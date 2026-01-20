@@ -1,0 +1,547 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{PRESENTATION_TITLE}}</title>
+    <style>
+        /* ============================================
+           SLIDESHOW TEMPLATE - Reusable Presentation
+           ============================================
+           
+           HOW TO USE:
+           1. Copy this file and rename it
+           2. Replace {{PRESENTATION_TITLE}} in <title>
+           3. Add your slides inside .slide-container
+           4. Each <div class="slide"> is one slide
+           5. Use .title-slide or .closing-slide for special slides
+           
+           SLIDE TYPES:
+           - Regular: <div class="slide">
+           - Title:   <div class="slide title-slide">
+           - Closing: <div class="slide closing-slide">
+           
+           FORMATTING:
+           - <strong> = Accent color text
+           - <em> = Italic purple text
+           - <span class="highlight"> = Yellow highlight
+           - <div class="note-box"> = Callout box
+           - <ul>/<li> = Bullet list
+           
+           CUSTOMIZATION:
+           - Change --accent-1 and --accent-2 for theme colors
+           - Adjust font sizes in .slide h1, h2, p
+        */
+
+        :root {
+            --accent-1: #667eea;
+            --accent-2: #764ba2;
+            --text-dark: #1a202c;
+            --text-medium: #2d3748;
+            --text-light: #4a5568;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            background: linear-gradient(135deg, var(--accent-1) 0%, var(--accent-2) 100%);
+            color: #fff;
+            overflow: hidden;
+            height: 100vh;
+        }
+
+        .slide-container {
+            height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 2rem;
+        }
+
+        .slide {
+            display: none;
+            max-width: 900px;
+            width: 100%;
+            background: rgba(255, 255, 255, 0.95);
+            color: var(--text-dark);
+            border-radius: 20px;
+            padding: 3rem 4rem;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            animation: slideIn 0.5s ease-out;
+        }
+
+        .slide.active {
+            display: block;
+        }
+
+        @keyframes slideIn {
+            from {
+                opacity: 0;
+                transform: translateY(30px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .slide h1 {
+            font-size: 2.5rem;
+            margin-bottom: 1.5rem;
+            color: var(--accent-1);
+            line-height: 1.2;
+        }
+
+        .slide h2 {
+            font-size: 2rem;
+            margin-bottom: 1.5rem;
+            color: var(--accent-1);
+            line-height: 1.3;
+        }
+
+        .slide p {
+            font-size: 1.25rem;
+            line-height: 1.8;
+            margin-bottom: 1.5rem;
+            color: var(--text-medium);
+        }
+
+        .slide ul {
+            font-size: 1.25rem;
+            line-height: 1.8;
+            margin-left: 2rem;
+            margin-bottom: 1.5rem;
+            color: var(--text-medium);
+        }
+
+        .slide li {
+            margin-bottom: 0.75rem;
+        }
+
+        .slide strong {
+            color: var(--accent-1);
+            font-weight: 600;
+        }
+
+        .slide em {
+            color: var(--accent-2);
+            font-style: italic;
+        }
+
+        /* Special slide types */
+        .title-slide {
+            text-align: center;
+        }
+
+        .title-slide h1 {
+            font-size: 3rem;
+            margin-bottom: 2rem;
+        }
+
+        .title-slide .subtitle {
+            font-size: 1.5rem;
+            color: var(--text-light);
+            margin-bottom: 1rem;
+        }
+
+        .closing-slide {
+            text-align: center;
+        }
+
+        .closing-slide h1,
+        .closing-slide h2 {
+            font-size: 2.5rem;
+            margin-bottom: 2rem;
+        }
+
+        /* Formatting elements */
+        .note-box {
+            background: #f7fafc;
+            border-left: 4px solid var(--accent-1);
+            padding: 1.5rem;
+            margin: 1.5rem 0;
+            border-radius: 8px;
+        }
+
+        .note-box p {
+            margin-bottom: 0.5rem;
+        }
+
+        .highlight {
+            background: linear-gradient(120deg, #fef3c7 0%, #fde68a 100%);
+            padding: 0.2rem 0.5rem;
+            border-radius: 4px;
+        }
+
+        /* Controls */
+        .controls {
+            position: fixed;
+            bottom: 2rem;
+            left: 50%;
+            transform: translateX(-50%);
+            display: flex;
+            gap: 1rem;
+            align-items: center;
+            background: rgba(255, 255, 255, 0.95);
+            padding: 1rem 2rem;
+            border-radius: 50px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+        }
+
+        .controls button {
+            background: var(--accent-1);
+            color: white;
+            border: none;
+            padding: 0.75rem 1.5rem;
+            border-radius: 25px;
+            font-size: 1rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .controls button:hover {
+            background: var(--accent-2);
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.2);
+        }
+
+        .controls button:disabled {
+            background: #cbd5e0;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .slide-counter {
+            font-size: 1rem;
+            font-weight: 600;
+            color: var(--text-medium);
+            min-width: 80px;
+            text-align: center;
+        }
+
+        .progress-bar {
+            position: fixed;
+            top: 0;
+            left: 0;
+            height: 5px;
+            background: var(--accent-1);
+            transition: width 0.3s ease;
+            z-index: 1000;
+        }
+
+        .keyboard-shortcut {
+            position: fixed;
+            top: 1rem;
+            right: 1rem;
+            background: rgba(255, 255, 255, 0.9);
+            padding: 0.5rem 1rem;
+            border-radius: 8px;
+            font-size: 0.875rem;
+            color: var(--text-light);
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.1);
+        }
+
+        .export-btn {
+            position: fixed;
+            top: 1rem;
+            left: 1rem;
+            background: rgba(255, 255, 255, 0.95);
+            color: var(--accent-1);
+            border: 2px solid var(--accent-1);
+            padding: 0.5rem 1rem;
+            border-radius: 8px;
+            font-size: 0.875rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.1);
+        }
+
+        .export-btn:hover {
+            background: var(--accent-1);
+            color: white;
+        }
+
+        /* Responsive */
+        @media (max-width: 768px) {
+            .slide {
+                padding: 2rem;
+            }
+
+            .slide h1 {
+                font-size: 2rem;
+            }
+
+            .slide h2 {
+                font-size: 1.5rem;
+            }
+
+            .slide p, .slide ul {
+                font-size: 1rem;
+            }
+
+            .controls {
+                bottom: 1rem;
+                padding: 0.75rem 1.5rem;
+            }
+
+            .controls button {
+                padding: 0.5rem 1rem;
+                font-size: 0.875rem;
+            }
+        }
+
+        /* Print styles for PDF export */
+        @media print {
+            * {
+                -webkit-print-color-adjust: exact !important;
+                print-color-adjust: exact !important;
+            }
+
+            body {
+                background: white !important;
+                overflow: visible;
+                height: auto;
+            }
+
+            .slide-container {
+                height: auto;
+                padding: 0;
+                display: block;
+            }
+
+            .slide {
+                display: block !important;
+                page-break-after: always;
+                page-break-inside: avoid;
+                box-shadow: none;
+                margin: 0 auto;
+                padding: 2.5rem 3rem;
+                border-radius: 12px;
+                animation: none;
+                background: white !important;
+                border: 3px solid var(--accent-1);
+                max-width: 100%;
+                min-height: 6in;
+            }
+
+            .slide:last-child {
+                page-break-after: avoid;
+            }
+
+            .slide h1 {
+                color: var(--accent-1) !important;
+                font-size: 2.2rem;
+            }
+
+            .slide h2 {
+                color: var(--accent-1) !important;
+                font-size: 1.8rem;
+                border-bottom: 2px solid var(--accent-1);
+                padding-bottom: 0.5rem;
+                margin-bottom: 1.5rem;
+            }
+
+            .slide p {
+                font-size: 1.1rem;
+                line-height: 1.7;
+                color: var(--text-dark) !important;
+            }
+
+            .slide ul {
+                font-size: 1.1rem;
+            }
+
+            .slide strong {
+                color: var(--accent-1) !important;
+            }
+
+            .slide em {
+                color: var(--accent-2) !important;
+            }
+
+            .highlight {
+                background: #fef3c7 !important;
+                padding: 0.15rem 0.4rem;
+                border-radius: 3px;
+            }
+
+            .note-box {
+                background: #f0f4ff !important;
+                border-left: 4px solid var(--accent-1) !important;
+                padding: 1rem 1.5rem;
+                margin: 1rem 0;
+            }
+
+            .title-slide h1 {
+                font-size: 2.5rem;
+            }
+
+            .title-slide .subtitle {
+                color: var(--text-light) !important;
+            }
+
+            .controls,
+            .progress-bar,
+            .keyboard-shortcut,
+            .export-btn {
+                display: none !important;
+            }
+
+            @page {
+                size: letter landscape;
+                margin: 0.4in;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="progress-bar" id="progressBar"></div>
+    <button class="export-btn" onclick="exportPDF()">📄 Export PDF</button>
+    <div class="keyboard-shortcut">← → or Space to navigate</div>
+
+    <div class="slide-container">
+        <!-- ==========================================
+             YOUR SLIDES GO HERE
+             ==========================================
+             
+             Copy and paste slide templates below.
+             The first slide should have class="slide active"
+             All other slides should have class="slide"
+        -->
+
+        <!-- TITLE SLIDE -->
+        <div class="slide active title-slide">
+            <h1>Presentation Title</h1>
+            <p class="subtitle">Subtitle or description</p>
+            <p class="subtitle" style="margin-top: 2rem; font-size: 1.2rem;">Your Name</p>
+        </div>
+
+        <!-- CONTENT SLIDE (copy this for each slide) -->
+        <div class="slide">
+            <h2>Slide Title</h2>
+            <p>Your content goes here. Use <strong>strong</strong> for emphasis.</p>
+            <p>Use <span class="highlight">highlight</span> for key phrases.</p>
+            <ul>
+                <li>Bullet point one</li>
+                <li>Bullet point two</li>
+                <li>Bullet point three</li>
+            </ul>
+        </div>
+
+        <!-- SLIDE WITH NOTE BOX -->
+        <div class="slide">
+            <h2>Slide with Callout</h2>
+            <p>Regular paragraph content here.</p>
+            <div class="note-box">
+                <p><strong>Important:</strong> This is a callout box for key information.</p>
+            </div>
+            <p>More content after the callout.</p>
+        </div>
+
+        <!-- CLOSING SLIDE -->
+        <div class="slide closing-slide">
+            <h1>Thank You</h1>
+            <p style="font-size: 1.5rem; margin-top: 2rem;">Questions?</p>
+        </div>
+    </div>
+
+    <div class="controls">
+        <button id="prevBtn" onclick="changeSlide(-1)">← Previous</button>
+        <span class="slide-counter"><span id="currentSlide">1</span> / <span id="totalSlides">4</span></span>
+        <button id="nextBtn" onclick="changeSlide(1)">Next →</button>
+    </div>
+
+    <script>
+        let currentSlide = 0;
+        const slides = document.querySelectorAll('.slide');
+        const totalSlides = slides.length;
+        const prevBtn = document.getElementById('prevBtn');
+        const nextBtn = document.getElementById('nextBtn');
+        const currentSlideSpan = document.getElementById('currentSlide');
+        const totalSlidesSpan = document.getElementById('totalSlides');
+        const progressBar = document.getElementById('progressBar');
+
+        // Update total slides count
+        totalSlidesSpan.textContent = totalSlides;
+
+        function showSlide(n) {
+            slides.forEach(slide => slide.classList.remove('active'));
+            
+            if (n >= slides.length) {
+                currentSlide = slides.length - 1;
+            } else if (n < 0) {
+                currentSlide = 0;
+            } else {
+                currentSlide = n;
+            }
+            
+            slides[currentSlide].classList.add('active');
+            currentSlideSpan.textContent = currentSlide + 1;
+            
+            const progress = ((currentSlide + 1) / totalSlides) * 100;
+            progressBar.style.width = progress + '%';
+            
+            prevBtn.disabled = currentSlide === 0;
+            nextBtn.disabled = currentSlide === slides.length - 1;
+        }
+
+        function changeSlide(direction) {
+            showSlide(currentSlide + direction);
+        }
+
+        // Keyboard navigation
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'ArrowRight' || e.key === ' ') {
+                e.preventDefault();
+                changeSlide(1);
+            } else if (e.key === 'ArrowLeft') {
+                e.preventDefault();
+                changeSlide(-1);
+            } else if (e.key === 'Home') {
+                e.preventDefault();
+                showSlide(0);
+            } else if (e.key === 'End') {
+                e.preventDefault();
+                showSlide(slides.length - 1);
+            }
+        });
+
+        // Touch/swipe support
+        let touchStartX = 0;
+        let touchEndX = 0;
+
+        document.addEventListener('touchstart', (e) => {
+            touchStartX = e.changedTouches[0].screenX;
+        });
+
+        document.addEventListener('touchend', (e) => {
+            touchEndX = e.changedTouches[0].screenX;
+            handleSwipe();
+        });
+
+        function handleSwipe() {
+            if (touchEndX < touchStartX - 50) {
+                changeSlide(1);
+            }
+            if (touchEndX > touchStartX + 50) {
+                changeSlide(-1);
+            }
+        }
+
+        // PDF Export
+        function exportPDF() {
+            window.print();
+        }
+
+        // Initialize
+        showSlide(0);
+    </script>
+</body>
+</html>

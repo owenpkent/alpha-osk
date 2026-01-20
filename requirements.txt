@@ -1,0 +1,13 @@
+# Alpha-OSK Dependencies
+
+# Dashboard (minimal for now)
+# No external dependencies needed - uses Python stdlib
+
+# Future dependencies (uncomment as needed):
+# PySide6>=6.6.0        # Qt UI framework
+# transformers>=4.36.0  # AI text prediction
+# torch>=2.1.0          # PyTorch backend
+# openai-whisper>=20231117  # Voice transcription
+# flwr>=1.6.0           # Federated learning (Flower)
+# sounddevice>=0.4.6    # Audio input
+# numpy>=1.26.0         # Numerical operations

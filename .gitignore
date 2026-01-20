@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+ENV/
+.venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# AI/LLM scratch space
+_scratch/
+_draft_*
+*.tmp
+.cascade/
+.cursor/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project specific
+*.log

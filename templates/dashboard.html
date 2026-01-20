@@ -1,0 +1,534 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Alpha-OSK Dashboard</title>
+    <style>
+        :root {
+            --bg-primary: #0f172a;
+            --bg-secondary: #1e293b;
+            --bg-card: #334155;
+            --accent: #3b82f6;
+            --accent-hover: #2563eb;
+            --success: #22c55e;
+            --warning: #f59e0b;
+            --text-primary: #f8fafc;
+            --text-secondary: #94a3b8;
+            --border: #475569;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            min-height: 100vh;
+            line-height: 1.6;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 2rem;
+        }
+
+        header {
+            text-align: center;
+            margin-bottom: 3rem;
+            padding-bottom: 2rem;
+            border-bottom: 1px solid var(--border);
+        }
+
+        h1 {
+            font-size: 2.5rem;
+            font-weight: 700;
+            margin-bottom: 0.5rem;
+            background: linear-gradient(135deg, var(--accent), #8b5cf6);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .tagline {
+            color: var(--text-secondary);
+            font-size: 1.1rem;
+        }
+
+        .status-badge {
+            display: inline-block;
+            padding: 0.25rem 0.75rem;
+            background: var(--warning);
+            color: var(--bg-primary);
+            border-radius: 9999px;
+            font-size: 0.875rem;
+            font-weight: 600;
+            margin-top: 1rem;
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
+            gap: 1.5rem;
+            margin-bottom: 2rem;
+        }
+
+        .card {
+            background: var(--bg-secondary);
+            border-radius: 12px;
+            padding: 1.5rem;
+            border: 1px solid var(--border);
+        }
+
+        .card h2 {
+            font-size: 1.25rem;
+            margin-bottom: 1rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .card h2 .icon {
+            font-size: 1.5rem;
+        }
+
+        .feature-list {
+            list-style: none;
+        }
+
+        .feature-list li {
+            padding: 0.75rem 0;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            align-items: flex-start;
+            gap: 0.75rem;
+        }
+
+        .feature-list li:last-child {
+            border-bottom: none;
+        }
+
+        .feature-list .icon {
+            flex-shrink: 0;
+            width: 24px;
+            text-align: center;
+        }
+
+        .feature-list .title {
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+
+        .feature-list .desc {
+            color: var(--text-secondary);
+            font-size: 0.875rem;
+        }
+
+        .todo-section {
+            margin-top: 2rem;
+        }
+
+        .todo-section h2 {
+            margin-bottom: 1.5rem;
+            font-size: 1.5rem;
+        }
+
+        .phase {
+            background: var(--bg-secondary);
+            border-radius: 12px;
+            padding: 1.5rem;
+            margin-bottom: 1rem;
+            border: 1px solid var(--border);
+        }
+
+        .phase h3 {
+            font-size: 1.1rem;
+            margin-bottom: 1rem;
+            color: var(--accent);
+        }
+
+        .todo-item {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            padding: 0.5rem 0;
+            color: var(--text-secondary);
+        }
+
+        .todo-item.completed {
+            text-decoration: line-through;
+            opacity: 0.6;
+        }
+
+        .checkbox {
+            width: 20px;
+            height: 20px;
+            border: 2px solid var(--border);
+            border-radius: 4px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+        }
+
+        .checkbox.checked {
+            background: var(--success);
+            border-color: var(--success);
+        }
+
+        .keyboard-preview {
+            background: var(--bg-card);
+            border-radius: 12px;
+            padding: 1.5rem;
+            font-family: 'Courier New', monospace;
+            font-size: 0.75rem;
+            overflow-x: auto;
+            margin-top: 1rem;
+        }
+
+        .keyboard-row {
+            display: flex;
+            gap: 4px;
+            margin-bottom: 4px;
+            justify-content: center;
+        }
+
+        .key {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 0.5rem 0.75rem;
+            min-width: 40px;
+            text-align: center;
+            font-weight: 600;
+            transition: all 0.2s;
+        }
+
+        .key:hover {
+            background: var(--accent);
+            border-color: var(--accent);
+            transform: translateY(-2px);
+        }
+
+        .key.wide {
+            min-width: 80px;
+        }
+
+        .key.space {
+            min-width: 200px;
+        }
+
+        .key.prediction {
+            background: var(--accent);
+            border-color: var(--accent);
+            font-size: 0.7rem;
+        }
+
+        .architecture {
+            background: var(--bg-card);
+            border-radius: 8px;
+            padding: 1rem;
+            font-family: 'Courier New', monospace;
+            font-size: 0.75rem;
+            white-space: pre;
+            overflow-x: auto;
+            line-height: 1.4;
+        }
+
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 1rem;
+            margin-bottom: 2rem;
+        }
+
+        .stat {
+            background: var(--bg-secondary);
+            border-radius: 12px;
+            padding: 1.5rem;
+            text-align: center;
+            border: 1px solid var(--border);
+        }
+
+        .stat .number {
+            font-size: 2rem;
+            font-weight: 700;
+            color: var(--accent);
+        }
+
+        .stat .label {
+            color: var(--text-secondary);
+            font-size: 0.875rem;
+            margin-top: 0.25rem;
+        }
+
+        footer {
+            text-align: center;
+            padding: 2rem;
+            color: var(--text-secondary);
+            border-top: 1px solid var(--border);
+            margin-top: 2rem;
+        }
+
+        footer a {
+            color: var(--accent);
+            text-decoration: none;
+        }
+
+        footer a:hover {
+            text-decoration: underline;
+        }
+
+        @media (max-width: 768px) {
+            .stats {
+                grid-template-columns: repeat(2, 1fr);
+            }
+            
+            .grid {
+                grid-template-columns: 1fr;
+            }
+            
+            h1 {
+                font-size: 1.75rem;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>⌨️ Alpha-OSK</h1>
+            <p class="tagline">AI-Powered On-Screen Keyboard for Windows Accessibility</p>
+            <span class="status-badge">🚧 Planning Phase</span>
+        </header>
+
+        <div class="stats">
+            <div class="stat">
+                <div class="number">6</div>
+                <div class="label">Development Phases</div>
+            </div>
+            <div class="stat">
+                <div class="number">3</div>
+                <div class="label">AI Features</div>
+            </div>
+            <div class="stat">
+                <div class="number">4</div>
+                <div class="label">Input Modes</div>
+            </div>
+            <div class="stat">
+                <div class="number">∞</div>
+                <div class="label">Accessibility Focus</div>
+            </div>
+        </div>
+
+        <div class="grid">
+            <div class="card">
+                <h2><span class="icon">🧠</span> AI Features</h2>
+                <ul class="feature-list">
+                    <li>
+                        <span class="icon">📝</span>
+                        <div>
+                            <div class="title">Smart Prediction</div>
+                            <div class="desc">Context-aware word completion using transformer models</div>
+                        </div>
+                    </li>
+                    <li>
+                        <span class="icon">🎤</span>
+                        <div>
+                            <div class="title">Voice Dictation</div>
+                            <div class="desc">Whisper-powered speech-to-text with voice commands</div>
+                        </div>
+                    </li>
+                    <li>
+                        <span class="icon">🔒</span>
+                        <div>
+                            <div class="title">Federated Learning</div>
+                            <div class="desc">Privacy-preserving personalization across users</div>
+                        </div>
+                    </li>
+                    <li>
+                        <span class="icon">🤝</span>
+                        <div>
+                            <div class="title">Collaboration</div>
+                            <div class="desc">Shared vocabularies and community accessibility profiles</div>
+                        </div>
+                    </li>
+                </ul>
+            </div>
+
+            <div class="card">
+                <h2><span class="icon">♿</span> Accessibility Modes</h2>
+                <ul class="feature-list">
+                    <li>
+                        <span class="icon">👆</span>
+                        <div>
+                            <div class="title">Direct Touch</div>
+                            <div class="desc">Standard tap or click input</div>
+                        </div>
+                    </li>
+                    <li>
+                        <span class="icon">⏱️</span>
+                        <div>
+                            <div class="title">Dwell Click</div>
+                            <div class="desc">Hover to activate (300ms–2000ms configurable)</div>
+                        </div>
+                    </li>
+                    <li>
+                        <span class="icon">🔄</span>
+                        <div>
+                            <div class="title">Scanning</div>
+                            <div class="desc">Row/column navigation for switch users</div>
+                        </div>
+                    </li>
+                    <li>
+                        <span class="icon">🗣️</span>
+                        <div>
+                            <div class="title">Voice Control</div>
+                            <div class="desc">Hands-free dictation and commands</div>
+                        </div>
+                    </li>
+                </ul>
+            </div>
+        </div>
+
+        <div class="card">
+            <h2><span class="icon">⌨️</span> Keyboard Layout Preview</h2>
+            <div class="keyboard-preview">
+                <div class="keyboard-row">
+                    <div class="key prediction">the</div>
+                    <div class="key prediction">hello</div>
+                    <div class="key prediction">world</div>
+                    <div class="key" style="background: #22c55e; border-color: #22c55e;">🎤</div>
+                </div>
+                <div class="keyboard-row">
+                    <div class="key">Q</div>
+                    <div class="key">W</div>
+                    <div class="key">E</div>
+                    <div class="key">R</div>
+                    <div class="key">T</div>
+                    <div class="key">Y</div>
+                    <div class="key">U</div>
+                    <div class="key">I</div>
+                    <div class="key">O</div>
+                    <div class="key">P</div>
+                    <div class="key">⌫</div>
+                </div>
+                <div class="keyboard-row">
+                    <div class="key">A</div>
+                    <div class="key">S</div>
+                    <div class="key">D</div>
+                    <div class="key">F</div>
+                    <div class="key">G</div>
+                    <div class="key">H</div>
+                    <div class="key">J</div>
+                    <div class="key">K</div>
+                    <div class="key">L</div>
+                    <div class="key wide">⏎</div>
+                </div>
+                <div class="keyboard-row">
+                    <div class="key wide">⇧</div>
+                    <div class="key">Z</div>
+                    <div class="key">X</div>
+                    <div class="key">C</div>
+                    <div class="key">V</div>
+                    <div class="key">B</div>
+                    <div class="key">N</div>
+                    <div class="key">M</div>
+                    <div class="key wide">⇧</div>
+                </div>
+                <div class="keyboard-row">
+                    <div class="key">123</div>
+                    <div class="key">🌐</div>
+                    <div class="key space">Space</div>
+                    <div class="key">←</div>
+                    <div class="key">→</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="card" style="margin-top: 1.5rem;">
+            <h2><span class="icon">🔒</span> Federated Learning Architecture</h2>
+            <div class="architecture">┌─────────────────────────────────────────────────────────────┐
+│                     Alpha-OSK Device                        │
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────┐  │
+│  │ User Input  │→ │ Local Model │→ │ Personalized Pred.  │  │
+│  └─────────────┘  └──────┬──────┘  └─────────────────────┘  │
+│                          │                                   │
+│                    (if opted in)                             │
+│                          ↓                                   │
+│              ┌───────────────────────┐                       │
+│              │ Model Update (grads)  │                       │
+│              └───────────┬───────────┘                       │
+└──────────────────────────┼──────────────────────────────────┘
+                           ↓
+                 ┌─────────────────────┐
+                 │  Aggregation Server │  (Flower)
+                 │  (no raw text ever) │
+                 └─────────────────────┘
+                           ↓
+              ┌────────────────────────────┐
+              │ Improved Global Model      │
+              │ (distributed back to users)│
+              └────────────────────────────┘</div>
+        </div>
+
+        <div class="todo-section">
+            <h2>📋 Development Roadmap</h2>
+            
+            <div class="phase">
+                <h3>Phase 1: Foundation</h3>
+                <div class="todo-item"><div class="checkbox"></div> Set up project structure</div>
+                <div class="todo-item"><div class="checkbox"></div> Basic keyboard window (PySide6)</div>
+                <div class="todo-item"><div class="checkbox"></div> Key input simulation</div>
+                <div class="todo-item"><div class="checkbox"></div> Simple QWERTY layout</div>
+            </div>
+
+            <div class="phase">
+                <h3>Phase 2: Accessibility Core</h3>
+                <div class="todo-item"><div class="checkbox"></div> Dwell-click support</div>
+                <div class="todo-item"><div class="checkbox"></div> Scanning mode</div>
+                <div class="todo-item"><div class="checkbox"></div> Adjustable key sizes</div>
+                <div class="todo-item"><div class="checkbox"></div> High-contrast themes</div>
+            </div>
+
+            <div class="phase">
+                <h3>Phase 3: AI Prediction</h3>
+                <div class="todo-item"><div class="checkbox"></div> Word prediction engine</div>
+                <div class="todo-item"><div class="checkbox"></div> Transformer integration</div>
+                <div class="todo-item"><div class="checkbox"></div> Personal vocabulary learning</div>
+            </div>
+
+            <div class="phase">
+                <h3>Phase 4: Voice Dictation</h3>
+                <div class="todo-item"><div class="checkbox"></div> Whisper integration</div>
+                <div class="todo-item"><div class="checkbox"></div> Real-time transcription</div>
+                <div class="todo-item"><div class="checkbox"></div> Voice commands</div>
+            </div>
+
+            <div class="phase">
+                <h3>Phase 5: Federated Learning</h3>
+                <div class="todo-item"><div class="checkbox"></div> Local model training</div>
+                <div class="todo-item"><div class="checkbox"></div> Flower client setup</div>
+                <div class="todo-item"><div class="checkbox"></div> Privacy controls</div>
+            </div>
+
+            <div class="phase">
+                <h3>Phase 6: Collaboration</h3>
+                <div class="todo-item"><div class="checkbox"></div> Shared word lists</div>
+                <div class="todo-item"><div class="checkbox"></div> Community profiles</div>
+                <div class="todo-item"><div class="checkbox"></div> Cloud sync (optional)</div>
+            </div>
+        </div>
+
+        <footer>
+            <p>Alpha-OSK • AI-Powered Accessibility</p>
+            <p>Tracked by <a href="https://github.com/owenpkent/constellation">Constellation</a></p>
+        </footer>
+    </div>
+</body>
+</html>
