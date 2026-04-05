@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(venv\\\\Scripts\\\\python.exe:*)",
+      "Bash(venv/Scripts/python.exe -c ':*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)"
+    ]
+  }
+}
