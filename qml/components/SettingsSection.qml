@@ -12,16 +12,16 @@ Item {
     
     ColumnLayout {
         id: sectionColumn
-        anchors.left: parent.left
-        anchors.right: parent.right
+        anchors.fill: parent
         spacing: 8
-        
+
         Text {
             text: section.title
             color: "#aaa"
-            font.pixelSize: 11
+            font.pixelSize: 12
             font.bold: true
             Layout.topMargin: 4
+            Layout.leftMargin: 2
         }
         
         ColumnLayout {

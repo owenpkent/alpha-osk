@@ -457,6 +457,7 @@ remove_from_startup()              # Remove from Startup
 | Keyboard steals focus on click | `WS_EX_NOACTIVATE` not applied | Check logs for "Failed to apply Windows extended styles" |
 | Keyboard appears in Alt+Tab | `WS_EX_TOOLWINDOW` not applied | Same as above |
 | Keyboard disappears behind other windows | Topmost not working | Try restarting Alpha-OSK |
+| **Window becomes massive after moving to a different monitor** | Qt's default DPI rounding multiplies logical window dimensions when crossing monitors with different scale factors | Fixed: `PassThrough` DPI rounding policy set in `keyboard_app.py`; `onScreenChanged` in `Main.qml` clamps width to the new screen's available width |
 
 ### Build Issues
 

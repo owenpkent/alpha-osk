@@ -29,6 +29,10 @@ Item {
 
     width: keyWidth
     height: keyHeight
+    // implicitWidth/Height are what Qt Quick Layouts (RowLayout, GridLayout)
+    // use for size allocation.  Without these, layouts see 0×0 and keys overflow.
+    implicitWidth: keyWidth
+    implicitHeight: keyHeight
 
     // Key repeat timer
     Timer {

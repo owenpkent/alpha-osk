@@ -82,7 +82,7 @@ Item {
         }
         
         // Row 3: Empty, Up Arrow, Empty
-        Item { width: navPanel.keyW; height: navPanel.keyH }
+        Item { width: navPanel.keyW; height: navPanel.keyH; implicitWidth: width; implicitHeight: height }
         KeyButton {
             keyText: "up"
             displayText: "▲"
@@ -93,7 +93,7 @@ Item {
             keyColor: "#333333"
             onKeyPressed: keyboard.pressSpecialKey("up")
         }
-        Item { width: navPanel.keyW; height: navPanel.keyH }
+        Item { width: navPanel.keyW; height: navPanel.keyH; implicitWidth: width; implicitHeight: height }
         
         // Row 4: Left, Down, Right
         KeyButton {

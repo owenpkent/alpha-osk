@@ -125,8 +125,9 @@ src/prediction/
 
 **UI & Window:**
 - **Title bar** with drag handle, minimize, close buttons
-- **Resizable window** - Drag bottom/right edges or corner grip (uses screen coordinates)
-- **Unified settings panel** - All settings in one scrollable menu (⚙ button)
+- **Resizable window** - Drag left or right edges; closed-form key sizing distributes width proportionally across all visible panels (main, nav, numpad) with sub-pixel rounding protection and dynamic minimum-width enforcement to prevent key clipping
+- **Multi-monitor DPI** — Window size stays correct when dragged between monitors with different scaling; fixed via Qt `PassThrough` DPI rounding policy + `onScreenChanged` clamp in QML
+- **Settings popup window** - All settings in a separate floating window (⚙ button), positioned to the right of the keyboard
 - **5 Color Themes** - Dark, Light, Blue, Green, Purple
 - Modern prediction bar with improved readability
 
@@ -145,15 +146,17 @@ src/prediction/
 - **Training Corpus** - Pre-loaded with common phrases
 - **Smart Punctuation** - Auto-removes space before ? ! . , ; :
 
-**Accessibility:**
-- **6 Accessibility Profiles** - Precise, Normal, Mild/Moderate/Severe Tremor, Limited Mobility
-- All settings accessible from single unified panel
+**Settings Panel (popup window):**
+- Layout toggles: Function keys, Navigation keys, Numpad
+- 5 color themes
+- Developer: Debug mode toggle
+- Draggable, frameless, always-on-top; does not overlay the keyboard
 
-### Architecture Decision: No Transformer/LLM ✂️
-We **removed** the transformer model (DistilGPT-2) from the default configuration:
-- **Reason:** Overkill for a keyboard - adds 300MB download + startup delay
-- **Alternative:** N-gram + PPM + Fuzzy provides excellent predictions without AI overhead
-- **Option:** Can be re-enabled via settings if desired
+### Architecture Decision: No LLM/AI Toggle in Settings ✂️
+The transformer model (DistilGPT-2) toggle has been removed from the settings UI:
+- **Reason:** Model not available by default; exposing the toggle causes confusion
+- **Current prediction stack:** N-gram + PPM + Fuzzy — no AI dependency
+- **Future:** AI toggle may return when a lightweight model ships with the app
 
 ### Current State: Prediction Quality 🔧
 The prediction system is functional but still learning:

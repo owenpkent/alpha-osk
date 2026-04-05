@@ -28,7 +28,7 @@ Item {
         }
         
         // Spacer
-        Item { width: fnRow.keySpacing * 2; height: 1 }
+        Item { width: fnRow.keySpacing * 2; height: 1; implicitWidth: width; implicitHeight: height }
         
         // F1-F4
         Repeater {
@@ -46,7 +46,7 @@ Item {
         }
         
         // Spacer
-        Item { width: fnRow.keySpacing * 2; height: 1 }
+        Item { width: fnRow.keySpacing * 2; height: 1; implicitWidth: width; implicitHeight: height }
         
         // F5-F8
         Repeater {
@@ -64,7 +64,7 @@ Item {
         }
         
         // Spacer
-        Item { width: fnRow.keySpacing * 2; height: 1 }
+        Item { width: fnRow.keySpacing * 2; height: 1; implicitWidth: width; implicitHeight: height }
         
         // F9-F12
         Repeater {
@@ -82,7 +82,7 @@ Item {
         }
         
         // Spacer
-        Item { width: fnRow.keySpacing * 2; height: 1 }
+        Item { width: fnRow.keySpacing * 2; height: 1; implicitWidth: width; implicitHeight: height }
         
         // Print Screen, Scroll Lock, Pause
         KeyButton {

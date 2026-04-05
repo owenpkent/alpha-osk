@@ -435,6 +435,22 @@ creation.
 - Makes testing easier — you can instantiate a specific backend directly.
 - Avoids `if sys.platform == ...` scattered throughout the codebase.
 
+### Why PassThrough DPI Rounding Policy?
+
+**Decision**: Call `QGuiApplication.setHighDpiScaleFactorRoundingPolicy(PassThrough)`
+before creating `QGuiApplication` on all platforms.
+
+**Rationale**:
+- Qt 6's default `RoundPreferFloor` policy rounds each monitor's scale factor
+  (e.g. 1.5 → 1.0).  When the window moves to a monitor whose rounded factor
+  differs from the source monitor's rounded factor, Qt re-scales the logical
+  window dimensions — making the keyboard grow or shrink unexpectedly.
+- `PassThrough` uses the exact fractional DPI ratio from the OS, so no
+  rounding discontinuity occurs across monitor transitions.
+- A complementary `onScreenChanged` handler in `Main.qml` clamps `root.width`
+  to `Screen.desktopAvailableWidth - 40` as a safety net for any remaining
+  edge cases.
+
 ### Why NSIS Instead of WiX or Inno Setup?
 
 **Decision**: Use NSIS for the Windows installer.

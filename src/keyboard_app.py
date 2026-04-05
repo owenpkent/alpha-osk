@@ -173,6 +173,12 @@ def main() -> int:
             "active" if pinfo.get("ui_access") else "not active",
         )
 
+    # Use PassThrough rounding so Qt does not multiply logical window sizes
+    # by a rounded scale factor when moving between monitors with different DPI.
+    QGuiApplication.setHighDpiScaleFactorRoundingPolicy(
+        Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
+    )
+
     app = QGuiApplication(sys.argv)
     app.setApplicationName("Alpha-OSK")
     app.setOrganizationName("alpha-osk")

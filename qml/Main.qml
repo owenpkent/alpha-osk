@@ -8,9 +8,9 @@ Window {
     id: root
     visible: true
     // Default size gives keyW ≈ 56px; user can freely resize and keys scale
-    width: 832
+    width: 880
     height: mainLayout.implicitHeight + 60  // Extra height for title bar + bottom padding
-    minimumWidth: 530  // keyW ≈ 34px — smallest usable touch target
+    minimumWidth: Math.round(30 * totalKeyUnits + layoutFixedPixels)  // keyW ≈ 30px — smallest usable touch target
     minimumHeight: 200
     color: "transparent"
     title: "Alpha-OSK"
@@ -22,14 +22,10 @@ Window {
         root.y = Screen.height - root.height - 40
     }
 
-    // Width added when the settings panel is visible
-    readonly property real settingsPanelWidth: 340
-
     // When side panels toggle, grow/shrink from the right edge (left stays put)
-    onCompactModeChanged: root.width = compactMode ? 660 : 832
-    onShowNavigationChanged: root.width += showNavigation ? 160 : -160
-    onShowNumpadChanged: root.width += showNumpad ? 200 : -200
-    onShowSettingsChanged: root.width += showSettings ? root.settingsPanelWidth : -root.settingsPanelWidth
+    // Deltas sized to keep main keys ~same size (≈ 2.7*keyW+17 for nav, 3.6*keyW+19 for numpad at default scale)
+    onShowNavigationChanged: root.width += showNavigation ? 175 : -175
+    onShowNumpadChanged: root.width += showNumpad ? 220 : -220
 
     // Keyboard state from Python bridge
     property bool shiftOn: keyboard ? keyboard.shiftActive : false
@@ -49,34 +45,48 @@ Window {
     property bool showFunctionRow: false
     property bool showNavigation: false
     property bool showNumpad: false
-    property bool compactMode: false
     property bool showSettings: false
-    property bool showPredictionSettings: false
-    property bool showAccessibility: false
-    
-    // Prediction settings
-    property bool llmEnabled: keyboard ? keyboard.llmEnabled : true
-    property bool llmAvailable: keyboard ? keyboard.llmAvailable : false
-    property int predictionCount: keyboard ? keyboard.predictionCount : 5
-    property var predictionStats: ({totalWords: 0, uniqueWords: 0, userWords: 0})
     
     // Debug
     property bool showDebugPanel: false
     property var debugLog: []
     property string debugContext: ""
 
-    // Sizing — keys scale dynamically with window width
-    // Number row (widest): backtick + 10 digits + minus + backspace(1.5x) = 13.5 key-widths + 12 gaps
+    // Sizing — keys scale dynamically with window width using closed-form calculation.
+    // All visible panels share the window width proportionally, avoiding static estimates.
     property real keySpacing: 3
 
-    // Side panel extra width (fixed estimates to avoid circular binding with keyW)
-    // Nav panel: 3 keys × ~46px + gaps + separator ≈ 160px
-    // Numpad:    4 keys × ~44px + gaps + separator ≈ 200px
-    property real sidePanelExtra: (showNavigation ? 160 : 0) + (showNumpad ? 200 : 0) + (showSettings ? settingsPanelWidth : 0)
+    // Total key-width units across all visible sections:
+    // Main keyboard home row: Caps(1.6) + 9 alpha + ; + ' + Enter(1.8) = 14.4 units
+    // Nav panel: 3 keys × 0.9 = 2.7 units;  Numpad: 4 keys × 0.9 = 3.6 units
+    property real totalKeyUnits: 14.4
+        + (showNavigation ? 2.7 : 0)
+        + (showNumpad ? 3.6 : 0)
 
-    property real availableKeyboardWidth: root.width - 40 - sidePanelExtra
-    property real keyW: Math.max(30, (availableKeyboardWidth - keySpacing * 12) / 13.5)
-    property real keyH: Math.max(34, keyW * 0.89)  // maintain aspect ratio
+    // Fixed-pixel overhead: margins(8×2=16) + main gaps(12×3=36)
+    // + per-panel: separator(1) + panel gaps + 2×RowLayout spacing(6)
+    // Nav: 1 + 2×2 + 2×6 = 17;  Numpad: 1 + 3×2 + 2×6 = 19
+    property real layoutFixedPixels: 52
+        + (showNavigation ? 17 : 0)
+        + (showNumpad ? 19 : 0)
+
+    property real keyW: Math.max(30, (root.width - layoutFixedPixels) / totalKeyUnits)
+    property real keyH: Math.max(34, keyW * 0.89)
+
+    // Safety net: if the window width ever drops below minimumWidth (e.g. via
+    // OS window-snap, DPI change, or panel toggle), clamp it back up.
+    onWidthChanged: {
+        if (width < minimumWidth) width = minimumWidth
+    }
+
+    // Multi-monitor DPI fix: when Qt moves the window to a screen with a
+    // different scale factor it can mis-size the window.  Clamp to the new
+    // screen's available width so the keyboard never bloats off-screen.
+    onScreenChanged: {
+        var maxW = Screen.desktopAvailableWidth - 40
+        if (root.width > maxW) root.width = maxW
+        if (root.width < root.minimumWidth) root.width = root.minimumWidth
+    }
     
     // ===== Color Theme System =====
     property string currentTheme: "dark"  // "dark", "light", "blue", "green", "purple"
@@ -145,8 +155,6 @@ Window {
         function onPredictionsChanged(preds) { root.predictions = preds }
         function onPredictionsRefined(preds) { root.predictions = preds }
         function onPredictionLoading(loading) { root.predictionsLoading = loading }
-        function onLlmAvailableChanged(available) { root.llmAvailable = available }
-        function onLlmEnabledChanged(enabled) { root.llmEnabled = enabled }
         
         // Debug updates
         function onDebugLogChanged(log) { root.debugLog = log }
@@ -323,6 +331,7 @@ Window {
             // ===== Main Keyboard Section =====
             ColumnLayout {
                 id: mainKeyboard
+                Layout.fillWidth: true
                 spacing: 2
 
                 // ===== Function Row (F1-F12) =====
@@ -709,7 +718,7 @@ Window {
             Rectangle {
                 visible: root.showNavigation
                 Layout.fillHeight: true
-                width: 1
+                Layout.preferredWidth: 1
                 color: "#333"
             }
             
@@ -723,7 +732,7 @@ Window {
             Rectangle {
                 visible: root.showNumpad
                 Layout.fillHeight: true
-                width: 1
+                Layout.preferredWidth: 1
                 color: "#333"
             }
             
@@ -734,59 +743,6 @@ Window {
             }
         }
 
-        // Unified Settings Panel (single panel with all settings)
-        Comp.UnifiedSettingsPanel {
-            id: unifiedSettingsPanel
-            visible: root.showSettings
-            anchors.right: parent.right
-            anchors.top: titleBar.bottom
-            anchors.bottom: parent.bottom
-            anchors.rightMargin: 8
-            anchors.topMargin: 4
-            anchors.bottomMargin: 8
-            width: root.settingsPanelWidth - 20
-            
-            // Layout settings
-            showFunctionRow: root.showFunctionRow
-            showNavigation: root.showNavigation
-            showNumpad: root.showNumpad
-            compactMode: root.compactMode
-            currentTheme: root.currentTheme
-            
-            // Prediction settings
-            llmEnabled: root.llmEnabled
-            llmAvailable: root.llmAvailable
-            predictionCount: root.predictionCount
-            totalWords: root.predictionStats.total_words || 0
-            uniqueWords: root.predictionStats.unique_words || 0
-            userWords: root.predictionStats.user_words || 0
-            debugMode: root.showDebugPanel
-            
-            onSettingChanged: function(setting, value) {
-                // Layout settings
-                if (setting === "functionRow") root.showFunctionRow = value
-                else if (setting === "navigation") root.showNavigation = value
-                else if (setting === "numpad") root.showNumpad = value
-                else if (setting === "compact") root.compactMode = value
-                else if (setting === "theme") root.currentTheme = value
-                // Prediction settings
-                else if (setting === "llmEnabled" && keyboard) {
-                    keyboard.setLlmEnabled(value)
-                    root.llmEnabled = value
-                }
-                else if (setting === "debugMode") {
-                    root.showDebugPanel = value
-                    if (keyboard) keyboard.setDebugMode(value)
-                }
-                // Accessibility settings
-                else if (setting === "profile" && keyboard) {
-                    keyboard.setAccessibilityProfile(value)
-                }
-            }
-            
-            onCloseRequested: root.showSettings = false
-        }
-        
         // Debug Panel
         Comp.DebugPanel {
             id: debugPanelComp
@@ -809,13 +765,6 @@ Window {
             }
         }
         
-        // Function to refresh prediction stats
-        function refreshPredictionStats() {
-            if (keyboard) {
-                root.predictionStats = keyboard.getPredictionStats()
-            }
-        }
-
         // No synth tool warning
         Rectangle {
             visible: keyboard ? !keyboard.synthAvailable : true
@@ -837,115 +786,135 @@ Window {
             }
         }
         
-        // Resize handle (bottom-right corner)
+        // Resize handle — left edge (grows/shrinks from left, window slides)
         MouseArea {
-            id: resizeHandle
-            anchors.right: parent.right
+            id: leftResize
+            anchors.left: parent.left
+            anchors.top: titleBar.bottom
             anchors.bottom: parent.bottom
-            width: 24
-            height: 24
-            cursorShape: Qt.SizeFDiagCursor
-            
+            width: 8
+            cursorShape: Qt.SizeHorCursor
+
             property real startX
-            property real startY
             property real startW
-            property real startH
-            
+            property real startWinX
+
             onPressed: function(mouse) {
                 var global = mapToGlobal(mouse.x, mouse.y)
                 startX = global.x
-                startY = global.y
                 startW = root.width
-                startH = root.height
+                startWinX = root.x
             }
-            
+
             onPositionChanged: function(mouse) {
                 if (pressed) {
                     var global = mapToGlobal(mouse.x, mouse.y)
                     var dw = global.x - startX
-                    var dh = global.y - startY
-                    root.width = Math.max(500, startW + dw)
-                    root.height = Math.max(250, startH + dh)
+                    var newW = Math.max(root.minimumWidth, startW - dw)
+                    root.x = startWinX + (startW - newW)
+                    root.width = newW
                 }
             }
-            
-            // Visual indicator (grip lines)
+
+            // Visual grip indicator
             Column {
-                anchors.right: parent.right
-                anchors.bottom: parent.bottom
-                anchors.margins: 4
-                spacing: 2
+                anchors.left: parent.left
+                anchors.verticalCenter: parent.verticalCenter
+                anchors.margins: 2
+                spacing: 3
                 Repeater {
-                    model: 3
-                    Row {
-                        spacing: 2
-                        Repeater {
-                            model: 3 - index
-                            Rectangle {
-                                width: 3
-                                height: 3
-                                radius: 1
-                                color: "#555"
-                            }
-                        }
-                    }
+                    model: 4
+                    Rectangle { width: 3; height: 3; radius: 1.5; color: "#555" }
                 }
             }
         }
-        
-        // Resize handle (bottom edge)
-        MouseArea {
-            id: bottomResize
-            anchors.bottom: parent.bottom
-            anchors.left: parent.left
-            anchors.right: resizeHandle.left
-            anchors.leftMargin: 10
-            height: 8
-            cursorShape: Qt.SizeVerCursor
-            
-            property real startY
-            property real startH
-            
-            onPressed: function(mouse) {
-                var global = mapToGlobal(mouse.x, mouse.y)
-                startY = global.y
-                startH = root.height
-            }
-            
-            onPositionChanged: function(mouse) {
-                if (pressed) {
-                    var global = mapToGlobal(mouse.x, mouse.y)
-                    var dh = global.y - startY
-                    root.height = Math.max(250, startH + dh)
-                }
-            }
-        }
-        
-        // Resize handle (right edge)
+
+        // Resize handle — right edge (grows/shrinks from right)
         MouseArea {
             id: rightResize
             anchors.right: parent.right
             anchors.top: titleBar.bottom
-            anchors.bottom: resizeHandle.top
+            anchors.bottom: parent.bottom
             width: 8
             cursorShape: Qt.SizeHorCursor
-            
+
             property real startX
             property real startW
-            
+
             onPressed: function(mouse) {
                 var global = mapToGlobal(mouse.x, mouse.y)
                 startX = global.x
                 startW = root.width
             }
-            
+
             onPositionChanged: function(mouse) {
                 if (pressed) {
                     var global = mapToGlobal(mouse.x, mouse.y)
                     var dw = global.x - startX
-                    root.width = Math.max(500, startW + dw)
+                    root.width = Math.max(root.minimumWidth, startW + dw)
                 }
             }
+
+            // Visual grip indicator
+            Column {
+                anchors.right: parent.right
+                anchors.verticalCenter: parent.verticalCenter
+                anchors.margins: 2
+                spacing: 3
+                Repeater {
+                    model: 4
+                    Rectangle { width: 3; height: 3; radius: 1.5; color: "#555" }
+                }
+            }
+        }
+    }
+
+    // ===== Settings Popup Window =====
+    Window {
+        id: settingsWindow
+        title: "Alpha-OSK Settings"
+        visible: root.showSettings
+        width: 360
+        minimumWidth: 320
+        height: 540
+        minimumHeight: 300
+        // Frameless so we can draw our own drag handle; stays on top
+        flags: Qt.Window | Qt.WindowStaysOnTopHint | Qt.FramelessWindowHint | Qt.Tool
+
+        // Position to the right of the main keyboard when first shown
+        onVisibleChanged: {
+            if (visible) {
+                settingsWindow.x = root.x + root.width + 8
+                settingsWindow.y = root.y
+            }
+        }
+
+        // Sync close button with main showSettings flag
+        onClosing: root.showSettings = false
+
+        color: "#1e1e1e"
+
+        Comp.UnifiedSettingsPanel {
+            anchors.fill: parent
+
+            showFunctionRow: root.showFunctionRow
+            showNavigation: root.showNavigation
+            showNumpad: root.showNumpad
+            currentTheme: root.currentTheme
+            debugMode: root.showDebugPanel
+
+            onSettingChanged: function(setting, value) {
+                if (setting === "functionRow") root.showFunctionRow = value
+                else if (setting === "navigation") root.showNavigation = value
+                else if (setting === "numpad") root.showNumpad = value
+                else if (setting === "theme") root.currentTheme = value
+                else if (setting === "debugMode") {
+                    root.showDebugPanel = value
+                    if (keyboard) keyboard.setDebugMode(value)
+                }
+            }
+
+            onCloseRequested: root.showSettings = false
         }
     }
 }
