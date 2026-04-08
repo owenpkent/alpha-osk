@@ -116,7 +116,7 @@ def get_platform_info() -> dict:
         info["ydotool"] = shutil.which("ydotool") is not None
     elif CURRENT_PLATFORM == "windows":
         info["ui_access"] = _check_ui_access()
-        info["windows_version"] = sys.getwindowsversion().major
+        info["windows_version"] = sys.getwindowsversion().major  # type: ignore[attr-defined]
 
     return info
 
@@ -181,8 +181,8 @@ def _check_ui_access() -> bool:
         TOKEN_QUERY = 0x0008
         TokenUIAccess = 26  # TOKEN_INFORMATION_CLASS value
 
-        kernel32 = ctypes.windll.kernel32
-        advapi32 = ctypes.windll.advapi32
+        kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+        advapi32 = ctypes.windll.advapi32  # type: ignore[attr-defined]
 
         token = wintypes.HANDLE()
         if not advapi32.OpenProcessToken(
