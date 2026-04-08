@@ -100,7 +100,7 @@ def get_platform_info() -> dict:
         Dict with keys: ``platform``, ``python``, ``synthesizer``,
         ``display_server`` (Linux only), ``ui_access`` (Windows only).
     """
-    info = {
+    info: dict = {
         "platform": CURRENT_PLATFORM,
         "python": sys.version,
         "sys_platform": sys.platform,

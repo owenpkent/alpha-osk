@@ -306,6 +306,7 @@ class HybridPredictor(QObject):
 
         # Get more candidates for re-ranking
         extended_candidates = self._ngram.predict(context, n * 3)
+        assert self._transformer is not None  # Guarded by caller
         self._transformer.rerank_async(context, extended_candidates, on_refined, n)
 
     def learn(self, text: str) -> None:
