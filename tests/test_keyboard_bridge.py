@@ -210,7 +210,7 @@ class TestPredictionWiring:
         assert not bridge._predictor.enable_llm
 
     def test_prediction_count_default(self, bridge: KeyboardBridge):
-        assert bridge._prediction_count == 5
+        assert bridge._prediction_count == 8
 
     def test_set_prediction_count(self, bridge: KeyboardBridge):
         bridge.setPredictionCount(3)

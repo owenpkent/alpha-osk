@@ -12,6 +12,10 @@ Item {
     property bool showNumpad: false
     property string currentTheme: "dark"
 
+    // Suggestions
+    property bool suggestionsEnabled: true
+    property int predictionCount: 8
+
     // Debug
     property bool debugMode: false
 
@@ -31,7 +35,7 @@ Item {
             anchors.margins: 14
             spacing: 0
 
-            // ── Header / drag handle ──────────────────────────────────────
+            // -- Header / drag handle --
             Item {
                 Layout.fillWidth: true
                 Layout.preferredHeight: 36
@@ -51,7 +55,7 @@ Item {
                     anchors.fill: parent
 
                     Text {
-                        text: "⚙ Settings"
+                        text: "\u2699 Settings"
                         color: "#fff"
                         font.pixelSize: 16
                         font.bold: true
@@ -67,7 +71,7 @@ Item {
 
                         Text {
                             anchors.centerIn: parent
-                            text: "✕"
+                            text: "\u2715"
                             color: closeArea.containsMouse ? "#ff6666" : "#888"
                             font.pixelSize: 14
                         }
@@ -89,18 +93,18 @@ Item {
                 Layout.bottomMargin: 4
             }
 
-            // ── Scrollable content ────────────────────────────────────────
-            ScrollView {
-                id: scrollArea
+            // -- Scrollable content --
+            Flickable {
+                id: flickArea
                 Layout.fillWidth: true
                 Layout.fillHeight: true
-                // Don't clip here; the parent Rectangle clips the window edges
-                clip: false
-                // Fix content width so horizontal scroll never activates
-                contentWidth: availableWidth
+                contentWidth: width
+                contentHeight: contentColumn.implicitHeight
+                clip: true
+                boundsBehavior: Flickable.StopAtBounds
 
                 ScrollBar.vertical: ScrollBar {
-                    policy: ScrollBar.AlwaysOn
+                    policy: ScrollBar.AsNeeded
                     width: 8
 
                     contentItem: Rectangle {
@@ -114,14 +118,13 @@ Item {
                         radius: 4
                     }
                 }
-                ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
 
                 ColumnLayout {
                     id: contentColumn
-                    width: scrollArea.availableWidth
+                    width: flickArea.width - 12
                     spacing: 16
 
-                    // ── LAYOUT ───────────────────────────────────────────
+                    // -- LAYOUT --
                     SettingsSection {
                         title: "Layout"
                         Layout.fillWidth: true
@@ -132,7 +135,7 @@ Item {
 
                             SettingsToggle {
                                 Layout.fillWidth: true
-                                text: "Function Keys (F1–F12)"
+                                text: "Function Keys (F1\u2013F12)"
                                 checked: unifiedSettings.showFunctionRow
                                 onToggled: function(c) { unifiedSettings.settingChanged("functionRow", c) }
                             }
@@ -150,11 +153,210 @@ Item {
                                 checked: unifiedSettings.showNumpad
                                 onToggled: function(c) { unifiedSettings.settingChanged("numpad", c) }
                             }
-
                         }
                     }
 
-                    // ── THEME ────────────────────────────────────────────
+                    // -- SUGGESTIONS --
+                    SettingsSection {
+                        title: "Suggestions"
+                        Layout.fillWidth: true
+
+                        ColumnLayout {
+                            Layout.fillWidth: true
+                            spacing: 4
+
+                            SettingsToggle {
+                                Layout.fillWidth: true
+                                text: "Show Suggestions"
+                                checked: unifiedSettings.suggestionsEnabled
+                                onToggled: function(c) { unifiedSettings.settingChanged("suggestions", c) }
+                            }
+
+                            // Prediction count
+                            Item {
+                                Layout.fillWidth: true
+                                implicitHeight: 28
+
+                                Rectangle {
+                                    anchors.fill: parent
+                                    radius: 4
+                                    color: "transparent"
+
+                                    RowLayout {
+                                        anchors.fill: parent
+                                        anchors.leftMargin: 4
+                                        anchors.rightMargin: 4
+                                        spacing: 8
+
+                                        Text {
+                                            text: "Max Suggestions"
+                                            color: "#c0c0c0"
+                                            font.pixelSize: 12
+                                            Layout.fillWidth: true
+                                        }
+
+                                        Rectangle {
+                                            width: 24; height: 22; radius: 4
+                                            color: countDownArea.containsMouse ? "#444" : "#333"
+                                            Text { anchors.centerIn: parent; text: "\u2212"; color: "#ccc"; font.pixelSize: 14 }
+                                            MouseArea {
+                                                id: countDownArea
+                                                anchors.fill: parent; hoverEnabled: true
+                                                onClicked: {
+                                                    var n = Math.max(3, unifiedSettings.predictionCount - 1)
+                                                    unifiedSettings.settingChanged("predictionCount", n)
+                                                }
+                                            }
+                                        }
+
+                                        Text {
+                                            text: unifiedSettings.predictionCount
+                                            color: "#fff"
+                                            font.pixelSize: 13
+                                            font.bold: true
+                                            horizontalAlignment: Text.AlignHCenter
+                                            Layout.preferredWidth: 20
+                                        }
+
+                                        Rectangle {
+                                            width: 24; height: 22; radius: 4
+                                            color: countUpArea.containsMouse ? "#444" : "#333"
+                                            Text { anchors.centerIn: parent; text: "+"; color: "#ccc"; font.pixelSize: 14 }
+                                            MouseArea {
+                                                id: countUpArea
+                                                anchors.fill: parent; hoverEnabled: true
+                                                onClicked: {
+                                                    var n = Math.min(10, unifiedSettings.predictionCount + 1)
+                                                    unifiedSettings.settingChanged("predictionCount", n)
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // -- ACCESSIBILITY --
+                    SettingsSection {
+                        title: "Accessibility Profile"
+                        Layout.fillWidth: true
+
+                        ColumnLayout {
+                            Layout.fillWidth: true
+                            spacing: 3
+
+                            property string currentProfile: keyboard ? keyboard.getCurrentProfile() : "normal"
+
+                            Repeater {
+                                model: [
+                                    { id: "precise",          label: "Precise" },
+                                    { id: "normal",           label: "Normal" },
+                                    { id: "mild_tremor",      label: "Mild Tremor" },
+                                    { id: "moderate_tremor",  label: "Moderate Tremor" },
+                                    { id: "severe_tremor",    label: "Severe Tremor" },
+                                    { id: "limited_mobility", label: "Limited Mobility" }
+                                ]
+
+                                Item {
+                                    Layout.fillWidth: true
+                                    implicitHeight: 26
+
+                                    Rectangle {
+                                        anchors.fill: parent
+                                        radius: 4
+                                        color: profArea.containsMouse ? "#333" : "transparent"
+
+                                        RowLayout {
+                                            anchors.fill: parent
+                                            anchors.leftMargin: 4
+                                            anchors.rightMargin: 4
+
+                                            Text {
+                                                text: modelData.label
+                                                color: "#c0c0c0"
+                                                font.pixelSize: 12
+                                                Layout.fillWidth: true
+                                            }
+
+                                            Rectangle {
+                                                width: 16; height: 16; radius: 8
+                                                border.color: parent.parent.parent.parent.currentProfile === modelData.id ? "#4a9eff" : "#666"
+                                                border.width: 1.5
+                                                color: "transparent"
+
+                                                Rectangle {
+                                                    anchors.centerIn: parent
+                                                    width: 8; height: 8; radius: 4
+                                                    color: "#4a9eff"
+                                                    visible: parent.parent.parent.parent.parent.parent.currentProfile === modelData.id
+                                                }
+                                            }
+                                        }
+
+                                        MouseArea {
+                                            id: profArea
+                                            anchors.fill: parent
+                                            hoverEnabled: true
+                                            onClicked: {
+                                                if (keyboard) {
+                                                    keyboard.setAccessibilityProfile(modelData.id)
+                                                    parent.parent.parent.currentProfile = modelData.id
+                                                    unifiedSettings.settingChanged("accessibilityProfile", modelData.id)
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // -- VOCABULARY PACKS --
+                    SettingsSection {
+                        title: "Vocabulary Packs"
+                        Layout.fillWidth: true
+
+                        ColumnLayout {
+                            id: vocabColumn
+                            Layout.fillWidth: true
+                            spacing: 4
+
+                            property var enabledPacks: []
+
+                            Component.onCompleted: {
+                                if (keyboard) enabledPacks = keyboard.getEnabledPacks()
+                            }
+
+                            Repeater {
+                                model: [
+                                    { id: "medical",      label: "Medical" },
+                                    { id: "programming",  label: "Programming" },
+                                    { id: "academic",     label: "Academic" },
+                                    { id: "gaming",       label: "Gaming" },
+                                    { id: "business",     label: "Business" }
+                                ]
+
+                                SettingsToggle {
+                                    Layout.fillWidth: true
+                                    text: modelData.label
+                                    checked: vocabColumn.enabledPacks.indexOf(modelData.id) >= 0
+
+                                    onToggled: function(c) {
+                                        if (keyboard) {
+                                            if (c)
+                                                keyboard.enableVocabularyPack(modelData.id)
+                                            else
+                                                keyboard.disableVocabularyPack(modelData.id)
+                                            vocabColumn.enabledPacks = keyboard.getEnabledPacks()
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // -- THEME --
                     SettingsSection {
                         title: "Theme"
                         Layout.fillWidth: true
@@ -182,7 +384,7 @@ Item {
 
                                     Text {
                                         anchors.centerIn: parent
-                                        text: unifiedSettings.currentTheme === modelData.name ? "✓" : ""
+                                        text: unifiedSettings.currentTheme === modelData.name ? "\u2713" : ""
                                         color: modelData.name === "light" ? "#333" : "#fff"
                                         font.pixelSize: 14
                                         font.bold: true
@@ -198,7 +400,66 @@ Item {
                         }
                     }
 
-                    // ── DEBUG ────────────────────────────────────────────
+                    // -- DATA --
+                    SettingsSection {
+                        title: "Data"
+                        Layout.fillWidth: true
+
+                        ColumnLayout {
+                            Layout.fillWidth: true
+                            spacing: 6
+
+                            // Save model button
+                            Rectangle {
+                                Layout.fillWidth: true
+                                implicitHeight: 30
+                                radius: 5
+                                color: saveArea.containsMouse ? "#3a5a3a" : "#2a3a2a"
+                                border.color: "#4a6a4a"
+
+                                Text {
+                                    anchors.centerIn: parent
+                                    text: "Save Prediction Model"
+                                    color: "#aaffaa"
+                                    font.pixelSize: 12
+                                }
+
+                                MouseArea {
+                                    id: saveArea
+                                    anchors.fill: parent
+                                    hoverEnabled: true
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: { if (keyboard) keyboard.savePredictionModel() }
+                                }
+                            }
+
+                            // Clear user data button
+                            Rectangle {
+                                Layout.fillWidth: true
+                                implicitHeight: 30
+                                radius: 5
+                                color: clearArea.containsMouse ? "#5a2a2a" : "#3a2222"
+                                border.color: "#6a4444"
+
+                                Text {
+                                    anchors.centerIn: parent
+                                    text: "Clear Learned Data"
+                                    color: "#ffaaaa"
+                                    font.pixelSize: 12
+                                }
+
+                                MouseArea {
+                                    id: clearArea
+                                    anchors.fill: parent
+                                    hoverEnabled: true
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: { if (keyboard) keyboard.clearUserData() }
+                                }
+                            }
+                        }
+                    }
+
+                    // -- DEVELOPER --
                     SettingsSection {
                         title: "Developer"
                         Layout.fillWidth: true

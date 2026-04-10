@@ -2,6 +2,7 @@ import QtQuick 2.15
 import QtQuick.Controls 2.15
 import QtQuick.Layouts 1.15
 import QtQuick.Window 2.15
+import QtCore
 import "components" as Comp
 
 Window {
@@ -15,17 +16,53 @@ Window {
     color: "transparent"
     title: "Alpha-OSK"
 
+    // Persistent settings — saved automatically on change, restored on launch
+    Settings {
+        id: appSettings
+        category: "ui"
+        property bool savedShowNavigation: true
+        property bool savedShowNumpad: false
+        property bool savedShowFunctionRow: false
+        property string savedTheme: "dark"
+        property bool savedSuggestionsEnabled: true
+    }
+
     // Position once at startup — do NOT bind x/y to width/height or resize
     // will feel inverted (window re-centers on every pixel change)
     Component.onCompleted: {
+        // Load saved preferences
+        root.showNavigation = appSettings.savedShowNavigation
+        root.showNumpad = appSettings.savedShowNumpad
+        root.showFunctionRow = appSettings.savedShowFunctionRow
+        root.currentTheme = appSettings.savedTheme
+        root.suggestionsEnabled = appSettings.savedSuggestionsEnabled
+
+        // Set initial width accounting for saved panel state
+        var w = 880
+        if (root.showNavigation) w += 200
+        if (root.showNumpad) w += 220
+        root.width = w
+
         root.x = (Screen.width - root.width) / 2
         root.y = Screen.height - root.height - 40
+        root._loaded = true
     }
 
     // When side panels toggle, grow/shrink from the right edge (left stays put)
     // Deltas sized to keep main keys ~same size (≈ 2.7*keyW+17 for nav, 3.6*keyW+19 for numpad at default scale)
-    onShowNavigationChanged: root.width += showNavigation ? 175 : -175
-    onShowNumpadChanged: root.width += showNumpad ? 220 : -220
+    onShowNavigationChanged: {
+        if (_loaded) root.width += showNavigation ? 200 : -200
+        appSettings.savedShowNavigation = showNavigation
+    }
+    onShowNumpadChanged: {
+        if (_loaded) root.width += showNumpad ? 220 : -220
+        appSettings.savedShowNumpad = showNumpad
+    }
+
+    // Clear suggestions when the window loses activation (user clicked away)
+    onActiveChanged: {
+        if (!active && keyboard) keyboard.clearPredictions()
+    }
 
     // Keyboard state from Python bridge
     property bool shiftOn: keyboard ? keyboard.shiftActive : false
@@ -46,9 +83,13 @@ Window {
     property bool showNavigation: false
     property bool showNumpad: false
     property bool showSettings: false
-    
+    property bool suggestionsEnabled: true
+
     // Debug
     property bool showDebugPanel: false
+
+    // Guard to prevent double width adjustments during startup
+    property bool _loaded: false
     property var debugLog: []
     property string debugContext: ""
 
@@ -57,16 +98,16 @@ Window {
     property real keySpacing: 3
 
     // Total key-width units across all visible sections:
-    // Main keyboard home row: Caps(1.6) + 9 alpha + ; + ' + Enter(1.8) = 14.4 units
+    // Widest row is the number row: Esc(1) + `(1) + 10 nums + -(1) + Backspace(1.5) = 14.5 units
     // Nav panel: 3 keys × 0.9 = 2.7 units;  Numpad: 4 keys × 0.9 = 3.6 units
-    property real totalKeyUnits: 14.4
+    property real totalKeyUnits: 14.5
         + (showNavigation ? 2.7 : 0)
         + (showNumpad ? 3.6 : 0)
 
-    // Fixed-pixel overhead: margins(8×2=16) + main gaps(12×3=36)
+    // Fixed-pixel overhead: margins(8×2=16) + number-row gaps(14×3=42)
     // + per-panel: separator(1) + panel gaps + 2×RowLayout spacing(6)
     // Nav: 1 + 2×2 + 2×6 = 17;  Numpad: 1 + 3×2 + 2×6 = 19
-    property real layoutFixedPixels: 52
+    property real layoutFixedPixels: 58
         + (showNavigation ? 17 : 0)
         + (showNumpad ? 19 : 0)
 
@@ -205,7 +246,7 @@ Window {
             MouseArea {
                 id: dragArea
                 anchors.fill: parent
-                anchors.rightMargin: 120  // Leave space for buttons
+                anchors.rightMargin: 155  // Leave space for buttons
                 cursorShape: Qt.SizeAllCursor
                 
                 property real startMouseX
@@ -249,6 +290,35 @@ Window {
                 anchors.verticalCenter: parent.verticalCenter
                 spacing: 6
                 
+                // Suggestions toggle button
+                Rectangle {
+                    width: 28
+                    height: 24
+                    radius: 4
+                    color: sugToggle.containsMouse ? "#444" : "transparent"
+
+                    Text {
+                        anchors.centerIn: parent
+                        text: "Aa"
+                        font.pixelSize: 12
+                        font.weight: Font.Medium
+                        color: root.suggestionsEnabled ? "#4a9eff" : "#555"
+                        font.strikeout: !root.suggestionsEnabled
+                    }
+
+                    MouseArea {
+                        id: sugToggle
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: {
+                            root.suggestionsEnabled = !root.suggestionsEnabled
+                            appSettings.savedSuggestionsEnabled = root.suggestionsEnabled
+                            if (!root.suggestionsEnabled && keyboard) keyboard.clearPredictions()
+                        }
+                    }
+                }
+
                 // Settings button (gear icon) - opens unified settings
                 Rectangle {
                     width: 28
@@ -342,63 +412,83 @@ Window {
                     keyH: root.keyH * 0.7
                 }
 
-                // ===== Prediction Bar =====
-                Row {
-                    Layout.alignment: Qt.AlignHCenter
-                    Layout.bottomMargin: 4
-                    spacing: 8
+                // ===== Prediction Bar (fixed height to prevent window resizing) =====
+                Item {
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: root.suggestionsEnabled ? 40 : 0
+                    Layout.bottomMargin: root.suggestionsEnabled ? 4 : 0
+                    clip: true
 
-                    Repeater {
-                        model: root.predictions.length > 0 ? root.predictions.slice(0, 5) : []
-                        delegate: Rectangle {
-                            width: Math.max(80, predText.implicitWidth + 28)
-                            height: 36
-                            radius: 8
-                            color: predMouse.containsMouse ? "#3d4d5d" : "#2a3a4a"
-                            border.color: predMouse.containsMouse ? "#6ab4ff" : "#4a9eff"
-                            border.width: predMouse.containsMouse ? 2 : 1
-                            
-                            // Subtle gradient for depth
-                            Rectangle {
-                                anchors.fill: parent
-                                anchors.margins: 1
-                                radius: parent.radius - 1
-                                gradient: Gradient {
-                                    GradientStop { position: 0.0; color: Qt.rgba(1, 1, 1, 0.08) }
-                                    GradientStop { position: 1.0; color: Qt.rgba(0, 0, 0, 0.05) }
+                    Behavior on Layout.preferredHeight { NumberAnimation { duration: 150 } }
+
+                    Row {
+                        anchors.centerIn: parent
+                        spacing: 8
+                        visible: root.suggestionsEnabled
+
+                        Repeater {
+                            model: root.suggestionsEnabled && root.predictions.length > 0 ? root.predictions : []
+                            delegate: Rectangle {
+                                width: Math.max(80, predText.implicitWidth + 28)
+                                height: 36
+                                radius: 8
+                                color: predMouse.containsMouse ? "#3d4d5d" : "#2a3a4a"
+                                border.color: predMouse.containsMouse ? "#6ab4ff" : "#4a9eff"
+                                border.width: predMouse.containsMouse ? 2 : 1
+
+                                // Subtle gradient for depth
+                                Rectangle {
+                                    anchors.fill: parent
+                                    anchors.margins: 1
+                                    radius: parent.radius - 1
+                                    gradient: Gradient {
+                                        GradientStop { position: 0.0; color: Qt.rgba(1, 1, 1, 0.08) }
+                                        GradientStop { position: 1.0; color: Qt.rgba(0, 0, 0, 0.05) }
+                                    }
                                 }
-                            }
 
-                            Text {
-                                id: predText
-                                anchors.centerIn: parent
-                                text: modelData
-                                color: predMouse.containsMouse ? "#ffffff" : "#f0f0f0"
-                                font.pixelSize: 15
-                                font.weight: Font.Medium
-                                font.family: "Ubuntu, Noto Sans, sans-serif"
-                            }
+                                Text {
+                                    id: predText
+                                    anchors.centerIn: parent
+                                    text: modelData
+                                    color: predMouse.containsMouse ? "#ffffff" : "#f0f0f0"
+                                    font.pixelSize: 15
+                                    font.weight: Font.Medium
+                                    font.family: "Ubuntu, Noto Sans, sans-serif"
+                                }
 
-                            MouseArea {
-                                id: predMouse
-                                anchors.fill: parent
-                                hoverEnabled: true
-                                cursorShape: Qt.PointingHandCursor
-                                onClicked: keyboard.pressPrediction(modelData)
+                                MouseArea {
+                                    id: predMouse
+                                    anchors.fill: parent
+                                    hoverEnabled: true
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: keyboard.pressPrediction(modelData)
+                                }
+
+                                // Smooth hover animation
+                                Behavior on color { ColorAnimation { duration: 100 } }
+                                Behavior on border.color { ColorAnimation { duration: 100 } }
                             }
-                            
-                            // Smooth hover animation
-                            Behavior on color { ColorAnimation { duration: 100 } }
-                            Behavior on border.color { ColorAnimation { duration: 100 } }
                         }
                     }
-                    
                 }
 
                 // ===== Number Row =====
                 Row {
                     Layout.alignment: Qt.AlignHCenter
                     spacing: root.keySpacing
+
+                    // Escape (always visible)
+                    Comp.KeyButton {
+                        keyText: "escape"
+                        displayText: "Esc"
+                        keyWidth: root.keyW
+                        keyHeight: root.keyH - 4
+                        fontSize: 11
+                        isSpecial: true
+                        keyColor: "#333"
+                        onKeyPressed: keyboard.pressSpecialKey("escape")
+                    }
 
                     // Backtick/Tilde
                     Comp.KeyButton {
@@ -901,14 +991,28 @@ Window {
             showNavigation: root.showNavigation
             showNumpad: root.showNumpad
             currentTheme: root.currentTheme
+            suggestionsEnabled: root.suggestionsEnabled
+            predictionCount: keyboard ? keyboard.predictionCount : 8
             debugMode: root.showDebugPanel
 
             onSettingChanged: function(setting, value) {
-                if (setting === "functionRow") root.showFunctionRow = value
-                else if (setting === "navigation") root.showNavigation = value
-                else if (setting === "numpad") root.showNumpad = value
-                else if (setting === "theme") root.currentTheme = value
-                else if (setting === "debugMode") {
+                if (setting === "functionRow") {
+                    root.showFunctionRow = value
+                    appSettings.savedShowFunctionRow = value
+                } else if (setting === "navigation") {
+                    root.showNavigation = value
+                } else if (setting === "numpad") {
+                    root.showNumpad = value
+                } else if (setting === "theme") {
+                    root.currentTheme = value
+                    appSettings.savedTheme = value
+                } else if (setting === "suggestions") {
+                    root.suggestionsEnabled = value
+                    appSettings.savedSuggestionsEnabled = value
+                    if (!value && keyboard) keyboard.clearPredictions()
+                } else if (setting === "predictionCount") {
+                    if (keyboard) keyboard.setPredictionCount(value)
+                } else if (setting === "debugMode") {
                     root.showDebugPanel = value
                     if (keyboard) keyboard.setDebugMode(value)
                 }

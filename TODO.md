@@ -13,8 +13,18 @@
 - [ ] **Scanning mode** — Row/column scanning for switch users
 - [x] **Adjustable key sizes** — Compact mode toggle in settings
 - [ ] **High-contrast themes** — WCAG-compliant color schemes
-- [x] **Sticky/latch keys** — Shift, Caps, Ctrl, Alt, Win/Super (auto-release)
+- [x] **Sticky/latch keys** — Shift, Caps, Ctrl, Alt, Win/Super (all auto-release after keypress)
 - [x] **Modular layout** — Toggleable Function Row, Nav Panel, Numpad
+- [x] **Key hover effect** — Keys lighten on mouse hover
+- [x] **Multi-modifier shortcuts** — Win+Shift+S, Ctrl+Shift+T, etc. work correctly
+- [x] **Escape key always visible** — Placed in number row (not behind Function Keys toggle)
+- [x] **System keys in nav panel** — PrtSc, ScrLk, Pause grouped with navigation keys
+- [x] **Persistent preferences** — Layout toggles, theme, suggestions saved via Qt Settings
+- [x] **Suggestions toggle** — "Aa" button in title bar, quick on/off
+- [x] **Predictions clear on deactivation** — Suggestions clear when user clicks away
+- [x] **No predictions for numbers** — Typing digits/symbols clears suggestion bar
+- [x] **Configurable suggestion count** — 3–10 suggestions (default 8), adjustable in settings
+- [x] **Comprehensive settings panel** — Layout, suggestions, accessibility profiles, vocabulary packs, theme, data management
 
 ## Phase 3: AI Prediction ✅
 
@@ -98,12 +108,17 @@
 - [x] Dark theme with press animations
 - [x] Draggable window (stays on top, no focus steal)
 - [x] Hybrid prediction engine (n-gram + LLM)
-- [x] Function row (F1-F12, Esc, PrtSc, etc.)
-- [x] Navigation panel (Ins, Del, Home, End, PgUp, PgDn, Arrows)
+- [x] Function row (F1-F12)
+- [x] Escape key always visible in number row
+- [x] Navigation panel (PrtSc, ScrLk, Pause, Ins, Del, Home, End, PgUp, PgDn, Arrows)
 - [x] Number pad with NumLock
-- [x] Settings panel with layout toggles
+- [x] Settings panel — layout, suggestions, accessibility profiles, vocabulary packs, theme, data
 - [x] Compact mode option
 - [x] LLM_ONBOARDING.md updated for AI assistants
 - [x] Key hold/repeat functionality
+- [x] Key hover effect (lighten on mouse hover)
 - [x] Next-word prediction after word selection
+- [x] Suggestions toggle (Aa button in title bar)
+- [x] Persistent preferences via Qt Settings
+- [x] Multi-modifier shortcuts (Win+Shift+S, etc.)
 - [x] Windows port — Platform abstraction, SendInput, UIAccess manifest

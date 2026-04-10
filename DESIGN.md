@@ -112,7 +112,10 @@ For limited screen space or one-handed use:
 ## AI Prediction Behavior
 
 ### Prediction Display
-- Show 3-5 predictions above keyboard
+- Show up to 8 predictions above keyboard (fills available space)
+- Predictions only appear for alphabetic input (not numbers/symbols)
+- Quick toggle via "Aa" button in title bar; preference is persisted
+- Predictions clear when keyboard loses focus (user clicks away)
 - First prediction can be selected with Space (optional)
 - Predictions update after each keystroke
 
@@ -272,19 +275,28 @@ For limited screen space or one-handed use:
 - ✅ QWERTY layout (adaptive, matches design spec)
 - ✅ Number layer (1-0 with symbols on shift)
 - ✅ Symbol layer (#+= toggle)
-- ✅ Sticky modifiers: Shift, Caps Lock, Ctrl, Alt
-- ✅ Auto-release modifiers after keypress
-- ✅ Prediction bar UI (3 slots + close button)
+- ✅ Sticky modifiers: Shift, Caps Lock, Ctrl, Alt, Win (all auto-release after keypress)
+- ✅ Multi-modifier shortcuts (Win+Shift+S, Ctrl+Shift+T, etc.) — Shift sent as modifier when combined with Ctrl/Alt/Win
+- ✅ Key hover effect — keys lighten on mouse hover
+- ✅ Prediction bar UI (up to 8 suggestions, fixed height to prevent window resizing)
+- ✅ Suggestions toggle ("Aa" button in title bar, persisted across sessions)
 - ✅ Dark theme with gradients and press animations
 - ✅ Draggable via top handle
 - ✅ Special keys: Backspace, Enter, Tab, Arrows, Space
+- ✅ Escape key always visible (start of number row)
 - ✅ Responsive key scaling — keys resize dynamically when window is dragged
-- ✅ Side panels (Navigation, Numpad) — window auto-expands when toggled on
-- ✅ Function row (F1-F12, Esc, PrtSc, etc.)
+- ✅ Side panels (Navigation + system keys, Numpad) — window auto-expands when toggled on
+- ✅ Navigation panel includes PrtSc/ScrLk/Pause alongside Ins/Home/PgUp/arrows
+- ✅ Function row (F1-F12)
+- ✅ Persistent preferences — layout panels, theme, and suggestions toggle saved via Qt Settings
+- ✅ Navigation keys open by default
 - ✅ Compact mode toggle
+- ✅ Comprehensive settings panel — layout toggles, suggestions (toggle + count), accessibility profiles, vocabulary packs, theme swatches, data management (save model, clear learned data)
+- ✅ Configurable suggestion count (3–10, adjustable in settings)
+- ✅ Accessibility profiles selectable from settings (precise, normal, tremor levels, limited mobility)
+- ✅ Vocabulary pack management in settings (medical, programming, academic, gaming, business)
 
 ### Pending Features
-- ⏳ AI prediction engine (see docs/PREDICTION_OPTIONS.md)
 - ⏳ Dwell-click mode
 - ⏳ Scanning mode
 - ⏳ High-contrast themes

@@ -62,7 +62,8 @@ def _setup_platform_env() -> None:
     """
     if CURRENT_PLATFORM == "linux":
         os.environ.setdefault("QT_QPA_PLATFORM", "xcb")
-    # Windows: Qt auto-selects the correct backend; nothing to set.
+    # Use Basic style so ScrollBar/Switch customization works without warnings
+    os.environ.setdefault("QT_QUICK_CONTROLS_STYLE", "Basic")
 
 
 def _apply_window_flags(root) -> None:

@@ -69,12 +69,18 @@ Current on-screen keyboards on Linux (GNOME On-Board) and Windows (built-in OSK)
 
 - ✅ **QWERTY layout** with shift/caps lock toggle
 - ✅ **Number and symbol layers** (123/#+= toggle)
-- ✅ **Sticky modifiers** — Ctrl, Alt (auto-release after next key)
+- ✅ **Sticky modifiers** — Shift, Ctrl, Alt, Win (all auto-release after next key)
+- ✅ **Multi-modifier shortcuts** — Win+Shift+S, Ctrl+Shift+T, etc. work correctly
 - ✅ **Key synthesis** via xdotool/ydotool (Linux) or SendInput (Windows)
-- ✅ **Dark theme** with press animations
+- ✅ **Dark theme** with press animations and key hover effect
 - ✅ **Draggable window** — stays on top, doesn't steal focus
-- ✅ **Prediction bar** — hybrid n-gram/PPM/fuzzy engine with smart learning
+- ✅ **Prediction bar** — hybrid n-gram/PPM/fuzzy engine with smart learning (up to 8 suggestions)
+- ✅ **Suggestions toggle** — "Aa" button in title bar to quickly enable/disable predictions
+- ✅ **Persistent preferences** — layout panels, theme, and suggestions setting saved across sessions
+- ✅ **Navigation panel** — arrow keys, Ins/Del/Home/End/PgUp/PgDn, plus PrtSc/ScrLk/Pause (open by default)
+- ✅ **Escape key** always visible in the number row
 - ✅ **Vocabulary packs** — medical, programming, academic, gaming, business (enable/disable at runtime)
+- ✅ **Settings panel** — layout, suggestions (toggle + count), accessibility profiles, vocabulary packs, theme, data management
 
 ## Inspiration
 

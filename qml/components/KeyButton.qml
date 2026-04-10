@@ -54,9 +54,12 @@ Item {
         radius: keyRoot.radius
         color: mouseArea.pressed ? keyPressedColor
              : isActive ? "#4a9eff"
+             : mouseArea.containsMouse ? Qt.lighter(keyColor, 1.25)
              : keyColor
 
-        border.color: isActive ? "#6ab4ff" : "#505050"
+        border.color: isActive ? "#6ab4ff"
+                    : mouseArea.containsMouse ? Qt.lighter("#505050", 1.4)
+                    : "#505050"
         border.width: 1
 
         // Subtle gradient overlay
@@ -102,7 +105,8 @@ Item {
     MouseArea {
         id: mouseArea
         anchors.fill: parent
-        
+        hoverEnabled: true
+
         onPressed: {
             keyRoot.keyPressed()
             // Enable repeat based on enableRepeat property (not isSpecial)

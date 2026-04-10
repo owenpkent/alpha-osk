@@ -91,7 +91,7 @@ class KeyboardBridge(QObject):
         _logger.info("Prediction engine initialized")
 
         # Prediction settings
-        self._prediction_count = 5
+        self._prediction_count = 8
         self._debug_mode = False
         self._debug_log: List[str] = []
 
@@ -112,6 +112,8 @@ class KeyboardBridge(QObject):
         """
         # Gather active modifiers
         modifiers = []
+        if self._shift_active:
+            modifiers.append("shift")
         if self._ctrl_active:
             modifiers.append("ctrl")
         if self._alt_active:
@@ -145,9 +147,10 @@ class KeyboardBridge(QObject):
             self._context_buffer = self._context_buffer[:-1]
             _logger.info("Removed space before '%s'", char)
 
-        # Use _send_key for modifier combos (Ctrl+C, Ctrl+V, etc.)
+        # Use _send_key for modifier combos (Ctrl+C, Win+Shift+S, etc.)
+        # Send the lowercase key — Shift is included as a modifier by _send_key
         if self._ctrl_active or self._alt_active or self._win_active:
-            self._send_key(char)
+            self._send_key(key.lower())
         else:
             self._send_text(char)
 
@@ -165,7 +168,12 @@ class KeyboardBridge(QObject):
             if len(self._context_buffer) > 200:
                 self._context_buffer = self._context_buffer[-200:]
 
-        self._update_predictions()
+        # Only show predictions for alphabetic input
+        if char.isalpha():
+            self._update_predictions()
+        else:
+            self._predictions = []
+            self.predictionsChanged.emit([])
 
         # Auto-release shift after one keypress (not caps lock)
         if self._shift_active and not self._caps_lock_active:
@@ -173,13 +181,16 @@ class KeyboardBridge(QObject):
             self._update_layer()
             self.shiftActiveChanged.emit(self._shift_active)
 
-        # Auto-release ctrl/alt after one keypress
+        # Auto-release ctrl/alt/win after one keypress
         if self._ctrl_active:
             self._ctrl_active = False
             self.ctrlActiveChanged.emit(self._ctrl_active)
         if self._alt_active:
             self._alt_active = False
             self.altActiveChanged.emit(self._alt_active)
+        if self._win_active:
+            self._win_active = False
+            self.winActiveChanged.emit(self._win_active)
 
     @Slot(str)
     def pressSpecialKey(self, key_name: str) -> None:
@@ -246,13 +257,16 @@ class KeyboardBridge(QObject):
             self._current_word = ""
             self._update_predictions()
 
-        # Auto-release ctrl/alt after special key too
+        # Auto-release ctrl/alt/win after special key too
         if self._ctrl_active:
             self._ctrl_active = False
             self.ctrlActiveChanged.emit(self._ctrl_active)
         if self._alt_active:
             self._alt_active = False
             self.altActiveChanged.emit(self._alt_active)
+        if self._win_active:
+            self._win_active = False
+            self.winActiveChanged.emit(self._win_active)
 
     @Slot()
     def toggleShift(self) -> None:
@@ -333,13 +347,19 @@ class KeyboardBridge(QObject):
         _logger.info("Context for next-word prediction: '%s' (ends_with_space=%s)",
                      context_for_prediction, context_for_prediction.endswith(" "))
 
-        next_preds = self._predictor.predict(context_for_prediction, n=5)
+        next_preds = self._predictor.predict(context_for_prediction, n=self._prediction_count)
         _logger.info("Next-word predictions: %s", next_preds)
 
         # Update with next-word predictions
         self._predictions = next_preds
         self.predictionsChanged.emit(next_preds)
         self._add_debug_log(f"Next-word after '{word}': {next_preds}")
+
+    @Slot()
+    def clearPredictions(self) -> None:
+        """Clear current predictions (called from QML on dismiss/deactivation)."""
+        self._predictions = []
+        self.predictionsChanged.emit([])
 
     # --- Properties for QML ---
 
@@ -386,7 +406,7 @@ class KeyboardBridge(QObject):
     def _update_predictions(self) -> None:
         """Request updated predictions from the engine."""
         context = self._context_buffer + self._current_word
-        self._predictor.predict_with_refinement(context, n=5)
+        self._predictor.predict_with_refinement(context, n=self._prediction_count)
 
     def _on_predictions_ready(self, predictions: List[str]) -> None:
         """Handle instant n-gram predictions."""
