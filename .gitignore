@@ -20,6 +20,7 @@ _draft_*
 *.tmp
 .cascade/
 .cursor/
+.claude/settings.local.json
 
 # OS
 .DS_Store
