@@ -11,6 +11,10 @@ Item {
     property bool showNavigation: false
     property bool showNumpad: false
     property string currentTheme: "dark"
+    property var themeData: ({})
+    property real windowOpacity: 1.0
+    property string currentLayout: "qwerty"
+    property bool audioEnabled: false
 
     // Suggestions
     property bool suggestionsEnabled: true
@@ -156,6 +160,45 @@ Item {
                         }
                     }
 
+                    // -- KEYBOARD LAYOUT --
+                    SettingsSection {
+                        title: "Keyboard Layout"
+                        Layout.fillWidth: true
+
+                        Row {
+                            spacing: 6
+
+                            Repeater {
+                                model: keyboard ? keyboard.getAvailableLayouts() : []
+
+                                Rectangle {
+                                    width: 72
+                                    height: 28
+                                    radius: 5
+                                    color: unifiedSettings.currentLayout === modelData.id
+                                           ? "#4a9eff" : (layoutBtnArea.containsMouse ? "#444" : "#333")
+                                    border.color: unifiedSettings.currentLayout === modelData.id ? "#6ab4ff" : "#555"
+
+                                    Text {
+                                        anchors.centerIn: parent
+                                        text: modelData.name
+                                        color: unifiedSettings.currentLayout === modelData.id ? "#fff" : "#ccc"
+                                        font.pixelSize: 11
+                                        font.weight: Font.DemiBold
+                                    }
+
+                                    MouseArea {
+                                        id: layoutBtnArea
+                                        anchors.fill: parent
+                                        hoverEnabled: true
+                                        cursorShape: Qt.PointingHandCursor
+                                        onClicked: unifiedSettings.settingChanged("layout", modelData.id)
+                                    }
+                                }
+                            }
+                        }
+                    }
+
                     // -- SUGGESTIONS --
                     SettingsSection {
                         title: "Suggestions"
@@ -250,12 +293,12 @@ Item {
 
                             Repeater {
                                 model: [
-                                    { id: "precise",          label: "Precise" },
-                                    { id: "normal",           label: "Normal" },
-                                    { id: "mild_tremor",      label: "Mild Tremor" },
-                                    { id: "moderate_tremor",  label: "Moderate Tremor" },
-                                    { id: "severe_tremor",    label: "Severe Tremor" },
-                                    { id: "limited_mobility", label: "Limited Mobility" }
+                                    { id: "precise",          label: "Precise \u2014 strict targeting, no autocorrect" },
+                                    { id: "normal",           label: "Normal \u2014 balanced accuracy and assistance" },
+                                    { id: "mild_tremor",      label: "Mild Tremor \u2014 slightly wider key targets" },
+                                    { id: "moderate_tremor",  label: "Moderate Tremor \u2014 wider targets, slower repeat" },
+                                    { id: "severe_tremor",    label: "Severe Tremor \u2014 widest targets, max assistance" },
+                                    { id: "limited_mobility", label: "Limited Mobility \u2014 wider reach, slower repeat" }
                                 ]
 
                                 Item {
@@ -365,27 +408,22 @@ Item {
                             spacing: 8
 
                             Repeater {
-                                model: [
-                                    { name: "dark",   color: "#1a1a1a", accent: "#4a9eff" },
-                                    { name: "light",  color: "#e8e8e8", accent: "#0078d4" },
-                                    { name: "blue",   color: "#1a2a3a", accent: "#4a9eff" },
-                                    { name: "green",  color: "#1a2a1a", accent: "#4aff4a" },
-                                    { name: "purple", color: "#2a1a3a", accent: "#bb66ff" }
-                                ]
+                                model: Object.keys(unifiedSettings.themeData)
 
                                 Rectangle {
+                                    property var t: unifiedSettings.themeData[modelData]
                                     width: 34
                                     height: 34
                                     radius: 7
-                                    color: modelData.color
-                                    border.color: unifiedSettings.currentTheme === modelData.name
-                                                  ? modelData.accent : "#555"
-                                    border.width: unifiedSettings.currentTheme === modelData.name ? 2 : 1
+                                    color: t.background
+                                    border.color: unifiedSettings.currentTheme === modelData
+                                                  ? t.accent : "#555"
+                                    border.width: unifiedSettings.currentTheme === modelData ? 2 : 1
 
                                     Text {
                                         anchors.centerIn: parent
-                                        text: unifiedSettings.currentTheme === modelData.name ? "\u2713" : ""
-                                        color: modelData.name === "light" ? "#333" : "#fff"
+                                        text: unifiedSettings.currentTheme === modelData ? "\u2713" : ""
+                                        color: modelData === "light" ? "#333" : "#fff"
                                         font.pixelSize: 14
                                         font.bold: true
                                     }
@@ -393,7 +431,88 @@ Item {
                                     MouseArea {
                                         anchors.fill: parent
                                         cursorShape: Qt.PointingHandCursor
-                                        onClicked: unifiedSettings.settingChanged("theme", modelData.name)
+                                        onClicked: unifiedSettings.settingChanged("theme", modelData)
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // -- APPEARANCE --
+                    SettingsSection {
+                        title: "Appearance"
+                        Layout.fillWidth: true
+
+                        ColumnLayout {
+                            Layout.fillWidth: true
+                            spacing: 4
+
+                            SettingsToggle {
+                                Layout.fillWidth: true
+                                text: "Key Click Sound"
+                                checked: unifiedSettings.audioEnabled
+                                onToggled: function(c) { unifiedSettings.settingChanged("audio", c) }
+                            }
+
+                            // Opacity slider
+                            Item {
+                                Layout.fillWidth: true
+                                implicitHeight: 28
+
+                                RowLayout {
+                                    anchors.fill: parent
+                                    anchors.leftMargin: 4
+                                    anchors.rightMargin: 4
+                                    spacing: 8
+
+                                    Text {
+                                        text: "Opacity"
+                                        color: "#c0c0c0"
+                                        font.pixelSize: 12
+                                    }
+
+                                    Slider {
+                                        id: opacitySlider
+                                        Layout.fillWidth: true
+                                        from: 0.3
+                                        to: 1.0
+                                        stepSize: 0.05
+                                        value: unifiedSettings.windowOpacity
+
+                                        background: Rectangle {
+                                            x: opacitySlider.leftPadding
+                                            y: opacitySlider.topPadding + opacitySlider.availableHeight / 2 - height / 2
+                                            width: opacitySlider.availableWidth
+                                            height: 4
+                                            radius: 2
+                                            color: "#333"
+
+                                            Rectangle {
+                                                width: opacitySlider.visualPosition * parent.width
+                                                height: parent.height
+                                                radius: 2
+                                                color: "#4a9eff"
+                                            }
+                                        }
+
+                                        handle: Rectangle {
+                                            x: opacitySlider.leftPadding + opacitySlider.visualPosition * (opacitySlider.availableWidth - width)
+                                            y: opacitySlider.topPadding + opacitySlider.availableHeight / 2 - height / 2
+                                            width: 14
+                                            height: 14
+                                            radius: 7
+                                            color: opacitySlider.pressed ? "#fff" : "#ddd"
+                                        }
+
+                                        onMoved: unifiedSettings.settingChanged("windowOpacity", value)
+                                    }
+
+                                    Text {
+                                        text: Math.round(opacitySlider.value * 100) + "%"
+                                        color: "#fff"
+                                        font.pixelSize: 11
+                                        Layout.preferredWidth: 32
+                                        horizontalAlignment: Text.AlignRight
                                     }
                                 }
                             }
@@ -456,6 +575,18 @@ Item {
                                     onClicked: { if (keyboard) keyboard.clearUserData() }
                                 }
                             }
+                        }
+                    }
+
+                    // -- ANALYTICS --
+                    SettingsSection {
+                        title: "Session Analytics"
+                        Layout.fillWidth: true
+
+                        AnalyticsDashboard {
+                            Layout.fillWidth: true
+                            implicitHeight: 340
+                            visible: true
                         }
                     }
 

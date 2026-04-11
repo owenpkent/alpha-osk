@@ -25,6 +25,9 @@ Window {
         property bool savedShowFunctionRow: false
         property string savedTheme: "dark"
         property bool savedSuggestionsEnabled: true
+        property real savedWindowOpacity: 1.0
+        property string savedLayout: "qwerty"
+        property bool savedAudioEnabled: false
     }
 
     // Position once at startup — do NOT bind x/y to width/height or resize
@@ -36,6 +39,18 @@ Window {
         root.showFunctionRow = appSettings.savedShowFunctionRow
         root.currentTheme = appSettings.savedTheme
         root.suggestionsEnabled = appSettings.savedSuggestionsEnabled
+
+        // Load audio setting
+        if (keyboard && appSettings.savedAudioEnabled) {
+            keyboard.setAudioEnabled(true)
+        }
+
+        // Load saved keyboard layout
+        if (keyboard && appSettings.savedLayout !== "qwerty") {
+            keyboard.setLayout(appSettings.savedLayout)
+            root.currentLayout = appSettings.savedLayout
+        }
+        root.layoutRows = keyboard ? keyboard.getLayoutRows() : []
 
         // Set initial width accounting for saved panel state
         var w = 880
@@ -64,6 +79,12 @@ Window {
         if (!active && keyboard) keyboard.clearPredictions()
     }
 
+    // Window transparency (0.3 = very transparent, 1.0 = fully opaque)
+    property real windowOpacity: appSettings.savedWindowOpacity
+
+    // Audio feedback
+    property bool audioEnabled: appSettings.savedAudioEnabled
+
     // Keyboard state from Python bridge
     property bool shiftOn: keyboard ? keyboard.shiftActive : false
     property bool capsOn: keyboard ? keyboard.capsLockActive : false
@@ -77,7 +98,11 @@ Window {
     // Predictions from hybrid engine
     property var predictions: []
     property bool predictionsLoading: false
-    
+
+    // Keyboard layout (data-driven from JSON)
+    property var layoutRows: keyboard ? keyboard.getLayoutRows() : []
+    property string currentLayout: appSettings.savedLayout
+
     // Layout toggles (modular panels)
     property bool showFunctionRow: false
     property bool showNavigation: false
@@ -130,57 +155,26 @@ Window {
     }
     
     // ===== Color Theme System =====
-    property string currentTheme: "dark"  // "dark", "light", "blue", "green", "purple"
-    
-    // Theme colors (computed based on currentTheme)
-    property color themeBackground: {
-        switch(currentTheme) {
-            case "light": return "#e8e8e8"
-            case "blue": return "#1a2a3a"
-            case "green": return "#1a2a1a"
-            case "purple": return "#2a1a3a"
-            default: return "#1a1a1a"  // dark
-        }
-    }
-    property color themeKeyColor: {
-        switch(currentTheme) {
-            case "light": return "#ffffff"
-            case "blue": return "#2a4a6a"
-            case "green": return "#2a4a2a"
-            case "purple": return "#4a2a5a"
-            default: return "#3a3a3a"
-        }
-    }
-    property color themeKeyPressed: {
-        switch(currentTheme) {
-            case "light": return "#d0d0d0"
-            case "blue": return "#3a6a9a"
-            case "green": return "#3a6a3a"
-            case "purple": return "#6a3a7a"
-            default: return "#5a5a5a"
-        }
-    }
-    property color themeTextColor: {
-        switch(currentTheme) {
-            case "light": return "#1a1a1a"
-            default: return "#e0e0e0"
-        }
-    }
-    property color themeAccent: {
-        switch(currentTheme) {
-            case "light": return "#0078d4"
-            case "blue": return "#4a9eff"
-            case "green": return "#4aff4a"
-            case "purple": return "#bb66ff"
-            default: return "#4a9eff"
-        }
-    }
-    property color themeBorder: {
-        switch(currentTheme) {
-            case "light": return "#c0c0c0"
-            default: return "#505050"
-        }
-    }
+    property string currentTheme: "dark"
+
+    // Theme definitions — add new themes here, everything else updates automatically
+    property var themeData: ({
+        "dark":   { background: "#1a1a1a", keyColor: "#3a3a3a", keyPressed: "#5a5a5a", textColor: "#e0e0e0", accent: "#4a9eff", border: "#505050" },
+        "light":  { background: "#e8e8e8", keyColor: "#ffffff", keyPressed: "#d0d0d0", textColor: "#1a1a1a", accent: "#0078d4", border: "#c0c0c0" },
+        "blue":   { background: "#1a2a3a", keyColor: "#2a4a6a", keyPressed: "#3a6a9a", textColor: "#e0e0e0", accent: "#4a9eff", border: "#505050" },
+        "green":  { background: "#1a2a1a", keyColor: "#2a4a2a", keyPressed: "#3a6a3a", textColor: "#e0e0e0", accent: "#4aff4a", border: "#505050" },
+        "purple": { background: "#2a1a3a", keyColor: "#4a2a5a", keyPressed: "#6a3a7a", textColor: "#e0e0e0", accent: "#bb66ff", border: "#505050" }
+    })
+
+    property var activeTheme: themeData[currentTheme] || themeData["dark"]
+
+    // Public theme color properties — used by all components
+    property color themeBackground: activeTheme.background
+    property color themeKeyColor: activeTheme.keyColor
+    property color themeKeyPressed: activeTheme.keyPressed
+    property color themeTextColor: activeTheme.textColor
+    property color themeAccent: activeTheme.accent
+    property color themeBorder: activeTheme.border
 
     // Update state when bridge emits signals
     Connections {
@@ -197,19 +191,23 @@ Window {
         function onPredictionsRefined(preds) { root.predictions = preds }
         function onPredictionLoading(loading) { root.predictionsLoading = loading }
         
+        // Layout updates
+        function onLayoutDataChanged(rows) { root.layoutRows = rows }
+
         // Debug updates
         function onDebugLogChanged(log) { root.debugLog = log }
     }
 
-    // Main background
+    // Main background — uses Qt.rgba so only the background becomes transparent
+    // while keys and text remain fully opaque
     Rectangle {
         id: background
         anchors.fill: parent
         radius: 10
-        color: root.themeBackground
-        border.color: root.themeBorder
+        color: Qt.rgba(root.themeBackground.r, root.themeBackground.g, root.themeBackground.b, root.windowOpacity)
+        border.color: Qt.rgba(root.themeBorder.r, root.themeBorder.g, root.themeBorder.b, root.windowOpacity)
         border.width: 1
-        
+
         Behavior on color { ColorAnimation { duration: 200 } }
 
         // Shadow
@@ -230,9 +228,10 @@ Window {
             anchors.left: parent.left
             anchors.right: parent.right
             height: 28
-            color: Qt.darker(root.themeBackground, 1.1)
+            property color baseColor: Qt.darker(root.themeBackground, 1.1)
+            color: Qt.rgba(baseColor.r, baseColor.g, baseColor.b, root.windowOpacity)
             radius: 10
-            
+
             // Only round top corners
             Rectangle {
                 anchors.bottom: parent.bottom
@@ -473,333 +472,75 @@ Window {
                     }
                 }
 
-                // ===== Number Row =====
-                Row {
-                    Layout.alignment: Qt.AlignHCenter
-                    spacing: root.keySpacing
+                // ===== Data-Driven Keyboard Rows =====
+                Repeater {
+                    model: root.layoutRows
 
-                    // Escape (always visible)
-                    Comp.KeyButton {
-                        keyText: "escape"
-                        displayText: "Esc"
-                        keyWidth: root.keyW
-                        keyHeight: root.keyH - 4
-                        fontSize: 11
-                        isSpecial: true
-                        keyColor: "#333"
-                        onKeyPressed: keyboard.pressSpecialKey("escape")
-                    }
+                    Row {
+                        Layout.alignment: Qt.AlignHCenter
+                        spacing: root.keySpacing
+                        property var rowData: modelData
+                        property real rowKeyH: rowData.id === "number" ? root.keyH - 4 : root.keyH
 
-                    // Backtick/Tilde
-                    Comp.KeyButton {
-                        keyText: "`"
-                        displayText: root.shiftOn ? "~" : "`"
-                        keyWidth: root.keyW
-                        keyHeight: root.keyH - 4
-                        fontSize: 14
-                        keyColor: "#2a2a2a"
-                        onKeyPressed: keyboard.pressKey(root.shiftOn ? "~" : "`")
-                    }
+                        Repeater {
+                            model: rowData.keys
 
-                    Repeater {
-                        model: root.shiftOn
-                            ? ["!", "@", "#", "$", "%", "^", "&", "*", "(", ")"]
-                            : ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"]
-                        Comp.KeyButton {
-                            keyText: modelData
-                            displayText: modelData
-                            keyWidth: root.keyW
-                            keyHeight: root.keyH - 4
-                            fontSize: 13
-                            keyColor: "#2a2a2a"
-                            onKeyPressed: keyboard.pressKey(modelData)
+                            Comp.KeyButton {
+                                property var kd: modelData
+                                keyText: kd.key || kd.action || ""
+                                displayText: {
+                                    if (kd.type === "char") {
+                                        if (kd.shifted && root.shiftOn) return kd.shifted
+                                        if (kd.key && kd.key.length === 1 && /[a-z]/.test(kd.key))
+                                            return root.shiftOn ? kd.key.toUpperCase() : kd.key
+                                        return kd.display || kd.key
+                                    }
+                                    return kd.display || ""
+                                }
+                                keyWidth: root.keyW * (kd.width || 1.0)
+                                keyHeight: rowKeyH
+                                fontSize: kd.fontSize || 16
+                                isSpecial: kd.type !== "char"
+                                isActive: {
+                                    if (!kd.stateKey) return false
+                                    switch(kd.stateKey) {
+                                        case "shiftOn": return root.shiftOn
+                                        case "capsOn": return root.capsOn
+                                        case "ctrlOn": return root.ctrlOn
+                                        case "altOn": return root.altOn
+                                        case "winOn": return root.winOn
+                                        default: return false
+                                    }
+                                }
+                                keyColor: {
+                                    switch(kd.style || "default") {
+                                        case "secondary": return Qt.darker(root.themeKeyColor, 1.3)
+                                        case "special": return Qt.darker(root.themeKeyColor, 1.15)
+                                        case "enter": return "#2a5a2a"
+                                        default: return root.themeKeyColor
+                                    }
+                                }
+                                keyPressedColor: root.themeKeyPressed
+                                keyTextColor: root.themeTextColor
+
+                                onKeyPressed: {
+                                    if (kd.type === "char") {
+                                        var ch = root.shiftOn && kd.shifted ? kd.shifted : kd.key
+                                        keyboard.pressKey(ch)
+                                    } else if (kd.type === "modifier") {
+                                        switch(kd.action) {
+                                            case "shift": keyboard.toggleShift(); break
+                                            case "caps": keyboard.toggleCapsLock(); break
+                                            case "ctrl": keyboard.toggleCtrl(); break
+                                            case "alt": keyboard.toggleAlt(); break
+                                            case "win": keyboard.toggleWin(); break
+                                        }
+                                    } else {
+                                        keyboard.pressSpecialKey(kd.action)
+                                    }
+                                }
+                            }
                         }
-                    }
-
-                    // Minus/Underscore
-                    Comp.KeyButton {
-                        keyText: "-"
-                        displayText: root.shiftOn ? "_" : "-"
-                        keyWidth: root.keyW
-                        keyHeight: root.keyH - 4
-                        fontSize: 14
-                        keyColor: "#2a2a2a"
-                        onKeyPressed: keyboard.pressKey(root.shiftOn ? "_" : "-")
-                    }
-
-                    // Backspace
-                    Comp.KeyButton {
-                        keyText: "backspace"
-                        displayText: "⌫"
-                        keyWidth: root.keyW * 1.5
-                        keyHeight: root.keyH - 4
-                        fontSize: 16
-                        isSpecial: true
-                        keyColor: "#333"
-                        onKeyPressed: keyboard.pressSpecialKey("backspace")
-                    }
-                }
-
-                // ===== QWERTY Row =====
-                Row {
-                    Layout.alignment: Qt.AlignHCenter
-                    spacing: root.keySpacing
-
-                    Comp.KeyButton {
-                        keyText: "tab"
-                        displayText: "Tab"
-                        keyWidth: root.keyW * 1.3
-                        keyHeight: root.keyH
-                        fontSize: 11
-                        isSpecial: true
-                        keyColor: "#333"
-                        onKeyPressed: keyboard.pressSpecialKey("tab")
-                    }
-
-                    Repeater {
-                        model: ["q", "w", "e", "r", "t", "y", "u", "i", "o", "p"]
-                        Comp.KeyButton {
-                            keyText: modelData
-                            displayText: root.shiftOn ? modelData.toUpperCase() : modelData
-                            keyWidth: root.keyW
-                            keyHeight: root.keyH
-                            onKeyPressed: keyboard.pressKey(modelData)
-                        }
-                    }
-
-                    // Brackets
-                    Comp.KeyButton {
-                        keyText: "["
-                        displayText: root.shiftOn ? "{" : "["
-                        keyWidth: root.keyW
-                        keyHeight: root.keyH
-                        fontSize: 14
-                        keyColor: "#2a2a2a"
-                        onKeyPressed: keyboard.pressKey(root.shiftOn ? "{" : "[")
-                    }
-                    Comp.KeyButton {
-                        keyText: "]"
-                        displayText: root.shiftOn ? "}" : "]"
-                        keyWidth: root.keyW
-                        keyHeight: root.keyH
-                        fontSize: 14
-                        keyColor: "#2a2a2a"
-                        onKeyPressed: keyboard.pressKey(root.shiftOn ? "}" : "]")
-                    }
-                    Comp.KeyButton {
-                        keyText: "\\"
-                        displayText: root.shiftOn ? "|" : "\\"
-                        keyWidth: root.keyW
-                        keyHeight: root.keyH
-                        fontSize: 14
-                        keyColor: "#2a2a2a"
-                        onKeyPressed: keyboard.pressKey(root.shiftOn ? "|" : "\\")
-                    }
-                }
-
-                // ===== Home Row =====
-                Row {
-                    Layout.alignment: Qt.AlignHCenter
-                    spacing: root.keySpacing
-
-                    Comp.KeyButton {
-                        keyText: "caps"
-                        displayText: "Caps"
-                        keyWidth: root.keyW * 1.6
-                        keyHeight: root.keyH
-                        fontSize: 11
-                        isSpecial: true
-                        isActive: root.capsOn
-                        keyColor: "#333"
-                        onKeyPressed: keyboard.toggleCapsLock()
-                    }
-
-                    Repeater {
-                        model: ["a", "s", "d", "f", "g", "h", "j", "k", "l"]
-                        Comp.KeyButton {
-                            keyText: modelData
-                            displayText: root.shiftOn ? modelData.toUpperCase() : modelData
-                            keyWidth: root.keyW
-                            keyHeight: root.keyH
-                            onKeyPressed: keyboard.pressKey(modelData)
-                        }
-                    }
-
-                    // Semicolon, Quote
-                    Comp.KeyButton {
-                        keyText: ";"
-                        displayText: root.shiftOn ? ":" : ";"
-                        keyWidth: root.keyW
-                        keyHeight: root.keyH
-                        fontSize: 14
-                        keyColor: "#2a2a2a"
-                        onKeyPressed: keyboard.pressKey(root.shiftOn ? ":" : ";")
-                    }
-                    Comp.KeyButton {
-                        keyText: "'"
-                        displayText: root.shiftOn ? "\"" : "'"
-                        keyWidth: root.keyW
-                        keyHeight: root.keyH
-                        fontSize: 14
-                        keyColor: "#2a2a2a"
-                        onKeyPressed: keyboard.pressKey(root.shiftOn ? "\"" : "'")
-                    }
-
-                    Comp.KeyButton {
-                        keyText: "return"
-                        displayText: "Enter"
-                        keyWidth: root.keyW * 1.8
-                        keyHeight: root.keyH
-                        fontSize: 11
-                        isSpecial: true
-                        keyColor: "#2a5a2a"
-                        onKeyPressed: keyboard.pressSpecialKey("return")
-                    }
-                }
-
-                // ===== Bottom Alpha Row =====
-                Row {
-                    Layout.alignment: Qt.AlignHCenter
-                    spacing: root.keySpacing
-
-                    Comp.KeyButton {
-                        keyText: "shift"
-                        displayText: "⇧ Shift"
-                        keyWidth: root.keyW * 2
-                        keyHeight: root.keyH
-                        fontSize: 11
-                        isSpecial: true
-                        isActive: root.shiftOn
-                        keyColor: "#333"
-                        onKeyPressed: keyboard.toggleShift()
-                    }
-
-                    Repeater {
-                        model: ["z", "x", "c", "v", "b", "n", "m"]
-                        Comp.KeyButton {
-                            keyText: modelData
-                            displayText: root.shiftOn ? modelData.toUpperCase() : modelData
-                            keyWidth: root.keyW
-                            keyHeight: root.keyH
-                            onKeyPressed: keyboard.pressKey(modelData)
-                        }
-                    }
-
-                    // Comma, Period, Slash
-                    Comp.KeyButton {
-                        keyText: ","
-                        displayText: root.shiftOn ? "<" : ","
-                        keyWidth: root.keyW
-                        keyHeight: root.keyH
-                        fontSize: 14
-                        keyColor: "#2a2a2a"
-                        onKeyPressed: keyboard.pressKey(root.shiftOn ? "<" : ",")
-                    }
-                    Comp.KeyButton {
-                        keyText: "."
-                        displayText: root.shiftOn ? ">" : "."
-                        keyWidth: root.keyW
-                        keyHeight: root.keyH
-                        fontSize: 14
-                        keyColor: "#2a2a2a"
-                        onKeyPressed: keyboard.pressKey(root.shiftOn ? ">" : ".")
-                    }
-                    Comp.KeyButton {
-                        keyText: "/"
-                        displayText: root.shiftOn ? "?" : "/"
-                        keyWidth: root.keyW
-                        keyHeight: root.keyH
-                        fontSize: 14
-                        keyColor: "#2a2a2a"
-                        onKeyPressed: keyboard.pressKey(root.shiftOn ? "?" : "/")
-                    }
-
-                    Comp.KeyButton {
-                        keyText: "shift"
-                        displayText: "⇧ Shift"
-                        keyWidth: root.keyW * 2.3
-                        keyHeight: root.keyH
-                        fontSize: 11
-                        isSpecial: true
-                        isActive: root.shiftOn
-                        keyColor: "#333"
-                        onKeyPressed: keyboard.toggleShift()
-                    }
-                }
-
-                // ===== Space Bar Row =====
-                Row {
-                    Layout.alignment: Qt.AlignHCenter
-                    spacing: root.keySpacing
-
-                    Comp.KeyButton {
-                        keyText: "ctrl"
-                        displayText: "Ctrl"
-                        keyWidth: root.keyW * 1.2
-                        keyHeight: root.keyH
-                        fontSize: 11
-                        isSpecial: true
-                        isActive: root.ctrlOn
-                        keyColor: "#333"
-                        onKeyPressed: keyboard.toggleCtrl()
-                    }
-
-                    Comp.KeyButton {
-                        keyText: "win"
-                        displayText: "⊞"
-                        keyWidth: root.keyW
-                        keyHeight: root.keyH
-                        fontSize: 16
-                        isSpecial: true
-                        isActive: root.winOn
-                        keyColor: "#333"
-                        onKeyPressed: keyboard.toggleWin()
-                    }
-
-                    Comp.KeyButton {
-                        keyText: "alt"
-                        displayText: "Alt"
-                        keyWidth: root.keyW * 1.1
-                        keyHeight: root.keyH
-                        fontSize: 11
-                        isSpecial: true
-                        isActive: root.altOn
-                        keyColor: "#333"
-                        onKeyPressed: keyboard.toggleAlt()
-                    }
-
-                    // Space bar
-                    Comp.KeyButton {
-                        keyText: "space"
-                        displayText: ""
-                        keyWidth: root.keyW * 6
-                        keyHeight: root.keyH
-                        keyColor: "#3a3a3a"
-                        onKeyPressed: keyboard.pressSpecialKey("space")
-                    }
-
-                    Comp.KeyButton {
-                        keyText: "alt"
-                        displayText: "Alt"
-                        keyWidth: root.keyW * 1.1
-                        keyHeight: root.keyH
-                        fontSize: 11
-                        isSpecial: true
-                        isActive: root.altOn
-                        keyColor: "#333"
-                        onKeyPressed: keyboard.toggleAlt()
-                    }
-
-                    Comp.KeyButton {
-                        keyText: "ctrl"
-                        displayText: "Ctrl"
-                        keyWidth: root.keyW * 1.2
-                        keyHeight: root.keyH
-                        fontSize: 11
-                        isSpecial: true
-                        isActive: root.ctrlOn
-                        keyColor: "#333"
-                        onKeyPressed: keyboard.toggleCtrl()
                     }
                 }
             }
@@ -991,6 +732,10 @@ Window {
             showNavigation: root.showNavigation
             showNumpad: root.showNumpad
             currentTheme: root.currentTheme
+            themeData: root.themeData
+            windowOpacity: root.windowOpacity
+            currentLayout: root.currentLayout
+            audioEnabled: root.audioEnabled
             suggestionsEnabled: root.suggestionsEnabled
             predictionCount: keyboard ? keyboard.predictionCount : 8
             debugMode: root.showDebugPanel
@@ -1006,6 +751,17 @@ Window {
                 } else if (setting === "theme") {
                     root.currentTheme = value
                     appSettings.savedTheme = value
+                } else if (setting === "windowOpacity") {
+                    root.windowOpacity = value
+                    appSettings.savedWindowOpacity = value
+                } else if (setting === "layout") {
+                    if (keyboard) keyboard.setLayout(value)
+                    root.currentLayout = value
+                    appSettings.savedLayout = value
+                } else if (setting === "audio") {
+                    if (keyboard) keyboard.setAudioEnabled(value)
+                    root.audioEnabled = value
+                    appSettings.savedAudioEnabled = value
                 } else if (setting === "suggestions") {
                     root.suggestionsEnabled = value
                     appSettings.savedSuggestionsEnabled = value

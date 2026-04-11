@@ -52,6 +52,7 @@ Item {
         anchors.fill: parent
         anchors.margins: 2
         radius: keyRoot.radius
+        clip: true
         color: mouseArea.pressed ? keyPressedColor
              : isActive ? "#4a9eff"
              : mouseArea.containsMouse ? Qt.lighter(keyColor, 1.25)
@@ -62,14 +63,42 @@ Item {
                     : "#505050"
         border.width: 1
 
-        // Subtle gradient overlay
+        // Subtle gradient overlay — enhanced depth on press
         Rectangle {
             anchors.fill: parent
             anchors.margins: 1
             radius: parent.radius - 1
             gradient: Gradient {
-                GradientStop { position: 0.0; color: Qt.rgba(1, 1, 1, 0.06) }
-                GradientStop { position: 1.0; color: Qt.rgba(0, 0, 0, 0.08) }
+                GradientStop { position: 0.0; color: Qt.rgba(1, 1, 1, mouseArea.pressed ? 0.02 : 0.06) }
+                GradientStop { position: 1.0; color: Qt.rgba(0, 0, 0, mouseArea.pressed ? 0.14 : 0.08) }
+            }
+        }
+
+        // Ripple effect on press
+        Rectangle {
+            id: ripple
+            property real centerX: 0
+            property real centerY: 0
+            x: centerX - width / 2
+            y: centerY - height / 2
+            width: 0
+            height: width
+            radius: width / 2
+            color: Qt.rgba(1, 1, 1, 0.15)
+            opacity: 0
+
+            ParallelAnimation {
+                id: rippleAnim
+                NumberAnimation {
+                    target: ripple; property: "width"
+                    from: 0; to: keyBackground.width * 2
+                    duration: 300; easing.type: Easing.OutQuad
+                }
+                NumberAnimation {
+                    target: ripple; property: "opacity"
+                    from: 0.3; to: 0
+                    duration: 300; easing.type: Easing.OutQuad
+                }
             }
         }
 
@@ -79,26 +108,26 @@ Item {
             text: keyRoot.displayText
             color: mouseArea.pressed ? "#ffffff" : keyTextColor
             font.pixelSize: keyRoot.fontSize
-            font.family: "Segoe UI, Ubuntu, Noto Sans, sans-serif"
-            font.weight: isSpecial ? Font.Medium : Font.Normal
+            font.family: "Segoe UI, Inter, Ubuntu, Noto Sans, sans-serif"
+            font.weight: isSpecial ? Font.DemiBold : Font.DemiBold
             horizontalAlignment: Text.AlignHCenter
             verticalAlignment: Text.AlignVCenter
         }
 
-        // Press animation
+        // Smooth color transition
         Behavior on color {
-            ColorAnimation { duration: 80 }
+            ColorAnimation { duration: 120 }
         }
 
-        // Scale animation on press
+        // Scale animation on press — slight bounce for tactile feel
         transform: Scale {
             id: scaleTransform
             origin.x: keyBackground.width / 2
             origin.y: keyBackground.height / 2
             xScale: mouseArea.pressed ? 0.94 : 1.0
             yScale: mouseArea.pressed ? 0.94 : 1.0
-            Behavior on xScale { NumberAnimation { duration: 60 } }
-            Behavior on yScale { NumberAnimation { duration: 60 } }
+            Behavior on xScale { NumberAnimation { duration: 100; easing.type: Easing.OutBack; easing.overshoot: 1.2 } }
+            Behavior on yScale { NumberAnimation { duration: 100; easing.type: Easing.OutBack; easing.overshoot: 1.2 } }
         }
     }
 
@@ -107,7 +136,15 @@ Item {
         anchors.fill: parent
         hoverEnabled: true
 
-        onPressed: {
+        onPressed: function(mouse) {
+            // Trigger ripple from press point
+            ripple.centerX = mouse.x - keyBackground.anchors.margins
+            ripple.centerY = mouse.y - keyBackground.anchors.margins
+            rippleAnim.stop()
+            ripple.width = 0
+            ripple.opacity = 0
+            rippleAnim.start()
+
             keyRoot.keyPressed()
             // Enable repeat based on enableRepeat property (not isSpecial)
             // Backspace, Delete, Arrow keys should repeat
@@ -117,13 +154,13 @@ Item {
                 repeatTimer.start()
             }
         }
-        
+
         onReleased: {
             repeatTimer.stop()
             repeatTimer.interval = keyRoot.repeatDelay
             repeatTimer.repeat = false
         }
-        
+
         onCanceled: {
             repeatTimer.stop()
             repeatTimer.interval = keyRoot.repeatDelay

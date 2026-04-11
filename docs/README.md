@@ -58,6 +58,14 @@ Analysis of different prediction strategies and the rationale for Alpha-OSK's hy
 
 ---
 
+### Security
+
+**[`SECURITY_AUDIT.md`](SECURITY_AUDIT.md)** - Security audit and recommendations
+
+Comprehensive audit covering secrets management, network exposure, subprocess safety, file I/O, deserialization, dependencies, logging, privilege handling, and input validation. Includes hardening recommendations for production deployment.
+
+---
+
 ## 🎯 Quick Reference
 
 ### For New Contributors
@@ -128,11 +136,14 @@ src/prediction/
 - **Resizable window** - Drag left or right edges; closed-form key sizing distributes width proportionally across all visible panels (main, nav, numpad) with sub-pixel rounding protection and dynamic minimum-width enforcement to prevent key clipping
 - **Multi-monitor DPI** — Window size stays correct when dragged between monitors with different scaling; fixed via Qt `PassThrough` DPI rounding policy + `onScreenChanged` clamp in QML
 - **Settings popup window** - All settings in a separate floating window (⚙ button), positioned to the right of the keyboard
-- **5 Color Themes** - Dark, Light, Blue, Green, Purple
+- **Data-driven theme engine** — 5 built-in themes (Dark, Light, Blue, Green, Purple), defined as a single JS object map. Adding a theme requires one data entry, no code changes.
+- **Window transparency** — Adjustable opacity slider (30%–100%) in settings. Background becomes transparent while keys remain fully opaque and readable.
+- **Visual polish** — Ripple effect on key press (expands from touch point), smooth bounce animation, enhanced gradient depth, improved typography (DemiBold, Inter font stack).
+- **Audio feedback** — Optional key click sounds via QSoundEffect. Toggle in settings. Gracefully degrades if QtMultimedia is unavailable.
 - Modern prediction bar with improved readability
 
 **Keyboard Layout:**
-- Core keyboard with QWERTY layout
+- **Data-driven layouts** — QWERTY, Dvorak, and Colemak defined as JSON files in `data/layouts/`. Switchable in settings, persisted across sessions.
 - **Keyboard shortcuts** - Ctrl+C, Ctrl+V, Ctrl+Z, etc. work correctly
 - Sticky modifiers (Shift, Ctrl, Alt, Win)
 - Toggleable panels (Function keys, Navigation, Numpad)
@@ -146,9 +157,33 @@ src/prediction/
 - **Training Corpus** - Pre-loaded with common phrases
 - **Smart Punctuation** - Auto-removes space before ? ! . , ; :
 
+**Analytics:**
+- **Session analytics dashboard** — Live stats in settings: words per minute, prediction hit rate, correction rate, top words, session duration. Polls every 2 seconds.
+
+**Accessibility Profiles:**
+Six profiles that adjust how aggressively the keyboard compensates for motor challenges:
+
+| Profile | Key Target Size | Hold Delay | Autocorrect | Best For |
+|---------|----------------|-----------|-------------|----------|
+| Precise | Strict (0.5) | None | Off | Users with full motor control who want exact targeting |
+| Normal | Standard (1.0) | None | On | Most users — balanced accuracy and assistance |
+| Mild Tremor | Wider (1.5) | 100ms | On | Slight hand tremor or reduced finger precision |
+| Moderate Tremor | Wide (2.0) | 200ms | On | Noticeable tremor, needs more forgiveness |
+| Severe Tremor | Widest (2.5) | 300ms | On | Significant motor challenges, maximum assistance |
+| Limited Mobility | Wide (2.0) | 150ms | On | Reduced range of motion, difficulty reaching distant keys |
+
+Settings adjust `spatial_uncertainty` (how far from center a press is still counted), `confidence_threshold` (how sure the system must be before autocorrecting), `prediction_weight` (how much the predictor compensates), and `key_hold_delay` (minimum press duration to prevent accidental triggers).
+
 **Settings Panel (popup window):**
+- Keyboard layout selector (QWERTY / Dvorak / Colemak)
 - Layout toggles: Function keys, Navigation keys, Numpad
-- 5 color themes
+- Suggestions: toggle, count (3–10)
+- Accessibility profiles with descriptive labels
+- Vocabulary packs (Medical, Programming, Academic, Gaming, Business)
+- Theme selector (5 themes)
+- Appearance: key click sound toggle, window opacity slider
+- Session analytics dashboard
+- Data management: save model, clear learned data
 - Developer: Debug mode toggle
 - Draggable, frameless, always-on-top; does not overlay the keyboard
 
@@ -265,6 +300,7 @@ When adding new features or documentation:
 - **Quick project overview?** → [`../LLM_ONBOARDING.md`](../LLM_ONBOARDING.md)
 - **Prediction comparison?** → [`PREDICTION_OPTIONS.md`](PREDICTION_OPTIONS.md)
 - **Code architecture?** → [`../LLM_ONBOARDING.md`](../LLM_ONBOARDING.md#architecture)
+- **Security posture?** → [`SECURITY_AUDIT.md`](SECURITY_AUDIT.md)
 
 ---
 

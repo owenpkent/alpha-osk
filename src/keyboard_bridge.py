@@ -14,11 +14,21 @@ The bridge is platform-agnostic — all OS-specific logic lives in
 
 from __future__ import annotations
 
+import json
 import logging
-from typing import List, Optional
+from pathlib import Path
+from typing import Any, Dict, List, Optional
 
-from PySide6.QtCore import Property, QObject, Signal, Slot
+from PySide6.QtCore import Property, QObject, QUrl, Signal, Slot
 
+# Audio feedback — optional, gracefully degrades if QtMultimedia unavailable
+try:
+    from PySide6.QtMultimedia import QSoundEffect
+    _HAS_AUDIO = True
+except ImportError:
+    _HAS_AUDIO = False
+
+from .analytics import TypingAnalytics
 from .platform import create_key_synthesizer
 from .platform.base import KeySynthesizerBase
 from .prediction import HybridPredictor
@@ -58,6 +68,13 @@ class KeyboardBridge(QObject):
     predictionCountChanged = Signal(int)  # Prediction count changed
     predictionStatsChanged = Signal()     # Stats updated
 
+    # Audio signals
+    audioEnabledChanged = Signal(bool)
+
+    # Layout signals
+    layoutChanged = Signal(str)
+    layoutDataChanged = Signal(list)
+
     # Debug signals
     debugModeChanged = Signal(bool)
     debugLogChanged = Signal(list)
@@ -94,6 +111,29 @@ class KeyboardBridge(QObject):
         self._prediction_count = 8
         self._debug_mode = False
         self._debug_log: List[str] = []
+
+        # Keyboard layout
+        self._layouts: Dict[str, Any] = {}
+        self._current_layout = "qwerty"
+        self._load_layouts()
+
+        # Audio feedback
+        self._audio_enabled = False
+        self._click_sound: Optional[Any] = None
+        if _HAS_AUDIO:
+            sound_path = Path(__file__).parent.parent / "data" / "sounds" / "click.wav"
+            if sound_path.exists():
+                self._click_sound = QSoundEffect(self)
+                self._click_sound.setSource(QUrl.fromLocalFile(str(sound_path)))
+                self._click_sound.setVolume(0.3)
+                _logger.info("Audio feedback available")
+            else:
+                _logger.info("Click sound not found: %s", sound_path)
+        else:
+            _logger.info("QtMultimedia not available, audio feedback disabled")
+
+        # Analytics
+        self._analytics = TypingAnalytics(parent=self)
 
         # Context tracking for predictions
         self._context_buffer = ""
@@ -135,6 +175,8 @@ class KeyboardBridge(QObject):
     @Slot(str)
     def pressKey(self, key: str) -> None:
         """Called from QML when a character key is pressed."""
+        self._play_click()
+        self._analytics.record_keystroke(key)
         if self._shift_active or self._caps_lock_active:
             char = key.upper()
         else:
@@ -195,6 +237,7 @@ class KeyboardBridge(QObject):
     @Slot(str)
     def pressSpecialKey(self, key_name: str) -> None:
         """Called from QML for special keys (Backspace, Return, etc.)."""
+        self._play_click()
         key_map = {
             "backspace": "BackSpace",
             "return": "Return",
@@ -228,6 +271,7 @@ class KeyboardBridge(QObject):
         if key_name == "space":
             # Word completed - learn it and add to sentence
             if self._current_word:
+                self._analytics.record_word_completed(self._current_word)
                 self._sentence_buffer += self._current_word + " "
                 self._context_buffer += self._current_word + " "
                 # Learn bigrams/trigrams from the running sentence
@@ -239,12 +283,14 @@ class KeyboardBridge(QObject):
             self._update_predictions()
         elif key_name == "backspace":
             # Remove last character from current word
+            self._analytics.record_backspace()
             if self._current_word:
                 self._current_word = self._current_word[:-1]
                 self._update_predictions()
         elif key_name == "return":
             # Sentence boundary - learn full sentence, then reset sentence buffer
             if self._current_word:
+                self._analytics.record_word_completed(self._current_word)
                 self._sentence_buffer += self._current_word
             if self._sentence_buffer.strip():
                 self._predictor.learn(self._sentence_buffer.strip())
@@ -316,6 +362,10 @@ class KeyboardBridge(QObject):
         """Called when user taps a prediction suggestion."""
         _logger.info("Prediction selected: %s", word)
 
+        # Track prediction usage
+        rank = self._predictions.index(word) + 1 if word in self._predictions else 1
+        self._analytics.record_prediction_selected(word, rank)
+
         # Complete the word: type remaining characters + space
         if self._current_word:
             # Type only the remaining part of the word
@@ -357,8 +407,17 @@ class KeyboardBridge(QObject):
 
     @Slot()
     def clearPredictions(self) -> None:
-        """Clear current predictions (called from QML on dismiss/deactivation)."""
+        """Clear predictions and reset typing state.
+
+        Called from QML when the keyboard loses focus (user clicks away).
+        Resets the current word, sentence buffer, and context so the next
+        interaction starts fresh — otherwise stale partial words corrupt
+        predictions when the user returns.
+        """
         self._predictions = []
+        self._current_word = ""
+        self._sentence_buffer = ""
+        self._context_buffer = ""
         self.predictionsChanged.emit([])
 
     # --- Properties for QML ---
@@ -411,6 +470,8 @@ class KeyboardBridge(QObject):
     def _on_predictions_ready(self, predictions: List[str]) -> None:
         """Handle instant n-gram predictions."""
         self._predictions = predictions
+        if predictions:
+            self._analytics.record_prediction_offered()
         self.predictionsChanged.emit(predictions)
 
     def _on_predictions_refined(self, predictions: List[str]) -> None:
@@ -595,6 +656,81 @@ class KeyboardBridge(QObject):
         if result:
             self._add_debug_log(f"Vocabulary pack disabled: {pack_id}")
         return result
+
+    # --- Audio Feedback ---
+
+    def _play_click(self) -> None:
+        """Play key click sound if audio is enabled."""
+        if self._audio_enabled and self._click_sound is not None:
+            self._click_sound.play()
+
+    @Slot(bool)
+    def setAudioEnabled(self, enabled: bool) -> None:
+        """Enable or disable audio feedback."""
+        self._audio_enabled = enabled
+        self.audioEnabledChanged.emit(enabled)
+
+    def _get_audio_enabled(self) -> bool:
+        return self._audio_enabled
+
+    audioEnabled = Property(bool, _get_audio_enabled, notify=audioEnabledChanged)
+
+    @Slot(result=bool)
+    def isAudioAvailable(self) -> bool:
+        """Check if audio feedback hardware is available."""
+        return self._click_sound is not None
+
+    # --- Keyboard Layouts ---
+
+    def _load_layouts(self) -> None:
+        """Load all keyboard layout JSON files from data/layouts/."""
+        layouts_dir = Path(__file__).parent.parent / "data" / "layouts"
+        if not layouts_dir.exists():
+            _logger.warning("Layouts directory not found: %s", layouts_dir)
+            return
+        for path in layouts_dir.glob("*.json"):
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+                layout_id = data.get("id", path.stem)
+                self._layouts[layout_id] = data
+                _logger.info("Loaded layout: %s", layout_id)
+            except (json.JSONDecodeError, OSError) as e:
+                _logger.warning("Failed to load layout %s: %s", path.name, e)
+
+    @Slot(result=list)
+    def getAvailableLayouts(self) -> list:
+        """Return list of {id, name} dicts for available layouts."""
+        return [
+            {"id": lid, "name": data.get("name", lid)}
+            for lid, data in self._layouts.items()
+        ]
+
+    @Slot(result=str)
+    def getCurrentLayout(self) -> str:
+        """Return current layout id."""
+        return self._current_layout
+
+    @Slot(str)
+    def setLayout(self, layout_id: str) -> None:
+        """Switch to a different keyboard layout."""
+        if layout_id in self._layouts and layout_id != self._current_layout:
+            self._current_layout = layout_id
+            self.layoutChanged.emit(layout_id)
+            self.layoutDataChanged.emit(self._layouts[layout_id].get("rows", []))
+            self._add_debug_log(f"Layout changed to: {layout_id}")
+
+    @Slot(result=list)
+    def getLayoutRows(self) -> list:
+        """Return the current layout's row data for QML rendering."""
+        layout = self._layouts.get(self._current_layout, {})
+        return layout.get("rows", [])
+
+    # --- Analytics ---
+
+    @Slot(result="QVariant")
+    def getAnalytics(self) -> dict:
+        """Return session analytics for the QML dashboard."""
+        return self._analytics.get_session_stats()
 
     # --- Prediction Properties ---
 

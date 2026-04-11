@@ -95,10 +95,10 @@ Item {
             implicitWidth: navGrid.cellW; implicitHeight: navGrid.cellH
         }
         KeyButton {
-            keyText: "up"; displayText: "▲"
+            keyText: "up"; displayText: "\u2191"
             keyWidth: navGrid.cellW; keyHeight: navGrid.cellH
             Layout.preferredWidth: navGrid.cellW; Layout.preferredHeight: navGrid.cellH
-            fontSize: 14; isSpecial: true; keyColor: "#333333"
+            fontSize: 16; isSpecial: true; keyColor: "#333333"
             onKeyPressed: keyboard.pressSpecialKey("up")
         }
         Item {
@@ -108,24 +108,24 @@ Item {
 
         // Row 5: Left, Down, Right
         KeyButton {
-            keyText: "left"; displayText: "◀"
+            keyText: "left"; displayText: "\u2190"
             keyWidth: navGrid.cellW; keyHeight: navGrid.cellH
             Layout.preferredWidth: navGrid.cellW; Layout.preferredHeight: navGrid.cellH
-            fontSize: 14; isSpecial: true; keyColor: "#333333"
+            fontSize: 16; isSpecial: true; keyColor: "#333333"
             onKeyPressed: keyboard.pressSpecialKey("left")
         }
         KeyButton {
-            keyText: "down"; displayText: "▼"
+            keyText: "down"; displayText: "\u2193"
             keyWidth: navGrid.cellW; keyHeight: navGrid.cellH
             Layout.preferredWidth: navGrid.cellW; Layout.preferredHeight: navGrid.cellH
-            fontSize: 14; isSpecial: true; keyColor: "#333333"
+            fontSize: 16; isSpecial: true; keyColor: "#333333"
             onKeyPressed: keyboard.pressSpecialKey("down")
         }
         KeyButton {
-            keyText: "right"; displayText: "▶"
+            keyText: "right"; displayText: "\u2192"
             keyWidth: navGrid.cellW; keyHeight: navGrid.cellH
             Layout.preferredWidth: navGrid.cellW; Layout.preferredHeight: navGrid.cellH
-            fontSize: 14; isSpecial: true; keyColor: "#333333"
+            fontSize: 16; isSpecial: true; keyColor: "#333333"
             onKeyPressed: keyboard.pressSpecialKey("right")
         }
     }

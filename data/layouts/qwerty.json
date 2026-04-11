@@ -1,0 +1,90 @@
+{
+    "id": "qwerty",
+    "name": "QWERTY",
+    "rows": [
+        {
+            "id": "number",
+            "keys": [
+                {"type": "special", "action": "escape", "display": "Esc", "width": 1.0, "fontSize": 11, "style": "special"},
+                {"type": "char", "key": "`", "shifted": "~", "width": 1.0, "fontSize": 14, "style": "secondary"},
+                {"type": "char", "key": "1", "shifted": "!", "width": 1.0, "fontSize": 13, "style": "secondary"},
+                {"type": "char", "key": "2", "shifted": "@", "width": 1.0, "fontSize": 13, "style": "secondary"},
+                {"type": "char", "key": "3", "shifted": "#", "width": 1.0, "fontSize": 13, "style": "secondary"},
+                {"type": "char", "key": "4", "shifted": "$", "width": 1.0, "fontSize": 13, "style": "secondary"},
+                {"type": "char", "key": "5", "shifted": "%", "width": 1.0, "fontSize": 13, "style": "secondary"},
+                {"type": "char", "key": "6", "shifted": "^", "width": 1.0, "fontSize": 13, "style": "secondary"},
+                {"type": "char", "key": "7", "shifted": "&", "width": 1.0, "fontSize": 13, "style": "secondary"},
+                {"type": "char", "key": "8", "shifted": "*", "width": 1.0, "fontSize": 13, "style": "secondary"},
+                {"type": "char", "key": "9", "shifted": "(", "width": 1.0, "fontSize": 13, "style": "secondary"},
+                {"type": "char", "key": "0", "shifted": ")", "width": 1.0, "fontSize": 13, "style": "secondary"},
+                {"type": "char", "key": "-", "shifted": "_", "width": 1.0, "fontSize": 14, "style": "secondary"},
+                {"type": "special", "action": "backspace", "display": "\u232b", "width": 1.5, "fontSize": 16, "style": "special"}
+            ]
+        },
+        {
+            "id": "top",
+            "keys": [
+                {"type": "special", "action": "tab", "display": "Tab", "width": 1.3, "fontSize": 11, "style": "special"},
+                {"type": "char", "key": "q", "width": 1.0},
+                {"type": "char", "key": "w", "width": 1.0},
+                {"type": "char", "key": "e", "width": 1.0},
+                {"type": "char", "key": "r", "width": 1.0},
+                {"type": "char", "key": "t", "width": 1.0},
+                {"type": "char", "key": "y", "width": 1.0},
+                {"type": "char", "key": "u", "width": 1.0},
+                {"type": "char", "key": "i", "width": 1.0},
+                {"type": "char", "key": "o", "width": 1.0},
+                {"type": "char", "key": "p", "width": 1.0},
+                {"type": "char", "key": "[", "shifted": "{", "width": 1.0, "fontSize": 14, "style": "secondary"},
+                {"type": "char", "key": "]", "shifted": "}", "width": 1.0, "fontSize": 14, "style": "secondary"},
+                {"type": "char", "key": "\\", "shifted": "|", "width": 1.0, "fontSize": 14, "style": "secondary"}
+            ]
+        },
+        {
+            "id": "home",
+            "keys": [
+                {"type": "modifier", "action": "caps", "display": "Caps", "width": 1.6, "fontSize": 11, "stateKey": "capsOn", "style": "special"},
+                {"type": "char", "key": "a", "width": 1.0},
+                {"type": "char", "key": "s", "width": 1.0},
+                {"type": "char", "key": "d", "width": 1.0},
+                {"type": "char", "key": "f", "width": 1.0},
+                {"type": "char", "key": "g", "width": 1.0},
+                {"type": "char", "key": "h", "width": 1.0},
+                {"type": "char", "key": "j", "width": 1.0},
+                {"type": "char", "key": "k", "width": 1.0},
+                {"type": "char", "key": "l", "width": 1.0},
+                {"type": "char", "key": ";", "shifted": ":", "width": 1.0, "fontSize": 14, "style": "secondary"},
+                {"type": "char", "key": "'", "shifted": "\"", "width": 1.0, "fontSize": 14, "style": "secondary"},
+                {"type": "special", "action": "return", "display": "Enter", "width": 1.8, "fontSize": 11, "style": "enter"}
+            ]
+        },
+        {
+            "id": "bottom",
+            "keys": [
+                {"type": "modifier", "action": "shift", "display": "\u21e7 Shift", "width": 2.0, "fontSize": 11, "stateKey": "shiftOn", "style": "special"},
+                {"type": "char", "key": "z", "width": 1.0},
+                {"type": "char", "key": "x", "width": 1.0},
+                {"type": "char", "key": "c", "width": 1.0},
+                {"type": "char", "key": "v", "width": 1.0},
+                {"type": "char", "key": "b", "width": 1.0},
+                {"type": "char", "key": "n", "width": 1.0},
+                {"type": "char", "key": "m", "width": 1.0},
+                {"type": "char", "key": ",", "shifted": "<", "width": 1.0, "fontSize": 14, "style": "secondary"},
+                {"type": "char", "key": ".", "shifted": ">", "width": 1.0, "fontSize": 14, "style": "secondary"},
+                {"type": "char", "key": "/", "shifted": "?", "width": 1.0, "fontSize": 14, "style": "secondary"},
+                {"type": "modifier", "action": "shift", "display": "\u21e7 Shift", "width": 2.3, "fontSize": 11, "stateKey": "shiftOn", "style": "special"}
+            ]
+        },
+        {
+            "id": "space",
+            "keys": [
+                {"type": "modifier", "action": "ctrl", "display": "Ctrl", "width": 1.2, "fontSize": 11, "stateKey": "ctrlOn", "style": "special"},
+                {"type": "modifier", "action": "win", "display": "\u229e", "width": 1.0, "fontSize": 16, "stateKey": "winOn", "style": "special"},
+                {"type": "modifier", "action": "alt", "display": "Alt", "width": 1.1, "fontSize": 11, "stateKey": "altOn", "style": "special"},
+                {"type": "special", "action": "space", "display": "", "width": 6.0},
+                {"type": "modifier", "action": "alt", "display": "Alt", "width": 1.1, "fontSize": 11, "stateKey": "altOn", "style": "special"},
+                {"type": "modifier", "action": "ctrl", "display": "Ctrl", "width": 1.2, "fontSize": 11, "stateKey": "ctrlOn", "style": "special"}
+            ]
+        }
+    ]
+}
