@@ -45,6 +45,10 @@ class NgramPredictor:
         # User-specific vocabulary boost
         self.user_vocab: Dict[str, int] = defaultdict(int)
 
+        # Word suppression: blacklisted words never appear, dispreferred are downweighted
+        self.blacklist: set[str] = set()
+        self.dispreference: Dict[str, int] = defaultdict(int)
+
         # Recency decay: every N learn() calls, scale user frequencies down
         # so recent words gradually outweigh older ones
         self._learn_count = 0
@@ -245,6 +249,29 @@ class NgramPredictor:
 
         _logger.debug("Applied recency decay (factor=%.2f)", factor)
 
+    def blacklist_word(self, word: str) -> None:
+        """Permanently suppress a word from predictions."""
+        self.blacklist.add(word.lower())
+        _logger.info("Blacklisted word: %s", word)
+
+    def unblacklist_word(self, word: str) -> None:
+        """Re-enable a previously blacklisted word."""
+        self.blacklist.discard(word.lower())
+        _logger.info("Unblacklisted word: %s", word)
+
+    def mark_bad(self, word: str) -> None:
+        """Downweight a word in future predictions."""
+        self.dispreference[word.lower()] += 1
+        _logger.info("Marked bad: %s (weight now %d)", word, self.dispreference[word.lower()])
+
+    def is_suppressed(self, word: str) -> bool:
+        """Check if a word is blacklisted."""
+        return word.lower() in self.blacklist
+
+    def get_dispreference(self, word: str) -> int:
+        """Get the dispreference weight for a word."""
+        return self.dispreference.get(word.lower(), 0)
+
     def learn_word(self, word: str) -> None:
         """Learn a single word (boost its frequency)."""
         word = word.lower().strip()
@@ -261,6 +288,8 @@ class NgramPredictor:
             "trigrams": {k: dict(v) for k, v in self.trigrams.items()},
             "user_vocab": dict(self.user_vocab),
             "total_words": self.total_words,
+            "blacklist": sorted(self.blacklist),
+            "dispreference": dict(self.dispreference),
         }
         path.parent.mkdir(parents=True, exist_ok=True)
         with open(path, "w") as f:
@@ -284,7 +313,9 @@ class NgramPredictor:
             )
             self.user_vocab = defaultdict(int, data.get("user_vocab", {}))
             self.total_words = data.get("total_words", 0)
-            _logger.info("Model loaded from %s", path)
+            self.blacklist = set(data.get("blacklist", []))
+            self.dispreference = defaultdict(int, data.get("dispreference", {}))
+            _logger.info("Model loaded from %s (%d blacklisted)", path, len(self.blacklist))
         except Exception as e:
             _logger.warning("Failed to load model from %s: %s", path, e)
 

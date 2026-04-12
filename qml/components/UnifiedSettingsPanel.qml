@@ -2,6 +2,7 @@ import QtQuick 2.15
 import QtQuick.Layouts 1.15
 import QtQuick.Controls 2.15
 import QtQuick.Window 2.15
+import Qt.labs.platform 1.1 as Platform
 
 Item {
     id: unifiedSettings
@@ -19,6 +20,11 @@ Item {
     // Suggestions
     property bool suggestionsEnabled: true
     property int predictionCount: 8
+    property bool autoSpaceAfterPunctuation: true
+    property bool autoCapitalizeAfterPunctuation: false
+
+    // Data
+    property bool autoSaveOnExit: true
 
     // Debug
     property bool debugMode: false
@@ -215,6 +221,20 @@ Item {
                                 onToggled: function(c) { unifiedSettings.settingChanged("suggestions", c) }
                             }
 
+                            SettingsToggle {
+                                Layout.fillWidth: true
+                                text: "Auto-Space After Punctuation"
+                                checked: unifiedSettings.autoSpaceAfterPunctuation
+                                onToggled: function(c) { unifiedSettings.settingChanged("autoSpaceAfterPunctuation", c) }
+                            }
+
+                            SettingsToggle {
+                                Layout.fillWidth: true
+                                text: "Auto-Capitalize After Punctuation"
+                                checked: unifiedSettings.autoCapitalizeAfterPunctuation
+                                onToggled: function(c) { unifiedSettings.settingChanged("autoCapitalizeAfterPunctuation", c) }
+                            }
+
                             // Prediction count
                             Item {
                                 Layout.fillWidth: true
@@ -291,19 +311,28 @@ Item {
 
                             property string currentProfile: keyboard ? keyboard.getCurrentProfile() : "normal"
 
+                            Text {
+                                text: "Adjusts key target size, autocorrect strength, and jitter filtering. See Help (?) for details."
+                                color: "#888"
+                                font.pixelSize: 10
+                                wrapMode: Text.WordWrap
+                                Layout.fillWidth: true
+                                Layout.bottomMargin: 2
+                            }
+
                             Repeater {
                                 model: [
-                                    { id: "precise",          label: "Precise \u2014 strict targeting, no autocorrect" },
-                                    { id: "normal",           label: "Normal \u2014 balanced accuracy and assistance" },
-                                    { id: "mild_tremor",      label: "Mild Tremor \u2014 slightly wider key targets" },
-                                    { id: "moderate_tremor",  label: "Moderate Tremor \u2014 wider targets, slower repeat" },
-                                    { id: "severe_tremor",    label: "Severe Tremor \u2014 widest targets, max assistance" },
-                                    { id: "limited_mobility", label: "Limited Mobility \u2014 wider reach, slower repeat" }
+                                    { id: "precise",          label: "Precise", desc: "Exact targeting, no autocorrect, no jitter filter" },
+                                    { id: "normal",           label: "Normal", desc: "Light autocorrect, standard key targets" },
+                                    { id: "mild_tremor",      label: "Mild Tremor", desc: "1.5\u00d7 key targets, 100ms jitter filter" },
+                                    { id: "moderate_tremor",  label: "Moderate Tremor", desc: "2\u00d7 key targets, 200ms jitter filter" },
+                                    { id: "severe_tremor",    label: "Severe Tremor", desc: "2.5\u00d7 key targets, 300ms jitter filter, max assist" },
+                                    { id: "limited_mobility", label: "Limited Mobility", desc: "2\u00d7 key targets, 150ms jitter filter" }
                                 ]
 
                                 Item {
                                     Layout.fillWidth: true
-                                    implicitHeight: 26
+                                    implicitHeight: 38
 
                                     Rectangle {
                                         anchors.fill: parent
@@ -315,11 +344,21 @@ Item {
                                             anchors.leftMargin: 4
                                             anchors.rightMargin: 4
 
-                                            Text {
-                                                text: modelData.label
-                                                color: "#c0c0c0"
-                                                font.pixelSize: 12
+                                            ColumnLayout {
                                                 Layout.fillWidth: true
+                                                spacing: 0
+
+                                                Text {
+                                                    text: modelData.label
+                                                    color: "#c0c0c0"
+                                                    font.pixelSize: 12
+                                                }
+
+                                                Text {
+                                                    text: modelData.desc
+                                                    color: "#777"
+                                                    font.pixelSize: 10
+                                                }
                                             }
 
                                             Rectangle {
@@ -395,6 +434,64 @@ Item {
                                         }
                                     }
                                 }
+                            }
+
+                            // Import custom pack
+                            Rectangle {
+                                Layout.fillWidth: true
+                                implicitHeight: 30
+                                radius: 5
+                                color: importPackArea.containsMouse ? "#3a3a5a" : "#2a2a3a"
+                                border.color: "#4a4a6a"
+
+                                Text {
+                                    anchors.centerIn: parent
+                                    text: vocabColumn.importStatus || "Import Custom Pack\u2026"
+                                    color: vocabColumn.importStatus ? "#aaffaa" : "#aaaaff"
+                                    font.pixelSize: 12
+                                }
+
+                                MouseArea {
+                                    id: importPackArea
+                                    anchors.fill: parent
+                                    hoverEnabled: true
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: packFolderDialog.open()
+                                }
+
+                                Timer {
+                                    id: importStatusTimer
+                                    interval: 3000
+                                    onTriggered: vocabColumn.importStatus = ""
+                                }
+                            }
+
+                            property string importStatus: ""
+
+                            Platform.FolderDialog {
+                                id: packFolderDialog
+                                title: "Select vocabulary pack folder"
+                                onAccepted: {
+                                    if (keyboard) {
+                                        var path = folder.toString().replace("file:///", "")
+                                        var packId = keyboard.importVocabularyPack(path)
+                                        if (packId) {
+                                            vocabColumn.importStatus = "Imported: " + packId
+                                            vocabColumn.enabledPacks = keyboard.getEnabledPacks()
+                                        } else {
+                                            vocabColumn.importStatus = "Failed (needs dictionary.txt)"
+                                        }
+                                        importStatusTimer.restart()
+                                    }
+                                }
+                            }
+
+                            Text {
+                                text: "Custom packs: " + (keyboard ? keyboard.getUserPacksDir() : "")
+                                color: "#666"
+                                font.pixelSize: 9
+                                wrapMode: Text.WrapAnywhere
+                                Layout.fillWidth: true
                             }
                         }
                     }
@@ -521,12 +618,27 @@ Item {
 
                     // -- DATA --
                     SettingsSection {
-                        title: "Data"
+                        title: "Prediction Model"
                         Layout.fillWidth: true
 
                         ColumnLayout {
                             Layout.fillWidth: true
                             spacing: 6
+
+                            Text {
+                                text: "Your learned words and phrases. Settings (layout, theme, etc.) save automatically."
+                                color: "#888"
+                                font.pixelSize: 10
+                                wrapMode: Text.WordWrap
+                                Layout.fillWidth: true
+                            }
+
+                            SettingsToggle {
+                                Layout.fillWidth: true
+                                text: "Auto-Save on Exit"
+                                checked: unifiedSettings.autoSaveOnExit
+                                onToggled: function(c) { unifiedSettings.settingChanged("autoSaveOnExit", c) }
+                            }
 
                             // Save model button
                             Rectangle {
@@ -538,7 +650,7 @@ Item {
 
                                 Text {
                                     anchors.centerIn: parent
-                                    text: "Save Prediction Model"
+                                    text: "Save Now"
                                     color: "#aaffaa"
                                     font.pixelSize: 12
                                 }
@@ -552,19 +664,43 @@ Item {
                                 }
                             }
 
-                            // Clear user data button
+                            // Clear user data button with multi-step confirmation
                             Rectangle {
+                                id: clearBtn
                                 Layout.fillWidth: true
                                 implicitHeight: 30
                                 radius: 5
-                                color: clearArea.containsMouse ? "#5a2a2a" : "#3a2222"
-                                border.color: "#6a4444"
+
+                                property int confirmStep: 0  // 0=idle, 1=first click, 2=confirmed
+
+                                color: {
+                                    if (confirmStep === 2) return "#2a3a2a"
+                                    if (confirmStep === 1) return clearArea.containsMouse ? "#7a2a2a" : "#5a2a2a"
+                                    return clearArea.containsMouse ? "#5a2a2a" : "#3a2222"
+                                }
+                                border.color: confirmStep === 1 ? "#ff4444" : "#6a4444"
+                                border.width: confirmStep === 1 ? 2 : 1
 
                                 Text {
                                     anchors.centerIn: parent
-                                    text: "Clear Learned Data"
-                                    color: "#ffaaaa"
+                                    text: {
+                                        if (clearBtn.confirmStep === 2) return "Cleared!"
+                                        if (clearBtn.confirmStep === 1) return "Are you sure? Click again to confirm"
+                                        return "Clear Learned Data"
+                                    }
+                                    color: {
+                                        if (clearBtn.confirmStep === 2) return "#aaffaa"
+                                        if (clearBtn.confirmStep === 1) return "#ff6666"
+                                        return "#ffaaaa"
+                                    }
                                     font.pixelSize: 12
+                                    font.bold: clearBtn.confirmStep === 1
+                                }
+
+                                Timer {
+                                    id: clearResetTimer
+                                    interval: 3000
+                                    onTriggered: clearBtn.confirmStep = 0
                                 }
 
                                 MouseArea {
@@ -572,7 +708,16 @@ Item {
                                     anchors.fill: parent
                                     hoverEnabled: true
                                     cursorShape: Qt.PointingHandCursor
-                                    onClicked: { if (keyboard) keyboard.clearUserData() }
+                                    onClicked: {
+                                        if (clearBtn.confirmStep === 0) {
+                                            clearBtn.confirmStep = 1
+                                            clearResetTimer.restart()
+                                        } else if (clearBtn.confirmStep === 1) {
+                                            if (keyboard) keyboard.clearUserData()
+                                            clearBtn.confirmStep = 2
+                                            clearResetTimer.restart()
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -580,12 +725,12 @@ Item {
 
                     // -- ANALYTICS --
                     SettingsSection {
-                        title: "Session Analytics"
+                        title: "Analytics"
                         Layout.fillWidth: true
 
                         AnalyticsDashboard {
                             Layout.fillWidth: true
-                            implicitHeight: 340
+                            implicitHeight: 460
                             visible: true
                         }
                     }

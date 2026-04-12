@@ -28,6 +28,9 @@ Window {
         property real savedWindowOpacity: 1.0
         property string savedLayout: "qwerty"
         property bool savedAudioEnabled: false
+        property bool savedAutoSpaceAfterPunctuation: true
+        property bool savedAutoCapitalizeAfterPunctuation: false
+        property bool savedAutoSaveOnExit: true
     }
 
     // Position once at startup — do NOT bind x/y to width/height or resize
@@ -43,6 +46,13 @@ Window {
         // Load audio setting
         if (keyboard && appSettings.savedAudioEnabled) {
             keyboard.setAudioEnabled(true)
+        }
+
+        // Load punctuation and auto-save settings
+        if (keyboard) {
+            keyboard.setAutoSpaceAfterPunctuation(appSettings.savedAutoSpaceAfterPunctuation)
+            keyboard.setAutoCapitalizeAfterPunctuation(appSettings.savedAutoCapitalizeAfterPunctuation)
+            keyboard.setAutoSaveOnExit(appSettings.savedAutoSaveOnExit)
         }
 
         // Load saved keyboard layout
@@ -85,6 +95,13 @@ Window {
     // Audio feedback
     property bool audioEnabled: appSettings.savedAudioEnabled
 
+    // Auto-space and auto-capitalize after punctuation
+    property bool autoSpaceAfterPunctuation: appSettings.savedAutoSpaceAfterPunctuation
+    property bool autoCapitalizeAfterPunctuation: appSettings.savedAutoCapitalizeAfterPunctuation
+
+    // Auto-save prediction model on exit
+    property bool autoSaveOnExit: appSettings.savedAutoSaveOnExit
+
     // Keyboard state from Python bridge
     property bool shiftOn: keyboard ? keyboard.shiftActive : false
     property bool capsOn: keyboard ? keyboard.capsLockActive : false
@@ -108,6 +125,7 @@ Window {
     property bool showNavigation: false
     property bool showNumpad: false
     property bool showSettings: false
+    property bool showHelp: false
     property bool suggestionsEnabled: true
 
     // Debug
@@ -120,7 +138,7 @@ Window {
 
     // Sizing — keys scale dynamically with window width using closed-form calculation.
     // All visible panels share the window width proportionally, avoiding static estimates.
-    property real keySpacing: 3
+    property real keySpacing: Math.max(1, Math.round(root.width * 0.0035))
 
     // Total key-width units across all visible sections:
     // Widest row is the number row: Esc(1) + `(1) + 10 nums + -(1) + Backspace(1.5) = 14.5 units
@@ -129,12 +147,11 @@ Window {
         + (showNavigation ? 2.7 : 0)
         + (showNumpad ? 3.6 : 0)
 
-    // Fixed-pixel overhead: margins(8×2=16) + number-row gaps(14×3=42)
+    // Fixed-pixel overhead: margins(8×2=16) + number-row gaps(14×keySpacing)
     // + per-panel: separator(1) + panel gaps + 2×RowLayout spacing(6)
-    // Nav: 1 + 2×2 + 2×6 = 17;  Numpad: 1 + 3×2 + 2×6 = 19
-    property real layoutFixedPixels: 58
-        + (showNavigation ? 17 : 0)
-        + (showNumpad ? 19 : 0)
+    property real layoutFixedPixels: 16 + 14 * keySpacing
+        + (showNavigation ? 1 + 2 * keySpacing + 12 : 0)
+        + (showNumpad ? 1 + 3 * keySpacing + 12 : 0)
 
     property real keyW: Math.max(30, (root.width - layoutFixedPixels) / totalKeyUnits)
     property real keyH: Math.max(34, keyW * 0.89)
@@ -289,32 +306,27 @@ Window {
                 anchors.verticalCenter: parent.verticalCenter
                 spacing: 6
                 
-                // Suggestions toggle button
+                // Help button
                 Rectangle {
                     width: 28
                     height: 24
                     radius: 4
-                    color: sugToggle.containsMouse ? "#444" : "transparent"
+                    color: helpBtn.containsMouse ? "#444" : "transparent"
 
                     Text {
                         anchors.centerIn: parent
-                        text: "Aa"
-                        font.pixelSize: 12
-                        font.weight: Font.Medium
-                        color: root.suggestionsEnabled ? "#4a9eff" : "#555"
-                        font.strikeout: !root.suggestionsEnabled
+                        text: "?"
+                        font.pixelSize: 14
+                        font.weight: Font.Bold
+                        color: root.showHelp ? "#4a9eff" : "#999"
                     }
 
                     MouseArea {
-                        id: sugToggle
+                        id: helpBtn
                         anchors.fill: parent
                         hoverEnabled: true
                         cursorShape: Qt.PointingHandCursor
-                        onClicked: {
-                            root.suggestionsEnabled = !root.suggestionsEnabled
-                            appSettings.savedSuggestionsEnabled = root.suggestionsEnabled
-                            if (!root.suggestionsEnabled && keyboard) keyboard.clearPredictions()
-                        }
+                        onClicked: root.showHelp = !root.showHelp
                     }
                 }
 
@@ -409,6 +421,7 @@ Window {
                     Layout.alignment: Qt.AlignHCenter
                     keyW: root.keyW * 0.85
                     keyH: root.keyH * 0.7
+                    keySpacing: root.keySpacing
                 }
 
                 // ===== Prediction Bar (fixed height to prevent window resizing) =====
@@ -421,6 +434,7 @@ Window {
                     Behavior on Layout.preferredHeight { NumberAnimation { duration: 150 } }
 
                     Row {
+                        id: predRow
                         anchors.centerIn: parent
                         spacing: 8
                         visible: root.suggestionsEnabled
@@ -428,7 +442,14 @@ Window {
                         Repeater {
                             model: root.suggestionsEnabled && root.predictions.length > 0 ? root.predictions : []
                             delegate: Rectangle {
-                                width: Math.max(80, predText.implicitWidth + 28)
+                                property real naturalWidth: Math.max(60, predText.implicitWidth + 28)
+                                property real maxPillWidth: {
+                                    var count = root.predictions.length
+                                    if (count <= 0) return naturalWidth
+                                    var avail = root.width - 32 - (count - 1) * predRow.spacing
+                                    return Math.max(50, avail / count)
+                                }
+                                width: Math.min(naturalWidth, maxPillWidth)
                                 height: 36
                                 radius: 8
                                 color: predMouse.containsMouse ? "#3d4d5d" : "#2a3a4a"
@@ -448,25 +469,58 @@ Window {
 
                                 Text {
                                     id: predText
-                                    anchors.centerIn: parent
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    anchors.left: parent.left
+                                    anchors.right: parent.right
+                                    anchors.leftMargin: 8
+                                    anchors.rightMargin: 8
+                                    horizontalAlignment: Text.AlignHCenter
                                     text: modelData
                                     color: predMouse.containsMouse ? "#ffffff" : "#f0f0f0"
                                     font.pixelSize: 15
                                     font.weight: Font.Medium
                                     font.family: "Ubuntu, Noto Sans, sans-serif"
+                                    elide: Text.ElideRight
                                 }
 
                                 MouseArea {
                                     id: predMouse
                                     anchors.fill: parent
                                     hoverEnabled: true
+                                    acceptedButtons: Qt.LeftButton | Qt.RightButton
                                     cursorShape: Qt.PointingHandCursor
-                                    onClicked: keyboard.pressPrediction(modelData)
+                                    onClicked: function(mouse) {
+                                        if (mouse.button === Qt.RightButton) {
+                                            predContextMenu.targetWord = modelData
+                                            predContextMenu.popup()
+                                        } else {
+                                            keyboard.pressPrediction(modelData)
+                                        }
+                                    }
                                 }
 
                                 // Smooth hover animation
                                 Behavior on color { ColorAnimation { duration: 100 } }
                                 Behavior on border.color { ColorAnimation { duration: 100 } }
+                            }
+                        }
+                    }
+
+                    // Right-click context menu for prediction pills
+                    Menu {
+                        id: predContextMenu
+                        property string targetWord: ""
+
+                        MenuItem {
+                            text: "Remove \"%1\" from vocabulary".arg(predContextMenu.targetWord)
+                            onTriggered: {
+                                if (keyboard) keyboard.blacklistWord(predContextMenu.targetWord)
+                            }
+                        }
+                        MenuItem {
+                            text: "Bad suggestion (show less)"
+                            onTriggered: {
+                                if (keyboard) keyboard.markBadSuggestion(predContextMenu.targetWord)
                             }
                         }
                     }
@@ -557,6 +611,7 @@ Window {
                 visible: root.showNavigation
                 keyW: root.keyW * 0.9
                 keyH: root.keyH * 0.9
+                keySpacing: root.keySpacing
             }
 
             // ===== Numpad (toggleable) =====
@@ -571,6 +626,7 @@ Window {
                 visible: root.showNumpad
                 keyW: root.keyW * 0.9
                 keyH: root.keyH * 0.9
+                keySpacing: root.keySpacing
             }
         }
 
@@ -712,11 +768,11 @@ Window {
         // Frameless so we can draw our own drag handle; stays on top
         flags: Qt.Window | Qt.WindowStaysOnTopHint | Qt.FramelessWindowHint | Qt.Tool
 
-        // Position to the right of the main keyboard when first shown
+        // Center on screen when first shown
         onVisibleChanged: {
             if (visible) {
-                settingsWindow.x = root.x + root.width + 8
-                settingsWindow.y = root.y
+                settingsWindow.x = Screen.width / 2 - settingsWindow.width / 2
+                settingsWindow.y = Screen.height / 2 - settingsWindow.height / 2
             }
         }
 
@@ -738,6 +794,9 @@ Window {
             audioEnabled: root.audioEnabled
             suggestionsEnabled: root.suggestionsEnabled
             predictionCount: keyboard ? keyboard.predictionCount : 8
+            autoSpaceAfterPunctuation: root.autoSpaceAfterPunctuation
+            autoCapitalizeAfterPunctuation: root.autoCapitalizeAfterPunctuation
+            autoSaveOnExit: root.autoSaveOnExit
             debugMode: root.showDebugPanel
 
             onSettingChanged: function(setting, value) {
@@ -768,6 +827,18 @@ Window {
                     if (!value && keyboard) keyboard.clearPredictions()
                 } else if (setting === "predictionCount") {
                     if (keyboard) keyboard.setPredictionCount(value)
+                } else if (setting === "autoSpaceAfterPunctuation") {
+                    root.autoSpaceAfterPunctuation = value
+                    appSettings.savedAutoSpaceAfterPunctuation = value
+                    if (keyboard) keyboard.setAutoSpaceAfterPunctuation(value)
+                } else if (setting === "autoCapitalizeAfterPunctuation") {
+                    root.autoCapitalizeAfterPunctuation = value
+                    appSettings.savedAutoCapitalizeAfterPunctuation = value
+                    if (keyboard) keyboard.setAutoCapitalizeAfterPunctuation(value)
+                } else if (setting === "autoSaveOnExit") {
+                    root.autoSaveOnExit = value
+                    appSettings.savedAutoSaveOnExit = value
+                    if (keyboard) keyboard.setAutoSaveOnExit(value)
                 } else if (setting === "debugMode") {
                     root.showDebugPanel = value
                     if (keyboard) keyboard.setDebugMode(value)
@@ -775,6 +846,34 @@ Window {
             }
 
             onCloseRequested: root.showSettings = false
+        }
+    }
+
+    // ===== Help Popup Window =====
+    Window {
+        id: helpWindow
+        title: "Alpha-OSK Help"
+        visible: root.showHelp
+        width: 400
+        minimumWidth: 340
+        height: 520
+        minimumHeight: 300
+        flags: Qt.Window | Qt.WindowStaysOnTopHint | Qt.FramelessWindowHint | Qt.Tool
+
+        onVisibleChanged: {
+            if (visible) {
+                helpWindow.x = Screen.width / 2 - helpWindow.width / 2
+                helpWindow.y = Screen.height / 2 - helpWindow.height / 2
+            }
+        }
+
+        onClosing: root.showHelp = false
+
+        color: "#1e1e1e"
+
+        Comp.HelpPanel {
+            anchors.fill: parent
+            onCloseRequested: root.showHelp = false
         }
     }
 }

@@ -183,8 +183,11 @@ class HybridPredictor(QObject):
         return predictions
 
     def _is_valid_word(self, word: str) -> bool:
-        """Check if word is in our vocabulary (real word, not fragment)."""
+        """Check if word is in our vocabulary and not blacklisted."""
         word_lower = word.lower()
+        # Blacklisted words never appear
+        if self._ngram.is_suppressed(word_lower):
+            return False
         # Check n-gram vocabulary (includes Google 10K)
         if word_lower in self._ngram.unigrams:
             return True
@@ -247,6 +250,12 @@ class HybridPredictor(QObject):
             score = fuzzy_weight / (i + 1)
             scores[word] = scores.get(word, 0) + score
             sources.setdefault(word, []).append("fz")
+
+        # Apply dispreference penalties before sorting
+        for word in list(scores):
+            dp = self._ngram.get_dispreference(word)
+            if dp > 0:
+                scores[word] /= (1 + dp * 0.5)
 
         # Sort by combined score
         sorted_words = sorted(scores.items(), key=lambda x: -x[1])
@@ -563,3 +572,34 @@ class HybridPredictor(QObject):
             _logger.info("Vocabulary pack disabled: %s", pack_id)
             return True
         return False
+
+    def import_vocabulary_pack(self, source_dir: str) -> str:
+        """
+        Import a custom vocabulary pack from a folder.
+
+        Args:
+            source_dir: Path to the pack folder (must contain dictionary.txt)
+
+        Returns:
+            Pack ID on success, empty string on failure
+        """
+        from pathlib import Path
+        pack_id = self._pack_manager.import_pack(Path(source_dir))
+        if pack_id:
+            self.packsChanged.emit()
+            return pack_id
+        return ""
+
+    def get_user_packs_dir(self) -> str:
+        """Return the user packs directory path as a string."""
+        return str(self._pack_manager.get_user_packs_dir())
+
+    # --- Word Suppression ---
+
+    def blacklist_word(self, word: str) -> None:
+        """Remove a word from all future predictions."""
+        self._ngram.blacklist_word(word)
+
+    def mark_bad_suggestion(self, word: str) -> None:
+        """Downweight a word in future predictions."""
+        self._ngram.mark_bad(word)

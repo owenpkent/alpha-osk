@@ -221,6 +221,15 @@ def main() -> int:
     if root:
         _apply_window_flags(root)
 
+    # Save state on quit
+    def _on_about_to_quit() -> None:
+        if bridge.autoSaveOnExit:
+            _logger.info("Auto-saving prediction model on exit...")
+            bridge.savePredictionModel()
+        bridge.saveAnalytics()
+
+    app.aboutToQuit.connect(_on_about_to_quit)
+
     return app.exec()
 
 

@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import logging
+import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Set
@@ -182,34 +183,42 @@ class PackManager:
     n-gram model.
     """
 
-    def __init__(self, packs_dir: Optional[Path] = None):
+    def __init__(self, packs_dir: Optional[Path] = None,
+                 user_packs_dir: Optional[Path] = None):
         """
         Initialize the pack manager.
 
         Args:
-            packs_dir: Directory containing pack subdirectories.
+            packs_dir: Directory containing built-in pack subdirectories.
                        Defaults to ``data/packs/`` relative to project root.
+            user_packs_dir: Directory for user-imported custom packs.
+                           Defaults to ``<config_dir>/packs/``.
         """
         if packs_dir is None:
             packs_dir = Path(__file__).parent.parent.parent / "data" / "packs"
 
+        if user_packs_dir is None:
+            from ..platform import get_config_dir
+            user_packs_dir = get_config_dir() / "packs"
+            user_packs_dir.mkdir(parents=True, exist_ok=True)
+
         self._packs_dir = packs_dir
+        self._user_packs_dir = user_packs_dir
         self._packs: Dict[str, VocabularyPack] = {}
 
         self._discover_packs()
 
     def _discover_packs(self) -> None:
-        """Scan the packs directory for available packs."""
-        if not self._packs_dir.is_dir():
-            _logger.info("No packs directory found at %s", self._packs_dir)
-            return
-
-        for item in sorted(self._packs_dir.iterdir()):
-            if item.is_dir() and not item.name.startswith("."):
-                pack = VocabularyPack.from_directory(item)
-                if pack is not None:
-                    self._packs[item.name] = pack
-                    _logger.info("Discovered pack: %s", pack.name)
+        """Scan both built-in and user packs directories."""
+        for packs_dir in (self._packs_dir, self._user_packs_dir):
+            if not packs_dir.is_dir():
+                continue
+            for item in sorted(packs_dir.iterdir()):
+                if item.is_dir() and not item.name.startswith("."):
+                    pack = VocabularyPack.from_directory(item)
+                    if pack is not None and item.name not in self._packs:
+                        self._packs[item.name] = pack
+                        _logger.info("Discovered pack: %s (%s)", pack.name, packs_dir)
 
         _logger.info("Found %d vocabulary packs", len(self._packs))
 
@@ -310,6 +319,68 @@ class PackManager:
                     predictor.trigrams[key][w3] = max(
                         predictor.trigrams[key].get(w3, 0), weight
                     )
+
+    def import_pack(self, source_dir: Path) -> Optional[str]:
+        """
+        Import a vocabulary pack from an external directory.
+
+        Copies the pack folder into the user packs directory. The source
+        must contain at least a ``dictionary.txt`` file. A ``pack.json``
+        is optional (the folder name is used as the pack ID).
+
+        Args:
+            source_dir: Path to the pack folder to import.
+
+        Returns:
+            The pack ID (folder name) on success, None on failure.
+        """
+        source_dir = Path(source_dir)
+        if not source_dir.is_dir():
+            _logger.error("Import source is not a directory: %s", source_dir)
+            return None
+
+        # Must have at least a dictionary.txt
+        if not (source_dir / "dictionary.txt").exists():
+            _logger.error("Import source missing dictionary.txt: %s", source_dir)
+            return None
+
+        pack_id = source_dir.name.lower().replace(" ", "_")
+        dest_dir = self._user_packs_dir / pack_id
+
+        # Don't overwrite built-in packs
+        if pack_id in self._packs and (self._packs_dir / pack_id).is_dir():
+            _logger.error("Cannot overwrite built-in pack: %s", pack_id)
+            return None
+
+        try:
+            if dest_dir.exists():
+                shutil.rmtree(dest_dir)
+            shutil.copytree(source_dir, dest_dir)
+
+            # Generate pack.json if missing
+            if not (dest_dir / "pack.json").exists():
+                meta = {
+                    "name": source_dir.name,
+                    "description": f"Custom pack imported from {source_dir.name}",
+                    "version": 1,
+                }
+                (dest_dir / "pack.json").write_text(json.dumps(meta))
+
+            # Register the new pack
+            pack = VocabularyPack.from_directory(dest_dir)
+            if pack is not None:
+                self._packs[pack_id] = pack
+                _logger.info("Imported pack: %s (%d)", pack.name, len(list(dest_dir.iterdir())))
+                return pack_id
+
+        except Exception as e:
+            _logger.error("Failed to import pack from %s: %s", source_dir, e)
+
+        return None
+
+    def get_user_packs_dir(self) -> Path:
+        """Return the user packs directory path."""
+        return self._user_packs_dir
 
     def get_pack(self, pack_id: str) -> Optional[VocabularyPack]:
         """Get a pack by ID (for testing/direct access)."""

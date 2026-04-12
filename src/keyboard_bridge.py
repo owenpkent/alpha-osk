@@ -140,6 +140,9 @@ class KeyboardBridge(QObject):
         self._current_word = ""
         self._sentence_buffer = ""  # Accumulates words for sentence-level learning
         self._predictions: List[str] = []
+        self._auto_space_after_punctuation = True
+        self._auto_capitalize_after_punctuation = False
+        self._auto_save_on_exit = True
 
     # --- Key synthesis (delegated to platform layer) ---
 
@@ -206,7 +209,13 @@ class KeyboardBridge(QObject):
                 self._predictor.learn(sentence.strip())
             self._sentence_buffer = ""
             self._current_word = ""
+            if self._auto_space_after_punctuation:
+                self._send_text(" ")
             self._context_buffer += char + " "
+            # Auto-capitalize next letter
+            if self._auto_capitalize_after_punctuation:
+                self._shift_active = True
+                self.shiftActiveChanged.emit(True)
             if len(self._context_buffer) > 200:
                 self._context_buffer = self._context_buffer[-200:]
 
@@ -362,9 +371,10 @@ class KeyboardBridge(QObject):
         """Called when user taps a prediction suggestion."""
         _logger.info("Prediction selected: %s", word)
 
-        # Track prediction usage
+        # Track prediction usage — keystrokes saved = characters user didn't type + space
         rank = self._predictions.index(word) + 1 if word in self._predictions else 1
-        self._analytics.record_prediction_selected(word, rank)
+        saved = len(word) - len(self._current_word) + 1  # +1 for auto-space
+        self._analytics.record_prediction_selected(word, rank, keystrokes_saved=max(0, saved))
 
         # Complete the word: type remaining characters + space
         if self._current_word:
@@ -508,6 +518,29 @@ class KeyboardBridge(QObject):
         """Set number of predictions to show."""
         self._prediction_count = max(1, min(10, count))
         self.predictionCountChanged.emit(self._prediction_count)
+
+    @Slot(bool)
+    def setAutoSpaceAfterPunctuation(self, enabled: bool) -> None:
+        """Toggle automatic space insertion after sentence-ending punctuation."""
+        self._auto_space_after_punctuation = enabled
+        _logger.info("Auto-space after punctuation: %s", enabled)
+
+    @Slot(bool)
+    def setAutoCapitalizeAfterPunctuation(self, enabled: bool) -> None:
+        """Toggle auto-capitalize after sentence-ending punctuation."""
+        self._auto_capitalize_after_punctuation = enabled
+        _logger.info("Auto-capitalize after punctuation: %s", enabled)
+
+    @Slot(bool)
+    def setAutoSaveOnExit(self, enabled: bool) -> None:
+        """Toggle auto-save of prediction model when app closes."""
+        self._auto_save_on_exit = enabled
+        _logger.info("Auto-save on exit: %s", enabled)
+
+    @property
+    def autoSaveOnExit(self) -> bool:
+        """Whether to auto-save prediction model on exit."""
+        return self._auto_save_on_exit
 
     @Slot(result=dict)
     def getPredictionStats(self) -> dict:
@@ -657,6 +690,38 @@ class KeyboardBridge(QObject):
             self._add_debug_log(f"Vocabulary pack disabled: {pack_id}")
         return result
 
+    @Slot(str, result=str)
+    def importVocabularyPack(self, folder_path: str) -> str:
+        """Import a custom vocabulary pack from a folder. Returns pack ID or empty."""
+        pack_id = self._predictor.import_vocabulary_pack(folder_path)
+        if pack_id:
+            self._add_debug_log(f"Imported vocabulary pack: {pack_id}")
+        else:
+            self._add_debug_log(f"Failed to import pack from: {folder_path}")
+        return pack_id
+
+    @Slot(result=str)
+    def getUserPacksDir(self) -> str:
+        """Get the user custom packs directory path."""
+        return self._predictor.get_user_packs_dir()
+
+    # --- Word Suppression ---
+
+    @Slot(str)
+    def blacklistWord(self, word: str) -> None:
+        """Remove a word from all future predictions."""
+        self._predictor.blacklist_word(word)
+        # Refresh predictions to remove it immediately
+        self._predictions = [w for w in self._predictions if w.lower() != word.lower()]
+        self.predictionsChanged.emit(self._predictions)
+        self._add_debug_log(f"Blacklisted: {word}")
+
+    @Slot(str)
+    def markBadSuggestion(self, word: str) -> None:
+        """Downweight a word in future predictions."""
+        self._predictor.mark_bad_suggestion(word)
+        self._add_debug_log(f"Marked bad: {word}")
+
     # --- Audio Feedback ---
 
     def _play_click(self) -> None:
@@ -730,8 +795,13 @@ class KeyboardBridge(QObject):
 
     @Slot(result="QVariant")
     def getAnalytics(self) -> dict:
-        """Return session analytics for the QML dashboard."""
+        """Return session + all-time analytics for the QML dashboard."""
         return self._analytics.get_session_stats()
+
+    @Slot()
+    def saveAnalytics(self) -> None:
+        """Save analytics to disk."""
+        self._analytics.save()
 
     # --- Prediction Properties ---
 
