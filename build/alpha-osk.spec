@@ -45,8 +45,8 @@ PROJECT_ROOT = Path(SPECPATH).parent
 block_cipher = None
 
 a = Analysis(
-    # Entry point
-    [str(PROJECT_ROOT / 'src' / 'keyboard_app.py')],
+    # Entry point — launcher handles frozen vs dev import paths
+    [str(PROJECT_ROOT / 'build' / 'launcher.py')],
 
     pathex=[str(PROJECT_ROOT)],
 
