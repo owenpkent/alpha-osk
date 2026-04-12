@@ -85,7 +85,7 @@ a = Analysis(
         'src.prediction.ppm_predictor',
         'src.prediction.fuzzy_recognizer',
         'src.prediction.hybrid_predictor',
-        'src.prediction.transformer_predictor',
+        # transformer_predictor excluded — requires torch (optional, not bundled)
         'src.prediction.vocabulary_pack',
     ],
 
@@ -96,6 +96,18 @@ a = Analysis(
         # Exclude Linux-only modules on Windows builds
         'ydotool',
         'xdotool',
+        # Exclude heavy ML/science libraries (not needed — LLM predictor is optional)
+        'torch', 'torchvision', 'torchaudio',
+        'transformers', 'huggingface_hub', 'tokenizers', 'safetensors',
+        'numpy', 'scipy', 'pandas', 'matplotlib',
+        'sklearn', 'scikit-learn',
+        'PIL', 'cv2', 'openai',
+        # Exclude dev/test tools
+        'pytest', 'pytest_cov', 'coverage', 'mypy', 'ruff',
+        'IPython', 'notebook', 'jupyter',
+        'pygments', 'pyinstaller',
+        # Exclude other unneeded heavy packages
+        'pygame', 'pyvjoy',
     ],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
