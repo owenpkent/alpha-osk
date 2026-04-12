@@ -723,7 +723,8 @@ class KeyboardBridge(QObject):
     def getLayoutRows(self) -> list:
         """Return the current layout's row data for QML rendering."""
         layout = self._layouts.get(self._current_layout, {})
-        return layout.get("rows", [])
+        rows: list = layout.get("rows", [])
+        return rows
 
     # --- Analytics ---
 
