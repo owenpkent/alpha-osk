@@ -425,8 +425,10 @@ Var CreateStartMenuShortcut
 
 ; --- MUI Settings ---
 !define MUI_ABORTWARNING
-!define MUI_FINISHPAGE_RUN "$INSTDIR\\${{APP_EXE}}"
+; Launch as the original (non-elevated) user via Explorer shell
+!define MUI_FINISHPAGE_RUN
 !define MUI_FINISHPAGE_RUN_TEXT "Launch ${{APP_NAME}}"
+!define MUI_FINISHPAGE_RUN_FUNCTION LaunchAsUser
 
 ; --- Pages ---
 !insertmacro MUI_PAGE_WELCOME
@@ -485,6 +487,14 @@ Function .onInit
 FunctionEnd
 
 ; ============================================================
+;  Launch as original (non-elevated) user
+; ============================================================
+Function LaunchAsUser
+  ; Use Explorer to launch so the app runs as the normal user, not admin
+  Exec '"$WINDIR\\explorer.exe" "$INSTDIR\\${{APP_EXE}}"'
+FunctionEnd
+
+; ============================================================
 ;  Install Section
 ; ============================================================
 Section "Install"
@@ -513,9 +523,9 @@ Section "Install"
   ; Run custom install macros (old version cleanup)
   !insertmacro customInstall
 
-  ; Create shortcuts based on user selection
-  ; Use SetShellVarContext to target the CURRENT user, not admin
-  SetShellVarContext current
+  ; Create shortcuts — use All Users context so they appear for everyone
+  ; and resolve correctly under admin elevation
+  SetShellVarContext all
 
   ${{If}} $CreateStartMenuShortcut == ${{BST_CHECKED}}
     CreateDirectory "$SMPROGRAMS\\Alpha-OSK"
@@ -526,8 +536,6 @@ Section "Install"
   ${{If}} $CreateDesktopShortcut == ${{BST_CHECKED}}
     CreateShortCut "$DESKTOP\\Alpha-OSK.lnk" "$INSTDIR\\${{APP_EXE}}" "" "$INSTDIR\\${{APP_EXE}}" 0
   ${{EndIf}}
-
-  SetShellVarContext all
 SectionEnd
 
 ; ============================================================
@@ -537,13 +545,12 @@ Section "Uninstall"
   ; Run custom uninstall macros
   !insertmacro customUnInstall
 
-  ; Clean up shortcuts (both user contexts)
-  SetShellVarContext current
+  ; Clean up shortcuts (All Users context to match install)
+  SetShellVarContext all
   Delete "$DESKTOP\\Alpha-OSK.lnk"
   Delete "$SMPROGRAMS\\Alpha-OSK\\Alpha-OSK.lnk"
   Delete "$SMPROGRAMS\\Alpha-OSK\\Uninstall Alpha-OSK.lnk"
   RMDir "$SMPROGRAMS\\Alpha-OSK"
-  SetShellVarContext all
 
   ; Remove files
 {uninstall_files}
