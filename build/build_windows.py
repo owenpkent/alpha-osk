@@ -366,12 +366,17 @@ def _generate_nsi_script(version: str, installer_name: str) -> str:
     # Build file list from dist directory
     file_install_lines = []
     file_uninstall_lines = []
+    current_outpath = "."  # Track current SetOutPath to avoid redundant changes
     if DIST_DIR.exists():
         for f in sorted(DIST_DIR.rglob("*")):
             if f.is_file():
                 rel = f.relative_to(DIST_DIR)
                 parent = str(rel.parent).replace("/", "\\")
                 if parent == ".":
+                    # Root-level file — reset SetOutPath if we were in a subdir
+                    if current_outpath != ".":
+                        file_install_lines.append('  SetOutPath "$INSTDIR"')
+                        current_outpath = "."
                     file_install_lines.append(
                         f'  File "{f}"'
                     )
@@ -379,9 +384,11 @@ def _generate_nsi_script(version: str, installer_name: str) -> str:
                         f'  Delete "$INSTDIR\\{rel.name}"'
                     )
                 else:
-                    file_install_lines.append(
-                        f'  SetOutPath "$INSTDIR\\{parent}"'
-                    )
+                    if current_outpath != parent:
+                        file_install_lines.append(
+                            f'  SetOutPath "$INSTDIR\\{parent}"'
+                        )
+                        current_outpath = parent
                     file_install_lines.append(
                         f'  File "{f}"'
                     )
