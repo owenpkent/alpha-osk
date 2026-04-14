@@ -376,4 +376,5 @@ Conventional commits: `feat:`, `fix:`, `docs:`, `refactor:`, `chore:`
 - On Windows, `WS_EX_NOACTIVATE` is set via Win32 API (not just Qt flags).
 - Key spacing and sizing are calculated dynamically from window width — see `keyW`, `keyH`, `keySpacing`, `layoutFixedPixels` properties in Main.qml.
 - The title bar has play/pause (privacy), ⚙ (settings), minimize, and close. Help and visualization are in Settings → Tools.
-- Predictions clear automatically when the window loses focus (`onActiveChanged` in Main.qml) so context doesn't go stale.
+- Predictions clear automatically when the window loses focus (`onActiveChanged` in Main.qml) but `_current_word` and `_context_buffer` are preserved — some apps cause rapid focus flickers that would destroy typing state.
+- Prediction selection uses **Shift+Left select-and-replace**, not Backspace. Electron apps (Slack, Teams, Discord) misbehave when Backspace empties the input field — they close the compose area. See `replace_text()` in `platform/windows.py`.

@@ -472,7 +472,10 @@ class KeyboardBridge(QObject):
     @Slot(str)
     def pressPrediction(self, word: str) -> None:
         """Called when user taps a prediction suggestion."""
-        _logger.info("Prediction selected: %s", word)
+        _logger.info(
+            "Prediction selected: '%s' | _current_word='%s' (len=%d) | select=%d",
+            word, self._current_word, len(self._current_word), len(self._current_word),
+        )
 
         # Track prediction usage — keystrokes saved = characters user didn't type + space
         rank = self._predictions.index(word) + 1 if word in self._predictions else 1

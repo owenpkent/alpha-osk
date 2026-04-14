@@ -387,29 +387,38 @@ class WindowsKeySynthesizer(KeySynthesizerBase):
 
     def replace_text(self, backspace_count: int, text: str) -> None:
         """
-        Atomically erase characters then type replacement text.
+        Atomically select-and-replace characters with new text.
 
-        Builds all backspace key-down/up pairs and Unicode character
-        events into a **single** ``SendInput`` call so the target
-        application's input queue sees the whole operation as one burst
-        with no gaps for other events to interleave.
+        Uses Shift+Left arrow to select characters (instead of Backspace)
+        so the field never goes empty — some apps (Slack, Teams) misbehave
+        when Backspace empties the input field (they close the compose area
+        or shift focus).  Typing the replacement text overwrites the
+        selection.  If ``backspace_count`` is 0, just types the text.
+
+        All events are sent in a **single** ``SendInput`` call so the
+        target application sees the operation atomically.
 
         Args:
-            backspace_count: Number of ``Backspace`` presses to send.
-            text: Replacement string to type after deletions.
+            backspace_count: Number of characters to select and replace.
+            text: Replacement string to type (overwrites selection).
         """
         events: List[INPUT] = []
 
-        for _ in range(backspace_count):
-            events.append(self._make_key_event(VK_BACK, key_down=True))
-            events.append(self._make_key_event(VK_BACK, key_down=False))
+        if backspace_count > 0:
+            # Hold Shift, press Left N times, release Shift → selects N chars
+            events.append(self._make_key_event(VK_SHIFT, key_down=True))
+            for _ in range(backspace_count):
+                events.append(self._make_key_event(VK_LEFT, key_down=True))
+                events.append(self._make_key_event(VK_LEFT, key_down=False))
+            events.append(self._make_key_event(VK_SHIFT, key_down=False))
 
+        # Typing the replacement overwrites the selection
         for char in text:
             events.extend(self._make_unicode_events(char))
 
         self._inject(events)
         self._log_send(
-            f"replace backspaces={backspace_count} text='{text}'"
+            f"replace select={backspace_count} text='{text}'"
         )
 
     def send_combination(self, keys: List[str]) -> None:

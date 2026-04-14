@@ -115,6 +115,11 @@ The Windows synthesizer lives in `src/platform/windows.py`.  Key features:
 - **Atomic injection** — all events for a keystroke (modifier press → key
   press → key release → modifier release) are sent in a single `SendInput`
   call, preventing race conditions with other input.
+- **Select-and-replace for predictions** — when a prediction is selected,
+  the typed prefix is selected via Shift+Left (not deleted via Backspace),
+  then the replacement text overwrites the selection. This prevents Electron
+  apps (Slack, Teams, Discord) from closing the compose area when Backspace
+  would empty the input field.
 - **Extended key handling** — correctly sets `KEYEVENTF_EXTENDEDKEY` for
   navigation keys (arrows, Home, End, Insert, Delete, Page Up/Down) which
   require it on Windows.
