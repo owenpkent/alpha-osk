@@ -60,6 +60,8 @@ a = Analysis(
         (str(PROJECT_ROOT / 'data'), 'data'),
         # Templates (dashboard)
         (str(PROJECT_ROOT / 'templates'), 'templates'),
+        # App icon (used at runtime for system tray)
+        (str(PROJECT_ROOT / 'build' / 'alpha-osk.ico'), '.'),
     ],
 
     # Hidden imports that PyInstaller misses

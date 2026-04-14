@@ -33,8 +33,9 @@ import sys
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QUrl
-from PySide6.QtGui import QGuiApplication
+from PySide6.QtGui import QGuiApplication, QIcon
 from PySide6.QtQml import QQmlApplicationEngine
+from PySide6.QtWidgets import QApplication, QSystemTrayIcon, QMenu
 
 from .keyboard_bridge import KeyboardBridge
 from .platform import CURRENT_PLATFORM, get_platform_info
@@ -42,11 +43,29 @@ from .platform import CURRENT_PLATFORM, get_platform_info
 _logger = logging.getLogger("KeyboardApp")
 
 
+def _project_root() -> Path:
+    """Resolve the project root (handles both dev and PyInstaller frozen)."""
+    here = Path(__file__).resolve().parent
+    return here.parent
+
+
 def qml_path() -> Path:
     """Resolve the path to Main.qml relative to this file."""
-    here = Path(__file__).resolve().parent
-    project_root = here.parent
-    return project_root / "qml" / "Main.qml"
+    return _project_root() / "qml" / "Main.qml"
+
+
+def _icon_path() -> Path | None:
+    """Find the app icon for the system tray."""
+    root = _project_root()
+    candidates = [
+        root / "build" / "alpha-osk.ico",
+        root / "alpha-osk.ico",
+        Path(sys.executable).parent / "alpha-osk.ico",
+    ]
+    for p in candidates:
+        if p.exists():
+            return p
+    return None
 
 
 def _setup_platform_env() -> None:
@@ -174,13 +193,23 @@ def main() -> int:
 
     # Use PassThrough rounding so Qt does not multiply logical window sizes
     # by a rounded scale factor when moving between monitors with different DPI.
-    QGuiApplication.setHighDpiScaleFactorRoundingPolicy(
+    QApplication.setHighDpiScaleFactorRoundingPolicy(
         Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
     )
 
-    app = QGuiApplication(sys.argv)
+    app = QApplication(sys.argv)
     app.setApplicationName("Alpha-OSK")
     app.setOrganizationName("alpha-osk")
+
+    # Set app icon
+    icon_file = _icon_path()
+    if icon_file:
+        app_icon = QIcon(str(icon_file))
+        app.setWindowIcon(app_icon)
+        _logger.info("App icon loaded: %s", icon_file)
+    else:
+        app_icon = QIcon()
+        _logger.warning("App icon not found")
 
     # Create the bridge (auto-detects platform key synthesizer)
     bridge = KeyboardBridge()
@@ -220,6 +249,32 @@ def main() -> int:
     root = engine.rootObjects()[0]
     if root:
         _apply_window_flags(root)
+
+    # --- System tray icon ---
+    tray = QSystemTrayIcon(app_icon, app)
+    tray_menu = QMenu()
+    show_action = tray_menu.addAction("Show / Hide")
+    tray_menu.addSeparator()
+    quit_action = tray_menu.addAction("Quit Alpha-OSK")
+
+    def _toggle_visibility() -> None:
+        if root.isVisible():
+            root.hide()
+        else:
+            root.show()
+            root.raise_()
+
+    show_action.triggered.connect(_toggle_visibility)
+    tray.activated.connect(
+        lambda reason: _toggle_visibility()
+        if reason == QSystemTrayIcon.ActivationReason.Trigger
+        else None
+    )
+    quit_action.triggered.connect(app.quit)
+    tray.setContextMenu(tray_menu)
+    tray.setToolTip("Alpha-OSK")
+    tray.show()
+    _logger.info("System tray icon active")
 
     # Save state on quit
     def _on_about_to_quit() -> None:
