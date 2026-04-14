@@ -482,14 +482,24 @@ class KeyboardBridge(QObject):
         saved = len(word) - len(self._current_word) + 1  # +1 for auto-space
         self._analytics.record_prediction_selected(word, rank, keystrokes_saved=max(0, saved))
 
-        # Complete the word: erase typed prefix, then type full word + space.
-        # Using backspace-then-retype is more robust than sending only the
-        # remaining suffix, because _current_word can drift out of sync with
-        # what's actually on screen (e.g. after modifier keys or focus changes).
-        # The replace is done atomically (single SendInput call on Windows) so
-        # the target app can't interleave other events between the backspaces
-        # and the replacement text.
-        self._synth.replace_text(len(self._current_word), word + " ")
+        # Complete the word by typing only the suffix (characters the user
+        # hasn't typed yet) plus a space.  This avoids Backspace and
+        # Shift+Left selection, which both break in certain apps:
+        # - Backspace empties the field in Slack/Teams/Discord → compose closes
+        # - Shift+Left doesn't select text in terminals → leaves duplicates
+        # Suffix-only typing works everywhere.
+        lower_word = word.lower()
+        lower_prefix = self._current_word.lower()
+        if lower_word.startswith(lower_prefix) and self._current_word:
+            # Prediction extends what was typed — just type the remaining chars
+            suffix = word[len(self._current_word):] + " "
+            self._send_text(suffix)
+        elif not self._current_word:
+            # Next-word prediction (nothing typed) — type the full word
+            self._send_text(word + " ")
+        else:
+            # Prediction doesn't match typed prefix (rare) — select and replace
+            self._synth.replace_text(len(self._current_word), word + " ")
 
         # Learn from selection — use context_buffer only, not the typed
         # fragment (_current_word) which is being *replaced* by the prediction.
