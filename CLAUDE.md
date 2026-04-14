@@ -242,6 +242,14 @@ Commercial keyboards (Gboard/LatinIME, Presage) treat prediction and spell-check
 - **SymSpell**: precompute all deletion variants within edit distance N at index time. Query = generate deletions of input + hash lookup. (github.com/wolfgarbe/SymSpell)
 - **Hunspell**: affix-based dictionary + phonetic matching. Slower but handles morphology.
 
+## MacroVox Integration
+
+Design doc at `docs/MACROVOX_INTEGRATION.md`. MacroVox (`C:\Users\Owen\dev\MacroVox`) is a managed voice dictation app (Tauri 2 / Rust + React, Deepgram STT, Claude AI cleanup). Together with Alpha-OSK it forms a complete accessibility input suite: type when you can, dictate when you can't.
+
+**Phases**: (1) Launch & trigger via mic button + Ctrl+Space hotkey. (2) Clipboard bridge — dictated text feeds prediction context. (3) Named pipe IPC — real-time transcript streaming + keyword boosting. (4) Unified installer and shared auth.
+
+Phase 1 requires no MacroVox changes — just a mic icon in Alpha-OSK's title bar.
+
 ## Federated Learning
 
 Design doc at `docs/FEDERATED_LEARNING.md`. Not yet implemented — Phase 1 (local delta computation) is the next step.
