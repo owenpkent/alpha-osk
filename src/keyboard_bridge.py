@@ -159,6 +159,15 @@ class KeyboardBridge(QObject):
         self._password_timer.timeout.connect(self._check_password_field)
         self._password_timer.start()
 
+        # Monitor foreground window changes to clear predictions when user
+        # switches apps. WS_EX_NOACTIVATE means onActiveChanged doesn't fire
+        # reliably in QML, so we poll from Python instead.
+        self._last_foreground_hwnd = 0
+        self._foreground_timer = QTimer(self)
+        self._foreground_timer.setInterval(250)
+        self._foreground_timer.timeout.connect(self._check_foreground_window)
+        self._foreground_timer.start()
+
     # --- Key synthesis (delegated to platform layer) ---
 
     def _send_key(self, key_name: str) -> None:
@@ -666,6 +675,28 @@ class KeyboardBridge(QObject):
         return self._auto_save_on_exit
 
     # --- Privacy Mode ---
+
+    def _check_foreground_window(self) -> None:
+        """Detect when the user switches to a different application.
+
+        Clears predictions and resets typing state since the context is
+        now stale for the new window.  Uses GetForegroundWindow() which
+        is lightweight (~0 cost).
+        """
+        try:
+            import ctypes
+            hwnd = ctypes.windll.user32.GetForegroundWindow()
+            if hwnd != self._last_foreground_hwnd and self._last_foreground_hwnd != 0:
+                # Foreground window changed — user switched apps
+                self._predictions = []
+                self._current_word = ""
+                self._sentence_buffer = ""
+                self._context_buffer = ""
+                self.predictionsChanged.emit([])
+                _logger.debug("Foreground window changed — predictions cleared")
+            self._last_foreground_hwnd = hwnd
+        except Exception:
+            pass  # Non-Windows or ctypes unavailable — skip
 
     def _check_password_field(self) -> None:
         """Periodic check for password field focus (called by QTimer)."""

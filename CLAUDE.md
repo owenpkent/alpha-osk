@@ -421,5 +421,5 @@ Conventional commits: `feat:`, `fix:`, `docs:`, `refactor:`, `chore:`
 - On Windows, `WS_EX_NOACTIVATE` is set via Win32 API (not just Qt flags).
 - Key spacing and sizing are calculated dynamically from window width — see `keyW`, `keyH`, `keySpacing`, `layoutFixedPixels` properties in Main.qml.
 - The title bar has play/pause (privacy), ⚙ (settings), minimize, and close. Help and visualization are in Settings → Tools.
-- Predictions clear automatically when the window loses focus (`onActiveChanged` in Main.qml) but `_current_word` and `_context_buffer` are preserved — some apps cause rapid focus flickers that would destroy typing state.
-- Prediction selection uses **Shift+Left select-and-replace**, not Backspace. Electron apps (Slack, Teams, Discord) misbehave when Backspace empties the input field — they close the compose area. See `replace_text()` in `platform/windows.py`.
+- Predictions clear when the user switches apps — monitored via `GetForegroundWindow()` polling every 250ms in `keyboard_bridge.py`. The QML `onActiveChanged` doesn't fire reliably with `WS_EX_NOACTIVATE`, so Python handles it. Full context reset on app switch (`_current_word`, `_context_buffer`, `_sentence_buffer`).
+- Prediction selection uses **suffix-only typing** — if the user typed "hel" and picks "hello", only "lo " is sent. No Backspace (empties Slack compose), no Shift+Left (doesn't work in terminals). Falls back to `replace_text()` only when the prediction doesn't match the typed prefix.
