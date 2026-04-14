@@ -33,9 +33,9 @@ import sys
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QUrl
-from PySide6.QtGui import QGuiApplication, QIcon
+from PySide6.QtGui import QIcon
 from PySide6.QtQml import QQmlApplicationEngine
-from PySide6.QtWidgets import QApplication, QSystemTrayIcon, QMenu
+from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
 from .keyboard_bridge import KeyboardBridge
 from .platform import CURRENT_PLATFORM, get_platform_info

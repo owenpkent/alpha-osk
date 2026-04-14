@@ -370,3 +370,42 @@ class TestPunctuationSpacing:
         bridge.pressKey(",")
         # Comma should NOT activate shift (only sentence-enders do)
         assert not bridge._shift_active
+
+    def test_no_backspace_before_comma_mid_word(self, bridge: KeyboardBridge):
+        """Typing 'hello,' should NOT backspace — there's no space to remove."""
+        bridge.pressKey("h")
+        bridge.pressKey("e")
+        bridge.pressKey("l")
+        bridge.pressKey("l")
+        bridge.pressKey("o")
+        bridge._synth.send_key.reset_mock()
+        bridge.pressKey(",")
+        # No BackSpace should have been sent — the comma comes right after letters
+        backspace_calls = [
+            c for c in bridge._synth.send_key.call_args_list
+            if c[0][0] == "BackSpace"
+        ]
+        assert len(backspace_calls) == 0
+
+    def test_space_removed_before_comma_after_prediction(self, bridge: KeyboardBridge):
+        """Selecting prediction 'hello ' then typing ',' should remove the space."""
+        bridge._auto_space_after_punctuation = True
+        bridge.pressKey("h")
+        bridge.pressPrediction("hello")
+        # After prediction: _current_word = "", context_buffer ends with "hello "
+        bridge._synth.send_key.reset_mock()
+        bridge.pressKey(",")
+        # Should have sent a BackSpace to remove the trailing space
+        bridge._synth.send_key.assert_any_call("BackSpace", modifiers=None)
+
+    def test_clear_predictions_preserves_context(self, bridge: KeyboardBridge):
+        """clearPredictions should NOT wipe typing state."""
+        bridge.pressKey("h")
+        bridge.pressKey("e")
+        bridge.pressKey("l")
+        assert bridge._current_word == "hel"
+        bridge.clearPredictions()
+        # Predictions cleared but typing state preserved
+        assert bridge._predictions == []
+        assert bridge._current_word == "hel"
+        assert bridge._context_buffer != "" or bridge._current_word == "hel"

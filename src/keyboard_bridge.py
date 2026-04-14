@@ -201,8 +201,11 @@ class KeyboardBridge(QObject):
         else:
             char = key.lower()
 
-        # Handle punctuation spacing - remove preceding space
-        if char in self._NO_SPACE_BEFORE and self._context_buffer.endswith(" "):
+        # Handle punctuation spacing - remove preceding space only if the
+        # space is actually the last thing on screen (no partial word after it)
+        if (char in self._NO_SPACE_BEFORE
+                and self._context_buffer.endswith(" ")
+                and not self._current_word):
             # Delete the trailing space before typing punctuation
             self._send_key("BackSpace")
             self._context_buffer = self._context_buffer[:-1]
@@ -267,10 +270,17 @@ class KeyboardBridge(QObject):
 
             # Mid-sentence punctuation — auto-space but no learning/capitalize
             elif char in (",", ";", ":"):
+                # Preserve the word before the comma in the sentence buffer
+                # (_current_word includes the comma at this point, strip it)
+                word_before = self._current_word[:-1]
+                if word_before:
+                    self._sentence_buffer += word_before + char + " "
+                    self._context_buffer += word_before + char + " "
+                else:
+                    self._context_buffer += char + " "
                 self._current_word = ""
                 if self._auto_space_after_punctuation:
                     self._send_text(" ")
-                self._context_buffer += char + " "
                 if len(self._context_buffer) > 200:
                     self._context_buffer = self._context_buffer[-200:]
 
@@ -508,13 +518,20 @@ class KeyboardBridge(QObject):
 
     @Slot()
     def clearPredictions(self) -> None:
-        """Clear predictions and reset typing state.
+        """Clear visible predictions when the keyboard loses focus.
 
-        Called from QML when the keyboard loses focus (user clicks away).
-        Resets the current word, sentence buffer, and context so the next
-        interaction starts fresh — otherwise stale partial words corrupt
-        predictions when the user returns.
+        Only clears the displayed predictions, not the typing state
+        (_current_word, _context_buffer, _sentence_buffer).  Some apps
+        (Slack, browsers) cause rapid focus flickers that would wipe
+        tracking state and break the next prediction selection.  The
+        predictions will refresh naturally on the next keypress.
         """
+        self._predictions = []
+        self.predictionsChanged.emit([])
+
+    @Slot()
+    def resetContext(self) -> None:
+        """Full reset of typing state — for explicit user action only."""
         self._predictions = []
         self._current_word = ""
         self._sentence_buffer = ""
