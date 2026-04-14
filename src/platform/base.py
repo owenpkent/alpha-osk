@@ -161,6 +161,25 @@ class KeySynthesizerBase(ABC):
             key_name: Modifier name (same as :meth:`hold_modifier`).
         """
 
+    def replace_text(self, backspace_count: int, text: str) -> None:
+        """
+        Atomically erase *backspace_count* characters then type *text*.
+
+        Used by prediction selection to replace a partially-typed word with
+        the full prediction.  Backends that can batch input events into a
+        single OS call should override this to avoid race conditions with
+        the target application's input queue.
+
+        The default implementation falls back to sequential calls.
+
+        Args:
+            backspace_count: Number of ``Backspace`` key presses to send.
+            text: Replacement text to type after the deletions.
+        """
+        for _ in range(backspace_count):
+            self.send_key("BackSpace")
+        self.send_text(text)
+
     # ------------------------------------------------------------------ #
     #  Helpers available to all backends
     # ------------------------------------------------------------------ #

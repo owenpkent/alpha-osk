@@ -557,9 +557,23 @@ class NgramPredictor:
             return False
 
     def clear_user_data(self) -> None:
-        """Clear user-learned vocabulary while keeping base dictionary."""
+        """Clear all user-learned data and rebuild from base dictionaries."""
+        # Wipe everything — unigrams, bigrams, trigrams all contain
+        # user-learned entries that can't be separated in-place.
         self.user_vocab.clear()
-        _logger.info("User vocabulary cleared")
+        self.unigrams.clear()
+        self.bigrams.clear()
+        self.trigrams.clear()
+        self.total_words = 0
+        self.blacklist.clear()
+        self.dispreference.clear()
+        self._blacklist_type_count.clear()
+        self._learn_count = 0
+
+        # Rebuild base vocabulary from wordlists
+        self._load_frequency_wordlist()
+        self._load_proper_nouns()
+        _logger.info("User data cleared, base dictionary reloaded")
 
     def get_stats(self) -> dict:
         """Get prediction engine statistics."""

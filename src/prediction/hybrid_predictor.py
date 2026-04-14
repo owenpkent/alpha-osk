@@ -525,10 +525,17 @@ class HybridPredictor(QObject):
         return self._fuzzy.get_key_alternatives(key)
 
     def clear_user_data(self) -> None:
-        """Clear user-learned vocabulary."""
+        """Clear all user-learned data and rebuild base dictionaries."""
         self._ngram.clear_user_data()
-        # Reload base dictionary
+        # Reload base dictionary and common n-grams
         self._ngram.load_base_dictionary()
+        self._ngram.load_common_bigrams()
+        self._ngram.load_common_trigrams()
+        # Reset PPM models — reinitialise from scratch
+        if self._enable_ppm:
+            self._ppm = PPMPredictor(max_order=self._ppm.max_order)
+            self._ppm_word = PPMWordPredictor(ppm=self._ppm)
+            self._load_training_corpus()
 
     def reload_dictionary(self) -> bool:
         """Reload the base dictionary."""

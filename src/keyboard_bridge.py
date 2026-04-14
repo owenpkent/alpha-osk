@@ -188,7 +188,7 @@ class KeyboardBridge(QObject):
     # --- QML Slots ---
 
     # Punctuation that should not have a space before them
-    _NO_SPACE_BEFORE = {"?", "!", ".", ",", ";", ":", "'", '"', ")", "]", "}"}
+    _NO_SPACE_BEFORE = {"?", "!", ".", ",", ";", ":", ")", "]", "}"}
 
     @Slot(str)
     def pressKey(self, key: str) -> None:
@@ -464,14 +464,14 @@ class KeyboardBridge(QObject):
         # Using backspace-then-retype is more robust than sending only the
         # remaining suffix, because _current_word can drift out of sync with
         # what's actually on screen (e.g. after modifier keys or focus changes).
-        if self._current_word:
-            for _ in range(len(self._current_word)):
-                self._synth.send_key("BackSpace")
-        self._send_text(word + " ")
+        # The replace is done atomically (single SendInput call on Windows) so
+        # the target app can't interleave other events between the backspaces
+        # and the replacement text.
+        self._synth.replace_text(len(self._current_word), word + " ")
 
-        # Learn from selection
-        context = self._context_buffer + self._current_word
-        self._predictor.learn_from_selection(context, word)
+        # Learn from selection — use context_buffer only, not the typed
+        # fragment (_current_word) which is being *replaced* by the prediction.
+        self._predictor.learn_from_selection(self._context_buffer, word)
 
         # Update context - add the completed word
         self._context_buffer += word + " "
@@ -875,10 +875,7 @@ class KeyboardBridge(QObject):
         self._predictor.set_capitalization(edited, edited)
 
         # Insert the edited word (same as pressPrediction but with edited text)
-        if self._current_word:
-            for _ in range(len(self._current_word)):
-                self._synth.send_key("BackSpace")
-        self._send_text(edited + " ")
+        self._synth.replace_text(len(self._current_word), edited + " ")
 
         # Update context
         self._context_buffer += edited + " "
@@ -983,24 +980,21 @@ class KeyboardBridge(QObject):
         """Return language-model data for the visualisation panel."""
         ngram = self._predictor._ngram
 
-        # Top words by frequency (unigrams + user_vocab merged)
-        merged: dict[str, int] = {}
-        for w, c in ngram.unigrams.items():
-            if w not in ngram.blacklist:
-                merged[w] = merged.get(w, 0) + c
+        # Top words by frequency — only words the user has actually typed
+        user_words: dict[str, int] = {}
         for w, c in ngram.user_vocab.items():
             if w not in ngram.blacklist:
-                merged[w] = merged.get(w, 0) + c
-        sorted_words = sorted(merged.items(), key=lambda x: x[1], reverse=True)[:100]
+                user_words[w] = c
+        sorted_words = sorted(user_words.items(), key=lambda x: x[1], reverse=True)[:100]
 
-        # Bigram edges — top connections for the top words
+        # Bigram edges — only between user-typed words
         top_word_set = {w for w, _ in sorted_words[:40]}
         edges: list[dict] = []
         for prev, nexts in ngram.bigrams.items():
             if prev not in top_word_set:
                 continue
             for nxt, cnt in nexts.items():
-                if nxt in top_word_set and cnt >= 2:
+                if nxt in top_word_set and nxt in ngram.user_vocab and cnt >= 2:
                     edges.append({"from": prev, "to": nxt, "count": cnt})
         edges.sort(key=lambda e: e["count"], reverse=True)
         edges = edges[:150]

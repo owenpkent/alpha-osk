@@ -25,6 +25,7 @@ Item {
                 keyHeight: fnRow.keyH
                 fontSize: 10
                 isSpecial: true
+                enableRepeat: false
                 keyColor: "#333333"
                 onKeyPressed: keyboard.pressSpecialKey(modelData.toLowerCase())
             }
@@ -43,6 +44,7 @@ Item {
                 keyHeight: fnRow.keyH
                 fontSize: 10
                 isSpecial: true
+                enableRepeat: false
                 keyColor: "#333333"
                 onKeyPressed: keyboard.pressSpecialKey(modelData.toLowerCase())
             }
@@ -61,6 +63,7 @@ Item {
                 keyHeight: fnRow.keyH
                 fontSize: 10
                 isSpecial: true
+                enableRepeat: false
                 keyColor: "#333333"
                 onKeyPressed: keyboard.pressSpecialKey(modelData.toLowerCase())
             }

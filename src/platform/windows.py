@@ -385,6 +385,33 @@ class WindowsKeySynthesizer(KeySynthesizerBase):
         self._inject(events)
         self._log_send(f"text='{text}'")
 
+    def replace_text(self, backspace_count: int, text: str) -> None:
+        """
+        Atomically erase characters then type replacement text.
+
+        Builds all backspace key-down/up pairs and Unicode character
+        events into a **single** ``SendInput`` call so the target
+        application's input queue sees the whole operation as one burst
+        with no gaps for other events to interleave.
+
+        Args:
+            backspace_count: Number of ``Backspace`` presses to send.
+            text: Replacement string to type after deletions.
+        """
+        events: List[INPUT] = []
+
+        for _ in range(backspace_count):
+            events.append(self._make_key_event(VK_BACK, key_down=True))
+            events.append(self._make_key_event(VK_BACK, key_down=False))
+
+        for char in text:
+            events.extend(self._make_unicode_events(char))
+
+        self._inject(events)
+        self._log_send(
+            f"replace backspaces={backspace_count} text='{text}'"
+        )
+
     def send_combination(self, keys: List[str]) -> None:
         """
         Send a key combination (all pressed together, then released).

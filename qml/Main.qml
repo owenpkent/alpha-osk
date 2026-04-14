@@ -702,6 +702,13 @@ Window {
                                 accentColor: root.themeAccent
                                 borderColor: root.themeBorder
 
+                                // Only repeat navigational keys (backspace, delete, arrows, etc.)
+                                // Character and modifier keys should not repeat — a slow
+                                // click-release must not produce duplicate input.
+                                enableRepeat: kd.type !== "char" && kd.type !== "modifier"
+                                    && ["backspace","delete","left","right","up","down",
+                                        "home","end","pageup","pagedown"].indexOf(kd.action) >= 0
+
                                 onKeyPressed: {
                                     if (kd.type === "char") {
                                         var ch = root.shiftOn && kd.shifted ? kd.shifted : kd.key
