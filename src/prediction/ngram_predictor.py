@@ -55,6 +55,25 @@ class NgramPredictor:
 
         # Capitalization: lowercase → preferred form (e.g. "owen" → "Owen")
         self.capitalization: Dict[str, str] = {}
+        # Words that are ALWAYS capitalized regardless of position
+        self._always_capitalize: Dict[str, str] = {
+            "i": "I", "i'm": "I'm", "i'll": "I'll", "i'd": "I'd",
+            "i've": "I've",
+        }
+        # Words that are common English AND names — only capitalize at
+        # sentence start, not mid-sentence (avoids "the Jack was loose")
+        self._ambiguous_names: set = {
+            "bell", "bud", "carol", "chase", "cliff", "dale", "dawn",
+            "dean", "don", "drew", "earl", "faith", "fern", "flora",
+            "frank", "gene", "glen", "grace", "grant", "guy", "heath",
+            "hope", "hunter", "iris", "ivy", "jack", "jade", "jean",
+            "jerry", "jimmy", "joe", "john", "joy", "june", "lance",
+            "lee", "lily", "mark", "matt", "max", "mercy", "mike",
+            "nick", "norm", "olive", "pat", "pearl", "penny", "peter",
+            "ray", "reed", "rob", "robin", "rocky", "rose", "ruby",
+            "sandy", "sue", "terry", "troy", "wade", "will", "violet",
+            "may", "bill", "bob", "art", "bar",
+        }
         self._load_proper_nouns()
 
         # Recency decay: every N learn() calls, scale user frequencies down
@@ -154,7 +173,8 @@ class NgramPredictor:
         """Learn preferred capitalization from user typing.
 
         Only stores non-trivial capitalization (not all-lower or first-letter-upper
-        for words that aren't already known proper nouns).
+        for words that aren't already known proper nouns).  Single-character
+        words are skipped (handled by _always_capitalize).
 
         Returns True if a new or updated capitalization was saved.
         """
@@ -175,9 +195,40 @@ class NgramPredictor:
             return False
         return self.capitalization.get(lower) != existing
 
-    def get_capitalized(self, word: str) -> str:
-        """Return the preferred capitalization for a word, or the word as-is."""
-        return self.capitalization.get(word.lower(), word)
+    def get_capitalized(self, word: str, sentence_start: bool = False) -> str:
+        """Return context-aware capitalization for a word.
+
+        Three tiers (same model as Android/Gboard):
+        1. Always capitalize: "I", "I'm", "I'll", "I'd", "I've"
+        2. Sentence-start only: proper nouns that are also common words
+           (e.g. "jack", "may", "will") — only capitalized after .!? or
+           at the start of input.
+        3. Always capitalize: unambiguous proper nouns ("Monday", "Paris",
+           "iPhone") and user-taught capitalizations.
+
+        Args:
+            word: The word to capitalize (usually lowercase).
+            sentence_start: True if this word follows .!? or is the first
+                word in the input.
+        """
+        lower = word.lower()
+
+        # Tier 1: always capitalize
+        if lower in self._always_capitalize:
+            return self._always_capitalize[lower]
+
+        preferred = self.capitalization.get(lower)
+        if preferred is None:
+            # No capitalization rule — return as-is, or capitalize at
+            # sentence start (like Android does for all words)
+            return word.capitalize() if sentence_start else word
+
+        # Tier 2: ambiguous name/word — only capitalize at sentence start
+        if lower in self._ambiguous_names and not sentence_start:
+            return word
+
+        # Tier 3: unambiguous proper noun or user-taught — always capitalize
+        return preferred
 
     def predict(self, context: str, n: int = 5) -> List[str]:
         """

@@ -221,7 +221,7 @@ class HybridPredictor(QObject):
         # N-gram predictions (weight: 3.0 for next-word, 1.0 for completion)
         ngram_weight = 3.0 if is_next_word else 1.0
         for i, word in enumerate(ngram):
-            if is_next_word and len(word) <= 2:
+            if is_next_word and len(word) <= 2 and word != "i":
                 continue
             # Validate word exists in vocabulary
             if not self._is_valid_word(word):
@@ -233,7 +233,7 @@ class HybridPredictor(QObject):
         # PPM predictions (weight: 0.3 for next-word, 0.8 for completion)
         ppm_weight = 0.3 if is_next_word else 0.8
         for i, word in enumerate(ppm):
-            if is_next_word and len(word) <= 2:
+            if is_next_word and len(word) <= 2 and word != "i":
                 continue
             # Validate word exists in vocabulary
             if not self._is_valid_word(word):
@@ -260,13 +260,23 @@ class HybridPredictor(QObject):
         # Sort by combined score
         sorted_words = sorted(scores.items(), key=lambda x: -x[1])
 
-        # Return top n valid words, applying capitalization
+        # Determine if we're at sentence start (for capitalization)
+        ctx = self._current_context.rstrip()
+        sentence_start = (
+            not ctx
+            or ctx[-1] in ".!?"
+            or ctx.endswith("\n")
+        )
+
+        # Return top n valid words, applying context-aware capitalization
         results = []
         for word, score in sorted_words:
-            if is_next_word and len(word) <= 2:
+            # Allow "i" through (always-capitalize handles it), but skip
+            # other short words for next-word predictions
+            if is_next_word and len(word) <= 2 and word != "i":
                 continue
-            # Apply proper noun / learned capitalization
-            capped = self._ngram.get_capitalized(word)
+            # Apply context-aware capitalization
+            capped = self._ngram.get_capitalized(word, sentence_start)
             results.append(capped)
             # Log source for debugging
             src = "+".join(sources.get(word, ["?"]))

@@ -242,3 +242,51 @@ class TestNgramStats:
         predictor.learn("unique test words here")
         after = predictor.get_stats()["user_words"]
         assert after > before
+
+
+class TestCapitalization:
+    """Context-aware capitalization (Android/Gboard model)."""
+
+    def test_always_capitalize_i(self):
+        predictor = NgramPredictor()
+        assert predictor.get_capitalized("i", sentence_start=False) == "I"
+        assert predictor.get_capitalized("i", sentence_start=True) == "I"
+
+    def test_always_capitalize_contractions(self):
+        predictor = NgramPredictor()
+        assert predictor.get_capitalized("i'm", sentence_start=False) == "I'm"
+        assert predictor.get_capitalized("i'll", sentence_start=False) == "I'll"
+        assert predictor.get_capitalized("i'd", sentence_start=False) == "I'd"
+        assert predictor.get_capitalized("i've", sentence_start=False) == "I've"
+
+    def test_ambiguous_name_mid_sentence(self):
+        """'will', 'jack', etc. should NOT capitalize mid-sentence."""
+        predictor = NgramPredictor()
+        assert predictor.get_capitalized("will", sentence_start=False) == "will"
+        assert predictor.get_capitalized("jack", sentence_start=False) == "jack"
+        assert predictor.get_capitalized("may", sentence_start=False) == "may"
+        assert predictor.get_capitalized("mark", sentence_start=False) == "mark"
+
+    def test_ambiguous_name_sentence_start(self):
+        """'will', 'jack', etc. SHOULD capitalize at sentence start."""
+        predictor = NgramPredictor()
+        assert predictor.get_capitalized("will", sentence_start=True) == "Will"
+        assert predictor.get_capitalized("jack", sentence_start=True) == "Jack"
+
+    def test_unambiguous_proper_noun_always(self):
+        """'Monday', 'Paris' should always capitalize."""
+        predictor = NgramPredictor()
+        assert predictor.get_capitalized("monday", sentence_start=False) == "Monday"
+        assert predictor.get_capitalized("monday", sentence_start=True) == "Monday"
+
+    def test_unknown_word_sentence_start(self):
+        """Unknown words capitalize at sentence start only."""
+        predictor = NgramPredictor()
+        assert predictor.get_capitalized("hello", sentence_start=False) == "hello"
+        assert predictor.get_capitalized("hello", sentence_start=True) == "Hello"
+
+    def test_learned_capitalization(self):
+        """User-taught capitalization persists."""
+        predictor = NgramPredictor()
+        predictor.learn_capitalization("iPhone")
+        assert predictor.get_capitalized("iphone", sentence_start=False) == "iPhone"

@@ -57,13 +57,28 @@ All in `src/prediction/`. Orchestrated by `hybrid_predictor.py`:
 
 ## Auto-Capitalization & Proper Nouns
 
-Predictions automatically capitalize known proper nouns (names, places, brands, days/months).
+Capitalization uses a **three-tier context-aware system** (same model as Android/Gboard):
 
-- **Built-in**: `data/proper_nouns.txt` (~8,000 entries from US Census + community datasets) loaded into `ngram_predictor.capitalization` on startup.
+### Tier 1 — Always capitalize
+Words that are always capitalized regardless of position. Hardcoded in `ngram_predictor._always_capitalize`:
+- `"I"`, `"I'm"`, `"I'll"`, `"I'd"`, `"I've"`
+
+### Tier 2 — Sentence-start only (ambiguous names)
+Words that are both common English AND proper names (e.g., "will", "jack", "may", "mark"). Listed in `ngram_predictor._ambiguous_names`. These are **only capitalized** after sentence-ending punctuation (`.!?`) or at the start of input. Mid-sentence, they stay lowercase — "the jack was loose" stays lowercase, but "Jack went home." capitalizes.
+
+### Tier 3 — Unambiguous proper nouns
+Everything else in `data/proper_nouns.txt` (~8,000 entries) and user-taught capitalizations. These are always capitalized: "Monday", "Paris", "iPhone", "Owen".
+
+### How it works
+- **Built-in**: `data/proper_nouns.txt` loaded into `ngram_predictor.capitalization` on startup.
 - **Learned**: When a user types a word with non-trivial capitalization (e.g., "iPhone", "Owen") and completes it with space, the preferred form is saved via `learn_capitalization()`.
 - **User edits**: Right-click a prediction → Edit to correct capitalization. This calls `editPrediction()` which inserts the corrected word and saves the capitalization permanently.
-- **Applied at output**: `hybrid_predictor._merge_predictions()` calls `ngram.get_capitalized()` on each result before returning to QML.
+- **Applied at output**: `hybrid_predictor._merge_predictions()` calls `ngram.get_capitalized(word, sentence_start)` on each result before returning to QML. The `sentence_start` flag is determined by checking if the context ends with `.!?` or is empty.
 - **Persisted**: The `capitalization` dict is saved in `ngram_model.json`. User overrides merge with built-in proper nouns on load (user wins).
+
+### Adding to always-capitalize or ambiguous lists
+- Always-capitalize: edit `_always_capitalize` dict in `ngram_predictor.py`
+- Ambiguous names: edit `_ambiguous_names` set in `ngram_predictor.py`
 
 ## Where User Data Lives
 
