@@ -314,7 +314,7 @@ def build_nsis_installer(makensis_path: str) -> Path | None:
 
     RELEASE_DIR.mkdir(parents=True, exist_ok=True)
 
-    version = "1.0.0"
+    version = "1.0.1"
     installer_name = f"Alpha-OSK-Setup-{version}"
     installer_exe = RELEASE_DIR / f"{installer_name}.exe"
 
