@@ -275,7 +275,7 @@ python build/sign.py dist/alpha-osk/alpha-osk.exe --verify
 | Path | Description |
 |------|-------------|
 | `dist/alpha-osk/alpha-osk.exe` | Portable executable + dependencies |
-| `release/Alpha-OSK-Setup-1.0.0.exe` | NSIS installer (if NSIS is installed) |
+| `release/Alpha-OSK-Setup-{version}.exe` | NSIS installer (if NSIS is installed) |
 
 ### What the Build Includes
 
@@ -353,7 +353,7 @@ python build/build_windows.py
 python build/sign.py dist/alpha-osk/alpha-osk.exe --verify
 
 # Verify installer
-python build/sign.py release/Alpha-OSK-Setup-1.0.0.exe --verify
+python build/sign.py release/Alpha-OSK-Setup-{version}.exe --verify
 
 # Quick PowerShell check
 (Get-AuthenticodeSignature "dist\alpha-osk\alpha-osk.exe").Status

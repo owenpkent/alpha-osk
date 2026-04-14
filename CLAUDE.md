@@ -12,7 +12,7 @@ Alpha-OSK is an AI-powered on-screen keyboard for Windows and Linux. Users click
 
 ```bash
 python run.py          # Creates venv, installs deps, launches keyboard
-python -m pytest       # Run tests (266+ tests)
+python -m pytest       # Run tests (269+ tests)
 ```
 
 ## Architecture Overview
@@ -208,6 +208,161 @@ Theme picker in settings shows labeled color swatches with mini key previews.
 ## Federated Learning
 
 Design doc at `docs/FEDERATED_LEARNING.md`. Not yet implemented — Phase 1 (local delta computation) is the next step.
+
+## Building & Signing a Release
+
+This is the end-to-end process for shipping a new version. **Do not skip steps** — unsigned builds won't get UIAccess, and forgetting to bump the version means the installer overwrites without proper upgrade logic.
+
+### Prerequisites (one-time setup)
+
+| Requirement | Install | Verify |
+|-------------|---------|--------|
+| Python 3.9+ | `python.org` | `python --version` |
+| PyInstaller | `pip install pyinstaller` | `pyinstaller --version` |
+| NSIS 3.x | `winget install NSIS.NSIS` | `makensis /VERSION` |
+| Windows SDK (signtool) | Visual Studio Installer → Windows SDK | `where signtool.exe` |
+| SafeNet Authentication Client | Comes with the USB eToken hardware | Tray icon visible |
+| EV Certificate (OK Studio Inc.) | Already provisioned on eToken | `certutil -store -user My` → look for thumbprint `fc22b522...` |
+
+### Step-by-step release checklist
+
+#### 1. Bump the version
+
+The version string is in **one place**: `build/build_windows.py`, the `version` variable inside `build_nsis_installer()` (~line 317). Update it:
+
+```python
+version = "1.0.2"  # was "1.0.1"
+```
+
+This flows into:
+- Installer filename: `Alpha-OSK-Setup-1.0.2.exe`
+- NSIS `APP_VERSION` (shown in Add/Remove Programs)
+- Registry `DisplayVersion`
+
+#### 2. Update the CHANGELOG
+
+Edit `CHANGELOG.md`. Add a new `## [x.y.z] — YYYY-MM-DD` section at the top. Categorize changes under `### Added`, `### Fixed`, `### Changed`, `### Chores` as appropriate.
+
+#### 3. Commit the version bump + changelog
+
+```bash
+git add build/build_windows.py CHANGELOG.md
+git commit -m "chore: bump version to x.y.z"
+```
+
+#### 4. Run the full build
+
+**Must run from a normal (non-elevated) shell.** The eToken is not visible to admin processes.
+
+```bash
+python build/build_windows.py
+```
+
+This does, in order:
+1. Checks prerequisites (Python, PyInstaller, NSIS, signtool, eToken certificate)
+2. Runs PyInstaller with `build/alpha-osk.spec` → `dist/alpha-osk/`
+3. Signs all `.exe` files in `dist/alpha-osk/` with the EV cert
+4. Generates NSIS installer → `release/Alpha-OSK-Setup-x.y.z.exe`
+5. Signs the installer
+6. Verifies all signatures
+
+**Common flags:**
+
+| Flag | When to use |
+|------|-------------|
+| `--no-sign` | Dev/test builds without the eToken plugged in |
+| `--skip-build` | Re-package/re-sign without re-running PyInstaller (faster) |
+| `--verify-only` | Just check existing signatures |
+| `--no-installer` | Produce portable exe only, skip NSIS |
+
+#### 5. Test the installer
+
+1. Run `release/Alpha-OSK-Setup-x.y.z.exe`
+2. Verify it detects and removes the previous version (same-directory: silent uninstall; different-directory: prompts)
+3. Verify it installs to `C:\Program Files\Alpha-OSK` by default
+4. Verify shortcuts are created (Desktop + Start Menu)
+5. Launch from the installer's "Launch Alpha-OSK" checkbox
+6. **Test UIAccess**: open an elevated Command Prompt (Run as Admin) and verify keystrokes reach it
+7. Verify the app icon appears correctly in the taskbar and Start Menu
+
+#### 6. Test the portable exe
+
+```bash
+dist/alpha-osk/alpha-osk.exe
+```
+
+This won't have UIAccess (not in Program Files), but should work for normal apps.
+
+#### 7. Tag the release
+
+```bash
+git tag v1.0.2
+git push origin main --tags
+```
+
+#### 8. Create GitHub release (optional)
+
+```bash
+gh release create v1.0.2 release/Alpha-OSK-Setup-1.0.2.exe --title "v1.0.2" --notes "See CHANGELOG.md"
+```
+
+### Signing details
+
+| Field | Value |
+|-------|-------|
+| Certificate | OK Studio Inc. (EV, Sectigo) |
+| Thumbprint | `fc22b5221318f3f3f6b3eb2d969d7f99091557bf` |
+| Timestamp server | `http://timestamp.digicert.com` |
+| Sign script | `build/sign.py` (5 retries, exponential backoff for Defender locks) |
+| What gets signed | All `.exe` in `dist/alpha-osk/` + the final installer `.exe` |
+
+**Why non-elevated?** The SafeNet eToken driver exposes the cert to the current user session only. Elevated (admin) shells can't see it. Always build from a **normal shell**.
+
+### Installer upgrade behavior
+
+The NSIS installer handles upgrades as follows:
+
+| Scenario | Behavior |
+|----------|----------|
+| Same directory (default `C:\Program Files\Alpha-OSK`) | Silently runs old `uninstall.exe /S` before extracting new files. Preserves `%APPDATA%\alpha-osk` (learned vocabulary). |
+| Different directory | Prompts user: "Remove previous version?" If yes, runs old uninstaller. If no, both coexist. |
+| Running instance detected | Prompts to close, then kills `alpha-osk.exe` via `taskkill`. |
+| Interactive uninstall | Prompts whether to delete `%APPDATA%\alpha-osk` (learned vocabulary and settings). |
+
+Key files:
+- `build/build_windows.py` — orchestrates the full pipeline, generates the `.nsi` script
+- `build/installer.nsh` — NSIS macros for init, install, and uninstall customization
+- `build/sign.py` — signing with retry logic
+- `build/alpha-osk.spec` — PyInstaller specification
+- `build/alpha-osk.exe.manifest` — UIAccess manifest embedded in the exe
+- `build/alpha-osk.ico` — app icon (multi-resolution: 16–256px)
+
+### Troubleshooting builds
+
+| Problem | Cause | Fix |
+|---------|-------|-----|
+| `Cannot find certificate` | Elevated shell, or eToken unplugged | Use normal shell; check eToken LED is on |
+| `SignTool Error: file being used` | Defender scanning the exe | `sign.py` retries automatically (5x) |
+| `signtool not found` | Windows SDK not installed | `winget install Microsoft.WindowsSDK` or install via VS Installer |
+| `makensis not found` | NSIS not installed or not on PATH | `winget install NSIS.NSIS` |
+| `ModuleNotFoundError` at runtime | Missing hidden import in spec | Add to `hiddenimports` in `build/alpha-osk.spec` |
+| Installer doesn't remove old version | Same-directory upgrade path broken | Check `IfFileExists "$INSTDIR\\uninstall.exe"` block in generated NSI |
+| UIAccess not working after install | Not in Program Files, or unsigned | Verify: signed + installed to `C:\Program Files\Alpha-OSK` |
+
+### Assets & branding
+
+- Source logos: `assets/logo-1024.png`, `assets/logo-2048.png`
+- App icon: `build/alpha-osk.ico` (generated from logo via Pillow)
+- Midjourney prompts and icon generation workflow: `docs/BRANDING.md`
+
+To regenerate the `.ico` from a new PNG:
+```python
+from PIL import Image
+img = Image.open("assets/logo-1024.png").convert("RGBA")
+sizes = [(256,256),(128,128),(64,64),(48,48),(32,32),(16,16)]
+resized = [img.resize(s, Image.LANCZOS) for s in sizes]
+resized[0].save("build/alpha-osk.ico", format="ICO", sizes=sizes, append_images=resized[1:])
+```
 
 ## Git Conventions
 
