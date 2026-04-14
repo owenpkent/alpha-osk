@@ -27,11 +27,14 @@ _draft_*
 Thumbs.db
 *.stackdump
 
-# Build artifacts (PyInstaller)
+# Build artifacts (PyInstaller output)
 dist/
+build/alpha-osk/
 build/__pycache__/
-build/_alpha-osk-installer.nsi
 *.spec.bak
+
+# Test / coverage
+.coverage
 
 # Windows release output (NSIS installers)
 release/
