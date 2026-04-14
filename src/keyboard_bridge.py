@@ -685,7 +685,7 @@ class KeyboardBridge(QObject):
         """
         try:
             import ctypes
-            hwnd = ctypes.windll.user32.GetForegroundWindow()
+            hwnd = ctypes.windll.user32.GetForegroundWindow()  # type: ignore[attr-defined]
             if hwnd != self._last_foreground_hwnd and self._last_foreground_hwnd != 0:
                 # Foreground window changed — user switched apps
                 self._predictions = []
