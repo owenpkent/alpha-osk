@@ -242,6 +242,12 @@ Commercial keyboards (Gboard/LatinIME, Presage) treat prediction and spell-check
 - **SymSpell**: precompute all deletion variants within edit distance N at index time. Query = generate deletions of input + hash lookup. (github.com/wolfgarbe/SymSpell)
 - **Hunspell**: affix-based dictionary + phonetic matching. Slower but handles morphology.
 
+## Modular Layouts
+
+Design doc at `docs/MODULAR_LAYOUTS.md`. Inspired by Octavium's (`C:\Users\Owen\dev\Octavium`) Layout/KeyDef data model. Four levels of modularity: (1) Built-in JSON layout packs (video editing, gaming, streaming). (2) User-created layouts via editor. (3) Panel composition — snap independent panels (QWERTY, numpad, macros) into a grid. (4) App-aware auto-switching based on foreground window.
+
+Action types: `char`, `special`, `hotkey`, `text`, `macro`, `launch`, `layout`, `midi`. Profiles bundle layout + theme + window position + auto-switch rules.
+
 ## Auto-Update
 
 Design doc at `docs/AUTO_UPDATE.md`. Not yet implemented. Recommended approach: check GitHub Releases API on startup, notify via tray icon, download and run installer silently (`/S`). The NSIS silent upgrade path already works. ~50 lines of Python. WinGet manifest as a bonus.
