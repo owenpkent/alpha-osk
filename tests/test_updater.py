@@ -9,7 +9,6 @@ is a regression that ships arbitrary code on every user's machine.
 from __future__ import annotations
 
 import json
-from pathlib import Path
 from unittest import mock
 
 import pytest

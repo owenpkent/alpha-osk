@@ -488,6 +488,14 @@ Key files:
 | Installer doesn't remove old version | Same-directory upgrade path broken | Check `IfFileExists "$INSTDIR\\uninstall.exe"` block in generated NSI |
 | UIAccess not working after install | Not in Program Files, or unsigned | Verify: signed + installed to `C:\Program Files\Alpha-OSK` |
 
+### Bundle size
+
+The PySide6 wheel ships every Qt module — including a 193 MB `Qt6WebEngineCore.dll` we never use. `build/alpha-osk.spec` explicitly excludes the WebEngine / WebView / WebChannel families to keep the installer around 100 MB instead of 165 MB. If you ever add an in-app browser (release-notes view, embedded help, etc.), re-include them in the `excludes` list and re-measure — losing 100 MB of installer in one careless re-include is easy.
+
+If you need to verify what's actually in the bundle::
+
+    du -sm dist/alpha-osk/PySide6/* | sort -rn | head -20
+
 ### Assets & branding
 
 - Source logos: `assets/logo-1024.png`, `assets/logo-2048.png`

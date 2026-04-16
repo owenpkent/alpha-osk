@@ -110,12 +110,55 @@ a = Analysis(
         'pygments', 'pyinstaller',
         # Exclude other unneeded heavy packages
         'pygame', 'pyvjoy',
+        # PySide6.QtWebEngineCore alone is ~193 MB — half the bundle —
+        # and Alpha-OSK never embeds a web view.  PyInstaller pulls it
+        # in transitively through PySide6's all-modules hook, so we
+        # have to name every WebEngine / WebView / WebChannel module
+        # explicitly to drop them.  If we ever add an in-app browser
+        # for release notes etc., re-include these and re-measure.
+        'PySide6.QtWebEngineCore',
+        'PySide6.QtWebEngineQuick',
+        'PySide6.QtWebEngineWidgets',
+        'PySide6.QtWebChannel',
+        'PySide6.QtWebChannelQuick',
+        'PySide6.QtWebView',
+        'PySide6.QtWebViewQuick',
     ],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
     cipher=block_cipher,
     noarchive=False,
 )
+
+# Filter unwanted Qt binaries out of the bundle.
+#
+# Module-level excludes (above) only stop Python imports — the PySide6
+# PyInstaller hook still copies the matching Qt DLLs verbatim from
+# site-packages.  To actually drop them we have to walk a.binaries
+# (and a.datas) and remove entries by filename pattern.
+#
+# Qt6WebEngineCore.dll alone is 193 MB — half the bundle — and
+# Alpha-OSK never embeds a browser.  If you ever add an in-app
+# browser, prune this list and re-measure.
+_DROP_BINARY_PREFIXES = (
+    'Qt6WebEngineCore', 'Qt6WebEngineQuick', 'Qt6WebEngine',
+    'Qt6WebChannel', 'Qt6WebChannelQuick',
+    'Qt6WebView', 'Qt6WebViewQuick',
+)
+
+
+def _keep(entry):
+    name = os.path.basename(entry[0]).lower()
+    return not any(name.startswith(p.lower()) for p in _DROP_BINARY_PREFIXES)
+
+
+_before_bins = len(a.binaries)
+_before_data = len(a.datas)
+a.binaries = [b for b in a.binaries if _keep(b)]
+a.datas = [d for d in a.datas if _keep(d)]
+print(f"[spec] Stripped {_before_bins - len(a.binaries)} binaries "
+      f"and {_before_data - len(a.datas)} data entries "
+      f"matching {_DROP_BINARY_PREFIXES!r}")
 
 pyz = PYZ(
     a.pure,

@@ -2,6 +2,15 @@
 
 All notable changes to Alpha-OSK are documented in this file.
 
+## [1.0.4] — 2026-04-16
+
+### Changed
+- **Installer ~48 % smaller** — `Qt6WebEngineCore.dll` (193 MB by itself, half the bundle) and the rest of the PySide6 WebEngine / WebView / WebChannel families are now stripped in `build/alpha-osk.spec`. Alpha-OSK never embeds a browser; PyInstaller was pulling them in transitively. Module-level `excludes` alone weren't enough — the PySide6 hook still copied the matching Qt DLLs verbatim. The spec now also walks `a.binaries` after Analysis and removes 7 entries by filename pattern. Installer drops from 164 MB to **85 MB**; uncompressed install folder from 418 MB to **224 MB**.
+
+### Fixed
+- **`ReferenceError: parent is not defined` no longer spams the log on every privacy-mode toggle** — the privacy-mode play/pause icon's repaint trigger lived inside a `Connections {}` block that referenced `parent.children[0]`, but `parent` doesn't resolve inside Connections. The icon glyph silently failed to repaint. Now references the Canvas by `id` directly.
+- **`ruff check` no longer fails on `tests/test_updater.py`** — removed an unused `pathlib.Path` import left over from an earlier draft.
+
 ## [1.0.3] — 2026-04-16
 
 ### Added

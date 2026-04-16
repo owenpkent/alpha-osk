@@ -528,6 +528,7 @@ Window {
                     border.width: root.privacyMode ? 1 : 0
 
                     Canvas {
+                        id: privacyIcon
                         anchors.centerIn: parent
                         width: 14; height: 14
                         onPaint: {
@@ -550,7 +551,13 @@ Window {
                         }
                         Connections {
                             target: root
-                            function onPrivacyModeChanged() { parent.children[0].requestPaint() }
+                            // Inside Connections, `parent` doesn't
+                            // resolve to the enclosing Canvas — Qt
+                            // logs "ReferenceError: parent is not
+                            // defined" on every privacy-mode toggle
+                            // and the icon glyph silently doesn't
+                            // repaint.  Reference the Canvas by id.
+                            function onPrivacyModeChanged() { privacyIcon.requestPaint() }
                         }
                     }
 
