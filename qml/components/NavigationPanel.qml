@@ -92,6 +92,7 @@ Item {
             keyTextColor: navPanel.keyTextColor
             accentColor: navPanel.accentColor
             borderColor: navPanel.borderColor
+            enableRepeat: true
             onKeyPressed: keyboard.pressSpecialKey("pageup")
         }
 
@@ -105,6 +106,7 @@ Item {
             keyTextColor: navPanel.keyTextColor
             accentColor: navPanel.accentColor
             borderColor: navPanel.borderColor
+            enableRepeat: true
             onKeyPressed: keyboard.pressSpecialKey("delete")
         }
         KeyButton {
@@ -127,6 +129,7 @@ Item {
             keyTextColor: navPanel.keyTextColor
             accentColor: navPanel.accentColor
             borderColor: navPanel.borderColor
+            enableRepeat: true
             onKeyPressed: keyboard.pressSpecialKey("pagedown")
         }
 
@@ -144,6 +147,7 @@ Item {
             keyTextColor: navPanel.keyTextColor
             accentColor: navPanel.accentColor
             borderColor: navPanel.borderColor
+            enableRepeat: true
             onKeyPressed: keyboard.pressSpecialKey("up")
         }
         Item {
@@ -161,6 +165,7 @@ Item {
             keyTextColor: navPanel.keyTextColor
             accentColor: navPanel.accentColor
             borderColor: navPanel.borderColor
+            enableRepeat: true
             onKeyPressed: keyboard.pressSpecialKey("left")
         }
         KeyButton {
@@ -172,6 +177,7 @@ Item {
             keyTextColor: navPanel.keyTextColor
             accentColor: navPanel.accentColor
             borderColor: navPanel.borderColor
+            enableRepeat: true
             onKeyPressed: keyboard.pressSpecialKey("down")
         }
         KeyButton {
@@ -183,6 +189,7 @@ Item {
             keyTextColor: navPanel.keyTextColor
             accentColor: navPanel.accentColor
             borderColor: navPanel.borderColor
+            enableRepeat: true
             onKeyPressed: keyboard.pressSpecialKey("right")
         }
     }

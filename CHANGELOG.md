@@ -23,6 +23,11 @@ All notable changes to Alpha-OSK are documented in this file.
 - **Personal vocabulary now outranks dictionary words in predictions** — the n-gram unigram scoring now blends a separate base-dictionary table with the user's personal typing counts in probability space (`P = α·P_user + (1−α)·P_base`, α = 0.7 by default). Previously, a word typed 10 times scored ~10 while a common dictionary word scored ~5,000; now a few uses is enough for a personal word to rise to the top for its prefix. Tunable via `NgramPredictor.personal_weight`. See `docs/HYBRID_MERGING.md` → "Personal vs. Base Vocabulary".
 
 ### Fixed
+- **Double-typed keystrokes eliminated** — two separate causes were firing a single click as two characters:
+  1. No software debounce on the MouseArea press, so hardware button bounce (common on cheap / worn / adaptive mice) would emit two press events.
+  2. Character keys had auto-repeat enabled with a 400 ms delay; a slightly-slow click held past that threshold would fire the key twice.
+  
+  `KeyButton` now debounces press events within 150 ms of the last accepted one, and auto-repeat is off by default. Only backspace (main keyboard) and the arrow / Delete / PageUp / PageDown keys in the navigation panel opt in to repeat — where it's actually useful for held navigation.
 - **Predictions now honour capitalization** — picking a prediction like "iPhone" after typing "iph" no longer outputs "iphone". Suffix-only typing now requires a case-sensitive prefix match; mismatched casing falls back to select-and-replace.
 - **Caps Lock no longer also turns Shift on** — caps and shift are independent toggles. Letter keys still display uppercase under either, but the Shift key is no longer forcibly highlighted while caps is active.
 - **Held key auto-releases on drag-off** — moving the cursor off a key while held now stops the key-repeat timer immediately, instead of continuing to fire until the mouse button is released.

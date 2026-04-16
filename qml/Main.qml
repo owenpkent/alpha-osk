@@ -784,10 +784,10 @@ Window {
                                 accentColor: root.themeAccent
                                 borderColor: root.themeBorder
 
-                                // Repeat all keys except modifiers (shift, ctrl, alt, win).
-                                // Character keys repeat so users can hold for repeated input.
-                                // Modifier keys don't repeat — they're sticky toggles.
-                                enableRepeat: kd.type !== "modifier"
+                                // Main keyboard's only repeat-worthy key is
+                                // backspace.  Character keys must not repeat
+                                // (see KeyButton.qml for the rationale).
+                                enableRepeat: kd.type === "special" && kd.action === "backspace"
 
                                 onKeyPressed: {
                                     if (kd.type === "char") {

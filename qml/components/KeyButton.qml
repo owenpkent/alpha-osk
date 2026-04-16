@@ -21,10 +21,24 @@ Item {
     property bool isActive: false  // For modifier keys (shift, ctrl, etc.)
     property bool isWide: false
 
-    // Key repeat settings
-    property bool enableRepeat: true
+    // Key repeat settings.  Default OFF — only callers that clearly
+    // benefit from auto-repeat (backspace, arrow keys, delete, page
+    // up/down) opt in.  Character keys do NOT repeat on this OSK: a
+    // slightly-slow mouse click past the 400 ms threshold would fire
+    // the character twice, and "type 'aaaa' by holding the button" is
+    // not a real use case for mouse-driven typing.
+    property bool enableRepeat: false
     property int repeatDelay: 400    // ms before repeat starts
     property int repeatInterval: 50  // ms between repeats
+
+    // Debounce window (ms).  Consecutive MouseArea presses within this
+    // window count as a single press — covers hardware button bounce
+    // (cheap / worn mice emit two events per physical click) and
+    // accidental double-clicks from slow motor control.  150 ms is
+    // well below any deliberate rapid-click cadence but well above any
+    // plausible bounce interval.
+    property int debounceMs: 150
+    property real _lastAcceptedPress: 0
 
     // Signals
     signal keyPressed()
@@ -148,6 +162,17 @@ Item {
         hoverEnabled: true
 
         onPressed: function(mouse) {
+            // Debounce: drop any second press within debounceMs of the
+            // previous accepted one.  Catches hardware bounce and
+            // accidental double-clicks without affecting deliberate
+            // typing (150 ms is well under a human's repeat cadence).
+            var now = Date.now()
+            if (now - keyRoot._lastAcceptedPress < keyRoot.debounceMs) {
+                mouse.accepted = true
+                return
+            }
+            keyRoot._lastAcceptedPress = now
+
             // Trigger ripple from press point
             ripple.centerX = mouse.x - keyBackground.anchors.margins
             ripple.centerY = mouse.y - keyBackground.anchors.margins
