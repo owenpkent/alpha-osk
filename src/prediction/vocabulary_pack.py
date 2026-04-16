@@ -16,10 +16,16 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Set
+
+# Pack IDs are used as filesystem directory names under the user's packs
+# directory.  A pack id of ".." (or anything that resolves outside that
+# directory) must be rejected before any shutil.rmtree / copytree call.
+_VALID_PACK_ID = re.compile(r"^[a-z0-9][a-z0-9_\-]{0,63}$")
 
 _logger = logging.getLogger("VocabularyPack")
 
@@ -344,18 +350,48 @@ class PackManager:
             _logger.error("Import source missing dictionary.txt: %s", source_dir)
             return None
 
-        pack_id = source_dir.name.lower().replace(" ", "_")
-        dest_dir = self._user_packs_dir / pack_id
+        # Derive a pack ID and reject anything that could escape the
+        # user packs directory.  Path traversal via a source folder named
+        # ".." (whose pathlib .name is literally "..") would otherwise
+        # let rmtree nuke the parent of user_packs_dir.  After cleaning
+        # we also verify the resolved destination sits strictly under
+        # user_packs_dir — defence in depth against symlinked configs.
+        raw_id = source_dir.name.lower().replace(" ", "_")
+        pack_id = re.sub(r"[^a-z0-9_\-]", "", raw_id).strip("_-")
+        if not pack_id or not _VALID_PACK_ID.match(pack_id):
+            _logger.error(
+                "Rejected pack import: invalid pack id %r derived from %s",
+                pack_id, source_dir,
+            )
+            return None
+
+        user_packs_root = self._user_packs_dir.resolve()
+        dest_dir = (self._user_packs_dir / pack_id).resolve()
+        try:
+            dest_dir.relative_to(user_packs_root)
+        except ValueError:
+            _logger.error(
+                "Rejected pack import: resolved destination %s escapes %s",
+                dest_dir, user_packs_root,
+            )
+            return None
 
         # Don't overwrite built-in packs
         if pack_id in self._packs and (self._packs_dir / pack_id).is_dir():
             _logger.error("Cannot overwrite built-in pack: %s", pack_id)
             return None
 
+        # Skip any symlinks in the source tree — they can dereference to
+        # files outside the pack (secrets, device files) and shutil's
+        # default symlinks=False would copy their contents verbatim.
+        def _ignore_symlinks(src: str, names: List[str]) -> List[str]:
+            src_path = Path(src)
+            return [n for n in names if (src_path / n).is_symlink()]
+
         try:
             if dest_dir.exists():
                 shutil.rmtree(dest_dir)
-            shutil.copytree(source_dir, dest_dir)
+            shutil.copytree(source_dir, dest_dir, ignore=_ignore_symlinks)
 
             # Generate pack.json if missing
             if not (dest_dir / "pack.json").exists():

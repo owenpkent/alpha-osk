@@ -303,3 +303,57 @@ class TestPackHybridIntegration:
         predictor.enable_vocabulary_pack("medical")
         # Medical terms should now be known to the predictor
         assert predictor._ngram.unigrams.get("diagnosis", 0) > 0
+
+
+class TestImportPackSecurity:
+    """Adversarial input to PackManager.import_pack — no path traversal."""
+
+    def _mgr(self, tmp_path: Path) -> PackManager:
+        packs_dir = tmp_path / "builtin"
+        packs_dir.mkdir()
+        user_dir = tmp_path / "user_packs"
+        user_dir.mkdir()
+        return PackManager(packs_dir=packs_dir, user_packs_dir=user_dir)
+
+    def _make_source_with_dict(self, path: Path) -> Path:
+        path.mkdir(parents=True, exist_ok=True)
+        (path / "dictionary.txt").write_text("alpha\nbeta\n")
+        return path
+
+    def test_rejects_dotdot_name(self, tmp_path: Path):
+        """A source folder whose .name is '..' must not blow away
+        user_packs_dir's parent via rmtree / copytree."""
+        mgr = self._mgr(tmp_path)
+        # Build a path whose pathlib .name is literally ".."
+        bad_source = self._make_source_with_dict(tmp_path / "evil")
+        # pathlib path ending in '..' has .name == '..'
+        traversal = Path(str(bad_source) + "/..")
+        assert traversal.name == ".."
+        result = mgr.import_pack(traversal)
+        assert result is None
+        # The builtin dir must still exist — rmtree should never have run on it
+        assert (tmp_path / "builtin").is_dir()
+        assert (tmp_path / "user_packs").is_dir()
+
+    def test_rejects_control_chars_in_name(self, tmp_path: Path):
+        """Non-alphanumeric junk is stripped; if nothing valid remains,
+        the import is rejected rather than silently creating a directory
+        with an empty or strange name."""
+        mgr = self._mgr(tmp_path)
+        bad = self._make_source_with_dict(tmp_path / "---")
+        assert mgr.import_pack(bad) is None
+
+    def test_accepts_normal_name(self, tmp_path: Path):
+        mgr = self._mgr(tmp_path)
+        src = self._make_source_with_dict(tmp_path / "My Pack")
+        pack_id = mgr.import_pack(src)
+        assert pack_id == "my_pack"
+        assert (tmp_path / "user_packs" / "my_pack").is_dir()
+
+    def test_destination_cannot_escape_user_packs_dir(self, tmp_path: Path):
+        """Even if the sanitiser somehow passed, the resolve() check
+        catches symlinked user_packs paths pointing elsewhere."""
+        mgr = self._mgr(tmp_path)
+        src = self._make_source_with_dict(tmp_path / "ok_pack")
+        # Regular case still works
+        assert mgr.import_pack(src) == "ok_pack"

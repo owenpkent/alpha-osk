@@ -4,6 +4,17 @@ All notable changes to Alpha-OSK are documented in this file.
 
 ## [Unreleased]
 
+### Security
+- **Path traversal in `PackManager.import_pack` (CRITICAL)** — a source folder whose pathlib `.name` resolves to `..` would have made `dest_dir` the parent of the user packs directory, and the existing `shutil.rmtree(dest_dir)` call would then have wiped the app config root (learned models, settings). Now the pack id is sanitised with a strict `[a-z0-9_-]{1,64}` pattern and the resolved destination is verified to sit under `user_packs_dir`; symlinks in the source tree are skipped rather than dereferenced.
+- **Background QTimers no longer fire during shutdown (HIGH)** — `_password_timer` and `_foreground_timer` are now stopped from `KeyboardBridge.shutdown()` via `QApplication.aboutToQuit`, so a final `timeout` cannot run against half-collected bridge state.
+- **JSON model load capped (HIGH)** — `NgramPredictor.load` / `PPMPredictor.load` refuse to open files larger than 50 MB, and the n-gram loader also rejects files with more than 500k unigrams, 500k bigram prefixes, or 100k capitalisation entries. A hostile or corrupted model file in `%APPDATA%/alpha-osk/models/` can no longer OOM the app at startup.
+- **Password-field detection race closed (HIGH)** — `pressKey` / `pressSpecialKey` now call `is_password_field()` synchronously (rate-limited to ~50 ms) before touching prediction state, instead of relying on the 200 ms background timer.
+- **`editPrediction` input sanitised (MEDIUM)** — `_sanitize_edit` strips control characters, caps length to 64, and rejects empty-after-strip so malformed QML input can't persist junk into the capitalisation table.
+
+### Changed
+- **Encapsulation** — `keyboard_bridge.processSwipe` now calls `HybridPredictor.get_unigram_freqs()` / `get_capitalized()` instead of reaching through `_predictor._ngram`.
+- **`NgramPredictor._user_total` is tracked incrementally** — `learn` / `learn_word` / `_apply_decay` / `clear_user_data` / `load` all keep the running total in sync, removing an O(N) `sum()` from every keystroke's `predict()` call.
+
 ### Added
 - **Swipe / glide typing** — drag the mouse across letters to type a whole word in one gesture (Gboard-style). Uses simplified SHARK² shape matching against the dictionary, with a frequency prior. Off by default; toggle in *Settings → Suggestions → Swipe Typing*. Design doc: `docs/SWIPE_TYPING.md`.
 - **Deep-dive algorithm docs** — `docs/FUZZY_RECOGNITION.md` (spatial model + accessibility profiles), `docs/PPM.md` (variable-order character model + PPMD escape), `docs/HYBRID_MERGING.md` (merge weights + validation + capitalization).

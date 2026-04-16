@@ -377,6 +377,11 @@ class PPMPredictor:
 
         _logger.info("PPM model saved to %s", path)
 
+    # Same defensive bound as the n-gram model: a full PPM trie stays
+    # well under 50 MB even after extended training; beyond that we
+    # refuse to load rather than risk OOM during recursive rebuild.
+    _MAX_MODEL_FILE_BYTES = 50 * 1024 * 1024
+
     def load(self, path: Path) -> None:
         """Load model from JSON file."""
         def dict_to_node(d: dict) -> PPMNode:
@@ -386,6 +391,14 @@ class PPMPredictor:
             return node
 
         try:
+            file_size = path.stat().st_size
+            if file_size > self._MAX_MODEL_FILE_BYTES:
+                _logger.warning(
+                    "PPM model %s too large (%d bytes); skipping load.",
+                    path, file_size,
+                )
+                return
+
             with open(path) as f:
                 data = json.load(f)
 

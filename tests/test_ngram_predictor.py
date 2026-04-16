@@ -356,3 +356,72 @@ class TestPersonalVocabRanking:
         # well as under weak personal bias.
         if "claude" in strong and "claude" in weak:
             assert strong.index("claude") <= weak.index("claude")
+
+
+class TestLoadBounds:
+    """DoS cap: an adversarial or corrupted model file is refused."""
+
+    def test_load_rejects_oversized_file(self, tmp_path):
+        """A file above the size cap is skipped, not json.loaded."""
+        p = tmp_path / "big.json"
+        # Exceed the 50 MB cap with mostly whitespace so we don't burn
+        # real memory building the actual dict.
+        p.write_bytes(b" " * (51 * 1024 * 1024))
+        pred = NgramPredictor()
+        pred.unigrams.clear()
+        pred.load(p)
+        # load() silently no-ops on oversize; unigrams stays empty
+        assert len(pred.unigrams) == 0
+
+    def test_load_rejects_too_many_unigrams(self, tmp_path):
+        """A legitimately-small file with millions of unigrams is refused."""
+        import json
+        p = tmp_path / "many.json"
+        huge = {"unigrams": {f"w{i}": 1 for i in range(NgramPredictor._MAX_UNIGRAMS + 100)}}
+        p.write_text(json.dumps(huge))
+        pred = NgramPredictor()
+        before = dict(pred.unigrams)
+        pred.load(p)
+        # Base dictionary state preserved; crafted file discarded.
+        assert dict(pred.unigrams) == before
+
+
+class TestUserTotalIncremental:
+    """_user_total must stay equal to sum(user_vocab.values())."""
+
+    def test_learn_tracks_total(self):
+        p = NgramPredictor()
+        p.learn("alpha beta alpha")
+        assert p._user_total == sum(p.user_vocab.values())
+        p.learn("alpha gamma")
+        assert p._user_total == sum(p.user_vocab.values())
+
+    def test_learn_word_tracks_total(self):
+        p = NgramPredictor()
+        p.learn_word("claude")
+        assert p._user_total == sum(p.user_vocab.values())
+
+    def test_decay_restores_total(self):
+        p = NgramPredictor()
+        for _ in range(200):
+            p.learn("claude")
+        # Force decay
+        p._apply_decay()
+        assert p._user_total == sum(p.user_vocab.values())
+
+    def test_clear_user_data_resets_total(self):
+        p = NgramPredictor()
+        p.learn("alpha beta gamma")
+        p.clear_user_data()
+        assert p._user_total == 0
+
+    def test_load_rebuilds_total(self, tmp_path):
+        p = NgramPredictor()
+        p.learn("one two three")
+        saved_file = tmp_path / "m.json"
+        p.save(saved_file)
+        # Scramble running total, then reload
+        q = NgramPredictor()
+        q._user_total = 99999
+        q.load(saved_file)
+        assert q._user_total == sum(q.user_vocab.values())

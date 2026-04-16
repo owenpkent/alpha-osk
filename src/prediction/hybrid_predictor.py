@@ -453,6 +453,25 @@ class HybridPredictor(QObject):
         stats["fuzzy"] = self._fuzzy.get_stats()
         return stats
 
+    # --- Public API for callers that previously reached through to _ngram ---
+
+    def get_unigram_freqs(self) -> Dict[str, int]:
+        """Merged unigram counts (base + user).
+
+        Public forwarder so callers (e.g. the swipe recogniser) don't
+        reach through the private ``_ngram`` attribute.
+        """
+        return self._ngram.unigrams
+
+    def get_capitalized(self, word: str, sentence_start: bool = False) -> str:
+        """Return the preferred capitalisation for ``word``.
+
+        See :meth:`NgramPredictor.get_capitalized` for the three-tier
+        model.  Exposed publicly so external callers don't have to
+        reach into ``_ngram``.
+        """
+        return self._ngram.get_capitalized(word, sentence_start)
+
     # --- Accessibility Profile Management ---
 
     def set_accessibility_profile(self, profile_name: str) -> bool:

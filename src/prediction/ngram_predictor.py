@@ -59,6 +59,9 @@ class NgramPredictor:
         # User-typed word counts.  Incremented by learn() / learn_word();
         # feeds P_user in the split-table score.  Recency-decayed.
         self.user_vocab: Dict[str, int] = defaultdict(int)
+        # Running sum of user_vocab.values().  Maintained incrementally
+        # so predict() doesn't recompute sum() (O(N)) per keystroke.
+        self._user_total: int = 0
 
         # Word suppression: blacklisted words never appear, dispreferred are downweighted
         self.blacklist: set[str] = set()
@@ -328,7 +331,7 @@ class NgramPredictor:
         # weights above (bigram += freq · 2 etc.), so those context
         # bonuses still meaningfully boost candidates.
         alpha = self.personal_weight
-        user_total = sum(self.user_vocab.values())
+        user_total = self._user_total
         base_total = self._base_total
         SCALE = 100_000
 
@@ -394,6 +397,7 @@ class NgramPredictor:
             was_new = word not in self.user_vocab
             self.unigrams[word] += 1
             self.user_vocab[word] += 1
+            self._user_total += 1
             self.total_words += 1
             if was_new:
                 new_words.append(word)
@@ -450,12 +454,16 @@ class NgramPredictor:
 
         # Decay user vocab boost
         to_remove = []
+        new_total = 0
         for word in self.user_vocab:
             self.user_vocab[word] = int(self.user_vocab[word] * factor)
             if self.user_vocab[word] < min_freq:
                 to_remove.append(word)
+            else:
+                new_total += self.user_vocab[word]
         for word in to_remove:
             del self.user_vocab[word]
+        self._user_total = new_total
 
         # Decay user-learned bigrams (only those above base dictionary levels)
         for prev_word in list(self.bigrams):
@@ -522,6 +530,7 @@ class NgramPredictor:
         if word:
             self.unigrams[word] += 5
             self.user_vocab[word] += 5
+            self._user_total += 5
             self.total_words += 5
 
     def save(self, path: Path) -> None:
@@ -542,29 +551,69 @@ class NgramPredictor:
             json.dump(data, f)
         _logger.info("Model saved to %s", path)
 
+    # Defensive bounds on saved-model shape.  A legitimate model grown
+    # through normal typing stays well under these limits; values beyond
+    # them suggest a corrupt or crafted file and are refused rather than
+    # risking OOM at startup.
+    _MAX_MODEL_FILE_BYTES = 50 * 1024 * 1024     # 50 MB on disk
+    _MAX_UNIGRAMS = 500_000
+    _MAX_BIGRAMS_PREFIXES = 500_000
+    _MAX_CAPITALIZATIONS = 100_000
+
     def load(self, path: Path) -> None:
         """Load model from JSON file."""
         try:
+            file_size = path.stat().st_size
+            if file_size > self._MAX_MODEL_FILE_BYTES:
+                _logger.warning(
+                    "Model file %s too large (%d bytes > %d cap); skipping load.",
+                    path, file_size, self._MAX_MODEL_FILE_BYTES,
+                )
+                return
+
             with open(path) as f:
                 data = json.load(f)
 
-            self.unigrams = defaultdict(int, data.get("unigrams", {}))
+            unigrams = data.get("unigrams", {})
+            if len(unigrams) > self._MAX_UNIGRAMS:
+                _logger.warning(
+                    "Model file %s has %d unigrams (> %d); skipping load.",
+                    path, len(unigrams), self._MAX_UNIGRAMS,
+                )
+                return
+            bigrams = data.get("bigrams", {})
+            if len(bigrams) > self._MAX_BIGRAMS_PREFIXES:
+                _logger.warning(
+                    "Model file %s has %d bigram prefixes (> %d); skipping load.",
+                    path, len(bigrams), self._MAX_BIGRAMS_PREFIXES,
+                )
+                return
+            caps = data.get("capitalization", {})
+            if len(caps) > self._MAX_CAPITALIZATIONS:
+                _logger.warning(
+                    "Model file %s has %d capitalizations (> %d); skipping load.",
+                    path, len(caps), self._MAX_CAPITALIZATIONS,
+                )
+                return
+
+            self.unigrams = defaultdict(int, unigrams)
             self.bigrams = defaultdict(
                 lambda: defaultdict(int),
-                {k: defaultdict(int, v) for k, v in data.get("bigrams", {}).items()}
+                {k: defaultdict(int, v) for k, v in bigrams.items()}
             )
             self.trigrams = defaultdict(
                 lambda: defaultdict(int),
                 {k: defaultdict(int, v) for k, v in data.get("trigrams", {}).items()}
             )
             self.user_vocab = defaultdict(int, data.get("user_vocab", {}))
+            # Rebuild incremental running total from loaded counts.
+            self._user_total = sum(self.user_vocab.values())
             self.total_words = data.get("total_words", 0)
             self.blacklist = set(data.get("blacklist", []))
             self.dispreference = defaultdict(int, data.get("dispreference", {}))
             self._blacklist_type_count = defaultdict(int, data.get("blacklist_type_count", {}))
             # Merge saved capitalization with built-in proper nouns (user overrides win)
-            saved_caps = data.get("capitalization", {})
-            self.capitalization.update(saved_caps)
+            self.capitalization.update(caps)
             _logger.info("Model loaded from %s (%d blacklisted, %d capitalizations)",
                          path, len(self.blacklist), len(self.capitalization))
         except Exception as e:
@@ -704,6 +753,7 @@ class NgramPredictor:
         self.trigrams.clear()
         self._base_unigrams.clear()
         self._base_total = 0
+        self._user_total = 0
         self.total_words = 0
         self.blacklist.clear()
         self.dispreference.clear()

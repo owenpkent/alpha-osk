@@ -276,12 +276,14 @@ def main() -> int:
     tray.show()
     _logger.info("System tray icon active")
 
-    # Save state on quit
+    # Save state on quit, then stop background timers so nothing fires
+    # after the bridge / predictor start being torn down.
     def _on_about_to_quit() -> None:
         if bridge.autoSaveOnExit:
             _logger.info("Auto-saving prediction model on exit...")
             bridge.savePredictionModel()
         bridge.saveAnalytics()
+        bridge.shutdown()
 
     app.aboutToQuit.connect(_on_about_to_quit)
 

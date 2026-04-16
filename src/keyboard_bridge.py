@@ -158,6 +158,10 @@ class KeyboardBridge(QObject):
         self._privacy_mode = False
         self._privacy_mode_manual = False   # User toggled manually
         self._password_detect_enabled = True
+        # Last synchronous is_password_field() call, to rate-limit the
+        # sync check fired on every keystroke (COM calls are cheap but
+        # not free; ~50 ms between calls stops thrashing).
+        self._last_sync_password_check: float = 0.0
 
         # Poll for password fields every 200ms (fast detection reduces keystroke leakage)
         self._password_timer = QTimer(self)
@@ -208,6 +212,10 @@ class KeyboardBridge(QObject):
     @Slot(str)
     def pressKey(self, key: str) -> None:
         """Called from QML when a character key is pressed."""
+        # Close the 200 ms race window: if focus has just landed on a
+        # password field, flip privacy mode *before* we touch any
+        # prediction state with this keystroke.
+        self._check_password_field_sync()
         self._play_click()
         if not self._privacy_mode:
             self._analytics.record_keystroke(key)
@@ -329,6 +337,7 @@ class KeyboardBridge(QObject):
     @Slot(str)
     def pressSpecialKey(self, key_name: str) -> None:
         """Called from QML for special keys (Backspace, Return, etc.)."""
+        self._check_password_field_sync()
         self._play_click()
         key_map = {
             "backspace": "BackSpace",
@@ -632,6 +641,26 @@ class KeyboardBridge(QObject):
         """Save the prediction model to disk."""
         self._predictor.save()
 
+    def shutdown(self) -> None:
+        """Stop background timers cleanly before the app tears down.
+
+        Qt can deliver a final ``timeout`` signal on a running ``QTimer``
+        while the owning ``KeyboardBridge`` is being destroyed; that
+        slot would then run against half-collected attributes (notably
+        ``self._predictor``) and crash the exit path.  Calling
+        ``shutdown`` from ``QApplication.aboutToQuit`` guarantees the
+        timers are stopped while the bridge is still intact.
+        """
+        for timer in (
+            getattr(self, "_password_timer", None),
+            getattr(self, "_foreground_timer", None),
+        ):
+            if timer is not None:
+                try:
+                    timer.stop()
+                except RuntimeError:
+                    pass  # already deleted by Qt; harmless
+
     @Slot()
     def clearUserData(self) -> None:
         """Clear user-learned vocabulary and overwrite saved models on disk."""
@@ -705,6 +734,23 @@ class KeyboardBridge(QObject):
             self._last_foreground_hwnd = hwnd
         except Exception:
             pass  # Non-Windows or ctypes unavailable — skip
+
+    def _check_password_field_sync(self) -> None:
+        """Synchronous password check for keystroke paths.
+
+        The 200 ms background timer alone leaves a leak window where the
+        first characters after focus lands on a password field go into
+        ``_current_word`` and the prediction cache before privacy mode
+        flips.  This wrapper fires on every keystroke but caches the
+        result for ~50 ms so the UI Automation COM call doesn't thrash
+        under rapid repeats.
+        """
+        import time
+        now = time.monotonic()
+        if now - self._last_sync_password_check < 0.05:
+            return
+        self._last_sync_password_check = now
+        self._check_password_field()
 
     def _check_password_field(self) -> None:
         """Periodic check for password field focus (called by QTimer)."""
@@ -944,10 +990,34 @@ class KeyboardBridge(QObject):
         self._predictor.remove_dispreference(word)
         self._add_debug_log(f"Removed dispreference: {word}")
 
+    # Maximum length for a user-edited prediction.  Well above any real
+    # word; the cap exists to stop a malformed QML call from persisting
+    # a 10 KB string into the capitalisation table.
+    _MAX_EDIT_LEN = 64
+
+    @staticmethod
+    def _sanitize_edit(value: str) -> str:
+        """Clean a user-typed prediction edit before it reaches the model.
+
+        Strips surrounding whitespace and control characters (NUL,
+        newlines, other C0/C1), caps the length, and returns '' if
+        nothing survives.  Called from :meth:`editPrediction` — the
+        edited text is persisted into ``capitalization`` and surfaces
+        in every future prediction, so garbage must be rejected here
+        rather than downstream.
+        """
+        if not isinstance(value, str):
+            return ""
+        cleaned = "".join(ch for ch in value if ch == " " or (ch.isprintable() and ord(ch) >= 0x20))
+        cleaned = cleaned.strip()
+        if len(cleaned) > KeyboardBridge._MAX_EDIT_LEN:
+            cleaned = cleaned[: KeyboardBridge._MAX_EDIT_LEN].rstrip()
+        return cleaned
+
     @Slot(str, str)
     def editPrediction(self, original: str, edited: str) -> None:
         """User edited a prediction (e.g. to fix capitalization). Insert it and learn."""
-        edited = edited.strip()
+        edited = self._sanitize_edit(edited)
         if not edited:
             return
 
@@ -1032,12 +1102,11 @@ class KeyboardBridge(QObject):
         if len(trace) < 4:
             return
 
-        candidates = self._predictor._ngram.unigrams.keys()
-        word_freq = self._predictor._ngram.unigrams
+        unigrams = self._predictor.get_unigram_freqs()
         results = self._swipe.decode(
             trace,
-            candidates,
-            word_freq=dict(word_freq),
+            unigrams.keys(),
+            word_freq=dict(unigrams),
             top_k=self._prediction_count,
         )
         if not results:
@@ -1046,10 +1115,11 @@ class KeyboardBridge(QObject):
 
         # Apply learned/built-in capitalisation to each candidate so that
         # picking the top word respects "iPhone" vs. "iphone".
-        ngram = self._predictor._ngram
         trimmed = self._context_buffer.rstrip()
         sentence_start = not trimmed or trimmed.endswith((".", "!", "?"))
-        capitalised = [ngram.get_capitalized(w, sentence_start) for w in results]
+        capitalised = [
+            self._predictor.get_capitalized(w, sentence_start) for w in results
+        ]
 
         top = capitalised[0]
         self._send_text(top + " ")

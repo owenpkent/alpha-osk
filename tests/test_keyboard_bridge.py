@@ -418,3 +418,33 @@ class TestPunctuationSpacing:
         assert bridge._predictions == []
         assert bridge._current_word == "hel"
         assert bridge._context_buffer != "" or bridge._current_word == "hel"
+
+
+class TestEditPredictionSanitize:
+    """_sanitize_edit scrubs untrusted QML input before it reaches the model."""
+
+    def test_strips_control_chars(self):
+        from src.keyboard_bridge import KeyboardBridge
+        assert KeyboardBridge._sanitize_edit("hello\x00world") == "helloworld"
+        assert KeyboardBridge._sanitize_edit("foo\nbar") == "foobar"
+        assert KeyboardBridge._sanitize_edit("a\x01b\x1fc") == "abc"
+
+    def test_caps_length(self):
+        from src.keyboard_bridge import KeyboardBridge
+        long = "a" * 200
+        assert len(KeyboardBridge._sanitize_edit(long)) == KeyboardBridge._MAX_EDIT_LEN
+
+    def test_empty_after_strip_is_empty(self):
+        from src.keyboard_bridge import KeyboardBridge
+        assert KeyboardBridge._sanitize_edit("   ") == ""
+        assert KeyboardBridge._sanitize_edit("\x00\x01\n") == ""
+
+    def test_non_string_input(self):
+        from src.keyboard_bridge import KeyboardBridge
+        assert KeyboardBridge._sanitize_edit(None) == ""  # type: ignore[arg-type]
+        assert KeyboardBridge._sanitize_edit(42) == ""    # type: ignore[arg-type]
+
+    def test_normal_input_preserved(self):
+        from src.keyboard_bridge import KeyboardBridge
+        assert KeyboardBridge._sanitize_edit("iPhone") == "iPhone"
+        assert KeyboardBridge._sanitize_edit("  hello  ") == "hello"
