@@ -57,7 +57,9 @@ class TestHybridLearning:
     """Learning and adaptation."""
 
     def test_learn_text(self, predictor: HybridPredictor):
-        predictor.learn("xylophone zebra xylophone")
+        # Unknown words need to pass the ngram fragment-filter repetition
+        # gate (3 sightings) before they enter user_vocab.
+        predictor.learn("xylophone zebra xylophone xylophone")
         results = predictor.predict("xylo", n=5)
         assert "xylophone" in results
 

@@ -113,6 +113,13 @@ class NgramPredictor:
         self._decay_interval = 50  # decay every 50 learn() calls
         self._decay_factor = 0.95  # multiply by this on each decay
 
+        # Fragment filter: unknown words must pass a shape check AND be
+        # sighted _candidate_threshold times before entering user_vocab.
+        # Keeps random consonant clusters and one-off keyboard slips out
+        # of predictions.  Gboard / AOSP LatinIME use a similar gate.
+        self._candidate_counts: Dict[str, int] = defaultdict(int)
+        self._candidate_threshold: int = 3
+
         # Load Google 10K wordlist (frequency-ranked) if available
         self._load_frequency_wordlist()
 
@@ -267,9 +274,28 @@ class NgramPredictor:
         # Tier 3: unambiguous proper noun or user-taught — always capitalize
         return preferred
 
+    # Linear-interpolation weights for next-word scoring.  Mirrors the
+    # classic Presage / LatinIME recipe: trigram evidence dominates,
+    # bigram is the main fallback, unigram is the long-tail anchor.
+    # All three probabilities live in [0, 1] so the weighted sum is
+    # itself a probability — no SCALE-vs-raw-count mismatch.
+    _LAMBDA_TRI = 0.5
+    _LAMBDA_BI = 0.3
+    _LAMBDA_UNI = 0.2
+
     def predict(self, context: str, n: int = 5) -> List[str]:
         """
         Predict next words based on context.
+
+        Scoring is a linear interpolation of conditional probabilities:
+
+            score(w) = λ₃·P(w | w₋₂, w₋₁) + λ₂·P(w | w₋₁) + λ₁·P_uni(w)
+
+        where P_uni is the split-table personal/base mix
+        (``alpha·P_user + (1−alpha)·P_base``).  When there is no
+        preceding context (pure partial-word completion), the weighted
+        formula collapses to P_uni so the long-tail unigram ranking
+        isn't artificially depressed.
 
         Args:
             context: The text typed so far (full or partial word at end)
@@ -287,75 +313,82 @@ class NgramPredictor:
         if not context_clean:
             return self._top_unigrams(n)
 
-        # Split into words
         words = self._tokenize(context_clean)
 
         # Check if user is mid-word (no trailing space in original)
         partial_word = ""
         if not ends_with_space and words:
-            # User is typing a partial word - complete it
             partial_word = words[-1]
             words = words[:-1]
-        # else: User finished word (space at end) - predict next word
+        # else: user finished word (space at end) — predict next word
 
-        # Get candidates
-        candidates: Dict[str, float] = {}
-
-        # Trigram predictions (if we have 2+ previous words)
+        # Conditional trigram probabilities for this 2-word prefix.
+        # Normalising by the prefix-total turns raw counts into
+        # P(w | w₋₂, w₋₁), which is what the interpolation expects.
+        trigram_probs: Dict[str, float] = {}
         if len(words) >= 2:
             key = f"{words[-2]} {words[-1]}"
-            if key in self.trigrams:
-                for word, freq in self.trigrams[key].items():
-                    if self._matches_partial(word, partial_word):
-                        # Weight trigrams highest
-                        candidates[word] = candidates.get(word, 0) + freq * 3
+            tri_context = self.trigrams.get(key)
+            if tri_context:
+                total = sum(tri_context.values())
+                if total > 0:
+                    for word, freq in tri_context.items():
+                        trigram_probs[word] = freq / total
 
-        # Bigram predictions (if we have 1+ previous words)
+        # Conditional bigram probabilities for the 1-word prefix.
+        bigram_probs: Dict[str, float] = {}
         if len(words) >= 1:
             prev_word = words[-1]
-            if prev_word in self.bigrams:
-                for word, freq in self.bigrams[prev_word].items():
-                    if self._matches_partial(word, partial_word):
-                        candidates[word] = candidates.get(word, 0) + freq * 2  # Weight bigrams
+            bi_context = self.bigrams.get(prev_word)
+            if bi_context:
+                total = sum(bi_context.values())
+                if total > 0:
+                    for word, freq in bi_context.items():
+                        bigram_probs[word] = freq / total
 
-        # Unigram scoring — split-table linear interpolation.
-        #
-        #   score(w) = SCALE · [alpha · P_user(w) + (1 − alpha) · P_base(w)]
-        #
-        # Probability space is the right space to blend in: raw-count
-        # blending drowns personal typing under the dictionary's huge
-        # pre-seeded frequencies.  With alpha = 0.7 by default, a word the
-        # user has typed even a handful of times ranks ahead of common
-        # English words they've never used.  SCALE brings the unigram
-        # contribution into a similar magnitude as the bigram/trigram
-        # weights above (bigram += freq · 2 etc.), so those context
-        # bonuses still meaningfully boost candidates.
         alpha = self.personal_weight
         user_total = self._user_total
         base_total = self._base_total
-        SCALE = 100_000
+        # Decide the per-component weights.  When there's no context to
+        # condition on, use unigram at full strength instead of λ₁·P_uni
+        # — the trigram/bigram terms are identically zero, and down-
+        # weighting unigram in that case would needlessly flatten
+        # ranking.  Same logic when the user has typed a preceding word
+        # the model has never seen (no bigram context): fall back to
+        # unigram-at-full-weight rather than λ₁·P_uni.
+        has_context = bool(trigram_probs) or bool(bigram_probs)
+        if has_context:
+            w_tri = self._LAMBDA_TRI
+            w_bi = self._LAMBDA_BI
+            w_uni = self._LAMBDA_UNI
+        else:
+            w_tri = 0.0
+            w_bi = 0.0
+            w_uni = 1.0
 
-        # Walk the union of base and user vocabularies.  Using the merged
-        # view (``self.unigrams``) would also work, but this skips the
-        # many ambiguous-name / decayed entries that aren't real vocab.
+        # Candidate set: every word that could get non-zero score.
         seen_words: set[str] = set()
-        for word in self._base_unigrams.keys():
-            seen_words.add(word)
-        for word in self.user_vocab.keys():
-            seen_words.add(word)
+        seen_words.update(trigram_probs.keys())
+        seen_words.update(bigram_probs.keys())
+        seen_words.update(self._base_unigrams.keys())
+        seen_words.update(self.user_vocab.keys())
 
+        candidates: Dict[str, float] = {}
         for word in seen_words:
             if not self._matches_partial(word, partial_word):
                 continue
+            p_tri = trigram_probs.get(word, 0.0)
+            p_bi = bigram_probs.get(word, 0.0)
             base_freq = self._base_unigrams.get(word, 0)
             user_freq = self.user_vocab.get(word, 0)
             p_base = (base_freq / base_total) if base_total else 0.0
             p_user = (user_freq / user_total) if user_total else 0.0
-            p_mixed = alpha * p_user + (1.0 - alpha) * p_base
-            if p_mixed > 0:
-                candidates[word] = candidates.get(word, 0) + p_mixed * SCALE
+            p_uni = alpha * p_user + (1.0 - alpha) * p_base
 
-        # Sort by score and return top n
+            score = w_tri * p_tri + w_bi * p_bi + w_uni * p_uni
+            if score > 0:
+                candidates[word] = score
+
         sorted_candidates = sorted(candidates.items(), key=lambda x: -x[1])
         return [word for word, _ in sorted_candidates[:n]]
 
@@ -376,12 +409,67 @@ class NgramPredictor:
         words = re.findall(r"[a-zA-Z']+", text.lower())
         return words
 
+    # Vowels include 'y' so "cry", "try", "rhythm" pass the shape filter.
+    _VOWELS = frozenset("aeiouy")
+    # 1- and 2-letter words that ARE legitimate — everything else at
+    # length ≤ 2 is treated as a fragment.  Kept small on purpose; edge
+    # cases just need to be typed a few times to enter user_vocab via
+    # the repetition gate path for unknown words that happen to have a
+    # vowel, but the pure-fragment case (length ≤ 2, no vowel) is
+    # shape-rejected outright.
+    _SHORT_WORD_WHITELIST = frozenset({
+        "a", "i",
+        "am", "an", "as", "at", "be", "by", "do", "go",
+        "he", "hi", "if", "in", "is", "it", "me", "my",
+        "no", "of", "oh", "ok", "on", "or", "so", "to",
+        "up", "us", "we", "ya", "ha", "ah", "eh", "mm",
+        "hm", "mr", "ms", "dr", "st", "pm",
+    })
+
+    def _is_plausible_word(self, word: str) -> bool:
+        """Reject obvious keyboard-slip fragments.
+
+        Rules:
+          - length ≤ 2: must be in the short-word whitelist
+          - length ≥ 3: must contain at least one vowel (a/e/i/o/u/y)
+            AND at least one non-aeiou letter.  The two-sided check
+            rejects both all-consonant clusters ("xqz") and vowel mashing
+            ("aaaa", "iii").  'y' is counted as a vowel for the first
+            check (so "cry", "rhythm" pass) but as a consonant for the
+            second (so "eye", "aye" still pass).
+        """
+        n = len(word)
+        if n == 0:
+            return False
+        if n <= 2:
+            return word in self._SHORT_WORD_WHITELIST
+        has_vowel = False
+        has_consonant = False
+        for c in word:
+            if c in "aeiou":
+                has_vowel = True
+            elif c == "y":
+                has_vowel = True
+                has_consonant = True
+            elif c.isalpha():
+                has_consonant = True
+        return has_vowel and has_consonant
+
     def learn(self, text: str) -> List[str]:
         """
         Learn from new text, updating n-gram frequencies.
 
-        Args:
-            text: Text to learn from
+        Unknown words pass through a two-stage filter:
+          1. Shape check — rejects all-consonant clusters and untrusted
+             1-/2-letter fragments outright.
+          2. Repetition gate — surviving unknown words must be sighted
+             ``_candidate_threshold`` times (default 3) before entering
+             user_vocab.  Known base-dict words and words already in
+             user_vocab skip the gate.
+
+        Bigrams and trigrams are only formed between words that actually
+        land in the vocabulary on this call, so a gated fragment never
+        produces a "the xqz" context edge.
 
         Returns:
             List of words that were new to user_vocab (first time learned).
@@ -391,28 +479,54 @@ class NgramPredictor:
             return []
 
         new_words: List[str] = []
+        # Parallel to `words`; entry is the word iff it was accepted into
+        # the vocabulary on this call, else None.  Drives bigram/trigram
+        # updates so filtered/gated words don't seed context edges.
+        learned: List[Optional[str]] = []
 
-        # Update unigrams
         for word in words:
-            was_new = word not in self.user_vocab
-            self.unigrams[word] += 1
-            self.user_vocab[word] += 1
-            self._user_total += 1
-            self.total_words += 1
-            if was_new:
+            if not self._is_plausible_word(word):
+                learned.append(None)
+                continue
+
+            if word in self._base_unigrams or word in self.user_vocab:
+                # Known word — learn immediately, bypass the gate.
+                was_new = word not in self.user_vocab
+                self.unigrams[word] += 1
+                self.user_vocab[word] += 1
+                self._user_total += 1
+                self.total_words += 1
+                if was_new:
+                    new_words.append(word)
+                learned.append(word)
+                continue
+
+            # Unknown but plausible — accumulate sightings in the
+            # candidate pool and only promote once the threshold is hit.
+            self._candidate_counts[word] += 1
+            if self._candidate_counts[word] >= self._candidate_threshold:
+                count = self._candidate_counts.pop(word)
+                self.unigrams[word] += count
+                self.user_vocab[word] += count
+                self._user_total += count
+                self.total_words += count
                 new_words.append(word)
+                learned.append(word)
+            else:
+                learned.append(None)
 
-        # Update bigrams
-        for i in range(1, len(words)):
-            prev_word = words[i - 1]
-            curr_word = words[i]
-            self.bigrams[prev_word][curr_word] += 1
+        # Update bigrams — only between neighbours that both made it in.
+        for i in range(1, len(learned)):
+            prev_word, curr_word = learned[i - 1], learned[i]
+            if prev_word and curr_word:
+                self.bigrams[prev_word][curr_word] += 1
 
-        # Update trigrams
-        for i in range(2, len(words)):
-            key = f"{words[i-2]} {words[i-1]}"
-            curr_word = words[i]
-            self.trigrams[key][curr_word] += 1
+        # Update trigrams — all three positions must have been accepted.
+        for i in range(2, len(learned)):
+            w2, w1, curr = learned[i - 2], learned[i - 1], learned[i]
+            if w2 and w1 and curr:
+                key = f"{w2} {w1}"
+                self.trigrams[key][curr] += 1
 
         # Periodic recency decay so old words don't dominate
         self._learn_count += 1
@@ -471,6 +585,15 @@ class NgramPredictor:
                 self.bigrams[prev_word][word] = max(
                     min_freq, int(self.bigrams[prev_word][word] * factor)
                 )
+
+        # Decay candidate counts too — a word seen once long ago
+        # shouldn't slowly accumulate toward promotion across sessions.
+        for word in list(self._candidate_counts):
+            decayed = int(self._candidate_counts[word] * factor)
+            if decayed < 1:
+                del self._candidate_counts[word]
+            else:
+                self._candidate_counts[word] = decayed
 
         _logger.debug("Applied recency decay (factor=%.2f)", factor)
 
@@ -545,6 +668,7 @@ class NgramPredictor:
             "dispreference": dict(self.dispreference),
             "blacklist_type_count": dict(self._blacklist_type_count),
             "capitalization": dict(self.capitalization),
+            "candidate_counts": dict(self._candidate_counts),
         }
         path.parent.mkdir(parents=True, exist_ok=True)
         with open(path, "w") as f:
@@ -612,6 +736,7 @@ class NgramPredictor:
             self.blacklist = set(data.get("blacklist", []))
             self.dispreference = defaultdict(int, data.get("dispreference", {}))
             self._blacklist_type_count = defaultdict(int, data.get("blacklist_type_count", {}))
+            self._candidate_counts = defaultdict(int, data.get("candidate_counts", {}))
             # Merge saved capitalization with built-in proper nouns (user overrides win)
             self.capitalization.update(caps)
             _logger.info("Model loaded from %s (%d blacklisted, %d capitalizations)",
@@ -758,6 +883,7 @@ class NgramPredictor:
         self.blacklist.clear()
         self.dispreference.clear()
         self._blacklist_type_count.clear()
+        self._candidate_counts.clear()
         self._learn_count = 0
         # Clear learned capitalization so user-typed forms don't persist
         self.capitalization.clear()

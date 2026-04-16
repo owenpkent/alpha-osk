@@ -79,9 +79,12 @@ class TestNgramLearning:
 
     def test_learn_updates_user_vocab(self):
         predictor = NgramPredictor()
-        predictor.learn("bespoke vocabulary")
-        assert predictor.user_vocab["bespoke"] > 0
-        assert predictor.user_vocab["vocabulary"] > 0
+        # Both words are in the base 10K dictionary, so they skip the
+        # fragment-filter repetition gate and land in user_vocab on the
+        # first learn() call.
+        predictor.learn("hello world")
+        assert predictor.user_vocab["hello"] > 0
+        assert predictor.user_vocab["world"] > 0
 
     def test_clear_user_data(self):
         predictor = NgramPredictor()
@@ -384,6 +387,138 @@ class TestLoadBounds:
         pred.load(p)
         # Base dictionary state preserved; crafted file discarded.
         assert dict(pred.unigrams) == before
+
+
+class TestContextualRanking:
+    """Linear-interpolation scoring must let context actually beat unigram prior.
+
+    Pre-change, `predict()` summed raw bigram/trigram frequencies with a
+    100000-scaled unigram probability — the unigram term dwarfed
+    everything else, so "I want " predicted "the" (most common English
+    word) instead of "to" (very common continuation of "want"). These
+    tests pin the fix: when a bigram/trigram context has been trained,
+    the continuation word must outrank the global unigram favourite.
+    """
+
+    def test_bigram_beats_top_unigram_on_trained_context(self):
+        p = NgramPredictor()
+        for _ in range(20):
+            p.learn("I want to go home")
+        # After "I want " the top pick should be "to", not "the".
+        results = p.predict("I want ", n=5)
+        assert results[0] == "to", f"expected 'to' first, got {results}"
+
+    def test_trigram_beats_bigram_when_both_seen(self):
+        p = NgramPredictor()
+        # "big red ball" — trigram (big, red) → ball.  Also train
+        # (red → apple) as a competing bigram, more frequent than the
+        # trigram-specific continuation, to prove the trigram still wins.
+        for _ in range(10):
+            p.learn("big red ball")
+        for _ in range(30):
+            p.learn("red apple")
+        results = p.predict("big red ", n=5)
+        # Trigram evidence (big, red) → ball should outrank the very
+        # strong but context-less bigram red → apple.
+        assert results[0] == "ball", f"expected 'ball' first, got {results}"
+
+    def test_unigram_full_strength_without_context(self):
+        p = NgramPredictor()
+        # With no preceding word, ranking must come from P_uni at full
+        # weight — i.e. the usual top-of-dict word wins on a prefix.
+        results = p.predict("th", n=5)
+        assert results[0] == "the", f"expected 'the' first, got {results}"
+
+
+class TestFragmentFilter:
+    """Shape filter + repetition gate keep random fragments out of user_vocab."""
+
+    def test_shape_filter_rejects_all_consonant_cluster(self):
+        p = NgramPredictor()
+        for _ in range(10):
+            p.learn("xqz")
+        # No vowel → always rejected, no matter how many times seen.
+        assert p.user_vocab.get("xqz", 0) == 0
+        assert p._candidate_counts.get("xqz", 0) == 0
+
+    def test_shape_filter_rejects_all_vowel_mash(self):
+        p = NgramPredictor()
+        for _ in range(10):
+            p.learn("aaaa")
+        # No consonant → always rejected.
+        assert p.user_vocab.get("aaaa", 0) == 0
+        assert p._candidate_counts.get("aaaa", 0) == 0
+
+    def test_shape_filter_accepts_y_as_both(self):
+        p = NgramPredictor()
+        # "eye" — y must count as consonant for this word to pass.
+        # "cry" — y must count as vowel for this word to pass.
+        for _ in range(3):
+            p.learn("eye")
+            p.learn("cry")
+        assert p.user_vocab.get("eye", 0) > 0
+        assert p.user_vocab.get("cry", 0) > 0
+
+    def test_shape_filter_rejects_short_non_whitelisted(self):
+        p = NgramPredictor()
+        for _ in range(10):
+            p.learn("qq")
+        # "qq" is length 2 and not in the whitelist.
+        assert p.user_vocab.get("qq", 0) == 0
+
+    def test_shape_filter_accepts_short_whitelist(self):
+        p = NgramPredictor()
+        p.learn("hi")
+        # "hi" is in the whitelist AND in the base dict — learns immediately.
+        assert p.user_vocab.get("hi", 0) > 0
+
+    def test_repetition_gate_blocks_first_sighting(self):
+        p = NgramPredictor()
+        p.learn("zephyrish")  # plausible shape, not in base dict
+        assert p.user_vocab.get("zephyrish", 0) == 0
+        assert p._candidate_counts.get("zephyrish", 0) == 1
+
+    def test_repetition_gate_promotes_at_threshold(self):
+        p = NgramPredictor()
+        for _ in range(3):
+            p.learn("zephyrish")
+        assert p.user_vocab.get("zephyrish", 0) >= 3
+        # Candidate pool is emptied once the word is promoted.
+        assert p._candidate_counts.get("zephyrish", 0) == 0
+
+    def test_known_base_word_bypasses_gate(self):
+        p = NgramPredictor()
+        p.learn("hello")
+        assert p.user_vocab.get("hello", 0) > 0
+
+    def test_learn_word_bypasses_gate(self):
+        p = NgramPredictor()
+        p.learn_word("zephyrish")
+        # Explicit user add — the gate doesn't apply.
+        assert p.user_vocab.get("zephyrish", 0) > 0
+
+    def test_gated_word_does_not_form_bigrams(self):
+        p = NgramPredictor()
+        p.learn("the xqz fox")
+        # "xqz" is shape-filtered; no bigram edges should involve it.
+        assert "xqz" not in p.bigrams.get("the", {})
+        assert "fox" not in p.bigrams.get("xqz", {})
+
+    def test_candidate_counts_persist_across_save_load(self, tmp_path):
+        p = NgramPredictor()
+        p.learn("zephyrish")
+        path = tmp_path / "model.json"
+        p.save(path)
+
+        q = NgramPredictor()
+        q.load(path)
+        assert q._candidate_counts.get("zephyrish", 0) == 1
+
+    def test_clear_user_data_resets_candidates(self):
+        p = NgramPredictor()
+        p.learn("zephyrish")
+        p.clear_user_data()
+        assert len(p._candidate_counts) == 0
 
 
 class TestUserTotalIncremental:
