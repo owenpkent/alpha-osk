@@ -19,7 +19,7 @@ The updater is the highest-value MITM target in the app — a successful attacke
 | TLS strip / MITM                                        | `urllib` cert validation + scheme whitelist (https only)                                              |
 | DNS hijack to attacker host                             | Authenticode pin — attacker can't sign with our key                                                   |
 | Compromised GitHub asset                                | Authenticode pin: `Status == Valid` AND thumbprint matches `fc22b522…` AND signer CN matches `OK Studio Inc.` |
-| Asset URL points off-host                               | Host whitelist: `github.com`, `objects.githubusercontent.com` only                                    |
+| Asset URL points off-host                               | Host whitelist: `github.com`, `objects.githubusercontent.com`, `release-assets.githubusercontent.com` (only)                                             |
 | Post-redirect host swap                                 | Re-validate `resp.geturl()` after `urlopen` follows redirects                                          |
 | Disk-fill                                               | `_MAX_DOWNLOAD_BYTES = 500 MB` aborts runaway downloads                                                |
 | Downgrade attack                                        | Strict semver compare (`is_newer`); equal/older silently refused                                       |

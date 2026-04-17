@@ -305,7 +305,7 @@ The updater is the highest-value MITM target — a successful attacker ships arb
 | TLS strip / MITM                                        | `urllib` cert validation + scheme whitelist (https only)     |
 | DNS hijack to attacker host                             | Authenticode pin — attacker can't sign with our key          |
 | Compromised GitHub asset                                | Authenticode pin (thumbprint + Status==Valid + signer CN)    |
-| Asset URL points off-host                               | Host whitelist: `github.com`, `objects.githubusercontent.com` |
+| Asset URL points off-host                               | Host whitelist: `github.com`, `objects.githubusercontent.com`, `release-assets.githubusercontent.com` (the two historical + current GitHub release-asset CDNs) |
 | Post-redirect host swap                                 | Re-validate `resp.geturl()` after `urlopen` follows redirects |
 | Disk-fill                                               | `_MAX_DOWNLOAD_BYTES = 500 MB` aborts runaway downloads       |
 | Downgrade attack                                        | Strict semver compare (`is_newer`); refuse equal/older       |

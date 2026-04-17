@@ -24,9 +24,11 @@ attacker host                          a spoofed host, the served exe
 Compromised       Authenticode pin     ``_verify_signature`` rejects
 GitHub asset                           anything not signed by SHA1
                                        ``fc22b522...``.
-Asset URL         Host whitelist       Only ``github.com`` and
-redirection                            ``objects.githubusercontent.com``
-                                       (the release-asset CDN) are
+Asset URL         Host whitelist       Only ``github.com``,
+redirection                            ``objects.githubusercontent.com``,
+                                       and ``release-assets.githubusercontent.com``
+                                       (the historical and current
+                                       release-asset CDNs) are
                                        accepted.
 Disk-fill         Bounded download     ``_MAX_DOWNLOAD_BYTES`` aborts
                                        runaway downloads.
