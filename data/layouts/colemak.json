@@ -18,6 +18,7 @@
                 {"type": "char", "key": "9", "shifted": "(", "width": 1.0, "fontSize": 13, "style": "secondary"},
                 {"type": "char", "key": "0", "shifted": ")", "width": 1.0, "fontSize": 13, "style": "secondary"},
                 {"type": "char", "key": "-", "shifted": "_", "width": 1.0, "fontSize": 14, "style": "secondary"},
+                {"type": "char", "key": "=", "shifted": "+", "width": 1.0, "fontSize": 14, "style": "secondary"},
                 {"type": "special", "action": "backspace", "display": "\u232b", "width": 1.5, "fontSize": 16, "style": "special"}
             ]
         },

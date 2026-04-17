@@ -2,6 +2,11 @@
 
 All notable changes to Alpha-OSK are documented in this file.
 
+## [1.0.6] — 2026-04-16
+
+### Fixed
+- **`=` / `+` key restored to the number row** — all three built-in layouts (QWERTY, Colemak, Dvorak) jumped straight from `-` / `_` to Backspace, missing the `=` / `+` key that lives between them on a real keyboard. Added back in `data/layouts/{qwerty,colemak,dvorak}.json`.
+
 ## [1.0.5] — 2026-04-16
 
 ### Fixed
