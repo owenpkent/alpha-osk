@@ -161,6 +161,24 @@ class KeySynthesizerBase(ABC):
             key_name: Modifier name (same as :meth:`hold_modifier`).
         """
 
+    def reset_modifier_state(self) -> None:
+        """
+        Defensively release Ctrl, Alt, Shift, and Super/Win at the OS level.
+
+        Intended for startup — if a previous alpha-osk instance crashed
+        or was killed while a modifier was "active" (sticky), that
+        ``keydown`` may still be pinned at the window server with no
+        matching ``keyup``. Clearing them here lets a fresh session
+        start from a known state.
+
+        Safe to call whenever the app is certain no user modifier is
+        *intentionally* held (e.g. app init). Do NOT call during
+        interactive use — it would release a physically-held modifier.
+
+        The default implementation is a no-op. Backends override if
+        stray OS-level modifier state is possible on their platform.
+        """
+
     def replace_text(self, backspace_count: int, text: str) -> None:
         """
         Atomically erase *backspace_count* characters then type *text*.

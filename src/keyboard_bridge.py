@@ -114,6 +114,15 @@ class KeyboardBridge(QObject):
                 self._synth.backend_name(),
             )
 
+        # Defensive: clear any modifier left stuck at the OS level by a
+        # previous alpha-osk that crashed or was killed mid-chord. A
+        # stuck Ctrl/Alt silently breaks clicks in other apps (e.g. the
+        # browser starts treating every click as Ctrl+click / Alt+click)
+        # and the OSK button wouldn't show it active because Python
+        # tracks its own flag, not the server's. Safe here — the user
+        # hasn't started interacting yet.
+        self._synth.reset_modifier_state()
+
         # Initialize prediction engine (LLM disabled by default - overkill for keyboard)
         self._predictor = HybridPredictor(enable_llm=False, parent=self)
         self._predictor.predictionsReady.connect(self._on_predictions_ready)

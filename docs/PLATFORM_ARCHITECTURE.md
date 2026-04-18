@@ -183,6 +183,18 @@ The three calls run synchronously so their X events arrive in issue order;
 releases any sticky modifier that was still active at exit so the user's
 real keyboard isn't left feeling "held".
 
+`KeyboardBridge.__init__` additionally calls
+`LinuxKeySynthesizer.reset_modifier_state()` to issue a defensive `keyup`
+on Ctrl/Alt/Shift/Super at startup. This catches the cross-session case
+— a prior alpha-osk instance that crashed or was SIGKILL'd before it
+could release — without which the new session's UI shows every modifier
+inactive while the X server still thinks (say) Alt is held, and the user
+sees symptoms like Chrome treating link-clicks as Alt+click (download
+instead of navigate). We only reset on startup because a periodic
+release would also clobber a modifier the user is physically holding
+(Alt-codes, Ctrl-scroll-wheel, etc.) — safe reconciliation would need
+`XQueryKeymap` to distinguish "held" from "should-be-released".
+
 ### Windows: SendInput
 
 ```

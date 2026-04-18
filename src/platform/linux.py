@@ -210,6 +210,23 @@ class LinuxKeySynthesizer(KeySynthesizerBase):
             self._log_send(f"ydotool key --key-up {mapped}")
             _run(["ydotool", "key", "--key-up", mapped])
 
+    def reset_modifier_state(self) -> None:
+        """Release Ctrl/Alt/Shift/Super at the X server / Wayland compositor.
+
+        Safe to call at startup; each ``keyup`` is a no-op if the
+        modifier wasn't held. See the base class docstring for why you
+        must NOT call this during interactive typing.
+        """
+        if not self._tool:
+            return
+        modifiers = ("ctrl", "alt", "shift", "super")
+        _logger.info("Resetting OS modifier state (defensive keyup)")
+        for mod in modifiers:
+            if self._tool == "xdotool":
+                _run(["xdotool", "keyup", mod])
+            elif self._tool == "ydotool":
+                _run(["ydotool", "key", "--key-up", mod])
+
     def send_combination(self, keys: List[str]) -> None:
         """
         Send a multi-key chord (e.g. Ctrl+Alt+Delete).

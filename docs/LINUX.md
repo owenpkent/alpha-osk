@@ -113,6 +113,7 @@ menus once the user integrates the AppImage (e.g. via
 | `libtiff.so.5` warning at build time | Qt imageformats plugin looks for it | Benign — we don't use TIFF; warning doesn't affect the bundle |
 | Real keyboard feels like Ctrl/Shift is held | Another OSK (e.g. GNOME On-Board) is still running and has its own `keydown` pinned | `killall onboard`; check with `pgrep -a onboard`. Press-and-release Ctrl/Shift on the physical keyboard to clear, or `xdotool keyup ctrl shift alt super` |
 | Alpha-OSK sticky modifier stays held after quit | Old builds fired `xdotool keydown` without a matching `keyup` on shutdown | Fixed — `KeyboardBridge.shutdown()` now releases Ctrl/Alt/Win on `aboutToQuit`. Rebuild if you're on an older bundle |
+| Fresh Alpha-OSK launch inherits a stuck modifier from a prior crash | Previous instance was killed before it could release | Fixed — `KeyboardBridge.__init__` issues a defensive `keyup` on Ctrl/Alt/Shift/Super at startup (see `LinuxKeySynthesizer.reset_modifier_state()`). Launching Alpha-OSK alone clears the stuck state |
 
 ---
 
