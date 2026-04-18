@@ -15,7 +15,7 @@ Usage
 From the project root::
 
     pip install pyinstaller
-    pyinstaller build/alpha-osk.spec
+    pyinstaller build/windows/alpha-osk.spec
 
 Output
 ------
@@ -39,8 +39,9 @@ Notes
 import os
 from pathlib import Path
 
-# Project root is one level up from this spec file
-PROJECT_ROOT = Path(SPECPATH).parent
+# This spec lives at build/windows/alpha-osk.spec — project root is 2 levels up.
+PROJECT_ROOT = Path(SPECPATH).parent.parent
+SPEC_DIR = Path(SPECPATH)
 
 block_cipher = None
 
@@ -61,7 +62,7 @@ a = Analysis(
         # Templates (dashboard)
         (str(PROJECT_ROOT / 'templates'), 'templates'),
         # App icon (used at runtime for system tray)
-        (str(PROJECT_ROOT / 'build' / 'alpha-osk.ico'), '.'),
+        (str(SPEC_DIR / 'alpha-osk.ico'), '.'),
     ],
 
     # Hidden imports that PyInstaller misses
@@ -181,9 +182,9 @@ exe = EXE(
     # Disable UPX for PySide6 DLLs (they don't compress well)
     upx_exclude=['PySide6'],
     # Embed the UIAccess manifest
-    manifest=str(PROJECT_ROOT / 'build' / 'alpha-osk.exe.manifest'),
+    manifest=str(SPEC_DIR / 'alpha-osk.exe.manifest'),
     # Icon for the executable (replace with a professional .ico if desired)
-    icon=str(PROJECT_ROOT / 'build' / 'alpha-osk.ico'),
+    icon=str(SPEC_DIR / 'alpha-osk.ico'),
 )
 
 coll = COLLECT(

@@ -73,26 +73,26 @@
 - [x] **Cross-platform keyboard_bridge.py** — Refactored to use platform layer
 - [x] **Cross-platform keyboard_app.py** — Platform-aware env setup + Win32 WS_EX_NOACTIVATE
 - [x] **Cross-platform run.py** — Venv paths (bin vs Scripts), system dep checks
-- [x] **UIAccess manifest** — `build/alpha-osk.exe.manifest` for EV-signed builds
-- [x] **PyInstaller spec** — `build/alpha-osk.spec` for standalone .exe builds
+- [x] **UIAccess manifest** — `build/windows/alpha-osk.exe.manifest` for EV-signed builds
+- [x] **PyInstaller spec** — `build/windows/alpha-osk.spec` for standalone .exe builds
 - [x] **Cross-platform model storage** — AppData on Windows, .config on Linux
 - [x] **Documentation** — `docs/WINDOWS.md`, `docs/PLATFORM_ARCHITECTURE.md`
 - [x] **Updated all docs** — README, LLM_ONBOARDING, DESIGN for cross-platform
 
 ## Phase 8: Windows Polish ✅
 
-- [x] **Build pipeline** — `build/build_windows.py` (PyInstaller → Sign → NSIS → Verify)
-- [x] **Code signing** — `build/sign.py` with retry logic (matches gitconnect's `sign.js` pattern)
-- [x] **NSIS installer** — `build/installer.nsh` (kill running app, old-version cleanup, shortcuts, AppData prompt)
-- [x] **App icon** — `build/alpha-osk.ico` wired into PyInstaller spec
+- [x] **Build pipeline** — `build/windows/build.py` (PyInstaller → Sign → NSIS → Verify)
+- [x] **Code signing** — `build/windows/sign.py` with retry logic (matches gitconnect's `sign.js` pattern)
+- [x] **NSIS installer** — `build/windows/installer.nsh` (kill running app, old-version cleanup, shortcuts, AppData prompt)
+- [x] **App icon** — `build/windows/alpha-osk.ico` wired into PyInstaller spec
 - [x] **Shortcut helpers** — `create_start_menu_shortcut()`, `create_desktop_shortcut()`, `add_to_startup()`, `remove_from_startup()` in `src/platform/windows.py`
 - [x] **Documentation updated** — `docs/WINDOWS.md` with real eToken signing steps, NSIS details, troubleshooting
 
 ### Remaining (manual steps)
 
-- [ ] **Plug in eToken and run** `python build/build_windows.py` for a signed release
+- [ ] **Plug in eToken and run** `python build/windows/build.py` for a signed release
 - [ ] **Test UIAccess** — Install to Program Files, type into elevated Command Prompt
-- [ ] **Replace placeholder icon** — Swap `build/alpha-osk.ico` with professional design
+- [ ] **Replace placeholder icon** — Swap `build/windows/alpha-osk.ico` with professional design
 - [ ] **Full integration test** on Windows 10 and Windows 11
 
 ## Completed

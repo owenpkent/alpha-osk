@@ -136,7 +136,11 @@ Defines `KeySynthesizerBase` with these abstract methods:
 
 - Detects `xdotool` or `ydotool` on `$PATH`
 - Prefers `ydotool` on Wayland, `xdotool` on X11
-- Uses `subprocess.Popen` for fire-and-forget key injection
+- Uses **synchronous** `subprocess.run` (via the `_run()` helper) for
+  every key event. Ordering matters: a `keydown`/`keyup` pair for a
+  sticky modifier (Ctrl+C flow) must land at the X server in the order
+  Python issued them, and non-blocking `Popen` races lead to stuck
+  modifiers. The ~10 ms cost per event is inaudible at typing cadence.
 
 ### `windows.py` — Windows Backend
 
@@ -155,7 +159,7 @@ Defines `KeySynthesizerBase` with these abstract methods:
 pressKey("a") in QML
     → KeyboardBridge._send_text("a")
         → LinuxKeySynthesizer.send_text("a")
-            → subprocess.Popen(["xdotool", "type", "--clearmodifiers", "a"])
+            → subprocess.run(["xdotool", "type", "--clearmodifiers", "a"])
                 → X11 server receives synthetic KeyPress event
                     → Focused application receives the keystroke
 ```
@@ -165,8 +169,19 @@ For modifier combos (Ctrl+C):
 pressKey("c") with Ctrl active
     → KeyboardBridge._send_key("c")
         → LinuxKeySynthesizer.send_key("c", modifiers=["ctrl"])
-            → subprocess.Popen(["xdotool", "key", "--clearmodifiers", "ctrl+c"])
+            → subprocess.run(["xdotool", "key", "--clearmodifiers", "ctrl+c"])
 ```
+
+Sticky-modifier lifecycle (tap Ctrl on the OSK, tap C, Ctrl auto-releases):
+```
+toggleCtrl()       → xdotool keydown ctrl          (synchronous)
+pressKey("c")      → xdotool key --clearmodifiers ctrl+c
+auto-release ctrl  → xdotool keyup ctrl
+```
+The three calls run synchronously so their X events arrive in issue order;
+`KeyboardBridge.shutdown()` (wired to `QApplication.aboutToQuit`) also
+releases any sticky modifier that was still active at exit so the user's
+real keyboard isn't left feeling "held".
 
 ### Windows: SendInput
 
@@ -189,9 +204,10 @@ pressKey("c") with Ctrl active
             → SendInput(4, array, sizeof(INPUT))
 ```
 
-**Key difference**: Linux fires a subprocess per keystroke (fast enough in
-practice, ~1ms).  Windows calls `SendInput` directly in-process via ctypes
-(~0.01ms).
+**Key difference**: Linux spawns an `xdotool`/`ydotool` subprocess per
+keystroke (~5–15 ms) and waits for it to exit so keydown/keyup events
+can't race. Windows calls `SendInput` directly in-process via ctypes
+(~0.01 ms) and so needs no such serialization.
 
 ---
 
@@ -465,7 +481,7 @@ before creating `QGuiApplication` on all platforms.
 
 ### Why a Python Signing Script Instead of Inline Commands?
 
-**Decision**: Create `build/sign.py` as a dedicated signing tool with
+**Decision**: Create `build/windows/sign.py` as a dedicated signing tool with
 retry logic (matching gitconnect's `build/sign.js`).
 
 **Rationale**:
@@ -474,7 +490,7 @@ retry logic (matching gitconnect's `build/sign.js`).
   process."  Retry logic with exponential backoff solves this reliably.
 - Encapsulating certificate thumbprint, timestamp server, and signtool
   discovery in one file avoids duplication and mistakes.
-- The same script works standalone (`python build/sign.py file.exe`) and
+- The same script works standalone (`python build/windows/sign.py file.exe`) and
   as a library imported by `build_windows.py`.
 
 ---
@@ -503,12 +519,12 @@ retry logic (matching gitconnect's `build/sign.js`).
 
 | File | Purpose |
 |------|---------|
-| `build/alpha-osk.spec` | PyInstaller build specification |
-| `build/alpha-osk.exe.manifest` | UIAccess manifest for EV signing |
-| `build/alpha-osk.ico` | Application icon |
-| `build/sign.py` | Code signing with retry logic (matches gitconnect) |
-| `build/build_windows.py` | Full pipeline: PyInstaller → Sign → NSIS → Verify |
-| `build/installer.nsh` | NSIS installer macros (shortcuts, cleanup) |
+| `build/windows/alpha-osk.spec` | PyInstaller build specification |
+| `build/windows/alpha-osk.exe.manifest` | UIAccess manifest for EV signing |
+| `build/windows/alpha-osk.ico` | Application icon |
+| `build/windows/sign.py` | Code signing with retry logic (matches gitconnect) |
+| `build/windows/build.py` | Full pipeline: PyInstaller → Sign → NSIS → Verify |
+| `build/windows/installer.nsh` | NSIS installer macros (shortcuts, cleanup) |
 
 ### Documentation
 

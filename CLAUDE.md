@@ -39,7 +39,7 @@ User clicks key (QML)
 | `qml/Main.qml` | Root UI — title bar, keyboard rows, prediction bar, resize handles |
 | `qml/components/` | Reusable QML components (KeyButton, settings panels, etc.) |
 | `data/` | Static data: dictionaries, training corpus, keyboard layouts, vocab packs |
-| `build/` | Windows build: PyInstaller spec, UIAccess manifest, signing |
+| `build/` | Packaging pipelines — `build/windows/` (PyInstaller + NSIS + EV signing) and `build/linux/` (PyInstaller + optional AppImage). `build/launcher.py` is the shared frozen-mode entry point. |
 | `tests/` | pytest suite |
 
 ## Prediction Engine
@@ -319,11 +319,11 @@ What's **not** covered: compromise of the EV signing key itself. That requires a
 
 ### Bumping the version
 
-Single source of truth: `src/__version__.py`. `build/build_windows.py` reads from it; the updater compares against it. To ship a new release:
+Single source of truth: `src/__version__.py`. `build/windows/build.py` reads from it; the updater compares against it. To ship a new release:
 
 1. Edit `src/__version__.py` → bump `__version__`.
 2. Update `CHANGELOG.md`.
-3. Commit, run `python build/build_windows.py`, tag, `gh release create`.
+3. Commit, run `python build/windows/build.py`, tag, `gh release create`.
 
 The release-asset filename **must** match `Alpha-OSK-Setup-{version}.exe` exactly — the updater rejects anything else.
 
@@ -350,9 +350,9 @@ See also: `docs/MACROVOX_INTEGRATION.md` (voice dictation), `docs/MODULAR_LAYOUT
 
 Design doc at `docs/FEDERATED_LEARNING.md`. Not yet implemented — Phase 1 (local delta computation) is the next step.
 
-## Building & Signing a Release
+## Building & Signing a Release (Windows)
 
-This is the end-to-end process for shipping a new version. **Do not skip steps** — unsigned builds won't get UIAccess, and forgetting to bump the version means the installer overwrites without proper upgrade logic.
+This is the end-to-end process for shipping a new **Windows** version. For the Linux build pipeline see the [Linux build](#linux-build) section below or `docs/LINUX.md`. **Do not skip steps** — unsigned builds won't get UIAccess, and forgetting to bump the version means the installer overwrites without proper upgrade logic.
 
 ### Prerequisites (one-time setup)
 
@@ -369,7 +369,7 @@ This is the end-to-end process for shipping a new version. **Do not skip steps**
 
 #### 1. Bump the version
 
-The version string is in **one place**: `build/build_windows.py`, the `version` variable inside `build_nsis_installer()` (~line 317). Update it:
+The version string is in **one place**: `build/windows/build.py`, the `version` variable inside `build_nsis_installer()` (~line 317). Update it:
 
 ```python
 version = "1.0.2"  # was "1.0.1"
@@ -387,7 +387,7 @@ Edit `CHANGELOG.md`. Add a new `## [x.y.z] — YYYY-MM-DD` section at the top. C
 #### 3. Commit the version bump + changelog
 
 ```bash
-git add build/build_windows.py CHANGELOG.md
+git add build/windows/build.py CHANGELOG.md
 git commit -m "chore: bump version to x.y.z"
 ```
 
@@ -396,12 +396,12 @@ git commit -m "chore: bump version to x.y.z"
 **Must run from a normal (non-elevated) shell.** The eToken is not visible to admin processes.
 
 ```bash
-python build/build_windows.py
+python build/windows/build.py
 ```
 
 This does, in order:
 1. Checks prerequisites (Python, PyInstaller, NSIS, signtool, eToken certificate)
-2. Runs PyInstaller with `build/alpha-osk.spec` → `dist/alpha-osk/`
+2. Runs PyInstaller with `build/windows/alpha-osk.spec` → `dist/alpha-osk/`
 3. Signs all `.exe` files in `dist/alpha-osk/` with the EV cert
 4. Generates NSIS installer → `release/Alpha-OSK-Setup-x.y.z.exe`
 5. Signs the installer
@@ -459,7 +459,7 @@ gh release create v1.0.2 release/Alpha-OSK-Setup-1.0.2.exe \
 | Certificate | OK Studio Inc. (EV, Sectigo) |
 | Thumbprint | `fc22b5221318f3f3f6b3eb2d969d7f99091557bf` |
 | Timestamp server | `http://timestamp.digicert.com` |
-| Sign script | `build/sign.py` (5 retries, exponential backoff for Defender locks) |
+| Sign script | `build/windows/sign.py` (5 retries, exponential backoff for Defender locks) |
 | What gets signed | All `.exe` in `dist/alpha-osk/` + the final installer `.exe` |
 
 **Why non-elevated?** The SafeNet eToken driver exposes the cert to the current user session only. Elevated (admin) shells can't see it. Always build from a **normal shell**.
@@ -476,12 +476,12 @@ The NSIS installer handles upgrades as follows:
 | Interactive uninstall | Prompts whether to delete `%APPDATA%\alpha-osk` (learned vocabulary and settings). |
 
 Key files:
-- `build/build_windows.py` — orchestrates the full pipeline, generates the `.nsi` script
-- `build/installer.nsh` — NSIS macros for init, install, and uninstall customization
-- `build/sign.py` — signing with retry logic
-- `build/alpha-osk.spec` — PyInstaller specification
-- `build/alpha-osk.exe.manifest` — UIAccess manifest embedded in the exe
-- `build/alpha-osk.ico` — app icon (multi-resolution: 16–256px)
+- `build/windows/build.py` — orchestrates the full pipeline, generates the `.nsi` script
+- `build/windows/installer.nsh` — NSIS macros for init, install, and uninstall customization
+- `build/windows/sign.py` — signing with retry logic
+- `build/windows/alpha-osk.spec` — PyInstaller specification
+- `build/windows/alpha-osk.exe.manifest` — UIAccess manifest embedded in the exe
+- `build/windows/alpha-osk.ico` — app icon (multi-resolution: 16–256px)
 
 ### Troubleshooting builds
 
@@ -491,13 +491,13 @@ Key files:
 | `SignTool Error: file being used` | Defender scanning the exe | `sign.py` retries automatically (5x) |
 | `signtool not found` | Windows SDK not installed | `winget install Microsoft.WindowsSDK` or install via VS Installer |
 | `makensis not found` | NSIS not installed or not on PATH | `winget install NSIS.NSIS` |
-| `ModuleNotFoundError` at runtime | Missing hidden import in spec | Add to `hiddenimports` in `build/alpha-osk.spec` |
+| `ModuleNotFoundError` at runtime | Missing hidden import in spec | Add to `hiddenimports` in `build/windows/alpha-osk.spec` |
 | Installer doesn't remove old version | Same-directory upgrade path broken | Check `IfFileExists "$INSTDIR\\uninstall.exe"` block in generated NSI |
 | UIAccess not working after install | Not in Program Files, or unsigned | Verify: signed + installed to `C:\Program Files\Alpha-OSK` |
 
 ### Bundle size
 
-The PySide6 wheel ships every Qt module — including a 193 MB `Qt6WebEngineCore.dll` we never use. `build/alpha-osk.spec` explicitly excludes the WebEngine / WebView / WebChannel families to keep the installer around 100 MB instead of 165 MB. If you ever add an in-app browser (release-notes view, embedded help, etc.), re-include them in the `excludes` list and re-measure — losing 100 MB of installer in one careless re-include is easy.
+The PySide6 wheel ships every Qt module — including a 193 MB `Qt6WebEngineCore.dll` we never use. `build/windows/alpha-osk.spec` explicitly excludes the WebEngine / WebView / WebChannel families to keep the installer around 100 MB instead of 165 MB. If you ever add an in-app browser (release-notes view, embedded help, etc.), re-include them in the `excludes` list and re-measure — losing 100 MB of installer in one careless re-include is easy.
 
 If you need to verify what's actually in the bundle::
 
@@ -506,7 +506,7 @@ If you need to verify what's actually in the bundle::
 ### Assets & branding
 
 - Source logos: `assets/logo-1024.png`, `assets/logo-2048.png`
-- App icon: `build/alpha-osk.ico` (generated from logo via Pillow)
+- App icon: `build/windows/alpha-osk.ico` (generated from logo via Pillow)
 - Midjourney prompts and icon generation workflow: `docs/BRANDING.md`
 
 To regenerate the `.ico` from a new PNG:
@@ -515,8 +515,41 @@ from PIL import Image
 img = Image.open("assets/logo-1024.png").convert("RGBA")
 sizes = [(256,256),(128,128),(64,64),(48,48),(32,32),(16,16)]
 resized = [img.resize(s, Image.LANCZOS) for s in sizes]
-resized[0].save("build/alpha-osk.ico", format="ICO", sizes=sizes, append_images=resized[1:])
+resized[0].save("build/windows/alpha-osk.ico", format="ICO", sizes=sizes, append_images=resized[1:])
 ```
+
+## Linux build
+
+Linux has its own pipeline in `build/linux/` that mirrors the Windows
+one but skips the NSIS/signing legs (AppImage is unsigned by design,
+and EV signing is Windows-specific).
+
+```bash
+venv/bin/pip install pyinstaller          # one-time
+
+python build/linux/build.py               # PyInstaller bundle → dist/alpha-osk/
+python build/linux/build.py --appimage --fetch-appimagetool
+                                          # + AppImage → release/Alpha-OSK-<ver>-x86_64.AppImage
+```
+
+Key files:
+- `build/linux/alpha-osk.spec` — PyInstaller spec (same exclusions as
+  the Windows spec: torch, transformers, QtWebEngine, etc.).
+- `build/linux/build.py` — driver; optionally downloads `appimagetool`
+  to `~/.cache/alpha-osk-build/` on first `--appimage` run.
+- `build/linux/AppRun` — AppImage entry script that points `QT_PLUGIN_PATH`
+  / `QML2_IMPORT_PATH` at the bundled Qt and defaults
+  `QT_QPA_PLATFORM=xcb`.
+- `build/linux/alpha-osk.desktop` — `Categories=Utility;Accessibility;`
+  so the app surfaces in accessibility menus once the AppImage is
+  integrated.
+
+`xdotool` / `ydotool` are **not** bundled — they're OS-level tools that
+must be installed on the host. The bundle will start without them but
+key synthesis will silently no-op.
+
+See `docs/LINUX.md` for deeper coverage (troubleshooting, AppImage
+internals, spec customization).
 
 ## Git Conventions
 
@@ -532,6 +565,7 @@ Conventional commits: `feat:`, `fix:`, `docs:`, `refactor:`, `chore:`
 - The title bar has play/pause (privacy), ⚙ (settings), minimize, and close. Help and visualization are in Settings → Tools.
 - Predictions clear when the user switches apps — monitored via `GetForegroundWindow()` polling every 250ms in `keyboard_bridge.py`. The QML `onActiveChanged` doesn't fire reliably with `WS_EX_NOACTIVATE`, so Python handles it. Full context reset on app switch (`_current_word`, `_context_buffer`, `_sentence_buffer`).
 - Prediction selection uses **suffix-only typing** — if the user typed "hel" and picks "hello", only "lo " is sent. No Backspace (empties Slack compose), no Shift+Left (doesn't work in terminals). Falls back to `replace_text()` only when the prediction doesn't match the typed prefix.
-- **Shutdown ordering matters** — `keyboard_app.py` wires `aboutToQuit` to run `savePredictionModel`, `saveAnalytics`, then `bridge.shutdown()` in that order. `shutdown()` stops `_password_timer` and `_foreground_timer` so a final `timeout` can't run against a half-torn-down predictor. Any new long-lived QTimer in `KeyboardBridge` should also be stopped there.
+- **Shutdown ordering matters** — `keyboard_app.py` wires `aboutToQuit` to run `savePredictionModel`, `saveAnalytics`, then `bridge.shutdown()` in that order. `shutdown()` stops `_password_timer` and `_foreground_timer` so a final `timeout` can't run against a half-torn-down predictor, **and** releases any sticky Ctrl/Alt/Win that was still "active" so the OS doesn't see a phantom-held modifier after quit. Any new long-lived QTimer in `KeyboardBridge` should also be stopped there.
+- **Linux key synthesis is synchronous** — `src/platform/linux.py` wraps every `xdotool`/`ydotool` invocation in `subprocess.run` (not `Popen`). Ordering between `keydown` / chord / `keyup` must be preserved; non-blocking subprocesses race and leave modifiers stuck. If you add a new send path, use the module-level `_run()` helper. Windows (`SendInput` via ctypes) has no analogous concern — events are atomic.
 - **External callers reach `NgramPredictor` via `HybridPredictor` forwarders** — don't access `keyboard._predictor._ngram` from `keyboard_bridge.py` or new code. Use `get_unigram_freqs()` / `get_capitalized()` or add a new forwarder. The swipe path is the canonical example (see `processSwipe`).
 - **`NgramPredictor._user_total` is an invariant** — every mutation to `user_vocab` (in `learn`, `learn_word`, `_apply_decay`, `clear_user_data`, `load`) must keep it equal to `sum(user_vocab.values())`. `predict()` reads it every keystroke; the consistency tests in `tests/test_ngram_predictor.py::TestUserTotalIncremental` will catch a missed site.

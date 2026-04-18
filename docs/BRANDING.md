@@ -103,8 +103,8 @@ Derived from the app's default "Dark" theme and Ocean/Amethyst themes:
    ```bash
    magick icon-256.png -define icon:auto-resize=256,128,64,48,32,16 alpha-osk.ico
    ```
-5. Replace `build/alpha-osk.ico` with the new icon
-6. Rebuild: `python build/build_windows.py`
+5. Replace `build/windows/alpha-osk.ico` with the new icon
+6. Rebuild: `python build/windows/build.py`
 
 ## Tray Icon Notes
 

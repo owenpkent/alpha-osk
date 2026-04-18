@@ -105,6 +105,7 @@ Alpha-OSK combines the best of accessibility-first design with modern AI.
   - Flower for federated learning
 - **Dashboard:** HTML/CSS (served via Python)
 - **Windows Build:** PyInstaller + EV code signing for UIAccess
+- **Linux Build:** PyInstaller bundle + optional AppImage
 
 ---
 
@@ -204,9 +205,20 @@ alpha-osk/
 ├── qml/
 │   ├── Main.qml           # Main keyboard window
 │   └── components/        # Reusable QML components
-├── build/                 # ★ Windows build configuration
-│   ├── alpha-osk.exe.manifest  # UIAccess manifest (EV signing)
-│   └── alpha-osk.spec    # PyInstaller build spec
+├── build/                 # ★ Packaging pipelines (per-platform)
+│   ├── launcher.py              # Shared PyInstaller entry point
+│   ├── linux/                   # PyInstaller spec + AppImage assets
+│   │   ├── alpha-osk.spec
+│   │   ├── build.py             #   python build/linux/build.py [--appimage]
+│   │   ├── AppRun
+│   │   └── alpha-osk.desktop
+│   └── windows/                 # PyInstaller spec + NSIS + EV signing
+│       ├── alpha-osk.spec
+│       ├── alpha-osk.exe.manifest
+│       ├── alpha-osk.ico
+│       ├── build.py             #   python build/windows/build.py
+│       ├── installer.nsh
+│       └── sign.py
 ├── data/                  # ★ Training data (see data/README.md)
 │   ├── base_dictionary.txt        # Unigram vocabulary (one word/line)
 │   ├── common_bigrams.txt         # Word pairs for prediction
@@ -216,6 +228,7 @@ alpha-osk/
 ├── templates/             # Project dashboard (HTML)
 └── docs/                  # Extended documentation
     ├── WINDOWS.md         # ★ Windows setup & signing guide
+    ├── LINUX.md           # ★ Linux build (PyInstaller + AppImage)
     ├── PLATFORM_ARCHITECTURE.md  # ★ Cross-platform design
     └── ...
 ```

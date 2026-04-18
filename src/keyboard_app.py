@@ -55,12 +55,21 @@ def qml_path() -> Path:
 
 
 def _icon_path() -> Path | None:
-    """Find the app icon for the system tray."""
+    """Find the app icon for the system tray.
+
+    Prefers ``.ico`` on Windows and falls back to the PNG shipped in
+    ``assets/`` on Linux (the PyInstaller Linux spec copies it into
+    ``_internal/assets/`` next to the executable).
+    """
     root = _project_root()
+    exe_dir = Path(sys.executable).parent
     candidates = [
-        root / "build" / "alpha-osk.ico",
+        root / "build" / "windows" / "alpha-osk.ico",
         root / "alpha-osk.ico",
-        Path(sys.executable).parent / "alpha-osk.ico",
+        exe_dir / "alpha-osk.ico",
+        root / "assets" / "logo-1024.png",
+        exe_dir / "_internal" / "assets" / "logo-1024.png",
+        exe_dir / "assets" / "logo-1024.png",
     ]
     for p in candidates:
         if p.exists():

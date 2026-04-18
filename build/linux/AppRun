@@ -1,0 +1,26 @@
+#!/bin/bash
+# AppRun entry point for the Alpha-OSK AppImage.
+#
+# AppImages are extracted into a directory whose path is exposed as
+# $APPDIR. The PyInstaller bundle lives at $APPDIR/usr/bin/alpha-osk
+# (a single-directory layout), so we just exec its launcher after
+# pointing Qt at the bundled plugins and QML.
+
+set -e
+
+HERE="$(dirname "$(readlink -f "$0")")"
+
+# PyInstaller's onedir layout sits under usr/bin. The bundled _internal
+# directory next to the executable carries all Qt plugins/libraries.
+export PATH="$HERE/usr/bin:$PATH"
+
+# Help Qt find bundled plugins / QML imports when the AppImage is moved.
+export QT_PLUGIN_PATH="$HERE/usr/bin/_internal/PySide6/Qt/plugins:${QT_PLUGIN_PATH}"
+export QML2_IMPORT_PATH="$HERE/usr/bin/_internal/PySide6/Qt/qml:${QML2_IMPORT_PATH}"
+
+# Prefer X11 when running under XWayland-capable sessions; users on pure
+# Wayland can override by exporting QT_QPA_PLATFORM before launching.
+: "${QT_QPA_PLATFORM:=xcb}"
+export QT_QPA_PLATFORM
+
+exec "$HERE/usr/bin/alpha-osk" "$@"

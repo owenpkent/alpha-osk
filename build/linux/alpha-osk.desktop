@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Alpha-OSK
+GenericName=On-Screen Keyboard
+Comment=AI-powered on-screen keyboard for accessibility
+Exec=alpha-osk
+Icon=alpha-osk
+Terminal=false
+Categories=Utility;Accessibility;
+Keywords=keyboard;osk;accessibility;a11y;prediction;
+StartupNotify=false
+StartupWMClass=alpha-osk

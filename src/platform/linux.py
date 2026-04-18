@@ -44,6 +44,27 @@ from .base import KeySynthesizerBase
 _logger = logging.getLogger("LinuxKeySynthesizer")
 
 
+def _run(cmd: List[str]) -> None:
+    """Run a key-synthesis command synchronously.
+
+    Modifier events MUST be ordered correctly relative to the key events
+    they wrap — if ``keydown ctrl`` / ``keyup ctrl`` are fired as
+    ``subprocess.Popen`` with no wait, they race each other and the
+    target app can see the ``keyup`` first, leaving Ctrl stuck held.
+    ``subprocess.run`` blocks until the tool exits (~5–15 ms), which is
+    negligible for key input and guarantees event ordering.
+    """
+    try:
+        subprocess.run(
+            cmd,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+    except Exception as exc:
+        _logger.error("Command failed %s: %s", cmd, exc)
+
+
 class LinuxKeySynthesizer(KeySynthesizerBase):
     """
     Linux key synthesis via xdotool (X11) or ydotool (Wayland).
@@ -134,32 +155,17 @@ class LinuxKeySynthesizer(KeySynthesizerBase):
         # Map "win" → "super" for xdotool
         mapped_mods = [("super" if m == "win" else m) for m in modifiers]
 
-        try:
-            if self._tool == "xdotool":
-                if mapped_mods:
-                    combo = "+".join(mapped_mods + [key_name])
-                    self._log_send(f"xdotool key {combo}")
-                    subprocess.Popen(
-                        ["xdotool", "key", "--clearmodifiers", combo],
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL,
-                    )
-                else:
-                    self._log_send(f"xdotool key {key_name}")
-                    subprocess.Popen(
-                        ["xdotool", "key", "--clearmodifiers", key_name],
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL,
-                    )
-            elif self._tool == "ydotool":
-                self._log_send(f"ydotool key {key_name}")
-                subprocess.Popen(
-                    ["ydotool", "key", key_name],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                )
-        except Exception as e:
-            _logger.error("Failed to send key %s: %s", key_name, e)
+        if self._tool == "xdotool":
+            if mapped_mods:
+                combo = "+".join(mapped_mods + [key_name])
+                self._log_send(f"xdotool key {combo}")
+                _run(["xdotool", "key", "--clearmodifiers", combo])
+            else:
+                self._log_send(f"xdotool key {key_name}")
+                _run(["xdotool", "key", "--clearmodifiers", key_name])
+        elif self._tool == "ydotool":
+            self._log_send(f"ydotool key {key_name}")
+            _run(["ydotool", "key", key_name])
 
     def send_text(self, text: str) -> None:
         """
@@ -173,69 +179,36 @@ class LinuxKeySynthesizer(KeySynthesizerBase):
         if not self._tool:
             return
 
-        try:
-            if self._tool == "xdotool":
-                self._log_send(f"xdotool type '{text}'")
-                subprocess.Popen(
-                    ["xdotool", "type", "--clearmodifiers", text],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                )
-            elif self._tool == "ydotool":
-                self._log_send(f"ydotool type '{text}'")
-                subprocess.Popen(
-                    ["ydotool", "type", text],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                )
-        except Exception as e:
-            _logger.error("Failed to type text: %s", e)
+        if self._tool == "xdotool":
+            self._log_send(f"xdotool type '{text}'")
+            _run(["xdotool", "type", "--clearmodifiers", text])
+        elif self._tool == "ydotool":
+            self._log_send(f"ydotool type '{text}'")
+            _run(["ydotool", "type", text])
 
     def hold_modifier(self, key_name: str) -> None:
         """Send a modifier key-down so it stays held at the OS level."""
         if not self._tool:
             return
         mapped = "super" if key_name == "win" else key_name
-        try:
-            if self._tool == "xdotool":
-                self._log_send(f"xdotool keydown {mapped}")
-                subprocess.Popen(
-                    ["xdotool", "keydown", mapped],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                )
-            elif self._tool == "ydotool":
-                self._log_send(f"ydotool key --key-down {mapped}")
-                subprocess.Popen(
-                    ["ydotool", "key", "--key-down", mapped],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                )
-        except Exception as e:
-            _logger.error("Failed to hold modifier %s: %s", key_name, e)
+        if self._tool == "xdotool":
+            self._log_send(f"xdotool keydown {mapped}")
+            _run(["xdotool", "keydown", mapped])
+        elif self._tool == "ydotool":
+            self._log_send(f"ydotool key --key-down {mapped}")
+            _run(["ydotool", "key", "--key-down", mapped])
 
     def release_modifier(self, key_name: str) -> None:
         """Send a modifier key-up to release a held modifier."""
         if not self._tool:
             return
         mapped = "super" if key_name == "win" else key_name
-        try:
-            if self._tool == "xdotool":
-                self._log_send(f"xdotool keyup {mapped}")
-                subprocess.Popen(
-                    ["xdotool", "keyup", mapped],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                )
-            elif self._tool == "ydotool":
-                self._log_send(f"ydotool key --key-up {mapped}")
-                subprocess.Popen(
-                    ["ydotool", "key", "--key-up", mapped],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                )
-        except Exception as e:
-            _logger.error("Failed to release modifier %s: %s", key_name, e)
+        if self._tool == "xdotool":
+            self._log_send(f"xdotool keyup {mapped}")
+            _run(["xdotool", "keyup", mapped])
+        elif self._tool == "ydotool":
+            self._log_send(f"ydotool key --key-up {mapped}")
+            _run(["ydotool", "key", "--key-up", mapped])
 
     def send_combination(self, keys: List[str]) -> None:
         """

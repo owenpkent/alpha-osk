@@ -188,7 +188,7 @@ All **three** conditions must be met:
 
 1. **UIAccess manifest**: The `.exe` must embed a manifest with
    `uiAccess="true"`.  Alpha-OSK's manifest is at
-   `build/alpha-osk.exe.manifest`.
+   `build/windows/alpha-osk.exe.manifest`.
 
 2. **EV code signing**: The `.exe` must be signed with an **Extended
    Validation (EV)** code signing certificate.  Standard OV certificates
@@ -247,32 +247,32 @@ The build script handles everything — PyInstaller, signing, and NSIS packaging
 
 ```powershell
 # Full signed release (eToken must be plugged in)
-python build/build_windows.py
+python build/windows/build.py
 
 # Unsigned dev build (no eToken needed)
-python build/build_windows.py --no-sign
+python build/windows/build.py --no-sign
 
 # Re-sign / re-package without rebuilding
-python build/build_windows.py --skip-build
+python build/windows/build.py --skip-build
 
 # Verify signatures on existing build
-python build/build_windows.py --verify-only
+python build/windows/build.py --verify-only
 
 # Portable only (skip NSIS installer)
-python build/build_windows.py --no-installer
+python build/windows/build.py --no-installer
 ```
 
 ### Manual Build (Step by Step)
 
 ```powershell
 # 1. Build with PyInstaller
-pyinstaller build/alpha-osk.spec --noconfirm
+pyinstaller build/windows/alpha-osk.spec --noconfirm
 
 # 2. Sign all .exe/.dll in the output
-python build/sign.py dist/alpha-osk/
+python build/windows/sign.py dist/alpha-osk/
 
 # 3. Verify
-python build/sign.py dist/alpha-osk/alpha-osk.exe --verify
+python build/windows/sign.py dist/alpha-osk/alpha-osk.exe --verify
 ```
 
 ### Output
@@ -293,7 +293,7 @@ python build/sign.py dist/alpha-osk/alpha-osk.exe --verify
 
 ### Build Options
 
-The `.spec` file (`build/alpha-osk.spec`) can be customized:
+The `.spec` file (`build/windows/alpha-osk.spec`) can be customized:
 
 | Setting | Default | Description |
 |---------|---------|-------------|
@@ -319,7 +319,7 @@ Uses the **same EV certificate and signing workflow** as
 | **Hardware** | SafeNet USB eToken (physical USB key) |
 | **Thumbprint** | `fc22b5221318f3f3f6b3eb2d969d7f99091557bf` |
 | **Timestamp server** | `http://timestamp.digicert.com` |
-| **Sign script** | `build/sign.py` (retry logic for Defender file locks) |
+| **Sign script** | `build/windows/sign.py` (retry logic for Defender file locks) |
 
 ### What Gets Signed
 
@@ -343,7 +343,7 @@ directory — including the bundled Python DLLs, PySide6 DLLs, and the main
 **Build (from a normal, non-elevated PowerShell):**
 
 ```powershell
-python build/build_windows.py
+python build/windows/build.py
 ```
 
 > **Why non-elevated?** The SafeNet eToken driver makes the certificate
@@ -355,16 +355,16 @@ python build/build_windows.py
 
 ```powershell
 # Verify main exe
-python build/sign.py dist/alpha-osk/alpha-osk.exe --verify
+python build/windows/sign.py dist/alpha-osk/alpha-osk.exe --verify
 
 # Verify installer
-python build/sign.py release/Alpha-OSK-Setup-{version}.exe --verify
+python build/windows/sign.py release/Alpha-OSK-Setup-{version}.exe --verify
 
 # Quick PowerShell check
 (Get-AuthenticodeSignature "dist\alpha-osk\alpha-osk.exe").Status
 ```
 
-### `build/sign.py` — Retry Script
+### `build/windows/sign.py` — Retry Script
 
 The signing script handles Windows Defender temporarily locking `.exe` files
 during scanning (same problem gitconnect's `sign.js` solves).  Key behaviour:
@@ -397,8 +397,8 @@ The build script generates a proper NSIS installer that:
 - **Registers in Add/Remove Programs** for clean uninstall.
 - **Asks about AppData** on uninstall (keep learned vocabulary or delete).
 
-The installer customizations live in `build/installer.nsh`, following the
-same macro patterns as gitconnect's `build/installer.nsh`.
+The installer customizations live in `build/windows/installer.nsh`, following the
+same macro patterns as gitconnect's `build/windows/installer.nsh`.
 
 ---
 
@@ -566,8 +566,8 @@ Or check the startup log output:
 | `src/keyboard_app.py` | MODIFIED — Cross-platform env setup, Win32 window styles |
 | `src/prediction/hybrid_predictor.py` | MODIFIED — Cross-platform model dir |
 | `run.py` | MODIFIED — Cross-platform venv paths and dep checks |
-| `build/alpha-osk.exe.manifest` | NEW — UIAccess manifest for EV signing |
-| `build/alpha-osk.spec` | NEW — PyInstaller build specification |
+| `build/windows/alpha-osk.exe.manifest` | NEW — UIAccess manifest for EV signing |
+| `build/windows/alpha-osk.spec` | NEW — PyInstaller build specification |
 
 ### Key Design Decisions
 

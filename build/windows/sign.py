@@ -8,8 +8,8 @@ gitconnect's ``build/sign.js``).
 
 Usage::
 
-    python build/sign.py path/to/file.exe
-    python build/sign.py path/to/file.exe --verify
+    python build/windows/sign.py path/to/file.exe
+    python build/windows/sign.py path/to/file.exe --verify
 
 The script:
 
@@ -265,9 +265,9 @@ def main() -> int:
 
     Usage::
 
-        python build/sign.py file.exe           # Sign a single file
-        python build/sign.py file.exe --verify   # Verify a signature
-        python build/sign.py dist/alpha-osk/     # Sign all .exe/.dll in dir
+        python build/windows/sign.py file.exe           # Sign a single file
+        python build/windows/sign.py file.exe --verify   # Verify a signature
+        python build/windows/sign.py dist/alpha-osk/     # Sign all .exe/.dll in dir
     """
     import argparse
 

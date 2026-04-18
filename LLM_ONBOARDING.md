@@ -131,11 +131,11 @@ User types key → Fuzzy Recognition (spatial correction)
 | `src/prediction/ppm_predictor.py` | Character-level PPM (Dasher algorithm) |
 | `src/prediction/fuzzy_recognizer.py` | Spatial error correction + accessibility profiles |
 | `qml/Main.qml` | Main UI — modular with toggleable panels |
-| `build/alpha-osk.exe.manifest` | Windows UIAccess manifest for EV signing |
-| `build/alpha-osk.spec` | PyInstaller build specification |
-| `build/build_windows.py` | Full build pipeline: PyInstaller → Sign → NSIS → Verify |
-| `build/sign.py` | Code signing with retry logic (matches gitconnect pattern) |
-| `build/installer.nsh` | NSIS installer macros (shortcuts, cleanup) |
+| `build/windows/alpha-osk.exe.manifest` | Windows UIAccess manifest for EV signing |
+| `build/windows/alpha-osk.spec` | PyInstaller build specification |
+| `build/windows/build.py` | Full build pipeline: PyInstaller → Sign → NSIS → Verify |
+| `build/windows/sign.py` | Code signing with retry logic (matches gitconnect pattern) |
+| `build/windows/installer.nsh` | NSIS installer macros (shortcuts, cleanup) |
 | `docs/WINDOWS.md` | Windows setup, signing, and deployment guide |
 | `docs/PLATFORM_ARCHITECTURE.md` | Cross-platform design rationale and decisions |
 
@@ -205,7 +205,7 @@ That's it! No AI/LLM download required. Predictions work out of the box with n-g
 ### Building a Windows .exe (with UIAccess)
 ```powershell
 pip install pyinstaller
-pyinstaller build/alpha-osk.spec
+pyinstaller build/windows/alpha-osk.spec
 # Then EV code-sign and install to Program Files — see docs/WINDOWS.md
 ```
 

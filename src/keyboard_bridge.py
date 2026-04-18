@@ -760,6 +760,12 @@ class KeyboardBridge(QObject):
         ``self._predictor``) and crash the exit path.  Calling
         ``shutdown`` from ``QApplication.aboutToQuit`` guarantees the
         timers are stopped while the bridge is still intact.
+
+        Also releases any modifier keys that were held at the OS level
+        via sticky toggles (Ctrl, Alt, Win). Without this, quitting with
+        Ctrl "active" leaves the X server / Wayland compositor thinking
+        Ctrl is physically held — so the user's real keyboard behaves as
+        though Ctrl is stuck until they press and release it manually.
         """
         for timer in (
             getattr(self, "_password_timer", None),
@@ -770,6 +776,16 @@ class KeyboardBridge(QObject):
                     timer.stop()
                 except RuntimeError:
                     pass  # already deleted by Qt; harmless
+
+        if self._ctrl_active:
+            self._synth.release_modifier("ctrl")
+            self._ctrl_active = False
+        if self._alt_active:
+            self._synth.release_modifier("alt")
+            self._alt_active = False
+        if self._win_active:
+            self._synth.release_modifier("win")
+            self._win_active = False
 
     @Slot()
     def clearUserData(self) -> None:
