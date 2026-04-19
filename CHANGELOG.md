@@ -4,6 +4,9 @@ All notable changes to Alpha-OSK are documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+- **Edit-prediction popup no longer dismisses on the first OSK keystroke.** The popup's `closePolicy` included `Popup.CloseOnPressOutside`, so every click on an OSK character or arrow-row key registered as a "press outside the popup" and closed it before the keystroke could land. Dropped `CloseOnPressOutside` from the policy and added an explicit ✕ cancel button next to the ✓ confirm button; Escape still dismisses too.
+
 ### Added
 - **Prediction pill reveals full word on hover when truncated.** Long predictions are elided with `Text.ElideRight` when the pill is narrower than the word (common at high prediction counts or narrow window widths). Hovering over a truncated pill now surfaces a tooltip with the full word after a 400 ms delay. Gated on `predText.truncated` so short words that already fit don't trigger a redundant tooltip.
 - **Linux: atomic prediction replacement via `replace_text()`.** Picking a prediction whose casing or prefix differs from what was typed (e.g. "iph" → "iPhone") used to fall through to sequential `xdotool key BackSpace` calls, which raced with xdotool's subprocess latency and produced visible stuttering / apparent duplicated characters in fast typers' sessions. `LinuxKeySynthesizer.replace_text()` now chains N `shift+Left` chords into a single `xdotool key` invocation then a separate `xdotool type`, mirroring the Windows single-`SendInput` path. Wayland / ydotool gets the equivalent `--key-down shift` → `Left`×N → `--key-up shift` → `type` sequence.

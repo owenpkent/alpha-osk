@@ -1155,11 +1155,16 @@ Window {
             parent: Overlay.overlay
             x: (root.width - width) / 2
             y: 36
-            width: 260
+            width: 290
             height: 46
             modal: true
             dim: false
-            closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+            // Escape or the ✕ button dismisses. We intentionally do NOT
+            // include CloseOnPressOutside — the user edits this field by
+            // clicking OSK keys, and every OSK key click is a "press
+            // outside" that would otherwise slam the popup shut before
+            // the keystroke took effect.
+            closePolicy: Popup.CloseOnEscape
 
             background: Rectangle {
                 color: "#252535"
@@ -1230,6 +1235,32 @@ Window {
                             }
                             predEditPopup.close()
                         }
+                    }
+                }
+
+                // Cancel button (dismiss without saving)
+                Rectangle {
+                    width: 32
+                    height: 32
+                    radius: 6
+                    color: cancelMa.containsMouse ? "#6a2a2a" : "#3e1e1e"
+                    border.color: "#a44"
+                    border.width: 1
+
+                    Text {
+                        anchors.centerIn: parent
+                        text: "\u2715"
+                        font.pixelSize: 14
+                        font.weight: Font.Bold
+                        color: "#f88"
+                    }
+
+                    MouseArea {
+                        id: cancelMa
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: predEditPopup.close()
                     }
                 }
             }
