@@ -16,10 +16,20 @@ all expose password state through UIA).  Falls back to the Win32
 
 Linux
 -----
-Not yet implemented — returns False.  Users should use the manual
-privacy-mode toggle for now.
+Uses AT-SPI 2 via PyGObject (``gi.repository.Atspi``).  An event
+listener running on a dedicated GLib thread fires whenever focus
+moves; we read each focused accessible's state set and cache whether
+``STATE_PASSWORD_TEXT`` is set.  Works for GTK (GtkEntry with
+``visibility=false``), Qt (QLineEdit in Password echo mode), and
+browsers that expose accessibility metadata (Firefox, Chromium).
 
-Dependencies: none beyond Python's standard library (``ctypes``).
+Requires ``gir1.2-atspi-2.0`` + ``python3-gi`` on the host *and* the
+at-spi-2 bus running (both are default on Ubuntu GNOME).  If
+PyGObject or the bus is absent, falls back silently to the null
+detector and users can still toggle privacy mode manually.
+
+Dependencies: ``ctypes`` (Windows), optional ``gi.repository.Atspi``
+(Linux).
 """
 
 from __future__ import annotations
@@ -62,6 +72,17 @@ def _create_detector() -> _Detector:
             return det
         _logger.info("Password detection: Windows Win32 fallback")
         return _WindowsWin32Detector()
+    if sys.platform.startswith("linux"):
+        det_linux = _LinuxATSPIDetector()
+        if det_linux.available:
+            _logger.info("Password detection: Linux AT-SPI")
+            return det_linux
+        _logger.info(
+            "Password detection: AT-SPI unavailable — "
+            "install python3-gi + gir1.2-atspi-2.0, or use the "
+            "manual privacy toggle."
+        )
+        return _NullDetector()
     _logger.info("Password detection: not available on this platform")
     return _NullDetector()
 
@@ -73,6 +94,113 @@ def _create_detector() -> _Detector:
 class _NullDetector:
     def check(self) -> bool:
         return False
+
+
+# ====================================================================== #
+#  Linux — AT-SPI 2 via PyGObject
+# ====================================================================== #
+
+class _LinuxATSPIDetector:
+    """Detect password fields via AT-SPI 2 focus events.
+
+    AT-SPI delivers focus events through a GLib main loop.  Running
+    that loop on the Qt thread would clash (two main loops, one set of
+    dbus sockets), so we spawn a daemon thread that owns the loop and
+    updates ``_is_password`` on each focus-change event.  The Qt side
+    only ever reads the flag — no locking needed for a single bool on
+    CPython.
+
+    Event source of truth: ``object:state-changed:focused`` fires with
+    the newly-focused accessible as ``event.source``.  We read its
+    state set and look for ``Atspi.StateType.PASSWORD_TEXT``.  When
+    focus leaves a password field we flip back to False on the next
+    focus event (including refocus onto a non-password widget).
+    """
+
+    def __init__(self) -> None:
+        self.available = False
+        self._is_password = False
+        self._Atspi = None  # type: ignore[assignment]
+
+        try:
+            import gi
+            gi.require_version("Atspi", "2.0")
+            from gi.repository import Atspi  # type: ignore[import-not-found]
+        except Exception as exc:
+            _logger.debug("AT-SPI import failed: %s", exc)
+            return
+
+        # Atspi.init() returns 0 on success, non-zero if the bus isn't
+        # reachable (no at-spi-2-core running, or dbus session missing).
+        try:
+            init_rc = Atspi.init()
+        except Exception as exc:
+            _logger.debug("Atspi.init raised: %s", exc)
+            return
+        if init_rc not in (0, 1):  # 0 = first init, 1 = already inited
+            _logger.debug("Atspi.init returned %s", init_rc)
+            return
+
+        self._Atspi = Atspi
+        if not self._start_listener_thread():
+            return
+        self.available = True
+
+    def _start_listener_thread(self) -> bool:
+        """Spin up the GLib main loop owning the AT-SPI event listener."""
+        import threading
+
+        def run() -> None:
+            Atspi = self._Atspi
+            try:
+                listener = Atspi.EventListener.new(self._on_focus_event)
+                listener.register("object:state-changed:focused")
+                # focus: is the legacy event name — some toolkits still emit it.
+                listener.register("focus:")
+                Atspi.event_main()  # blocks until Atspi.event_quit()
+            except Exception as exc:
+                _logger.debug("AT-SPI listener thread died: %s", exc)
+
+        try:
+            t = threading.Thread(
+                target=run, name="atspi-focus", daemon=True
+            )
+            t.start()
+            return True
+        except Exception as exc:
+            _logger.debug("Failed to start AT-SPI thread: %s", exc)
+            return False
+
+    def _on_focus_event(self, event: Any) -> None:
+        """Focus-change callback. Runs on the GLib thread.
+
+        For ``state-changed:focused`` events AT-SPI sets
+        ``event.detail1 == 1`` when focus arrived on the source, and 0
+        when focus left it.  Legacy ``focus:`` events only fire on
+        arrival.  We only update state on arrival — a defocus event
+        says nothing about the new focus target.
+        """
+        try:
+            # Ignore defocus events; the next arrival event will tell us
+            # what to do.
+            name = getattr(event, "type", "") or ""
+            if name.startswith("object:state-changed:focused"):
+                if getattr(event, "detail1", 0) == 0:
+                    return
+
+            source = getattr(event, "source", None)
+            if source is None:
+                return
+            state_set = source.get_state_set()
+            self._is_password = bool(
+                state_set.contains(self._Atspi.StateType.PASSWORD_TEXT)
+            )
+        except Exception:
+            # Any per-event failure shouldn't kill the listener.
+            pass
+
+    def check(self) -> bool:
+        return self._is_password
 
 
 # ====================================================================== #

@@ -240,3 +240,48 @@ class LinuxKeySynthesizer(KeySynthesizerBase):
         # Last key is the action key; everything before is a modifier
         *modifiers, action_key = keys
         self.send_key(action_key, modifiers=modifiers if modifiers else None)
+
+    def replace_text(self, backspace_count: int, text: str) -> None:
+        """Atomically select-and-replace *backspace_count* chars with *text*.
+
+        Mirrors the Windows SendInput path: select N characters with
+        Shift+Left, then type the replacement so the selection is
+        overwritten in one motion.  Using Shift+Left instead of
+        Backspace keeps the input non-empty — Slack/Teams close their
+        compose area when a field is emptied between keystrokes.
+
+        xdotool: a single ``xdotool key`` invocation runs N ``shift+Left``
+        chords in order; each chord is applied-then-released atomically
+        by xdotool, so no stray modifier can leak out if the process is
+        killed mid-call.  Shelling out twice (one ``key`` + one ``type``)
+        is still race-free because `_run` blocks on each command.
+
+        ydotool: there is no chord-chain syntax, so we frame the N Left
+        presses with explicit ``--key-down shift`` / ``--key-up shift``.
+        If the process dies between the two, shift would stick — not
+        worse than the pre-existing sticky-modifier hold path.
+        """
+        if not self._tool:
+            return
+        if backspace_count <= 0:
+            self.send_text(text)
+            return
+
+        if self._tool == "xdotool":
+            chords = ["shift+Left"] * backspace_count
+            self._log_send(
+                f"xdotool key shift+Left×{backspace_count} + type '{text}'"
+            )
+            _run(["xdotool", "key", "--clearmodifiers", *chords])
+            if text:
+                _run(["xdotool", "type", "--clearmodifiers", text])
+        elif self._tool == "ydotool":
+            self._log_send(
+                f"ydotool shift+Left×{backspace_count} + type '{text}'"
+            )
+            _run(["ydotool", "key", "--key-down", "shift"])
+            for _ in range(backspace_count):
+                _run(["ydotool", "key", "Left"])
+            _run(["ydotool", "key", "--key-up", "shift"])
+            if text:
+                _run(["ydotool", "type", text])

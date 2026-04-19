@@ -12,6 +12,9 @@ The Windows counterpart lives in [WINDOWS.md](WINDOWS.md).
 sudo apt install xdotool    # X11 (most desktops)
 sudo apt install ydotool    # Wayland (requires user-space daemon setup)
 
+# Optional: enable password-field auto-detection (see Privacy Mode below)
+sudo apt install python3-gi gir1.2-atspi-2.0
+
 # Launch — run.py auto-creates a venv and installs PySide6
 python run.py
 ```
@@ -22,6 +25,64 @@ out of the box. Wayland users who prefer `ydotool` can override it:
 ```bash
 QT_QPA_PLATFORM=wayland python run.py
 ```
+
+---
+
+## Platform-parity features
+
+Features originally written for Windows that now also work on Linux:
+
+| Feature | X11 | Wayland | Mechanism |
+|---------|-----|---------|-----------|
+| Atomic prediction replacement (`replace_text`) | ✅ | ✅ | `xdotool key shift+Left…` chord chain; `ydotool --key-down shift` + Left×N + `--key-up shift` |
+| App-switch context reset | ✅ | ❌ | `xdotool getactivewindow` polled every 250 ms; Wayland compositors don't expose focused window to unprivileged clients |
+| Password-field auto privacy mode | ✅ | ✅ (if toolkit speaks AT-SPI) | `gi.repository.Atspi` focus listener — needs `python3-gi` + `gir1.2-atspi-2.0` |
+| Sticky-modifier hold / release | ✅ | ✅ | `xdotool keydown/keyup` or `ydotool key --key-down/--key-up` |
+| Defensive modifier release on startup | ✅ | ✅ | `LinuxKeySynthesizer.reset_modifier_state()` (see Troubleshooting) |
+
+### Privacy Mode (password auto-detection)
+
+When Alpha-OSK can see that the focused text field is a password box, it
+suppresses prediction learning and clears typing state so sensitive
+characters never reach the n-gram cache or model JSON on disk. The title
+bar icon flips to the padlock state and the prediction bar shows
+"Learning paused".
+
+How it works on Linux:
+
+1. `src/platform/password_detect.py::_LinuxATSPIDetector` tries to
+   `import gi` and initialise AT-SPI 2. If either step fails (package
+   missing, at-spi-2-core daemon not running, no D-Bus session), the
+   detector reports `available=False` and we fall back to the null
+   detector — the manual play/pause toggle in the title bar still
+   works.
+2. On success, a daemon thread owns a dedicated GLib main loop that
+   listens for `object:state-changed:focused` (and the legacy `focus:`
+   event for older toolkits). Each arrival event reads the source
+   accessible's state set; if it contains
+   `Atspi.StateType.PASSWORD_TEXT`, the shared `_is_password` flag
+   flips on. Defocus events (detail1=0) are ignored — they describe
+   focus *leaving* the source, not arriving anywhere specific.
+3. The bridge polls `is_password_field()` on a 200 ms timer *and* on
+   every keystroke (rate-limited to 50 ms) to close the race window
+   where the first characters after focus-change would otherwise leak
+   into the prediction cache.
+
+Tested toolkits: GTK 3 / 4 (`GtkEntry` with `visibility=false`), Qt
+(`QLineEdit` with `EchoMode.Password`), Firefox + Chromium
+(`<input type="password">`). If your app doesn't trip the detector,
+`accerciser` (Ubuntu: `sudo apt install accerciser`) will show you
+whether AT-SPI sees it as a password field at all.
+
+### App-switch context reset
+
+Polling-based, 4 Hz. When the focused window ID changes, the bridge
+wipes `_current_word`, `_context_buffer`, `_sentence_buffer`, and
+current predictions so suggestions from the previous app's context
+don't leak into the new one. Cost: one `xdotool getactivewindow`
+subprocess every 250 ms (~5 ms wall time each). On Wayland the helper
+returns 0 and the clearing path is simply skipped — there's no
+unprivileged API to ask the compositor which window has focus.
 
 ---
 

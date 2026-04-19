@@ -29,6 +29,74 @@ def bridge() -> KeyboardBridge:
         return b
 
 
+class TestForegroundWindow:
+    """_get_foreground_window_id platform dispatch."""
+
+    def test_wayland_returns_zero(self, bridge: KeyboardBridge, monkeypatch):
+        import sys
+        monkeypatch.setattr(sys, "platform", "linux")
+        monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-0")
+        assert bridge._get_foreground_window_id() == 0
+
+    def test_x11_parses_xdotool_output(self, bridge: KeyboardBridge, monkeypatch):
+        import sys
+        monkeypatch.setattr(sys, "platform", "linux")
+        monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
+
+        fake_result = MagicMock()
+        fake_result.returncode = 0
+        fake_result.stdout = "12345678\n"
+        monkeypatch.setattr("subprocess.run", lambda *a, **kw: fake_result)
+
+        assert bridge._get_foreground_window_id() == 12345678
+
+    def test_xdotool_missing_returns_zero(self, bridge: KeyboardBridge, monkeypatch):
+        import sys
+        monkeypatch.setattr(sys, "platform", "linux")
+        monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
+
+        def raise_fnf(*a, **kw):
+            raise FileNotFoundError("xdotool not found")
+        monkeypatch.setattr("subprocess.run", raise_fnf)
+
+        assert bridge._get_foreground_window_id() == 0
+
+    def test_check_foreground_clears_context_on_switch(self, bridge: KeyboardBridge, monkeypatch):
+        """When the window ID changes, predictions and buffers reset."""
+        bridge._last_foreground_hwnd = 100
+        bridge._current_word = "hel"
+        bridge._context_buffer = "earlier "
+        bridge._sentence_buffer = "earlier "
+        bridge._predictions = ["hello"]
+
+        monkeypatch.setattr(bridge, "_get_foreground_window_id", lambda: 200)
+        bridge._check_foreground_window()
+
+        assert bridge._current_word == ""
+        assert bridge._context_buffer == ""
+        assert bridge._sentence_buffer == ""
+        assert bridge._predictions == []
+        assert bridge._last_foreground_hwnd == 200
+
+    def test_check_foreground_skips_first_poll(self, bridge: KeyboardBridge, monkeypatch):
+        """First poll after startup only seeds _last_foreground_hwnd — no wipe."""
+        bridge._last_foreground_hwnd = 0
+        bridge._current_word = "hel"
+        monkeypatch.setattr(bridge, "_get_foreground_window_id", lambda: 42)
+        bridge._check_foreground_window()
+        assert bridge._current_word == "hel"          # preserved
+        assert bridge._last_foreground_hwnd == 42     # but seeded
+
+    def test_check_foreground_noop_when_unavailable(self, bridge: KeyboardBridge, monkeypatch):
+        """If we can't read the focused window, leave state alone."""
+        bridge._last_foreground_hwnd = 100
+        bridge._current_word = "hel"
+        monkeypatch.setattr(bridge, "_get_foreground_window_id", lambda: 0)
+        bridge._check_foreground_window()
+        assert bridge._current_word == "hel"
+        assert bridge._last_foreground_hwnd == 100    # unchanged
+
+
 class TestModifierState:
     """Modifier key state machine."""
 

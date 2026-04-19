@@ -104,6 +104,64 @@ class TestBaseSynthesizerInterface:
             assert hasattr(KeySynthesizerBase, method)
 
 
+class TestLinuxReplaceText:
+    """LinuxKeySynthesizer.replace_text() — atomic select-and-replace.
+
+    These tests stub the subprocess runner and a synthesizer tool so they
+    run on any OS (including the Windows CI lane, where xdotool is absent).
+    """
+
+    def _make_synth(self, tool: str, monkeypatch):
+        from src.platform import linux as linux_mod
+
+        calls: list[list[str]] = []
+        monkeypatch.setattr(linux_mod, "_run", lambda cmd: calls.append(cmd))
+        synth = linux_mod.LinuxKeySynthesizer.__new__(linux_mod.LinuxKeySynthesizer)
+        synth._tool = tool
+        return synth, calls
+
+    def test_xdotool_chain_is_single_invocation(self, monkeypatch):
+        synth, calls = self._make_synth("xdotool", monkeypatch)
+        synth.replace_text(3, "hello")
+        # One `key` invocation carrying all 3 chords, plus one `type`.
+        assert calls[0] == [
+            "xdotool", "key", "--clearmodifiers",
+            "shift+Left", "shift+Left", "shift+Left",
+        ]
+        assert calls[1] == ["xdotool", "type", "--clearmodifiers", "hello"]
+        assert len(calls) == 2
+
+    def test_xdotool_zero_backspace_skips_selection(self, monkeypatch):
+        synth, calls = self._make_synth("xdotool", monkeypatch)
+        synth.replace_text(0, "hi")
+        # No shift+Left chain; falls through to send_text.
+        assert calls == [["xdotool", "type", "--clearmodifiers", "hi"]]
+
+    def test_xdotool_empty_text_still_selects(self, monkeypatch):
+        synth, calls = self._make_synth("xdotool", monkeypatch)
+        synth.replace_text(2, "")
+        assert calls == [[
+            "xdotool", "key", "--clearmodifiers",
+            "shift+Left", "shift+Left",
+        ]]
+
+    def test_ydotool_frames_shift_around_lefts(self, monkeypatch):
+        synth, calls = self._make_synth("ydotool", monkeypatch)
+        synth.replace_text(2, "hi")
+        assert calls == [
+            ["ydotool", "key", "--key-down", "shift"],
+            ["ydotool", "key", "Left"],
+            ["ydotool", "key", "Left"],
+            ["ydotool", "key", "--key-up", "shift"],
+            ["ydotool", "type", "hi"],
+        ]
+
+    def test_no_tool_is_silent_noop(self, monkeypatch):
+        synth, calls = self._make_synth(None, monkeypatch)
+        synth.replace_text(3, "x")
+        assert calls == []
+
+
 class TestPlatformInfo:
     """get_platform_info diagnostic."""
 

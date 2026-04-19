@@ -852,23 +852,52 @@ class KeyboardBridge(QObject):
         """Detect when the user switches to a different application.
 
         Clears predictions and resets typing state since the context is
-        now stale for the new window.  Uses GetForegroundWindow() which
-        is lightweight (~0 cost).
+        now stale for the new window.  On Windows the check is a
+        near-free ``GetForegroundWindow()`` call; on X11 it shells out
+        to ``xdotool getactivewindow`` (~5 ms at 4 Hz).  Wayland doesn't
+        expose the focused window to unprivileged clients, so we skip.
         """
+        hwnd = self._get_foreground_window_id()
+        if hwnd == 0:
+            return  # detection unavailable on this platform
+        if hwnd != self._last_foreground_hwnd and self._last_foreground_hwnd != 0:
+            # Foreground window changed — user switched apps
+            self._predictions = []
+            self._current_word = ""
+            self._sentence_buffer = ""
+            self._context_buffer = ""
+            self.predictionsChanged.emit([])
+            _logger.debug("Foreground window changed — predictions cleared")
+        self._last_foreground_hwnd = hwnd
+
+    def _get_foreground_window_id(self) -> int:
+        """Return the focused-window ID, or 0 if unavailable.
+
+        Windows: ``GetForegroundWindow()`` via ctypes.
+        X11:    ``xdotool getactivewindow`` subprocess (~5 ms).
+        Wayland / other: returns 0 (no supported API).
+        """
+        import sys
         try:
-            import ctypes
-            hwnd = ctypes.windll.user32.GetForegroundWindow()  # type: ignore[attr-defined]
-            if hwnd != self._last_foreground_hwnd and self._last_foreground_hwnd != 0:
-                # Foreground window changed — user switched apps
-                self._predictions = []
-                self._current_word = ""
-                self._sentence_buffer = ""
-                self._context_buffer = ""
-                self.predictionsChanged.emit([])
-                _logger.debug("Foreground window changed — predictions cleared")
-            self._last_foreground_hwnd = hwnd
+            if sys.platform == "win32":
+                import ctypes
+                return int(
+                    ctypes.windll.user32.GetForegroundWindow()  # type: ignore[attr-defined]
+                )
+            if sys.platform.startswith("linux"):
+                import os
+                import subprocess
+                if os.environ.get("WAYLAND_DISPLAY"):
+                    return 0
+                result = subprocess.run(
+                    ["xdotool", "getactivewindow"],
+                    capture_output=True, text=True, timeout=0.5, check=False,
+                )
+                out = result.stdout.strip()
+                return int(out) if result.returncode == 0 and out else 0
         except Exception:
-            pass  # Non-Windows or ctypes unavailable — skip
+            return 0
+        return 0
 
     def _check_password_field_sync(self) -> None:
         """Synchronous password check for keystroke paths.

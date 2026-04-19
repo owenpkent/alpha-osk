@@ -141,6 +141,15 @@ Defines `KeySynthesizerBase` with these abstract methods:
   sticky modifier (Ctrl+C flow) must land at the X server in the order
   Python issued them, and non-blocking `Popen` races lead to stuck
   modifiers. The ~10 ms cost per event is inaudible at typing cadence.
+- Overrides `replace_text()` for atomic select-and-replace. xdotool:
+  a single `xdotool key shift+Left shift+Left …` invocation runs N
+  chords end-to-end (chord atomicity is handled by xdotool itself), then
+  a separate `xdotool type --clearmodifiers <text>` overwrites the
+  selection. ydotool: frames N `Left` presses with explicit
+  `--key-down shift` / `--key-up shift`, then a `type`. The base-class
+  fallback (N sequential `BackSpace` sends) raced with xdotool's
+  subprocess latency in practice — the overrides collapse that to two
+  synchronous commands, matching the Windows single-`SendInput` path.
 
 ### `windows.py` — Windows Backend
 
@@ -300,6 +309,8 @@ by `hybrid_predictor.py` when initialising the prediction engine.
 |-----------|------|-----------------|
 | Key synthesis | `src/platform/linux.py`, `src/platform/windows.py` | Entirely different implementations |
 | Platform detection | `src/platform/__init__.py` | Factory + config paths |
+| Password-field detection | `src/platform/password_detect.py` | Windows: UIA COM / Win32 `EM_GETPASSWORDCHAR`. Linux: AT-SPI 2 via `gi.repository.Atspi` (daemon thread owning a GLib loop, listens for `object:state-changed:focused`). Unsupported platforms get a null detector. |
+| Foreground-window polling | `src/keyboard_bridge.py::_get_foreground_window_id` | Windows: `GetForegroundWindow` via ctypes. X11: `xdotool getactivewindow` subprocess (250 ms poll). Wayland: returns 0 so `_check_foreground_window` skips the state wipe entirely. |
 | Window flags | `src/keyboard_app.py` | Win32 extended styles on Windows |
 | Env setup | `src/keyboard_app.py` | `QT_QPA_PLATFORM=xcb` on Linux only |
 | Launcher | `run.py` | Venv path (`bin` vs `Scripts`), dep checks |
@@ -451,6 +462,56 @@ creation.
 - Must be applied post-creation because Qt creates the native window
   during `engine.load()`.
 
+### Why AT-SPI via PyGObject on Linux Instead of Polling Xlib?
+
+**Decision**: Detect password fields on Linux by registering for
+AT-SPI `object:state-changed:focused` events through
+`gi.repository.Atspi`, not by walking the X11 window tree or querying
+toolkit-specific APIs.
+
+**Rationale**:
+- AT-SPI is the **single cross-toolkit API** that GTK, Qt, and browsers
+  all publish accessibility state through. One code path covers GtkEntry,
+  QLineEdit, and `<input type="password">`.
+- Walking the accessibility tree on every poll would be too slow (GNOME's
+  desktop tree can have thousands of accessibles). Event-driven updates
+  are O(1) per focus change and free between events.
+- PyGObject is a soft dependency — if the user doesn't install
+  `python3-gi` + `gir1.2-atspi-2.0`, the detector reports unavailable and
+  we fall back to the null detector; manual privacy toggle still works.
+  We don't ship these in the AppImage because they'd bloat the bundle by
+  ~40 MB and every target distro already has them in-repo.
+- The alternative (X11-specific tricks like reading focused window class
+  + property heuristics) would miss Wayland clients and wouldn't know
+  about password state inside a browser.
+
+**Trade-off**: The daemon thread owning a GLib main loop runs alongside
+Qt's event loop — two main loops in one process. They don't share state
+so they don't fight, but shutdown order matters: the thread is
+`daemon=True` so interpreter exit kills it without needing an explicit
+`Atspi.event_quit()` call (which would require marshaling back onto the
+GLib thread).
+
+### Why Poll `xdotool getactivewindow` for App Switches Instead of Subscribing to X Events?
+
+**Decision**: Poll `xdotool getactivewindow` every 250 ms on X11 to
+detect app-switches, rather than opening our own X display connection
+and listening for `_NET_ACTIVE_WINDOW` property changes via
+`XSelectInput`.
+
+**Rationale**:
+- xdotool is already a hard runtime dependency for key synthesis — no
+  new deps.
+- At 4 Hz the amortized cost is ~20 ms/s of CPU, invisible at typing
+  cadence.
+- X event-subscription via `python-xlib` or `ctypes` + libX11 would
+  require holding a second display connection for the lifetime of the
+  app, plus a thread to pump events. Strictly more correct but
+  disproportionate to the benefit at this poll rate.
+- Wayland has no equivalent (compositors deliberately hide focus from
+  unprivileged clients for security), so the feature would be
+  X11-exclusive regardless.
+
 ### Why Separate Platform Files Instead of if/else in Bridge?
 
 **Decision**: Full platform abstraction with separate files and a factory.
@@ -547,4 +608,4 @@ retry logic (matching gitconnect's `build/sign.js`).
 
 ---
 
-*Last updated: March 2026*
+*Last updated: April 2026*

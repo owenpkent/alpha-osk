@@ -2,6 +2,17 @@
 
 All notable changes to Alpha-OSK are documented in this file.
 
+## [Unreleased]
+
+### Added
+- **Prediction pill reveals full word on hover when truncated.** Long predictions are elided with `Text.ElideRight` when the pill is narrower than the word (common at high prediction counts or narrow window widths). Hovering over a truncated pill now surfaces a tooltip with the full word after a 400 ms delay. Gated on `predText.truncated` so short words that already fit don't trigger a redundant tooltip.
+- **Linux: atomic prediction replacement via `replace_text()`.** Picking a prediction whose casing or prefix differs from what was typed (e.g. "iph" → "iPhone") used to fall through to sequential `xdotool key BackSpace` calls, which raced with xdotool's subprocess latency and produced visible stuttering / apparent duplicated characters in fast typers' sessions. `LinuxKeySynthesizer.replace_text()` now chains N `shift+Left` chords into a single `xdotool key` invocation then a separate `xdotool type`, mirroring the Windows single-`SendInput` path. Wayland / ydotool gets the equivalent `--key-down shift` → `Left`×N → `--key-up shift` → `type` sequence.
+- **Linux: app-switch context reset.** Predictions, current word, and sentence buffers now clear when the user switches applications on X11, same as Windows. `KeyboardBridge._get_foreground_window_id()` dispatches: Windows → `GetForegroundWindow` via ctypes (unchanged), X11 → `xdotool getactivewindow` (~5 ms at 4 Hz), Wayland → no-op (compositors don't expose focused window to unprivileged clients).
+- **Linux: password-field auto-detection via AT-SPI 2.** Privacy mode now flips on automatically when focus lands on a password field (GTK `GtkEntry` with `visibility=false`, Qt `QLineEdit` in password echo mode, browsers that expose accessibility metadata). Implementation in `src/platform/password_detect.py` spawns a daemon thread that owns a GLib event loop and listens for `object:state-changed:focused`; the focused accessible's state set is checked for `STATE_PASSWORD_TEXT`. Requires `python3-gi` + `gir1.2-atspi-2.0` on the host; falls back silently to the null detector (manual toggle still works) if either is missing.
+
+### Chores
+- Added `tests/test_password_detect.py` (12 tests) and `TestForegroundWindow` / `TestLinuxReplaceText` classes covering the new Linux paths. Tests mock `subprocess.run` and the `gi` import so they run on any OS, including the Windows CI lane where `xdotool` / AT-SPI don't exist.
+
 ## [1.0.7] — 2026-04-16
 
 ### Fixed

@@ -817,6 +817,13 @@ Window {
                                 }
                             }
 
+                            // Reveal the full word on hover when the pill
+                            // clipped it — predText.truncated is true only
+                            // when ElideRight actually had to chop.
+                            ToolTip.visible: predMouse.containsMouse && predText.truncated
+                            ToolTip.text: modelData
+                            ToolTip.delay: 400
+
                             // Smooth hover animation
                             Behavior on color { ColorAnimation { duration: 100 } }
                             Behavior on border.color { ColorAnimation { duration: 100 } }
