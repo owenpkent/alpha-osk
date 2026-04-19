@@ -340,6 +340,63 @@ class TestPredictionCapsDisplay:
         assert called["count"] == 0
 
 
+class TestEditModeIntercept:
+    """pressKey / pressSpecialKey route to QML when edit mode is active."""
+
+    def _collect(self, signal):
+        calls: list = []
+        signal.connect(lambda *args: calls.append(args))
+        return calls
+
+    def test_press_key_emits_editKeyTyped_when_edit_mode_active(self, bridge: KeyboardBridge):
+        typed = self._collect(bridge.editKeyTyped)
+        bridge.setEditMode(True)
+        bridge.pressKey("a")
+        assert typed == [("a",)]
+        # And nothing leaked to the synth
+        bridge._synth.send_text.assert_not_called()
+        bridge._synth.send_key.assert_not_called()
+
+    def test_press_key_respects_shift_in_edit_mode(self, bridge: KeyboardBridge):
+        typed = self._collect(bridge.editKeyTyped)
+        bridge.setEditMode(True)
+        bridge.toggleShift()
+        bridge.pressKey("a")
+        assert typed == [("A",)]
+        assert not bridge._shift_active  # auto-released after one keypress
+
+    def test_press_key_respects_caps_in_edit_mode(self, bridge: KeyboardBridge):
+        typed = self._collect(bridge.editKeyTyped)
+        bridge.setEditMode(True)
+        bridge._caps_lock_active = True
+        bridge.pressKey("a")
+        bridge.pressKey("b")
+        assert typed == [("A",), ("B",)]
+
+    def test_press_special_emits_editSpecialPressed_in_edit_mode(self, bridge: KeyboardBridge):
+        specials = self._collect(bridge.editSpecialPressed)
+        bridge.setEditMode(True)
+        bridge.pressSpecialKey("backspace")
+        bridge.pressSpecialKey("left")
+        bridge.pressSpecialKey("return")
+        assert specials == [("backspace",), ("left",), ("return",)]
+        bridge._synth.send_key.assert_not_called()
+
+    def test_edit_mode_off_falls_through_to_synth(self, bridge: KeyboardBridge):
+        typed = self._collect(bridge.editKeyTyped)
+        bridge.setEditMode(False)
+        bridge.pressKey("a")
+        assert typed == []               # no signal
+        bridge._synth.send_text.assert_called()   # synth path taken
+
+    def test_set_edit_mode_toggles_flag(self, bridge: KeyboardBridge):
+        assert bridge._edit_mode_active is False
+        bridge.setEditMode(True)
+        assert bridge._edit_mode_active is True
+        bridge.setEditMode(False)
+        assert bridge._edit_mode_active is False
+
+
 class TestDebugLog:
     """Debug logging."""
 

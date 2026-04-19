@@ -94,6 +94,15 @@ class KeyboardBridge(QObject):
     updateInstallStarted = Signal()
     updateInstallFailed = Signal(str)
 
+    # Edit-mode signals — when the prediction-edit popup is open, OSK
+    # keystrokes must target its TextField, not the OS-focused app
+    # behind us (we can't steal OS focus without breaking the rest of
+    # the keyboard). QML calls setEditMode(True) when the popup opens,
+    # we short-circuit pressKey/pressSpecialKey to emit these signals
+    # instead, and QML mutates the TextField directly.
+    editKeyTyped = Signal(str)          # char to insert at cursor
+    editSpecialPressed = Signal(str)    # special key name (backspace, left, etc.)
+
     def __init__(self, parent: Optional[QObject] = None) -> None:
         super().__init__(parent)
         self._shift_active = False
@@ -102,6 +111,7 @@ class KeyboardBridge(QObject):
         self._alt_active = False
         self._win_active = False
         self._current_layer = "lower"  # "lower", "upper", "numbers", "symbols"
+        self._edit_mode_active = False  # prediction-edit popup open → redirect OSK keys
 
         # Create platform-appropriate key synthesizer
         self._synth: KeySynthesizerBase = create_key_synthesizer()
@@ -235,9 +245,43 @@ class KeyboardBridge(QObject):
     # Punctuation that should not have a space before them
     _NO_SPACE_BEFORE = {"?", "!", ".", ",", ";", ":", ")", "]", "}"}
 
+    @Slot(bool)
+    def setEditMode(self, active: bool) -> None:
+        """Route OSK keystrokes to the QML edit popup instead of the OS.
+
+        Called from QML when the prediction-edit popup opens/closes.
+        While active, pressKey/pressSpecialKey emit editKeyTyped /
+        editSpecialPressed instead of synthesising to the OS, so the
+        popup's TextField can insert them directly. Shift/caps still
+        affect letter case; other sticky modifiers (ctrl/alt/win) are
+        ignored while editing — chords make no sense inside a 30-char
+        edit field, and leaking a Ctrl+V into the OS app behind us
+        would be surprising.
+        """
+        self._edit_mode_active = active
+
     @Slot(str)
     def pressKey(self, key: str) -> None:
         """Called from QML when a character key is pressed."""
+        # Edit-mode intercept: route the character to the popup's
+        # TextField instead of the OS. Apply shift/caps for case but
+        # skip everything else (password detection, analytics,
+        # predictions) — the user is editing a word, not typing.
+        if self._edit_mode_active:
+            self._play_click()
+            char = (
+                key.upper()
+                if (self._shift_active or self._caps_lock_active)
+                else key.lower()
+            )
+            self.editKeyTyped.emit(char)
+            # Auto-release shift after one keypress (caps lock persists).
+            if self._shift_active and not self._caps_lock_active:
+                self._shift_active = False
+                self._update_layer()
+                self.shiftActiveChanged.emit(False)
+            return
+
         # Close the 200 ms race window: if focus has just landed on a
         # password field, flip privacy mode *before* we touch any
         # prediction state with this keystroke.
@@ -363,6 +407,14 @@ class KeyboardBridge(QObject):
     @Slot(str)
     def pressSpecialKey(self, key_name: str) -> None:
         """Called from QML for special keys (Backspace, Return, etc.)."""
+        # Edit-mode intercept: let the QML popup handle cursor motion,
+        # backspace, return, etc. directly on the TextField instead of
+        # sending the keystroke to the OS-focused app.
+        if self._edit_mode_active:
+            self._play_click()
+            self.editSpecialPressed.emit(key_name.lower())
+            return
+
         self._check_password_field_sync()
         self._play_click()
         key_map = {

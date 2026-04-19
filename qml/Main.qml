@@ -1157,14 +1157,69 @@ Window {
             y: 36
             width: 290
             height: 46
-            modal: true
+            // Non-modal: the popup must NOT install an event-blocking
+            // overlay. If it did, OSK key MouseAreas below would never
+            // fire, and the user couldn't type into the field using the
+            // very keyboard that's visible. Escape or the ✕ button
+            // dismisses; the bridge-level edit-mode intercept (see
+            // onOpened/onClosed) routes OSK keystrokes here instead of
+            // synthesising them to the OS.
+            modal: false
             dim: false
-            // Escape or the ✕ button dismisses. We intentionally do NOT
-            // include CloseOnPressOutside — the user edits this field by
-            // clicking OSK keys, and every OSK key click is a "press
-            // outside" that would otherwise slam the popup shut before
-            // the keystroke took effect.
             closePolicy: Popup.CloseOnEscape
+
+            onOpened: if (keyboard) keyboard.setEditMode(true)
+            onClosed: if (keyboard) keyboard.setEditMode(false)
+
+            // While the popup is open, OSK key presses are short-
+            // circuited in the bridge and routed here via these signals
+            // instead of synthesising to the OS.
+            Connections {
+                target: keyboard
+                enabled: predEditPopup.opened
+
+                function onEditKeyTyped(ch) {
+                    if (predEditField.selectedText)
+                        predEditField.remove(predEditField.selectionStart, predEditField.selectionEnd)
+                    predEditField.insert(predEditField.cursorPosition, ch)
+                }
+
+                function onEditSpecialPressed(name) {
+                    var pos = predEditField.cursorPosition
+                    var len = predEditField.length
+                    if (name === "backspace") {
+                        if (predEditField.selectedText)
+                            predEditField.remove(predEditField.selectionStart, predEditField.selectionEnd)
+                        else if (pos > 0)
+                            predEditField.remove(pos - 1, pos)
+                    } else if (name === "delete") {
+                        if (predEditField.selectedText)
+                            predEditField.remove(predEditField.selectionStart, predEditField.selectionEnd)
+                        else if (pos < len)
+                            predEditField.remove(pos, pos + 1)
+                    } else if (name === "left") {
+                        predEditField.cursorPosition = Math.max(0, pos - 1)
+                    } else if (name === "right") {
+                        predEditField.cursorPosition = Math.min(len, pos + 1)
+                    } else if (name === "home") {
+                        predEditField.cursorPosition = 0
+                    } else if (name === "end") {
+                        predEditField.cursorPosition = len
+                    } else if (name === "space") {
+                        if (predEditField.selectedText)
+                            predEditField.remove(predEditField.selectionStart, predEditField.selectionEnd)
+                        predEditField.insert(predEditField.cursorPosition, " ")
+                    } else if (name === "return" || name === "enter") {
+                        // Accept the edit
+                        if (predEditField.text.trim() && keyboard)
+                            keyboard.editPrediction(predEditField.originalWord, predEditField.text.trim())
+                        predEditPopup.close()
+                    } else if (name === "escape") {
+                        predEditPopup.close()
+                    }
+                    // Tab, function keys, insert, etc. are ignored in edit mode.
+                }
+            }
 
             background: Rectangle {
                 color: "#252535"
