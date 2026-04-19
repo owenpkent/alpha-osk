@@ -5,6 +5,7 @@ All notable changes to Alpha-OSK are documented in this file.
 ## [Unreleased]
 
 ### Fixed
+- **Prediction pills now match Caps Lock display case.** With Caps Lock on, the user's `_current_word` was accumulating uppercase (e.g. "HELL") while the pills still showed lowercase ("hello"). Even worse, clicking a pill inserted the lowercase text next to the uppercase prefix. Added a `_display_cased()` transform applied at every prediction emit site (instant, refined, next-word-after-selection, edited, swipe) that uppercases the engine's output while Caps Lock is active. Toggling Caps Lock while pills are visible now re-queries the engine so the visible pills flip case immediately. Shift is deliberately not mirrored — it's one-shot and sentence-start capitalisation is already handled upstream by `get_capitalized`.
 - **Edit-prediction popup no longer dismisses on the first OSK keystroke.** The popup's `closePolicy` included `Popup.CloseOnPressOutside`, so every click on an OSK character or arrow-row key registered as a "press outside the popup" and closed it before the keystroke could land. Dropped `CloseOnPressOutside` from the policy and added an explicit ✕ cancel button next to the ✓ confirm button; Escape still dismisses too.
 
 ### Added

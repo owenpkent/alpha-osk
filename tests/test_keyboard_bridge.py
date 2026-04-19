@@ -300,6 +300,46 @@ class TestPredictionWiring:
         assert bridge._prediction_count == 1
 
 
+class TestPredictionCapsDisplay:
+    """Caps Lock mirrors into the prediction pill display case."""
+
+    def test_display_cased_passthrough_when_caps_off(self, bridge: KeyboardBridge):
+        assert bridge._display_cased(["hello", "world"]) == ["hello", "world"]
+
+    def test_display_cased_uppercases_when_caps_on(self, bridge: KeyboardBridge):
+        bridge._caps_lock_active = True
+        assert bridge._display_cased(["hello", "iPhone"]) == ["HELLO", "IPHONE"]
+
+    def test_display_cased_empty_list_is_safe(self, bridge: KeyboardBridge):
+        bridge._caps_lock_active = True
+        assert bridge._display_cased([]) == []
+
+    def test_on_predictions_ready_uppercases_with_caps(self, bridge: KeyboardBridge):
+        bridge._caps_lock_active = True
+        bridge._on_predictions_ready(["hello", "help"])
+        assert bridge._predictions == ["HELLO", "HELP"]
+
+    def test_on_predictions_ready_preserves_case_without_caps(self, bridge: KeyboardBridge):
+        bridge._on_predictions_ready(["iPhone", "iPad"])
+        assert bridge._predictions == ["iPhone", "iPad"]
+
+    def test_caps_toggle_triggers_prediction_refresh(self, bridge: KeyboardBridge):
+        """Flipping caps while pills are visible should re-query the
+        engine so the visible pills flip case to match the new mode."""
+        bridge._predictions = ["HELLO"]  # something visible
+        called = {"count": 0}
+        bridge._update_predictions = lambda: called.__setitem__("count", called["count"] + 1)
+        bridge.toggleCapsLock()
+        assert called["count"] == 1
+
+    def test_caps_toggle_skips_refresh_when_no_predictions(self, bridge: KeyboardBridge):
+        bridge._predictions = []
+        called = {"count": 0}
+        bridge._update_predictions = lambda: called.__setitem__("count", called["count"] + 1)
+        bridge.toggleCapsLock()
+        assert called["count"] == 0
+
+
 class TestDebugLog:
     """Debug logging."""
 

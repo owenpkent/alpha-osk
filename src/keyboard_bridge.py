@@ -482,6 +482,14 @@ class KeyboardBridge(QObject):
         self._caps_lock_active = not self._caps_lock_active
         self._update_layer()
         self.capsLockActiveChanged.emit(self._caps_lock_active)
+        # Re-query the engine so currently-visible pills flip case to
+        # match the new mode. We can't just uppercase/lowercase the
+        # stored list in-place — once predictions are uppercased we've
+        # lost the original capitalisation the engine gave us
+        # (e.g. "iPhone" vs "IPHONE"), so the engine is the source of
+        # truth.
+        if self._predictions:
+            self._update_predictions()
 
     @Slot()
     def toggleCtrl(self) -> None:
@@ -577,9 +585,10 @@ class KeyboardBridge(QObject):
         _logger.info("Next-word predictions: %s", next_preds)
 
         # Update with next-word predictions
-        self._predictions = next_preds
-        self.predictionsChanged.emit(next_preds)
-        self._add_debug_log(f"Next-word after '{word}': {next_preds}")
+        display = self._display_cased(next_preds)
+        self._predictions = display
+        self.predictionsChanged.emit(display)
+        self._add_debug_log(f"Next-word after '{word}': {display}")
 
     @Slot()
     def clearPredictions(self) -> None:
@@ -654,17 +663,40 @@ class KeyboardBridge(QObject):
         context = self._context_buffer + self._current_word
         self._predictor.predict_with_refinement(context, n=self._prediction_count)
 
+    def _display_cased(self, predictions: List[str]) -> List[str]:
+        """Transform predictions to match the user's active case mode.
+
+        When Caps Lock is on, every character the user types is being
+        sent uppercase, and `_current_word` accumulates uppercase too.
+        If the pills still showed "hello" while the user had typed
+        "HELL", the user couldn't tell which pill matched what they
+        typed — and clicking the pill would send the lowercase
+        replacement, which looks wrong next to the uppercase prefix
+        they already typed. Uppercase the pills so display and insert
+        behaviour match.
+
+        Shift is deliberately *not* mirrored here: it's a one-shot
+        auto-releasing modifier, and sentence-start capitalisation
+        already flows through :func:`NgramPredictor.get_capitalized`
+        upstream.
+        """
+        if predictions and self._caps_lock_active:
+            return [w.upper() for w in predictions]
+        return predictions
+
     def _on_predictions_ready(self, predictions: List[str]) -> None:
         """Handle instant n-gram predictions."""
-        self._predictions = predictions
-        if predictions:
+        display = self._display_cased(predictions)
+        self._predictions = display
+        if display:
             self._analytics.record_prediction_offered()
-        self.predictionsChanged.emit(predictions)
+        self.predictionsChanged.emit(display)
 
     def _on_predictions_refined(self, predictions: List[str]) -> None:
         """Handle LLM-refined predictions."""
-        self._predictions = predictions
-        self.predictionsRefined.emit(predictions)
+        display = self._display_cased(predictions)
+        self._predictions = display
+        self.predictionsRefined.emit(display)
 
     @Slot()
     def savePredictionModel(self) -> None:
@@ -1201,8 +1233,9 @@ class KeyboardBridge(QObject):
         self._predictions = []
         self.predictionsChanged.emit([])
         next_preds = self._predictor.predict(self._context_buffer, n=self._prediction_count)
-        self._predictions = next_preds
-        self.predictionsChanged.emit(next_preds)
+        display = self._display_cased(next_preds)
+        self._predictions = display
+        self.predictionsChanged.emit(display)
 
         self._add_debug_log(f"Edited prediction: {original} → {edited}")
         _logger.info("Prediction edited: %s → %s", original, edited)
@@ -1302,7 +1335,8 @@ class KeyboardBridge(QObject):
             self._predictor.get_capitalized(w, sentence_start) for w in results
         ]
 
-        top = capitalised[0]
+        display = self._display_cased(capitalised)
+        top = display[0]
         self._send_text(top + " ")
         self._context_buffer += top + " "
         self._sentence_buffer += top + " "
@@ -1311,11 +1345,11 @@ class KeyboardBridge(QObject):
         self._current_word = ""
 
         # Show the rest as alternative predictions in case the top guess is wrong.
-        self._predictions = capitalised
-        self.predictionsChanged.emit(capitalised)
+        self._predictions = display
+        self.predictionsChanged.emit(display)
         self._analytics.record_word_completed(top)
-        self._add_debug_log(f"Swipe → {top} (alts: {capitalised[1:4]})")
-        _logger.info("Swipe decoded: %s (alts: %s)", top, capitalised[1:4])
+        self._add_debug_log(f"Swipe → {top} (alts: {display[1:4]})")
+        _logger.info("Swipe decoded: %s (alts: %s)", top, display[1:4])
 
     # --- Audio Feedback ---
 
