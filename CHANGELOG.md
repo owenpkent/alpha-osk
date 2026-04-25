@@ -4,6 +4,13 @@ All notable changes to Alpha-OSK are documented in this file.
 
 ## [Unreleased]
 
+## [1.0.12] — 2026-04-25
+
+Hotfix: 1.0.11 wouldn't launch.
+
+### Fixed
+- **QML duplicate-handler crash on launch.** The window-size persistence work in 1.0.11 added top-level `onWidthChanged` / `onHeightChanged` handlers without noticing that handlers for those signals were already declared further down the file. Qt rejects duplicate signal handlers on the same object with "Property value set multiple times" and the QML file failed to load — the app started, logged the error, and exited. Merged the size-save call into the existing handlers instead. The dev build masked the issue (it elevated and exited fast enough that the failure wasn't obvious); the frozen 1.0.11 installer hit it on every launch. Anyone on 1.0.11 needs to install 1.0.12 by hand to recover.
+
 ## [1.0.11] — 2026-04-25
 
 UX cleanup: standard taskbar minimize, persistent window size, plus the apostrophe-contractions work that landed on `main` after 1.0.10.

@@ -60,8 +60,13 @@ Window {
             }
         }
     }
-    onWidthChanged: if (_geometryRestored) saveGeometryTimer.restart()
-    onHeightChanged: if (_geometryRestored) saveGeometryTimer.restart()
+    // NB: width/height-changed handlers live further down in the file
+    // (one near line 164 for height, one near 301 for width). Each
+    // calls saveGeometryTimer.restart() when _geometryRestored is true,
+    // so resize is persisted via that single seam. Don't redeclare
+    // onWidthChanged / onHeightChanged here — Qt rejects duplicate
+    // signal handlers on the same object with "Property value set
+    // multiple times" and the QML file fails to load.
 
     // Auto-update — bridge fills these in when checkForUpdate() finds
     // a signed newer release.  See src/updater.py for the security model.
@@ -161,7 +166,12 @@ Window {
     // Refresh the swipe-recognizer layout whenever the window is resized —
     // key positions move with the layout.  (See the merged onWidthChanged
     // handler further down which also handles minimumWidth clamping.)
-    onHeightChanged: swipeLayoutPushTimer.restart()
+    // Also debounces a save of the new height so the OSK comes back at
+    // this size next launch.
+    onHeightChanged: {
+        swipeLayoutPushTimer.restart()
+        if (_geometryRestored) saveGeometryTimer.restart()
+    }
 
     onSwipeEnabledChanged: {
         appSettings.savedSwipeEnabled = swipeEnabled
@@ -301,6 +311,7 @@ Window {
     onWidthChanged: {
         if (width < minimumWidth) width = minimumWidth
         swipeLayoutPushTimer.restart()
+        if (_geometryRestored) saveGeometryTimer.restart()
     }
 
     // Multi-monitor DPI fix: when Qt moves the window to a screen with a
