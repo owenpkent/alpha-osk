@@ -567,6 +567,72 @@ class TestPunctuationSpacing:
         assert bridge._context_buffer != "" or bridge._current_word == "hel"
 
 
+class TestMatchCase:
+    """KeyboardBridge._match_case casing rules for autocorrect output."""
+
+    def test_all_uppercase_typed_returns_upper(self):
+        from src.keyboard_bridge import KeyboardBridge
+        assert KeyboardBridge._match_case("RECIEVE", "receive") == "RECEIVE"
+
+    def test_title_case_typed_returns_title(self):
+        from src.keyboard_bridge import KeyboardBridge
+        assert KeyboardBridge._match_case("Recieve", "receive") == "Receive"
+
+    def test_lowercase_typed_returns_replacement_as_is(self):
+        from src.keyboard_bridge import KeyboardBridge
+        # Replacement keeps its own casing (e.g. "iPhone" out of the
+        # misspellings table) even if typed was all-lowercase.
+        assert KeyboardBridge._match_case("iphone", "iPhone") == "iPhone"
+
+    def test_mixed_case_typed_passes_through(self):
+        from src.keyboard_bridge import KeyboardBridge
+        # Not title, not all-upper → don't try to second-guess.
+        assert KeyboardBridge._match_case("RecIEVE", "receive") == "receive"
+
+    def test_empty_typed_returns_replacement(self):
+        from src.keyboard_bridge import KeyboardBridge
+        assert KeyboardBridge._match_case("", "x") == "x"
+
+
+class TestSpaceTimeAutocorrect:
+    """pressSpecialKey('space') runs misspelling/fuzzy autocorrect."""
+
+    def test_known_misspelling_replaced_on_space(self, bridge: KeyboardBridge):
+        bridge._current_word = "recieve"
+        bridge.pressSpecialKey("space")
+        # _current_word should have been corrected before clearing.
+        # Check the post-space state — corrected word should land in
+        # the sentence buffer, not the misspelling.
+        assert "receive" in bridge._sentence_buffer
+        assert "recieve" not in bridge._sentence_buffer
+
+    def test_misspelling_casing_matches_typed_word(self, bridge: KeyboardBridge):
+        bridge._current_word = "Recieve"
+        bridge.pressSpecialKey("space")
+        # Title-cased typed → title-cased correction.
+        assert "Receive" in bridge._sentence_buffer
+
+    def test_valid_word_not_corrected(self, bridge: KeyboardBridge):
+        bridge._current_word = "the"
+        bridge.pressSpecialKey("space")
+        assert "the" in bridge._sentence_buffer
+
+    def test_disabling_autocorrect_lets_misspelling_through(self, bridge: KeyboardBridge):
+        bridge.setAutocorrectEnabled(False)
+        bridge._current_word = "recieve"
+        bridge.pressSpecialKey("space")
+        # With autocorrect off, the literal typed word survives.
+        assert "recieve" in bridge._sentence_buffer
+
+    def test_privacy_mode_skips_autocorrect(self, bridge: KeyboardBridge):
+        bridge.setPrivacyMode(True)
+        bridge._current_word = "recieve"
+        bridge.pressSpecialKey("space")
+        # Privacy mode shouldn't learn or autocorrect.
+        assert "recieve" not in bridge._sentence_buffer
+        assert "receive" not in bridge._sentence_buffer
+
+
 class TestEditPredictionSanitize:
     """_sanitize_edit scrubs untrusted QML input before it reaches the model."""
 

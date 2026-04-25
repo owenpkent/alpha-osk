@@ -20,6 +20,7 @@ from typing import Dict, List, Optional
 
 from PySide6.QtCore import QObject, Signal
 
+from .autocorrect import CommonMisspellings
 from .fuzzy_recognizer import FuzzyRecognizer
 from .ngram_predictor import NgramPredictor
 from .ppm_predictor import PPMPredictor, PPMWordPredictor
@@ -92,9 +93,11 @@ class HybridPredictor(QObject):
 
         # Initialize fuzzy recognizer (spatial error correction)
         self._fuzzy = FuzzyRecognizer()
-        self._fuzzy.load_dictionary(
-            Path(__file__).parent.parent.parent / "data" / "base_dictionary.txt"
-        )
+        data_dir = Path(__file__).parent.parent.parent / "data"
+        self._fuzzy.load_dictionary(data_dir / "base_dictionary.txt")
+        # Load common-misspellings fast-path table for autocorrect.
+        self._misspellings = CommonMisspellings()
+        self._misspellings.load(data_dir / "common_misspellings.txt")
         # Inject n-gram unigram frequencies so candidate ranking
         # prefers common words ("the") over rare ones ("tha").  Done
         # before the training corpus runs since we want this snapshot
@@ -532,16 +535,27 @@ class HybridPredictor(QObject):
     # --- Fuzzy Recognition ---
 
     def check_autocorrect(self, typed_word: str, context: str = "") -> Optional[str]:
-        """
-        Check if a word should be autocorrected.
+        """Return the corrected spelling for ``typed_word`` or None.
 
-        Args:
-            typed_word: Word as typed
-            context: Previous context
-
-        Returns:
-            Corrected word if should autocorrect, None otherwise
+        Two-tier:
+        1. **Fast path** — common-misspellings table (``data/common_misspellings.txt``).
+           Direct lookup for well-known mistakes that the fuzzy machinery
+           would either miss ("definately") or only weakly correct.
+        2. **Slow path** — fuzzy ``should_autocorrect``, which uses spatial
+           probability + frequency + edit distance.  Only fires if the
+           typed word isn't already in the fuzzy dictionary, so we never
+           "correct" something the user actually meant.
         """
+        if not typed_word:
+            return None
+
+        # Fast path: direct table lookup.
+        misspell = self._misspellings.lookup(typed_word)
+        if misspell and misspell != typed_word.lower():
+            self.autocorrectSuggested.emit(typed_word, misspell)
+            return misspell
+
+        # Slow path: spatial / edit-distance fuzzy correction.
         correction = self._fuzzy.should_autocorrect(typed_word, context)
         if correction:
             self.autocorrectSuggested.emit(typed_word, correction)

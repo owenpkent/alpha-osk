@@ -177,6 +177,11 @@ class KeyboardBridge(QObject):
         self._auto_space_after_punctuation = True
         self._auto_capitalize_after_punctuation = False
         self._auto_save_on_exit = True
+        # Space-time autocorrect — replace the typed word with a known
+        # correction when space lands.  Falls through silently if the
+        # word is in the dictionary (no false positives) or no good
+        # correction is available.  See HybridPredictor.check_autocorrect.
+        self._autocorrect_enabled = True
 
         # Swipe / glide typing — off by default, toggled in settings.
         # The recognizer needs the keyboard layout (key centres) before it
@@ -239,6 +244,24 @@ class KeyboardBridge(QObject):
     def _send_text(self, text: str) -> None:
         """Send a string of text via the platform synthesizer."""
         self._synth.send_text(text)
+
+    @staticmethod
+    def _match_case(typed: str, replacement: str) -> str:
+        """Return ``replacement`` cased to match the typed word.
+
+        - All-uppercase typed → uppercase replacement.
+        - Title-cased typed (first letter capital, rest lowercase) →
+          title-cased replacement.
+        - Otherwise → replacement as-is (preserves intentional internal
+          capitals like "iPhone" coming out of the misspellings table).
+        """
+        if not typed:
+            return replacement
+        if typed.isupper():
+            return replacement.upper()
+        if typed[0].isupper() and typed[1:].islower():
+            return replacement[:1].upper() + replacement[1:]
+        return replacement
 
     # --- QML Slots ---
 
@@ -444,7 +467,39 @@ class KeyboardBridge(QObject):
             "numlock": "Num_Lock",
         }
         xdotool_key = key_map.get(key_name, key_name)
-        self._send_key(xdotool_key)
+
+        # Space-time autocorrect runs *before* the space hits the wire:
+        # if the typed word matches a known misspelling or has a high-
+        # confidence fuzzy correction, atomically replace the typed
+        # letters with the correction and the trailing space in one
+        # SendInput call.  Doing it before the space-send avoids a
+        # double space and keeps the visible output flicker-free.
+        autocorrected = False
+        if (
+            key_name == "space"
+            and self._current_word
+            and not self._privacy_mode
+            and self._autocorrect_enabled
+        ):
+            correction = self._predictor.check_autocorrect(
+                self._current_word, self._context_buffer,
+            )
+            if correction and correction.lower() != self._current_word.lower():
+                cased = self._match_case(self._current_word, correction)
+                self._synth.replace_text(
+                    len(self._current_word), cased + " ",
+                )
+                self._add_debug_log(
+                    f"Autocorrected: {self._current_word!r} → {cased!r}"
+                )
+                _logger.info(
+                    "Autocorrected: %r → %r", self._current_word, cased,
+                )
+                self._current_word = cased
+                autocorrected = True
+
+        if not autocorrected:
+            self._send_key(xdotool_key)
 
         # Privacy mode — send the key but don't track context or learn
         if self._privacy_mode:
@@ -924,6 +979,12 @@ class KeyboardBridge(QObject):
         """Toggle auto-save of prediction model when app closes."""
         self._auto_save_on_exit = enabled
         _logger.info("Auto-save on exit: %s", enabled)
+
+    @Slot(bool)
+    def setAutocorrectEnabled(self, enabled: bool) -> None:
+        """Toggle space-time autocorrect (misspellings + fuzzy)."""
+        self._autocorrect_enabled = enabled
+        _logger.info("Autocorrect: %s", enabled)
 
     @property
     def autoSaveOnExit(self) -> bool:

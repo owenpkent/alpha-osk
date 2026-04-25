@@ -1,0 +1,155 @@
+# Alpha-OSK Common Misspellings
+#
+# One mapping per line: ``wrong right``
+# - All lowercase. Output casing follows the user's typing (handled
+#   in keyboard_bridge by case-matching the typed word).
+# - One-to-one only. Multi-word fixes ("alot" → "a lot") aren't
+#   supported here because the bridge replaces a single token.
+# - Lines starting with # are comments; blank lines are ignored.
+#
+# Sourced from public-domain compilations of common English
+# misspellings (Wikipedia's lists of common misspellings + curated
+# additions). Tilt towards mistakes the edit-distance fuzzy path
+# misses (silent-letter swaps, doubled vs single letters, vowel
+# confusions over edit distance > 1).
+
+# --- Vowel confusions / silent letters ---
+abondon abandon
+abscence absence
+accidently accidentally
+acheive achieve
+acheived achieved
+aknowledge acknowledge
+agressive aggressive
+arguement argument
+atheletic athletic
+beleive believe
+beleived believed
+benifit benefit
+buisness business
+calender calendar
+catagory category
+cemetary cemetery
+collegue colleague
+concious conscious
+definately definitely
+definatly definitely
+definitly definitely
+diffrent different
+embarass embarrass
+embarrased embarrassed
+enviroment environment
+exagerate exaggerate
+familar familiar
+febuary february
+finaly finally
+fourty forty
+freind friend
+freinds friends
+goverment government
+grammer grammar
+greatful grateful
+guidence guidance
+hieght height
+hierachy hierarchy
+humourous humorous
+independant independent
+intresting interesting
+knowlege knowledge
+liason liaison
+maintainance maintenance
+mispell misspell
+neccessary necessary
+neccessarily necessarily
+oppertunity opportunity
+paralell parallel
+parralel parallel
+peice piece
+perminantly permanently
+posession possession
+prefered preferred
+preformance performance
+presense presence
+privelege privilege
+priviledge privilege
+probaly probably
+proffessional professional
+pronounciation pronunciation
+publically publicly
+recomend recommend
+recomended recommended
+recommand recommend
+referal referral
+refered referred
+religous religious
+responsability responsibility
+restaraunt restaurant
+ridiculus ridiculous
+saftey safety
+secratary secretary
+seperate separate
+seperated separated
+seperately separately
+similiar similar
+sincerly sincerely
+speach speech
+statment statement
+succesful successful
+sucessful successful
+supercede supersede
+suprise surprise
+suprised surprised
+tendancy tendency
+threshhold threshold
+tommorow tomorrow
+tommorrow tomorrow
+truely truly
+twelth twelfth
+ulitmately ultimately
+untill until
+usefull useful
+ussual usual
+ussually usually
+vaccuum vacuum
+vegtable vegetable
+visable visible
+wether whether
+wierd weird
+witheld withheld
+writting writing
+youself yourself
+
+# --- Doubled-letter mistakes ---
+adress address
+becomming becoming
+begining beginning
+changeing changing
+comming coming
+commited committed
+commitee committee
+dissapoint disappoint
+happend happened
+harras harass
+imediate immediate
+imediatly immediately
+occured occurred
+occurence occurrence
+ocasion occasion
+ocassion occasion
+preceeding preceding
+recieve receive
+recieved received
+reciept receipt
+
+# --- Letter ordering / transposition catches ---
+becuase because
+becasue because
+thier their
+wich which
+whitch which
+
+# --- Common short-word typos ---
+teh the
+hte the
+htere there
+yhe the
