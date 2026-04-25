@@ -4,6 +4,25 @@ All notable changes to Alpha-OSK are documented in this file.
 
 ## [Unreleased]
 
+## [1.0.9] — 2026-04-25
+
+Fuzzy / autocorrect overhaul plus a Windows-terminal fix for prediction-pill replacement.
+
+### Fixed
+- **Prediction-pill replace works in Windows terminals.** In `ConsoleWindowClass` (cmd / PowerShell / conhost), Windows Terminal, and mintty, `Shift+Left` moves the cursor without selecting. The default `replace_text` path therefore left the user's typed prefix intact and inserted the prediction at the new cursor position — typing `owen` and clicking the `Owen` pill produced `Owenowen`. `WindowsKeySynthesizer` now detects terminal window classes via `GetClassNameW` and falls back to BackSpace+type for them. BackSpace would still break Slack-style chat compose, but those aren't terminals — class-based dispatch lets us pick the right deletion strategy per app.
+
+### Changed
+- **Removed accessibility profiles.** The six profiles (Precise / Normal / Mild–Severe Tremor / Limited Mobility) pretended to give six dials when really five of those settings were shades of the same dial. Most users picked "Normal" and `key_hold_delay` was documented but never actually consumed. Replaced with one tuned default on `FuzzyRecognizer`: `spatial_uncertainty=1.4` (was 1.0 in Normal — covers diagonal neighbours), `confidence_threshold=0.65` (was 0.8 — more willing to autocorrect), `prediction_weight=0.6` (was 0.5), beam-search `min_prob=0.001` (was 0.01 — lets a single-substitution path survive across a 5+ char word). Profile picker UI gone; the `set_accessibility_profile` / `setAccessibilityProfile` paths through `FuzzyRecognizer`, `HybridPredictor`, and `KeyboardBridge` are removed along with `AccessibilityPanel.qml`.
+
+### Added
+- **Frequency-weighted fuzzy ranking.** Dictionary is now `Dict[str, float]` (word → frequency). `generate_candidates` multiplies spatial probability by `log(freq + 1)` so a high-frequency word with a slightly worse spatial match still beats a rare word with a perfect spatial match. Frequencies are sourced from the n-gram unigram counts (`HybridPredictor.__init__` injects `ngram.unigrams` into the fuzzy dictionary; re-injected after the training corpus expands those counts). Fixes "the" and "tha" tying on a 3-letter spatial match.
+- **Edit-distance fuzzy candidates** — transposition, deletion, insertion. The spatial-substitution beam search only catches typos where the user hit a near key; "teh" (transposition), "thee" (extra letter), and "th" (missing letter) all slipped through. New `_edit_distance_candidates` path generates dictionary hits at edit distance 1 with per-edit penalties (transposition 0.30, deletion 0.20, insertion 0.15, divided by typed length so longer words aren't unfairly penalised). Insertion path skipped for inputs over 12 chars to bound per-keystroke cost — typical 5-letter input does ~170 hash lookups.
+- **Bigram prior on fuzzy candidates in the hybrid merge.** Fuzzy candidates were context-blind; "the" after `of ` tied with "thy" and "tha". `HybridPredictor._merge_predictions` now multiplies each fuzzy candidate's positional score by `1 + log1p(bigram_count) / 2`. The /2 slope is intentional — fuzzy candidates have no other context signal, so a confident bigram should be able to override positional ranking.
+- **Space-time autocorrect (hybrid).** Two-tier: a curated common-misspellings table at `data/common_misspellings.txt` (~150 entries from public-domain English misspelling lists, focused on errors fuzzy machinery would either miss or only weakly correct — silent letters, doubled vs single letters, vowel confusions over edit distance 1), then `fuzzy.should_autocorrect` as the slow path with the 0.65 confidence gate. Runs on space, replaces the typed letters and the trailing space atomically via `replace_text()` so terminals work correctly. Casing follows the typed word (all-upper / title / passthrough). Privacy mode and edit mode skip autocorrect entirely. Toggle via `setAutocorrectEnabled` slot (default on).
+
+### Chores
+- **CLAUDE.md trimmed by 33 %.** The auto-update threat-model table and the full Windows release runbook were duplicate copies of content that already lived in `docs/AUTO_UPDATE.md` and `docs/WINDOWS.md` respectively, but loaded into context every conversation. Replaced with concise pointers preserving the actually-actionable bits (public-repo gotcha, single source of truth for version, non-elevated-shell trap). `docs/WINDOWS.md` gained a "Release Checklist" section and an "Installer Upgrade Behavior" table so the post-build steps live alongside the existing build/sign documentation.
+
 ## [1.0.8] — 2026-04-25
 
 v1.0.7 was committed but never built or released; its fixes ship here in 1.0.8 alongside the post-1.0.7 work.
