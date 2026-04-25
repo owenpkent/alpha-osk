@@ -7,16 +7,17 @@ proper window flags for an OSK (stays on top, doesn't steal focus).
 Cross-Platform Behaviour
 ------------------------
 - **Linux (X11)**: Sets ``QT_QPA_PLATFORM=xcb`` and uses Qt window flags
-  ``WindowStaysOnTopHint | Tool | FramelessWindowHint |
-  WindowDoesNotAcceptFocus`` to stay above other windows without stealing
-  keyboard focus.
+  ``WindowStaysOnTopHint | FramelessWindowHint | WindowDoesNotAcceptFocus``
+  to stay above other windows without stealing keyboard focus.
 
 - **Windows**: Uses the same Qt flags.  When the binary is EV code-signed
   with a ``UIAccess="true"`` manifest, the keyboard can also appear above
   UAC prompts and elevated windows.  Additionally, on Windows we call
-  ``SetWindowLong`` to apply ``WS_EX_NOACTIVATE`` and
-  ``WS_EX_TOOLWINDOW`` so the OS never gives our window keyboard focus
-  and it doesn't appear in the Alt+Tab list.
+  ``SetWindowLong`` to apply ``WS_EX_NOACTIVATE`` (focus-suppression)
+  and ``WS_EX_TOPMOST`` (defence-in-depth on the always-on-top behaviour).
+  ``WS_EX_TOOLWINDOW`` and ``Qt.Tool`` are deliberately *not* applied —
+  they suppressed the taskbar entry, leaving the standard minimize
+  button with nowhere to go.
 
 See Also
 --------
@@ -103,16 +104,20 @@ def _apply_window_flags(root) -> None:
     - Stays on top of all other windows.
     - Never steals keyboard focus from the user's active application.
     - Frameless (Alpha-OSK draws its own title bar in QML).
-    - Classified as a Tool window (not shown in taskbar on Linux).
-
-    On Windows, additional Win32 extended styles are applied via
-    ``SetWindowLongW`` to ensure ``WS_EX_NOACTIVATE`` (never receives
-    focus on click) and ``WS_EX_TOOLWINDOW`` (hidden from Alt+Tab).
+    - Has a normal taskbar entry so the standard Windows minimize
+      button can drop the OSK to the taskbar and clicking the
+      taskbar entry restores it.  (Earlier builds used ``Qt.Tool``
+      and ``WS_EX_TOOLWINDOW`` to suppress the taskbar entry, which
+      meant minimize had to ``hide()`` and the only way back was the
+      tray icon — easy to miss.  Trade-off: the OSK now appears in
+      Alt+Tab.  Acceptable since ``WS_EX_NOACTIVATE`` still prevents
+      focus theft on every click.)
     """
-    # Qt flags — work on all platforms
+    # Qt flags — work on all platforms.  WindowDoesNotAcceptFocus
+    # is the Linux/Wayland equivalent of WS_EX_NOACTIVATE; on
+    # Windows the Win32 path below handles focus suppression.
     root.setFlags(
         Qt.WindowType.WindowStaysOnTopHint
-        | Qt.WindowType.Tool
         | Qt.WindowType.FramelessWindowHint
         | Qt.WindowType.WindowDoesNotAcceptFocus
     )
@@ -133,10 +138,14 @@ def _apply_windows_extended_styles(root) -> None:
       activated when clicked.  This is *critical* for an OSK — without
       it, clicking a key would move focus away from the user's text
       editor.
-    - **WS_EX_TOOLWINDOW** (``0x00000080``): The window is not shown in
-      the taskbar or Alt+Tab switcher.
     - **WS_EX_TOPMOST** (``0x00000008``): Redundant with Qt's
       ``WindowStaysOnTopHint`` but set explicitly for defence-in-depth.
+
+    ``WS_EX_TOOLWINDOW`` was *removed* because it suppressed the
+    taskbar entry, leaving minimize with nowhere to go — the user
+    expects standard Windows behaviour (click the taskbar to
+    restore).  The trade-off is that the OSK now appears in Alt+Tab,
+    which is acceptable.
 
     Requires the window to have a valid ``winId()`` (i.e. the native
     window handle has been created).
@@ -146,7 +155,6 @@ def _apply_windows_extended_styles(root) -> None:
 
         GWL_EXSTYLE = -20
         WS_EX_NOACTIVATE = 0x08000000
-        WS_EX_TOOLWINDOW = 0x00000080
         WS_EX_TOPMOST = 0x00000008
 
         user32 = ctypes.windll.user32
@@ -155,7 +163,7 @@ def _apply_windows_extended_styles(root) -> None:
         # Get current extended style
         current = user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
         # Add our flags
-        new_style = current | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW | WS_EX_TOPMOST
+        new_style = current | WS_EX_NOACTIVATE | WS_EX_TOPMOST
         user32.SetWindowLongW(hwnd, GWL_EXSTYLE, new_style)
 
         # SetWindowPos with SWP_FRAMECHANGED forces the system to re-read the
@@ -174,7 +182,7 @@ def _apply_windows_extended_styles(root) -> None:
 
         _logger.info(
             "Applied Windows extended styles: "
-            "WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW | WS_EX_TOPMOST"
+            "WS_EX_NOACTIVATE | WS_EX_TOPMOST"
         )
     except Exception as e:
         _logger.warning("Failed to apply Windows extended styles: %s", e)
@@ -317,16 +325,15 @@ def main() -> int:
             root.raise_()
 
     def _minimize_window() -> None:
-        """Hide the window on double-click, matching the in-window − button.
+        """Minimize on tray double-click, matching the in-window − button.
 
-        The keyboard is a Qt.Tool + WindowStaysOnTopHint window with no
-        taskbar entry, so ``showMinimized()`` no-ops on most X11 WMs and
-        produces an orphan thumbnail on Windows toolwindows. ``hide()``
-        is the cross-platform behaviour that actually matches what the
-        user expects; the tray icon's single-click toggle is how they
-        bring it back.
+        Now that the OSK has a normal taskbar entry (no WS_EX_TOOLWINDOW),
+        ``showMinimized()`` does what users expect: drops to the taskbar,
+        clicking the taskbar restores. The tray icon stays as a backup
+        path — the single-click toggle still works — but isn't the only
+        way back anymore.
         """
-        root.hide()
+        root.showMinimized()
 
     # Tray single-click vs. double-click: we want a single click to
     # toggle show/hide (current behaviour) and a double click to

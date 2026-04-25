@@ -4,11 +4,19 @@ All notable changes to Alpha-OSK are documented in this file.
 
 ## [Unreleased]
 
+## [1.0.11] — 2026-04-25
+
+UX cleanup: standard taskbar minimize, persistent window size, plus the apostrophe-contractions work that landed on `main` after 1.0.10.
+
+### Changed
+- **Minimize behaves like Chrome now.** Clicking the title-bar `−` calls `Window.showMinimized()` and the OSK drops to the taskbar; click the taskbar entry to restore. Earlier builds set `Qt.Tool` and `WS_EX_TOOLWINDOW` to suppress the taskbar entry, which meant the minimize button had to `hide()` the window entirely — and the only path back was the easily-missed system-tray icon. Trade-off: the OSK now appears in Alt+Tab. `WS_EX_NOACTIVATE` still prevents focus theft on click.
+- **Window size is remembered across launches.** `savedWindowWidth` / `savedWindowHeight` added to the persisted settings; restored at the top of `Component.onCompleted` (before any other init that could fight a binding). Resize writes are debounced 300 ms to avoid hammering the OS settings store on every pixel during a drag.
+
 ### Added
-- **Apostrophe-less contractions now autocomplete and autocorrect.** Typing `im` surfaces `I'm` in the predictions and replaces with `I'm` on space; same for `dont` → `don't`, `youre` → `you're`, `cant` → `can't`, etc. Three pieces:
+- **Apostrophe-less contractions autocomplete and autocorrect.** Typing `im` surfaces `I'm` in the predictions and replaces to `I'm` on space; same for `dont` → `don't`, `youre` → `you're`, `cant` → `can't`, etc. Three pieces:
   - `'` added to `FuzzyWordGenerator._ALPHABET` so the insertion edit-distance path can produce contraction candidates from bare-form input.
   - `FuzzyWordGenerator._APOSTROPHE_INSERTION_PROB = 0.50` — apostrophe insertion gets a much higher per-edit probability than the generic letter-insertion penalty (0.15) because missing apostrophes are the dominant insertion error in real OSK typing. Without this, `i'm` got buried at rank 9 below noisier candidates like `him`, `aim`, `um`.
-  - 42 common contractions added to `data/base_dictionary.txt` with realistic frequencies (8000 for `i'm`, comparable to `hello`/`the`); 32 unambiguous bare-form → with-apostrophe entries added to `data/common_misspellings.txt` for the autocorrect-on-space path. Skipped ambiguous bare forms that are valid words on their own (`its`, `lets`, `were`, `wed`, `id`, `ill`, `hes`).
+  - 42 common contractions added to `data/base_dictionary.txt` with realistic frequencies (`i'm` at 8000, comparable to `hello` / `the`); 32 unambiguous bare-form → with-apostrophe entries added to `data/common_misspellings.txt` for the autocorrect-on-space path. Skipped bare forms that are valid words on their own (`its`, `lets`, `were`, `wed`, `id`, `ill`, `hes`).
 - **`load_base_dictionary` accepts a `word count` syntax** for entries that need a frequency higher than the default `+1` boost, so contractions can compete with the Google 10K wordlist's 1000–10000 range.
 
 ## [1.0.10] — 2026-04-25

@@ -33,7 +33,35 @@ Window {
         property bool savedAutoSaveOnExit: true
         property bool savedSwipeEnabled: false
         property bool savedAutoCheckUpdates: true
+        // Window geometry — restored on launch, saved (debounced) on
+        // resize.  0 means "no saved value yet, use the binding-driven
+        // default" — that path runs on a fresh install.
+        property int savedWindowWidth: 0
+        property int savedWindowHeight: 0
     }
+
+    // Set when Component.onCompleted finishes restoring the saved
+    // geometry.  Width/height-changed handlers gate on this so the
+    // restore itself doesn't fire a no-op save.
+    property bool _geometryRestored: false
+
+    // Debounce window-resize writes — onWidthChanged / onHeightChanged
+    // fire on every pixel during a drag, and Settings.write hits the
+    // OS registry/config synchronously.  Wait 300 ms after the last
+    // change before persisting.
+    Timer {
+        id: saveGeometryTimer
+        interval: 300
+        repeat: false
+        onTriggered: {
+            if (root._geometryRestored) {
+                appSettings.savedWindowWidth = root.width
+                appSettings.savedWindowHeight = root.height
+            }
+        }
+    }
+    onWidthChanged: if (_geometryRestored) saveGeometryTimer.restart()
+    onHeightChanged: if (_geometryRestored) saveGeometryTimer.restart()
 
     // Auto-update — bridge fills these in when checkForUpdate() finds
     // a signed newer release.  See src/updater.py for the security model.
@@ -61,6 +89,15 @@ Window {
     // Position once at startup — do NOT bind x/y to width/height or resize
     // will feel inverted (window re-centers on every pixel change)
     Component.onCompleted: {
+        // Restore saved window geometry first so the user gets the
+        // size they had last time, not a flash of the default size
+        // followed by a resize.  0 means "no value persisted yet".
+        if (appSettings.savedWindowWidth > 0)
+            root.width = Math.max(root.minimumWidth, appSettings.savedWindowWidth)
+        if (appSettings.savedWindowHeight > 0)
+            root.height = Math.max(root.minimumHeight, appSettings.savedWindowHeight)
+        root._geometryRestored = true
+
         // Load saved preferences
         root.showNavigation = appSettings.savedShowNavigation
         root.showNumpad = appSettings.savedShowNumpad
@@ -703,13 +740,17 @@ Window {
                     }
                 }
                 
-                // Minimize button
+                // Standard Windows minimize. Drops the OSK to the
+                // taskbar; click the taskbar entry to restore. Works
+                // because we no longer apply Qt.Tool / WS_EX_TOOLWINDOW
+                // (see _apply_window_flags), which were keeping us
+                // out of the taskbar entirely.
                 Rectangle {
                     width: 28
                     height: 24
                     radius: 4
                     color: minBtn.containsMouse ? "#444" : "transparent"
-                    
+
                     Rectangle {
                         anchors.centerIn: parent
                         width: 12
@@ -717,18 +758,13 @@ Window {
                         radius: 1
                         color: "#999"
                     }
-                    
+
                     MouseArea {
                         id: minBtn
                         anchors.fill: parent
                         hoverEnabled: true
                         cursorShape: Qt.PointingHandCursor
-                        // Qt.Tool + WindowStaysOnTopHint windows have no
-                        // taskbar entry, so Window.Minimized silently
-                        // no-ops on most X11 WMs (GNOME/KDE). Hide
-                        // instead — the tray icon's single-click toggle
-                        // is the canonical way to bring the OSK back.
-                        onClicked: root.hide()
+                        onClicked: root.showMinimized()
                     }
                 }
                 
