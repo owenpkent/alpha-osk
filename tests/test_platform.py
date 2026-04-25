@@ -162,6 +162,91 @@ class TestLinuxReplaceText:
         assert calls == []
 
 
+class TestWindowsReplaceText:
+    """WindowsKeySynthesizer.replace_text() — terminal-aware select-and-replace.
+
+    Bypasses ``__init__`` (which loads user32.dll) and stubs the event
+    builders so the tests can assert the dispatch behavior on any OS,
+    including the Linux CI lane.
+    """
+
+    def _make_synth(self, foreground_class: str):
+        from src.platform import windows as win_mod
+
+        synth = win_mod.WindowsKeySynthesizer.__new__(win_mod.WindowsKeySynthesizer)
+        captured: list = []
+        synth._inject = lambda events: captured.append(list(events))
+        synth._make_key_event = lambda vk, key_down: ("vk", vk, key_down)
+        synth._make_unicode_events = lambda c: [("uni", c)]
+        # Bypass GetForegroundWindow / GetClassNameW directly — mocking
+        # them via ctypes is brittle off-Windows.
+        synth._get_foreground_window_class = lambda: foreground_class
+        return synth, captured
+
+    def test_terminal_uses_backspace_path(self):
+        from src.platform.windows import VK_BACK
+        synth, captured = self._make_synth("ConsoleWindowClass")
+        synth.replace_text(3, "Ow")
+        assert captured == [[
+            ("vk", VK_BACK, True),  ("vk", VK_BACK, False),
+            ("vk", VK_BACK, True),  ("vk", VK_BACK, False),
+            ("vk", VK_BACK, True),  ("vk", VK_BACK, False),
+            ("uni", "O"), ("uni", "w"),
+        ]]
+
+    def test_windows_terminal_class_also_uses_backspace(self):
+        from src.platform.windows import VK_BACK
+        synth, captured = self._make_synth("CASCADIA_HOSTING_WINDOW_CLASS")
+        synth.replace_text(1, "x")
+        assert captured == [[
+            ("vk", VK_BACK, True), ("vk", VK_BACK, False),
+            ("uni", "x"),
+        ]]
+
+    def test_mintty_class_also_uses_backspace(self):
+        from src.platform.windows import VK_BACK
+        synth, captured = self._make_synth("mintty")
+        synth.replace_text(2, "")
+        assert captured == [[
+            ("vk", VK_BACK, True), ("vk", VK_BACK, False),
+            ("vk", VK_BACK, True), ("vk", VK_BACK, False),
+        ]]
+
+    def test_non_terminal_uses_shift_left_path(self):
+        from src.platform.windows import VK_SHIFT, VK_LEFT
+        synth, captured = self._make_synth("Chrome_WidgetWin_1")
+        synth.replace_text(2, "hi")
+        assert captured == [[
+            ("vk", VK_SHIFT, True),
+            ("vk", VK_LEFT, True),  ("vk", VK_LEFT, False),
+            ("vk", VK_LEFT, True),  ("vk", VK_LEFT, False),
+            ("vk", VK_SHIFT, False),
+            ("uni", "h"), ("uni", "i"),
+        ]]
+
+    def test_zero_backspace_in_terminal_just_types(self):
+        synth, captured = self._make_synth("ConsoleWindowClass")
+        synth.replace_text(0, "abc")
+        assert captured == [[("uni", "a"), ("uni", "b"), ("uni", "c")]]
+
+    def test_zero_backspace_outside_terminal_skips_selection(self):
+        from src.platform.windows import VK_SHIFT
+        synth, captured = self._make_synth("Notepad")
+        synth.replace_text(0, "abc")
+        # No Shift bookends when there's nothing to select.
+        events = captured[0]
+        assert all(e[0] == "uni" for e in events)
+        assert ("vk", VK_SHIFT, True) not in events
+
+    def test_unknown_class_treated_as_non_terminal(self):
+        from src.platform.windows import VK_SHIFT
+        synth, captured = self._make_synth("")
+        synth.replace_text(1, "x")
+        # Empty class name (e.g. GetClassNameW failed) → safe default
+        # is the existing Shift+Left path, not BackSpace.
+        assert ("vk", VK_SHIFT, True) in captured[0]
+
+
 class TestPlatformInfo:
     """get_platform_info diagnostic."""
 

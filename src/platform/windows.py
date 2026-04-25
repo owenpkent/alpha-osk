@@ -282,6 +282,15 @@ class WindowsKeySynthesizer(KeySynthesizerBase):
         ]
         self._send_input.restype = wintypes.UINT
 
+        # Pin argtypes so the foreground-window-class probe (used to
+        # detect terminals in replace_text) returns correct values on 64-bit.
+        self._user32.GetForegroundWindow.argtypes = []
+        self._user32.GetForegroundWindow.restype = wintypes.HWND
+        self._user32.GetClassNameW.argtypes = [
+            wintypes.HWND, wintypes.LPWSTR, ctypes.c_int,
+        ]
+        self._user32.GetClassNameW.restype = ctypes.c_int
+
         # Check UIAccess status
         self._has_ui_access = self._check_ui_access()
         if self._has_ui_access:
@@ -389,19 +398,35 @@ class WindowsKeySynthesizer(KeySynthesizerBase):
         """
         Atomically select-and-replace characters with new text.
 
-        Uses Shift+Left arrow to select characters (instead of Backspace)
-        so the field never goes empty — some apps (Slack, Teams) misbehave
-        when Backspace empties the input field (they close the compose area
-        or shift focus).  Typing the replacement text overwrites the
-        selection.  If ``backspace_count`` is 0, just types the text.
+        Default path uses Shift+Left selection so the field never goes
+        empty — chat apps (Slack, Teams, Discord) close their compose
+        area if Backspace empties the input.  Typing the replacement
+        text overwrites the selection.
 
-        All events are sent in a **single** ``SendInput`` call so the
-        target application sees the operation atomically.
-
-        Args:
-            backspace_count: Number of characters to select and replace.
-            text: Replacement string to type (overwrites selection).
+        Terminals are an exception.  In ``ConsoleWindowClass`` (cmd /
+        powershell / conhost), Windows Terminal, and mintty, Shift+Left
+        moves the cursor instead of selecting, so the typed-letters
+        prefix would survive *and* the inserted word would land at the
+        new cursor position — leaving the user's original characters at
+        the end of the inserted word.  For those windows we fall back
+        to BackSpace + retype, which terminal line editors handle
+        correctly.  (BackSpace would break Slack et al., but those
+        aren't terminals.)
         """
+        if self._foreground_is_terminal():
+            events: List[INPUT] = []
+            for _ in range(backspace_count):
+                events.append(self._make_key_event(VK_BACK, key_down=True))
+                events.append(self._make_key_event(VK_BACK, key_down=False))
+            for char in text:
+                events.extend(self._make_unicode_events(char))
+            if events:
+                self._inject(events)
+            self._log_send(
+                f"replace (terminal) backspace={backspace_count} text='{text}'"
+            )
+            return
+
         events: List[INPUT] = []
 
         if backspace_count > 0:
@@ -420,6 +445,33 @@ class WindowsKeySynthesizer(KeySynthesizerBase):
         self._log_send(
             f"replace select={backspace_count} text='{text}'"
         )
+
+    # Window classes where Shift+Left moves the cursor without
+    # selecting, breaking the default replace_text path.  Add new
+    # entries here as terminal emulators are encountered.
+    _TERMINAL_WINDOW_CLASSES = frozenset({
+        "ConsoleWindowClass",             # cmd.exe / powershell / conhost
+        "CASCADIA_HOSTING_WINDOW_CLASS",  # Windows Terminal
+        "mintty",                         # Git Bash / Cygwin / MSYS2
+    })
+
+    def _foreground_is_terminal(self) -> bool:
+        """True iff the current foreground window is a known terminal."""
+        return self._get_foreground_window_class() in self._TERMINAL_WINDOW_CLASSES
+
+    def _get_foreground_window_class(self) -> str:
+        """Win32 class name of the foreground window, or '' on failure."""
+        try:
+            hwnd = self._user32.GetForegroundWindow()
+            if not hwnd:
+                return ""
+            buf = ctypes.create_unicode_buffer(256)
+            n = self._user32.GetClassNameW(hwnd, buf, 256)
+            if n <= 0:
+                return ""
+            return buf.value
+        except OSError:
+            return ""
 
     def send_combination(self, keys: List[str]) -> None:
         """
