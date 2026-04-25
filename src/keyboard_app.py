@@ -28,6 +28,7 @@ See Also
 from __future__ import annotations
 
 import logging
+import logging.handlers
 import os
 import sys
 from pathlib import Path
@@ -38,7 +39,7 @@ from PySide6.QtQml import QQmlApplicationEngine
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
 from .keyboard_bridge import KeyboardBridge
-from .platform import CURRENT_PLATFORM, get_platform_info
+from .platform import CURRENT_PLATFORM, get_config_dir, get_platform_info
 
 _logger = logging.getLogger("KeyboardApp")
 
@@ -179,12 +180,45 @@ def _apply_windows_extended_styles(root) -> None:
         _logger.warning("Failed to apply Windows extended styles: %s", e)
 
 
+def _configure_logging() -> Path | None:
+    """Wire up stderr + rotating file logging.
+
+    The frozen build runs without a console, so stderr is /dev/null —
+    file logging is the only way users can capture updater errors,
+    crash tracebacks, etc. Returns the log path (or None on failure).
+    """
+    fmt = "%(asctime)s [%(name)s] %(levelname)s: %(message)s"
+    root = logging.getLogger()
+    root.setLevel(logging.INFO)
+    for h in list(root.handlers):
+        root.removeHandler(h)
+
+    stream = logging.StreamHandler()
+    stream.setFormatter(logging.Formatter(fmt))
+    root.addHandler(stream)
+
+    log_path: Path | None = None
+    try:
+        log_path = get_config_dir() / "alpha-osk.log"
+        file_handler = logging.handlers.RotatingFileHandler(
+            log_path, maxBytes=2 * 1024 * 1024, backupCount=3, encoding="utf-8",
+        )
+        file_handler.setFormatter(logging.Formatter(fmt))
+        root.addHandler(file_handler)
+    except OSError as e:
+        # Non-fatal: stderr handler still works in dev. Frozen users
+        # without a writable APPDATA are vanishingly rare.
+        root.warning("Could not open log file %s: %s", log_path, e)
+        log_path = None
+
+    return log_path
+
+
 def main() -> int:
     """Launch the Alpha-OSK on-screen keyboard."""
-    logging.basicConfig(
-        level=logging.INFO,
-        format="[%(name)s] %(levelname)s: %(message)s",
-    )
+    log_path = _configure_logging()
+    if log_path is not None:
+        _logger.info("Log file: %s", log_path)
     # Enable debug logging for prediction to see sources
     logging.getLogger("HybridPredictor").setLevel(logging.DEBUG)
 
