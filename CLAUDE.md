@@ -197,6 +197,14 @@ python -m pytest -k "fuzzy"         # Fuzzy recognizer tests
 
 Linting: `ruff check src/`, type checking: `mypy src/`
 
+### Pre-push check
+
+Run `python check.py` before `git push` to catch lint / type / test
+failures locally instead of waiting for CI's red X (the same three
+gates GitHub Actions runs).  Default mode skips coverage tracking
+(~85 s); add `--full` to include the `--cov-fail-under=60` gate
+(~3 min, matches CI exactly).
+
 ## Word Suppression
 
 Users can right-click prediction pills to:

@@ -31,3 +31,14 @@ ignore_missing_imports = true
 [[tool.mypy.overrides]]
 module = ["src.platform.windows", "src.platform.linux", "src.keyboard_app"]
 ignore_errors = true
+
+# Optional transitive deps that may be installed locally (e.g. via the
+# commented-out transformers extra in requirements.txt) but never on
+# CI.  `follow_imports = "skip"` bypasses parsing of these libraries so
+# their py3.10-syntax features (huggingface_hub uses `match`) don't
+# crash mypy when our project targets py3.9.  CI behaviour is
+# unchanged — these modules aren't installed there, so the override is
+# a no-op.
+[[tool.mypy.overrides]]
+module = ["huggingface_hub.*", "transformers.*", "torch.*"]
+follow_imports = "skip"
