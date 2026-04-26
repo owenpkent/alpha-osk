@@ -4,7 +4,9 @@ All notable changes to Alpha-OSK are documented in this file.
 
 ## [Unreleased]
 
-Lifetime analytics, a stuck-key visual fix, the height-binding bug behind several recent layout complaints, and a Windows code-review sweep.
+## [1.0.13] — 2026-04-26
+
+Lifetime analytics, a stuck-key visual fix, the height-binding bug behind several recent layout complaints, a Windows code-review sweep, and a local pre-push CI parity script.
 
 ### Added
 - **Lifetime analytics — every metric, not just totals.** `src/analytics.py` already persisted four lifetime counters (words, keystrokes saved, sessions, minutes), but everything else — WPM, prediction hit rate, savings %, backspace rate, top words, key frequencies, prediction quality score — was session-only. Now every session counter has an `_alltime_*` mirror that's loaded, merged on save, and surfaced in `get_session_stats()` as `alltime<Metric>`. `_compute_quality_score` takes kwargs so the same code computes either session or lifetime score. `AnalyticsDashboard.qml` got a Lifetime / Session toggle that drives every tile (Speed, Saved, Predictions Used, Corrections, Top Words). The "Prediction Quality" bar always reads lifetime — session quality is noisy until you've typed enough words. `word_freq` is capped at 5000 unique entries on save (top-N by count) so `analytics.json` stays bounded.
@@ -26,9 +28,13 @@ Lifetime analytics, a stuck-key visual fix, the height-binding bug behind severa
 - **Installer welcome-page copy is now marketing, not a feature list.** Was: "Alpha-OSK is an AI-powered on-screen keyboard for Windows. Features: smart word prediction… UIAccess… 9 themes…". Now: "The smartest keyboard you'll never touch. Click less. Type faster. Alpha-OSK predicts what you want to say before you finish typing it." Takes effect on the next `python build/windows/build.py` run since it's baked into the NSIS script.
 
 ### Internal
+- **`check.py` — local pre-push CI parity.** Runs the same three gates GitHub Actions runs (`ruff`, `mypy`, `pytest`) so lint failures get caught locally instead of after a red CI run. Default mode skips coverage tracking (~85 s); `--full` adds the `--cov-fail-under=60` gate to match CI exactly (~3 min). Ships with a `[tool.mypy.overrides]` block in `pyproject.toml` that sets `follow_imports = "skip"` on `huggingface_hub.*` / `transformers.*` / `torch.*` — those are optional transitive deps via the commented-out transformers extra in `requirements.txt`; CI doesn't install them, but if they're present locally mypy used to choke on `huggingface_hub`'s py3.10 `match` syntax (we target py3.9). `CLAUDE.md` has a new "Pre-push check" section under Testing.
 - **`KeyButton._visualPressed`** is the new contract for press visuals. New visual bindings should use `keyRoot._visualPressed`, not `mouseArea.pressed`.
 - **`_SINGLETON_LOCK`** in `keyboard_app.py` is module-level on purpose — `QSharedMemory`'s segment is freed when the holding object is destroyed, so a function-local would release the lock immediately. If you refactor `_acquire_singleton_or_surface`, keep the reference alive somewhere with longer lifetime than `QApplication`.
 - **`predPillHeight` decoupling**: an interim version of the resize-fix work made `predPillHeight` track `keyW` instead of `keyH` to break a (genuine) binding loop. The height-binding fix above made that loop impossible — `predPillHeight` is back to tracking `keyH * 0.72` like the original.
+
+### Fixed (lint hotfix)
+- **`E501` in `src/analytics.py:135` and `I001` in `src/keyboard_app.py:37`** — the two ruff errors that turned the first push of this work red on CI. Line-broke the `prediction_rank_*` assignments and reordered the `PySide6.QtCore` import to put `QSharedMemory` before `Qt` (case-insensitive alphabetical).
 
 ## [1.0.12] — 2026-04-25
 
