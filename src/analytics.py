@@ -131,8 +131,12 @@ class TypingAnalytics(QObject):
             "minutes": self._alltime_minutes + (time.time() - self._session_start) / 60,
             "backspaces": self._alltime_backspaces + self._backspace_count,
             "prediction_offers": self._alltime_prediction_offers + self._prediction_offers,
-            "prediction_rank_sum": self._alltime_prediction_rank_sum + self._prediction_rank_sum,
-            "prediction_rank_count": self._alltime_prediction_rank_count + self._prediction_rank_count,
+            "prediction_rank_sum": (
+                self._alltime_prediction_rank_sum + self._prediction_rank_sum
+            ),
+            "prediction_rank_count": (
+                self._alltime_prediction_rank_count + self._prediction_rank_count
+            ),
             "word_freq": dict(merged_words),
             "key_freq": dict(merged_keys),
         }

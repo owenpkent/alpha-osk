@@ -34,7 +34,7 @@ import os
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QSharedMemory, QTimer, QUrl
+from PySide6.QtCore import QSharedMemory, Qt, QTimer, QUrl
 from PySide6.QtGui import QIcon
 from PySide6.QtQml import QQmlApplicationEngine
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
