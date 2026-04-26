@@ -935,6 +935,16 @@ class KeyboardBridge(QObject):
             self._synth.release_modifier("win")
             self._win_active = False
 
+        # Release the password detector's COM interface + CoInitializeEx
+        # token.  Negligible at process exit (the OS reaps it anyway) but
+        # makes the lifecycle explicit and lets a hot-reload path tear
+        # things down cleanly without leaking COM apartments.
+        try:
+            from .platform import password_detect
+            password_detect.shutdown()
+        except Exception:
+            pass
+
     @Slot()
     def clearUserData(self) -> None:
         """Clear user-learned vocabulary and overwrite saved models on disk."""
@@ -1021,6 +1031,10 @@ class KeyboardBridge(QObject):
         Windows: ``GetForegroundWindow()`` via ctypes.
         X11:    ``xdotool getactivewindow`` subprocess (~5 ms).
         Wayland / other: returns 0 (no supported API).
+
+        Errors are logged once per unique exception type so a recurring
+        platform issue (xdotool missing, ACCESS_DENIED, etc.) shows up
+        in logs without spamming at the 4 Hz poll cadence.
         """
         import sys
         try:
@@ -1040,7 +1054,18 @@ class KeyboardBridge(QObject):
                 )
                 out = result.stdout.strip()
                 return int(out) if result.returncode == 0 and out else 0
-        except Exception:
+        except Exception as exc:
+            # Dedupe by exception type so a missing xdotool or a transient
+            # Win32 access denial doesn't flood logs at 4 Hz.
+            seen = getattr(self, "_fg_logged_errors", None)
+            if seen is None:
+                seen = set()
+                self._fg_logged_errors = seen
+            key = type(exc).__name__
+            if key not in seen:
+                seen.add(key)
+                _logger.warning("Foreground-window detection failed (%s): %s",
+                                key, exc)
             return 0
         return 0
 

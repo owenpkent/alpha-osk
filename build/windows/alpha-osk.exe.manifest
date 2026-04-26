@@ -9,14 +9,26 @@
   ==================
   When uiAccess="true" is set AND the binary is properly signed:
 
-  1. The keyboard can send keystrokes to ELEVATED windows (e.g. an
-     admin Command Prompt, Task Manager, or Registry Editor).
-  2. The keyboard can appear ABOVE the Secure Desktop (Ctrl+Alt+Del
-     screen, UAC consent prompts, Windows login screen).
-  3. The keyboard can interact with windows at ALL integrity levels.
+  1. The keyboard can send keystrokes to ELEVATED windows on the regular
+     desktop (e.g. an admin Command Prompt, Task Manager, Registry Editor).
+  2. The keyboard can interact with windows at ALL integrity levels — but
+     only on the regular desktop.
 
   Without UIAccess, SendInput() silently fails when the target window
   runs at a higher integrity level than Alpha-OSK.
+
+  What UIAccess Does NOT Do
+  =========================
+  UIAccess does NOT grant access to the Windows Secure Desktop.  The Secure
+  Desktop is where UAC consent prompts, Ctrl+Alt+Del, and the login/lock
+  screens are drawn — and only Microsoft-signed processes (winlogon, the
+  built-in osk.exe, Magnifier, Narrator) are allowed there.  There is no
+  public mechanism for a third-party app to appear on the Secure Desktop,
+  no matter how it's signed.
+
+  See docs/WINDOWS.md → "UAC and the Secure Desktop" for the
+  PromptOnSecureDesktop=0 workaround that moves UAC consent prompts back
+  to the regular desktop, where UIAccess does work.
 
   Requirements for UIAccess
   =========================

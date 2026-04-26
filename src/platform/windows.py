@@ -138,6 +138,13 @@ VK_SCROLL = 0x91        # Scroll Lock
 #  Win32 Structures (ctypes)
 # ====================================================================== #
 
+# ULONG_PTR is a pointer-sized unsigned integer (4 bytes on 32-bit,
+# 8 bytes on 64-bit Windows).  c_size_t is the cross-version match;
+# wintypes.ULONG_PTR isn't guaranteed across all Python versions we
+# support.
+ULONG_PTR = ctypes.c_size_t
+
+
 class KEYBDINPUT(ctypes.Structure):
     """
     Win32 KEYBDINPUT structure.
@@ -150,14 +157,20 @@ class KEYBDINPUT(ctypes.Structure):
                      ``KEYEVENTF_UNICODE`` is set.
         dwFlags:     Combination of ``KEYEVENTF_*`` constants.
         time:        Timestamp (0 = system fills it in).
-        dwExtraInfo: Extra info pointer (typically 0).
+        dwExtraInfo: Opaque ULONG_PTR — application-defined data
+                     retrievable via ``GetMessageExtraInfo``.  Set to 0
+                     since we don't tag our input.  MSDN types this as
+                     ``ULONG_PTR`` (an integer, not a real pointer); the
+                     old ``POINTER(c_ulong)`` typing was wrong and led
+                     us to allocate Python objects whose addresses
+                     could be reaped before SendInput consumed them.
     """
     _fields_ = [
         ("wVk", wintypes.WORD),
         ("wScan", wintypes.WORD),
         ("dwFlags", wintypes.DWORD),
         ("time", wintypes.DWORD),
-        ("dwExtraInfo", ctypes.POINTER(ctypes.c_ulong)),
+        ("dwExtraInfo", ULONG_PTR),
     ]
 
 
@@ -560,7 +573,7 @@ class WindowsKeySynthesizer(KeySynthesizerBase):
         inp._input.ki.wScan = 0
         inp._input.ki.dwFlags = flags
         inp._input.ki.time = 0
-        inp._input.ki.dwExtraInfo = ctypes.pointer(ctypes.c_ulong(0))
+        inp._input.ki.dwExtraInfo = 0
         return inp
 
     def _make_unicode_events(self, char: str) -> List[INPUT]:
@@ -592,7 +605,7 @@ class WindowsKeySynthesizer(KeySynthesizerBase):
                     | (KEYEVENTF_KEYUP if key_up else 0)
                 )
                 inp._input.ki.time = 0
-                inp._input.ki.dwExtraInfo = ctypes.pointer(ctypes.c_ulong(0))
+                inp._input.ki.dwExtraInfo = 0
                 events.append(inp)
         else:
             # Supplementary character — UTF-16 surrogate pair
@@ -609,9 +622,7 @@ class WindowsKeySynthesizer(KeySynthesizerBase):
                         | (KEYEVENTF_KEYUP if key_up else 0)
                     )
                     inp._input.ki.time = 0
-                    inp._input.ki.dwExtraInfo = ctypes.pointer(
-                        ctypes.c_ulong(0)
-                    )
+                    inp._input.ki.dwExtraInfo = 0
                     events.append(inp)
 
         return events

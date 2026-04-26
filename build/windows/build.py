@@ -448,7 +448,7 @@ Var CreateStartMenuShortcut
 {"!define MUI_WELCOMEFINISHPAGE_BITMAP " + '"' + sidebar_path + '"' if has_sidebar else ""}
 {"!define MUI_UNWELCOMEFINISHPAGE_BITMAP " + '"' + sidebar_path + '"' if has_sidebar else ""}
 !define MUI_WELCOMEPAGE_TITLE "Welcome to Alpha-OSK ${{APP_VERSION}}"
-!define MUI_WELCOMEPAGE_TEXT "Alpha-OSK is an AI-powered on-screen keyboard for Windows.$\\r$\\n$\\r$\\nFeatures:$\\r$\\n  - Smart word prediction that learns your vocabulary$\\r$\\n  - Works with elevated applications (UIAccess)$\\r$\\n  - 9 themes, accessibility profiles, privacy mode$\\r$\\n$\\r$\\nClick Next to continue."
+!define MUI_WELCOMEPAGE_TEXT "The smartest keyboard you'll never touch.$\\r$\\n$\\r$\\nClick less. Type faster. Alpha-OSK predicts what you want to say before you finish typing it.$\\r$\\n$\\r$\\nClick Next to install."
 !define MUI_FINISHPAGE_TITLE "Alpha-OSK Installed"
 !define MUI_FINISHPAGE_TEXT "Alpha-OSK has been installed on your computer.$\\r$\\n$\\r$\\nClick Launch to start using it now."
 ; Launch as the original (non-elevated) user via Explorer shell

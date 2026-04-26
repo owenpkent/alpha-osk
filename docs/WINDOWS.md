@@ -11,6 +11,7 @@ Complete guide to running, building, and deploying Alpha-OSK on Windows.
 - [Key Synthesis: SendInput API](#key-synthesis-sendinput-api)
 - [Window Behaviour](#window-behaviour)
 - [UIAccess and EV Code Signing](#uiaccess-and-ev-code-signing)
+- [UAC and the Secure Desktop](#uac-and-the-secure-desktop)
 - [Building a Standalone Executable](#building-a-standalone-executable)
 - [Code Signing Walkthrough](#code-signing-walkthrough)
 - [Installation for UIAccess](#installation-for-uiaccess)
@@ -166,8 +167,6 @@ windows running at a higher integrity level.  This means:
 
 - ❌ Cannot type into an **elevated Command Prompt** (Run as Admin).
 - ❌ Cannot type into **Task Manager** or **Registry Editor**.
-- ❌ Cannot appear above **UAC consent prompts**.
-- ❌ Cannot appear on the **Secure Desktop** (Ctrl+Alt+Del screen).
 
 For an on-screen keyboard used by someone with a motor disability, this is
 a serious accessibility barrier.
@@ -178,9 +177,11 @@ Windows provides a mechanism called **UIAccess** specifically designed for
 assistive technology like on-screen keyboards.  When a process has UIAccess
 privileges:
 
-- ✅ `SendInput` reaches **all** windows, regardless of integrity level.
-- ✅ The keyboard can appear **above UAC prompts**.
-- ✅ The keyboard can appear on the **Secure Desktop**.
+- ✅ `SendInput` reaches **all** elevated windows on the regular desktop,
+  regardless of integrity level.
+- ⚠️ **Does not** grant access to the Secure Desktop (UAC consent prompts,
+  Ctrl+Alt+Del, lock screen).  See [UAC and the Secure Desktop](#uac-and-the-secure-desktop)
+  below for the only available workaround.
 
 ### Requirements for UIAccess
 
@@ -224,6 +225,58 @@ from src.platform import get_platform_info
 info = get_platform_info()
 print(info["ui_access"])  # True or False
 ```
+
+### UAC and the Secure Desktop
+
+UIAccess solves elevated-window injection on the **regular desktop** but
+does **not** get Alpha-OSK onto the **Secure Desktop**, which is where
+Windows draws:
+
+- UAC consent prompts (the password box that appears when an app asks for
+  admin rights),
+- the Ctrl+Alt+Del screen,
+- the login and lock screens.
+
+The Secure Desktop is a separate, isolated session that only allows
+specific Microsoft-signed processes (`winlogon`, the built-in `osk.exe`,
+Magnifier, Narrator).  This is intentional: it prevents malware from
+spoofing the prompt or simulating clicks to approve elevation.  No
+EV-signed third-party app can join — there is no public API.
+
+#### Workaround for UAC consent prompts only
+
+You can tell Windows to display UAC prompts on the **regular desktop**
+instead of the Secure Desktop.  Once it's there, Alpha-OSK's existing
+UIAccess privilege is enough to type into it.
+
+**Trade-off:** with the Secure Desktop disabled, any same-session process
+running as the user can theoretically observe or interact with the UAC
+prompt.  This weakens UAC's spoofing protection.  Users with
+accessibility needs often accept this trade-off; document it clearly in
+release notes if you ship guidance on enabling it.
+
+**Via `secpol.msc`** (preferred — survives Windows Update):
+
+1. Run `secpol.msc` as administrator.
+2. Navigate to **Local Policies → Security Options**.
+3. Set **"User Account Control: Switch to the secure desktop when
+   prompting for elevation"** to **Disabled**.
+4. Reboot.
+
+**Via the registry** (equivalent — useful for automation or Home edition,
+which lacks `secpol.msc`):
+
+```
+HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System
+    PromptOnSecureDesktop = 0    (REG_DWORD)
+```
+
+#### What about the login/lock screen?
+
+There is no override for these.  They are always on the Secure Desktop.
+The only on-screen keyboard available there is Microsoft's `osk.exe`,
+launched via the Ease of Access (wheelchair) menu in the bottom-left of
+the login screen.  Users who need an OSK at login should rely on that.
 
 ---
 

@@ -216,6 +216,32 @@ Item {
                         }
                     }
 
+                    // -- UAC AND ADMIN PROMPTS --
+                    SettingsSection {
+                        title: "UAC and Admin Prompts"
+                        Layout.fillWidth: true
+
+                        ColumnLayout {
+                            Layout.fillWidth: true
+                            spacing: 6
+
+                            HelpText { text: "When Windows asks for an administrator password (a UAC prompt), Alpha-OSK doesn't appear by default — only Microsoft's built-in on-screen keyboard does." }
+                            HelpText { text: "That's because UAC prompts run on the Windows <b>Secure Desktop</b>, an isolated session that only allows specific Microsoft-signed processes. No third-party app, no matter how it's signed, can appear there. This is a security feature — it stops malware from faking the prompt or stealing your password." }
+                            HelpText { text: "<b>Workaround:</b> you can tell Windows to put UAC prompts on the regular desktop instead. Once it's there, Alpha-OSK can type into it normally." }
+                            HelpText { text: "<b>How to enable:</b>" }
+                            HelpText { text: "1. Press <b>Win + R</b>, type <code>secpol.msc</code>, and press Enter (requires admin)." }
+                            HelpText { text: "2. Go to <b>Local Policies → Security Options</b>." }
+                            HelpText { text: "3. Find <b>\"User Account Control: Switch to the secure desktop when prompting for elevation\"</b> and set it to <b>Disabled</b>." }
+                            HelpText { text: "4. Reboot." }
+
+                            HelpText {
+                                text: "<b>Trade-off:</b> with the Secure Desktop disabled, any program running as you could in theory see or interact with a UAC prompt. Only do this if you understand and accept that risk."
+                                color: "#cc9966"
+                            }
+                            HelpText { text: "<b>Login screen, lock screen, and Ctrl+Alt+Del:</b> these are always on the Secure Desktop and there's no override. Use Windows' built-in on-screen keyboard from the Ease of Access menu (the wheelchair icon) for those." }
+                        }
+                    }
+
                     // -- VOCABULARY PACKS --
                     SettingsSection {
                         title: "Vocabulary Packs"

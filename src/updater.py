@@ -210,13 +210,12 @@ def check_for_update(
     """Hit the Releases API and return an UpdateInfo iff a newer
     properly-shaped release exists.  Returns None on any error — the
     updater path is best-effort and must never crash the app."""
-    # Both checks are defensive — at runtime ``api_url`` is the constant
-    # above.  Tests pass the constant explicitly; refusing anything else
-    # stops a future careless override from pointing the updater at an
-    # attacker-controlled host.
-    if not api_url.startswith(
-        "https://api.github.com/repos/okstudio1/alpha-osk-releases/"
-    ):
+    # Defensive — at runtime ``api_url`` is the constant above.  Tests
+    # pass the constant explicitly; refusing anything else stops a
+    # future careless override from pointing the updater at any other
+    # endpoint, even within the same repo.  Exact equality is tighter
+    # than a prefix match: it pins the path, not just the host+repo.
+    if api_url != GITHUB_API_URL:
         _logger.error("Refusing non-pinned API URL: %s", api_url)
         return None
 

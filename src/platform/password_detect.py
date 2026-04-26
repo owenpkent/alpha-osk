@@ -64,6 +64,27 @@ def is_password_field() -> bool:
         return False
 
 
+def shutdown() -> None:
+    """Release any resources held by the active detector.
+
+    Safe to call multiple times.  The Windows UIA detector holds a COM
+    interface pointer and a CoInitializeEx token that should be paired
+    with a Release/CoUninitialize on graceful exit.  No-op for other
+    detectors.
+    """
+    global _detector
+    det = _detector
+    _detector = None
+    if det is None:
+        return
+    close = getattr(det, "close", None)
+    if callable(close):
+        try:
+            close()
+        except Exception as exc:
+            _logger.debug("Password detector close failed: %s", exc)
+
+
 def _create_detector() -> _Detector:
     if sys.platform == "win32":
         det = _WindowsUIADetector()
@@ -268,11 +289,18 @@ if sys.platform == "win32":
         def __init__(self) -> None:
             self.available = False
             self._automation = ctypes.c_void_p()
+            # Did *we* initialise COM?  Only call CoUninitialize if so —
+            # never tear down a context another caller set up.  S_FALSE
+            # (1) means COM was already initialised on this thread, so
+            # we did not take ownership and must not uninit.
+            self._owns_com = False
 
             try:
                 ole32 = ctypes.windll.ole32
                 hr = ole32.CoInitializeEx(None, 0)
-                if hr not in (0, 1):  # S_OK or S_FALSE
+                if hr == 0:  # S_OK — we initialised it
+                    self._owns_com = True
+                elif hr != 1:  # S_FALSE = already inited; anything else fails
                     return
 
                 hr = ole32.CoCreateInstance(
@@ -281,11 +309,33 @@ if sys.platform == "win32":
                     ctypes.byref(self._automation),
                 )
                 if hr != 0 or not self._automation:
+                    if self._owns_com:
+                        ole32.CoUninitialize()
+                        self._owns_com = False
                     return
 
                 self.available = True
             except Exception as exc:
                 _logger.debug("UIA init failed: %s", exc)
+                if self._owns_com:
+                    try:
+                        ctypes.windll.ole32.CoUninitialize()
+                    except Exception:
+                        pass
+                    self._owns_com = False
+
+        def close(self) -> None:
+            """Release the IUIAutomation interface and uninitialise COM."""
+            if self._automation:
+                _com_release(self._automation)
+                self._automation = ctypes.c_void_p()
+            self.available = False
+            if self._owns_com:
+                try:
+                    ctypes.windll.ole32.CoUninitialize()
+                except Exception:
+                    pass
+                self._owns_com = False
 
         def check(self) -> bool:
             if not self.available or not self._automation:
