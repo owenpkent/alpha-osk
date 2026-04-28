@@ -51,6 +51,13 @@ Item {
 
     // Signals
     signal keyPressed()
+    // Right-click — emitted on right mouse button.  Caller decides what
+    // to do (typically: type the shifted variant of this key without
+    // flipping the sticky shift state).  Press visuals + ripple still
+    // fire so the user gets the same tactile feedback as a left-click,
+    // but the auto-repeat timer never starts — right-click is a
+    // deliberate one-shot, not a hold.
+    signal keyRightPressed()
 
     width: keyWidth
     height: keyHeight
@@ -183,6 +190,7 @@ Item {
         id: mouseArea
         anchors.fill: parent
         hoverEnabled: true
+        acceptedButtons: Qt.LeftButton | Qt.RightButton
 
         onPressed: function(mouse) {
             // Debounce: drop any second press within debounceMs of the
@@ -209,6 +217,13 @@ Item {
             ripple.width = 0
             ripple.opacity = 0
             rippleAnim.start()
+
+            if (mouse.button === Qt.RightButton) {
+                // Right-click is a one-shot — never auto-repeats, and
+                // the caller decides what (if anything) to type.
+                keyRoot.keyRightPressed()
+                return
+            }
 
             keyRoot.keyPressed()
             // Enable repeat based on enableRepeat property (not isSpecial)

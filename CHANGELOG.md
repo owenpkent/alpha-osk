@@ -4,6 +4,18 @@ All notable changes to Alpha-OSK are documented in this file.
 
 ## [Unreleased]
 
+## [1.0.14] — 2026-04-28
+
+Right-click on a key types its shifted variant, like the Windows on-screen keyboard. Plus the design doc for the long-press alternates feature (deferred — see "Why this is paused" section in the doc).
+
+### Added
+- **Right-click → shifted variant.** Right-click on any character key types the shifted glyph (`!` from `1`, `<` from `,`, `A` from `a`) without flipping the sticky shift state. Modifier and special keys are deliberate no-ops. Toggle in *Settings → Input → "Right-Click for Shifted Character"*; default ON since left-click behaviour is unaffected. `KeyButton.qml` gains a `keyRightPressed` signal; `MouseArea` accepts both buttons but the right-button branch returns before the auto-repeat path so right-click is always a one-shot. Settings flow mirrors the swipe toggle (`savedRightClickShift` in the QML `Settings {}`).
+- **`KeyboardBridge.pressKeyLiteral`.** New `@Slot(str)` that types a character verbatim, bypassing the shift / caps-lock case normalization that `pressKey` applies. Right-click goes through this slot — `pressKey` was lowercasing the `'A'` we'd already chosen back to `'a'`. Internally both slots now delegate to `_press_char(key, literal)`; existing `pressKey` callers and behaviour are unchanged.
+- **`docs/LONG_PRESS_ALTERNATES.md` — design doc for the deferred Gboard-style press-and-hold-for-accents feature.** Includes the data file format (`data/key_alternates.json`), the popup architecture, the press-on-release timing change required to implement it, and the reason it's paused: making press timing depend on a hold threshold is hostile to slow-motor users, which is exactly the audience this OSK serves. Picked back up when adding non-English layouts or when a user explicitly asks for diacritics.
+
+### Internal
+- **`KeyButton.keyRightPressed`** is the new contract for right-click handling. Press visuals + ripple still fire so the user gets the same tactile feedback as a left-click; only the auto-repeat timer is skipped (right-click is a one-shot).
+
 ## [1.0.13] — 2026-04-26
 
 Lifetime analytics, a stuck-key visual fix, the height-binding bug behind several recent layout complaints, a Windows code-review sweep, and a local pre-push CI parity script.

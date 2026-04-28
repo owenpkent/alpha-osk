@@ -32,6 +32,7 @@ Window {
         property bool savedAutoCapitalizeAfterPunctuation: false
         property bool savedAutoSaveOnExit: true
         property bool savedSwipeEnabled: false
+        property bool savedRightClickShift: true
         property bool savedAutoCheckUpdates: true
         // Window WIDTH — restored on launch, saved (debounced) on resize.
         // 0 means "no saved value yet, use the binding-driven default"
@@ -206,6 +207,11 @@ Window {
 
     // Swipe / glide typing — when on, dragging across keys decodes a word.
     property bool swipeEnabled: appSettings.savedSwipeEnabled
+
+    // Right-click on a char key types its shifted variant (e.g. "1" → "!",
+    // "a" → "A") without flipping the sticky shift state.  Purely additive
+    // — left-click behaviour is unchanged whether this is on or off.
+    property bool rightClickShift: appSettings.savedRightClickShift
 
     // Char-key registry — populated by each KeyButton on creation; consumed
     // by SwipeOverlay for hit testing and by buildSwipeLayout() for the
@@ -1066,6 +1072,31 @@ Window {
                                         keyboard.pressSpecialKey(kd.action)
                                     }
                                 }
+
+                                // Right-click on a char key → shifted glyph
+                                // (e.g. "!" on "1") or uppercase letter,
+                                // without touching the sticky shift state.
+                                // Uses pressKeyLiteral because pressKey
+                                // applies shift/caps case normalization
+                                // and would lowercase the "A" we just
+                                // chose back to "a".  Modifier / special
+                                // keys are deliberate no-ops — right-
+                                // clicking Shift or Enter has no obvious
+                                // meaning.
+                                onKeyRightPressed: {
+                                    if (!root.rightClickShift) return
+                                    if (kd.type !== "char") return
+                                    var rch = ""
+                                    if (kd.shifted) {
+                                        rch = kd.shifted
+                                    } else if (kd.key && kd.key.length === 1 && /[a-z]/i.test(kd.key)) {
+                                        rch = kd.key.toUpperCase()
+                                        if (rch === kd.key) return  // already uppercase, nothing to do
+                                    } else {
+                                        return
+                                    }
+                                    keyboard.pressKeyLiteral(rch)
+                                }
                             }
                         }
                     }
@@ -1622,6 +1653,7 @@ Window {
             autoCapitalizeAfterPunctuation: root.autoCapitalizeAfterPunctuation
             autoSaveOnExit: root.autoSaveOnExit
             swipeEnabled: root.swipeEnabled
+            rightClickShift: root.rightClickShift
             debugMode: root.showDebugPanel
             autoCheckUpdates: root.autoCheckUpdates
             updateStatus: root.updateInstalling
@@ -1671,6 +1703,9 @@ Window {
                     if (keyboard) keyboard.setAutoSaveOnExit(value)
                 } else if (setting === "swipeEnabled") {
                     root.swipeEnabled = value
+                } else if (setting === "rightClickShift") {
+                    root.rightClickShift = value
+                    appSettings.savedRightClickShift = value
                 } else if (setting === "debugMode") {
                     root.showDebugPanel = value
                     if (keyboard) keyboard.setDebugMode(value)

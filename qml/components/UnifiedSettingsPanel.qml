@@ -28,6 +28,7 @@ Item {
 
     // Input methods
     property bool swipeEnabled: false
+    property bool rightClickShift: true
 
     // Debug
     property bool debugMode: false
@@ -317,6 +318,24 @@ Item {
                                         }
                                     }
                                 }
+                            }
+                        }
+                    }
+
+                    // -- INPUT --
+                    SettingsSection {
+                        title: "Input"
+                        Layout.fillWidth: true
+
+                        ColumnLayout {
+                            Layout.fillWidth: true
+                            spacing: 4
+
+                            SettingsToggle {
+                                Layout.fillWidth: true
+                                text: "Right-Click for Shifted Character"
+                                checked: unifiedSettings.rightClickShift
+                                onToggled: function(c) { unifiedSettings.settingChanged("rightClickShift", c) }
                             }
                         }
                     }

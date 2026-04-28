@@ -285,18 +285,41 @@ class KeyboardBridge(QObject):
 
     @Slot(str)
     def pressKey(self, key: str) -> None:
-        """Called from QML when a character key is pressed."""
+        """Called from QML when a character key is pressed.
+
+        Applies shift / caps-lock case normalization to `key`. For a
+        "type this character verbatim" path (e.g. right-click → shifted
+        variant where QML has already picked the exact character to
+        send), use :meth:`pressKeyLiteral` instead.
+        """
+        self._press_char(key, literal=False)
+
+    @Slot(str)
+    def pressKeyLiteral(self, char: str) -> None:
+        """Type ``char`` exactly as-is, bypassing shift / caps-lock case
+        normalization.
+
+        Used by the right-click → shifted-variant feature: QML has
+        already chosen the desired output (``"!"`` from ``"1"``, ``"A"``
+        from ``"a"``) and we must not lowercase it back.  All other
+        side effects (analytics, learning, predictions, modifier
+        auto-release) match :meth:`pressKey`.
+        """
+        self._press_char(char, literal=True)
+
+    def _press_char(self, key: str, literal: bool) -> None:
         # Edit-mode intercept: route the character to the popup's
         # TextField instead of the OS. Apply shift/caps for case but
         # skip everything else (password detection, analytics,
         # predictions) — the user is editing a word, not typing.
         if self._edit_mode_active:
             self._play_click()
-            char = (
-                key.upper()
-                if (self._shift_active or self._caps_lock_active)
-                else key.lower()
-            )
+            if literal:
+                char = key
+            elif self._shift_active or self._caps_lock_active:
+                char = key.upper()
+            else:
+                char = key.lower()
             self.editKeyTyped.emit(char)
             # Auto-release shift after one keypress (caps lock persists).
             if self._shift_active and not self._caps_lock_active:
@@ -313,7 +336,9 @@ class KeyboardBridge(QObject):
         self._play_click()
         if not self._privacy_mode:
             self._analytics.record_keystroke(key)
-        if self._shift_active or self._caps_lock_active:
+        if literal:
+            char = key
+        elif self._shift_active or self._caps_lock_active:
             char = key.upper()
         else:
             char = key.lower()
