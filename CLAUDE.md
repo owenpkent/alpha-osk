@@ -75,7 +75,7 @@ Everything else in `data/proper_nouns.txt` (~8,000 entries) and user-taught capi
 - **Built-in**: `data/proper_nouns.txt` loaded into `ngram_predictor.capitalization` on startup.
 - **Learned**: When a user types a word with non-trivial capitalization (e.g., "iPhone", "Owen") and completes it with space, the preferred form is saved via `learn_capitalization()`.
 - **User edits**: Right-click a prediction → Edit to correct capitalization. This calls `editPrediction()` which inserts the corrected word and saves the capitalization permanently.
-- **Applied at output**: `hybrid_predictor._merge_predictions()` calls `ngram.get_capitalized(word, sentence_start)` on each result before returning to QML. The `sentence_start` flag is determined by checking if the context ends with `.!?` or is empty.
+- **Applied at output**: `hybrid_predictor._merge_predictions()` calls `ngram.get_capitalized(word, sentence_start)` on each result before returning to QML. `sentence_start` is true **only** when the (rstripped) context ends with `.!?`. Empty context is *not* treated as a sentence start — that produced annoying behaviour in terminals/REPLs where the user backspaces every typed char, leaving an empty context that isn't actually a fresh sentence. The fresh-document case (open Notepad, type the first letter) is handled by `_display_cased` mirroring the typed prefix's casing instead, so shift-typed "T" still surfaces "The".
 - **Persisted**: The `capitalization` dict is saved in `ngram_model.json`. User overrides merge with built-in proper nouns on load (user wins).
 
 ### Adding to always-capitalize or ambiguous lists

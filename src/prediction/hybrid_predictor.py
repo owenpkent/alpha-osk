@@ -296,13 +296,20 @@ class HybridPredictor(QObject):
         # Sort by combined score
         sorted_words = sorted(scores.items(), key=lambda x: -x[1])
 
-        # Determine if we're at sentence start (for capitalization)
+        # Determine if we're at sentence start (for capitalization).
+        # Sentence start is only true when there's an actual sentence-
+        # ending punctuation in context — empty context does NOT
+        # qualify. Treating empty as sentence-start used to fire
+        # capitalisation in two cases the user doesn't expect: (1) in
+        # a terminal/REPL after backspacing every typed char (the
+        # context buffer is empty but the user isn't starting a
+        # sentence — they're cleaning up), and (2) on app switch,
+        # which clears context. The fresh-document case (open Notepad,
+        # type the first letter) is handled downstream by
+        # `_display_cased` mirroring the typed prefix's casing — if
+        # the user shift-typed "T", "the" → "The" anyway.
         ctx = self._current_context.rstrip()
-        sentence_start = (
-            not ctx
-            or ctx[-1] in ".!?"
-            or ctx.endswith("\n")
-        )
+        sentence_start = bool(ctx) and ctx[-1] in ".!?"
 
         # Return top n valid words, applying context-aware capitalization
         results = []

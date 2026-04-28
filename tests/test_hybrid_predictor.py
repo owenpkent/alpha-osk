@@ -180,3 +180,45 @@ class TestHybridMergeWeighting:
         as_lower = [w.lower() for w in merged]
         if "the" in as_lower and "tha" in as_lower:
             assert as_lower.index("the") < as_lower.index("tha")
+
+
+class TestSentenceStartCapitalization:
+    """`_merge_predictions` only treats genuinely-after-punctuation
+    contexts as sentence starts. Empty context (fresh launch, post-
+    backspace, post-app-switch) does NOT capitalize predictions.
+
+    Reproduces the user-reported terminal bug: in Windows Terminal,
+    typing "lsa" then backspacing 3 times left the prediction pills
+    showing "The", "I", "How", etc. — the empty context was being
+    treated as a sentence start.
+    """
+
+    def test_empty_context_does_not_capitalize(self, predictor: HybridPredictor):
+        predictor._ngram.unigrams["the"] = 100
+        predictor._ngram.unigrams["of"] = 80
+        merged = predictor._merge_predictions(
+            ngram=["the", "of"], ppm=[], fuzzy=[], n=5,
+        )
+        # current_context defaults to "" — must NOT trigger sentence
+        # start capitalisation.
+        assert "the" in merged or "The" not in merged, (
+            f"empty context capitalised predictions: {merged}"
+        )
+
+    def test_post_period_context_does_capitalize(self, predictor: HybridPredictor):
+        predictor._ngram.unigrams["the"] = 100
+        predictor._current_context = "Hello world. "
+        merged = predictor._merge_predictions(
+            ngram=["the"], ppm=[], fuzzy=[], n=5,
+        )
+        assert "The" in merged, f"sentence-start should capitalise: {merged}"
+
+    def test_mid_word_completion_does_not_capitalize(
+        self, predictor: HybridPredictor,
+    ):
+        predictor._ngram.unigrams["the"] = 100
+        predictor._current_context = "the"
+        merged = predictor._merge_predictions(
+            ngram=["the"], ppm=[], fuzzy=[], n=5,
+        )
+        assert "the" in merged, f"mid-word should stay lowercase: {merged}"
