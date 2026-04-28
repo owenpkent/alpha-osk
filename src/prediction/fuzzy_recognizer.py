@@ -47,6 +47,15 @@ DEFAULT_PREDICTION_WEIGHT = 0.6
 # after about 4 multiplications.
 DEFAULT_MIN_PROB = 0.001
 
+# Relative threshold for autocorrect: a correction's score must be at
+# least this many times the typed word's hypothetical "rare-but-real"
+# baseline before the correction fires.  Mirrors the LatinIME / Gboard
+# 1.5x – 2x heuristic — keeps autocorrect from stomping on plausibly
+# deliberate typings ("thru", "lol", short slang) while still letting
+# obvious typos through.  Implausibly shaped inputs ("thx", "btw") get
+# baseline 0, so the absolute confidence threshold alone gates them.
+DEFAULT_AUTOCORRECT_MARGIN = 1.5
+
 
 class SpatialKeyModel:
     """Probability distribution over intended keys for a given press."""
@@ -315,6 +324,7 @@ class FuzzyRecognizer:
     spatial_uncertainty: float = DEFAULT_SPATIAL_UNCERTAINTY
     confidence_threshold: float = DEFAULT_CONFIDENCE_THRESHOLD
     prediction_weight: float = DEFAULT_PREDICTION_WEIGHT
+    autocorrect_margin: float = DEFAULT_AUTOCORRECT_MARGIN
 
     def __init__(self, dictionary: Optional[Dict[str, float]] = None):
         self.spatial_model = SpatialKeyModel(
@@ -345,7 +355,47 @@ class FuzzyRecognizer:
         if correction is None:
             return None
         word, confidence = correction
-        return word if confidence >= self.confidence_threshold else None
+        if confidence < self.confidence_threshold:
+            return None
+        # Relative threshold: the correction must outscore what the
+        # typed word would score if it were a rare real dictionary
+        # entry. Without this, "thru" → "the", "lol" → "log",
+        # "wtf" → "wtf" with one extra letter, etc. would all fire
+        # because the absolute confidence threshold is permissive
+        # by design (it has to admit corrections of obvious typos
+        # like "teh" → "the"). Implausibly shaped inputs get
+        # baseline 0 so we still autocorrect random letter slop.
+        typed_baseline = self._typed_baseline(typed_word)
+        if confidence < typed_baseline * self.autocorrect_margin:
+            return None
+        return word
+
+    @staticmethod
+    def _typed_baseline(typed_word: str) -> float:
+        """Hypothetical "rare real word" score for the typed input.
+
+        Returns ``log1p(1) ≈ 0.69`` if the input has the shape of a
+        plausible word (at least one vowel and one consonant — same
+        rule the n-gram fragment filter uses), else ``0.0``. The
+        ``should_autocorrect`` relative-margin check multiplies this
+        by ``autocorrect_margin`` to derive the score a correction
+        must clear before it fires.
+        """
+        if not typed_word:
+            return 0.0
+        has_vowel = False
+        has_consonant = False
+        for c in typed_word.lower():
+            if c in "aeiou":
+                has_vowel = True
+            elif c == "y":
+                has_vowel = True
+                has_consonant = True
+            elif c.isalpha():
+                has_consonant = True
+        if not (has_vowel and has_consonant):
+            return 0.0
+        return math.log1p(1)
 
     def get_key_alternatives(self, key: str) -> Dict[str, float]:
         return self.spatial_model.get_key_probabilities(key)

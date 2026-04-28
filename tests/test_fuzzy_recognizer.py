@@ -255,6 +255,58 @@ class TestFuzzyRecognizer:
         # "the" is valid → no correction.
         assert rec.should_autocorrect("the") is None
 
+    def test_typed_baseline_implausible_returns_zero(self):
+        """Implausible shapes (no vowel, or no consonant, or empty)
+        get baseline 0 so the relative-margin gate doesn't apply —
+        only the absolute confidence threshold guards them."""
+        assert FuzzyRecognizer._typed_baseline("") == 0.0
+        assert FuzzyRecognizer._typed_baseline("xqz") == 0.0
+        assert FuzzyRecognizer._typed_baseline("aaa") == 0.0
+        assert FuzzyRecognizer._typed_baseline("thx") == 0.0
+
+    def test_typed_baseline_plausible_returns_log1p_one(self):
+        import math
+        # Plausible shape (vowel + consonant) → rare-real-word
+        # baseline used by the relative-margin check.
+        assert FuzzyRecognizer._typed_baseline("hello") == math.log1p(1)
+        assert FuzzyRecognizer._typed_baseline("thru") == math.log1p(1)
+        # 'y' counts as both vowel and consonant.
+        assert FuzzyRecognizer._typed_baseline("cry") == math.log1p(1)
+
+    def test_should_autocorrect_relative_margin_blocks_borderline(self):
+        """A correction that clears the absolute threshold but only
+        marginally beats the typed word's baseline should NOT fire —
+        the user might have meant the typed letters."""
+        rec = FuzzyRecognizer()
+        # Stub get_correction to return a controlled (word, score).
+        rec.word_generator.get_correction = (  # type: ignore[method-assign]
+            lambda word, ctx="": ("the", 1.0)
+        )
+        # "thru" is plausible → baseline ≈ 0.69 → threshold ≈ 1.04.
+        # confidence 1.0 < 1.04 → blocked.
+        assert rec.should_autocorrect("thru") is None
+
+    def test_should_autocorrect_relative_margin_passes_clear_winner(self):
+        rec = FuzzyRecognizer()
+        rec.word_generator.get_correction = (  # type: ignore[method-assign]
+            lambda word, ctx="": ("the", 5.0)
+        )
+        # 5.0 > 0.69 * 1.5 = 1.04 → fires.
+        assert rec.should_autocorrect("thru") == "the"
+
+    def test_should_autocorrect_implausible_typed_skips_relative_gate(self):
+        """Random-letter inputs (no vowel/consonant balance) get
+        baseline 0, so only the absolute confidence threshold gates
+        them — corrections of obvious slop ('xqz' → 'the') still
+        fire as long as they clear the absolute bar."""
+        rec = FuzzyRecognizer()
+        rec.word_generator.get_correction = (  # type: ignore[method-assign]
+            lambda word, ctx="": ("the", 0.8)
+        )
+        # 0.8 ≥ 0.65 absolute, baseline 0 → relative gate trivially
+        # passes.
+        assert rec.should_autocorrect("xqz") == "the"
+
     def test_get_fuzzy_predictions_empty_text(self):
         rec = FuzzyRecognizer()
         assert rec.get_fuzzy_predictions("") == []
