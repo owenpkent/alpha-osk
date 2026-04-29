@@ -48,7 +48,7 @@ The simplest path that leverages existing infrastructure.
 3. If newer, show a notification in the system tray: "Alpha-OSK v1.0.2 available — click to update."
 4. User clicks → app downloads the installer `.exe` from the release assets to `%TEMP%`.
 5. App launches the installer silently: `Alpha-OSK-Setup-1.0.2.exe /S`
-6. The NSIS installer kills the running instance, uninstalls the old version, installs the new one, and optionally relaunches.
+6. The NSIS installer kills the running instance (`taskkill /F /IM alpha-osk.exe` in `customInit`), uninstalls the old version, installs the new one, and **relaunches the new app** via `explorer.exe` (drops admin IL → user IL — see `build/windows/installer.nsh`'s `customInstall`). The `IfSilent` gate scopes auto-relaunch to the auto-update path only; an interactive install does not auto-launch the app on completion.
 
 ### Implementation Plan
 

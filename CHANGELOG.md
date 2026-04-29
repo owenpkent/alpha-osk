@@ -4,12 +4,8 @@ All notable changes to Alpha-OSK are documented in this file.
 
 ## [Unreleased]
 
-## [1.0.15] — 2026-04-28
-
-Hotfix: auto-update didn't relaunch the app after installing.
-
 ### Fixed
-- **Auto-updater left the user with no keyboard after a successful update.** The `/S` silent installer path killed the running `alpha-osk.exe` (correctly — the running exe is locked) but never started the new one, so the user was stuck without an OSK until they manually launched from the Start Menu. `updater.py:519` even claimed the installer "(per installer.nsh) optionally relaunches" — but `installer.nsh` had no relaunch logic. Added an `IfSilent`-gated relaunch at the end of `customInstall` that spawns the freshly-installed `alpha-osk.exe` via `explorer.exe` so the new process runs at the user's medium IL instead of inheriting the installer's admin token. Interactive installs are unaffected — the user can still launch from the Start Menu / desktop shortcut.
+- **Auto-updater left the user with no keyboard after a successful update.** The `/S` silent installer path killed the running `alpha-osk.exe` (correctly — the running exe is locked) but never started the new one, so the user was stuck without an OSK until they manually launched from the Start Menu. `updater.py:519` even claimed the installer "(per installer.nsh) optionally relaunches" — but `installer.nsh` had no relaunch logic. Added an `IfSilent`-gated relaunch at the end of `customInstall` that spawns the freshly-installed `alpha-osk.exe` via `explorer.exe` so the new process runs at the user's medium IL instead of inheriting the installer's admin token. Interactive installs are unaffected — the user can still launch from the Start Menu / desktop shortcut. **Note:** users on 1.0.14 will hit this bug one more time when they update to whatever version this fix ships in; from that build forward, auto-update relaunches automatically.
 - **Misleading updater comment.** The matching comment in `src/updater.py` now accurately describes the relaunch flow rather than claiming behaviour that wasn't implemented.
 
 ## [1.0.14] — 2026-04-28
