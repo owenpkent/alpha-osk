@@ -14,6 +14,8 @@ import logging
 import math
 from typing import Dict, List, Mapping, Optional, Tuple
 
+from .symspell import SymSpell
+
 _logger = logging.getLogger("FuzzyRecognizer")
 
 
@@ -129,10 +131,16 @@ class FuzzyWordGenerator:
         spatial_model: Optional[SpatialKeyModel] = None,
         dictionary: Optional[Dict[str, float]] = None,
         max_candidates: int = 50,
+        max_edit_distance: int = 2,
     ):
         self.spatial_model = spatial_model or SpatialKeyModel()
         self.dictionary: Dict[str, float] = dict(dictionary) if dictionary else {}
         self.max_candidates = max_candidates
+        self.max_edit_distance = max_edit_distance
+        self._symspell = SymSpell(max_edit_distance=max_edit_distance)
+        if self.dictionary:
+            for word, freq in self.dictionary.items():
+                self._symspell.add_word(word, int(max(1, freq)))
 
     def generate_candidates(
         self,
@@ -186,61 +194,91 @@ class FuzzyWordGenerator:
     # an apostrophe-insertion candidate competes with a perfect spatial
     # match instead of getting buried at rank 9.
     _APOSTROPHE_INSERTION_PROB = 0.50
-    # Apostrophe is intentionally in the insertion alphabet so the
-    # path can suggest contractions when the user types the bare form.
-    _ALPHABET = "abcdefghijklmnopqrstuvwxyz'"
+    # Substitution penalty.  Substitutions ("rxample" → "example") were
+    # not enumerated by the prior edit-distance-1 path at all — that
+    # path only covered transposition / deletion / insertion.  The
+    # spatial beam search catches *near-key* substitutions via Gaussian
+    # neighbour probability, but non-adjacent substitutions slipped
+    # through entirely.  SymSpell now surfaces them; this constant
+    # scores them slightly below insertion since the spatial path
+    # already covers the near-key common case (avoids double-counting).
+    _SUBSTITUTION_PROB = 0.18
+    # Distance-2 candidates (any combination of two edits).  Much lower
+    # than single-edit penalties because two-edit corrections are far
+    # noisier than one-edit ones.  Still positive enough that real
+    # double-typo hits ("becuase" → "because" is distance-1, but
+    # "becouase" → "because" is distance-2) can surface as suggestions.
+    _DOUBLE_EDIT_PROB = 0.05
 
     def _edit_distance_candidates(self, typed: str) -> List[Tuple[str, float]]:
-        """Return dictionary hits at edit distance 1 from ``typed``.
+        """Return dictionary hits within ``max_edit_distance`` of ``typed``.
 
-        Three transformations:
-        - **Transposition** — swap each adjacent pair ("teh" → "the").
-        - **Deletion** — drop each char (user typed an extra letter).
-        - **Insertion** — insert each letter at each position (user
-          missed a letter).  Skipped for inputs over 12 chars to keep
-          the per-keystroke cost bounded.
+        Backed by SymSpell (Garbe, 2012) — precomputed-deletion index
+        with Damerau-Levenshtein post-filter.  Replaces the previous
+        per-letter brute-force candidate generator, which was capped
+        at edit distance 1 and did not cover substitutions.
 
-        Per-edit penalty is scaled by 1/length so longer words aren't
-        unfairly penalised — a 1-edit hit on a 10-letter word is still
-        a confident correction, not a noise candidate.
+        Each candidate is scored with the edit-type-specific penalty
+        (transposition / deletion / insertion / apostrophe-insertion /
+        substitution) when the edit distance is 1, or a flat
+        ``_DOUBLE_EDIT_PROB`` for distance-2 matches.  The penalty is
+        normalised by ``1/n`` (input length) so longer words are not
+        unfairly penalised.
         """
         n = len(typed)
         if n < 2:
             return []
 
         scored: Dict[str, float] = {}
-
-        for i in range(n - 1):
-            if typed[i] == typed[i + 1]:
+        for word, _freq, dist in self._symspell.lookup(typed):
+            if dist == 0:
+                # The user typed an exact dictionary word; skip — the
+                # caller (fuzzy candidate path) is for *corrections*,
+                # and an exact match is handled upstream.
                 continue
-            swapped = typed[:i] + typed[i + 1] + typed[i] + typed[i + 2:]
-            if swapped in self.dictionary:
-                score = self._TRANSPOSITION_PROB / n
-                if score > scored.get(swapped, 0.0):
-                    scored[swapped] = score
-
-        for i in range(n):
-            shorter = typed[:i] + typed[i + 1:]
-            if shorter and shorter in self.dictionary:
-                score = self._DELETION_PROB / n
-                if score > scored.get(shorter, 0.0):
-                    scored[shorter] = score
-
-        if n <= 12:
-            for i in range(n + 1):
-                for c in self._ALPHABET:
-                    longer = typed[:i] + c + typed[i:]
-                    if longer in self.dictionary:
-                        prob = (
-                            self._APOSTROPHE_INSERTION_PROB
-                            if c == "'"
-                            else self._INSERTION_PROB
-                        )
-                        score = prob / n
-                        if score > scored.get(longer, 0.0):
-                            scored[longer] = score
+            if dist == 1:
+                prob = self._classify_edit_prob(typed, word)
+            else:
+                prob = self._DOUBLE_EDIT_PROB
+            score = prob / n
+            if score > scored.get(word, 0.0):
+                scored[word] = score
 
         return list(scored.items())
+
+    def _classify_edit_prob(self, typed: str, candidate: str) -> float:
+        """Return the per-edit-type probability for a distance-1 pair.
+
+        The precomputed-deletion index gives us the candidate set; this
+        function inspects the actual transformation to pick the right
+        penalty (transposition vs. substitution vs. deletion vs.
+        apostrophe-insertion vs. plain insertion).
+        """
+        lt, lc = len(typed), len(candidate)
+        if lt == lc:
+            # Same length — either substitution or transposition.
+            diff_positions = [
+                i for i in range(lt) if typed[i] != candidate[i]
+            ]
+            if (
+                len(diff_positions) == 2
+                and diff_positions[1] == diff_positions[0] + 1
+                and typed[diff_positions[0]] == candidate[diff_positions[1]]
+                and typed[diff_positions[1]] == candidate[diff_positions[0]]
+            ):
+                return self._TRANSPOSITION_PROB
+            return self._SUBSTITUTION_PROB
+        if lc < lt:
+            # Candidate is shorter — user typed an extra char (deletion
+            # gets us from typed to candidate).
+            return self._DELETION_PROB
+        # Candidate is longer — user missed a char (insertion gets us
+        # from typed to candidate).  Apostrophe insertion is the
+        # dominant real-world case ("im" → "i'm", "dont" → "don't") and
+        # gets a much higher penalty than generic insertion.
+        if "'" in candidate and "'" not in typed:
+            return self._APOSTROPHE_INSERTION_PROB
+        return self._INSERTION_PROB
 
     def _generate_fuzzy_sequences(
         self,
@@ -294,6 +332,7 @@ class FuzzyWordGenerator:
                     # Don't overwrite a higher freq we already loaded.
                     if freq > self.dictionary.get(word, 0.0):
                         self.dictionary[word] = freq
+                    self._symspell.add_word(word, int(max(1, freq)))
             _logger.info("Fuzzy dictionary loaded: %d words", len(self.dictionary))
             return True
         except OSError as e:
@@ -316,6 +355,11 @@ class FuzzyWordGenerator:
             word = word.lower()
             if freq > self.dictionary.get(word, 0.0):
                 self.dictionary[word] = float(freq)
+            self._symspell.add_word(word, int(max(1, freq)))
+        # Eager-build so the cost lands in startup latency, not on the
+        # user's first keystroke.  Lazy-build is fine for incremental
+        # additions later (vocab pack toggles, learned words).
+        self._symspell.prepare()
 
 
 class FuzzyRecognizer:
