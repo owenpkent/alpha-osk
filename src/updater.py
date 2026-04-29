@@ -516,7 +516,9 @@ def download_and_install(
 
         # /S = NSIS silent install; the installer kills the running
         # alpha-osk.exe, runs the old uninstaller, installs the new
-        # build, and (per installer.nsh) optionally relaunches.
+        # build, and relaunches the freshly-installed app via the
+        # explorer.exe trick in installer.nsh's customInstall macro
+        # (drops the admin token so the OSK runs at the user's IL).
         _logger.info("Launching signed installer: %s", dest)
         ok, err = _launch_installer(dest)
         if not ok:

@@ -83,6 +83,24 @@
   ${EndIf}
 
   ; Shortcuts are created in the main install section (user-selectable)
+
+  ; --- Auto-relaunch after silent install (auto-updater path) ---
+  ; Interactive install: the user can launch the app from the Start
+  ; Menu / desktop shortcut, no need to spawn it for them.  Silent
+  ; install: triggered by the auto-updater (`/S`), which has already
+  ; killed the running app via customInit's taskkill — so without this,
+  ; the user is left with no keyboard until they manually relaunch.
+  ;
+  ; Spawn via explorer.exe as the launching parent so the new app
+  ; runs at the user's medium integrity level instead of inheriting
+  ; the installer's high IL (admin) token.  Running the OSK as admin
+  ; is the wrong identity for a user-input app — it changes the
+  ; WS_EX_NOACTIVATE focus semantics, breaks UIAccess (which is
+  ; designed for medium-IL processes injecting *into* high-IL apps),
+  ; and means every learned word lands in the admin profile rather
+  ; than the user's %APPDATA%.
+  IfSilent 0 +2
+  Exec '"$WINDIR\explorer.exe" "$INSTDIR\alpha-osk.exe"'
 !macroend
 
 !macro customUnInstall
