@@ -70,16 +70,32 @@ Item {
     implicitWidth: keyWidth
     implicitHeight: keyHeight
 
-    // Key repeat timer
+    // Key repeat timer.  Fires twice per hold cycle: once at
+    // ``repeatDelay`` to warm up (just transitions into repeat mode,
+    // does NOT fire a keystroke), then at ``repeatInterval`` cadence
+    // for each actual auto-repeat.  Without the warm-up tick, a press
+    // that lands exactly at ``repeatDelay`` would fire two keystrokes
+    // for what the user perceives as a single deliberate click — the
+    // initial press emit, plus the timer's first emit at the boundary.
+    // Slow-motor users systematically tip past 500 ms (especially when
+    // moving between keys) and felt this as "Backspace sometimes sends
+    // 2".  With the warm-up, any press shorter than
+    // ``repeatDelay + repeatInterval`` gives exactly one keystroke.
     Timer {
         id: repeatTimer
         interval: keyRoot.repeatDelay
         repeat: false
+        property bool warmedUp: false
         onTriggered: {
+            if (!warmedUp) {
+                warmedUp = true
+                interval = keyRoot.repeatInterval
+                repeat = true
+                start()
+                pressSafetyTimer.restart()
+                return
+            }
             keyRoot.keyPressed()
-            interval = keyRoot.repeatInterval
-            repeat = true
-            start()
             // Push the safety deadline forward.  The safety timer only
             // exists to recover from a *stranded* press (Qt dropped the
             // release under WS_EX_NOACTIVATE) — but if repeats are
@@ -252,6 +268,7 @@ Item {
             repeatTimer.stop()
             repeatTimer.interval = keyRoot.repeatDelay
             repeatTimer.repeat = false
+            repeatTimer.warmedUp = false
         }
 
         onCanceled: {
@@ -260,6 +277,7 @@ Item {
             repeatTimer.stop()
             repeatTimer.interval = keyRoot.repeatDelay
             repeatTimer.repeat = false
+            repeatTimer.warmedUp = false
         }
 
         // Cursor leaving the key clears the visual press AND stops
@@ -274,6 +292,7 @@ Item {
                 repeatTimer.stop()
                 repeatTimer.interval = keyRoot.repeatDelay
                 repeatTimer.repeat = false
+                repeatTimer.warmedUp = false
             }
         }
     }

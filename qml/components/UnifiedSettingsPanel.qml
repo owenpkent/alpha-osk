@@ -29,6 +29,9 @@ Item {
     // Input methods
     property bool swipeEnabled: false
     property bool rightClickShift: true
+    // Hold-to-repeat timing (ms).  Defaults must match KeyButton.qml.
+    property int repeatDelay: 500
+    property int repeatInterval: 120
 
     // Debug
     property bool debugMode: false
@@ -336,6 +339,128 @@ Item {
                                 text: "Right-Click for Shifted Character"
                                 checked: unifiedSettings.rightClickShift
                                 onToggled: function(c) { unifiedSettings.settingChanged("rightClickShift", c) }
+                            }
+
+                            // Hold-to-repeat delay — the threshold below
+                            // which a press counts as a single click.
+                            // Range 300–1500 ms in 100 ms steps.  Slow-
+                            // motor users can crank up the delay to
+                            // eliminate accidental double-keystrokes.
+                            Item {
+                                Layout.fillWidth: true
+                                implicitHeight: 28
+
+                                RowLayout {
+                                    anchors.fill: parent
+                                    anchors.leftMargin: 4
+                                    anchors.rightMargin: 4
+                                    spacing: 8
+
+                                    Text {
+                                        text: "Hold-to-Repeat Delay"
+                                        color: "#c0c0c0"
+                                        font.pixelSize: 12
+                                        Layout.fillWidth: true
+                                    }
+
+                                    Rectangle {
+                                        width: 24; height: 22; radius: 4
+                                        color: delayDownArea.containsMouse ? "#444" : "#333"
+                                        Text { anchors.centerIn: parent; text: "−"; color: "#ccc"; font.pixelSize: 14 }
+                                        MouseArea {
+                                            id: delayDownArea
+                                            anchors.fill: parent; hoverEnabled: true
+                                            onClicked: {
+                                                var n = Math.max(300, unifiedSettings.repeatDelay - 100)
+                                                unifiedSettings.settingChanged("repeatDelay", n)
+                                            }
+                                        }
+                                    }
+
+                                    Text {
+                                        text: unifiedSettings.repeatDelay + " ms"
+                                        color: "#fff"
+                                        font.pixelSize: 12
+                                        horizontalAlignment: Text.AlignHCenter
+                                        Layout.preferredWidth: 56
+                                    }
+
+                                    Rectangle {
+                                        width: 24; height: 22; radius: 4
+                                        color: delayUpArea.containsMouse ? "#444" : "#333"
+                                        Text { anchors.centerIn: parent; text: "+"; color: "#ccc"; font.pixelSize: 14 }
+                                        MouseArea {
+                                            id: delayUpArea
+                                            anchors.fill: parent; hoverEnabled: true
+                                            onClicked: {
+                                                var n = Math.min(1500, unifiedSettings.repeatDelay + 100)
+                                                unifiedSettings.settingChanged("repeatDelay", n)
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            // Hold-to-repeat interval — cadence between
+                            // repeats once auto-repeat has started.
+                            // Range 60–300 ms in 20 ms steps.  Lower =
+                            // faster repeat (good for bulk delete);
+                            // higher = slower (good if you overshoot).
+                            Item {
+                                Layout.fillWidth: true
+                                implicitHeight: 28
+
+                                RowLayout {
+                                    anchors.fill: parent
+                                    anchors.leftMargin: 4
+                                    anchors.rightMargin: 4
+                                    spacing: 8
+
+                                    Text {
+                                        text: "Hold-to-Repeat Rate"
+                                        color: "#c0c0c0"
+                                        font.pixelSize: 12
+                                        Layout.fillWidth: true
+                                    }
+
+                                    Rectangle {
+                                        width: 24; height: 22; radius: 4
+                                        color: rateDownArea.containsMouse ? "#444" : "#333"
+                                        Text { anchors.centerIn: parent; text: "−"; color: "#ccc"; font.pixelSize: 14 }
+                                        MouseArea {
+                                            id: rateDownArea
+                                            anchors.fill: parent; hoverEnabled: true
+                                            onClicked: {
+                                                // "Slower" = larger interval — minus button increases ms.
+                                                var n = Math.min(300, unifiedSettings.repeatInterval + 20)
+                                                unifiedSettings.settingChanged("repeatInterval", n)
+                                            }
+                                        }
+                                    }
+
+                                    Text {
+                                        text: unifiedSettings.repeatInterval + " ms"
+                                        color: "#fff"
+                                        font.pixelSize: 12
+                                        horizontalAlignment: Text.AlignHCenter
+                                        Layout.preferredWidth: 56
+                                    }
+
+                                    Rectangle {
+                                        width: 24; height: 22; radius: 4
+                                        color: rateUpArea.containsMouse ? "#444" : "#333"
+                                        Text { anchors.centerIn: parent; text: "+"; color: "#ccc"; font.pixelSize: 14 }
+                                        MouseArea {
+                                            id: rateUpArea
+                                            anchors.fill: parent; hoverEnabled: true
+                                            onClicked: {
+                                                // "Faster" = smaller interval — plus button decreases ms.
+                                                var n = Math.max(60, unifiedSettings.repeatInterval - 20)
+                                                unifiedSettings.settingChanged("repeatInterval", n)
+                                            }
+                                        }
+                                    }
+                                }
                             }
                         }
                     }

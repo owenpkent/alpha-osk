@@ -12,6 +12,11 @@ Item {
     property color keyTextColor: "#e0e0e0"
     property color accentColor: "#4a9eff"
     property color borderColor: "#505050"
+    // Hold-to-repeat timing — driven by user-tunable values in Main.qml.
+    // Defaults match KeyButton.qml's hardcoded values for safety if a
+    // caller doesn't pass them through.
+    property int repeatDelay: 500
+    property int repeatInterval: 120
 
     implicitWidth: navGrid.implicitWidth
     implicitHeight: navGrid.implicitHeight
@@ -92,7 +97,7 @@ Item {
             keyTextColor: navPanel.keyTextColor
             accentColor: navPanel.accentColor
             borderColor: navPanel.borderColor
-            enableRepeat: true
+            enableRepeat: true; repeatDelay: navPanel.repeatDelay; repeatInterval: navPanel.repeatInterval
             onKeyPressed: keyboard.pressSpecialKey("pageup")
         }
 
@@ -106,7 +111,7 @@ Item {
             keyTextColor: navPanel.keyTextColor
             accentColor: navPanel.accentColor
             borderColor: navPanel.borderColor
-            enableRepeat: true
+            enableRepeat: true; repeatDelay: navPanel.repeatDelay; repeatInterval: navPanel.repeatInterval
             onKeyPressed: keyboard.pressSpecialKey("delete")
         }
         KeyButton {
@@ -129,7 +134,7 @@ Item {
             keyTextColor: navPanel.keyTextColor
             accentColor: navPanel.accentColor
             borderColor: navPanel.borderColor
-            enableRepeat: true
+            enableRepeat: true; repeatDelay: navPanel.repeatDelay; repeatInterval: navPanel.repeatInterval
             onKeyPressed: keyboard.pressSpecialKey("pagedown")
         }
 
@@ -147,7 +152,7 @@ Item {
             keyTextColor: navPanel.keyTextColor
             accentColor: navPanel.accentColor
             borderColor: navPanel.borderColor
-            enableRepeat: true
+            enableRepeat: true; repeatDelay: navPanel.repeatDelay; repeatInterval: navPanel.repeatInterval
             onKeyPressed: keyboard.pressSpecialKey("up")
         }
         Item {
@@ -165,7 +170,7 @@ Item {
             keyTextColor: navPanel.keyTextColor
             accentColor: navPanel.accentColor
             borderColor: navPanel.borderColor
-            enableRepeat: true
+            enableRepeat: true; repeatDelay: navPanel.repeatDelay; repeatInterval: navPanel.repeatInterval
             onKeyPressed: keyboard.pressSpecialKey("left")
         }
         KeyButton {
@@ -177,7 +182,7 @@ Item {
             keyTextColor: navPanel.keyTextColor
             accentColor: navPanel.accentColor
             borderColor: navPanel.borderColor
-            enableRepeat: true
+            enableRepeat: true; repeatDelay: navPanel.repeatDelay; repeatInterval: navPanel.repeatInterval
             onKeyPressed: keyboard.pressSpecialKey("down")
         }
         KeyButton {
@@ -189,7 +194,7 @@ Item {
             keyTextColor: navPanel.keyTextColor
             accentColor: navPanel.accentColor
             borderColor: navPanel.borderColor
-            enableRepeat: true
+            enableRepeat: true; repeatDelay: navPanel.repeatDelay; repeatInterval: navPanel.repeatInterval
             onKeyPressed: keyboard.pressSpecialKey("right")
         }
     }

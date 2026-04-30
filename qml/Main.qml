@@ -34,6 +34,13 @@ Window {
         property bool savedSwipeEnabled: false
         property bool savedRightClickShift: true
         property bool savedAutoCheckUpdates: true
+        // Hold-to-repeat timing (Backspace, arrow keys, Delete, PgUp/PgDn).
+        // Defaults match KeyButton.qml's hardcoded values.  Exposed in
+        // Settings → Input so motor-impaired users can tune the threshold
+        // (slow clicks systematically tipped past the 500 ms default and
+        // produced "double" Backspace keystrokes).
+        property int savedRepeatDelay: 500
+        property int savedRepeatInterval: 120
         // Window WIDTH — restored on launch, saved (debounced) on resize.
         // 0 means "no saved value yet, use the binding-driven default"
         // — that path runs on a fresh install.
@@ -204,6 +211,13 @@ Window {
 
     // Auto-save prediction model on exit
     property bool autoSaveOnExit: appSettings.savedAutoSaveOnExit
+
+    // Hold-to-repeat timing for Backspace, arrows, Delete, PgUp/PgDn.
+    // ``repeatDelay`` is the threshold below which a press counts as a
+    // single click; ``repeatInterval`` is the cadence once auto-repeat
+    // is firing.  Exposed in Settings → Input.
+    property int repeatDelay: appSettings.savedRepeatDelay
+    property int repeatInterval: appSettings.savedRepeatInterval
 
     // Swipe / glide typing — when on, dragging across keys decodes a word.
     property bool swipeEnabled: appSettings.savedSwipeEnabled
@@ -1055,6 +1069,8 @@ Window {
                                 // backspace.  Character keys must not repeat
                                 // (see KeyButton.qml for the rationale).
                                 enableRepeat: kd.type === "special" && kd.action === "backspace"
+                                repeatDelay: root.repeatDelay
+                                repeatInterval: root.repeatInterval
 
                                 onKeyPressed: {
                                     if (kd.type === "char") {
@@ -1121,6 +1137,8 @@ Window {
                 keyTextColor: root.themeTextColor
                 accentColor: root.themeAccent
                 borderColor: root.themeBorder
+                repeatDelay: root.repeatDelay
+                repeatInterval: root.repeatInterval
             }
 
             // ===== Numpad (toggleable) =====
@@ -1708,6 +1726,8 @@ Window {
             autoSaveOnExit: root.autoSaveOnExit
             swipeEnabled: root.swipeEnabled
             rightClickShift: root.rightClickShift
+            repeatDelay: root.repeatDelay
+            repeatInterval: root.repeatInterval
             debugMode: root.showDebugPanel
             autoCheckUpdates: root.autoCheckUpdates
             updateStatus: root.updateInstalling
@@ -1760,6 +1780,12 @@ Window {
                 } else if (setting === "rightClickShift") {
                     root.rightClickShift = value
                     appSettings.savedRightClickShift = value
+                } else if (setting === "repeatDelay") {
+                    root.repeatDelay = value
+                    appSettings.savedRepeatDelay = value
+                } else if (setting === "repeatInterval") {
+                    root.repeatInterval = value
+                    appSettings.savedRepeatInterval = value
                 } else if (setting === "debugMode") {
                     root.showDebugPanel = value
                     if (keyboard) keyboard.setDebugMode(value)
