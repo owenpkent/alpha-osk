@@ -292,6 +292,75 @@ class TestContextTracking:
             bridge.pressSpecialKey("space")
         assert len(bridge._context_buffer) <= 200
 
+    def test_backspace_into_completed_word_rehydrates_current_word(
+        self, bridge: KeyboardBridge,
+    ):
+        """Regression: backspacing past a trailing space pulls the
+        partial word back into ``_current_word`` so prediction-clicks
+        take the suffix-only branch instead of the next-word branch.
+
+        Without this, clicking a prediction after backspacing into a
+        committed word produced "backspacbackspaces"-style duplicates:
+        ``_current_word`` was empty, so ``pressPrediction`` typed the
+        full word alongside the on-screen partial.
+        """
+        for c in "backspaces":
+            bridge.pressKey(c)
+        bridge.pressSpecialKey("space")
+        # State after space-completion: word committed to context.
+        assert bridge._current_word == ""
+        assert bridge._context_buffer.endswith("backspaces ")
+
+        # First backspace pops the trailing space off context.  The
+        # partial word "backspaces" is now the tail of context_buffer,
+        # and the rehydrate hook should move it back into
+        # _current_word.
+        bridge.pressSpecialKey("backspace")
+        assert bridge._current_word == "backspaces"
+        assert not bridge._context_buffer.endswith("backspaces")
+
+        # Subsequent backspaces shrink _current_word normally.
+        bridge.pressSpecialKey("backspace")
+        bridge.pressSpecialKey("backspace")
+        assert bridge._current_word == "backspac"
+
+    def test_backspace_into_word_without_preceding_text(
+        self, bridge: KeyboardBridge,
+    ):
+        """Edge case: only one word typed, backspaced past the trailing
+        space.  Rehydrate must work when there is no whitespace earlier
+        in the buffer (entire context becomes _current_word, buffer
+        becomes empty)."""
+        for c in "hello":
+            bridge.pressKey(c)
+        bridge.pressSpecialKey("space")
+        bridge.pressSpecialKey("backspace")
+        assert bridge._current_word == "hello"
+        assert bridge._context_buffer == ""
+
+    def test_backspace_at_word_boundary_does_not_rehydrate(
+        self, bridge: KeyboardBridge,
+    ):
+        """The rehydrate hook must no-op when the new tail is already
+        whitespace — the user is between words, not editing one."""
+        for c in "hi":
+            bridge.pressKey(c)
+        bridge.pressSpecialKey("space")
+        for c in "x":
+            bridge.pressKey(c)
+        bridge.pressSpecialKey("space")
+        # Context: "hi x ", _current_word: ""
+        bridge.pressSpecialKey("backspace")  # pops trailing space
+        # Now context "hi x" — single trailing word "x" should rehydrate.
+        assert bridge._current_word == "x"
+        # Backspace once more — _current_word goes empty.
+        bridge.pressSpecialKey("backspace")
+        assert bridge._current_word == ""
+        # Backspace once more — pops the space between "hi" and what
+        # used to be "x"; "hi" should rehydrate.
+        bridge.pressSpecialKey("backspace")
+        assert bridge._current_word == "hi"
+
 
 class TestPredictionWiring:
     """Prediction integration."""

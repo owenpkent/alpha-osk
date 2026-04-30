@@ -595,6 +595,17 @@ class KeyboardBridge(QObject):
                 # fires with sentence_start=True (capitalized candidates)
                 # on what looks like an empty document.
                 self._context_buffer = self._context_buffer[:-1]
+                # If the new tail is mid-word (no trailing whitespace),
+                # the user has just backspaced *into* a previously-
+                # committed word — they're now editing it, not typing a
+                # fresh next word.  Move the trailing partial word back
+                # into _current_word so the state matches the user's
+                # mental model: "the word at the cursor is the one I'm
+                # editing."  Without this, prediction clicks took the
+                # "no current word" branch and typed the FULL word
+                # alongside the on-screen partial, producing
+                # "backspacbackspaces"-style duplicates.
+                self._rehydrate_current_word_from_context()
                 self._update_predictions()
         elif key_name == "return":
             # Sentence boundary - learn full sentence, then reset sentence buffer
@@ -849,6 +860,36 @@ class KeyboardBridge(QObject):
         """Request updated predictions from the engine."""
         context = self._context_buffer + self._current_word
         self._predictor.predict_with_refinement(context, n=self._prediction_count)
+
+    def _rehydrate_current_word_from_context(self) -> None:
+        """Move a mid-edit partial word from context back into _current_word.
+
+        When Backspace pops a whitespace char off ``_context_buffer``,
+        the user has backspaced into a previously-completed word.  The
+        invariant the rest of the code relies on — "the word being
+        currently edited lives in ``_current_word``" — is broken until
+        we rebalance.  This walks the trailing characters of
+        ``_context_buffer`` back to the last whitespace and moves them
+        to ``_current_word``.  No-op when the tail is already whitespace
+        (the user is between words) or when the buffer is empty.
+        """
+        if not self._context_buffer:
+            return
+        # Last char is whitespace → already at a word boundary, nothing
+        # to rehydrate.
+        if self._context_buffer[-1] in (" ", "\n", "\t"):
+            return
+        # Find the last whitespace.  rfind returns -1 if not found,
+        # which is the right pivot for "everything is the partial word."
+        last_ws = max(
+            self._context_buffer.rfind(" "),
+            self._context_buffer.rfind("\n"),
+            self._context_buffer.rfind("\t"),
+        )
+        self._current_word = self._context_buffer[last_ws + 1:]
+        self._context_buffer = (
+            self._context_buffer[:last_ws + 1] if last_ws >= 0 else ""
+        )
 
     def _display_cased(self, predictions: List[str]) -> List[str]:
         """Transform predictions to match the user's active case mode.
