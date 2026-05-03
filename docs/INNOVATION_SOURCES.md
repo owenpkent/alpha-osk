@@ -148,7 +148,7 @@ Alpha-OSK draws technical inspiration from multiple sources. This document provi
 
 **Recommended path:**
 
-1. **Start:** [`../PHILOSOPHY.md`](../PHILOSOPHY.md)
+1. **Start:** [`PHILOSOPHY.md`](PHILOSOPHY.md)
    - Understand the "why" behind design decisions
    - Learn core principles from Dasher research
 
@@ -241,7 +241,7 @@ Alpha-OSK draws technical inspiration from multiple sources. This document provi
 When proposing new features, consider:
 
 1. **Which source inspired it?** (Dasher, mobile, or original idea)
-2. **Does it fit our philosophy?** (See [`../PHILOSOPHY.md`](../PHILOSOPHY.md))
+2. **Does it fit our philosophy?** (See [`PHILOSOPHY.md`](PHILOSOPHY.md))
 3. **Which document should it go in?** (Dasher vs mobile innovations)
 4. **What's the implementation complexity?** (Quick win vs long-term)
 5. **Who benefits most?** (All users vs specific accessibility needs)

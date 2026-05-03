@@ -128,7 +128,7 @@ python -m pytest tests/test_ngram_predictor.py
 python -m pytest --cov=src --cov-report=term-missing
 ```
 
-See [ROADMAP.md](ROADMAP.md) for the phased improvement plan.
+See [ROADMAP.md](ROADMAP.md) for the phased improvement plan and [docs/](docs/) for design, philosophy, and AI-assistant onboarding.
 
 ---
 
@@ -171,10 +171,15 @@ Dashboard opens at `http://localhost:8080`
 ```
 alpha-osk/
 ├── README.md              # This file
+├── CHANGELOG.md           # Release notes
+├── CLAUDE.md              # Claude Code project instructions
 ├── ROADMAP.md             # Phased improvement plan
 ├── TODO.md                # Task tracking
-├── DESIGN.md              # Layout and UX specifications
+├── IDEAS.md               # Idea scratch pad
+├── docs/                  # Design specs, philosophy, AI-assistant onboarding,
+│                          # per-feature deep dives (FUZZY_RECOGNITION, PPM, etc.)
 ├── run.py                 # Cross-platform launcher (venv + deps)
+├── check.py               # Pre-push gate (ruff + mypy + pytest)
 ├── requirements.txt       # Python dependencies
 ├── requirements-dev.txt   # Dev/test dependencies
 ├── pyproject.toml         # pytest, ruff, mypy config

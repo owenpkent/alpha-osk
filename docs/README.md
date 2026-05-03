@@ -8,7 +8,7 @@ Welcome to the Alpha-OSK documentation. This directory contains comprehensive gu
 
 ### Philosophy & Vision
 
-**[`../PHILOSOPHY.md`](../PHILOSOPHY.md)** - Core design philosophy and principles
+**[`PHILOSOPHY.md`](PHILOSOPHY.md)** - Core design philosophy and principles
 
 Learn about the information-theoretic foundations, accessibility-first design, and the principles borrowed from the Dasher Project. This document explains **why** we make the decisions we make.
 
@@ -82,9 +82,9 @@ Comprehensive audit covering secrets management, network exposure, subprocess sa
 
 ### For New Contributors
 
-1. **Start here:** [`../PHILOSOPHY.md`](../PHILOSOPHY.md) - Understand the "why"
+1. **Start here:** [`PHILOSOPHY.md`](PHILOSOPHY.md) - Understand the "why"
 2. **Then read:** [`TECHNICAL_INNOVATIONS.md`](TECHNICAL_INNOVATIONS.md) - Learn the "how"
-3. **Check:** [`../LLM_ONBOARDING.md`](../LLM_ONBOARDING.md) - Quick project overview
+3. **Check:** [`LLM_ONBOARDING.md`](LLM_ONBOARDING.md) - Quick project overview
 
 ### For Developers
 
@@ -102,7 +102,7 @@ Alpha-OSK builds on decades of HCI research, particularly:
 - **PPM algorithms** - Language modeling
 - **Accessibility research** - Assistive technology design
 
-See [`../PHILOSOPHY.md`](../PHILOSOPHY.md) for full references.
+See [`PHILOSOPHY.md`](PHILOSOPHY.md) for full references.
 
 ---
 
@@ -268,7 +268,7 @@ When adding new features or documentation:
 **New to assistive technology?**
 1. Read Dasher's ["How It Works"](https://dasher.at/docs/concepts/how-dasher-works/)
 2. Try Dasher yourself to understand the paradigm
-3. Read our [`PHILOSOPHY.md`](../PHILOSOPHY.md)
+3. Read our [`PHILOSOPHY.md`](PHILOSOPHY.md)
 4. Explore the codebase with context
 
 **Want to contribute code?**
@@ -307,11 +307,11 @@ When adding new features or documentation:
 ## 🔍 Finding Information
 
 **Looking for...**
-- **Why we do things this way?** → [`../PHILOSOPHY.md`](../PHILOSOPHY.md)
+- **Why we do things this way?** → [`PHILOSOPHY.md`](PHILOSOPHY.md)
 - **How to implement feature X?** → [`TECHNICAL_INNOVATIONS.md`](TECHNICAL_INNOVATIONS.md)
-- **Quick project overview?** → [`../LLM_ONBOARDING.md`](../LLM_ONBOARDING.md)
+- **Quick project overview?** → [`LLM_ONBOARDING.md`](LLM_ONBOARDING.md)
 - **Prediction comparison?** → [`PREDICTION_OPTIONS.md`](PREDICTION_OPTIONS.md)
-- **Code architecture?** → [`../LLM_ONBOARDING.md`](../LLM_ONBOARDING.md#architecture)
+- **Code architecture?** → [`LLM_ONBOARDING.md`](LLM_ONBOARDING.md#architecture)
 - **Security posture?** → [`SECURITY_AUDIT.md`](SECURITY_AUDIT.md)
 
 ---
