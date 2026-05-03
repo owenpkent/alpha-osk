@@ -523,6 +523,22 @@ class TestPredictionCapitalizationLearning:
         bridge.pressPrediction("Hello")
         bridge._predictor.learn_capitalization.assert_not_called()
 
+    def test_midword_capital_prefix_then_pill_click_teaches_casing(
+        self, bridge: KeyboardBridge,
+    ):
+        # Mid-word right-click ("e" then right-click "B") is an even
+        # stronger casing signal than a first-letter cap — there is no
+        # sentence-start ambiguity, mid-word capitals only ever come from
+        # brand / PascalCase intent.  The first-letter-only check missed
+        # this entirely; the prefix's first char was lowercase 'e', so
+        # learn_capitalization was never called and "ebay" stayed
+        # uncased forever.
+        bridge._predictor.learn_capitalization = MagicMock(return_value=True)
+        bridge.pressKey("e")
+        bridge.pressKeyLiteral("B")
+        bridge.pressPrediction("eBay")
+        bridge._predictor.learn_capitalization.assert_called_with("eBay")
+
 
 class TestPredictionCapsDisplay:
     """Caps Lock mirrors into the prediction pill display case."""

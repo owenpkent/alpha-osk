@@ -922,16 +922,21 @@ class KeyboardBridge(QObject):
         # fragment (_current_word) which is being *replaced* by the prediction.
         self._predictor.learn_from_selection(self._context_buffer, word)
 
-        # Capture casing intent.  If the user typed a capital first letter
-        # (right-click → shifted variant, or manual shift) before clicking
-        # a prediction, that's a deliberate signal "this word is
-        # capitalized."  learn_from_selection only updates frequency /
-        # bigrams, so without this call the casing was being thrown away
-        # — the user would have to re-right-click / re-shift every time
-        # they typed the same word.  learn_capitalization has its own
-        # guards (rejects all-uppercase and single-char inputs), so it's
-        # safe to call unconditionally on the typed-uppercase path.
-        if self._current_word and self._current_word[0].isupper():
+        # Capture casing intent.  If the user typed *any* uppercase
+        # letter in the prefix (right-click → shifted variant, or manual
+        # shift), that's a deliberate signal "this word is capitalized."
+        # Triggering on `prefix != prefix.lower()` covers both first-
+        # letter caps ("Hello") and mid-word caps ("eBay", "macBook",
+        # "iPhone"), which was the gap in the original first-letter-only
+        # check — a right-click on the 'B' in "macBook" left the casing
+        # intent unlearned because `_current_word[0]` was lowercase 'm'.
+        # learn_from_selection only updates frequency / bigrams, so
+        # without this call the casing was being thrown away — the user
+        # would have to re-right-click / re-shift every time they typed
+        # the same word.  learn_capitalization has its own guards
+        # (rejects all-uppercase and single-char inputs), so the call is
+        # safe on any non-lowercase prefix.
+        if self._current_word and self._current_word != self._current_word.lower():
             self._predictor.learn_capitalization(word)
 
         # Update context - add the completed word
