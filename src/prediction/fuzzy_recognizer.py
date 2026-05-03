@@ -395,6 +395,17 @@ class FuzzyRecognizer:
         typed_word: str,
         context: str = "",
     ) -> Optional[str]:
+        # Skip very short typings.  Single chars and 2-char fragments
+        # carry too little signal — "v" → "is", "vs" → "is", "th" →
+        # "to" are all corrections the user did not ask for.  Common
+        # 2-char abbreviations the user types deliberately ("vs",
+        # "ok", "th" as a fragment of "the" they're still typing)
+        # would be clobbered.  Genuine 2-char misspellings that need
+        # autocorrect (e.g. "im" → "I'm") are handled by the upstream
+        # ``check_autocorrect`` fast-path table, which is unaffected
+        # by this guard.
+        if len(typed_word) < 3:
+            return None
         correction = self.word_generator.get_correction(typed_word, context)
         if correction is None:
             return None

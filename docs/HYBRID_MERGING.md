@@ -145,7 +145,7 @@ User actions feed back into the models:
 
 | Trigger | What gets learned |
 |---------|-------------------|
-| Word completed with space | n-gram unigrams/bigrams/trigrams, PPM trie, capitalisation |
+| Word completed with space | n-gram unigrams/bigrams/trigrams, PPM trie, capitalisation (all-caps only learned if Caps Lock was off — see below) |
 | Sentence ended (`.!?`) | Full sentence re-trains n-grams + PPM |
 | Prediction selected | Word boosted (`learn_from_selection`), context→word association recorded |
 | Prediction edited via right-click → "Edit" | Capitalisation recorded permanently (`set_capitalization`) |
@@ -154,6 +154,36 @@ User actions feed back into the models:
 
 All persisted to `ngram_model.json` + `ppm_model.json` on explicit
 save or auto-save-on-exit.
+
+### Capitalisation learning — Caps Lock vs. deliberate caps
+
+`NgramPredictor.learn_capitalization` rejects all-uppercase typings
+by default — those almost always come from Caps Lock being on, and
+learning them would pollute the table with shouty forms of every
+word the user typed under caps lock. But "all-caps typed
+deliberately" is a real signal worth keeping ("HVAC", "ROFL", a
+domain acronym).  The bridge tells the predictor which it is via
+`learn_capitalization(word, allow_uppercase=...)`:
+
+- `KeyboardBridge` carries a `_word_typed_under_caps_lock` flag,
+  set whenever a character is appended to `_current_word` while
+  `_caps_lock_active` is True. Reset at every word boundary.
+- The space-handler and `pressPrediction` pass
+  `allow_uppercase = not _word_typed_under_caps_lock`.  If the user
+  right-clicked / shifted each letter (Caps Lock off the whole
+  word), all-caps is allowed; if Caps Lock was on at any point,
+  it's rejected.
+
+So `HVAC` typed via four right-clicks then space is learned, but
+`HELLO` typed under Caps Lock is not — even though both produce an
+identical `_current_word`. The pill display uses the same
+`_word_typed_under_caps_lock` distinction implicitly: pills are
+case-mirrored from the typed prefix, and Caps Lock simply
+uppercases everything.
+
+Right-click → Edit goes through `set_capitalization`, which writes
+directly to `self.capitalization` and bypasses `learn_capitalization`
+entirely. Explicit user edits always win.
 
 ## Personal vs. Base Vocabulary (split-table scoring)
 

@@ -232,15 +232,15 @@ class NgramPredictor:
         except Exception as e:
             _logger.warning("Failed to load proper nouns: %s", e)
 
-    def learn_capitalization(self, word: str) -> bool:
+    def learn_capitalization(self, word: str, *, allow_uppercase: bool = False) -> bool:
         """Learn preferred capitalization from user typing.
 
         Only stores non-trivial capitalization (not all-lower or first-letter-upper
         for words that aren't already known proper nouns).  Single-character
         words are skipped (handled by _always_capitalize).
 
-        All-uppercase typings ("HELLO", "WORLD") are skipped — those
-        almost always come from Caps Lock being on, not a deliberate
+        All-uppercase typings ("HELLO", "WORLD") are skipped by default —
+        those almost always come from Caps Lock being on, not a deliberate
         signal that the word is canonically uppercase. Without this
         guard, every word the user types with caps lock on would
         pollute the capitalisation table, and predictions would come
@@ -248,11 +248,17 @@ class NgramPredictor:
         `_load_proper_nouns` directly into ``self.capitalization``,
         bypassing this learn path, so they still work.
 
+        Pass ``allow_uppercase=True`` when the caller has positive
+        evidence that the user typed all-caps deliberately (e.g.
+        Caps Lock was off for every char of the word — the user
+        right-clicked / shifted each letter individually). The bridge
+        gates this on its `_word_typed_under_caps_lock` flag.
+
         Returns True if a new or updated capitalization was saved.
         """
         if not word or len(word) < 2:
             return False
-        if word.isupper():
+        if word.isupper() and not allow_uppercase:
             return False
         lower = word.lower()
         existing = self.capitalization.get(lower)

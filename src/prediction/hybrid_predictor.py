@@ -1006,9 +1006,9 @@ class HybridPredictor(QObject):
         """Track typed word for auto-rehabilitation of blacklisted words."""
         return self._ngram.record_typed_word(word)
 
-    def learn_capitalization(self, word: str) -> bool:
+    def learn_capitalization(self, word: str, *, allow_uppercase: bool = False) -> bool:
         """Learn preferred capitalization from user typing."""
-        return self._ngram.learn_capitalization(word)
+        return self._ngram.learn_capitalization(word, allow_uppercase=allow_uppercase)
 
     def set_capitalization(self, word: str, preferred: str) -> None:
         """Explicitly set preferred capitalization (from user edit)."""

@@ -136,8 +136,24 @@ multiplies the score *before* per-source normalisation, so the
 context signal flows through the resulting probability distribution.
 
 `HybridPredictor.check_autocorrect` calls `should_autocorrect`, which
-returns a corrected word only if the top candidate's probability ≥
-`confidence_threshold`.
+returns a corrected word only if (1) the typed word is at least 3
+characters long, (2) the top candidate's probability ≥
+`confidence_threshold`, and (3) the candidate's score clears the
+relative `autocorrect_margin` over the typed word's hypothetical
+"rare real word" baseline. The 3-char gate is a hard cutoff: 1- and
+2-char fragments carry too little signal — without it, "v" → "is",
+"vs" → "is", "th" → "to" all fired on inputs the user typed
+deliberately. Genuine 2-char misspellings ("im" → "I'm") are handled
+by the `check_autocorrect` fast-path misspellings table, which sits
+*above* `should_autocorrect` and bypasses this guard.
+
+The space-time autocorrect path in `KeyboardBridge` (which calls
+`check_autocorrect` and overwrites the typed word via `replace_text`)
+is **off by default** (`_autocorrect_enabled = False`) — corrections
+surface as clickable suggestion pills, never silent on-space
+overwrites. `setAutocorrectEnabled(True)` re-enables the overwrite
+path; the fuzzy recogniser itself runs unconditionally as part of
+the prediction merge.
 
 ## Known Gaps / Future Work
 

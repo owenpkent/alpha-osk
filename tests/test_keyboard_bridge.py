@@ -501,7 +501,9 @@ class TestPredictionCapitalizationLearning:
         bridge.pressKey("w")
         bridge.pressKey("e")
         bridge.pressPrediction("Owen")
-        bridge._predictor.learn_capitalization.assert_called_with("Owen")
+        bridge._predictor.learn_capitalization.assert_called_with(
+            "Owen", allow_uppercase=True
+        )
 
     def test_lowercase_prefix_then_pill_click_does_not_teach_casing(
         self, bridge: KeyboardBridge,
@@ -537,7 +539,68 @@ class TestPredictionCapitalizationLearning:
         bridge.pressKey("e")
         bridge.pressKeyLiteral("B")
         bridge.pressPrediction("eBay")
-        bridge._predictor.learn_capitalization.assert_called_with("eBay")
+        bridge._predictor.learn_capitalization.assert_called_with(
+            "eBay", allow_uppercase=True
+        )
+
+
+class TestAllCapsLearningGate:
+    """Caps Lock must NOT teach the system that a word is canonically
+    all-caps — that pollutes the table with shouty forms of every word
+    the user typed under caps lock.  But right-clicking each letter to
+    deliberately type all-caps IS a strong signal and should be learned."""
+
+    def test_word_typed_all_caps_via_rightclick_learns_uppercase(
+        self, bridge: KeyboardBridge,
+    ):
+        """User right-clicks each letter — Caps Lock is off the whole
+        word.  At space, the all-caps form should be learned."""
+        bridge._predictor.learn_capitalization = MagicMock(return_value=True)
+        for ch in "HVAC":
+            bridge.pressKeyLiteral(ch)
+        assert bridge._word_typed_under_caps_lock is False
+        bridge.pressSpecialKey("space")
+        bridge._predictor.learn_capitalization.assert_called_with(
+            "HVAC", allow_uppercase=True
+        )
+
+    def test_word_typed_all_caps_under_caps_lock_does_not_learn_uppercase(
+        self, bridge: KeyboardBridge,
+    ):
+        """User toggles Caps Lock on, types HELLO — that's incidental
+        all-caps, not a deliberate signal.  The bridge must pass
+        ``allow_uppercase=False`` so the predictor's guard rejects it."""
+        bridge._predictor.learn_capitalization = MagicMock(return_value=False)
+        bridge.toggleCapsLock()
+        for ch in "HELLO":
+            bridge.pressKey(ch)
+        assert bridge._word_typed_under_caps_lock is True
+        bridge.pressSpecialKey("space")
+        bridge._predictor.learn_capitalization.assert_called_with(
+            "HELLO", allow_uppercase=False
+        )
+
+    def test_caps_lock_flag_resets_at_word_boundary(
+        self, bridge: KeyboardBridge,
+    ):
+        """After space, the next word starts with a clean slate — caps
+        lock used on the previous word does not taint the next one."""
+        bridge.toggleCapsLock()
+        bridge.pressKey("h")
+        assert bridge._word_typed_under_caps_lock is True
+        bridge.pressSpecialKey("space")
+        assert bridge._word_typed_under_caps_lock is False
+
+    def test_caps_lock_flag_resets_when_backspaced_to_empty(
+        self, bridge: KeyboardBridge,
+    ):
+        """Backspacing all the way through the word resets the flag —
+        the user is starting over."""
+        bridge.toggleCapsLock()
+        bridge.pressKey("h")
+        assert bridge._word_typed_under_caps_lock is True
+        bridge.pressSpecialKey("backspace")
+        assert bridge._word_typed_under_caps_lock is False
 
 
 class TestPredictionCapsDisplay:
@@ -603,6 +666,36 @@ class TestPredictionCapsDisplay:
         """No shift means no case-matching — pure pass-through."""
         bridge._current_word = "hel"
         assert bridge._display_cased(["hello", "help"]) == ["hello", "help"]
+
+    def test_display_cased_mirrors_all_caps_in_prefix(self, bridge: KeyboardBridge):
+        """Right-clicking each of H, E, L produces 'HEL'. The pills must
+        mirror every typed capital so the suffix-only insert path's
+        case-sensitive startswith fires and the user sees what they
+        typed reflected back."""
+        bridge._current_word = "HEL"
+        assert bridge._display_cased(["hello", "help"]) == ["HELlo", "HELp"]
+
+    def test_display_cased_mirrors_partial_caps_in_prefix(self, bridge: KeyboardBridge):
+        """Mixed casing 'HEl' (two right-clicks then a normal tap)
+        mirrors only the typed uppercase positions."""
+        bridge._current_word = "HEl"
+        assert bridge._display_cased(["hello", "help"]) == ["HEllo", "HElp"]
+
+    def test_display_cased_mirrors_midword_cap(self, bridge: KeyboardBridge):
+        """A mid-word cap from a right-click — typed 'iP' — must be
+        preserved on the pill, not lost. The first-letter-only gate
+        used to skip this case because cw[0] was lowercase."""
+        bridge._current_word = "iP"
+        assert bridge._display_cased(["iphone", "ipad"]) == ["iPhone", "iPad"]
+
+    def test_display_cased_mirrors_caps_onto_already_capped_prediction(
+        self, bridge: KeyboardBridge
+    ):
+        """Pred already has a mid-word cap (e.g. 'iPhone' from proper
+        nouns). User typed 'IP' — the mirror should add the I cap and
+        keep the P cap."""
+        bridge._current_word = "IP"
+        assert bridge._display_cased(["iPhone"]) == ["IPhone"]
 
 
 class TestEditModeIntercept:
@@ -870,9 +963,25 @@ class TestMatchCase:
 
 
 class TestSpaceTimeAutocorrect:
-    """pressSpecialKey('space') runs misspelling/fuzzy autocorrect."""
+    """pressSpecialKey('space') runs misspelling/fuzzy autocorrect.
+
+    Space-time autocorrect is OFF by default (a silent on-space
+    replacement clobbered deliberate input — see
+    `feedback_conservative_autotransform`).  Tests that exercise the
+    autocorrect path turn it back on explicitly via
+    ``setAutocorrectEnabled(True)``.
+    """
+
+    def test_default_is_off(self, bridge: KeyboardBridge):
+        """Space-time autocorrect must NOT fire by default — even on
+        a known misspelling, the literal typed word survives."""
+        bridge._current_word = "recieve"
+        bridge.pressSpecialKey("space")
+        assert "recieve" in bridge._sentence_buffer
+        assert "receive" not in bridge._sentence_buffer
 
     def test_known_misspelling_replaced_on_space(self, bridge: KeyboardBridge):
+        bridge.setAutocorrectEnabled(True)
         bridge._current_word = "recieve"
         bridge.pressSpecialKey("space")
         # _current_word should have been corrected before clearing.
@@ -882,12 +991,14 @@ class TestSpaceTimeAutocorrect:
         assert "recieve" not in bridge._sentence_buffer
 
     def test_misspelling_casing_matches_typed_word(self, bridge: KeyboardBridge):
+        bridge.setAutocorrectEnabled(True)
         bridge._current_word = "Recieve"
         bridge.pressSpecialKey("space")
         # Title-cased typed → title-cased correction.
         assert "Receive" in bridge._sentence_buffer
 
     def test_valid_word_not_corrected(self, bridge: KeyboardBridge):
+        bridge.setAutocorrectEnabled(True)
         bridge._current_word = "the"
         bridge.pressSpecialKey("space")
         assert "the" in bridge._sentence_buffer
@@ -900,6 +1011,7 @@ class TestSpaceTimeAutocorrect:
         assert "recieve" in bridge._sentence_buffer
 
     def test_privacy_mode_skips_autocorrect(self, bridge: KeyboardBridge):
+        bridge.setAutocorrectEnabled(True)
         bridge.setPrivacyMode(True)
         bridge._current_word = "recieve"
         bridge.pressSpecialKey("space")

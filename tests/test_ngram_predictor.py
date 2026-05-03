@@ -308,6 +308,18 @@ class TestCapitalization:
         # cap), not "HELLO".
         assert predictor.get_capitalized("hello", sentence_start=False) == "hello"
 
+    def test_all_uppercase_typing_learned_when_explicitly_allowed(self):
+        """The bridge passes ``allow_uppercase=True`` when it has
+        positive evidence the user did NOT use Caps Lock — i.e. they
+        right-clicked / shifted each letter individually. That's a
+        deliberate signal that the word is canonically all-caps
+        ("HVAC", "ROFL", a domain acronym), and the table should
+        learn it."""
+        predictor = NgramPredictor()
+        result = predictor.learn_capitalization("HVAC", allow_uppercase=True)
+        assert result is True, "deliberate all-caps typing should be learned"
+        assert predictor.get_capitalized("hvac", sentence_start=False) == "HVAC"
+
     def test_legitimate_acronym_via_proper_nouns_still_works(self):
         """Built-in acronyms like NASA, IBM, HBO are loaded directly
         into self.capitalization via _load_proper_nouns — they don't

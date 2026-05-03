@@ -283,6 +283,14 @@ class KeyboardBridge(QObject):
         # Context tracking for predictions
         self._context_buffer = ""
         self._current_word = ""
+        # True iff Caps Lock was active for at least one character in the
+        # currently-being-typed word.  Distinguishes "user shouted via
+        # caps lock" from "user deliberately right-clicked / shifted each
+        # letter to type all-caps" — the latter is a strong signal that
+        # the word is canonically uppercase ("HVAC", "ROFL") and should
+        # be learned, the former is incidental and would pollute the
+        # capitalisation table.  Reset on every word boundary.
+        self._word_typed_under_caps_lock = False
         self._sentence_buffer = ""  # Accumulates words for sentence-level learning
         self._predictions: List[str] = []
         self._auto_space_after_punctuation = True
@@ -295,11 +303,18 @@ class KeyboardBridge(QObject):
         # our own auto-space, never the user's manually-typed space.
         # Reset on any subsequent keystroke.
         self._auto_space_pending = False
-        # Space-time autocorrect — replace the typed word with a known
-        # correction when space lands.  Falls through silently if the
-        # word is in the dictionary (no false positives) or no good
-        # correction is available.  See HybridPredictor.check_autocorrect.
-        self._autocorrect_enabled = True
+        # Space-time autocorrect — replace the typed word with a
+        # known correction when space lands.  Off by default: the
+        # user can pick a corrected pill from the suggestion bar
+        # if they want it, but a silent on-space replacement
+        # clobbered deliberate input ("vs" → "is", and a hyphenated
+        # word followed by another word reportedly wiped both).
+        # The fuzzy recogniser still contributes to the suggestion
+        # pills (that's the "autocorrect in the suggestion box"
+        # the user wants); only the space-triggered overwrite path
+        # is disabled.  ``setAutocorrectEnabled`` flips this back
+        # on if a future caller wants it.
+        self._autocorrect_enabled = False
 
         # Remote desktop mode — when typing into a TeamViewer / RDP /
         # VNC / AnyDesk client window, the local OSK's suffix-only
@@ -543,6 +558,11 @@ class KeyboardBridge(QObject):
         else:
             # Update context and get predictions
             self._current_word += char
+            # Track whether Caps Lock was on for any char in this word
+            # — gates whether all-caps typing is allowed to be learned
+            # (see `_word_typed_under_caps_lock` in __init__).
+            if self._caps_lock_active:
+                self._word_typed_under_caps_lock = True
 
             # Sentence-ending punctuation triggers sentence learning
             if char in (".", "!", "?"):
@@ -555,6 +575,7 @@ class KeyboardBridge(QObject):
                             _logger.info("New word learned: %s", nw)
                 self._sentence_buffer = ""
                 self._current_word = ""
+                self._word_typed_under_caps_lock = False
                 if self._auto_space_after_punctuation:
                     self._send_text(" ")
                     self._auto_space_pending = True
@@ -577,6 +598,7 @@ class KeyboardBridge(QObject):
                 else:
                     self._context_buffer += char + " "
                 self._current_word = ""
+                self._word_typed_under_caps_lock = False
                 if self._auto_space_after_punctuation:
                     self._send_text(" ")
                     self._auto_space_pending = True
@@ -710,8 +732,17 @@ class KeyboardBridge(QObject):
                 if rehabilitated:
                     self._add_debug_log(f"Auto-rehabilitated: {rehabilitated}")
                 self._analytics.record_word_completed(self._current_word)
-                # Learn capitalization from user typing
-                if self._predictor.learn_capitalization(self._current_word):
+                # Learn capitalization from user typing.  All-caps is
+                # only allowed if Caps Lock was off the whole word —
+                # otherwise we'd pollute the table with shouty forms of
+                # every word typed under caps lock.  Off-the-whole-word
+                # means the user deliberately right-clicked / shifted
+                # each letter to type all-caps, which is a strong
+                # signal ("HVAC", "ROFL").
+                allow_uppercase = not self._word_typed_under_caps_lock
+                if self._predictor.learn_capitalization(
+                    self._current_word, allow_uppercase=allow_uppercase
+                ):
                     self._add_debug_log(f"Learned capitalization: \"{self._current_word}\"")
                     _logger.info("Learned capitalization: %s", self._current_word)
                 self._sentence_buffer += self._current_word + " "
@@ -726,11 +757,14 @@ class KeyboardBridge(QObject):
                 if len(self._context_buffer) > 200:
                     self._context_buffer = self._context_buffer[-200:]
             self._current_word = ""
+            self._word_typed_under_caps_lock = False
             self._update_predictions()
         elif key_name == "backspace":
             self._analytics.record_backspace()
             if self._current_word:
                 self._current_word = self._current_word[:-1]
+                if not self._current_word:
+                    self._word_typed_under_caps_lock = False
                 self._update_predictions()
             elif self._context_buffer:
                 # Stay in sync with on-screen text: backspace pops one
@@ -771,6 +805,7 @@ class KeyboardBridge(QObject):
             if len(self._context_buffer) > 200:
                 self._context_buffer = self._context_buffer[-200:]
             self._current_word = ""
+            self._word_typed_under_caps_lock = False
             self._update_predictions()
 
         # Auto-release ctrl/alt/win after special key too
@@ -934,16 +969,21 @@ class KeyboardBridge(QObject):
         # without this call the casing was being thrown away — the user
         # would have to re-right-click / re-shift every time they typed
         # the same word.  learn_capitalization has its own guards
-        # (rejects all-uppercase and single-char inputs), so the call is
-        # safe on any non-lowercase prefix.
+        # (rejects single-char inputs), so the call is safe on any
+        # non-lowercase prefix.  All-caps is allowed only if the user
+        # didn't have Caps Lock on for any char of the prefix (i.e.
+        # they deliberately right-clicked / shifted each letter) —
+        # see `_word_typed_under_caps_lock`.
         if self._current_word and self._current_word != self._current_word.lower():
-            self._predictor.learn_capitalization(word)
+            allow_uppercase = not self._word_typed_under_caps_lock
+            self._predictor.learn_capitalization(word, allow_uppercase=allow_uppercase)
 
         # Update context - add the completed word
         self._context_buffer += word + " "
         if len(self._context_buffer) > 100:
             self._context_buffer = self._context_buffer[-100:]
         self._current_word = ""
+        self._word_typed_under_caps_lock = False
 
         # IMPORTANT: Clear predictions first, then get next-word predictions
         self._predictions = []
@@ -982,6 +1022,7 @@ class KeyboardBridge(QObject):
         """Full reset of typing state — for explicit user action only."""
         self._predictions = []
         self._current_word = ""
+        self._word_typed_under_caps_lock = False
         self._sentence_buffer = ""
         self._context_buffer = ""
         self.predictionsChanged.emit([])
@@ -1078,13 +1119,16 @@ class KeyboardBridge(QObject):
            "HELL" misleads about which pill matches the prefix, and
            clicking sends the lowercase form next to an uppercase
            prefix.
-        2. One-shot Shift on the first letter — the user typed e.g.
-           "Hel" and wants "Hello", not "hello". The display has to
-           match for two reasons: (a) the user expects what they see
-           to match what they typed, and (b) the suffix-only insert
-           path uses a case-sensitive `startswith`, so "hello".
-           startswith("Hel") is False and the click would fall through
-           to a full replace, clobbering the user's capital H.
+        2. Any uppercase in the prefix — the user typed e.g. "Hel",
+           "HEL" (right-clicked each letter), "HEl", or "iP" (mid-word
+           cap via right-click). Mirror each typed uppercase position
+           onto the corresponding pill position so the displayed pill
+           reflects exactly what the user typed. Two reasons: (a) the
+           user expects what they see to match what they typed, and
+           (b) the suffix-only insert path uses a case-sensitive
+           `startswith`, so "hello".startswith("HEL") is False and the
+           click would fall through to a full replace, clobbering the
+           user's capitals.
 
         Sentence-start and proper-noun capitalisation are handled
         upstream by :func:`NgramPredictor.get_capitalized`; this layer
@@ -1095,12 +1139,18 @@ class KeyboardBridge(QObject):
         if self._caps_lock_active:
             return [w.upper() for w in predictions]
         cw = self._current_word
-        if cw and cw[0].isupper():
+        if cw and any(c.isupper() for c in cw):
             prefix_lower = cw.lower()
             result = []
             for w in predictions:
-                if w and w[0].islower() and w.lower().startswith(prefix_lower):
-                    result.append(w[0].upper() + w[1:])
+                if w and w.lower().startswith(prefix_lower):
+                    new_chars = []
+                    for i, ch in enumerate(w):
+                        if i < len(cw) and cw[i].isupper():
+                            new_chars.append(ch.upper())
+                        else:
+                            new_chars.append(ch)
+                    result.append("".join(new_chars))
                 else:
                     result.append(w)
             return result
@@ -1423,6 +1473,7 @@ class KeyboardBridge(QObject):
             # Foreground window changed — user switched apps
             self._predictions = []
             self._current_word = ""
+            self._word_typed_under_caps_lock = False
             self._sentence_buffer = ""
             self._context_buffer = ""
             self.predictionsChanged.emit([])
@@ -1515,6 +1566,7 @@ class KeyboardBridge(QObject):
         self._predictions = []
         self.predictionsChanged.emit([])
         self._current_word = ""
+        self._word_typed_under_caps_lock = False
         self._context_buffer = ""
         self._sentence_buffer = ""
 
@@ -1750,6 +1802,7 @@ class KeyboardBridge(QObject):
         if len(self._context_buffer) > 100:
             self._context_buffer = self._context_buffer[-100:]
         self._current_word = ""
+        self._word_typed_under_caps_lock = False
 
         # Refresh predictions
         self._predictions = []
@@ -1869,6 +1922,7 @@ class KeyboardBridge(QObject):
         if len(self._context_buffer) > 200:
             self._context_buffer = self._context_buffer[-200:]
         self._current_word = ""
+        self._word_typed_under_caps_lock = False
 
         # Show the rest as alternative predictions in case the top guess is wrong.
         self._predictions = display
