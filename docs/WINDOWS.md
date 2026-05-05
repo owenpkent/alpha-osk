@@ -527,6 +527,18 @@ gh release create vX.Y.Z release/Alpha-OSK-Setup-X.Y.Z.exe \
 
 > ⚠️ **The `--repo okstudio1/alpha-osk-releases` flag is mandatory.** The source repo is private; the auto-updater can't see private releases (returns 404 to unauthenticated callers). Forgetting `--repo` will create the release in the source repo where end users' updaters won't find it. Tag the source repo for changelog tracking; publish binaries in the public repo.
 
+### Tracking downloads
+
+GitHub stamps a `download_count` on every release asset. To see the per-release breakdown and total:
+
+```bash
+python scripts/downloads.py
+```
+
+The script just wraps `gh api repos/okstudio1/alpha-osk-releases/releases --paginate` and sums each release's asset counts. Requires `gh` to be authenticated against an account with read access to the releases repo.
+
+Caveat: the count includes auto-updater fetches as well as manual clicks from the release page — GitHub doesn't distinguish. Treat it as a directional number (downloads, not unique installs). If you ever need true install / DAU numbers, that requires a separate telemetry endpoint (off by default, opt-in setting) — see the auto-update doc for the model.
+
 ### Bundle size
 
 PyInstaller spec at `build/windows/alpha-osk.spec` excludes `Qt6WebEngineCore.dll` (193 MB by itself) and the WebEngine / WebView / WebChannel families. Installer is ~85 MB instead of ~165 MB. If you ever add an in-app browser, re-include them in `excludes` and re-measure — losing 100 MB of installer in one careless re-include is easy.

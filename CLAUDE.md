@@ -358,6 +358,7 @@ Full step-by-step release checklist, signing details, troubleshooting table, and
 4. Test the installer in `release/`, including UIAccess against an elevated shell.
 5. `git tag vX.Y.Z && git push origin main && git push origin vX.Y.Z`.
 6. **Public repo for binaries**: `gh release create vX.Y.Z release/Alpha-OSK-Setup-X.Y.Z.exe --repo okstudio1/alpha-osk-releases ...`. The `--repo` flag is mandatory — source repo is private and the auto-updater can't see private releases.
+7. **Track downloads**: `python scripts/downloads.py` prints per-release and total download counts via `gh api`. Includes auto-updater fetches, so it's a directional number rather than unique-install count.
 
 The eToken-non-elevated requirement is the single most common build trap: SafeNet exposes the cert to the user session only, so elevated shells get "Cannot find certificate."
 
@@ -397,6 +398,10 @@ internals, spec customization).
 ## Git Conventions
 
 Conventional commits: `feat:`, `fix:`, `docs:`, `refactor:`, `chore:`
+
+## Known Issues
+
+- **Prediction pills are broken in VS Code.** Clicking a pill produces wrong / duplicated text in the editor. Almost certainly the same root cause as the Remote Desktop Mode watch-out below: VS Code's Monaco editor has its own keystroke interception (IntelliSense, snippet expansion, multi-cursor) that breaks the suffix-only insertion path's "the typed prefix is already on screen, just append the rest" assumption. Workaround for now: turn on Remote Desktop Mode manually in *Settings → Input* when typing into VS Code — that switches to the BackSpace-then-retype path which is robust against keystroke interception. Proper fix is to add VS Code's window class (`Chrome_WidgetWin_1` is too broad — Code uses an Electron host class) or process name (`Code.exe`, `Code - Insiders.exe`) to one of the detection sets in `_is_remote_desktop_window`. Care needed because Electron classes overlap with other apps; process-name match is the safer lever.
 
 ## Things to Watch Out For
 
