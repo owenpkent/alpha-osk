@@ -34,6 +34,21 @@ Item {
                                      // press doesn't blast through extra
                                      // chars, fast enough to bulk-delete
                                      // a word in ~1 s)
+    property int warmUpGrace: 300    // ms between the warm-up tick at
+                                     // ``repeatDelay`` and the first
+                                     // actual auto-repeat keystroke.
+                                     // Widens the "1 vs 2 keystrokes"
+                                     // boundary from
+                                     // ``repeatDelay + repeatInterval``
+                                     // (~620 ms) to
+                                     // ``repeatDelay + warmUpGrace``
+                                     // (~800 ms) so a slightly-too-long
+                                     // tap on backspace doesn't fire
+                                     // a second emit.  Once the user
+                                     // is genuinely holding past the
+                                     // grace, auto-repeat kicks in at
+                                     // ``repeatInterval`` cadence as
+                                     // before.
 
     // Debounce window (ms).  Consecutive MouseArea presses within this
     // window count as a single press — covers hardware button bounce
@@ -70,27 +85,39 @@ Item {
     implicitWidth: keyWidth
     implicitHeight: keyHeight
 
-    // Key repeat timer.  Fires twice per hold cycle: once at
-    // ``repeatDelay`` to warm up (just transitions into repeat mode,
-    // does NOT fire a keystroke), then at ``repeatInterval`` cadence
-    // for each actual auto-repeat.  Without the warm-up tick, a press
-    // that lands exactly at ``repeatDelay`` would fire two keystrokes
-    // for what the user perceives as a single deliberate click — the
-    // initial press emit, plus the timer's first emit at the boundary.
-    // Slow-motor users systematically tip past 500 ms (especially when
-    // moving between keys) and felt this as "Backspace sometimes sends
-    // 2".  With the warm-up, any press shorter than
-    // ``repeatDelay + repeatInterval`` gives exactly one keystroke.
+    // Key repeat timer.  Three phases per hold cycle:
+    //   phase 0 (pre-warmup): scheduled at ``repeatDelay``.  When it
+    //                         fires, transition to phase 1.  Does NOT
+    //                         emit a keystroke.
+    //   phase 1 (grace):      scheduled at ``warmUpGrace``.  When it
+    //                         fires, emit the first auto-repeat
+    //                         keystroke and transition to phase 2.
+    //   phase 2 (repeating):  scheduled at ``repeatInterval`` cadence,
+    //                         emit each tick.
+    //
+    // The grace phase exists because phase 0 alone left a 120 ms
+    // boundary between "one tap" and "tap that fires twice".  Slow-
+    // motor users systematically tipped past it on backspace and felt
+    // it as "Backspace sometimes sends 2".  Adding the grace widens
+    // the boundary from ``repeatDelay + repeatInterval`` (~620 ms) to
+    // ``repeatDelay + warmUpGrace`` (~800 ms) without slowing down
+    // bulk-delete once auto-repeat is genuinely engaged.
+    //
+    // Any press shorter than ``repeatDelay + warmUpGrace`` gives
+    // exactly one keystroke.  ``phase`` must be reset to 0 wherever
+    // the timer is stopped (``onReleased``, ``onCanceled``,
+    // ``onContainsMouseChanged``); otherwise a subsequent press would
+    // skip the warm-up and resume mid-cycle.
     Timer {
         id: repeatTimer
         interval: keyRoot.repeatDelay
         repeat: false
-        property bool warmedUp: false
+        property int phase: 0
         onTriggered: {
-            if (!warmedUp) {
-                warmedUp = true
-                interval = keyRoot.repeatInterval
-                repeat = true
+            if (phase === 0) {
+                phase = 1
+                interval = keyRoot.warmUpGrace
+                repeat = false
                 start()
                 pressSafetyTimer.restart()
                 return
@@ -103,6 +130,12 @@ Item {
             // each tick so a long-held key (e.g. backspace deleting a
             // paragraph) doesn't get cut off mid-hold.
             pressSafetyTimer.restart()
+            if (phase === 1) {
+                phase = 2
+                interval = keyRoot.repeatInterval
+                repeat = true
+                start()
+            }
         }
     }
 
@@ -268,7 +301,7 @@ Item {
             repeatTimer.stop()
             repeatTimer.interval = keyRoot.repeatDelay
             repeatTimer.repeat = false
-            repeatTimer.warmedUp = false
+            repeatTimer.phase = 0
         }
 
         onCanceled: {
@@ -277,7 +310,7 @@ Item {
             repeatTimer.stop()
             repeatTimer.interval = keyRoot.repeatDelay
             repeatTimer.repeat = false
-            repeatTimer.warmedUp = false
+            repeatTimer.phase = 0
         }
 
         // Cursor leaving the key clears the visual press AND stops
@@ -292,7 +325,7 @@ Item {
                 repeatTimer.stop()
                 repeatTimer.interval = keyRoot.repeatDelay
                 repeatTimer.repeat = false
-                repeatTimer.warmedUp = false
+                repeatTimer.phase = 0
             }
         }
     }

@@ -869,11 +869,22 @@ class TestPredictionCapsDisplay:
         bridge._current_word = "Mar"
         assert bridge._display_cased(["Mary", "march"]) == ["Mary", "March"]
 
-    def test_display_cased_skips_predictions_not_matching_prefix(self, bridge: KeyboardBridge):
-        """Defensive: predictions whose lowercase form doesn't start
-        with the typed prefix shouldn't be re-cased."""
-        bridge._current_word = "Hel"
-        assert bridge._display_cased(["world"]) == ["world"]
+    def test_display_cased_mirrors_caps_onto_non_prefix_predictions(self, bridge: KeyboardBridge):
+        """Fuzzy / autocorrect pills don't always strict-prefix-match
+        the typed letters.  Typing 'Hwl' (typo for 'Hel') still surfaces
+        'hello' as a fuzzy candidate. The capital must be mirrored onto
+        the displayed pill anyway; the prior strict-prefix gate dropped
+        the cap on every fuzzy correction, so capitalised typings only
+        looked right when no typo got involved."""
+        bridge._current_word = "Hwl"
+        assert bridge._display_cased(["hello", "help"]) == ["Hello", "Help"]
+
+    def test_display_cased_mirrors_caps_onto_extra_letter_typo(self, bridge: KeyboardBridge):
+        """Insertion typos ('Heilo' for 'Hello') produce a fuzzy
+        correction that's *shorter* than the typed prefix.  Still mirror
+        every uppercase position that lines up with a pill char."""
+        bridge._current_word = "Heilo"
+        assert bridge._display_cased(["hello"]) == ["Hello"]
 
     def test_display_cased_lowercase_prefix_unchanged(self, bridge: KeyboardBridge):
         """No shift means no case-matching — pure pass-through."""

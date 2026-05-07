@@ -445,34 +445,131 @@ Item {
                                 onToggled: function(c) { unifiedSettings.settingChanged("rightClickShift", c) }
                             }
 
-                            // Auto-detect remote-desktop clients
-                            // (TeamViewer/RDP/VNC/AnyDesk/...) and IDEs
-                            // with always-on keystroke interception
-                            // (VS Code + Monaco forks, JetBrains family)
-                            // and switch prediction insertion to
-                            // backspace+retype automatically.  Default
-                            // ON — covers the common case without the
-                            // user having to remember to flip the
-                            // manual toggle.  See
-                            // `_COMPAT_PROCESS_NAMES` in
-                            // `keyboard_bridge.py` for the full list.
-                            SettingsToggle {
+                            // Compatibility Mode has three meaningful
+                            // states (Off / Auto / Always On) living
+                            // behind two booleans (`compatMode` =
+                            // manual force-on, `compatAutoDetect` =
+                            // auto-detect on focus change).  Effective
+                            // on-state is
+                            // `manual OR (auto_enabled AND auto_active)`.
+                            // The two-toggle UI was confusing because it
+                            // exposed the boolean composition, not the
+                            // user-visible state.  Collapse to a single
+                            // 3-card picker; on click set both booleans
+                            // unambiguously so toggling Always→Off
+                            // doesn't leave auto-detect silently armed.
+                            Item {
                                 Layout.fillWidth: true
-                                text: "Auto-Enable Compatibility Mode"
-                                checked: unifiedSettings.compatAutoDetect
-                                onToggled: function(c) { unifiedSettings.settingChanged("compatAutoDetect", c) }
+                                implicitHeight: 28
+
+                                Text {
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    anchors.left: parent.left
+                                    anchors.leftMargin: 4
+                                    text: "Compatibility Mode"
+                                    color: "#c0c0c0"
+                                    font.pixelSize: 12
+                                }
                             }
 
-                            // Manual force-on for cases auto-detect misses
-                            // (rare remote tools, IDEs not in the curated
-                            // list, local apps that proxy to remote
-                            // sessions, etc.).  Effective compat mode =
-                            // manual OR auto.
-                            SettingsToggle {
+                            ColumnLayout {
                                 Layout.fillWidth: true
-                                text: "Compatibility Mode (always on)"
-                                checked: unifiedSettings.compatMode
-                                onToggled: function(c) { unifiedSettings.settingChanged("compatMode", c) }
+                                spacing: 6
+
+                                Repeater {
+                                    model: [
+                                        {
+                                            id: "off",
+                                            name: "Off",
+                                            desc: "Predictions inserted with the fast suffix-only path everywhere.",
+                                            tooltip: "Lowest-latency insertion, but can produce duplicate or scrambled text inside remote-desktop windows (TeamViewer, RDP, VNC) and IDEs that intercept keystrokes (VS Code, JetBrains).\nPick this only if you never type into those apps."
+                                        },
+                                        {
+                                            id: "auto",
+                                            name: "Auto (recommended)",
+                                            desc: "Switches to the safer backspace+retype path when a known problem app has focus.",
+                                            tooltip: "Detects remote-desktop clients (TeamViewer/RDP/VNC/AnyDesk) and IDEs with always-on keystroke interception (VS Code + Monaco forks, JetBrains family) and switches prediction insertion to BackSpace × N + retype while they're focused. Other apps keep the fast path. The detection list lives in _COMPAT_PROCESS_NAMES in keyboard_bridge.py."
+                                        },
+                                        {
+                                            id: "always",
+                                            name: "Always On",
+                                            desc: "Forces backspace+retype everywhere. Pick this if Auto misses your app.",
+                                            tooltip: "Use the BackSpace × N + retype path on every prediction click and every space-time autocorrect, regardless of which app has focus. Slightly more visible flicker on long words, but immune to keystroke-reordering issues. Pick this if you're using a remote-desktop tool or IDE that Auto doesn't recognise."
+                                        }
+                                    ]
+
+                                    Rectangle {
+                                        id: compatCard
+                                        Layout.fillWidth: true
+                                        // Auto-size to content so descriptions
+                                        // that wrap onto a second line aren't
+                                        // clipped.  10 px vertical padding on
+                                        // each side matches the merge-strategy
+                                        // cards visually for short descs while
+                                        // letting longer ones grow.
+                                        implicitHeight: compatCardContent.implicitHeight + 20
+                                        radius: 5
+                                        property string currentChoice: unifiedSettings.compatMode
+                                                                       ? "always"
+                                                                       : (unifiedSettings.compatAutoDetect ? "auto" : "off")
+                                        property bool isCurrent: currentChoice === modelData.id
+                                        color: isCurrent
+                                               ? "#2d4a7a"
+                                               : (compatBtnArea.containsMouse ? "#3a3a3a" : "#2a2a2a")
+                                        border.color: isCurrent ? "#6ab4ff" : "#444"
+                                        border.width: isCurrent ? 2 : 1
+
+                                        ColumnLayout {
+                                            id: compatCardContent
+                                            anchors.left: parent.left
+                                            anchors.right: parent.right
+                                            anchors.verticalCenter: parent.verticalCenter
+                                            anchors.leftMargin: 10
+                                            anchors.rightMargin: 10
+                                            spacing: 2
+
+                                            Text {
+                                                text: modelData.name
+                                                color: compatCard.isCurrent ? "#fff" : "#ddd"
+                                                font.pixelSize: 12
+                                                font.weight: Font.DemiBold
+                                            }
+                                            Text {
+                                                text: modelData.desc
+                                                color: compatCard.isCurrent ? "#cfe0ff" : "#888"
+                                                font.pixelSize: 10
+                                                wrapMode: Text.WordWrap
+                                                Layout.fillWidth: true
+                                            }
+                                        }
+
+                                        MouseArea {
+                                            id: compatBtnArea
+                                            anchors.fill: parent
+                                            hoverEnabled: true
+                                            cursorShape: Qt.PointingHandCursor
+                                            onClicked: {
+                                                // Always set BOTH booleans so a transition
+                                                // like Always→Off doesn't leave auto-detect
+                                                // silently armed.
+                                                if (modelData.id === "off") {
+                                                    unifiedSettings.settingChanged("compatMode", false)
+                                                    unifiedSettings.settingChanged("compatAutoDetect", false)
+                                                } else if (modelData.id === "auto") {
+                                                    unifiedSettings.settingChanged("compatMode", false)
+                                                    unifiedSettings.settingChanged("compatAutoDetect", true)
+                                                } else { // "always"
+                                                    unifiedSettings.settingChanged("compatMode", true)
+                                                    unifiedSettings.settingChanged("compatAutoDetect", false)
+                                                }
+                                            }
+                                        }
+
+                                        ToolTip.visible: compatBtnArea.containsMouse
+                                        ToolTip.text: modelData.tooltip
+                                        ToolTip.delay: 400
+                                    }
+                                }
                             }
 
                             // Hold-to-repeat delay — the threshold below
@@ -491,7 +588,7 @@ Item {
                                     spacing: 8
 
                                     Text {
-                                        text: "Hold-to-Repeat Delay"
+                                        text: "Wait before auto-repeat"
                                         color: "#c0c0c0"
                                         font.pixelSize: 12
                                         Layout.fillWidth: true
@@ -551,7 +648,7 @@ Item {
                                     spacing: 8
 
                                     Text {
-                                        text: "Hold-to-Repeat Rate"
+                                        text: "Time between repeats"
                                         color: "#c0c0c0"
                                         font.pixelSize: 12
                                         Layout.fillWidth: true
@@ -565,8 +662,9 @@ Item {
                                             id: rateDownArea
                                             anchors.fill: parent; hoverEnabled: true
                                             onClicked: {
-                                                // "Slower" = larger interval — minus button increases ms.
-                                                var n = Math.min(300, unifiedSettings.repeatInterval + 20)
+                                                // − decreases the displayed ms value (faster repeats).
+                                                // Both rows now follow "+ raises the number, − lowers it."
+                                                var n = Math.max(60, unifiedSettings.repeatInterval - 20)
                                                 unifiedSettings.settingChanged("repeatInterval", n)
                                             }
                                         }
@@ -588,8 +686,8 @@ Item {
                                             id: rateUpArea
                                             anchors.fill: parent; hoverEnabled: true
                                             onClicked: {
-                                                // "Faster" = smaller interval — plus button decreases ms.
-                                                var n = Math.max(60, unifiedSettings.repeatInterval - 20)
+                                                // + raises the displayed ms value (slower repeats).
+                                                var n = Math.min(300, unifiedSettings.repeatInterval + 20)
                                                 unifiedSettings.settingChanged("repeatInterval", n)
                                             }
                                         }

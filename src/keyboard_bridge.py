@@ -1209,16 +1209,20 @@ class KeyboardBridge(QObject):
            "HELL" misleads about which pill matches the prefix, and
            clicking sends the lowercase form next to an uppercase
            prefix.
-        2. Any uppercase in the prefix — the user typed e.g. "Hel",
+        2. Any uppercase in the prefix.  The user typed e.g. "Hel",
            "HEL" (right-clicked each letter), "HEl", or "iP" (mid-word
            cap via right-click). Mirror each typed uppercase position
            onto the corresponding pill position so the displayed pill
-           reflects exactly what the user typed. Two reasons: (a) the
-           user expects what they see to match what they typed, and
-           (b) the suffix-only insert path uses a case-sensitive
-           `startswith`, so "hello".startswith("HEL") is False and the
-           click would fall through to a full replace, clobbering the
-           user's capitals.
+           reflects exactly what the user typed. The mirror runs
+           regardless of whether the pill strict-prefix-matches the
+           typed letters: prefix-match completions ("Hel" -> "Hello")
+           and fuzzy corrections that *don't* strict-match ("Hwl" ->
+           "hello", "Heilo" -> "hello") both need the capital reflected.
+           Without the unconditional mirror the fuzzy-corrected pills
+           kept showing lowercase. The strict-prefix path also matters
+           for the suffix-only insert: "hello".startswith("HEL") is
+           False without mirroring, so the click would fall through to
+           a full replace and clobber the user's capitals.
 
         Sentence-start and proper-noun capitalisation are handled
         upstream by :func:`NgramPredictor.get_capitalized`; this layer
@@ -1230,19 +1234,18 @@ class KeyboardBridge(QObject):
             return [w.upper() for w in predictions]
         cw = self._current_word
         if cw and any(c.isupper() for c in cw):
-            prefix_lower = cw.lower()
-            result = []
+            result: List[str] = []
             for w in predictions:
-                if w and w.lower().startswith(prefix_lower):
-                    new_chars = []
-                    for i, ch in enumerate(w):
-                        if i < len(cw) and cw[i].isupper():
-                            new_chars.append(ch.upper())
-                        else:
-                            new_chars.append(ch)
-                    result.append("".join(new_chars))
-                else:
+                if not w:
                     result.append(w)
+                    continue
+                new_chars = []
+                for i, ch in enumerate(w):
+                    if i < len(cw) and cw[i].isupper():
+                        new_chars.append(ch.upper())
+                    else:
+                        new_chars.append(ch)
+                result.append("".join(new_chars))
             return result
         return predictions
 

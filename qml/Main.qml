@@ -411,15 +411,15 @@ Window {
 
     // Theme definitions — add new themes here, everything else updates automatically
     property var themeData: ({
-        "dark":       { name: "Dark",       background: "#1a1a1a", keyColor: "#3a3a3a", keyPressed: "#5a5a5a", textColor: "#e0e0e0", accent: "#4a9eff", border: "#505050", animation: "" },
-        "light":      { name: "Light",      background: "#e8e8e8", keyColor: "#ffffff", keyPressed: "#d0d0d0", textColor: "#1a1a1a", accent: "#0078d4", border: "#c0c0c0", animation: "" },
-        "blue":       { name: "Ocean",      background: "#1a2a3a", keyColor: "#2a4a6a", keyPressed: "#3a6a9a", textColor: "#e0e0e0", accent: "#4a9eff", border: "#505050", animation: "" },
-        "green":      { name: "Forest",     background: "#1a2a1a", keyColor: "#2a4a2a", keyPressed: "#3a6a3a", textColor: "#e0e0e0", accent: "#4aff4a", border: "#505050", animation: "" },
-        "purple":     { name: "Amethyst",   background: "#2a1a3a", keyColor: "#4a2a5a", keyPressed: "#6a3a7a", textColor: "#e0e0e0", accent: "#bb66ff", border: "#505050", animation: "" },
-        "vaporwave":  { name: "Vaporwave",  background: "#1a0a2e", keyColor: "#2d1b4e", keyPressed: "#4a2d7a", textColor: "#ff71ce", accent: "#01cdfe", border: "#b967ff", animation: "gradient" },
-        "blackboard": { name: "Blackboard", background: "#2c3e2c", keyColor: "#3d5a3d", keyPressed: "#4e6e4e", textColor: "#e8e8d0", accent: "#ffffaa", border: "#4a6a4a", animation: "" },
-        "typewriter": { name: "Typewriter", background: "#f5f0e8", keyColor: "#d4c9b0", keyPressed: "#c0b090", textColor: "#2c2416", accent: "#8b4513", border: "#a08060", animation: "" },
-        "spaceship":  { name: "Spaceship",  background: "#040d04", keyColor: "#0a1f0a", keyPressed: "#153015", textColor: "#00e676", accent: "#00ff9f", border: "#0d3b0d", animation: "stars" }
+        "dark":       { name: "Dark",       background: "#1a1a1a", keyColor: "#3a3a3a", keyPressed: "#5a5a5a", textColor: "#e0e0e0", accent: "#4a9eff", border: "#505050" },
+        "light":      { name: "Light",      background: "#e8e8e8", keyColor: "#ffffff", keyPressed: "#d0d0d0", textColor: "#1a1a1a", accent: "#0078d4", border: "#c0c0c0" },
+        "blue":       { name: "Ocean",      background: "#1a2a3a", keyColor: "#2a4a6a", keyPressed: "#3a6a9a", textColor: "#e0e0e0", accent: "#4a9eff", border: "#505050" },
+        "green":      { name: "Forest",     background: "#1a2a1a", keyColor: "#2a4a2a", keyPressed: "#3a6a3a", textColor: "#e0e0e0", accent: "#4aff4a", border: "#505050" },
+        "purple":     { name: "Amethyst",   background: "#2a1a3a", keyColor: "#4a2a5a", keyPressed: "#6a3a7a", textColor: "#e0e0e0", accent: "#bb66ff", border: "#505050" },
+        "vaporwave":  { name: "Vaporwave",  background: "#1a0a2e", keyColor: "#2d1b4e", keyPressed: "#4a2d7a", textColor: "#ff71ce", accent: "#01cdfe", border: "#b967ff" },
+        "blackboard": { name: "Blackboard", background: "#2c3e2c", keyColor: "#3d5a3d", keyPressed: "#4e6e4e", textColor: "#e8e8d0", accent: "#ffffaa", border: "#4a6a4a" },
+        "typewriter": { name: "Typewriter", background: "#f5f0e8", keyColor: "#d4c9b0", keyPressed: "#c0b090", textColor: "#2c2416", accent: "#8b4513", border: "#a08060" },
+        "spaceship":  { name: "Spaceship",  background: "#040d04", keyColor: "#0a1f0a", keyPressed: "#153015", textColor: "#00e676", accent: "#00ff9f", border: "#0d3b0d" }
     })
 
     property var activeTheme: themeData[currentTheme] || themeData["dark"]
@@ -490,83 +490,6 @@ Window {
         color: Qt.rgba(root.themeBackground.r, root.themeBackground.g, root.themeBackground.b, root.windowOpacity)
         border.color: Qt.rgba(root.themeBorder.r, root.themeBorder.g, root.themeBorder.b, root.windowOpacity)
         border.width: 1
-
-        // ===== Theme Animation Overlay =====
-        Canvas {
-            id: themeAnimCanvas
-            anchors.fill: parent
-            visible: root.activeTheme.animation !== ""
-            opacity: 0.15
-            z: 0
-
-            property real tick: 0
-            property var starField: []
-
-            NumberAnimation on tick {
-                from: 0; to: 10000
-                duration: 1000000
-                loops: Animation.Infinite
-                running: themeAnimCanvas.visible
-            }
-
-            onTickChanged: if (visible) requestPaint()
-
-            Component.onCompleted: {
-                // Generate star field for spaceship theme
-                var stars = []
-                for (var i = 0; i < 40; i++) {
-                    stars.push({
-                        x: Math.random(),
-                        y: Math.random(),
-                        r: Math.random() * 1.5 + 0.5,
-                        speed: Math.random() * 0.3 + 0.1,
-                        phase: Math.random() * Math.PI * 2
-                    })
-                }
-                starField = stars
-            }
-
-            onPaint: {
-                var ctx = getContext("2d")
-                ctx.clearRect(0, 0, width, height)
-                var anim = root.activeTheme.animation
-
-                if (anim === "gradient") {
-                    // Vaporwave: slow horizontal gradient shift
-                    var shift = (tick * 0.5) % 360
-                    var grad = ctx.createLinearGradient(0, 0, width, height)
-                    var hue1 = (shift) % 360
-                    var hue2 = (shift + 60) % 360
-                    grad.addColorStop(0, Qt.hsla(hue1 / 360, 0.6, 0.3, 1))
-                    grad.addColorStop(1, Qt.hsla(hue2 / 360, 0.6, 0.3, 1))
-                    ctx.fillStyle = grad
-                    // Clip to rounded rect
-                    ctx.beginPath()
-                    ctx.roundedRect(0, 0, width, height, 10, 10)
-                    ctx.fill()
-
-                } else if (anim === "pulse") {
-                    // Neon: border glow pulse
-                    var pulse = Math.sin(tick * 0.15) * 0.5 + 0.5
-                    ctx.strokeStyle = Qt.rgba(0.22, 1.0, 0.08, pulse)
-                    ctx.lineWidth = 2 + pulse * 2
-                    ctx.beginPath()
-                    ctx.roundedRect(1, 1, width - 2, height - 2, 10, 10)
-                    ctx.stroke()
-
-                } else if (anim === "stars") {
-                    // Spaceship: twinkling star field
-                    for (var i = 0; i < starField.length; i++) {
-                        var s = starField[i]
-                        var twinkle = Math.sin(tick * s.speed + s.phase) * 0.5 + 0.5
-                        ctx.beginPath()
-                        ctx.arc(s.x * width, s.y * height, s.r * twinkle + 0.3, 0, Math.PI * 2)
-                        ctx.fillStyle = Qt.rgba(0, 0.9, 0.47, twinkle * 0.8)
-                        ctx.fill()
-                    }
-                }
-            }
-        }
 
         Behavior on color { ColorAnimation { duration: 200 } }
 
