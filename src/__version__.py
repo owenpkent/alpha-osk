@@ -5,4 +5,4 @@ Read by ``src/updater.py`` (to compare against GitHub Releases) and
 Bumping the version is a one-line change here.
 """
 
-__version__ = "1.0.14"
+__version__ = "1.0.15"
