@@ -648,7 +648,7 @@ Item {
                                         {label: "Vocabulary", value: (s.unique_words || 0).toLocaleString(), color: "#4dabf7"},
                                         {label: "Bigrams", value: (s.bigrams || 0).toLocaleString(), color: "#69db7c"},
                                         {label: "Trigrams", value: (s.trigrams || 0).toLocaleString(), color: "#ffd43b"},
-                                        {label: "Quality", value: (a.qualityScore || 0) + "%", color: "#ff8e72"},
+                                        {label: "Top Pick", value: (a.alltimeTopPickRate || a.topPickRate || 0) + "%", color: "#ff8e72"},
                                         {label: "Saved", value: (a.keystrokesSaved || 0).toString(), color: "#da77f2"}
                                     ]
                                 }

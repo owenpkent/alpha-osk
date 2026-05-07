@@ -40,6 +40,10 @@ class TypingAnalytics(QObject):
         self._key_freq: Counter[str] = Counter()
         self._prediction_rank_sum = 0
         self._prediction_rank_count = 0
+        # Picks at rank 1 ("the first suggestion was the right one").
+        # Tracked separately from rank_sum so the dashboard can show a
+        # plain percentage without having to invert an average.
+        self._top_pick_count = 0
         # WPM samples for sparkline (one per minute)
         self._wpm_samples: List[float] = []
         self._last_sample_time = time.time()
@@ -48,8 +52,8 @@ class TypingAnalytics(QObject):
         # All-time stats (loaded from / saved to disk).  Mirrors every
         # session counter so the dashboard can render lifetime versions
         # of every metric (WPM, hit rate, savings %, backspace rate,
-        # quality score, top words / keys).  Without persisting these,
-        # any aggregate-over-time reading is wrong the moment a session
+        # top words / keys).  Without persisting these, any
+        # aggregate-over-time reading is wrong the moment a session
         # ends.
         self._alltime_keystrokes = 0
         self._alltime_words = 0
@@ -61,6 +65,7 @@ class TypingAnalytics(QObject):
         self._alltime_prediction_offers = 0
         self._alltime_prediction_rank_sum = 0
         self._alltime_prediction_rank_count = 0
+        self._alltime_top_pick_count = 0
         self._alltime_word_freq: Counter[str] = Counter()
         self._alltime_key_freq: Counter[str] = Counter()
 
@@ -91,6 +96,7 @@ class TypingAnalytics(QObject):
             self._alltime_prediction_offers = data.get("prediction_offers", 0)
             self._alltime_prediction_rank_sum = data.get("prediction_rank_sum", 0)
             self._alltime_prediction_rank_count = data.get("prediction_rank_count", 0)
+            self._alltime_top_pick_count = data.get("top_pick_count", 0)
             wf = data.get("word_freq", {})
             kf = data.get("key_freq", {})
             if isinstance(wf, dict):
@@ -137,6 +143,7 @@ class TypingAnalytics(QObject):
             "prediction_rank_count": (
                 self._alltime_prediction_rank_count + self._prediction_rank_count
             ),
+            "top_pick_count": self._alltime_top_pick_count + self._top_pick_count,
             "word_freq": dict(merged_words),
             "key_freq": dict(merged_keys),
         }
@@ -170,6 +177,8 @@ class TypingAnalytics(QObject):
         self._prediction_hits += 1
         self._prediction_rank_sum += rank
         self._prediction_rank_count += 1
+        if rank == 1:
+            self._top_pick_count += 1
         self._keystrokes_saved += keystrokes_saved
         self.record_word_completed(word)
 
@@ -212,7 +221,6 @@ class TypingAnalytics(QObject):
         alltime_saved = self._alltime_keystrokes_saved + self._keystrokes_saved
         alltime_backspaces = self._alltime_backspaces + self._backspace_count
         alltime_offers = self._alltime_prediction_offers + self._prediction_offers
-        alltime_rank_sum = self._alltime_prediction_rank_sum + self._prediction_rank_sum
         alltime_rank_count = self._alltime_prediction_rank_count + self._prediction_rank_count
         alltime_minutes = self._alltime_minutes + elapsed_min
         alltime_total_typed = alltime_keystrokes + alltime_saved
@@ -222,17 +230,46 @@ class TypingAnalytics(QObject):
         # any word that appears in both.
         alltime_top_words = (self._alltime_word_freq + self._word_freq).most_common(5)
 
-        # Quality scores
-        session_quality = self._compute_quality_score()
-        alltime_quality = self._compute_quality_score(
-            words=alltime_words,
-            keystrokes=alltime_keystrokes,
-            keystrokes_saved=alltime_saved,
-            prediction_hits=alltime_predictions,
-            backspaces=alltime_backspaces,
-            rank_sum=alltime_rank_sum,
-            rank_count=alltime_rank_count,
+        # Top-pick rate: % of prediction picks that were the first
+        # suggestion.  Computed off rank_count (= total picks) so it
+        # tracks "how often is suggestion #1 right" independently of
+        # how many picks the user has made.
+        alltime_top_picks = self._alltime_top_pick_count + self._top_pick_count
+        session_top_pick_rate = round(
+            self._top_pick_count / max(1, self._prediction_rank_count) * 100, 1
         )
+        alltime_top_pick_rate = round(
+            alltime_top_picks / max(1, alltime_rank_count) * 100, 1
+        )
+
+        # Acceptance rate: when a prediction was OFFERED to the user,
+        # how often did they click one.  Distinct from
+        # predictionHitRate (= hits / words completed): a word the
+        # user typed without ever opening the suggestion bar isn't an
+        # offer.  Acceptance asks "of the times we showed something,
+        # how often was it useful enough to take".
+        session_acceptance_rate = round(
+            self._prediction_hits / max(1, self._prediction_offers) * 100, 1
+        )
+        alltime_acceptance_rate = round(
+            alltime_predictions / max(1, alltime_offers) * 100, 1
+        )
+
+        # Time saved: keystrokes saved * the user's own seconds per
+        # keystroke.  Using their own pace makes the number honest --
+        # a slow OSK user genuinely saves more wall-clock time per
+        # avoided keystroke than a fast one.  Falls back to 0.5 s/key
+        # when there's no usage history yet (new install).
+        session_pace = (
+            (elapsed_min * 60.0) / self._keystroke_count
+            if self._keystroke_count > 0 else 0.5
+        )
+        alltime_pace = (
+            (alltime_minutes * 60.0) / alltime_keystrokes
+            if alltime_keystrokes > 0 else 0.5
+        )
+        session_time_saved = self._keystrokes_saved * session_pace
+        alltime_time_saved = alltime_saved * alltime_pace
 
         return {
             # Session
@@ -240,6 +277,7 @@ class TypingAnalytics(QObject):
             "sessionMinutes": round(elapsed_min, 1),
             "totalWords": self._word_count,
             "totalKeystrokes": self._keystroke_count,
+            "totalBackspaces": self._backspace_count,
             "keystrokesSaved": self._keystrokes_saved,
             "savingsPercent": savings_pct,
             "predictionHitRate": round(
@@ -251,7 +289,10 @@ class TypingAnalytics(QObject):
             ),
             "topWords": [{"word": w, "count": c} for w, c in top_words],
             "wpmSamples": self._wpm_samples,
-            "qualityScore": session_quality,
+            "topPickRate": session_top_pick_rate,
+            "acceptanceRate": session_acceptance_rate,
+            "timeSavedSeconds": round(session_time_saved, 1),
+            "predictionOffers": self._prediction_offers,
 
             # Lifetime (= persisted history + current session)
             "alltimeWords": alltime_words,
@@ -267,69 +308,14 @@ class TypingAnalytics(QObject):
             "alltimePredictionHitRate": round(
                 alltime_predictions / max(1, alltime_words) * 100, 1
             ),
+            "alltimeBackspaces": alltime_backspaces,
             "alltimeBackspaceRate": round(
                 alltime_backspaces / max(1, alltime_keystrokes) * 100, 1
             ),
             "alltimePredictionOffers": alltime_offers,
             "alltimeTopWords": [{"word": w, "count": c} for w, c in alltime_top_words],
-            "alltimeQualityScore": alltime_quality,
+            "alltimeTopPickRate": alltime_top_pick_rate,
+            "alltimeAcceptanceRate": alltime_acceptance_rate,
+            "alltimeTimeSavedSeconds": round(alltime_time_saved, 1),
         }
 
-    def _compute_quality_score(
-        self,
-        *,
-        words: int | None = None,
-        keystrokes: int | None = None,
-        keystrokes_saved: int | None = None,
-        prediction_hits: int | None = None,
-        backspaces: int | None = None,
-        rank_sum: int | None = None,
-        rank_count: int | None = None,
-    ) -> int:
-        """
-        Compute a prediction quality score from 0 to 100.
-
-        Defaults to the current session's counters; pass keyword args to
-        score over a different aggregate (e.g. lifetime totals).
-
-        Weighted combination:
-        - Keystroke savings rate (40%): % of total effort saved.
-        - Prediction hit rate (25%): % of words completed via prediction.
-        - Rank accuracy (20%): How often users pick the #1 prediction.
-          Avg rank 1.0 = perfect, 5.0 = poor.
-          Scored as 100 * (1 - (avg_rank - 1) / 4), clamped.
-        - Low correction rate (15%): Inverse of backspace rate.
-
-        Returns 0 if fewer than 5 words have been typed (not enough data).
-        """
-        words = self._word_count if words is None else words
-        keystrokes = self._keystroke_count if keystrokes is None else keystrokes
-        keystrokes_saved = self._keystrokes_saved if keystrokes_saved is None else keystrokes_saved
-        prediction_hits = self._prediction_hits if prediction_hits is None else prediction_hits
-        backspaces = self._backspace_count if backspaces is None else backspaces
-        rank_sum = self._prediction_rank_sum if rank_sum is None else rank_sum
-        rank_count = self._prediction_rank_count if rank_count is None else rank_count
-
-        if words < 5:
-            return 0
-
-        total_effort = keystrokes + keystrokes_saved
-        savings = (keystrokes_saved / max(1, total_effort)) * 100
-        hit_rate = (prediction_hits / max(1, words)) * 100
-
-        if rank_count > 0:
-            avg_rank = rank_sum / rank_count
-            rank_score = max(0, min(100, 100 * (1 - (avg_rank - 1) / 4)))
-        else:
-            rank_score = 50  # neutral if no predictions used
-
-        backspace_pct = (backspaces / max(1, keystrokes)) * 100
-        correction_score = max(0, 100 - backspace_pct * 3)
-
-        score = (
-            savings * 0.40
-            + hit_rate * 0.25
-            + rank_score * 0.20
-            + correction_score * 0.15
-        )
-        return round(min(100, max(0, score)))

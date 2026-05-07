@@ -12,6 +12,14 @@ Item {
     // is still useful for "how am I doing right now."
     property bool showLifetime: true
 
+    // Size to content rather than filling the parent.  When the
+    // parent gave us a fixed implicitHeight (e.g. 460 px) the
+    // ColumnLayout's `anchors.fill: parent` stretched to fit and the
+    // inner items packed at the top, leaving a tall empty band below
+    // the tile grid (especially in This Session view, where the
+    // sparkline / top words sections collapse to zero height).
+    implicitHeight: contentColumn.implicitHeight
+
     // Poll analytics every 2 seconds while visible
     Timer {
         running: dashboard.visible
@@ -24,123 +32,16 @@ Item {
     }
 
     ColumnLayout {
-        anchors.fill: parent
+        id: contentColumn
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.top: parent.top
         spacing: 10
 
-        // ===== ALL-TIME HERO: Keystrokes Saved =====
-        Rectangle {
-            Layout.fillWidth: true
-            implicitHeight: heroCol.implicitHeight + 20
-            radius: 8
-            color: "#1a2a1a"
-            border.color: "#2a4a2a"
-
-            ColumnLayout {
-                id: heroCol
-                anchors.centerIn: parent
-                spacing: 2
-
-                Text {
-                    text: formatNumber(dashboard.stats.alltimeKeystrokesSaved || 0)
-                    font.pixelSize: 34
-                    font.weight: Font.Bold
-                    color: "#66dd88"
-                    Layout.alignment: Qt.AlignHCenter
-                }
-                Text {
-                    text: "keystrokes saved"
-                    font.pixelSize: 11
-                    color: "#88aa88"
-                    Layout.alignment: Qt.AlignHCenter
-                }
-            }
-        }
-
-        // ===== All-time stats row =====
-        RowLayout {
-            Layout.fillWidth: true
-            spacing: 6
-
-            StatPill {
-                label: "words"
-                value: formatNumber(dashboard.stats.alltimeWords || 0)
-            }
-            StatPill {
-                label: "sessions"
-                value: String(dashboard.stats.alltimeSessions || 0)
-            }
-            StatPill {
-                label: "hours"
-                value: ((dashboard.stats.alltimeMinutes || 0) / 60).toFixed(1)
-            }
-        }
-
-        // ===== PREDICTION QUALITY (lifetime — stable signal over time) =====
-        Rectangle {
-            Layout.fillWidth: true
-            implicitHeight: 32
-            radius: 6
-            color: "#252525"
-            visible: (dashboard.stats.alltimeQualityScore || 0) > 0
-
-            RowLayout {
-                anchors.fill: parent
-                anchors.margins: 6
-                spacing: 8
-
-                Text {
-                    text: "Prediction Quality"
-                    font.pixelSize: 11
-                    color: "#888"
-                }
-
-                // Progress bar
-                Rectangle {
-                    Layout.fillWidth: true
-                    height: 8
-                    radius: 4
-                    color: "#1a1a1a"
-
-                    Rectangle {
-                        width: parent.width * Math.min(1, (dashboard.stats.alltimeQualityScore || 0) / 100)
-                        height: parent.height
-                        radius: parent.radius
-                        color: {
-                            var q = dashboard.stats.alltimeQualityScore || 0
-                            if (q >= 70) return "#66dd88"
-                            if (q >= 40) return "#ddcc66"
-                            return "#dd6666"
-                        }
-                        Behavior on width { NumberAnimation { duration: 300 } }
-                    }
-                }
-
-                Text {
-                    text: (dashboard.stats.alltimeQualityScore || 0) + "/100"
-                    font.pixelSize: 12
-                    font.weight: Font.Bold
-                    color: {
-                        var q = dashboard.stats.alltimeQualityScore || 0
-                        if (q >= 70) return "#66dd88"
-                        if (q >= 40) return "#ddcc66"
-                        return "#dd6666"
-                    }
-                    Layout.preferredWidth: 44
-                    horizontalAlignment: Text.AlignRight
-                }
-            }
-        }
-
-        // Divider
-        Rectangle {
-            Layout.fillWidth: true
-            height: 1
-            color: "#333"
-            Layout.topMargin: 2
-            Layout.bottomMargin: 2
-        }
-
         // ===== Session / Lifetime toggle =====
+        // (was preceded by a separate hero card, all-time pill row,
+        // and a divider; collapsed into the single tile grid below
+        // because the visual layering read as 4 disconnected sections.)
         RowLayout {
             Layout.fillWidth: true
             spacing: 4
@@ -164,52 +65,55 @@ Item {
             rowSpacing: 6
             columnSpacing: 6
 
+            // Keystrokes Saved: the headline savings number, promoted
+            // from the previous hero card into a tile when the
+            // dashboard collapsed to a single section.  Replaces the
+            // prior "Typing Effort" (total keystrokes typed) tile
+            // because the absolute-savings number tells the dashboard
+            // story more directly than the absolute-effort one.
             StatBox {
-                label: "Speed"
-                value: dashboard.showLifetime
-                       ? (dashboard.stats.alltimeWpm || 0).toFixed(1)
-                       : (dashboard.stats.wpm || 0).toFixed(1)
-                unit: dashboard.showLifetime ? "avg wpm" : "wpm"
-                accent: "#4a9eff"
-            }
-
-            StatBox {
-                label: "Saved"
-                value: dashboard.showLifetime
-                       ? formatNumber(dashboard.stats.alltimeKeystrokesSaved || 0)
-                       : String(dashboard.stats.keystrokesSaved || 0)
-                unit: (dashboard.showLifetime
-                       ? (dashboard.stats.alltimeSavingsPercent || 0)
-                       : (dashboard.stats.savingsPercent || 0)
-                      ).toFixed(0) + "% of typing"
+                label: "Keystrokes Saved"
+                value: formatNumber(dashboard.showLifetime
+                                    ? (dashboard.stats.alltimeKeystrokesSaved || 0)
+                                    : (dashboard.stats.keystrokesSaved || 0))
+                unit: "keys you didn't have to press"
                 accent: "#66dd88"
             }
 
+            // Time Saved: keystrokes_saved x user's own pace, formatted.
             StatBox {
-                label: "Predictions Used"
+                label: "Time Saved"
+                value: formatDuration(dashboard.showLifetime
+                                      ? (dashboard.stats.alltimeTimeSavedSeconds || 0)
+                                      : (dashboard.stats.timeSavedSeconds || 0))
+                unit: "avoided by predictions"
+                accent: "#4a9eff"
+            }
+
+            // Effort Saved: % of total keystrokes that came from
+            // predictions instead of being typed.
+            StatBox {
+                label: "Effort Saved"
                 value: (dashboard.showLifetime
-                        ? (dashboard.stats.alltimePredictionHitRate || 0)
-                        : (dashboard.stats.predictionHitRate || 0)
+                        ? (dashboard.stats.alltimeSavingsPercent || 0)
+                        : (dashboard.stats.savingsPercent || 0)
                        ).toFixed(0) + "%"
-                unit: dashboard.showLifetime
-                      ? formatNumber(dashboard.stats.alltimePredictionHits || 0) + " of " + formatNumber(dashboard.stats.alltimeWords || 0) + " words"
-                      : (dashboard.stats.predictionHits || 0) + " of " + (dashboard.stats.totalWords || 0) + " words"
+                unit: "of total keystrokes"
                 accent: "#bb88ff"
             }
 
+            // Acceptance Rate: of suggestions OFFERED, what % did the
+            // user click.  Distinct from Effort Saved (a keystroke
+            // share): asks "when the keyboard suggested something,
+            // how often was it useful enough to take".
             StatBox {
-                label: "Corrections"
+                label: "Acceptance"
                 value: (dashboard.showLifetime
-                        ? (dashboard.stats.alltimeBackspaceRate || 0)
-                        : (dashboard.stats.backspaceRate || 0)
+                        ? (dashboard.stats.alltimeAcceptanceRate || 0)
+                        : (dashboard.stats.acceptanceRate || 0)
                        ).toFixed(0) + "%"
-                unit: "backspace rate"
-                accent: {
-                    var rate = dashboard.showLifetime
-                               ? (dashboard.stats.alltimeBackspaceRate || 0)
-                               : (dashboard.stats.backspaceRate || 0)
-                    return rate > 20 ? "#ffaa66" : "#888"
-                }
+                unit: "of offered suggestions accepted"
+                accent: "#ffaa66"
             }
         }
 
@@ -351,6 +255,19 @@ Item {
         return String(n)
     }
 
+    // Render a seconds count as the most readable unit for its size.
+    // < 1 min → "Xs" (only useful in fresh sessions before the user
+    // has saved a meaningful amount), then minutes, then hours with
+    // one decimal once we cross an hour.
+    function formatDuration(seconds) {
+        if (!seconds || seconds < 1) return "0s"
+        if (seconds < 60) return Math.round(seconds) + "s"
+        var minutes = seconds / 60
+        if (minutes < 60) return Math.round(minutes) + " min"
+        var hours = minutes / 60
+        return hours.toFixed(1) + " hrs"
+    }
+
     // Toggle pill for "Lifetime" vs "This Session"
     component ScopeTab: Rectangle {
         property string label: ""
@@ -381,37 +298,13 @@ Item {
         }
     }
 
-    // All-time stat pill (compact, inline)
-    component StatPill: Rectangle {
-        property string label: ""
-        property string value: ""
 
-        Layout.fillWidth: true
-        implicitHeight: 36
-        radius: 6
-        color: "#252525"
-
-        ColumnLayout {
-            anchors.centerIn: parent
-            spacing: 0
-
-            Text {
-                text: parent.parent.value
-                font.pixelSize: 14
-                font.weight: Font.Bold
-                color: "#ddd"
-                Layout.alignment: Qt.AlignHCenter
-            }
-            Text {
-                text: parent.parent.label
-                font.pixelSize: 9
-                color: "#777"
-                Layout.alignment: Qt.AlignHCenter
-            }
-        }
-    }
-
-    // Session stat box
+    // Session stat box.  The Rectangle's height grows with content
+    // (label + value + optional unit + margins) so subtext never
+    // renders past the rounded background -- the prior fixed
+    // implicitHeight of 50 px was ~10 px shorter than the three text
+    // elements need, which is why "1.8k words typed" appeared to
+    // float outside the colored box.
     component StatBox: ColumnLayout {
         property string label: ""
         property string value: ""
@@ -423,13 +316,17 @@ Item {
 
         Rectangle {
             Layout.fillWidth: true
-            implicitHeight: 50
+            implicitHeight: contentCol.implicitHeight + 14
             radius: 6
             color: "#2a2a2a"
 
             ColumnLayout {
-                anchors.fill: parent
-                anchors.margins: 6
+                id: contentCol
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.verticalCenter: parent.verticalCenter
+                anchors.leftMargin: 7
+                anchors.rightMargin: 7
                 spacing: 1
 
                 Text {
@@ -445,8 +342,8 @@ Item {
                 }
                 Text {
                     text: parent.parent.parent.unit
-                    font.pixelSize: 9
-                    color: "#666"
+                    font.pixelSize: 10
+                    color: "#aaa"
                     visible: parent.parent.parent.unit !== ""
                 }
             }

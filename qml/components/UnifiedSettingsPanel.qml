@@ -160,6 +160,20 @@ Item {
                     width: flickArea.width - 12
                     spacing: 16
 
+                    // -- ANALYTICS -- (top of panel: lifetime savings
+                    // is the most rewarding read on every open;
+                    // burying it under config sections meant the user
+                    // had to scroll down every time)
+                    SettingsSection {
+                        title: "Analytics"
+                        Layout.fillWidth: true
+
+                        AnalyticsDashboard {
+                            Layout.fillWidth: true
+                            visible: true
+                        }
+                    }
+
                     // -- LAYOUT --
                     SettingsSection {
                         title: "Layout"
@@ -1046,18 +1060,6 @@ Item {
                                     }
                                 }
                             }
-                        }
-                    }
-
-                    // -- ANALYTICS --
-                    SettingsSection {
-                        title: "Analytics"
-                        Layout.fillWidth: true
-
-                        AnalyticsDashboard {
-                            Layout.fillWidth: true
-                            implicitHeight: 460
-                            visible: true
                         }
                     }
 
