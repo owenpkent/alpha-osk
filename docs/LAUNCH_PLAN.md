@@ -84,6 +84,10 @@ This is a meaningful enough scope to warrant a **minor version bump (1.1.0)** ra
 - Public stats page.
 - Anything in the Whitepaper §8 known gaps that isn't already in flight.
 
+## Task tracker
+
+`docs/launch_tasks.csv` is the row-level tracker (40 tasks, ID-keyed, with dependency arrows). Open it in Excel / Numbers / Sheets / a CSV viewer to filter by status or phase. The markdown checklist above is the human-readable narrative; the CSV is the structured shadow.
+
 ## Next action (today)
 
 If launching 2026-05-28, the deploy step needs to land in Week 1 to leave room for build/test/release. Concretely: open `backend/cf-worker/README.md` and walk through the "One-time setup" section. ~30 min of work.

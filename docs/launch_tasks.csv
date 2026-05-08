@@ -1,0 +1,41 @@
+id,phase,task,status,depends_on,due,effort,where
+T01,Done,Analytics dashboard redesign (single section + 4 tiles + drop quality score),Done,,2026-05-07,—,commit 2530be4
+T02,Done,Telemetry client (src/telemetry.py) + 26 tests,Done,,2026-05-07,—,commit 0f737d1
+T03,Done,Bridge wiring + Settings Privacy UI,Done,,2026-05-07,—,commit 0f737d1
+T04,Done,docs/TELEMETRY.md + docs/PRIVACY.md,Done,,2026-05-07,—,commit 0f737d1
+T05,Done,backend/cf-worker scaffold (TypeScript + D1 + cron),Done,,2026-05-07,—,backend/cf-worker/
+T06,Done,Deployment workflow + WINDOWS release-checklist gate,Done,,2026-05-07,—,commit 8225178
+T07,Done,Launch plan,Done,,2026-05-07,—,docs/LAUNCH_PLAN.md
+T08,Setup,Confirm Cloudflare account access,Pending,,Week 1,S,Cloudflare dashboard
+T09,Setup,Create D1 database (wrangler d1 create alpha-osk-telemetry),Pending,T08,Week 1,S,backend/cf-worker/README.md
+T10,Setup,Paste database_id into wrangler.toml (copy from .example),Pending,T09,Week 1,S,backend/cf-worker/wrangler.toml
+T11,Setup,npm install + npm run schema:remote,Pending,T10,Week 1,S,backend/cf-worker/
+T12,Setup,npm run deploy and note printed worker URL,Pending,T11,Week 1,S,backend/cf-worker/
+T13,Setup,Smoke-test POST /v1/submit with curl (expect 204),Pending,T12,Week 1,S,backend/cf-worker/README.md
+T14,Setup,Smoke-test GET /v1/aggregate (expect submitted row),Pending,T13,Week 1,S,backend/cf-worker/README.md
+T15,Setup,Smoke-test POST /v1/forget then re-aggregate (expect row gone),Pending,T13,Week 1,S,backend/cf-worker/README.md
+T16,Setup,Set DEFAULT_ENDPOINT in src/telemetry.py to live worker URL,Pending,T12,Week 1,S,src/telemetry.py
+T17,Setup,Commit + push DEFAULT_ENDPOINT change,Pending,T16,Week 1,S,git
+T18,Dev-validate,Open Settings → Privacy in python run.py + verify section renders,Pending,T17,Week 1,S,manual
+T19,Dev-validate,Toggle on + restart + confirm persists from telemetry.json,Pending,T18,Week 1,S,manual
+T20,Dev-validate,Force submit (clear last_submit_ts) + verify D1 row appears,Pending,T19,Week 1,M,manual
+T21,Dev-validate,Click Delete-my-data twice + verify D1 row disappears,Pending,T20,Week 1,S,manual
+T22,Dev-validate,Toggle off + verify anon_id cleared in telemetry.json,Pending,T21,Week 1,S,manual
+T23,Dev-validate,Toggle back on + verify a NEW anon_id is generated,Pending,T22,Week 1,S,manual
+T24,Build,Bump src/__version__.py to 1.1.0,Pending,T23,Week 2,S,src/__version__.py
+T25,Build,Replace [Unreleased] heading with [1.1.0] - 2026-05-28 in CHANGELOG.md,Pending,T24,Week 2,S,CHANGELOG.md
+T26,Build,Write release-notes-1.1.0.md (community impact + cleaner analytics),Pending,T25,Week 2,M,release-notes-1.1.0.md
+T27,Build,Run python check.py --full (matches CI exactly),Pending,T25,Week 2,M,check.py
+T28,Build,Build Windows release (non-elevated shell + eToken),Pending,T27,Week 2,M,build/windows/build.py
+T29,Build,Test installer on clean account or VM,Pending,T28,Week 2,M,release/
+T30,Build,Verify Privacy section appears + toggle persists in installed build,Pending,T29,Week 2,S,manual
+T31,Build,Build Linux AppImage (optional this cycle),Pending,T27,Week 2,M,build/linux/build.py
+T32,Ship,git tag v1.1.0 + push tag,Pending,T29,Week 3,S,git
+T33,Ship,gh release create v1.1.0 on okstudio1/alpha-osk-releases,Pending,T32,Week 3,S,gh
+T34,Ship,Verify auto-update path: install 1.0.16 → trigger update → land 1.1.0,Pending,T33,Week 3,M,manual VM
+T35,Ship,Confirm Privacy section + auto-update toast appear in updated build,Pending,T34,Week 3,S,manual VM
+T36,Ship,npx wrangler tail for first 24h to catch malformed payloads,Pending,T33,Week 3,M,wrangler tail
+T37,Ship,Optional: announcement / blog / social,Pending,T33,Week 3,M,—
+T38,Post-launch,Watch aggregate counter for 4-8 weeks of real data,Deferred,T33,Post-launch,—,backend
+T39,Post-launch,Design + ship public stats page (alpha-osk.com/impact or similar),Deferred,T38,Post-launch,L,—
+T40,Post-launch,Federated learning Phase 1 (separate workstream),Deferred,,Post-launch,L,docs/FEDERATED_LEARNING.md
