@@ -293,6 +293,68 @@ class TestContextTracking:
             bridge.pressSpecialKey("space")
         assert len(bridge._context_buffer) <= 200
 
+    def test_hyphen_resets_current_word(self, bridge: KeyboardBridge):
+        """Regression: typing 'word1-word2' must not let _current_word
+        accumulate as 'word1-word2'.  The hyphen is a word boundary for
+        prediction purposes; the second token should be tracked alone.
+
+        Without this, clicking a suggestion for the second token failed
+        the prefix-match in pressPrediction (the suggestion didn't start
+        with 'word1-word2'), fell back to replace_text(len, ...), and
+        backspaced 'word1-' off the screen along with the partial word.
+        """
+        for c in "word1":
+            bridge.pressKey(c)
+        assert bridge._current_word == "word1"
+        bridge.pressKey("-")
+        # _current_word resets immediately on the boundary char; the
+        # hyphen is in the OS-side text (sent via _send_text) but no
+        # longer in our prediction state.
+        assert bridge._current_word == ""
+        assert bridge._context_buffer.endswith("word1-")
+        for c in "wo":
+            bridge.pressKey(c)
+        # Subsequent typing builds the SECOND word alone.
+        assert bridge._current_word == "wo"
+
+    def test_hyphenated_prediction_click_uses_suffix_only_path(
+        self, bridge: KeyboardBridge,
+    ):
+        """Regression for the user-reported bug: typing 'word1-wo' then
+        clicking a prediction for 'world' must NOT send BackSpaces that
+        eat 'word1-'.  Suffix-only insertion should fire as if 'wo'
+        were the only typed prefix.
+        """
+        for c in "word1":
+            bridge.pressKey(c)
+        bridge.pressKey("-")
+        for c in "wo":
+            bridge.pressKey(c)
+        bridge._synth.reset_mock()
+        bridge.pressPrediction("world")
+        # Suffix-only contract: send_text("rld "), no BackSpace, no
+        # replace_text.
+        backspace_calls = [
+            c for c in bridge._synth.send_key.call_args_list
+            if c.args and c.args[0] == "BackSpace"
+        ]
+        assert backspace_calls == [], (
+            "BackSpace was sent — would have eaten 'word1-' off the screen"
+        )
+        bridge._synth.replace_text.assert_not_called()
+        bridge._synth.send_text.assert_any_call("rld ")
+
+    def test_other_word_boundary_chars_also_reset(self, bridge: KeyboardBridge):
+        """Same fix applies to slash, backslash, opening brackets.
+        Spot-check '/' since URLs and dates trigger the same bug."""
+        for c in "path":
+            bridge.pressKey(c)
+        bridge.pressKey("/")
+        for c in "to":
+            bridge.pressKey(c)
+        assert bridge._current_word == "to"
+        assert bridge._context_buffer.endswith("path/")
+
     def test_backspace_into_completed_word_rehydrates_current_word(
         self, bridge: KeyboardBridge,
     ):
