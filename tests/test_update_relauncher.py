@@ -217,6 +217,30 @@ class TestRunRelauncherIntegration:
         assert not (config_dir / "update_handoff.json").is_file()
 
 
+class TestIsDevTarget:
+    """_is_dev_target — distinguishes a real installed alpha-osk.exe
+    target from a python interpreter target (dev-mode invocation)."""
+
+    def test_python_exe_is_dev_target(self):
+        assert relauncher._is_dev_target(
+            r"C:\Users\Owen\AppData\Local\Programs\Python\Python311\python.exe"
+        ) is True
+
+    def test_pythonw_is_dev_target(self):
+        assert relauncher._is_dev_target(
+            r"C:\Python311\pythonw.exe"
+        ) is True
+
+    def test_alpha_osk_exe_is_not_dev_target(self):
+        assert relauncher._is_dev_target(
+            r"C:\Program Files\Alpha-OSK\alpha-osk.exe"
+        ) is False
+
+    def test_case_insensitive(self):
+        assert relauncher._is_dev_target(r"C:\PYTHON311\PYTHON.EXE") is True
+        assert relauncher._is_dev_target(r"C:\Foo\Alpha-OSK.exe") is False
+
+
 class TestNewExeReady:
     """_new_exe_ready — single-shot mirror of _wait_for_new_exe used by
     the splash path so it can yield to the Qt event loop between
@@ -312,6 +336,44 @@ class TestShowSplashFlag:
 
         assert rc == 0
         assert observed == [True]
+
+    def test_dev_mode_target_skips_splash(self, tmp_path):
+        # When the target_exe is a python interpreter (dev mode), the
+        # splash would sit at "Installing files…" until _NEW_EXE_TIMEOUT_S
+        # because python.exe never gets a fresh mtime, leaving a stuck
+        # window. The dispatcher must short-circuit to headless instead.
+        import os as _os
+        # Point target_exe at this Python interpreter to mimic dev mode.
+        target_exe = tmp_path / "python.exe"
+        target_exe.write_bytes(b"x")
+        future_mtime = time.time() + 3600
+        _os.utime(target_exe, (future_mtime, future_mtime))
+        config_dir = tmp_path / "config"
+
+        argv = [
+            "alpha-osk.exe",
+            "--update-relauncher",
+            "--parent-pid", "999999999",
+            "--new-version", "1.0.18",
+            "--previous-version", "1.0.17",
+            "--target-exe", str(target_exe),
+            "--config-dir", str(config_dir),
+            "--show-splash",
+        ]
+
+        splash_called: list[bool] = []
+        with patch.object(relauncher, "_INSTALLER_GRACE_S", 0), \
+             patch.object(relauncher, "_NEW_EXE_TIMEOUT_S", 2), \
+             patch.object(relauncher, "_run_with_splash",
+                          lambda args: splash_called.append(True) or 0), \
+             patch.object(relauncher, "_launch_new_osk", return_value=True):
+            rc = relauncher.run_relauncher(argv)
+
+        assert rc == 0
+        assert splash_called == [], (
+            "dev-mode target must NOT spin up the splash — it would "
+            "hang at 'Installing files…' for 3 minutes"
+        )
 
     def test_splash_failure_falls_back_to_headless(self, tmp_path):
         # If PySide6 imports raise (no display, frozen-mode mishap),

@@ -256,7 +256,7 @@ def run_relauncher(argv: list[str]) -> int:
         args.parent_pid, args.new_version, args.target_exe, args.show_splash,
     )
 
-    if args.show_splash:
+    if args.show_splash and not _is_dev_target(args.target_exe):
         try:
             return _run_with_splash(args)
         except Exception as exc:                              # noqa: BLE001
@@ -265,7 +265,31 @@ def run_relauncher(argv: list[str]) -> int:
             )
             # Fall through to the headless path. Better to relaunch
             # the OSK silently than to leave the user with nothing.
+    elif args.show_splash:
+        # Dev mode (target is the python interpreter, not a real
+        # alpha-osk.exe install path). The splash would sit at
+        # "Installing files…" until _NEW_EXE_TIMEOUT_S because
+        # python.exe never gets a fresh mtime, leaving a stuck window
+        # the dev has to find and kill manually. Skip straight to
+        # headless, which times out the same way but invisibly.
+        _logger.info("Dev-mode target (%s); skipping splash", args.target_exe)
     return _run_headless(args)
+
+
+def _is_dev_target(target_exe: str) -> bool:
+    """Detect dev-mode invocation: target_exe pointing at a python
+    interpreter rather than an installed alpha-osk.exe.
+
+    In dev mode the relauncher is spawned by ``updater._spawn_relauncher``
+    with ``--target-exe sys.executable`` (the python that's running the
+    OSK), since there's no real install dir to poll. Production
+    spawns it with the installed alpha-osk.exe path. Matching on
+    ``python`` / ``pythonw`` in the basename is enough — there's no
+    realistic case where a real install lives at a path containing
+    ``python`` in the exe name.
+    """
+    name = Path(target_exe).name.lower()
+    return name.startswith("python") or name.startswith("pythonw")
 
 
 def _run_headless(args: argparse.Namespace) -> int:
@@ -338,6 +362,16 @@ def _run_with_splash(args: argparse.Namespace) -> int:
     app = existing_app if isinstance(existing_app, QApplication) else QApplication([])
 
     splash = _build_splash_widget(QWidget, QFrame, QLabel, QVBoxLayout, QFont, Qt)
+    # The close button hides the splash but lets the polling continue —
+    # the user is dismissing the visual, not aborting the relaunch.
+    # The new OSK still gets launched when the install completes; the
+    # app.quit() in _finish ends the process cleanly. If the user
+    # closes during a terminal phase (Done / failure dwell) the timer
+    # already scheduled will quit the app shortly after.
+    close_btn = splash.findChild(QWidget, "close")
+    if close_btn is not None:
+        close_btn.mousePressEvent = lambda ev: splash.hide()    # type: ignore[assignment]
+
     splash.show()
     # Centre on the primary screen — frameless windows don't get a
     # default position, so we'd otherwise land at (0, 0).
@@ -447,6 +481,8 @@ def _build_splash_widget(QWidget, QFrame, QLabel, QVBoxLayout, QFont, Qt):
         "QWidget { background-color: #1e3354; }"
         "QLabel#title { color: #7ec8ff; font-weight: bold; }"
         "QLabel#msg { color: #cfe0ff; }"
+        "QLabel#close { color: #7ec8ff; }"
+        "QLabel#close:hover { color: #ffffff; background-color: #2a4570; border-radius: 4px; }"
     )
 
     frame = QFrame(win)
@@ -454,6 +490,24 @@ def _build_splash_widget(QWidget, QFrame, QLabel, QVBoxLayout, QFont, Qt):
         "QFrame { border: 1px solid #4a8eff; border-radius: 8px; }"
     )
     frame.setGeometry(0, 0, 420, 140)
+
+    # Close button — top-right corner. The user can dismiss the splash
+    # if it ever gets stuck (network glitch during install, AV scanning
+    # the new exe forever, dev-mode test). Clicking only HIDES the
+    # window — the relauncher keeps polling and still launches the new
+    # OSK when ready, since "I don't need to look at this" is different
+    # from "abort the relaunch". See _run_with_splash.
+    close = QLabel("✕", win)
+    close.setObjectName("close")
+    close_font = QFont()
+    close_font.setPointSize(11)
+    close_font.setBold(True)
+    close.setFont(close_font)
+    close.setAlignment(Qt.AlignCenter)
+    close.setFixedSize(22, 22)
+    close.move(420 - 22 - 10, 8)
+    close.setCursor(Qt.PointingHandCursor)
+    close.setToolTip("Hide this window (the keyboard will still come back)")
 
     layout = QVBoxLayout(win)
     layout.setContentsMargins(20, 18, 20, 18)
@@ -476,6 +530,11 @@ def _build_splash_widget(QWidget, QFrame, QLabel, QVBoxLayout, QFont, Qt):
     msg.setAlignment(Qt.AlignHCenter | Qt.AlignVCenter)
     msg.setWordWrap(True)
     layout.addWidget(msg)
+
+    # Raise the close label above the layout-managed children so it
+    # always sits on top. The QLabel is a sibling of the layout host,
+    # not part of the layout.
+    close.raise_()
 
     return win
 
