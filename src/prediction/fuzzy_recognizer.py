@@ -21,7 +21,14 @@ _logger = logging.getLogger("FuzzyRecognizer")
 
 # QWERTY layout in (row, col) units.  Rows are offset by the standard
 # staggered amount so diagonal distances reflect the physical keyboard.
+# The number row sits at row -1 directly above the qwerty row, with no
+# horizontal stagger — matches the layout most users see (5 sits above
+# t, 6 above y, etc.) so a press one row off-target between digit and
+# letter is recoverable by the spatial model. Digits within the row
+# (4-5-6, etc.) inherit nearness for free from the same distance metric.
 QWERTY_POSITIONS: Dict[str, Tuple[float, float]] = {
+    '1': (-1, 0),   '2': (-1, 1),   '3': (-1, 2),   '4': (-1, 3),   '5': (-1, 4),
+    '6': (-1, 5),   '7': (-1, 6),   '8': (-1, 7),   '9': (-1, 8),   '0': (-1, 9),
     'q': (0, 0),    'w': (0, 1),    'e': (0, 2),    'r': (0, 3),    't': (0, 4),
     'y': (0, 5),    'u': (0, 6),    'i': (0, 7),    'o': (0, 8),    'p': (0, 9),
     'a': (1, 0.25), 's': (1, 1.25), 'd': (1, 2.25), 'f': (1, 3.25), 'g': (1, 4.25),

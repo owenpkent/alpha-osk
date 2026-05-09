@@ -26,9 +26,20 @@ class TestQWERTYLayout:
             assert isinstance(pos, tuple) and len(pos) == 2
 
     def test_rows_are_valid(self):
+        # Row -1 is the digit row above qwerty (added so 5↔t-style
+        # off-by-one-row mistypes are recoverable).
         for key, (row, col) in QWERTY_POSITIONS.items():
-            assert 0 <= row <= 2, f"Key {key} has invalid row {row}"
+            assert -1 <= row <= 2, f"Key {key} has invalid row {row}"
             assert col >= 0, f"Key {key} has negative col {col}"
+
+    def test_all_digits_present(self):
+        # Number row was added so spatial fuzzy can recover digit↔letter
+        # off-row presses ("h3llo" → "hello"). Without these entries,
+        # SpatialKeyModel.get_key_probabilities returns {digit: 1.0} and
+        # the candidate generator can't substitute anything for the
+        # mistyped digit.
+        for digit in "0123456789":
+            assert digit in QWERTY_POSITIONS, f"Missing digit: {digit}"
 
 
 class TestDefaults:
@@ -62,8 +73,27 @@ class TestSpatialKeyModel:
 
     def test_unknown_key_returns_certainty(self):
         model = SpatialKeyModel(uncertainty_radius=1.0)
-        probs = model.get_key_probabilities("1")  # Not in QWERTY layout
-        assert probs == {"1": 1.0}
+        # Punctuation isn't mapped — fuzzy correction stays out of
+        # punctuation entirely (different error mode, different fix).
+        probs = model.get_key_probabilities("?")
+        assert probs == {"?": 1.0}
+
+    def test_digit_neighbours_letter_below(self):
+        # The point of adding the number row: pressing "5" when you
+        # meant "t" (or vice versa) should be recoverable. They're
+        # vertically aligned (row -1 vs row 0, same column 4).
+        model = SpatialKeyModel(uncertainty_radius=1.5)
+        nearby_5 = model.get_nearby_keys("5")
+        assert "t" in nearby_5, f"'5' should neighbour 't', got {nearby_5}"
+        nearby_t = model.get_nearby_keys("t")
+        assert "5" in nearby_t, f"'t' should neighbour '5', got {nearby_t}"
+
+    def test_digit_neighbours_horizontal_digits(self):
+        # Same-row digit neighbours come for free from the distance
+        # metric (4 and 6 are adjacent to 5 in the digit row).
+        model = SpatialKeyModel(uncertainty_radius=1.5)
+        nearby_5 = model.get_nearby_keys("5")
+        assert "4" in nearby_5 and "6" in nearby_5
 
     def test_nearby_keys_are_included(self):
         model = SpatialKeyModel(uncertainty_radius=1.5)
