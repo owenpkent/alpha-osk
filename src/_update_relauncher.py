@@ -65,6 +65,13 @@ _PARENT_EXIT_TIMEOUT_S = 60
 _NEW_EXE_TIMEOUT_S = 180
 _INSTALLER_GRACE_S = 5  # after parent dies, wait for installer file copy
 
+# Splash-window dwell times. The "Done!" pause hides the brief gap
+# between us closing the splash and the new OSK drawing its first
+# frame; without it the user still sees a flash of nothing. The
+# failure dwell keeps an error message visible long enough to read.
+_DONE_DWELL_MS = 800
+_FAILURE_DWELL_MS = 6000
+
 
 def _configure_log(log_dir: Path) -> None:
     """Set up a file logger for the detached process.
@@ -213,7 +220,25 @@ def _write_handoff(
 
 
 def run_relauncher(argv: list[str]) -> int:
-    """CLI entry point. Returns a process exit code (0 = success)."""
+    """CLI entry point. Returns a process exit code (0 = success).
+
+    Dispatches between two implementations:
+
+    * ``--show-splash`` (production): drives the same wait phases via
+      a QTimer state machine so a small "Updating Alpha-OSK…" window
+      can stay painted on screen during the gap, with a phase-aware
+      message ("Waiting for installer to finish…" → "Installing
+      files…" → "Launching new keyboard…"). Without this window, the
+      user has no UI between the installer's taskkill and the new OSK
+      drawing its first frame, which can be ~30 s of total silence.
+    * default (tests + fallback): the original blocking-poll
+      implementation. Tests target this path so they don't have to
+      stand up a QApplication.
+
+    If the splash path fails to start (e.g. PySide6 import error, no
+    display server), we log and fall back to headless rather than
+    aborting the relaunch.
+    """
     parser = argparse.ArgumentParser(prog="alpha-osk --update-relauncher")
     parser.add_argument("--update-relauncher", action="store_true")
     parser.add_argument("--parent-pid", type=int, required=True)
@@ -221,14 +246,32 @@ def run_relauncher(argv: list[str]) -> int:
     parser.add_argument("--previous-version", type=str, default="")
     parser.add_argument("--target-exe", type=str, required=True)
     parser.add_argument("--config-dir", type=str, required=True)
+    parser.add_argument("--show-splash", action="store_true")
     args = parser.parse_args(argv[1:])
 
     config_dir = Path(args.config_dir)
     _configure_log(config_dir)
     _logger.info(
-        "Relauncher starting — parent_pid=%d new_version=%s target=%s",
-        args.parent_pid, args.new_version, args.target_exe,
+        "Relauncher starting — parent_pid=%d new_version=%s target=%s splash=%s",
+        args.parent_pid, args.new_version, args.target_exe, args.show_splash,
     )
+
+    if args.show_splash:
+        try:
+            return _run_with_splash(args)
+        except Exception as exc:                              # noqa: BLE001
+            _logger.warning(
+                "Splash path raised (%s); falling back to headless", exc,
+            )
+            # Fall through to the headless path. Better to relaunch
+            # the OSK silently than to leave the user with nothing.
+    return _run_headless(args)
+
+
+def _run_headless(args: argparse.Namespace) -> int:
+    """Original blocking-poll relauncher. Used by tests and as the
+    splash-path fallback. See ``run_relauncher`` for the contract."""
+    config_dir = Path(args.config_dir)
 
     if not _wait_for_parent_exit(args.parent_pid, _PARENT_EXIT_TIMEOUT_S):
         _logger.error("Parent OSK still alive after %.0fs — giving up",
@@ -253,6 +296,188 @@ def run_relauncher(argv: list[str]) -> int:
     _write_handoff(config_dir, args.new_version, args.previous_version)
     _logger.info("Relauncher done")
     return 0
+
+
+def _new_exe_ready(target: Path, after_mtime: Optional[float]) -> bool:
+    """Single-shot version of ``_wait_for_new_exe``. Returns True if the
+    new exe is in place right now. Used by the QTimer-driven splash
+    path so we can yield back to the event loop between checks."""
+    try:
+        if not target.is_file():
+            return False
+        stat = target.stat()
+        if stat.st_size <= 0:
+            return False
+        if after_mtime is None:
+            return True
+        return stat.st_mtime > after_mtime
+    except OSError:
+        return False
+
+
+def _run_with_splash(args: argparse.Namespace) -> int:
+    """Splash-window implementation. Drives the same waits as the
+    headless path but via QTimer ticks so the window can repaint and
+    show phase-aware progress text."""
+    # Lazy-import Qt so the headless path stays import-clean and
+    # tests don't accidentally drag PySide6 into a fresh interpreter.
+    from PySide6.QtCore import Qt, QTimer
+    from PySide6.QtGui import QFont
+    from PySide6.QtWidgets import (
+        QApplication,
+        QFrame,
+        QLabel,
+        QVBoxLayout,
+        QWidget,
+    )
+
+    config_dir = Path(args.config_dir)
+    target_exe = Path(args.target_exe)
+
+    existing_app = QApplication.instance()
+    app = existing_app if isinstance(existing_app, QApplication) else QApplication([])
+
+    splash = _build_splash_widget(QWidget, QFrame, QLabel, QVBoxLayout, QFont, Qt)
+    splash.show()
+    # Centre on the primary screen — frameless windows don't get a
+    # default position, so we'd otherwise land at (0, 0).
+    screen = app.primaryScreen()
+    if screen is not None:
+        geo = screen.availableGeometry()
+        splash.move(
+            geo.x() + (geo.width() - splash.width()) // 2,
+            geo.y() + (geo.height() - splash.height()) // 3,
+        )
+
+    # Mutable state held by the QTimer-driven state machine. A small
+    # class beats a dict here: typed fields keep mypy happy and the
+    # closure reads (`state.exit_code`) are clearer than dict lookups.
+    class _SplashState:
+        exit_code: int = 0
+        parent_death_time: Optional[float] = None
+        deadline: float = 0.0
+
+    state = _SplashState()
+
+    def _set_message(text: str) -> None:
+        label = splash.findChild(QLabel, "msg")
+        if label is not None:
+            label.setText(text)
+        # Force a repaint immediately — QTimer ticks are short enough
+        # that the natural paint cycle is fine, but during the
+        # transitions between phases we want the message to swap
+        # before any further processing happens.
+        splash.repaint()
+
+    def _finish(code: int) -> None:
+        state.exit_code = code
+        QTimer.singleShot(0, app.quit)
+
+    def _poll_parent() -> None:
+        if not _process_alive(args.parent_pid):
+            state.parent_death_time = time.time()
+            _set_message("Installing files…")
+            QTimer.singleShot(int(_INSTALLER_GRACE_S * 1000), _start_new_exe_phase)
+            return
+        if time.monotonic() >= state.deadline:
+            _logger.error("Parent OSK still alive after %.0fs — giving up",
+                          _PARENT_EXIT_TIMEOUT_S)
+            _finish(2)
+            return
+        QTimer.singleShot(int(_POLL_INTERVAL_S * 1000), _poll_parent)
+
+    def _start_new_exe_phase() -> None:
+        state.deadline = time.monotonic() + _NEW_EXE_TIMEOUT_S
+        QTimer.singleShot(0, _poll_new_exe)
+
+    def _poll_new_exe() -> None:
+        if _new_exe_ready(target_exe, state.parent_death_time):
+            _launch()
+            return
+        if time.monotonic() >= state.deadline:
+            _logger.error("New exe never appeared at %s within %.0fs",
+                          target_exe, _NEW_EXE_TIMEOUT_S)
+            _set_message("Update finished, but the keyboard didn't appear.\n"
+                         "Find Alpha-OSK in your Start Menu.")
+            QTimer.singleShot(_FAILURE_DWELL_MS, lambda: _finish(3))
+            return
+        QTimer.singleShot(int(_POLL_INTERVAL_S * 1000), _poll_new_exe)
+
+    def _launch() -> None:
+        _set_message("Launching the new keyboard…")
+        if not _launch_new_osk(target_exe):
+            _logger.error("Launch failed")
+            _set_message("Couldn't launch the new keyboard.\n"
+                         "Find Alpha-OSK in your Start Menu.")
+            QTimer.singleShot(_FAILURE_DWELL_MS, lambda: _finish(4))
+            return
+        _write_handoff(config_dir, args.new_version, args.previous_version)
+        # Brief "Done" pause so the splash doesn't vanish a frame
+        # before the new OSK draws its first window — otherwise
+        # there's still a visible blank moment.
+        _set_message("Done!")
+        QTimer.singleShot(_DONE_DWELL_MS, lambda: _finish(0))
+
+    state.deadline = time.monotonic() + _PARENT_EXIT_TIMEOUT_S
+    _set_message("Waiting for the installer to finish…")
+    QTimer.singleShot(0, _poll_parent)
+
+    app.exec()
+    _logger.info("Relauncher splash finished with code %d", state.exit_code)
+    return state.exit_code
+
+
+def _build_splash_widget(QWidget, QFrame, QLabel, QVBoxLayout, QFont, Qt):
+    """Construct the splash window. Pulled out to keep ``_run_with_splash``
+    short — and to make the styling tweakable in one place."""
+    win = QWidget()
+    win.setWindowTitle("Updating Alpha-OSK")
+    win.setWindowFlags(
+        Qt.FramelessWindowHint
+        | Qt.WindowStaysOnTopHint
+        | Qt.Tool
+        | Qt.WindowDoesNotAcceptFocus
+    )
+    win.setAttribute(Qt.WA_ShowWithoutActivating, True)
+    win.setFixedSize(420, 140)
+    # Match the in-app toast colour (#1e3354 on #4a8eff border) so the
+    # splash visually belongs to Alpha-OSK rather than looking like a
+    # stray system dialog.
+    win.setStyleSheet(
+        "QWidget { background-color: #1e3354; }"
+        "QLabel#title { color: #7ec8ff; font-weight: bold; }"
+        "QLabel#msg { color: #cfe0ff; }"
+    )
+
+    frame = QFrame(win)
+    frame.setStyleSheet(
+        "QFrame { border: 1px solid #4a8eff; border-radius: 8px; }"
+    )
+    frame.setGeometry(0, 0, 420, 140)
+
+    layout = QVBoxLayout(win)
+    layout.setContentsMargins(20, 18, 20, 18)
+    layout.setSpacing(8)
+
+    title = QLabel("Updating Alpha-OSK", win)
+    title.setObjectName("title")
+    title_font = QFont()
+    title_font.setPointSize(13)
+    title_font.setBold(True)
+    title.setFont(title_font)
+    title.setAlignment(Qt.AlignHCenter | Qt.AlignVCenter)
+    layout.addWidget(title)
+
+    msg = QLabel("", win)
+    msg.setObjectName("msg")
+    msg_font = QFont()
+    msg_font.setPointSize(10)
+    msg.setFont(msg_font)
+    msg.setAlignment(Qt.AlignHCenter | Qt.AlignVCenter)
+    msg.setWordWrap(True)
+    layout.addWidget(msg)
+
+    return win
 
 
 if __name__ == "__main__":  # pragma: no cover — CLI entry

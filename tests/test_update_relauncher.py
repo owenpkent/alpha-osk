@@ -215,3 +215,136 @@ class TestRunRelauncherIntegration:
         # Handoff should NOT be written if launch failed — would be
         # misleading on the next manual launch.
         assert not (config_dir / "update_handoff.json").is_file()
+
+
+class TestNewExeReady:
+    """_new_exe_ready — single-shot mirror of _wait_for_new_exe used by
+    the splash path so it can yield to the Qt event loop between
+    checks instead of blocking inside a sleep loop."""
+
+    def test_returns_false_for_missing_file(self, tmp_path):
+        target = tmp_path / "alpha-osk.exe"
+        assert relauncher._new_exe_ready(target, after_mtime=None) is False
+
+    def test_returns_false_for_zero_byte_file(self, tmp_path):
+        target = tmp_path / "alpha-osk.exe"
+        target.write_bytes(b"")
+        assert relauncher._new_exe_ready(target, after_mtime=None) is False
+
+    def test_returns_true_for_non_empty_file_with_no_mtime_floor(self, tmp_path):
+        target = tmp_path / "alpha-osk.exe"
+        target.write_bytes(b"x")
+        assert relauncher._new_exe_ready(target, after_mtime=None) is True
+
+    def test_rejects_stale_exe_when_after_mtime_set(self, tmp_path):
+        # File predates parent death — this is the OLD exe, installer
+        # hasn't finished writing yet. Returning True here would race.
+        import os as _os
+        target = tmp_path / "alpha-osk.exe"
+        target.write_bytes(b"x")
+        old_mtime = time.time() - 3600
+        _os.utime(target, (old_mtime, old_mtime))
+        assert relauncher._new_exe_ready(target, after_mtime=time.time()) is False
+
+    def test_accepts_fresh_exe_when_after_mtime_set(self, tmp_path):
+        import os as _os
+        target = tmp_path / "alpha-osk.exe"
+        target.write_bytes(b"x")
+        future_mtime = time.time() + 3600
+        _os.utime(target, (future_mtime, future_mtime))
+        assert relauncher._new_exe_ready(target, after_mtime=time.time()) is True
+
+
+class TestShowSplashFlag:
+    """The --show-splash flag opts into the Qt splash path. Tests
+    deliberately don't pass it, so they exercise the headless code
+    path; this class just confirms the flag parses without breaking
+    the existing CLI surface."""
+
+    def test_argv_without_show_splash_runs_headless(self, tmp_path):
+        # Same setup as TestRunRelauncherIntegration.test_happy_path
+        # but explicitly assert the headless dispatch path is taken.
+        import os as _os
+        target_exe = tmp_path / "alpha-osk.exe"
+        target_exe.write_bytes(b"freshly installed")
+        future_mtime = time.time() + 3600
+        _os.utime(target_exe, (future_mtime, future_mtime))
+        config_dir = tmp_path / "config"
+
+        argv = [
+            "alpha-osk.exe",
+            "--update-relauncher",
+            "--parent-pid", "999999999",
+            "--new-version", "1.0.18",
+            "--previous-version", "1.0.17",
+            "--target-exe", str(target_exe),
+            "--config-dir", str(config_dir),
+        ]
+
+        called: list[bool] = []
+        with patch.object(relauncher, "_INSTALLER_GRACE_S", 0), \
+             patch.object(relauncher, "_NEW_EXE_TIMEOUT_S", 2), \
+             patch.object(relauncher, "_run_with_splash",
+                          lambda args: called.append(True) or 0), \
+             patch.object(relauncher, "_launch_new_osk", return_value=True):
+            rc = relauncher.run_relauncher(argv)
+
+        assert rc == 0
+        assert called == [], "headless path must not invoke the splash"
+
+    def test_argv_with_show_splash_dispatches_to_splash(self, tmp_path):
+        config_dir = tmp_path / "config"
+        argv = [
+            "alpha-osk.exe",
+            "--update-relauncher",
+            "--parent-pid", "1",
+            "--new-version", "1.0.18",
+            "--previous-version", "1.0.17",
+            "--target-exe", str(tmp_path / "alpha-osk.exe"),
+            "--config-dir", str(config_dir),
+            "--show-splash",
+        ]
+
+        observed: list[object] = []
+        with patch.object(relauncher, "_run_with_splash",
+                          lambda args: observed.append(args.show_splash) or 0):
+            rc = relauncher.run_relauncher(argv)
+
+        assert rc == 0
+        assert observed == [True]
+
+    def test_splash_failure_falls_back_to_headless(self, tmp_path):
+        # If PySide6 imports raise (no display, frozen-mode mishap),
+        # the relauncher MUST still get the keyboard back. Falling
+        # back to the silent headless path is the right behaviour.
+        import os as _os
+        target_exe = tmp_path / "alpha-osk.exe"
+        target_exe.write_bytes(b"x")
+        future_mtime = time.time() + 3600
+        _os.utime(target_exe, (future_mtime, future_mtime))
+        config_dir = tmp_path / "config"
+
+        argv = [
+            "alpha-osk.exe",
+            "--update-relauncher",
+            "--parent-pid", "999999999",
+            "--new-version", "1.0.18",
+            "--previous-version", "1.0.17",
+            "--target-exe", str(target_exe),
+            "--config-dir", str(config_dir),
+            "--show-splash",
+        ]
+
+        def boom(args):
+            raise RuntimeError("no display server")
+
+        launch_calls: list[object] = []
+        with patch.object(relauncher, "_INSTALLER_GRACE_S", 0), \
+             patch.object(relauncher, "_NEW_EXE_TIMEOUT_S", 2), \
+             patch.object(relauncher, "_run_with_splash", boom), \
+             patch.object(relauncher, "_launch_new_osk",
+                          lambda p: launch_calls.append(p) or True):
+            rc = relauncher.run_relauncher(argv)
+
+        assert rc == 0
+        assert len(launch_calls) == 1, "headless fallback must still launch the OSK"

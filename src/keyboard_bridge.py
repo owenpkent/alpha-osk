@@ -38,6 +38,12 @@ from .prediction import HybridPredictor, SwipeRecognizer
 from .telemetry import TelemetryClient
 from .updater import UpdateInfo, check_for_update, download_and_install
 
+# How long to keep the "installing v… keyboard back in a moment" toast
+# on screen before letting the install proceed (and the installer's
+# taskkill arrive). Long enough to read, short enough not to feel like
+# the click did nothing.
+_PRE_INSTALL_TOAST_DWELL_S = 1.8
+
 # Window classes / process exes used to auto-detect a foreground app
 # whose keystroke handling breaks the suffix-only insertion path.
 # Two categories live in the same set because the compat lever is the
@@ -267,6 +273,14 @@ class KeyboardBridge(QObject):
     updateUnavailable = Signal()
     updateInstallStarted = Signal()
     updateInstallFailed = Signal(str)
+    # Fires immediately before the installer process is launched (after
+    # download + signature verify succeed). The QML side flashes a toast
+    # warning the user that the keyboard is about to disappear for
+    # ~30 s while the install runs and the relauncher brings it back.
+    # Without this, the silence between taskkill and relaunch reads as
+    # "the update broke the keyboard" — see docs/AUTO_UPDATE.md § Update
+    # progress indicator.
+    updateInstallHandoffPending = Signal(str)
 
     # Edit-mode signals — when the prediction-edit popup is open, OSK
     # keystrokes must target its TextField, not the OS-focused app
@@ -1375,8 +1389,23 @@ class KeyboardBridge(QObject):
 
         def _worker(info: UpdateInfo) -> None:
             self.updateInstallStarted.emit()
+
+            def _on_installer_launching(version: str) -> None:
+                # Fired from the worker thread immediately before the
+                # installer is spawned. Emit the toast signal and then
+                # block briefly so the toast has time to paint and be
+                # legible before the installer's taskkill arrives. The
+                # sleep is in the worker thread, so the UI stays
+                # responsive — the user sees a toast appear, then the
+                # keyboard disappears a moment later, instead of the
+                # keyboard vanishing without warning.
+                self.updateInstallHandoffPending.emit(version)
+                time.sleep(_PRE_INSTALL_TOAST_DWELL_S)
+
             try:
-                ok, err = download_and_install(info)
+                ok, err = download_and_install(
+                    info, on_installer_launching=_on_installer_launching,
+                )
             except Exception as e:                       # noqa: BLE001
                 _logger.error("Install raised: %s", e)
                 self.updateInstallFailed.emit(str(e))

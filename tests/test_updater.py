@@ -434,3 +434,85 @@ class TestDownloadAndInstall:
         assert ok is False
         assert "download" in err.lower(), f"error should name the failed step, got {err!r}"
         assert verify_calls == [], "must not verify a failed download"
+
+
+class TestInstallerLaunchingCallback:
+    """``on_installer_launching`` is the hook the bridge uses to fire
+    the pre-update toast in the live OSK so the user knows why the
+    keyboard is about to disappear. See docs/AUTO_UPDATE.md § Update
+    progress indicator."""
+
+    def _info(self) -> UpdateInfo:
+        return UpdateInfo(
+            version="1.2.3",
+            download_url="https://github.com/okstudio1/alpha-osk-releases/releases/download/v1.2.3/Alpha-OSK-Setup-1.2.3.exe",
+            asset_name="Alpha-OSK-Setup-1.2.3.exe",
+            notes="",
+        )
+
+    def _stub_happy_path(self, monkeypatch):
+        monkeypatch.setattr(updater, "_download_with_cap", lambda *a, **kw: True)
+        monkeypatch.setattr(updater, "_verify_signature", lambda p: True)
+        monkeypatch.setattr(updater, "_spawn_relauncher", lambda v: True)
+        monkeypatch.setattr(updater, "_launch_installer", lambda dest: (True, ""))
+
+    def test_callback_fires_with_version_before_installer_launch(
+        self, monkeypatch,
+    ):
+        self._stub_happy_path(monkeypatch)
+        events: list[tuple[str, object]] = []
+
+        monkeypatch.setattr(
+            updater, "_launch_installer",
+            lambda dest: events.append(("launch", dest)) or (True, ""),
+        )
+
+        def cb(version: str) -> None:
+            events.append(("callback", version))
+
+        ok, err = updater.download_and_install(
+            self._info(), on_installer_launching=cb,
+        )
+        assert ok is True
+        # Callback must run BEFORE the installer launches — otherwise
+        # the installer's taskkill can land before the toast paints.
+        kinds = [e[0] for e in events]
+        assert kinds == ["callback", "launch"], (
+            f"callback must precede installer launch, got {kinds}"
+        )
+        assert events[0][1] == "1.2.3"
+
+    def test_callback_does_not_fire_when_signature_fails(self, monkeypatch):
+        monkeypatch.setattr(updater, "_download_with_cap", lambda *a, **kw: True)
+        monkeypatch.setattr(updater, "_verify_signature", lambda p: False)
+        called: list[str] = []
+        monkeypatch.setattr(updater, "_spawn_relauncher", lambda v: True)
+        monkeypatch.setattr(updater, "_launch_installer", lambda dest: (True, ""))
+
+        ok, err = updater.download_and_install(
+            self._info(),
+            on_installer_launching=lambda v: called.append(v),
+        )
+        assert ok is False
+        assert called == [], "no toast should fire on a rejected signature"
+
+    def test_callback_raise_does_not_abort_install(self, monkeypatch):
+        # A misbehaving UI signal must never block an install — better
+        # to silently miss the toast than to leave the user without an
+        # update they accepted.
+        self._stub_happy_path(monkeypatch)
+
+        def bad_cb(version: str) -> None:
+            raise RuntimeError("UI signal exploded")
+
+        ok, err = updater.download_and_install(
+            self._info(), on_installer_launching=bad_cb,
+        )
+        assert ok is True
+        assert err == ""
+
+    def test_callback_is_optional(self, monkeypatch):
+        # Existing callers that don't pass the kwarg keep working.
+        self._stub_happy_path(monkeypatch)
+        ok, err = updater.download_and_install(self._info())
+        assert ok is True

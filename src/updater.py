@@ -283,6 +283,12 @@ def check_for_update(
 # Progress callback receives (bytes_downloaded, total_bytes_or_None).
 ProgressCb = Callable[[int, Optional[int]], None]
 
+# Fires from the install worker thread immediately before the installer
+# is launched (and ~1 s before the installer's taskkill arrives). The
+# bridge uses this to flash a toast in the live OSK so the user knows
+# why the keyboard is about to disappear. Receives the new version.
+HandoffCb = Callable[[str], None]
+
 
 def _download_with_cap(
     url: str,
@@ -525,6 +531,7 @@ def _spawn_relauncher(new_version: str) -> bool:
                 "--previous-version", current_version,
                 "--target-exe", str(target_exe),
                 "--config-dir", str(get_config_dir()),
+                "--show-splash",
             ]
         else:
             # Dev mode — use python -m for the relauncher, target exe
@@ -539,6 +546,7 @@ def _spawn_relauncher(new_version: str) -> bool:
                 "--previous-version", current_version,
                 "--target-exe", str(target_exe),
                 "--config-dir", str(get_config_dir()),
+                "--show-splash",
             ]
 
         flags = 0
@@ -565,6 +573,7 @@ def download_and_install(
     info: UpdateInfo,
     *,
     progress: Optional[ProgressCb] = None,
+    on_installer_launching: Optional[HandoffCb] = None,
     timeout: float = _HTTP_TIMEOUT_SECONDS * 4,  # downloads are slower than API
 ) -> Tuple[bool, str]:
     """Download the installer, verify its signature, and exec it silently.
@@ -601,6 +610,20 @@ def download_and_install(
         # because of integrity-level rules around elevated parents
         # spawning user-mode children). See _spawn_relauncher.
         _spawn_relauncher(info.version)
+
+        # Notify the live OSK that the installer is about to launch so
+        # it can flash a toast warning the user. The callback is
+        # expected to block briefly (~1.5 s) so the toast actually
+        # paints before the installer's taskkill arrives. A callback
+        # raise is never fatal — falling through to the install is
+        # better than aborting because a UI signal misfired.
+        if on_installer_launching is not None:
+            try:
+                on_installer_launching(info.version)
+            except Exception as exc:                          # noqa: BLE001
+                _logger.warning(
+                    "on_installer_launching callback raised: %s", exc,
+                )
 
         # /S = NSIS silent install; the installer kills the running
         # alpha-osk.exe, runs the old uninstaller, and installs the

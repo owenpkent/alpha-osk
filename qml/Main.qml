@@ -474,6 +474,14 @@ Window {
             root.updateInstalling = true
             root.updateError = ""
         }
+        function onUpdateInstallHandoffPending(version) {
+            // Fired right before the installer's taskkill arrives. The
+            // toast briefly tells the user the keyboard is about to
+            // disappear and will come back on its own — without it the
+            // ~30 s gap between keyboard-vanishes and relauncher-brings-
+            // it-back reads as "the update broke the keyboard."
+            updateStartingToast.flash(version)
+        }
         function onUpdateInstallFailed(msg) {
             root.updateInstalling = false
             root.updateError = msg
@@ -1531,6 +1539,61 @@ Window {
                 updateAppliedToast.previousVersion = prevVersion
                 open()
                 updateAppliedToastTimer.restart()
+            }
+        }
+
+        // Pre-update toast — flashed by KeyboardBridge.updateInstallHandoffPending
+        // immediately before the installer is launched, so the user
+        // knows why the keyboard is about to disappear and that it
+        // will come back on its own. The toast is wider than the
+        // post-update one because the message has more to say.
+        Popup {
+            id: updateStartingToast
+            parent: Overlay.overlay
+            x: (root.width - width) / 2
+            y: 36
+            width: 360
+            height: 56
+            modal: false
+            dim: false
+            closePolicy: Popup.NoAutoClose
+
+            property string newVersion: ""
+
+            background: Rectangle {
+                color: "#1e3354"
+                border.color: "#4a8eff"
+                border.width: 1
+                radius: 8
+            }
+
+            contentItem: Column {
+                spacing: 2
+                anchors.verticalCenter: parent.verticalCenter
+                Text {
+                    text: qsTr("Installing v%1…").arg(updateStartingToast.newVersion)
+                    color: "#7ec8ff"
+                    font.pixelSize: 14
+                    font.weight: Font.Bold
+                    anchors.horizontalCenter: parent.horizontalCenter
+                }
+                Text {
+                    text: qsTr("The keyboard will disappear briefly and come back.")
+                    color: "#cfe0ff"
+                    font.pixelSize: 12
+                    anchors.horizontalCenter: parent.horizontalCenter
+                }
+            }
+
+            // No close timer: the installer's taskkill will close us
+            // along with the rest of the process within ~1-2 s. Setting
+            // a timer would risk the toast vanishing before the
+            // keyboard does, leaving the user with the silence we're
+            // trying to avoid.
+
+            function flash(version) {
+                updateStartingToast.newVersion = version
+                open()
             }
         }
 
