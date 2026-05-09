@@ -13,18 +13,38 @@ Windows provides ``SendInput()`` in ``user32.dll`` which injects keyboard
 Alpha-OSK keystrokes are indistinguishable from physical keyboard input
 to every application, including games and system dialogs.
 
-Two injection modes are used:
+Three injection modes are used. ``send_text`` and the typed portion of
+``replace_text`` dispatch per character between modes 2 and 3 below.
 
 1. **Virtual-Key mode** (``send_key``, ``send_combination``):
-   Sends a ``KEYBDINPUT`` with a virtual-key code (``wVk``).  Used for
-   special keys (Backspace, F-keys, modifiers, arrows, etc.) and for
-   modifier+key combos (Ctrl+C, Alt+F4, etc.).
+   Sends a ``KEYBDINPUT`` with a virtual-key code in ``wVk`` and the
+   layout scancode in ``wScan``.  Used for special keys (Backspace,
+   F-keys, modifiers, arrows, etc.) and for modifier+key combos
+   (Ctrl+C, Alt+F4, etc.).
 
-2. **Unicode mode** (``send_text``):
-   Sends a ``KEYBDINPUT`` with ``KEYEVENTF_UNICODE`` and the character's
-   UTF-16 code point in ``wScan``.  This handles the full Unicode range
-   without needing to know the user's keyboard layout — emoji, accented
-   characters, CJK, everything just works.
+2. **Scancode mode** (``send_text`` default for ASCII):
+   Sends a ``KEYBDINPUT`` with ``wVk = 0``, the layout scancode in
+   ``wScan``, and the ``KEYEVENTF_SCANCODE`` flag.  The OS looks up
+   the virtual key from the scancode under the active layout and
+   dispatches a normal ``WM_KEYDOWN(VK_X)`` plus ``WM_CHAR`` (the same
+   path a physical keypress takes).  This is what the Windows
+   on-screen keyboard does, and it is what makes Alpha-OSK reach
+   apps that filter on real virtual-key codes or read raw scancodes:
+   Blender, VirtualBox, DirectInput games, raw-input 3D / CAD tools.
+
+3. **Unicode mode** (``send_text`` per-char fallback):
+   Sends a ``KEYBDINPUT`` with ``KEYEVENTF_UNICODE`` and the
+   character's UTF-16 code point in ``wScan``.  Layout-independent
+   and covers the full Unicode range (emoji, accented characters,
+   CJK).  Used per character when scancode mode is unsafe: non-ASCII
+   chars, unmappable chars on the active layout, AltGr-required
+   chords, dead-key triggers, and the corner case where Shift is
+   physically held but the char does not need shift.
+
+   Unicode mode produces a ``WM_KEYDOWN`` with the sentinel
+   ``VK_PACKET (0xE7)``.  Apps that filter on real VKs ignore it,
+   which is why scancode mode is preferred for ASCII even though
+   Unicode mode would otherwise be simpler.
 
 UIAccess (EV Code Signing)
 --------------------------
@@ -80,7 +100,8 @@ KEYEVENTF_UNICODE = 0x0004
 KEYEVENTF_SCANCODE = 0x0008
 
 # MapVirtualKey translation modes (winuser.h)
-MAPVK_VK_TO_VSC = 0  # VK → scancode using the active layout
+MAPVK_VK_TO_VSC = 0   # VK → scancode using the active layout
+MAPVK_VK_TO_CHAR = 2  # VK → unshifted char; bit 31 set indicates a dead key
 
 # Virtual-Key Codes (subset used by Alpha-OSK)
 # https://learn.microsoft.com/en-us/windows/win32/inputdev/virtual-key-codes
@@ -318,15 +339,30 @@ class WindowsKeySynthesizer(KeySynthesizerBase):
         # MapVirtualKeyW translates a virtual-key code to its hardware
         # scancode under the current keyboard layout.  We populate
         # KEYBDINPUT.wScan with this so synthesised events look like
-        # physical keystrokes — necessary for remote-desktop tools
+        # physical keystrokes. Necessary for remote-desktop tools
         # (TeamViewer, RDP, VNC, AnyDesk) that forward keystrokes
         # *by scancode* over the wire.  With wScan=0, those tools
         # either drop the event or forward it with broken modifier
         # state, so Ctrl+V / Ctrl+C / Ctrl+click silently no-op on the
         # remote machine.  Local Windows apps key off VK and ignore
         # wScan, so this is backwards-compatible.
+        #
+        # MapVirtualKeyW also serves the scancode-mode character path:
+        # MAPVK_VK_TO_VSC for the scancode itself, MAPVK_VK_TO_CHAR for
+        # the dead-key probe (bit 31 set on return = this VK produces a
+        # dead key on the active layout).
         self._user32.MapVirtualKeyW.argtypes = [wintypes.UINT, wintypes.UINT]
         self._user32.MapVirtualKeyW.restype = wintypes.UINT
+
+        # GetKeyState reports the toggle state of Caps Lock (bit 0).
+        # GetAsyncKeyState reports whether Shift is physically held
+        # right now (high bit). Both feed the scancode-mode dispatch
+        # in _resolve_char_scancode so we emit the correct shift
+        # wrap regardless of OS-side caps / shift state.
+        self._user32.GetKeyState.argtypes = [ctypes.c_int]
+        self._user32.GetKeyState.restype = wintypes.SHORT
+        self._user32.GetAsyncKeyState.argtypes = [ctypes.c_int]
+        self._user32.GetAsyncKeyState.restype = wintypes.SHORT
 
         # Check UIAccess status
         self._has_ui_access = self._check_ui_access()
@@ -426,12 +462,30 @@ class WindowsKeySynthesizer(KeySynthesizerBase):
         )
 
     def send_text(self, text: str) -> None:
-        """
-        Type a Unicode string using ``KEYEVENTF_UNICODE``.
+        """Type a string via scancode injection where possible, falling
+        back to ``KEYEVENTF_UNICODE`` per character.
 
-        Each character is sent as a key-down + key-up pair with its
-        UTF-16 code point in ``wScan``.  This bypasses the keyboard
-        layout entirely — any Unicode character works, including emoji.
+        Dispatch
+        --------
+        For each char we try ``_make_char_scancode_events`` first.  When
+        that returns a result, the char goes out as a real ``WM_KEYDOWN``
+        with the proper VK derived from the scancode (the same path a
+        physical keystroke takes).  Apps that listen for ``WM_KEYDOWN``
+        rather than ``WM_CHAR`` (Blender shortcuts, VirtualBox forwarded
+        input to the guest VM, DirectInput games, CAD tools) only see
+        clicked letters via this path. The Windows on-screen keyboard
+        uses scancode mode for the same reason.
+
+        When ``_make_char_scancode_events`` returns ``None`` we fall
+        back to ``_make_unicode_events`` for that char alone. UNICODE
+        injection is layout-independent and covers any Unicode point
+        including emoji and CJK, but produces a ``VK_PACKET`` event
+        that some apps filter out.  See ``_resolve_char_scancode`` for
+        the exhaustive list of fall-back cases.
+
+        Mixing modes inside one ``send_text`` call is fine: each char
+        is one or two ``INPUT`` events, the kernel processes the
+        array in order, and target apps see them as a normal sequence.
 
         Args:
             text: String to type (any length).
@@ -441,7 +495,11 @@ class WindowsKeySynthesizer(KeySynthesizerBase):
 
         events: List[INPUT] = []
         for char in text:
-            events.extend(self._make_unicode_events(char))
+            scancode_events = self._make_char_scancode_events(char)
+            if scancode_events is not None:
+                events.extend(scancode_events)
+            else:
+                events.extend(self._make_unicode_events(char))
 
         self._inject(events)
         self._log_send(f"text='{text}'")
@@ -465,13 +523,27 @@ class WindowsKeySynthesizer(KeySynthesizerBase):
         correctly.  (BackSpace would break Slack et al., but those
         aren't terminals.)
         """
+        # The typed-replacement portion uses the same scancode-first
+        # dispatch as send_text so prediction-pill insertion in
+        # Blender / VirtualBox / DirectInput apps produces real
+        # WM_KEYDOWN events. See send_text and _resolve_char_scancode
+        # for the rationale.
+        def _typed_events_for(s: str) -> List[INPUT]:
+            out: List[INPUT] = []
+            for char in s:
+                scancode_events = self._make_char_scancode_events(char)
+                if scancode_events is not None:
+                    out.extend(scancode_events)
+                else:
+                    out.extend(self._make_unicode_events(char))
+            return out
+
         if self._foreground_is_terminal():
             events: List[INPUT] = []
             for _ in range(backspace_count):
                 events.append(self._make_key_event(VK_BACK, key_down=True))
                 events.append(self._make_key_event(VK_BACK, key_down=False))
-            for char in text:
-                events.extend(self._make_unicode_events(char))
+            events.extend(_typed_events_for(text))
             if events:
                 self._inject(events)
             self._log_send(
@@ -479,7 +551,7 @@ class WindowsKeySynthesizer(KeySynthesizerBase):
             )
             return
 
-        events: List[INPUT] = []
+        events = []
 
         if backspace_count > 0:
             # Hold Shift, press Left N times, release Shift → selects N chars
@@ -490,8 +562,7 @@ class WindowsKeySynthesizer(KeySynthesizerBase):
             events.append(self._make_key_event(VK_SHIFT, key_down=False))
 
         # Typing the replacement overwrites the selection
-        for char in text:
-            events.extend(self._make_unicode_events(char))
+        events.extend(_typed_events_for(text))
 
         self._inject(events)
         self._log_send(
@@ -668,6 +739,206 @@ class WindowsKeySynthesizer(KeySynthesizerBase):
         inp._input.ki.dwExtraInfo = 0
         return inp
 
+    def _resolve_char_scancode(
+        self, char: str,
+    ) -> Optional[Tuple[int, int, bool]]:
+        """Resolve a character to ``(vk, scancode, needs_shift)`` for
+        scancode-mode injection, or ``None`` to signal the caller to
+        fall back to ``KEYEVENTF_UNICODE``.
+
+        Why this exists
+        ---------------
+        ``KEYEVENTF_UNICODE`` synthesises a ``WM_KEYDOWN`` with the
+        sentinel ``VK_PACKET (0xE7)`` followed by ``WM_CHAR``.  Apps
+        that read raw scancodes or filter on real VKs (Blender's GHOST
+        layer, VirtualBox's keyboard filter driver, DirectInput games,
+        many CAD / DAW tools) ignore ``VK_PACKET`` events entirely, so
+        clicked letters silently no-op there even though Notepad, chat
+        apps, and browsers handle them fine.
+
+        ``KEYEVENTF_SCANCODE`` instead tells the OS "this is a physical
+        key with this scancode."  The OS looks up the VK from the
+        scancode using the active layout and dispatches a normal
+        ``WM_KEYDOWN(VK_X)`` plus ``WM_CHAR``.  Indistinguishable from
+        a real keypress, which is why the Windows OSK uses this mode.
+
+        When we return None
+        -------------------
+        - ``char`` is non-ASCII (>= U+0080).  These would need
+          per-layout scancodes that may not exist.  UNICODE mode covers
+          every code point, so the fallback is safe and lossless.
+        - ``VkKeyScanW`` returns -1: the char has no single-keystroke
+          mapping on the active layout (typing ``ñ`` on US English).
+        - The layout requires AltGr (Ctrl+Alt) or a bare Ctrl modifier
+          to type the char (German ``@`` is AltGr+Q).  We don't try to
+          synthesise AltGr because its semantics vary across layouts.
+        - The VK is a dead-key trigger on the active layout
+          (``MAPVK_VK_TO_CHAR`` returns a value with bit 31 set).
+          Sending the scancode would arm a dead-key composition that
+          consumes the next keypress, not produce the character.
+        - Shift is physically held by the user *and* this char doesn't
+          need shift.  We can't safely release a key the user is
+          holding; UNICODE bypasses the shift state entirely.
+
+        Caps Lock handling
+        ------------------
+        ``VkKeyScanW`` returns the shift state assuming Caps Lock is
+        off.  For alphabetic chars, the OS XORs Caps Lock with the
+        Shift state.  We query ``GetKeyState(VK_CAPITAL)`` and flip
+        ``needs_shift`` accordingly, so a clicked lowercase ``a``
+        types ``a`` even when the user has the OS Caps Lock LED on.
+
+        Args:
+            char: Single character to resolve.
+
+        Returns:
+            ``(vk, scancode, needs_shift)`` tuple suitable for
+            ``_make_char_scancode_events``, or ``None`` to fall back.
+        """
+        if not char or len(char) != 1:
+            return None
+        if ord(char) >= 0x80:
+            return None  # non-ASCII: UNICODE handles the full range
+        try:
+            raw = self._user32.VkKeyScanW(char)
+        except (OSError, ValueError):
+            return None
+        # SHORT-typed: -1 indicates "no mapping on this layout."
+        if raw == -1:
+            return None
+        vk = raw & 0xFF
+        if vk == 0 or vk == 0xFF:
+            return None
+        shift_state = (raw >> 8) & 0xFF
+        # Bits: 0=Shift, 1=Ctrl, 2=Alt. Anything beyond Shift means
+        # the layout needs a chord we don't synthesise here.
+        if shift_state & 0b110:
+            return None
+        layout_shift = bool(shift_state & 1)
+
+        # Dead-key probe. MapVirtualKeyW(vk, MAPVK_VK_TO_CHAR) returns
+        # the unshifted char with bit 31 set when the VK is a dead-key
+        # trigger on this layout (e.g. apostrophe on US-International).
+        try:
+            dead_probe = self._user32.MapVirtualKeyW(vk, MAPVK_VK_TO_CHAR)
+        except (OSError, ValueError):
+            return None
+        if dead_probe & 0x80000000:
+            return None
+
+        try:
+            scancode = self._user32.MapVirtualKeyW(vk, MAPVK_VK_TO_VSC)
+        except (OSError, ValueError):
+            return None
+        if scancode == 0:
+            return None
+
+        needs_shift = layout_shift
+        # OS Caps Lock inverts shift for letters only. Digits and
+        # punctuation are unaffected by Caps Lock.
+        if char.isalpha():
+            try:
+                caps_on = bool(self._user32.GetKeyState(VK_CAPITAL) & 1)
+            except (OSError, ValueError):
+                caps_on = False
+            if caps_on:
+                needs_shift = not needs_shift
+
+        # If shift is currently physically held and we don't want
+        # shift for this char, we'd produce the wrong character.
+        # We can't release the user's physical shift, so bail to
+        # UNICODE which bypasses shift state entirely.
+        try:
+            shift_held = bool(
+                self._user32.GetAsyncKeyState(VK_SHIFT) & 0x8000,
+            )
+        except (OSError, ValueError):
+            shift_held = False
+        if shift_held and not needs_shift:
+            return None
+
+        return vk, scancode, needs_shift
+
+    def _make_char_scancode_events(self, char: str) -> Optional[List[INPUT]]:
+        """Build scancode-mode INPUT events for a character, or
+        return ``None`` to signal the caller should fall back to
+        ``_make_unicode_events``.
+
+        Wraps with a synthetic Shift press/release when the char needs
+        shift but shift isn't already held.  Skips the wrap when shift
+        is already held (whether by the user or by the OSK's sticky
+        modifier state) since adding a redundant press would later be
+        unbalanced by our release.
+
+        Returns ``None`` for the same conditions as
+        ``_resolve_char_scancode``.
+        """
+        resolved = self._resolve_char_scancode(char)
+        if resolved is None:
+            return None
+        vk, scancode, needs_shift = resolved
+
+        try:
+            shift_already_held = bool(
+                self._user32.GetAsyncKeyState(VK_SHIFT) & 0x8000,
+            )
+        except (OSError, ValueError):
+            shift_already_held = False
+
+        events: List[INPUT] = []
+        wrap_with_shift = needs_shift and not shift_already_held
+        if wrap_with_shift:
+            try:
+                shift_sc = self._user32.MapVirtualKeyW(
+                    VK_SHIFT, MAPVK_VK_TO_VSC,
+                )
+            except (OSError, ValueError):
+                shift_sc = 0
+            # If we couldn't resolve a shift scancode, bail to UNICODE
+            # rather than send half the events.
+            if shift_sc == 0:
+                return None
+            events.append(self._make_scancode_event(shift_sc, key_down=True))
+
+        events.append(self._make_scancode_event(scancode, key_down=True))
+        events.append(self._make_scancode_event(scancode, key_down=False))
+
+        if wrap_with_shift:
+            try:
+                shift_sc = self._user32.MapVirtualKeyW(
+                    VK_SHIFT, MAPVK_VK_TO_VSC,
+                )
+            except (OSError, ValueError):
+                shift_sc = 0
+            if shift_sc == 0:
+                # We already pressed shift down; without a release the
+                # OS would see a stuck shift. Synthesise a VK-mode
+                # release as a safety net (matches what
+                # release_modifier does).
+                events.append(self._make_key_event(VK_SHIFT, key_down=False))
+            else:
+                events.append(self._make_scancode_event(shift_sc, key_down=False))
+
+        return events
+
+    def _make_scancode_event(self, scancode: int, key_down: bool) -> INPUT:
+        """Build a pure-scancode INPUT event (``wVk=0``,
+        ``KEYEVENTF_SCANCODE`` set).  Used by the character-typing
+        path where we want the OS to derive the VK from the scancode,
+        same as a physical keypress.
+        """
+        flags = KEYEVENTF_SCANCODE
+        if not key_down:
+            flags |= KEYEVENTF_KEYUP
+        inp = INPUT()
+        inp.type = INPUT_KEYBOARD
+        inp._input.ki.wVk = 0
+        inp._input.ki.wScan = scancode
+        inp._input.ki.dwFlags = flags
+        inp._input.ki.time = 0
+        inp._input.ki.dwExtraInfo = 0
+        return inp
+
     def _make_unicode_events(self, char: str) -> List[INPUT]:
         """
         Build INPUT structures for a Unicode character (key-down + key-up).
@@ -675,6 +946,11 @@ class WindowsKeySynthesizer(KeySynthesizerBase):
         Uses ``KEYEVENTF_UNICODE`` with the character's UTF-16 code point
         in ``wScan``.  For characters outside the Basic Multilingual Plane
         (code point > 0xFFFF), sends a surrogate pair.
+
+        This is the **fallback** path: see ``_resolve_char_scancode``
+        for why we prefer SCANCODE mode for ASCII input. UNICODE is
+        used when the char is non-ASCII, has no layout mapping, or
+        needs a chord (AltGr) we can't safely synthesise.
 
         Args:
             char: Single Unicode character.

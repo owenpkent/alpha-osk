@@ -93,29 +93,47 @@ component that injects keystrokes into other applications.
 On Windows, Alpha-OSK injects keystrokes using the Win32 **`SendInput()`**
 function from `user32.dll`, accessed via Python's built-in `ctypes` module.
 
-### Two Injection Modes
+### Three Injection Modes
 
 | Mode | Used For | How It Works |
 |------|----------|--------------|
-| **Virtual-Key** | Special keys, modifier combos | Sends `KEYBDINPUT` with virtual-key code (`wVk`) |
-| **Unicode** | Normal text characters | Sends `KEYBDINPUT` with `KEYEVENTF_UNICODE` flag and UTF-16 code point in `wScan` |
+| **Virtual-Key** | Special keys, modifier combos, modifier+punctuation chords | Sends `KEYBDINPUT` with the virtual-key code in `wVk` and the layout scancode in `wScan` |
+| **Scancode** | ASCII text characters (default) | Sends `KEYBDINPUT` with `wVk = 0`, the layout scancode in `wScan`, and the `KEYEVENTF_SCANCODE` flag set |
+| **Unicode** | Per-character fallback when scancode is unsafe | Sends `KEYBDINPUT` with `wVk = 0`, the UTF-16 code point in `wScan`, and the `KEYEVENTF_UNICODE` flag set |
 
-### Why Unicode Mode?
+### Why Scancode Mode for ASCII
 
-Unicode mode (`KEYEVENTF_UNICODE`) is layout-independent — it sends the
-character's code point directly, so it works regardless of the user's
-keyboard layout.  This means Alpha-OSK correctly types accented characters,
-CJK, emoji, and any other Unicode character without needing to know whether
-the user has a US, UK, French, or Japanese keyboard layout.
+`KEYEVENTF_UNICODE` synthesises a `WM_KEYDOWN` event with the sentinel virtual-key code `VK_PACKET` (`0xE7`), followed by `WM_CHAR`. Many applications filter on real virtual-key codes and ignore `VK_PACKET`, or read raw scancodes directly via `RegisterRawInputDevices` and never see the Unicode-injected event at all. The list of confirmed cases that broke under pure-Unicode injection: Blender (the GHOST input layer keys off the real VK and scancode for shortcuts and viewport ops), VirtualBox (the kernel-mode keyboard filter forwards by scancode to the guest VM), DirectInput-based games and DAWs, raw-input-based 3D and CAD tools (Maya, Houdini, ZBrush, SolidWorks, Fusion 360 and similar). The general pattern: any application that wants `WM_KEYDOWN` rather than `WM_CHAR` was unreachable from Unicode mode.
+
+`KEYEVENTF_SCANCODE` instead tells the OS "this is a physical key with this scancode." The OS looks up the virtual key from the scancode using the active layout and dispatches a normal `WM_KEYDOWN(VK_X)` plus `WM_CHAR`. Indistinguishable from a real keypress, which is why the Windows on-screen keyboard uses this mode.
+
+Resolution path for a single ASCII character:
+
+1. `VkKeyScanW(char)` returns the VK plus the layout shift state.
+2. `MapVirtualKeyW(vk, MAPVK_VK_TO_VSC)` returns the hardware scancode under the active layout.
+3. `MapVirtualKeyW(vk, MAPVK_VK_TO_CHAR)` returns the unshifted character with bit 31 set when the VK is a dead-key trigger on this layout (apostrophe on US-International, grave on French AZERTY). Bit-31 results are skipped: arming a dead-key composition would consume the next keypress instead of producing the character.
+4. The OS Caps Lock state is folded in via `GetKeyState(VK_CAPITAL)`, so a clicked lowercase `a` produces `a` even when the OS Caps Lock LED is on.
+5. A synthetic Shift press/release wraps the keystroke when needed and not already held. The wrap is skipped when Shift is already physically held (whether by the user or the OSK's sticky modifier state) so the trailing release does not unbalance the user's held key.
+
+### When Scancode Mode Falls Back to Unicode
+
+Per-character fallback to `KEYEVENTF_UNICODE` (the call still completes; only that one character takes the alternate path) when any of the following holds:
+
+- The character is non-ASCII (≥ U+0080). Unicode mode covers the entire Unicode range including emoji, CJK, and accented chars not on the active layout.
+- `VkKeyScanW` returns -1 (no single-keystroke mapping on the active layout, e.g. typing `ñ` on US English).
+- The layout requires AltGr (Ctrl+Alt) or a bare Ctrl modifier to produce the char (German `@` is AltGr+Q). We do not synthesise AltGr because its semantics vary across layouts.
+- The VK is a dead-key trigger on the active layout (bit 31 set on the `MAPVK_VK_TO_CHAR` probe).
+- Shift is currently physically held *and* the character does not need shift. We cannot safely release a key the user is holding; Unicode mode bypasses shift state entirely for that character.
 
 ### Implementation
 
-The Windows synthesizer lives in `src/platform/windows.py`.  Key features:
+The Windows synthesizer lives in `src/platform/windows.py`. Key features:
 
 - **Zero external dependencies** — uses only `ctypes` (Python stdlib).
 - **Atomic injection** — all events for a keystroke (modifier press → key
   press → key release → modifier release) are sent in a single `SendInput`
   call, preventing race conditions with other input.
+- **Per-character mode dispatch** — `send_text` and the typed portion of `replace_text` try the scancode path first per character, falling back to the Unicode path on a per-character basis. Mixed strings (e.g. `"Hi 👋"`) interleave the modes naturally; the target app sees the events in order.
 - **Select-and-replace for predictions** — when a prediction is selected,
   the typed prefix is selected via Shift+Left (not deleted via Backspace),
   then the replacement text overwrites the selection. This prevents Electron
@@ -125,7 +143,7 @@ The Windows synthesizer lives in `src/platform/windows.py`.  Key features:
   navigation keys (arrows, Home, End, Insert, Delete, Page Up/Down) which
   require it on Windows.
 - **Surrogate pair support** — characters outside the Basic Multilingual
-  Plane (code point > 0xFFFF) are sent as UTF-16 surrogate pairs.
+  Plane (code point > 0xFFFF) take the Unicode path automatically and are sent as UTF-16 surrogate pairs.
 
 ---
 
@@ -661,7 +679,9 @@ higher-integrity windows) without granting broad admin access.  See the
 |---------|-------|-----|
 | Keys don't appear in any app | SendInput failing | Check logs for errors; restart Alpha-OSK |
 | Keys don't appear in **elevated** apps | No UIAccess | Sign with EV cert and install to Program Files |
-| Keys appear but wrong characters | Layout mismatch | Alpha-OSK uses Unicode mode — should be layout-independent. File a bug. |
+| Keys don't appear in **Blender / VirtualBox / a DirectInput game** | Pre-1.x.y versions used Unicode-only injection (`VK_PACKET`) which raw-input apps filter out | Update to a build that includes scancode-mode dispatch (see "Three Injection Modes" above). If still broken, file a bug with the app name and the foreground-window class. |
+| Keys appear but **wrong case** in a specific app | OS Caps Lock LED out of sync with the OSK's Caps button | Toggle the OSK Caps button to resync, or press the physical Caps Lock once. The scancode path queries the OS Caps Lock LED, so the OSK side reflects whatever the OS thinks. |
+| Keys appear but wrong characters on a non-US layout | Most chars take the scancode path which is layout-aware via `VkKeyScanW`; a few exotic chars fall back to Unicode mode (also layout-independent). File a bug with the layout name and the failing chars. |
 
 ### Window Behaviour Issues
 
@@ -703,7 +723,7 @@ Or check the startup log output:
 |--------|-------|---------|
 | **Key synthesis** | `xdotool` (X11) or `ydotool` (Wayland) via subprocess | `SendInput` API via `ctypes` |
 | **External deps** | `sudo apt install xdotool` | None (built-in) |
-| **Unicode handling** | xdotool `type` command | `KEYEVENTF_UNICODE` flag |
+| **Text injection** | xdotool `type` (per-char Unicode) | Per-char dispatch: `KEYEVENTF_SCANCODE` for ASCII, `KEYEVENTF_UNICODE` fallback for non-ASCII / dead-key / AltGr / unsafe-shift |
 | **Focus prevention** | Qt flags only | Qt flags + `WS_EX_NOACTIVATE` |
 | **Elevated access** | Not applicable (X11/Wayland don't have integrity levels) | UIAccess with EV signing |
 | **Config directory** | `~/.config/alpha-osk/` | `%APPDATA%\alpha-osk\` |
@@ -744,14 +764,11 @@ Or check the startup log output:
    rather than depending on `pywin32`.  This means **zero additional
    dependencies** on Windows — `ctypes` is part of the Python stdlib.
 
-2. **Unicode mode for text**: Rather than simulating individual virtual-key
-   presses (which depends on keyboard layout), we use
-   `KEYEVENTF_UNICODE` for all printable characters.  This is
-   layout-independent and supports the full Unicode range.
+2. **Scancode mode for ASCII text, Unicode mode as fallback**: Originally we used `KEYEVENTF_UNICODE` for every printable character because it is layout-independent and supports the full Unicode range. That choice broke any application that filters on real virtual-key codes or reads raw scancodes (Blender, VirtualBox, DirectInput games, raw-input 3D / CAD / audio software) because Unicode injection synthesises a `WM_KEYDOWN(VK_PACKET)` that those apps ignore. The current default is `KEYEVENTF_SCANCODE`, which produces a normal `WM_KEYDOWN(VK_X)` derived from the scancode under the active layout. Per-character fallback to `KEYEVENTF_UNICODE` covers non-ASCII chars, dead-key triggers, AltGr-required chars, and the unsafe corner case where the user is physically holding Shift but the char does not need shift. See "Three Injection Modes" above for the full resolution path.
 
 3. **Virtual-key mode for specials**: Special keys (Backspace, Enter,
    F-keys, arrows) and modifier combinations (Ctrl+C) use virtual-key
-   codes, which is the correct approach for non-character keys.
+   codes, which is the correct approach for non-character keys. The scancode is also populated in `wScan` so remote-desktop forwarding works.
 
 4. **UIAccess via manifest**: Rather than requiring the user to run as
    Administrator (which has security implications), we use the UIAccess

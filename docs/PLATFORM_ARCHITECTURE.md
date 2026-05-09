@@ -155,7 +155,8 @@ Defines `KeySynthesizerBase` with these abstract methods:
 
 - Uses `ctypes.windll.user32.SendInput` directly
 - Virtual-key mode for special keys and modifier combos
-- Unicode mode (`KEYEVENTF_UNICODE`) for text characters
+- **Scancode mode (`KEYEVENTF_SCANCODE`) is the default for ASCII text characters** so apps that read raw scancodes or filter on real virtual-key codes (Blender, VirtualBox, DirectInput games) receive normal `WM_KEYDOWN(VK_X)` events instead of the `VK_PACKET` sentinel that `KEYEVENTF_UNICODE` produces.
+- Unicode mode (`KEYEVENTF_UNICODE`) is the per-character fallback for non-ASCII chars, dead-key triggers, AltGr-required chars, and the unsafe corner case where Shift is physically held but the char does not need shift. Same path covers emoji and CJK.
 - Handles extended keys, surrogate pairs, UIAccess detection
 
 ---
@@ -210,11 +211,20 @@ release would also clobber a modifier the user is physically holding
 pressKey("a") in QML
     → KeyboardBridge._send_text("a")
         → WindowsKeySynthesizer.send_text("a")
-            → Build KEYBDINPUT with KEYEVENTF_UNICODE, wScan=ord('a')
+            → _make_char_scancode_events("a"):
+                VkKeyScanW("a") → VK_A, no shift
+                MapVirtualKeyW(VK_A, MAPVK_VK_TO_VSC) → 0x1E
+                MapVirtualKeyW(VK_A, MAPVK_VK_TO_CHAR) → 0x61 (no dead-key bit)
+                GetKeyState(VK_CAPITAL) → adjusts shift if Caps Lock LED on
+            → Build two KEYBDINPUTs (down, up) with wVk=0, wScan=0x1E,
+              dwFlags=KEYEVENTF_SCANCODE [+ KEYEVENTF_KEYUP]
             → SendInput(2, [key_down, key_up], sizeof(INPUT))
                 → Windows input queue receives the event
-                    → Focused application receives the keystroke
+                    → OS looks up VK from scancode, dispatches WM_KEYDOWN(VK_A)
+                        → Focused application receives the keystroke
 ```
+
+If `_make_char_scancode_events` returns `None` (non-ASCII char, dead-key trigger, AltGr required, unsafe shift state) the call falls back to `_make_unicode_events`, which builds the same INPUT pair with `KEYEVENTF_UNICODE` and the UTF-16 code point in `wScan`.
 
 For modifier combos (Ctrl+C):
 ```
@@ -438,16 +448,17 @@ assert synth._resolve_vk("F1") == 0x70
 - Both add unnecessary abstraction layers and dependencies.
 - Our implementation is ~300 lines and does exactly what we need.
 
-### Why Unicode Mode for Text?
+### Why Scancode Mode for ASCII Text? (supersedes the original Unicode-only decision)
 
-**Decision**: Use `KEYEVENTF_UNICODE` for all printable characters.
+**Decision**: Use `KEYEVENTF_SCANCODE` as the default for ASCII text characters; fall back to `KEYEVENTF_UNICODE` per character when scancode is unsafe.
 
 **Rationale**:
-- Layout-independent: works with any keyboard layout.
-- Supports the full Unicode range (including emoji via surrogate pairs).
-- Simpler than mapping characters → virtual key codes → scan codes.
-- The only downside is that some legacy applications don't support
-  Unicode input events, but this is extremely rare in modern Windows.
+- `KEYEVENTF_UNICODE` produces a `WM_KEYDOWN(VK_PACKET = 0xE7)` followed by `WM_CHAR`. Many real applications filter on real virtual-key codes or read raw scancodes via `RegisterRawInputDevices`. Those apps see clicked letters as nothing. Confirmed broken under pure-Unicode injection: Blender, VirtualBox, DirectInput-based games and DAWs, raw-input 3D and CAD tools (Maya, Houdini, ZBrush, SolidWorks, Fusion 360 and similar). The Windows on-screen keyboard works in those apps because it uses `KEYEVENTF_SCANCODE`.
+- `KEYEVENTF_SCANCODE` produces a normal `WM_KEYDOWN(VK_X)` derived from the scancode under the active layout. Indistinguishable from a physical keypress.
+- Resolution path is layout-aware: `VkKeyScanW` → VK + shift state, `MapVirtualKeyW` → scancode, `GetKeyState(VK_CAPITAL)` → folds Caps Lock LED into the shift wrap, `MapVirtualKeyW(.., MAPVK_VK_TO_CHAR)` bit 31 → skips dead-key triggers.
+- Unicode mode is preserved as a per-character fallback for non-ASCII (≥ U+0080), unmappable chars on the active layout, AltGr-required chords, dead-key triggers, and the corner case where Shift is physically held but the char does not need shift (we cannot safely release a key the user is holding). Same path covers emoji and CJK via UTF-16 surrogate pairs.
+
+**Original decision (deprecated)**: "Use `KEYEVENTF_UNICODE` for all printable characters." Reasoning at the time: layout-independent, full Unicode range, simpler than virtual-key + scancode resolution. The "rare in modern Windows" assumption about apps not supporting Unicode injection was wrong: any app that uses raw-input or DirectInput, including a sizeable fraction of professional creative and virtualisation software, was unreachable. The current dispatch keeps Unicode's coverage where Unicode's coverage actually matters (non-ASCII, dead keys) without paying its compatibility cost on the common case.
 
 ### Why WS_EX_NOACTIVATE via SetWindowLongW?
 

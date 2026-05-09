@@ -237,7 +237,13 @@ class TestWindowsReplaceText:
         synth._inject = lambda events: captured.append(list(events))
         synth._make_key_event = lambda vk, key_down: ("vk", vk, key_down)
         synth._make_unicode_events = lambda c: [("uni", c)]
-        # Bypass GetForegroundWindow / GetClassNameW directly — mocking
+        # Force the per-char dispatch in replace_text to take the
+        # UNICODE branch so this suite can keep asserting the
+        # branching behaviour of replace_text itself, independent of
+        # the scancode-resolution logic which has its own coverage in
+        # TestWindowsScancodeDispatch.
+        synth._make_char_scancode_events = lambda c: None
+        # Bypass GetForegroundWindow / GetClassNameW directly. Mocking
         # them via ctypes is brittle off-Windows.
         synth._get_foreground_window_class = lambda: foreground_class
         return synth, captured
@@ -380,6 +386,275 @@ class TestWindowsSendKeyPunctuationChord:
             ("vk", VK_CONTROL, True),
             ("uni", "ñ"),
             ("vk", VK_CONTROL, False),
+        ]]
+
+
+class TestWindowsScancodeDispatch:
+    """``send_text`` and the typed portion of ``replace_text`` route ASCII
+    chars through scancode-mode injection so they reach apps that listen
+    for ``WM_KEYDOWN`` rather than ``WM_CHAR`` (Blender, VirtualBox,
+    DirectInput games). Non-ASCII / dead-key / AltGr chars fall back to
+    ``KEYEVENTF_UNICODE`` per-char.
+
+    These tests stub ``_user32`` so they run on the Linux CI lane the
+    same as on Windows. The stub mimics the Win32 calls
+    ``_resolve_char_scancode`` makes:
+
+    - ``VkKeyScanW(ch)``: returns the SHORT-encoded ``(shift_state << 8) |
+      vk``, or -1 if the char has no single-keystroke mapping.
+    - ``MapVirtualKeyW(vk, MAPVK_VK_TO_VSC)``: VK → scancode.
+    - ``MapVirtualKeyW(vk, MAPVK_VK_TO_CHAR)``: VK → unshifted char with
+      bit 31 set when the VK triggers a dead-key composition.
+    - ``GetKeyState(VK_CAPITAL)``: bit 0 = Caps Lock LED on.
+    - ``GetAsyncKeyState(VK_SHIFT)``: high bit = Shift physically held
+      right now.
+    """
+
+    # US-layout reference values used across the tests.
+    _US = {
+        # char → VkKeyScanW return: (shift_state << 8) | vk
+        "VK_SCAN": {
+            "a": 0x0041,  # VK_A, no shift
+            "A": 0x0141,  # VK_A + shift
+            "z": 0x005A,
+            "1": 0x0031,
+            "!": 0x0131,  # Shift+1
+            "-": 0x00BD,  # VK_OEM_MINUS
+            ".": 0x00BE,
+            "@": 0x0232,  # Ctrl required (US-International for some chars; here
+                          # we use it just to drive the AltGr/Ctrl-required path)
+        },
+        # vk → scancode
+        "VSC": {
+            0x10: 0x2A,   # VK_SHIFT → left shift scancode
+            0x41: 0x1E,   # A
+            0x5A: 0x2C,   # Z
+            0x31: 0x02,   # 1
+            0xBD: 0x0C,   # -
+            0xBE: 0x34,   # .
+        },
+        # vk → MAPVK_VK_TO_CHAR result. Bit 31 set = dead key.
+        "CHAR": {
+            0x41: 0x61,
+            0x5A: 0x7A,
+            0x31: 0x31,
+            0xBD: 0x2D,
+            0xBE: 0x2E,
+        },
+    }
+
+    def _make_synth(
+        self,
+        *,
+        vk_scan: Optional[Dict[str, int]] = None,
+        vsc: Optional[Dict[int, int]] = None,
+        char_probe: Optional[Dict[int, int]] = None,
+        caps_on: bool = False,
+        shift_held: bool = False,
+    ):
+        from src.platform import windows as win_mod
+
+        # ``dict(base, **overrides)`` requires string keys; vsc/char_probe
+        # use int VK codes, so merge with ``|`` instead.
+        vk_scan = {**self._US["VK_SCAN"], **(vk_scan or {})}
+        vsc = {**self._US["VSC"], **(vsc or {})}
+        char_probe = {**self._US["CHAR"], **(char_probe or {})}
+
+        synth = win_mod.WindowsKeySynthesizer.__new__(win_mod.WindowsKeySynthesizer)
+        captured: list = []
+        synth._inject = lambda events: captured.append(list(events))
+
+        # Real _make_unicode_events would build INPUT structures; for
+        # tests we substitute a marker so the assertion shape is
+        # readable. The scancode helper builds real INPUT objects via
+        # _make_scancode_event, which we replace with a marker for the
+        # same reason.
+        synth._make_unicode_events = lambda c: [("uni", c)]
+        synth._make_scancode_event = (
+            lambda scancode, key_down: ("sc", scancode, key_down)
+        )
+        # _make_char_scancode_events also calls _make_key_event as a
+        # safety-net branch. We don't expect it to fire under any
+        # tested input, but stub it so an unexpected call surfaces
+        # as a clear marker rather than an AttributeError.
+        synth._make_key_event = lambda vk, key_down: ("vk_fallback", vk, key_down)
+
+        class _StubUser32:
+            def VkKeyScanW(self_inner, ch):
+                return vk_scan.get(ch, -1)
+
+            def MapVirtualKeyW(self_inner, vk, mode):
+                if mode == win_mod.MAPVK_VK_TO_VSC:
+                    return vsc.get(vk, 0)
+                if mode == win_mod.MAPVK_VK_TO_CHAR:
+                    return char_probe.get(vk, 0)
+                return 0
+
+            def GetKeyState(self_inner, vk):
+                return 1 if (vk == win_mod.VK_CAPITAL and caps_on) else 0
+
+            def GetAsyncKeyState(self_inner, vk):
+                return 0x8000 if (vk == win_mod.VK_SHIFT and shift_held) else 0
+
+        synth._user32 = _StubUser32()
+        return synth, captured
+
+    # ------------------------------------------------------------------ #
+    #  _resolve_char_scancode
+    # ------------------------------------------------------------------ #
+
+    def test_resolve_lowercase_letter(self):
+        synth, _ = self._make_synth()
+        assert synth._resolve_char_scancode("a") == (0x41, 0x1E, False)
+
+    def test_resolve_uppercase_letter_needs_shift(self):
+        synth, _ = self._make_synth()
+        assert synth._resolve_char_scancode("A") == (0x41, 0x1E, True)
+
+    def test_resolve_digit_no_shift(self):
+        synth, _ = self._make_synth()
+        assert synth._resolve_char_scancode("1") == (0x31, 0x02, False)
+
+    def test_resolve_shifted_punctuation_needs_shift(self):
+        synth, _ = self._make_synth()
+        assert synth._resolve_char_scancode("!") == (0x31, 0x02, True)
+
+    def test_caps_lock_inverts_shift_for_letters(self):
+        # With Caps Lock on, lowercase 'a' needs shift to produce 'a'
+        # (the OS uppercases by default), and uppercase 'A' no longer
+        # needs shift.
+        synth, _ = self._make_synth(caps_on=True)
+        assert synth._resolve_char_scancode("a") == (0x41, 0x1E, True)
+        assert synth._resolve_char_scancode("A") == (0x41, 0x1E, False)
+
+    def test_caps_lock_does_not_affect_digits(self):
+        synth, _ = self._make_synth(caps_on=True)
+        # Digits and punctuation are unaffected by Caps Lock.
+        assert synth._resolve_char_scancode("1") == (0x31, 0x02, False)
+        assert synth._resolve_char_scancode("!") == (0x31, 0x02, True)
+
+    def test_non_ascii_falls_back_to_unicode(self):
+        synth, _ = self._make_synth()
+        assert synth._resolve_char_scancode("ñ") is None
+        assert synth._resolve_char_scancode("é") is None
+        assert synth._resolve_char_scancode("漢") is None
+
+    def test_unmappable_char_falls_back(self):
+        # VkKeyScanW returns -1 for chars without a single-keystroke mapping.
+        synth, _ = self._make_synth(vk_scan={"x": -1})
+        # 'x' isn't in our US table either; explicit -1 here just for clarity.
+        assert synth._resolve_char_scancode("x") is None
+
+    def test_altgr_required_char_falls_back(self):
+        # Ctrl bit set in shift_state → return None (we don't synthesise AltGr).
+        # Stub a char where shift_state has Ctrl bit (0b010 = 0x02).
+        synth, _ = self._make_synth(vk_scan={"@": 0x0232})
+        assert synth._resolve_char_scancode("@") is None
+
+    def test_dead_key_char_falls_back(self):
+        # Set bit 31 on the MAPVK_VK_TO_CHAR result for VK_OEM_7
+        # (apostrophe), simulating US-International where ' is a dead key.
+        synth, _ = self._make_synth(
+            vk_scan={"'": 0x00DE},      # VK_OEM_7, no shift
+            vsc={0xDE: 0x28},
+            char_probe={0xDE: 0x80000027},  # 0x27 (apostrophe) + dead-key bit
+        )
+        assert synth._resolve_char_scancode("'") is None
+
+    def test_external_shift_held_blocks_no_shift_chars(self):
+        # If the user is physically holding Shift and we'd send a
+        # char that doesn't need shift, we'd produce the wrong char.
+        # Bail to UNICODE.
+        synth, _ = self._make_synth(shift_held=True)
+        assert synth._resolve_char_scancode("a") is None
+
+    def test_external_shift_held_ok_for_shift_chars(self):
+        # If shift is held and the char needs shift, that's fine —
+        # we just don't add a redundant wrap.
+        synth, _ = self._make_synth(shift_held=True)
+        assert synth._resolve_char_scancode("A") == (0x41, 0x1E, True)
+
+    # ------------------------------------------------------------------ #
+    #  _make_char_scancode_events
+    # ------------------------------------------------------------------ #
+
+    def test_lowercase_letter_no_shift_wrap(self):
+        synth, _ = self._make_synth()
+        events = synth._make_char_scancode_events("a")
+        assert events == [
+            ("sc", 0x1E, True),
+            ("sc", 0x1E, False),
+        ]
+
+    def test_uppercase_letter_wraps_with_shift(self):
+        synth, _ = self._make_synth()
+        events = synth._make_char_scancode_events("A")
+        assert events == [
+            ("sc", 0x2A, True),   # left shift down
+            ("sc", 0x1E, True),   # A down
+            ("sc", 0x1E, False),  # A up
+            ("sc", 0x2A, False),  # left shift up
+        ]
+
+    def test_uppercase_letter_skips_wrap_when_shift_already_held(self):
+        # Shift held by sticky modifier or physical key: don't double up.
+        synth, _ = self._make_synth(shift_held=True)
+        events = synth._make_char_scancode_events("A")
+        assert events == [
+            ("sc", 0x1E, True),
+            ("sc", 0x1E, False),
+        ]
+
+    def test_returns_none_when_resolve_fails(self):
+        synth, _ = self._make_synth()
+        assert synth._make_char_scancode_events("漢") is None
+
+    # ------------------------------------------------------------------ #
+    #  send_text dispatch
+    # ------------------------------------------------------------------ #
+
+    def test_send_text_pure_ascii_uses_scancode(self):
+        synth, captured = self._make_synth()
+        synth.send_text("Hi")
+        # Real _make_char_scancode_events would resolve scancodes for
+        # H (shift+VK_H) and i (VK_I); our stub doesn't include H/i in
+        # the VSC map so the events depend on what the resolver finds.
+        # Check the simpler "az" pair instead.
+        captured.clear()
+        synth.send_text("az")
+        assert captured == [[
+            ("sc", 0x1E, True), ("sc", 0x1E, False),
+            ("sc", 0x2C, True), ("sc", 0x2C, False),
+        ]]
+
+    def test_send_text_mixed_ascii_and_emoji(self):
+        # ASCII goes scancode, emoji falls back to UNICODE within the
+        # same call. The order in the resulting INPUT array preserves
+        # text order so the target app sees the chars in sequence.
+        synth, captured = self._make_synth()
+        synth.send_text("a漢z")
+        assert captured == [[
+            ("sc", 0x1E, True), ("sc", 0x1E, False),
+            ("uni", "漢"),
+            ("sc", 0x2C, True), ("sc", 0x2C, False),
+        ]]
+
+    def test_send_text_empty_string_no_inject(self):
+        synth, captured = self._make_synth()
+        synth.send_text("")
+        assert captured == []
+
+    def test_send_text_all_unicode_when_layout_lacks_chars(self):
+        # If VkKeyScanW returns -1 for everything (e.g. typing on a
+        # keyboard layout that lacks Latin chars), every char falls
+        # back to UNICODE and nothing changes about behaviour vs the
+        # pre-scancode implementation.
+        synth, captured = self._make_synth(
+            vk_scan={"a": -1, "b": -1, "c": -1},
+        )
+        synth.send_text("abc")
+        assert captured == [[
+            ("uni", "a"), ("uni", "b"), ("uni", "c"),
         ]]
 
 
