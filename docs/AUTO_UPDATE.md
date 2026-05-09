@@ -173,3 +173,47 @@ Publish as an MSIX package to the Microsoft Store.
 ## Recommendation
 
 Start with **Option A** (GitHub Releases check). Add **Option C** (WinGet) as a low-effort bonus. Defer B and D until the user base warrants it.
+
+---
+
+## Update progress indicator (planned, T40)
+
+### Problem
+
+Reported after a 1.0.15 → 1.0.17 update: the new keyboard does come back (the relauncher fix from this release works), but there's a ~15-60 s gap between the installer's `taskkill /F /IM alpha-osk.exe` and the relauncher launching the new exe. During that gap **no UI is alive at all** (intentional per `_update_relauncher.py`'s docstring: "Failures are deliberately silent. There is no UI surface to report into."). For an accessibility audience that just lost their primary input method, that silence reads as "the update broke the keyboard." The user reported thinking it was broken until it eventually came back.
+
+The on-startup ✓ Updated toast we added in this release fires *after* the gap and helps confirm "yes, that worked", but it can't bridge the silence during the gap itself.
+
+### Where the gap comes from
+
+`_update_relauncher.run_relauncher` has three sequential waits, all silent:
+1. `_wait_for_parent_exit` — up to 60 s for the installer's taskkill to land (usually < 1 s).
+2. `time.sleep(_INSTALLER_GRACE_S)` — fixed 5 s for the installer to finish file copies.
+3. `_wait_for_new_exe` — up to 180 s polling for `$INSTDIR\alpha-osk.exe` mtime to advance past parent-death.
+
+So the floor is ~5 s and the ceiling is ~245 s. Real installs land at ~15-30 s on a healthy machine; AV scanning of the freshly-extracted DLLs can push it higher.
+
+### Proposed fix (two layers, tiered by effort)
+
+**Layer 1: pre-update expectation-setting in the live OSK** (small, ship first)
+Before `updater.py::download_and_install` spawns the installer, surface a non-modal toast in the running OSK: *"Installing v1.0.X. The keyboard will reappear in about 30 seconds."* The toast is visible for the few seconds until the installer's taskkill arrives. This alone resolves most of the "I thought it was broken" framing because the user knows the silence is expected. Implementation is a sibling to `updateAppliedToast` in `Main.qml` (call it `updateStartingToast`); fire it from a new `KeyboardBridge.notifyUpdateStarting(version)` slot called by `updater.py` immediately before the installer Popen.
+
+**Layer 2: visible relauncher splash during the gap** (larger, defer if Layer 1 is enough)
+Have `_update_relauncher` show a small always-on-top window for the duration of the wait. Three implementation options:
+
+- **A. PySide6 QSplashScreen**. The relauncher already runs from the same `alpha-osk.exe` that has Qt bundled, so no new dependencies. QSplashScreen is the canonical use case. Cost: ~1-2 s extra startup latency for `QApplication.__init__` in the relauncher process. Refactor the polling loops to fire from `QTimer.singleShot` so the splash gets a real event loop.
+- **B. ctypes Win32 native window**. Zero dependencies, no event-loop overhead. Cost: ~150 lines of CreateWindowExW + DefWindowProcW glue from scratch, easy to get wrong on HiDPI / dark-mode.
+- **C. Windows toast notification**. Fire-and-forget via PowerShell / BurntToast — appears in Action Center, no continuous status. Cheapest, but doesn't bridge the silence; just punctuates it.
+
+Recommendation: A, since Qt is already loaded, the visual matches the rest of the app, and the splash window can show a real progress message that updates as the relauncher transitions through its three phases ("Waiting for installer to finish…" → "Installing files…" → "Launching new keyboard…").
+
+### Acceptance criteria
+
+- A user updating from 1.0.17 to the next version sees a toast *before* the keyboard disappears that explicitly tells them the keyboard is about to be unavailable for ~30 s.
+- (Layer 2) During the gap, a small "Updating Alpha-OSK…" window is visible on screen with a progress message reflecting the current relauncher phase.
+- The post-update ✓ Updated toast still fires after relaunch (no regression).
+- If the relauncher fails (Popen raises, timeout), the splash from Layer 2 surfaces an error message + a path to the install log instead of vanishing silently.
+
+### Why not just make the installer non-silent?
+
+The interactive NSIS UI would solve the visibility problem trivially, but at the cost of a UAC prompt + a Next/Next/Next dialog the user has to drive *without a keyboard*. Silent install is the right default for our audience; the fix has to live around it, not replace it.

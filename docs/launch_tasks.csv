@@ -75,3 +75,4 @@ M25,Outreach,Post-launch,Capture testimonials from first 5-10 users (15-min call
 M26,Asset,Post-launch,Update press kit + landing page with launch numbers (downloads + testimonials),Pending,M25,2026-06-08,M,assets/press/
 M27,Content,Post-launch,Founder-arc Episode 3 prep ("Why I Need MacroVox" — published 2026-06-24 per playbook),Pending,,2026-06-15,L,multi-channel
 M28,Operations,Post-launch,Begin MacroVox pre-launch hype ramp (handoff to MacroVox tracker),Pending,M27,2026-06-15,—,MacroVox repo
+T40,Product,Build,Auto-update progress indicator (no UI alive between installer-taskkill and relauncher-launch; user thought 1.0.17 update was broken for ~30s gap),Pending,,2026-05-28,M,docs/AUTO_UPDATE.md § Update progress indicator (planned)
