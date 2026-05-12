@@ -345,8 +345,10 @@ class TestContextTracking:
         bridge._synth.send_text.assert_any_call("rld ")
 
     def test_other_word_boundary_chars_also_reset(self, bridge: KeyboardBridge):
-        """Same fix applies to slash, backslash, opening brackets.
-        Spot-check '/' since URLs and dates trigger the same bug."""
+        """Same fix applies to slash, backslash, opening brackets, and
+        prefix punctuation (markdown *, mention @, hashtag #, sigils $,
+        operators = + & % | ~ ^ etc.).  Spot-check a handful that
+        trigger the same bug in real typing."""
         for c in "path":
             bridge.pressKey(c)
         bridge.pressKey("/")
@@ -354,6 +356,53 @@ class TestContextTracking:
             bridge.pressKey(c)
         assert bridge._current_word == "to"
         assert bridge._context_buffer.endswith("path/")
+
+    def test_prefix_punctuation_does_not_pollute_current_word(
+        self, bridge: KeyboardBridge,
+    ):
+        """Regression: typing '*hel' must leave _current_word = 'hel',
+        not '*hel'.  Without the boundary, clicking a prediction for
+        'hello' fell into the replace_text branch (since 'hello'
+        doesn't start with '*hel') and Shift+Left-selected the
+        asterisk along with the typed letters, deleting it."""
+        boundary_chars = ["*", "@", "#", "$", "%", "&", "+", "=", "~", "^", "|", '"', "`"]
+        for ch in boundary_chars:
+            bridge._current_word = ""
+            bridge._context_buffer = ""
+            bridge.pressKey(ch)
+            for c in "hel":
+                bridge.pressKey(c)
+            assert bridge._current_word == "hel", (
+                f"{ch!r} should be a word boundary; _current_word was "
+                f"{bridge._current_word!r}"
+            )
+            assert bridge._context_buffer.endswith(ch), (
+                f"{ch!r} should remain in context_buffer"
+            )
+
+    def test_asterisk_prefix_prediction_click_keeps_asterisk(
+        self, bridge: KeyboardBridge,
+    ):
+        """User-reported bug: typing '*hel' then clicking 'hello' must
+        type ONLY 'lo ' as a suffix and leave the leading '*' alone.
+        Pre-fix, the asterisk accumulated into _current_word so the
+        click fell through to replace_text(len('*hel'), 'hello '),
+        which Shift+Left-selected 4 chars and overwrote the asterisk.
+        """
+        bridge.pressKey("*")
+        for c in "hel":
+            bridge.pressKey(c)
+        bridge._synth.reset_mock()
+        bridge.pressPrediction("hello")
+        backspace_calls = [
+            c for c in bridge._synth.send_key.call_args_list
+            if c.args and c.args[0] == "BackSpace"
+        ]
+        assert backspace_calls == [], (
+            "BackSpace was sent — would have eaten the leading '*'"
+        )
+        bridge._synth.replace_text.assert_not_called()
+        bridge._synth.send_text.assert_any_call("lo ")
 
     def test_backspace_into_completed_word_rehydrates_current_word(
         self, bridge: KeyboardBridge,

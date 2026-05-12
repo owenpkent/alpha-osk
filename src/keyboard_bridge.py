@@ -708,19 +708,26 @@ class KeyboardBridge(QObject):
                     self._context_buffer = self._context_buffer[-200:]
 
             # Word-internal boundaries that DON'T get an auto-space:
-            # hyphen / slash / opening bracket etc.  Without this, typing
-            # "word1-word2" left _current_word = "word1-word2", so
-            # clicking a suggestion for "word2" failed the prefix-match
-            # in pressPrediction and fell through to replace_text, which
-            # backspaced "word1-" off the screen too.  Treat each of
-            # these as a word boundary for prediction purposes: keep the
-            # character on screen (already sent above), reset
+            # hyphen / slash / opening bracket / markdown-and-sigil
+            # punctuation.  Without this, typing "word1-word2" left
+            # _current_word = "word1-word2", so clicking a suggestion
+            # for "word2" failed the prefix-match in pressPrediction
+            # and fell through to replace_text, which backspaced
+            # "word1-" off the screen too.  Same bug for "*hello",
+            # "@user", "#tag", "$var", `key=value` etc. — the leading
+            # punctuation got selected and overwritten by the pill.
+            # Treat each as a word boundary for prediction purposes:
+            # keep the character on screen (already sent above), reset
             # _current_word, and append the segment-plus-separator to
-            # the buffers WITHOUT a trailing space (the user types these
-            # with no following space, unlike commas).  Apostrophe is
-            # deliberately NOT in this list -- contractions like
-            # "don't" are single tokens.
-            elif char in ("-", "/", "\\", "(", "[", "{", "<"):
+            # the buffers WITHOUT a trailing space (the user types
+            # these with no following space, unlike commas).  Excluded
+            # deliberately: apostrophe (contractions like "don't" are
+            # single tokens) and underscore (snake_case identifiers).
+            elif char in (
+                "-", "/", "\\", "(", "[", "{", "<",
+                "*", "@", "#", "$", "%", "&", "+", "=",
+                "~", "^", "|", '"', "`",
+            ):
                 word_before = self._current_word[:-1]
                 if word_before:
                     self._sentence_buffer += word_before + char
