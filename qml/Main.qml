@@ -1973,7 +1973,7 @@ Window {
     // ===== Model Visualization Window =====
     Window {
         id: vizWindow
-        title: "Language Model"
+        title: "Your Language Model"
         visible: root.showVisualization
         width: 720
         minimumWidth: 520

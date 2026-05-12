@@ -221,7 +221,7 @@ All three are persisted in `ngram_model.json`. Suppression is applied in `hybrid
 `unprefer(word)` decrements `unigrams` / `user_vocab` / `_user_total` / `total_words` by the cumulative boost amount, capped at the current `user_vocab` count so a word that was also organically learned keeps its organic count after the boost is removed. The `preferred` entry is then dropped. Boosts are never applied to bigrams or trigrams.
 
 ### Restoring Suppressed and Boosted Words
-In the Model Visualization dashboard (Settings → Tools → Language Model Visualization → Dashboard tab), three sections surface user-adjusted words as clickable tags:
+In the Model Visualization dashboard (Settings → Tools → Your Language Model → Dashboard tab), three sections surface user-adjusted words as clickable tags:
 - **Boosted Words** — green tags labelled `word (+N)` where N is the cumulative boost. Click to call `keyboard.unprefer(word)` which rolls back the boost (see math above).
 - **Suppressed Words → Blocked** — red tags for blacklisted words. Click to call `keyboard.unblacklistWord(word)`.
 - **Suppressed Words → Downweighted** — yellow tags for dispreferred words. Click to call `keyboard.undisprefer(word)`.
@@ -235,10 +235,10 @@ If a user manually types a blacklisted word 3 times (completing it with space), 
 
 ## Model Visualization
 
-Accessed via Settings → Tools → Language Model Visualization. Three tabs:
+Accessed via Settings → Tools → Your Language Model. Three tabs:
 - **Word Cloud** — circle-packed bubble chart of top words, sized by frequency
 - **Word Flow** — network graph of bigram word→word connections
-- **Dashboard** — stats cards, top words bar chart, interactive boosted words, interactive suppressed words, top word pairs
+- **Dashboard** — embedded AnalyticsDashboard (lifetime/session typing stats) at top, then stats cards, top words bar chart, interactive boosted words, interactive suppressed words, top word pairs. The AnalyticsDashboard was previously a separate section at the top of the Settings panel; it was moved here because lifetime savings is user-typing data and belongs with the rest of the user's model.
 
 Data provided by `keyboard_bridge.getVisualizationData()` → `ModelVisualization.qml`.
 

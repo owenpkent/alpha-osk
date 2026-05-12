@@ -160,20 +160,6 @@ Item {
                     width: flickArea.width - 12
                     spacing: 16
 
-                    // -- ANALYTICS -- (top of panel: lifetime savings
-                    // is the most rewarding read on every open;
-                    // burying it under config sections meant the user
-                    // had to scroll down every time)
-                    SettingsSection {
-                        title: "Analytics"
-                        Layout.fillWidth: true
-
-                        AnalyticsDashboard {
-                            Layout.fillWidth: true
-                            visible: true
-                        }
-                    }
-
                     // -- LAYOUT --
                     SettingsSection {
                         title: "Layout"
@@ -1219,7 +1205,7 @@ Item {
 
                                 Text {
                                     anchors.centerIn: parent
-                                    text: "Language Model Visualization"
+                                    text: "Your Language Model"
                                     color: vizBtnArea.containsMouse ? "#cce" : "#aab"
                                     font.pixelSize: 12
                                 }

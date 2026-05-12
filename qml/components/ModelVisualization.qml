@@ -104,7 +104,7 @@ Item {
                     anchors.rightMargin: 8
 
                     Text {
-                        text: "Language Model"
+                        text: "Your Language Model"
                         color: "#e0e0e0"
                         font.pixelSize: 15
                         font.weight: Font.DemiBold
@@ -633,6 +633,15 @@ Item {
                         id: dashCol
                         width: parent.width
                         spacing: 16
+
+                        // Analytics moved here from the top of Settings —
+                        // it's user-typing data, so it lives with the
+                        // rest of "Your Language Model" rather than
+                        // greeting the user every time they open
+                        // Settings to change a config.
+                        AnalyticsDashboard {
+                            Layout.fillWidth: true
+                        }
 
                         // -- Stats cards --
                         Row {
