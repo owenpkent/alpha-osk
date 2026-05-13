@@ -283,7 +283,7 @@ Theme picker in settings shows labeled color swatches with mini key previews.
 
 - **Base**: Google 10K wordlist (`data/google-10000-english-usa-no-swears.txt`) + 10K supplement (`data/google-20000-supplement.txt`, filtered for explicit content). ~20K total regular words.
 - **Packs**: Medical, Programming, Academic, Gaming, Business, NSFW. Toggled in Settings → Vocabulary Packs. NSFW is off by default.
-- **Numpad**: Toggles between numbers and navigation keys (Home/End/PgUp/PgDn/arrows/Ins/Del) via NumLock. Key 5 is blank in nav mode. Layout: rows `7 8 9 /`, `4 5 6 *`, `1 2 3 -`, `0(span 3) +`, `Enter(span 2) NumLock .`. The period sits in col 4 row 5, directly below the `+` in col 4 row 4 — that vertical alignment is intentional (period+plus is a common decimal-then-add pattern) and is what drove the row-4/row-5 restructure. Earlier builds put NumLock on the top row and stretched `+` / Enter as 2-row spans on the right column; the one before that had `0(span 2) . +` on row 4 and `Enter(span 3) NumLock` on row 5, which left the period mid-row instead of under the +. The flat 5-row layout is the user's request to match a physical 10-key.
+- **Numpad**: Toggles between numbers and navigation keys (Home/End/PgUp/PgDn/arrows/Ins/Del) via NumLock. Key 5 is blank in nav mode. Layout mirrors a physical numpad: rows `7 8 9 /`, `4 5 6 *`, `1 2 3 -`, `0(span 2) . +`, `Enter(span 3) NumLock`. NumLock sits at the bottom-right (active highlight uses the theme accent), Enter is the wide bottom-row key. Earlier builds put NumLock on the top row and stretched `+` / Enter as 2-row spans on the right column. The flat 5-row layout was the user's request to match a physical 10-key.
 
 ## Analytics
 
