@@ -204,11 +204,125 @@ class MacOSKeySynthesizer(KeySynthesizerBase):
         except ImportError:
             pass
         self._install_target_observer()
+        self._seed_target_from_parent()
         self._available = True
         _logger.info(
-            "macOS key synthesizer ready (Quartz CGEvent, self pid=%d)",
-            self._self_pid,
+            "macOS key synthesizer ready (Quartz CGEvent, self pid=%d, "
+            "initial target_pid=%s)",
+            self._self_pid, self._target_pid,
         )
+
+    # ------------------------------------------------------------------ #
+    #  Target pid plumbing
+    # ------------------------------------------------------------------ #
+
+    def set_target_pid(self, pid: int) -> None:
+        """Set the pid that future events will be posted to.
+
+        Called by the bridge's 250 ms foreground-window poll whenever
+        the OS reports a non-self frontmost app — second path beside
+        the ``NSWorkspaceDidActivateApplicationNotification`` observer
+        installed in ``_install_target_observer``.  Belt and braces:
+        the observer is event-driven, the poll catches anything the
+        observer missed (e.g. activation transitions during the
+        observer install window, or NSWorkspace not firing the
+        notification for the very first activation after launch).
+
+        Idempotent: skips logging if the pid is unchanged.
+        """
+        if pid <= 0 or pid == self._self_pid:
+            return
+        if pid != self._target_pid:
+            _logger.info("target_pid set via bridge poll → %d", pid)
+            self._target_pid = pid
+
+    def _seed_target_from_parent(self) -> None:
+        """Initial target = the GUI app at the top of our process tree.
+
+        Without this, the first ~hundreds of ms after launch have
+        ``_target_pid = None`` — the observer hasn't fired yet because
+        no app *changed* activation since we installed it.  Any
+        keystroke posted in that window falls back to ``CGEventPost``
+        (frontmost-targeted), which delivers to Alpha-OSK itself
+        because clicking on the OSK activates us.  Users see the very
+        first keystroke vanish.
+
+        ``os.getppid()`` alone is not enough: when launched from a
+        terminal via ``python -m src.keyboard_app``, the parent is
+        ``bash`` (a CLI process with no NSRunningApplication entry),
+        not the terminal app.  Posting events to bash's pid is a
+        no-op.  We walk up the process tree until we find a pid that
+        ``NSRunningApplication.runningApplicationWithProcessIdentifier_``
+        recognises — that's the user-facing app (Terminal / iTerm /
+        Cursor / VS Code / etc.) the user was using when they
+        launched us.
+
+        For ``.app`` launches via Finder / Dock the parent is
+        ``launchd`` (pid 1) and the walk bottoms out without finding
+        anything; we just leave ``_target_pid`` as None and rely on
+        the observer to fire the moment the user clicks into a real
+        editor.  Pre-walk filters reject self-pid and pid<=1.
+
+        The observer overrides this seed the moment the user
+        activates any non-self app — so a wrong seed self-heals as
+        soon as the user clicks into the real editor they want to
+        type into.
+        """
+        try:
+            from AppKit import NSRunningApplication  # type: ignore[import-not-found]
+        except ImportError:
+            return
+
+        try:
+            pid: Optional[int] = os.getppid()
+        except OSError:
+            return
+
+        # Walk up the parent chain, max 16 hops as a sanity cap so a
+        # weird ppid loop or runaway value can't make us spin.
+        for _ in range(16):
+            if pid is None or pid <= 1 or pid == self._self_pid:
+                return
+            try:
+                app = NSRunningApplication.runningApplicationWithProcessIdentifier_(pid)
+            except Exception as exc:
+                _logger.debug("runningApplicationWithProcessIdentifier failed: %s", exc)
+                return
+            if app is not None:
+                self._target_pid = pid
+                try:
+                    name = str(app.localizedName() or "?")
+                except Exception:
+                    name = "?"
+                _logger.info(
+                    "Seeded target_pid from process tree: %d (%s)",
+                    pid, name,
+                )
+                return
+            pid = self._parent_pid_of(pid)
+
+    @staticmethod
+    def _parent_pid_of(pid: int) -> Optional[int]:
+        """Return the parent pid of *pid*, or None on failure.
+
+        Uses ``ps -o ppid= -p <pid>`` because macOS has no ``/proc``
+        and pyobjc doesn't expose the underlying ``kinfo_proc``
+        struct in a way that's stable across versions.  ``ps`` is on
+        every macOS install and the overhead (~20 ms per call,
+        amortised over the seed walk's max-16 iterations) only fires
+        once at synth init.
+        """
+        import subprocess
+        try:
+            out = subprocess.check_output(
+                ["ps", "-o", "ppid=", "-p", str(pid)],
+                stderr=subprocess.DEVNULL,
+                timeout=1.0,
+            )
+            return int(out.strip())
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired,
+                ValueError, OSError):
+            return None
 
     # ------------------------------------------------------------------ #
     #  Interface implementation
@@ -419,11 +533,11 @@ class MacOSKeySynthesizer(KeySynthesizerBase):
         the foreground when the user clicks a key.  Posting to the
         editor's pid directly sidesteps the whole foreground question.
 
-        Falls back to ``CGEventPost`` (frontmost-targeted) when we
-        haven't seen any other app activate yet — usually a few
-        seconds after first launch.  In that window the focus theft
-        still bites; in practice it's rare because the user almost
-        always tabs to a target editor first.
+        Falls back to ``CGEventPost`` only when ``_target_pid`` is
+        still None — extremely rare now that ``__init__`` seeds it
+        from ``os.getppid()`` (the launching terminal / Finder).  The
+        only way this branch fires is if the parent pid was 1
+        (launchd) and no other app has activated since launch.
         """
         Quartz = self._Quartz
         if self._target_pid is not None:

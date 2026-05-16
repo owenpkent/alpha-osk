@@ -54,7 +54,8 @@ What's already running on macOS vs the other backends:
 | Floating across Spaces and over fullscreen apps | ✅ | NSWindow `setLevel:NSFloatingWindowLevel` + `collectionBehavior: CanJoinAllSpaces \| Transient \| FullScreenAuxiliary` + `hidesOnDeactivate: NO` |
 | `"win"` modifier maps to ⌘ Command | ✅ | `_MOD_INFO["win"]` → `kVK_Command` + `kCGEventFlagMaskCommand`. Mirrors how `"win"` → Super on Linux: each platform's primary shortcut modifier |
 | Compatibility Mode auto-detection | ⛔ | Stays off on macOS. The Windows-only IDE / RDP whitelist lives behind `sys.platform != "win32"` in `_window_needs_compat_mode` |
-| Password-field auto-detection | ⛔ | Falls back to `_NullDetector`. Manual title-bar toggle works. AXUIElement walk is the planned implementation — see *Phase 4* below |
+| Password-field auto-detection | ✅ | `_MacOSAXDetector` in `password_detect.py`. Frontmost-app pid → `AXUIElementCreateApplication` → `kAXFocusedUIElementAttribute` → `AXSecureTextField` subrole. Works in Cocoa, WebKit, and Chromium. Needs the Accessibility TCC grant. |
+| **Typing INTO** a password field | ⛔ | Blocked by macOS Secure Event Input. Every third-party OSK hits this; only Apple's built-in Accessibility Keyboard bypasses it. See *Phase 4 § Known constraint*. |
 | Auto-update | ⛔ | Windows-only path, unchanged. Mac users update via re-running the installer / `brew upgrade alpha-osk` once a Homebrew tap exists |
 | Code signing / notarization | ⛔ | `.app` is unsigned today — open via right-click → Open. See *Phase 3* |
 
@@ -249,21 +250,81 @@ downsample cleanly at every size — sharper small icons.
   - Accessibility itself is a TCC user grant, not an entitlement.
 - Update `docs/MACOS.md` § *Release checklist* with the codesign + notarize commands once they're verified end-to-end.
 
-### Phase 4 — AXUIElement password detection
-Currently `_create_detector()` returns `_NullDetector` on macOS — the
-manual title-bar toggle works, but auto-detect doesn't. The proper
-implementation:
+### Phase 4 — AXUIElement password detection ✅
+Implemented in `src/platform/password_detect.py::_MacOSAXDetector`.
+Same dual-trigger pattern as Windows/Linux: 200 ms background poll
+plus a per-keystroke synchronous check rate-limited to 50 ms (driven
+from the bridge, not the detector — see
+`KeyboardBridge._check_password_field` / `_check_password_field_sync`).
 
-1. Acquire system-wide accessible: `AXUIElementCreateSystemWide()`.
-2. Read focused element via `AXUIElementCopyAttributeValue(sw, kAXFocusedUIElementAttribute)`.
-3. Read its role/subrole: `kAXRoleAttribute` (`AXTextField`) and `kAXSubroleAttribute` (`AXSecureTextField`).
-4. Cache result; refresh on `kAXFocusedUIElementChangedNotification` via `AXObserverCreate` running on the main run-loop.
-5. Same dual-trigger pattern as Windows/Linux: 200 ms poll + per-keystroke sync check rate-limited to 50 ms.
+Path through AX:
 
-Requires the same Accessibility TCC grant the key synthesizer needs.
-Web browsers expose secure inputs correctly through AXUIElement when
-the user has Accessibility enabled for the browser — confirmed for
-Safari, Chrome, Firefox in casual testing.
+1. `NSWorkspace.sharedWorkspace().frontmostApplication()` → pid.
+2. `AXUIElementCreateApplication(pid)` → app's AX root. **Cached by
+   pid** so we don't pay the allocation cost every check (~µs but it
+   adds up at 5 Hz polling).
+3. `AXUIElementCopyAttributeValue(app_elem, kAXFocusedUIElementAttribute)`
+   → focused element in that app.
+4. Read `kAXSubroleAttribute` first (canonical password signal) then
+   `kAXRoleAttribute` (fallback some apps use). Match
+   `"AXSecureTextField"` either way.
+
+Why the pid-based path and not `AXUIElementCreateSystemWide()` →
+`kAXFocusedUIElementAttribute` directly: on macOS 14/15 that returns
+`kAXErrorCannotComplete (-25204)`. The system-wide element doesn't
+serve focused-element queries directly any more. Routing through the
+frontmost app is the supported path. Same pattern Apple's own
+Accessibility tools use.
+
+Coverage observed in casual testing:
+- ✅ Safari `<input type="password">`
+- ✅ Chrome / Edge / Brave (Chromium) password inputs
+- ✅ Cocoa `NSSecureTextField` (Keychain Access, System Settings login)
+- ⚠️ Firefox: works *if* Firefox's accessibility integration is on
+  (default since FF 90+). Some users disable it for perf — they'll
+  need the manual toggle.
+- ⚠️ Electron apps: depends on whether the app enables accessibility
+  metadata. VS Code / Slack / Discord do; some smaller apps don't.
+
+Failure mode if the AX grant is missing: detector reports
+`available = False` at init, `_create_detector()` falls back to
+`_NullDetector`, and the title-bar manual toggle remains the only
+control. Logged at INFO so it's visible in `~/Library/Application
+Support/alpha-osk/alpha-osk.log`.
+
+#### Known constraint: Secure Event Input blocks OSK typing into password fields
+
+Detecting a password field is one thing. **Actually typing into one
+via synthesized keystrokes is something macOS deliberately
+prevents.** When any app's `NSSecureTextField` becomes first
+responder, the OS enables a system-wide flag — `IsSecureEventInputEnabled()`
+— that blocks every event tap and `CGEventPost{,ToPid}` call from
+reaching the secure field. This is a security feature: it stops
+malicious processes from logging *or* injecting password keystrokes.
+It applies to every third-party app uniformly; no entitlement
+available to third-party developers bypasses it.
+
+Apple's built-in **Accessibility Keyboard** can type into password
+fields because it uses a privileged system path inside the
+accessibility subsystem itself — same trust level as the OS's own
+input methods. That path isn't exposed to third-party apps.
+
+The user-facing implication: **Alpha-OSK can detect password fields
+(so privacy mode protects them) but cannot type into them on Mac.**
+The user has to fall back to:
+- Their physical keyboard for that specific input, or
+- Apple's Accessibility Keyboard (System Settings → Accessibility →
+  Keyboard → Accessibility Keyboard) for password fields, switching
+  back to Alpha-OSK afterwards.
+
+This is a **macOS-only** limitation. The same OSK pattern works
+freely on Windows (SendInput delivers to secure fields when the
+process has UIAccess) and on Linux (xdotool / ydotool don't have an
+equivalent block).
+
+If a future workaround appears — a published entitlement, a TCC
+grant variant, a privileged helper tool — it'd belong in this same
+section. For now: detect, suppress learning, surface the limitation.
 
 ### Phase 5 — Auto-update
 Skip on Mac for now. The Windows `updater.py` flow is EV-cert

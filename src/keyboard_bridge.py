@@ -1739,6 +1739,19 @@ class KeyboardBridge(QObject):
         # on class miss).  Auto-active toggling is debounced internally
         # so this isn't noisy.
         self._update_compat_auto(hwnd)
+        # macOS: feed the foreground pid into the synthesizer's target
+        # tracking.  Redundant with the NSWorkspace activation observer
+        # in MacOSKeySynthesizer but acts as defence-in-depth: the
+        # observer can miss transitions (e.g. if the user activates an
+        # app via a path that doesn't fire NSWorkspaceDidActivate, or
+        # during the observer-install window at startup).  hwnd on
+        # macOS IS the pid — see _get_foreground_window_id's macOS
+        # branch.  set_target_pid filters self and no-ops when pid is
+        # unchanged, so calling on every poll is cheap.
+        if CURRENT_PLATFORM == "macos" and hwnd > 0:
+            set_target = getattr(self._synth, "set_target_pid", None)
+            if callable(set_target):
+                set_target(hwnd)
         self._last_foreground_hwnd = hwnd
 
     def _get_foreground_window_id(self) -> int:

@@ -30,17 +30,26 @@ detector and users can still toggle privacy mode manually.
 
 macOS
 -----
-Currently stubbed to the null detector — manual privacy toggle still
-works.  A full implementation would walk the AXUIElement focus chain
-(``AXUIElementCopyAttributeValue`` for ``kAXFocusedUIElementAttribute``
-and ``kAXRoleAttribute`` / ``kAXSubroleAttribute``, treating
-``AXSecureTextField`` as the password signal) via pyobjc's
-ApplicationServices bindings.  That path requires the same
-Accessibility TCC grant the key synthesizer needs and is its own
-chunk of work; deferred until the typing path is solid.
+Uses AXUIElement via pyobjc's ``ApplicationServices`` bindings.  The
+focused-element walk goes through the *frontmost application* rather
+than the system-wide AX element — ``kAXFocusedUIElementAttribute`` on
+``AXUIElementCreateSystemWide()`` returns ``kAXErrorCannotComplete``
+in practice on modern macOS, so we use ``NSWorkspace
+.frontmostApplication()`` → ``AXUIElementCreateApplication(pid)`` →
+``kAXFocusedUIElementAttribute`` instead.  Password fields surface as
+``kAXSubroleAttribute == "AXSecureTextField"`` (canonical) or
+``kAXRoleAttribute == "AXSecureTextField"`` (fallback some apps use).
+Works for Cocoa ``NSSecureTextField``, WebKit / Chromium
+``<input type="password">``, and most Electron apps that expose
+accessibility metadata.
+
+Requires the Accessibility TCC grant — the same one the key
+synthesizer needs.  Without it ``AXIsProcessTrusted()`` returns False
+and the detector falls back to the null detector; users can still
+toggle privacy mode manually.
 
 Dependencies: ``ctypes`` (Windows), optional ``gi.repository.Atspi``
-(Linux).
+(Linux), optional ``pyobjc-framework-ApplicationServices`` (macOS).
 """
 
 from __future__ import annotations
@@ -128,11 +137,13 @@ def _create_detector() -> _Detector:
         )
         return _NullDetector()
     if sys.platform == "darwin":
-        # macOS: AXUIElement-based auto-detection is a TODO.  Manual
-        # toggle in the title bar still works.  Logged at INFO so users
-        # who expect the auto path can tell why it isn't firing.
+        det_mac = _MacOSAXDetector()
+        if det_mac.available:
+            _logger.info("Password detection: macOS AXUIElement")
+            return det_mac
         _logger.info(
-            "Password detection: macOS auto-detect not yet implemented — "
+            "Password detection: macOS AX unavailable — "
+            "grant Accessibility in System Settings and restart, or "
             "use the manual privacy toggle in the title bar."
         )
         return _NullDetector()
@@ -257,6 +268,135 @@ class _LinuxATSPIDetector:
 
     def check(self) -> bool:
         return self._is_password
+
+
+# ====================================================================== #
+#  macOS — AXUIElement focus walk via pyobjc
+# ====================================================================== #
+
+class _MacOSAXDetector:
+    """Detect password fields by walking the focused app's AX tree.
+
+    The canonical macOS signal for a password field is
+    ``kAXSubroleAttribute == "AXSecureTextField"`` on the focused
+    element.  Cocoa's ``NSSecureTextField`` surfaces it directly;
+    WebKit (Safari, Mail compose) and Chromium (Chrome, Edge, Brave)
+    map ``<input type="password">`` to the same subrole.
+
+    Why we go through the focused *application* rather than the
+    system-wide AX element: ``kAXFocusedUIElementAttribute`` on
+    ``AXUIElementCreateSystemWide()`` returns
+    ``kAXErrorCannotComplete (-25204)`` in practice — confirmed in dev
+    on macOS 14/15.  The supported path is ``NSWorkspace
+    .frontmostApplication()`` → ``AXUIElementCreateApplication(pid)``
+    → ``kAXFocusedUIElementAttribute``, which gives us the focused
+    element in *that* app's accessibility tree.  See the API probe
+    in commit history if you want to verify.
+
+    Required runtime grant: Accessibility (TCC).  The same grant the
+    key synthesizer needs.  If ``AXIsProcessTrusted()`` is False we
+    set ``available = False`` and ``_create_detector`` falls back to
+    the null detector — the manual privacy toggle in the title bar
+    still works.
+
+    Caching: each ``check()`` builds an ``AXUIElementCreateApplication``
+    handle for the current frontmost pid.  Cheap (microseconds), but
+    not free, so we cache by pid and invalidate when frontmost
+    changes.
+
+    Threading: called from the Qt main thread (the bridge polls every
+    200 ms + per-keystroke).  The AX APIs are thread-safe but the
+    pyobjc bridge isn't tested across threads — keep all calls on the
+    main thread.
+    """
+
+    def __init__(self) -> None:
+        self.available = False
+        self._AX: Any = None
+        self._NSWorkspace: Any = None
+        # Cache: (pid, AXUIElement-for-that-app).  Invalidated when
+        # frontmost pid changes.
+        self._cached_app_pid: Optional[int] = None
+        self._cached_app_elem: Any = None
+
+        try:
+            import ApplicationServices  # type: ignore[import-not-found]
+        except ImportError as exc:
+            _logger.debug("ApplicationServices import failed: %s", exc)
+            return
+        try:
+            from AppKit import NSWorkspace  # type: ignore[import-not-found]
+        except ImportError as exc:
+            _logger.debug("AppKit import failed: %s", exc)
+            return
+
+        # AX queries silently return -25211 (kAXErrorAPIDisabled) for
+        # untrusted processes.  Probe once at init so we can log the
+        # actionable hint instead of letting every check() fail.
+        if not ApplicationServices.AXIsProcessTrusted():
+            _logger.debug(
+                "AXIsProcessTrusted=False — macOS password auto-detect "
+                "needs the Accessibility TCC grant (same one the key "
+                "synthesizer needs)"
+            )
+            return
+
+        self._AX = ApplicationServices
+        self._NSWorkspace = NSWorkspace
+        self.available = True
+
+    def _get_focused_app_elem(self) -> Any:
+        """Return an ``AXUIElement`` for the currently-frontmost app.
+
+        Caches by pid: if the frontmost app hasn't changed since the
+        last call, returns the cached element.  Otherwise creates a
+        fresh one via ``AXUIElementCreateApplication(pid)``.  Returns
+        None if no app is frontmost.
+        """
+        app = self._NSWorkspace.sharedWorkspace().frontmostApplication()
+        if app is None:
+            return None
+        pid = int(app.processIdentifier())
+        if pid != self._cached_app_pid:
+            self._cached_app_elem = self._AX.AXUIElementCreateApplication(pid)
+            self._cached_app_pid = pid
+        return self._cached_app_elem
+
+    def check(self) -> bool:
+        if not self.available:
+            return False
+        try:
+            app_elem = self._get_focused_app_elem()
+            if app_elem is None:
+                return False
+            AX = self._AX
+            err, focused = AX.AXUIElementCopyAttributeValue(
+                app_elem, AX.kAXFocusedUIElementAttribute, None,
+            )
+            if err != 0 or focused is None:
+                return False
+            # The canonical password signal is the subrole.  We check
+            # the role too as a belt-and-braces fallback: some apps
+            # report ``AXSecureTextField`` as the role directly with no
+            # subrole.  Either match means "treat as password field".
+            err_s, subrole = AX.AXUIElementCopyAttributeValue(
+                focused, AX.kAXSubroleAttribute, None,
+            )
+            if err_s == 0 and subrole == "AXSecureTextField":
+                return True
+            err_r, role = AX.AXUIElementCopyAttributeValue(
+                focused, AX.kAXRoleAttribute, None,
+            )
+            if err_r == 0 and role == "AXSecureTextField":
+                return True
+            return False
+        except Exception as exc:
+            # AX queries can throw for windows that are mid-teardown
+            # (e.g. the user just closed the focused window).  Treat
+            # as "not a password field" so privacy mode releases
+            # rather than getting stuck on.
+            _logger.debug("AX check failed: %s", exc)
+            return False
 
 
 # ====================================================================== #
