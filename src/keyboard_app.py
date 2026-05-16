@@ -492,8 +492,8 @@ def _apply_macos_window_flags(root) -> None:
             NSFloatingWindowLevel,
             NSPanel,
             NSWindowCollectionBehaviorCanJoinAllSpaces,
-            NSWindowCollectionBehaviorTransient,
             NSWindowCollectionBehaviorFullScreenAuxiliary,
+            NSWindowCollectionBehaviorTransient,
         )
     except ImportError as exc:
         _logger.warning(
