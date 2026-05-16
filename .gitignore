@@ -45,8 +45,10 @@ release/
 # PyInstaller temp
 *.manifest.bak
 
-# Node / cf-worker (lockfile is committed; downloaded deps are not)
+# Node / cf-worker (lockfile is committed; downloaded deps + generated
+# SBOM are not -- SBOM is regenerable from the lockfile via `npm run sbom`)
 node_modules/
+backend/cf-worker/cf-worker-sbom.cyclonedx.json
 
 # Project specific
 *.log

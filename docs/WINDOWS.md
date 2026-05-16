@@ -352,7 +352,8 @@ python build/windows/sign.py dist/alpha-osk/alpha-osk.exe --verify
 |------|-------------|
 | `dist/alpha-osk/alpha-osk.exe` | Portable executable + dependencies |
 | `release/Alpha-OSK-Setup-{version}.exe` | NSIS installer (if NSIS is installed) |
-| `release/Alpha-OSK-Setup-{version}-requirements.lock.txt` | `pip freeze --all` of the build venv at release time — the reproducible record of every Python package + version that PyInstaller bundled. Not a CycloneDX/SPDX SBOM (no licenses, no purls); just a plaintext answer to "what shipped in X.Y.Z?". See *Dependency Lockfile* below for the upgrade path to a proper SBOM. |
+| `release/Alpha-OSK-Setup-{version}-requirements.lock.txt` | `pip freeze --all` of the build venv — human/pip-friendly, reproducible install via `pip install -r`. See *Dependency Lockfile & SBOM* below. |
+| `release/Alpha-OSK-Setup-{version}-sbom.cyclonedx.json` | CycloneDX 1.6 SBOM of the build venv — machine/scanner-friendly, ingested directly by Trivy / Grype / OSV-Scanner / Dependency-Track. Includes per-component purl, license expression, and integrity hashes. See *Dependency Lockfile & SBOM* below. |
 
 ### What the Build Includes
 
@@ -545,18 +546,19 @@ git push origin vX.Y.Z
 
 ### 7. Create the GitHub release — on the PUBLIC releases repo
 
-Upload both the installer **and** the lockfile so the release page carries the build's dependency record:
+Upload the installer, the lockfile, **and** the CycloneDX SBOM so the release page carries the full build record:
 
 ```bash
 gh release create vX.Y.Z \
   release/Alpha-OSK-Setup-X.Y.Z.exe \
   release/Alpha-OSK-Setup-X.Y.Z-requirements.lock.txt \
+  release/Alpha-OSK-Setup-X.Y.Z-sbom.cyclonedx.json \
   --repo okstudio1/alpha-osk-releases \
   --title "vX.Y.Z" \
   --notes "See https://github.com/okstudio1/alpha-osk/blob/main/CHANGELOG.md"
 ```
 
-The lockfile is small (~5-10 KB) and gives anyone reviewing the release (auditors, future-us debugging "what changed between 1.0.16 and 1.0.17") an exact pip-installable record of the build venv. See *Dependency Lockfile* below for what it is and isn't.
+The lockfile (~5-10 KB) is the human/pip-friendly answer; the SBOM (~100 KB) is the machine-friendly answer that compliance scanners ingest directly. See *Dependency Lockfile & SBOM* below for what each is for.
 
 > ⚠️ **The `--repo okstudio1/alpha-osk-releases` flag is mandatory.** The source repo is private; the auto-updater can't see private releases (returns 404 to unauthenticated callers). Forgetting `--repo` will create the release in the source repo where end users' updaters won't find it. Tag the source repo for changelog tracking; publish binaries in the public repo.
 
@@ -582,23 +584,33 @@ To inspect the bundle:
 du -sm dist/alpha-osk/PySide6/* | sort -rn | head -20
 ```
 
-### Dependency Lockfile
+### Dependency Lockfile & SBOM
 
-`build/windows/build.py::freeze_lockfile` runs `pip freeze --all` against the build venv and writes `release/Alpha-OSK-Setup-{version}-requirements.lock.txt` alongside the installer. It runs unconditionally on every build (including `--skip-build`, since bumping the version is what `--skip-build` is for and the lockfile name encodes the version). A short header at the top names the version and explains how to reproduce the env.
+Every release ships two dependency artefacts alongside the installer. They cover the same packages from two angles:
 
-**What it is.** A plaintext, pip-installable record of every Python package + exact version that was resolved when the build venv was last `pip install -r requirements-dev.txt`'d. PyInstaller bundles whatever pip resolved at build time, so this lockfile is the closest thing we have to "what shipped in 1.0.X?". Anyone reviewing the release (a hospital procurement reviewer, a security researcher, future-you debugging what changed between two releases) can `pip install -r Alpha-OSK-Setup-1.0.X-requirements.lock.txt` into a fresh venv and recreate the exact dependency tree.
+| Artefact | Format | Audience | Tool |
+|---|---|---|---|
+| `Alpha-OSK-Setup-{version}-requirements.lock.txt` | Plaintext `pip freeze` | Human reading the release page; future-you doing `pip install -r` to recreate the build venv | `pip freeze --all` |
+| `Alpha-OSK-Setup-{version}-sbom.cyclonedx.json` | CycloneDX 1.6 JSON | Security scanners (Trivy, Grype, OSV-Scanner, Dependency-Track), procurement reviewers, compliance pipelines | `python -m cyclonedx_py environment` |
 
-**What it is NOT.** Not a CycloneDX or SPDX SBOM. There are no license fields, no package URLs (purl), no signed statements, no transitive provenance. US Executive Order 14028 and most enterprise procurement processes ask for a structured SBOM, not a `pip freeze` dump. The plaintext lockfile is the cheap floor; a proper SBOM is the next step up.
+Both emit unconditionally on every build (including `--skip-build`, since bumping the version is what `--skip-build` is for and the filenames encode the version). Both run *before* PyInstaller's output is signed, so the SBOM reflects exactly what got bundled.
 
-**Upgrade path to a proper SBOM.** When the audience demands it:
+**Lockfile** (`build/windows/build.py::freeze_lockfile`). `pip freeze --all` with a short header naming the version and explaining how to reproduce the env. ~5-10 KB depending on dep count.
 
-1. `pip install cyclonedx-bom` in the build venv.
-2. Add a step in `build/windows/build.py` after `freeze_lockfile`: `cyclonedx-py environment -o release/Alpha-OSK-Setup-{version}-sbom.cyclonedx.json`.
-3. Same for the worker: `npm install --save-dev @cyclonedx/cyclonedx-npm` in `backend/cf-worker/`, add a `npm run sbom` script that emits `cf-worker-sbom.cyclonedx.json`, wire into deploy.
-4. Upload both SBOMs alongside the installer in step 7's `gh release create` invocation.
-5. (Optional but recommended) Add `osv-scanner` as a CI job so transitive-dep CVEs flag on every PR — the lockfile makes this trivial: `osv-scanner --lockfile=requirements-lock.txt`.
+**SBOM** (`build/windows/build.py::emit_sbom`). `python -m cyclonedx_py environment --of JSON --sv 1.6 --output-reproducible -o ...`. CycloneDX 1.6 JSON with per-component name, version, PURL (`pkg:pypi/<name>@<version>`), license expression where the package metadata declares one, and integrity hashes. `--output-reproducible` strips time/random fields so two builds of the same env produce byte-identical SBOMs (diffs stay noise-free). About 100 KB / 80 components at the current dep set. Soft-fails (warning, no abort) if `cyclonedx-bom` isn't installed in the venv — dev builds without it still produce a working installer, they just skip the SBOM. Production release builds pull it in via `requirements-dev.txt`.
 
-The cheap-path lockfile is doing 80% of the reproducibility work for ~30 lines of build script. Don't skip the upgrade if the project ever lands in an institutional review pipeline, but don't over-build it before then either.
+**Worker side.** `backend/cf-worker/` ships a second SBOM via `npm run sbom` (which calls `@cyclonedx/cyclonedx-npm`). The `predeploy` npm script chains it before `wrangler deploy`, so every deploy has a fresh SBOM next to it (file is in `.gitignore` — regenerate any time from the committed `package-lock.json`). The worker SBOM is bigger (~470 KB / 209 components) because npm dep trees are deeper than pip's. The lockfile *is* checked in.
+
+**CI-time CVE scanning.** `.github/workflows/ci.yml` has an `osv-scan` job pinned to `google/osv-scanner-action@9a498708959aeaef5ef730655706c5a1df1edbc2` (v2.3.8) that reads both lockfiles (`requirements-dev.txt` + `backend/cf-worker/package-lock.json`) and queries the OSV database on every push and PR. Currently advisory-only (`fail-on-vuln: false`) because we already know about four dev-only Wrangler 3.x CVEs (3 moderate esbuild, 1 high undici — fix is a breaking change for the worker, tracked separately). Findings still upload to the GitHub Security tab via SARIF. Flip the flag to `true` once the known noise is resolved or quarantined.
+
+**Maintenance.** Bump `cyclonedx-bom` in `requirements-dev.txt` when CVE advisories appear (it's a build-only tool, so bumps are low-risk). Bump the `google/osv-scanner-action` pinned SHA in `ci.yml` quarterly or when a feature is needed (Dependabot does not yet reliably bump reusable-workflow refs):
+
+```bash
+gh api repos/google/osv-scanner-action/releases/latest --jq '.tag_name'
+gh api repos/google/osv-scanner-action/git/refs/tags/<tag> --jq '.object.sha'
+```
+
+Update the `@<sha> # <tag>` line in `ci.yml` and commit.
 
 ### Regenerating the app icon
 

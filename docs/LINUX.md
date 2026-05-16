@@ -112,21 +112,22 @@ Outputs:
 |------|-------------|
 | `dist/alpha-osk/alpha-osk` | PyInstaller single-directory bundle |
 | `release/Alpha-OSK-<version>-x86_64.AppImage` | `--appimage` wrapper |
-| `release/Alpha-OSK-<version>-linux-requirements.lock.txt` | `pip freeze --all` of the build venv — reproducible record of every Python package + version bundled. See *Dependency Lockfile* below. Always emitted (even on `--skip-build`). |
+| `release/Alpha-OSK-<version>-linux-requirements.lock.txt` | `pip freeze --all` of the build venv — human/pip-friendly. Always emitted. |
+| `release/Alpha-OSK-<version>-linux-sbom.cyclonedx.json` | CycloneDX 1.6 SBOM of the build venv — machine/scanner-friendly (purl, license, hashes). Always emitted. |
 
 Run the bundle directly with `./dist/alpha-osk/alpha-osk` — no install
 needed. Runtime still requires `xdotool` or `ydotool` on the host,
 because those are OS-level tools (not Python libraries) and are not
 bundled.
 
-### Dependency Lockfile
+### Dependency Lockfile & SBOM
 
-`build/linux/build.py::freeze_lockfile` writes
-`release/Alpha-OSK-<version>-linux-requirements.lock.txt` alongside
+`build/linux/build.py` emits both a plaintext lockfile
+(`freeze_lockfile`) and a CycloneDX 1.6 SBOM (`emit_sbom`) alongside
 the AppImage / .deb / tarball. Same shape and rationale as the Windows
-version — see `docs/WINDOWS.md` § *Dependency Lockfile* for what it is,
-what it isn't (not a CycloneDX/SPDX SBOM), and the upgrade path to a
-proper SBOM via `cyclonedx-bom`.
+build — see `docs/WINDOWS.md` § *Dependency Lockfile & SBOM* for what
+each artefact is for, the CI-time `osv-scan` job that reads both
+lockfiles for transitive CVEs, and how to bump the toolchain.
 
 ---
 

@@ -200,6 +200,55 @@ def freeze_lockfile(version: str) -> Path | None:
     return lockfile
 
 
+def emit_sbom(version: str) -> Path | None:
+    """Generate a CycloneDX 1.6 SBOM of the build venv (Linux).
+
+    Mirror of the Windows build's ``emit_sbom``.  See
+    ``build/windows/build.py::emit_sbom`` and
+    ``docs/WINDOWS.md`` § *Dependency Lockfile & SBOM* for the
+    rationale on shipping both the plaintext lockfile and the
+    structured SBOM alongside each release.
+
+    Soft-fails (returns None + warning) if ``cyclonedx-bom`` isn't
+    installed -- dev builds without it still produce a working
+    AppImage / .deb / tarball, they just skip the SBOM.  Production
+    release builds should have it via ``requirements-dev.txt``.
+    """
+    header("Generating CycloneDX SBOM")
+    RELEASE_DIR.mkdir(exist_ok=True)
+    sbom = RELEASE_DIR / f"Alpha-OSK-{version}-linux-sbom.cyclonedx.json"
+
+    step("Running cyclonedx-py environment")
+    try:
+        subprocess.run(
+            [
+                sys.executable, "-m", "cyclonedx_py", "environment",
+                "--of", "JSON",
+                "--sv", "1.6",
+                "--output-reproducible",
+                "-o", str(sbom),
+            ],
+            check=True, timeout=120,
+        )
+    except FileNotFoundError:
+        warn(
+            "cyclonedx-bom not installed -- SBOM skipped.\n"
+            "  Install with: pip install -r requirements-dev.txt"
+        )
+        return None
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+        warn(f"SBOM generation failed: {exc}")
+        return None
+
+    if not sbom.exists():
+        warn(f"SBOM file not created: {sbom}")
+        return None
+
+    size_kb = sbom.stat().st_size / 1024
+    ok(f"SBOM written: {sbom.name} ({size_kb:.1f} KB, CycloneDX 1.6)")
+    return sbom
+
+
 def find_appimagetool(auto_fetch: bool) -> Path | None:
     step("Locating appimagetool")
     on_path = shutil.which("appimagetool")
@@ -594,12 +643,18 @@ def main() -> int:
 
     version = read_version()
 
-    # Lockfile reflects the build venv state; always emit it (even on
-    # --skip-build, since bumping the version is what --skip-build is
-    # often for and the lockfile name encodes the version).
+    # Lockfile + SBOM reflect the build venv state; both always emit
+    # (even on --skip-build, since bumping the version is what
+    # --skip-build is often for and the filenames encode the version).
+    # Lockfile = pip freeze (human/pip-friendly).
+    # SBOM     = CycloneDX 1.6 (machine/scanner-friendly).
     lockfile_path = freeze_lockfile(version)
     if lockfile_path is None:
         warn("Lockfile generation failed -- continuing without it")
+
+    sbom_path = emit_sbom(version)
+    if sbom_path is None:
+        warn("SBOM generation failed -- continuing without it")
 
     if args.appimage:
         tool = find_appimagetool(auto_fetch=args.fetch_appimagetool)
@@ -622,6 +677,8 @@ def main() -> int:
         print(f"  Release:  {RELEASE_DIR}/")
     if lockfile_path and lockfile_path.exists():
         print(f"  Lockfile: {lockfile_path}")
+    if sbom_path and sbom_path.exists():
+        print(f"  SBOM:     {sbom_path}")
     return 0
 
 

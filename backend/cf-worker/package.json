@@ -5,12 +5,15 @@
   "type": "module",
   "scripts": {
     "dev": "wrangler dev --local",
+    "predeploy": "npm run sbom",
     "deploy": "wrangler deploy",
     "schema:local": "wrangler d1 execute alpha-osk-telemetry --local --file schema.sql",
-    "schema:remote": "wrangler d1 execute alpha-osk-telemetry --remote --file schema.sql"
+    "schema:remote": "wrangler d1 execute alpha-osk-telemetry --remote --file schema.sql",
+    "sbom": "cyclonedx-npm --spec-version 1.6 --output-reproducible --output-format JSON --output-file cf-worker-sbom.cyclonedx.json"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20250101.0",
+    "@cyclonedx/cyclonedx-npm": "^4.2.1",
     "typescript": "^5.4.0",
     "wrangler": "^3.80.0"
   }

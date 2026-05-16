@@ -60,3 +60,29 @@ jobs:
         run: pip install -r requirements-dev.txt
       - name: Run tests
         run: python -m pytest --cov=src --cov-report=term-missing --cov-fail-under=60
+
+  # Reads the committed lockfiles (requirements-dev.txt for Python,
+  # backend/cf-worker/package-lock.json for the worker) and queries
+  # the OSV database for known CVEs.  Pinned to the v2.3.8 SHA per
+  # the audit-driven hardening posture (tag refs are mutable).
+  #
+  # fail-on-vuln: false  -- advisory-only on day 1.  We already know
+  # about four dev-only CVEs flowing through Wrangler 3.x (3 moderate
+  # esbuild, 1 high undici); upgrading is a breaking change tracked
+  # separately.  Flip to true once those are resolved or quarantined
+  # in an ignore file so unknowns gate merges.
+  #
+  # upload-sarif: true (default) writes findings to the Security tab
+  # so they're visible without grepping action logs.
+  osv-scan:
+    name: OSV Scanner (deps CVE check)
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+    uses: google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@9a498708959aeaef5ef730655706c5a1df1edbc2 # v2.3.8
+    with:
+      scan-args: |-
+        --lockfile=requirements-dev.txt
+        --lockfile=backend/cf-worker/package-lock.json
+      fail-on-vuln: false

@@ -332,6 +332,74 @@ def freeze_lockfile() -> Path | None:
     return lockfile
 
 
+def emit_sbom() -> Path | None:
+    """Generate a CycloneDX 1.6 SBOM of the build venv.
+
+    Writes ``release/Alpha-OSK-Setup-{version}-sbom.cyclonedx.json``
+    containing structured component metadata (name, version, PURL,
+    license expression where pkg metadata declares one, integrity
+    hashes) for every Python package in the build venv.  This is the
+    machine-readable counterpart to the plaintext lockfile from
+    ``freeze_lockfile`` -- same packages, format that security scanners
+    (Trivy, Grype, OSV-Scanner, Dependency-Track) ingest directly.
+
+    Why both:
+        * the lockfile is a pip-installable record (human-friendly,
+          re-creates the env with ``pip install -r``);
+        * the SBOM is the supply-chain document (machine-friendly,
+          carries license + hash + purl per component, satisfies
+          procurement / federal supply-chain audits).
+
+    ``--output-reproducible`` strips time- and random-based fields so
+    two builds of the same env produce byte-identical SBOMs, which
+    keeps diffs noise-free.  ``--sv 1.6`` pins the spec version so
+    consumers don't need to handle a moving target.
+
+    Soft-fails (returns None + warning) if cyclonedx-bom isn't
+    installed -- dev builds without it still produce a working .exe,
+    they just skip the SBOM.  Production release builds should have
+    it via requirements-dev.txt.
+    """
+    header("Generating CycloneDX SBOM")
+
+    RELEASE_DIR.mkdir(parents=True, exist_ok=True)
+
+    sys.path.insert(0, str(PROJECT_ROOT))
+    from src.__version__ import __version__ as version
+    sbom = RELEASE_DIR / f"Alpha-OSK-Setup-{version}-sbom.cyclonedx.json"
+
+    step("Running cyclonedx-py environment...")
+    try:
+        subprocess.run(
+            [
+                sys.executable, "-m", "cyclonedx_py", "environment",
+                "--of", "JSON",
+                "--sv", "1.6",
+                "--output-reproducible",
+                "-o", str(sbom),
+            ],
+            check=True, timeout=120,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except FileNotFoundError:
+        warning(
+            "cyclonedx-bom not installed -- SBOM skipped.\n"
+            "  Install with: pip install -r requirements-dev.txt"
+        )
+        return None
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+        warning(f"SBOM generation failed: {exc}")
+        return None
+
+    if not sbom.exists():
+        warning(f"SBOM file not created: {sbom}")
+        return None
+
+    size_kb = sbom.stat().st_size / 1024
+    success(f"SBOM written: {sbom.name} ({size_kb:.1f} KB, CycloneDX 1.6)")
+    return sbom
+
+
 def sign_build(signtool_path: str) -> bool:
     """
     Sign all ``.exe`` and ``.dll`` files in the build output.
@@ -783,13 +851,21 @@ def main() -> int:
             error(f"Dist directory not found: {DIST_DIR}")
             return 1
 
-    # --- Capture dependency lockfile ---
-    # Runs even on --skip-build because the lockfile reflects the
-    # current build venv state, and bumping the version (which is
-    # what --skip-build is for) should still update the lockfile name.
+    # --- Capture dependency lockfile + SBOM ---
+    # Both run even on --skip-build because they reflect the current
+    # build venv state, and bumping the version (which is what
+    # --skip-build is for) should still update their filenames.
+    # Lockfile = pip freeze (human/pip-friendly).
+    # SBOM     = CycloneDX 1.6 (machine/scanner-friendly).
+    # See docs/WINDOWS.md "Dependency Lockfile & SBOM" for the
+    # rationale on shipping both.
     lockfile_path = freeze_lockfile()
     if lockfile_path is None:
         warning("Lockfile generation failed -- continuing without it")
+
+    sbom_path = emit_sbom()
+    if sbom_path is None:
+        warning("SBOM generation failed -- continuing without it")
 
     # --- Sign build output ---
     if can_sign and signtool:
@@ -830,6 +906,9 @@ def main() -> int:
 
     if lockfile_path and lockfile_path.exists():
         success(f"Lockfile: {lockfile_path}")
+
+    if sbom_path and sbom_path.exists():
+        success(f"SBOM:     {sbom_path}")
 
     if can_sign:
         success("All outputs are EV code-signed")

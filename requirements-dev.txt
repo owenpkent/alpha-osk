@@ -16,3 +16,10 @@ mypy>=1.9.0
 # Pulled in by pytest/rich; pin away from ReDoS-vulnerable versions
 # (CVE-2022-40896, CVE-2026-4539).
 Pygments>=2.20.0
+
+# SBOM generation (used at release time by build/{windows,linux}/build.py
+# to emit CycloneDX 1.6 SBOMs alongside the .exe / AppImage).  Not used
+# at runtime; safe to skip for dev installs that won't run the release
+# build, but pinned here so `pip install -r requirements-dev.txt` gets
+# the same toolchain CI uses.
+cyclonedx-bom>=7.0.0
