@@ -4,7 +4,7 @@ Alpha-OSK Launcher
 ==================
 
 Cross-platform launcher that handles virtual environment setup, dependency
-checking, and application startup for both **Linux** and **Windows**.
+checking, and application startup for **Linux**, **Windows**, and **macOS**.
 
 Usage::
 
@@ -13,12 +13,15 @@ Usage::
 
 What it does:
 
-1. Detects the current platform (Linux / Windows).
+1. Detects the current platform (Linux / Windows / macOS).
 2. Creates a Python virtual environment (``venv/``) if it doesn't exist.
 3. Installs PySide6 and other dependencies from ``requirements.txt``.
 4. Checks for platform-specific system dependencies:
    - **Linux**: ``xdotool`` (X11) or ``ydotool`` (Wayland).
    - **Windows**: No external tools needed — uses Win32 ``SendInput``.
+   - **macOS**: pyobjc frameworks (auto-installed in the venv); user
+     must grant Accessibility permission in System Settings on first
+     keystroke attempt.
 5. Launches ``src.keyboard_app`` inside the virtual environment.
 
 See Also:
@@ -38,6 +41,7 @@ SCRIPT_DIR = Path(__file__).parent.resolve()
 # Platform detection
 IS_WINDOWS = sys.platform == "win32"
 IS_LINUX = sys.platform.startswith("linux")
+IS_MACOS = sys.platform == "darwin"
 
 
 def check_python_version():
@@ -55,6 +59,10 @@ def check_system_deps():
 
     - **Linux**: Warns if neither xdotool nor ydotool are found.
     - **Windows**: No external dependencies needed (SendInput is built-in).
+    - **macOS**: pyobjc frameworks are installed as Python deps; the
+      Accessibility TCC grant is the only runtime requirement, and we
+      can't check it without prompting (the prompt itself happens on
+      first ``CGEventPost``), so we just print a reminder.
 
     Returns:
         List of warning strings (empty if all deps are satisfied).
@@ -72,10 +80,21 @@ def check_system_deps():
         # SendInput is always available via ctypes — no external deps.
         # But warn if running from a non-standard location without UIAccess.
         pass
+    elif IS_MACOS:
+        # First-run reminder. The TCC prompt itself appears the first
+        # time the app tries to post a key event; surfacing this hint
+        # up front saves the user a "why isn't it typing" debugging
+        # round.
+        warnings.append(
+            "  NOTE: On first keystroke, macOS will prompt for Accessibility\n"
+            "  permission. Open System Settings → Privacy & Security →\n"
+            "  Accessibility and enable Alpha-OSK (or your terminal /\n"
+            "  Python interpreter, while running from source)."
+        )
     else:
         warnings.append(
             f"  WARNING: Unsupported platform ({sys.platform}). "
-            "Alpha-OSK supports Linux and Windows."
+            "Alpha-OSK supports Linux, Windows, and macOS."
         )
 
     return warnings
@@ -101,7 +120,7 @@ def get_venv_python():
     """
     Get the path to the Python executable inside the virtual environment.
 
-    - **Linux**: ``venv/bin/python``
+    - **Linux / macOS**: ``venv/bin/python``
     - **Windows**: ``venv/Scripts/python.exe``
     """
     if IS_WINDOWS:
@@ -236,7 +255,14 @@ def ensure_admin_windows():
 
 def main():
     """Main launcher function."""
-    platform_name = "Windows" if IS_WINDOWS else "Linux" if IS_LINUX else sys.platform
+    if IS_WINDOWS:
+        platform_name = "Windows"
+    elif IS_LINUX:
+        platform_name = "Linux"
+    elif IS_MACOS:
+        platform_name = "macOS"
+    else:
+        platform_name = sys.platform
     print("=" * 50)
     print(f"  Alpha-OSK — On-Screen Keyboard for {platform_name}")
     print("=" * 50)

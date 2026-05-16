@@ -14,7 +14,9 @@ The name "Alpha" references both the alphabet and "first/primary" — this is th
 
 | Asset | Size | Format | Notes |
 |-------|------|--------|-------|
-| App icon | 256x256 | .ico (multi-res) | Windows taskbar, Start Menu, desktop shortcut |
+| App icon (Windows) | 256x256 | .ico (multi-res) | Windows taskbar, Start Menu, desktop shortcut |
+| App icon (macOS) | 16→1024 (10 sizes) | .icns | Dock, Finder, Cmd+Tab switcher. Regen recipe in `docs/MACOS.md` § *Regenerating `alpha-osk.icns`* — `sips` + `iconutil`, both built-in. |
+| App icon (Linux) | 1024x1024 | .png | AppImage / .desktop file (`hicolor` theme dir) |
 | Tray icon | 16x16, 32x32 | .ico | System tray, must read at tiny size |
 | Installer header | 150x57 | .bmp | NSIS installer banner |
 | Installer sidebar | 164x314 | .bmp | NSIS welcome/finish page |

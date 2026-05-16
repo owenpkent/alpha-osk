@@ -12,6 +12,12 @@ correct backend:
 - **Windows**: Uses the Win32 ``SendInput`` API via ctypes for low-level
   keyboard injection, with optional UIAccess elevation for secure-desktop
   support (requires an EV-signed binary with a UIAccess manifest).
+- **macOS**: Uses Quartz Event Services
+  (``CGEventCreateKeyboardEvent`` / ``CGEventPost``) via pyobjc.  The
+  process must hold the *Accessibility* TCC grant (System Settings →
+  Privacy & Security → Accessibility) or posts silently fail — the
+  first attempt prompts the user and the synthesizer no-ops until the
+  grant arrives.
 
 Usage::
 
@@ -31,7 +37,8 @@ Architecture
     ├── __init__.py          # This file — factory + detection
     ├── base.py              # Abstract base class (KeySynthesizerBase)
     ├── linux.py             # Linux backend (xdotool / ydotool)
-    └── windows.py           # Windows backend (SendInput via ctypes)
+    ├── windows.py           # Windows backend (SendInput via ctypes)
+    └── macos.py             # macOS backend (Quartz CGEvent via pyobjc)
 
 See also: ``docs/PLATFORM_ARCHITECTURE.md`` for detailed design rationale.
 """
@@ -48,13 +55,15 @@ if TYPE_CHECKING:
 
 _logger = logging.getLogger("Platform")
 
-# Current platform identifier: "windows", "linux", or "unsupported"
+# Current platform identifier: "windows", "linux", "macos", or "unsupported"
 CURRENT_PLATFORM: str
 
 if sys.platform == "win32":
     CURRENT_PLATFORM = "windows"
 elif sys.platform.startswith("linux"):
     CURRENT_PLATFORM = "linux"
+elif sys.platform == "darwin":
+    CURRENT_PLATFORM = "macos"
 else:
     CURRENT_PLATFORM = "unsupported"
 
@@ -83,10 +92,14 @@ def create_key_synthesizer() -> "KeySynthesizerBase":
         from .windows import WindowsKeySynthesizer
         _logger.info("Creating Windows key synthesizer")
         return WindowsKeySynthesizer()
+    elif CURRENT_PLATFORM == "macos":
+        from .macos import MacOSKeySynthesizer
+        _logger.info("Creating macOS key synthesizer")
+        return MacOSKeySynthesizer()
     else:
         raise RuntimeError(
             f"Unsupported platform: {sys.platform}. "
-            "Alpha-OSK supports Linux and Windows."
+            "Alpha-OSK supports Linux, Windows, and macOS."
         )
 
 
@@ -117,6 +130,9 @@ def get_platform_info() -> dict:
     elif CURRENT_PLATFORM == "windows":
         info["ui_access"] = _check_ui_access()
         info["windows_version"] = sys.getwindowsversion().major  # type: ignore[attr-defined]
+    elif CURRENT_PLATFORM == "macos":
+        info["accessibility_trusted"] = _check_macos_accessibility()
+        info["display_server"] = "quartz"
 
     return info
 
@@ -126,7 +142,8 @@ def get_config_dir() -> Path:
     Return the platform-appropriate configuration directory for Alpha-OSK.
 
     - **Windows**: ``%APPDATA%/alpha-osk``
-    - **Linux**: ``~/.config/alpha-osk``
+    - **Linux**:   ``~/.config/alpha-osk``
+    - **macOS**:   ``~/Library/Application Support/alpha-osk``
 
     The directory is created if it does not exist.
 
@@ -139,11 +156,15 @@ def get_config_dir() -> Path:
         import os
         base = Path(os.environ.get("APPDATA", Path.home() / "AppData" / "Roaming"))
         config_dir = base / "alpha-osk"
+    elif CURRENT_PLATFORM == "macos":
+        config_dir = Path.home() / "Library" / "Application Support" / "alpha-osk"
     else:
         config_dir = Path.home() / ".config" / "alpha-osk"
 
     config_dir.mkdir(parents=True, exist_ok=True)
-    # Restrict permissions on Linux (model files contain typed word history)
+    # Restrict permissions on POSIX (model files contain typed word history).
+    # Windows uses ACLs on the user profile already; macOS Application Support
+    # is per-user but tightening to 0700 is still defence in depth.
     if CURRENT_PLATFORM != "windows":
         config_dir.chmod(0o700)
     return config_dir
@@ -154,7 +175,8 @@ def get_model_dir() -> Path:
     Return the platform-appropriate model storage directory.
 
     - **Windows**: ``%APPDATA%/alpha-osk/models``
-    - **Linux**: ``~/.config/alpha-osk/models``
+    - **Linux**:   ``~/.config/alpha-osk/models``
+    - **macOS**:   ``~/Library/Application Support/alpha-osk/models``
 
     Returns:
         pathlib.Path to the models directory (created if needed).
@@ -206,6 +228,34 @@ def _check_ui_access() -> bool:
         )
         kernel32.CloseHandle(token)
         return bool(result and ui_access.value)
+    except Exception:
+        return False
+
+
+def _check_macos_accessibility() -> bool:
+    """Return True if this process is trusted for Accessibility on macOS.
+
+    Posting synthetic keyboard events (``CGEventPost``) silently fails
+    unless the process holds the Accessibility TCC grant in System
+    Settings → Privacy & Security → Accessibility.  This helper does a
+    *non-prompting* check using ``AXIsProcessTrusted`` — useful for
+    surfacing the state in logs / the platform-info dialog without
+    triggering the prompt repeatedly at import time.
+
+    The synthesizer itself triggers the prompt the first time it tries
+    to post an event; surfacing it here is purely informational.
+
+    Returns False on any error (no pyobjc, framework call raised, etc.).
+    """
+    if CURRENT_PLATFORM != "macos":
+        return False
+    try:
+        from ApplicationServices import AXIsProcessTrusted  # type: ignore[import-not-found]
+    except ImportError:
+        # pyobjc not installed — the synthesizer will warn at first use.
+        return False
+    try:
+        return bool(AXIsProcessTrusted())
     except Exception:
         return False
 

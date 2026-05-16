@@ -1746,6 +1746,15 @@ class KeyboardBridge(QObject):
 
         Windows: ``GetForegroundWindow()`` via ctypes.
         X11:    ``xdotool getactivewindow`` subprocess (~5 ms).
+        macOS:  ``NSWorkspace.frontmostApplication().processIdentifier()``
+                — pid stands in for window id; the bridge only uses
+                this value to detect *changes*, so a stable per-app
+                identifier is enough.  Multi-window apps share a pid,
+                which means switching between two TextEdit documents
+                won't clear context — acceptable, matches the Linux
+                behaviour today, and avoids the much heavier
+                ``CGWindowListCopyWindowInfo`` traversal on every
+                poll.
         Wayland / other: returns 0 (no supported API).
 
         Errors are logged once per unique exception type so a recurring
@@ -1770,6 +1779,15 @@ class KeyboardBridge(QObject):
                 )
                 out = result.stdout.strip()
                 return int(out) if result.returncode == 0 and out else 0
+            if sys.platform == "darwin":
+                try:
+                    from AppKit import NSWorkspace  # type: ignore[import-not-found]
+                except ImportError:
+                    return 0
+                app = NSWorkspace.sharedWorkspace().frontmostApplication()
+                if app is None:
+                    return 0
+                return int(app.processIdentifier())
         except Exception as exc:
             # Dedupe by exception type so a missing xdotool or a transient
             # Win32 access denial doesn't flood logs at 4 Hz.

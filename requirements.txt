@@ -1,8 +1,20 @@
 # Alpha-OSK Dependencies
-# Works on both Linux and Windows — no platform-specific packages required.
+# Works on Linux, Windows, and macOS.  Platform-specific packages use
+# PEP 508 environment markers so pip resolves the right set per host
+# without manual extras.
 
 # Core UI framework (Qt6 / QML)
 PySide6>=6.6.0
+
+# macOS key synthesis (Quartz CGEvent) + NSWindow tuning + AXIsProcessTrusted.
+# - pyobjc-framework-Quartz: CGEventCreateKeyboardEvent / CGEventPost.
+# - pyobjc-framework-Cocoa: AppKit (NSWindow tuning, NSWorkspace foreground app).
+# - pyobjc-framework-ApplicationServices: AXIsProcessTrusted readout, plus the
+#   future AXUIElement-based password detector.  Quartz doesn't pull it in
+#   transitively even though both wrap CoreGraphics, so list it explicitly.
+pyobjc-framework-Quartz>=10.0; sys_platform == "darwin"
+pyobjc-framework-Cocoa>=10.0; sys_platform == "darwin"
+pyobjc-framework-ApplicationServices>=10.0; sys_platform == "darwin"
 
 # Prediction engine (optional - n-gram works without these)
 # Install for LLM-enhanced predictions:
@@ -22,3 +34,4 @@ PySide6>=6.6.0
 
 # Note: The Windows key synthesis backend uses only ctypes (Python stdlib).
 # No pywin32 or other Windows-specific packages are needed.
+# Linux uses xdotool/ydotool as subprocess (OS-level tools, not Python deps).

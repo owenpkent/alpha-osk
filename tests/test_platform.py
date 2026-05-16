@@ -18,13 +18,15 @@ class TestPlatformDetection:
         assert isinstance(CURRENT_PLATFORM, str)
 
     def test_current_platform_is_valid(self):
-        assert CURRENT_PLATFORM in ("windows", "linux", "unsupported")
+        assert CURRENT_PLATFORM in ("windows", "linux", "macos", "unsupported")
 
     def test_current_platform_matches_sys(self):
         if sys.platform == "win32":
             assert CURRENT_PLATFORM == "windows"
         elif sys.platform.startswith("linux"):
             assert CURRENT_PLATFORM == "linux"
+        elif sys.platform == "darwin":
+            assert CURRENT_PLATFORM == "macos"
 
 
 class TestFactory:
@@ -44,6 +46,9 @@ class TestFactory:
         elif CURRENT_PLATFORM == "linux":
             from src.platform.linux import LinuxKeySynthesizer
             assert isinstance(synth, LinuxKeySynthesizer)
+        elif CURRENT_PLATFORM == "macos":
+            from src.platform.macos import MacOSKeySynthesizer
+            assert isinstance(synth, MacOSKeySynthesizer)
 
     def test_synthesizer_has_backend_name(self):
         from src.platform import create_key_synthesizer
@@ -76,6 +81,8 @@ class TestConfigPaths:
             assert "alpha-osk" in str(result)
         elif CURRENT_PLATFORM == "linux":
             assert ".config/alpha-osk" in str(result)
+        elif CURRENT_PLATFORM == "macos":
+            assert "Library/Application Support/alpha-osk" in str(result)
 
     def test_get_model_dir_returns_path(self):
         result = get_model_dir()

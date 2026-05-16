@@ -28,6 +28,17 @@ at-spi-2 bus running (both are default on Ubuntu GNOME).  If
 PyGObject or the bus is absent, falls back silently to the null
 detector and users can still toggle privacy mode manually.
 
+macOS
+-----
+Currently stubbed to the null detector — manual privacy toggle still
+works.  A full implementation would walk the AXUIElement focus chain
+(``AXUIElementCopyAttributeValue`` for ``kAXFocusedUIElementAttribute``
+and ``kAXRoleAttribute`` / ``kAXSubroleAttribute``, treating
+``AXSecureTextField`` as the password signal) via pyobjc's
+ApplicationServices bindings.  That path requires the same
+Accessibility TCC grant the key synthesizer needs and is its own
+chunk of work; deferred until the typing path is solid.
+
 Dependencies: ``ctypes`` (Windows), optional ``gi.repository.Atspi``
 (Linux).
 """
@@ -114,6 +125,15 @@ def _create_detector() -> _Detector:
             "Password detection: AT-SPI unavailable — "
             "install python3-gi + gir1.2-atspi-2.0, or use the "
             "manual privacy toggle."
+        )
+        return _NullDetector()
+    if sys.platform == "darwin":
+        # macOS: AXUIElement-based auto-detection is a TODO.  Manual
+        # toggle in the title bar still works.  Logged at INFO so users
+        # who expect the auto path can tell why it isn't firing.
+        _logger.info(
+            "Password detection: macOS auto-detect not yet implemented — "
+            "use the manual privacy toggle in the title bar."
         )
         return _NullDetector()
     _logger.info("Password detection: not available on this platform")

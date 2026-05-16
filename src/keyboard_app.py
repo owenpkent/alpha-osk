@@ -19,6 +19,15 @@ Cross-Platform Behaviour
   they suppressed the taskbar entry, leaving the standard minimize
   button with nowhere to go.
 
+- **macOS**: Same Qt flags (``WindowDoesNotAcceptFocus`` maps to
+  ``-canBecomeKeyWindow`` returning NO).  On top of that, pyobjc is
+  used to set the NSWindow level to ``NSFloatingWindowLevel``,
+  collection behavior to ``CanJoinAllSpaces | Transient | FullScreenAuxiliary``
+  (so the keyboard follows the user across Spaces and floats over
+  fullscreen apps), and ``hidesOnDeactivate=NO`` so the window stays
+  visible when another app gains focus — without that, clicking into
+  a text editor would make the keyboard vanish on the next event.
+
 See Also
 --------
 - ``src/platform/`` — OS-specific key synthesis backends.
@@ -161,16 +170,39 @@ def qml_path() -> Path:
 def _icon_path() -> Path | None:
     """Find the app icon for the system tray.
 
-    Prefers ``.ico`` on Windows and falls back to the PNG shipped in
-    ``assets/`` on Linux (the PyInstaller Linux spec copies it into
-    ``_internal/assets/`` next to the executable).
+    The native-format icon list is chosen per platform:
+
+    - macOS:   ``.icns`` (multi-resolution Apple format)
+    - Windows: ``.ico`` (multi-resolution Win32 format)
+    - Linux:   the PNG directly — neither .ico nor .icns is native
+
+    Then a PNG fallback so a stripped-down dev checkout still gets
+    *some* icon.  Without per-platform gating, every platform would
+    pick whichever native asset happens to sit earliest in the
+    candidate list — the macOS build was loading
+    ``build/windows/alpha-osk.ico`` because the iteration order was
+    Windows-first.
     """
     root = _project_root()
     exe_dir = Path(sys.executable).parent
-    candidates = [
-        root / "build" / "windows" / "alpha-osk.ico",
-        root / "alpha-osk.ico",
-        exe_dir / "alpha-osk.ico",
+
+    native_candidates: list[Path]
+    if CURRENT_PLATFORM == "macos":
+        native_candidates = [
+            root / "build" / "macos" / "alpha-osk.icns",
+            exe_dir / "alpha-osk.icns",
+        ]
+    elif CURRENT_PLATFORM == "windows":
+        native_candidates = [
+            root / "build" / "windows" / "alpha-osk.ico",
+            root / "alpha-osk.ico",
+            exe_dir / "alpha-osk.ico",
+        ]
+    else:
+        # Linux + unsupported — PNG only
+        native_candidates = []
+
+    candidates = native_candidates + [
         root / "assets" / "logo-1024.png",
         exe_dir / "_internal" / "assets" / "logo-1024.png",
         exe_dir / "assets" / "logo-1024.png",
@@ -191,6 +223,10 @@ def _setup_platform_env() -> None:
       prefer ``ydotool`` can override with ``QT_QPA_PLATFORM=wayland``.
     - **Windows**: No environment overrides needed — the ``windows``
       platform adapter is used automatically.
+    - **macOS**: No environment overrides needed — the ``cocoa``
+      platform adapter is used automatically.  NSWindow tuning
+      happens in ``_apply_macos_window_flags`` after the QML root
+      window is created.
     """
     if CURRENT_PLATFORM == "linux":
         os.environ.setdefault("QT_QPA_PLATFORM", "xcb")
@@ -218,15 +254,42 @@ def _apply_window_flags(root) -> None:
     # Qt flags — work on all platforms.  WindowDoesNotAcceptFocus
     # is the Linux/Wayland equivalent of WS_EX_NOACTIVATE; on
     # Windows the Win32 path below handles focus suppression.
-    root.setFlags(
+    base_flags = (
         Qt.WindowType.WindowStaysOnTopHint
         | Qt.WindowType.FramelessWindowHint
         | Qt.WindowType.WindowDoesNotAcceptFocus
     )
 
+    # macOS needs Qt.Tool ON TOP of the above.  On macOS, Qt.Tool
+    # makes the QML root a native NSPanel rather than a plain
+    # NSWindow.  Only NSPanel honors the "non-activating" semantics
+    # we need so clicks on the OSK don't pull Alpha-OSK to the
+    # foreground.  Qt.WindowDoesNotAcceptFocus alone maps to
+    # ``canBecomeKeyWindow: NO`` — that stops keyboard input but
+    # does NOT stop app-level activation on mouse-down.  Without
+    # Qt.Tool, clicking a key activates the OSK as the foreground
+    # app and ``CGEventPost`` then delivers the synthesised
+    # keystroke to Alpha-OSK itself rather than to the editor
+    # behind us.  Confirmed in dev logs as
+    # ``POST send_text('h') → frontmost=Python``.
+    #
+    # On Windows and Linux, Qt.Tool *also* removes the taskbar entry
+    # (Windows) and changes WM hinting in ways the bridge / minimise
+    # / tray icons don't expect — see the WS_EX_TOOLWINDOW note in
+    # ``_apply_windows_extended_styles`` for the full rationale.  So
+    # we only add Qt.Tool when we're actually on macOS, where the
+    # Accessory activation policy has already eliminated the
+    # taskbar/Dock entry anyway.
+    if CURRENT_PLATFORM == "macos":
+        base_flags = base_flags | Qt.WindowType.Tool
+
+    root.setFlags(base_flags)
+
     # Windows-specific: apply WS_EX_NOACTIVATE via Win32 API
     if CURRENT_PLATFORM == "windows":
         _apply_windows_extended_styles(root)
+    elif CURRENT_PLATFORM == "macos":
+        _apply_macos_window_flags(root)
 
 
 def _apply_windows_extended_styles(root) -> None:
@@ -318,6 +381,192 @@ def _apply_windows_extended_styles(root) -> None:
         )
     except Exception as e:
         _logger.warning("Failed to apply Windows extended styles: %s", e)
+
+
+def _apply_macos_activation_policy() -> None:
+    """Switch the NSApplication into ``Accessory`` activation policy.
+
+    This is the **critical** fix for OSK focus theft on macOS.  Qt's
+    ``WindowDoesNotAcceptFocus`` flag maps to ``canBecomeKeyWindow:
+    NO``, which stops the window from receiving keyboard input — but
+    on macOS, clicking on a window *also* activates the owning
+    application (yanks it to the foreground, owns the menu bar).  The
+    NSWindow-level flag does not prevent that.
+
+    Result before this fix: clicking any OSK key activated Alpha-OSK
+    as the foreground app, kicking TextEdit out of the frontmost slot.
+    ``CGEventPost`` then sent the synthesised keystroke to Alpha-OSK
+    itself (the new foreground), so nothing reached the editor — user
+    saw "keystrokes not sending".
+
+    ``NSApplicationActivationPolicyAccessory`` tells AppKit that this
+    app should never become the active app: clicks on its windows do
+    not steal application focus, and the previously frontmost app
+    keeps receiving input.  Same model used by macOS's own
+    "Accessibility Keyboard" and by menu-bar utilities like Magnet /
+    Rectangle / AltTab.
+
+    Trade-offs:
+    - **No Dock icon.** The system tray icon (already wired in
+      ``main()``) carries show/hide/quit.
+    - **No Cmd+Tab entry.** The OSK isn't an app in the switcher
+      sense; it's a system overlay.  Users who want a Cmd+Tab entry
+      can comment this out and pay the focus-theft cost, but for
+      first ship Accessory is the right answer.
+    - **No menu bar.** Qt was already not driving a menu bar for us.
+
+    Must run AFTER ``QApplication(sys.argv)`` so ``NSApp`` exists,
+    and BEFORE ``app.exec()``.  Silently no-ops if pyobjc isn't
+    available — degraded behaviour is "OSK works but steals focus",
+    same as without this function at all.
+    """
+    try:
+        from AppKit import (  # type: ignore[import-not-found]
+            NSApp,
+            NSApplicationActivationPolicyAccessory,
+        )
+    except ImportError as exc:
+        _logger.warning(
+            "pyobjc not available (%s) — cannot set Accessory activation "
+            "policy. OSK will likely steal focus on click. "
+            "Install: pip install pyobjc-framework-Cocoa",
+            exc,
+        )
+        return
+
+    try:
+        # NSApp is the global NSApplication singleton — created by Qt
+        # the moment QApplication is instantiated.
+        if NSApp is None:
+            _logger.warning(
+                "NSApp is None — QApplication probably not yet created. "
+                "Call _apply_macos_activation_policy() after "
+                "QApplication(sys.argv)."
+            )
+            return
+        NSApp.setActivationPolicy_(NSApplicationActivationPolicyAccessory)
+        _logger.info(
+            "Applied NSApplicationActivationPolicyAccessory — "
+            "OSK will not steal application focus on click"
+        )
+    except Exception as exc:
+        _logger.warning(
+            "Failed to set Accessory activation policy: %s — OSK may "
+            "steal focus when clicked",
+            exc,
+        )
+
+
+def _apply_macos_window_flags(root) -> None:
+    """Configure the NSWindow backing the QML root for OSK behaviour.
+
+    Three things we ask Cocoa for that Qt does not surface as flags:
+
+    1. **Level = NSFloatingWindowLevel** (3) — float above ordinary
+       windows.  Qt's ``WindowStaysOnTopHint`` already requests this
+       on macOS, but we restate it for defence-in-depth and to match
+       the Windows path (``WS_EX_TOPMOST``).
+    2. **Collection behavior** — join all Spaces so the keyboard
+       follows the user when they switch desktops, mark it transient
+       so Mission Control won't try to tile it as a real window, and
+       add the fullscreen-auxiliary flag so it appears above other
+       apps that have entered fullscreen mode.
+    3. **hidesOnDeactivate = NO** — keep the keyboard visible the
+       moment focus moves to the text editor the user is typing into.
+       The default is NO for NSWindow, but Qt sometimes flips it for
+       Tool-class windows; setting it explicitly is cheap insurance.
+
+    Qt's ``WindowDoesNotAcceptFocus`` already prevents the window
+    from becoming key on macOS (it maps to ``canBecomeKeyWindow`` →
+    NO), so we don't need to subclass NSWindow here.  If a future
+    regression brings focus-theft back, swizzling
+    ``canBecomeKeyWindow`` on the live window is the next step.
+
+    Silently no-ops if pyobjc isn't installed — the OSK will still
+    work, the keyboard just won't follow Spaces and may dip behind
+    fullscreen apps.
+    """
+    try:
+        import objc  # type: ignore[import-not-found]
+        from AppKit import (  # type: ignore[import-not-found]
+            NSFloatingWindowLevel,
+            NSPanel,
+            NSWindowCollectionBehaviorCanJoinAllSpaces,
+            NSWindowCollectionBehaviorTransient,
+            NSWindowCollectionBehaviorFullScreenAuxiliary,
+        )
+    except ImportError as exc:
+        _logger.warning(
+            "pyobjc not available (%s) — skipping macOS NSWindow tuning. "
+            "Install with: pip install pyobjc-framework-Cocoa",
+            exc,
+        )
+        return
+
+    try:
+        # root.winId() returns the native NSView pointer on macOS.
+        # Wrap it as a real ObjC object and walk up to the NSWindow.
+        ns_view = objc.objc_object(c_void_p=int(root.winId()))
+        ns_window = ns_view.window()
+        if ns_window is None:
+            _logger.warning(
+                "Could not obtain NSWindow from QML root — macOS window "
+                "flags not applied"
+            )
+            return
+
+        # The actual NSWindow class.  On Qt 6 / PySide6, QQuickWindow
+        # produces ``QNSWindow`` here regardless of Qt.Tool flag —
+        # Qt 5's Tool→NSPanel mapping was dropped.  We log at DEBUG
+        # in case a future Qt version restores the panel mapping (we'd
+        # see ``is_panel=True`` here and the NonactivatingPanel style
+        # bit below would actually do something).  Focus theft is
+        # *not* solved by the NSWindow tuning in this function — the
+        # working solution is the ``CGEventPostToPid`` routing in
+        # ``MacOSKeySynthesizer._post_event``.
+        cls_name = ns_window.className()
+        is_panel = bool(ns_window.isKindOfClass_(NSPanel))
+        _logger.debug(
+            "QML root NSWindow class=%s is_panel=%s",
+            cls_name, is_panel,
+        )
+
+        ns_window.setLevel_(NSFloatingWindowLevel)
+        ns_window.setCollectionBehavior_(
+            NSWindowCollectionBehaviorCanJoinAllSpaces
+            | NSWindowCollectionBehaviorTransient
+            | NSWindowCollectionBehaviorFullScreenAuxiliary
+        )
+        ns_window.setHidesOnDeactivate_(False)
+
+        # NSWindowStyleMaskNonactivatingPanel = 1 << 7 (0x80).  Only
+        # NSPanel honors this bit; plain NSWindow ignores it.  We OR
+        # it in opportunistically so that a future Qt version that
+        # restores the Tool→NSPanel mapping would automatically pick
+        # up the non-activating semantics with no further changes
+        # here.  Today (Qt 6.10.x) ``is_panel`` is False and this
+        # branch is dead — the focus story is handled by
+        # CGEventPostToPid in the synthesizer.
+        if is_panel:
+            NS_WINDOW_STYLE_MASK_NONACTIVATING_PANEL = 1 << 7
+            current_mask = int(ns_window.styleMask())
+            new_mask = current_mask | NS_WINDOW_STYLE_MASK_NONACTIVATING_PANEL
+            ns_window.setStyleMask_(new_mask)
+            try:
+                ns_window.setWorksWhenModal_(True)
+            except Exception:
+                pass
+            _logger.debug(
+                "NSPanel styleMask: %#x → %#x (added NonactivatingPanel)",
+                current_mask, new_mask,
+            )
+
+        _logger.info(
+            "Applied macOS NSWindow flags: "
+            "floating level, all-Spaces, fullscreen-aux, hides-on-deactivate=NO"
+        )
+    except Exception as exc:
+        _logger.warning("Failed to apply macOS NSWindow flags: %s", exc)
 
 
 def _migrate_legacy_compat_settings() -> None:
@@ -447,6 +696,14 @@ def main() -> int:
     app.setApplicationName("Alpha-OSK")
     app.setOrganizationName("alpha-osk")
 
+    # macOS: drop into Accessory activation policy so clicking the
+    # OSK doesn't yank the app to the foreground (and thereby steal
+    # focus from the text field the user is typing into).  Must
+    # happen after QApplication() because NSApp is created during
+    # QApplication's __init__.
+    if CURRENT_PLATFORM == "macos":
+        _apply_macos_activation_policy()
+
     # Migrate any legacy "Remote Desktop Mode" setting keys to the new
     # "Compatibility Mode" names before QML's Settings element binds.
     # Idempotent — guarded by a flag, so it costs nothing after the
@@ -479,6 +736,13 @@ def main() -> int:
             _logger.warning(
                 "No key synthesis tool found. "
                 "Install xdotool: sudo apt install xdotool"
+            )
+        elif CURRENT_PLATFORM == "macos":
+            _logger.warning(
+                "macOS key synthesis unavailable. "
+                "Install pyobjc-framework-Quartz, and grant Alpha-OSK "
+                "Accessibility permission in System Settings → "
+                "Privacy & Security → Accessibility."
             )
         else:
             _logger.warning(
