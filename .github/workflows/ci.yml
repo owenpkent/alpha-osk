@@ -66,14 +66,19 @@ jobs:
   # the OSV database for known CVEs.  Pinned to the v2.3.8 SHA per
   # the audit-driven hardening posture (tag refs are mutable).
   #
-  # fail-on-vuln: false  -- advisory-only on day 1.  We already know
-  # about four dev-only CVEs flowing through Wrangler 3.x (3 moderate
-  # esbuild, 1 high undici); upgrading is a breaking change tracked
-  # separately.  Flip to true once those are resolved or quarantined
-  # in an ignore file so unknowns gate merges.
+  # fail-on-vuln: true gates merges on unknown CVEs.  The known
+  # Wrangler-3.x esbuild/undici findings were resolved by upgrading
+  # to Wrangler 4.x; the transitive lxml advisory was resolved by
+  # pinning lxml>=6.1.0 in requirements-dev.txt.  If a future CVE
+  # appears and we genuinely can't fix it before the next push,
+  # quarantine it with an `osv-scanner.toml` ignore entry rather
+  # than flipping this back to false globally.
   #
-  # upload-sarif: true (default) writes findings to the Security tab
-  # so they're visible without grepping action logs.
+  # upload-sarif: false because the source repo is private and GitHub
+  # Advanced Security (required for SARIF upload to the Security tab on
+  # private repos) is not enabled.  The scan still runs and findings
+  # surface in the action's job summary / annotations; flip back to
+  # true if/when GHAS is enabled or the repo goes public.
   osv-scan:
     name: OSV Scanner (deps CVE check)
     permissions:
@@ -85,4 +90,5 @@ jobs:
       scan-args: |-
         --lockfile=requirements-dev.txt
         --lockfile=backend/cf-worker/package-lock.json
-      fail-on-vuln: false
+      fail-on-vuln: true
+      upload-sarif: false

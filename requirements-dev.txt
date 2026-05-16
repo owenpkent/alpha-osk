@@ -16,6 +16,9 @@ mypy>=1.9.0
 # Pulled in by pytest/rich; pin away from ReDoS-vulnerable versions
 # (CVE-2022-40896, CVE-2026-4539).
 Pygments>=2.20.0
+# Pulled in transitively by cyclonedx-bom -> py-serializable; pin past
+# CVE-2026-41066 (GHSA-vfmq-68hx-4jfw, fixed in 6.1.0).
+lxml>=6.1.0
 
 # SBOM generation (used at release time by build/{windows,linux}/build.py
 # to emit CycloneDX 1.6 SBOMs alongside the .exe / AppImage).  Not used

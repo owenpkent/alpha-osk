@@ -15,6 +15,6 @@
     "@cloudflare/workers-types": "^4.20250101.0",
     "@cyclonedx/cyclonedx-npm": "^4.2.1",
     "typescript": "^5.4.0",
-    "wrangler": "^3.80.0"
+    "wrangler": "^4.0.0"
   }
 }
