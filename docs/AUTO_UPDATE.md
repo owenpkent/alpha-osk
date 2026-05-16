@@ -6,9 +6,9 @@
 
 Code lives in `src/updater.py` (network + signature verification), `src/keyboard_bridge.py` (`checkForUpdate` / `installUpdate` / `dismissUpdate` slots, `updateAvailable` / `updateUnavailable` / `updateInstallStarted` / `updateInstallFailed` signals), `qml/Main.qml` (banner + Connections), `qml/components/UnifiedSettingsPanel.qml` (Updates section). Tests in `tests/test_updater.py`.
 
-### Public-vs-private repo split
+### Source-vs-releases repo split
 
-The source repo (`okstudio1/alpha-osk`) is **private**; release binaries live in a separate **public** repo (`okstudio1/alpha-osk-releases`). The auto-updater queries the public repo's `/releases/latest` endpoint — private repos return 404 to the unauthenticated requests update clients are. v1.0.3 and v1.0.4 shipped with the wrong endpoint hard-coded (the private source repo), so their updater always saw "no update available". v1.0.5 fixes the endpoint; v1.0.3 / v1.0.4 users need one final manual install of v1.0.5 to get on the working updater path.
+Source code lives at `okstudio1/alpha-osk`; release binaries live in a separate repo at `okstudio1/alpha-osk-releases`. Both are public as of 2026-05-16. The split is preserved for two reasons: (1) the auto-updater's API URL is hard-pinned to the releases repo (`src/updater.py::GITHUB_API_URL`), so flipping which repo holds releases would break every existing user's updater, and (2) keeping binaries out of the source repo keeps clone time small. **Historical note:** the source repo used to be private. v1.0.3 and v1.0.4 shipped with the wrong endpoint hard-coded (pointing at the then-private source repo), so their updater always saw "no update available". v1.0.5 fixed the endpoint; v1.0.3 / v1.0.4 users needed one final manual install of v1.0.5 to get on the working updater path.
 
 ## Threat model
 

@@ -74,11 +74,14 @@ jobs:
   # quarantine it with an `osv-scanner.toml` ignore entry rather
   # than flipping this back to false globally.
   #
-  # upload-sarif: false because the source repo is private and GitHub
-  # Advanced Security (required for SARIF upload to the Security tab on
-  # private repos) is not enabled.  The scan still runs and findings
-  # surface in the action's job summary / annotations; flip back to
-  # true if/when GHAS is enabled or the repo goes public.
+  # upload-sarif: false by default.  Originally because the source repo
+  # was private and GitHub Advanced Security (required for SARIF upload
+  # to the Security tab on private repos) was not enabled.  The repo
+  # went public on 2026-05-16, so code scanning is now free and SARIF
+  # upload could be flipped on — kept off for now because findings still
+  # surface in the action's job summary / annotations, and surfacing
+  # them in the public Security tab also publishes them to anyone
+  # watching.  Flip to true once you're comfortable with that.
   osv-scan:
     name: OSV Scanner (deps CVE check)
     permissions:
