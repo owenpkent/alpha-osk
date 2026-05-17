@@ -1066,9 +1066,14 @@ Window {
                     Comp.FunctionRow {
                         visible: root.showFunctionRow
                         Layout.alignment: Qt.AlignHCenter
-                        keyW: root.keyW * 0.85
+                        keyW: root.keyW
                         keyH: root.keyH * 0.7
                         keySpacing: root.keySpacing
+                        keyColor: Qt.darker(root.themeKeyColor, 1.15)
+                        keyPressedColor: root.themeKeyPressed
+                        keyTextColor: root.themeTextColor
+                        accentColor: root.themeAccent
+                        borderColor: root.themeBorder
                     }
 
                     // ===== Data-Driven Keyboard Rows =====

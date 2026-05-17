@@ -7,6 +7,11 @@ Item {
     property real keyW: 48
     property real keyH: 36
     property real keySpacing: 2
+    property color keyColor: "#333333"
+    property color keyPressedColor: "#5a5a5a"
+    property color keyTextColor: "#e0e0e0"
+    property color accentColor: "#4a9eff"
+    property color borderColor: "#505050"
 
     implicitWidth: fnLayout.implicitWidth
     implicitHeight: fnLayout.implicitHeight
@@ -26,7 +31,11 @@ Item {
                 fontSize: 10
                 isSpecial: true
                 enableRepeat: false
-                keyColor: "#333333"
+                keyColor: fnRow.keyColor
+                keyPressedColor: fnRow.keyPressedColor
+                keyTextColor: fnRow.keyTextColor
+                accentColor: fnRow.accentColor
+                borderColor: fnRow.borderColor
                 onKeyPressed: keyboard.pressSpecialKey(modelData.toLowerCase())
             }
         }
@@ -45,7 +54,11 @@ Item {
                 fontSize: 10
                 isSpecial: true
                 enableRepeat: false
-                keyColor: "#333333"
+                keyColor: fnRow.keyColor
+                keyPressedColor: fnRow.keyPressedColor
+                keyTextColor: fnRow.keyTextColor
+                accentColor: fnRow.accentColor
+                borderColor: fnRow.borderColor
                 onKeyPressed: keyboard.pressSpecialKey(modelData.toLowerCase())
             }
         }
@@ -64,7 +77,11 @@ Item {
                 fontSize: 10
                 isSpecial: true
                 enableRepeat: false
-                keyColor: "#333333"
+                keyColor: fnRow.keyColor
+                keyPressedColor: fnRow.keyPressedColor
+                keyTextColor: fnRow.keyTextColor
+                accentColor: fnRow.accentColor
+                borderColor: fnRow.borderColor
                 onKeyPressed: keyboard.pressSpecialKey(modelData.toLowerCase())
             }
         }

@@ -198,7 +198,12 @@ Item {
                 }
 
                 ScrollBar.vertical: ScrollBar {
-                    policy: ScrollBar.AsNeeded
+                    // AsNeeded misbehaves in Qt 6 — sometimes shows the bar
+                    // when contentHeight equals height (e.g. on the short
+                    // home grid).  Drive it from an explicit overflow check.
+                    policy: flickArea.contentHeight > flickArea.height + 1
+                            ? ScrollBar.AlwaysOn
+                            : ScrollBar.AlwaysOff
                     width: 8
 
                     contentItem: Rectangle {
