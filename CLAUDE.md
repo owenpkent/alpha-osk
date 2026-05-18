@@ -559,6 +559,18 @@ internals, spec customization).
 
 Conventional commits: `feat:`, `fix:`, `docs:`, `refactor:`, `chore:`
 
+## Community Files
+
+The repo ships the standard GitHub community health files at the top level and under `.github/`:
+
+- `CODE_OF_CONDUCT.md` — Contributor Covenant 2.1. Reports go to owenpkent@gmail.com with subject `CONDUCT: alpha-osk`.
+- `CONTRIBUTING.md` — dev setup, `check.py` pre-push gate, conventions, PR flow. Points new contributors at this file as the architecture map.
+- `SECURITY.md` — private vulnerability reporting via the releases repo's GHSA form, email fallback.
+- `.github/ISSUE_TEMPLATE/bug_report.yml` and `feature_request.yml` — form templates. `config.yml` disables blank issues and links to the security advisory + Discussions.
+- `.github/pull_request_template.md` — summary, type, test plan, accessibility check.
+
+If you change the security reporting flow, the CoC contact email, or the contribution gates, update both the relevant file and the cross-references in `CONTRIBUTING.md` / `bug_report.yml`.
+
 ## Known Issues
 
 (IDE prediction-pill duplication is now handled by auto-compat. `_COMPAT_PROCESS_NAMES` covers VS Code + Monaco forks (`code.exe`, `code - insiders.exe`, `cursor.exe`, `windsurf.exe`, `codium.exe`, `code-oss.exe`, `positron.exe`, `trae.exe`) and the JetBrains family (`idea64.exe`, `pycharm64.exe`, `webstorm64.exe`, `phpstorm64.exe`, `clion64.exe`, `goland64.exe`, `rider64.exe`, `rubymine64.exe`, `datagrip64.exe`, `dataspell64.exe`, `studio64.exe`, `studio.exe`). Both groups intercept keystrokes for completion/snippets/multi-caret in ways that break suffix-only insertion. Match on exe basename, **not** window class — `Chrome_WidgetWin_1` (Electron) and `SunAwtFrame` (JetBrains) are shared with too many unrelated apps. Visual Studio (`devenv.exe`), Sublime, and Eclipse were considered but left out: their interception is opt-in / popup-style rather than always-on, and the BackSpace-flicker path running unnecessarily isn't free. Add them if reports come in.)

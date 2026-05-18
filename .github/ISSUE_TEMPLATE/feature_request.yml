@@ -1,0 +1,57 @@
+name: Feature request
+description: Suggest a new feature or improvement.
+title: "[Feature] "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the suggestion. Alpha-OSK is an accessibility tool
+        first; features that help users with motor disabilities type
+        faster, more accurately, or with less fatigue are especially
+        welcome.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve?
+      description: Describe the situation where the current keyboard falls short. Real workflows are more useful than abstract ideas.
+      placeholder: |
+        When I'm typing in ... I have to ... because ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: How would the feature work from the user's perspective? Mockups, screenshots, or sketches help.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Other approaches you thought about, and why you preferred the one above.
+
+  - type: dropdown
+    id: accessibility-impact
+    attributes:
+      label: Accessibility impact
+      description: Does this make the keyboard easier or harder to use for someone with limited motor control?
+      options:
+        - Improves accessibility
+        - Neutral
+        - Could hurt accessibility (please explain)
+        - Not sure
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before you submit
+      options:
+        - label: I searched existing issues and didn't find a duplicate.
+          required: true

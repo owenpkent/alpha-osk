@@ -1,0 +1,71 @@
+name: Bug report
+description: Report something that doesn't work the way it should.
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug. Please fill in as much
+        as you can. If this is a **security issue**, stop here and follow
+        [SECURITY.md](https://github.com/okstudio1/alpha-osk/blob/main/SECURITY.md)
+        instead.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: A clear description of the bug. What did you do, what did you expect, what happened instead?
+      placeholder: |
+        1. I clicked ...
+        2. I expected ...
+        3. Instead ...
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Alpha-OSK version
+      description: Visible in Settings or in `src/__version__.py`.
+      placeholder: e.g. 1.0.17
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - Windows 11
+        - Windows 10
+        - Linux (X11)
+        - Linux (Wayland)
+        - macOS
+        - Other (mention in description)
+    validations:
+      required: true
+
+  - type: input
+    id: target-app
+    attributes:
+      label: Foreground application (if relevant)
+      description: Which app were you typing into when the bug occurred? Some bugs are app-specific (IDEs, remote desktop, browsers).
+      placeholder: e.g. VS Code, Chrome, TeamViewer
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or error output
+      description: If the keyboard printed an error or stack trace to the console, paste it here. Run `python run.py` from a terminal to capture output.
+      render: shell
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before you submit
+      options:
+        - label: I searched existing issues and didn't find a duplicate.
+          required: true
+        - label: This is not a security vulnerability (those go through SECURITY.md).
+          required: true

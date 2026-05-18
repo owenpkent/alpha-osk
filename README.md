@@ -238,6 +238,18 @@ alpha-osk/
 
 ---
 
+## Contributing
+
+Contributions are welcome, especially from users of adaptive technology.
+Start with [CONTRIBUTING.md](CONTRIBUTING.md) for development setup,
+coding conventions, and the PR flow. All participation is governed by
+the [Code of Conduct](CODE_OF_CONDUCT.md).
+
+For security issues, follow [SECURITY.md](SECURITY.md) instead of opening
+a public issue.
+
+---
+
 ## License
 
 [MIT License](LICENSE). Free for personal and commercial use.
