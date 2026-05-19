@@ -10,7 +10,7 @@ Accessibility-first, with hybrid predictive text (n-gram + PPM + fuzzy spatial c
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![CI](https://github.com/okstudio1/alpha-osk/actions/workflows/ci.yml/badge.svg)](https://github.com/okstudio1/alpha-osk/actions/workflows/ci.yml)
-[![Tests](https://img.shields.io/badge/tests-608-brightgreen.svg)](tests/)
+[![Tests](https://img.shields.io/badge/tests-641-brightgreen.svg)](tests/)
 [![Releases](https://img.shields.io/badge/releases-alpha--osk--releases-orange.svg)](https://github.com/okstudio1/alpha-osk-releases/releases)
 
 </div>
@@ -58,7 +58,8 @@ python run.py
 | Auto-update (Windows) | Shipping |
 | Anonymous telemetry (opt-in) | Shipping |
 | Analytics dashboard | Shipping |
-| Test suite | 608 tests passing |
+| Data backup (export / import) | Shipping |
+| Test suite | 641 tests passing |
 | macOS port | In progress |
 | Federated learning | Designed, not implemented |
 | Voice dictation | Lives in sibling project (MacroVox) |
@@ -83,6 +84,13 @@ python run.py
 - Custom vocabulary pack import (domain dictionaries: medical, programming, etc.)
 - Per-keystroke autocorrect surfaced as suggestion pills, never silent overwrites
 
+### Data backup
+
+- Export your model, lifetime stats, and imported vocabulary packs to a single `.zip` file (Settings → Data & Privacy → Data Backup)
+- Import on a new machine to restore everything in place, no restart required
+- Import auto-creates a timestamped rescue file of your current state first, so a regrettable import is one click to roll back
+- Telemetry contributor ID is deliberately excluded from exports so contributions never link across machines
+
 ### Accessibility
 
 - Tunable repeat delay and repeat interval per user
@@ -96,7 +104,7 @@ python run.py
 ### Reliability
 
 - Single-instance lock prevents accidental duplicates
-- 608 tests covering prediction, platform abstraction, bridge, vocab packs, telemetry
+- 641 tests covering prediction, platform abstraction, bridge, vocab packs, telemetry
 - CI runs ruff + mypy + pytest + OSV CVE scan on every push and PR
 - All-time analytics persist across sessions (keystrokes saved, time saved, acceptance rate)
 
@@ -125,7 +133,7 @@ For a guided tour, read [`CLAUDE.md`](CLAUDE.md). It's primarily an AI-onboardin
 
 ```bash
 python run.py                               # Launch the keyboard
-python -m pytest                            # Run the test suite (608 tests)
+python -m pytest                            # Run the test suite (641 tests)
 python check.py                             # Pre-push gate: ruff + mypy + pytest (~85s)
 python check.py --full                      # Adds coverage gate (~3min, matches CI)
 python build/windows/build.py               # Build signed Windows installer
@@ -145,6 +153,7 @@ For security issues, follow [`SECURITY.md`](SECURITY.md). Do not file public iss
 - Learning is on-device only. Your typing never leaves your computer unless you opt into telemetry.
 - Password fields are auto-detected (Windows UI Automation, Linux AT-SPI) and pause learning automatically. There's also a manual Learning / Paused toggle in the title bar.
 - Telemetry is opt-in, off by default, and sends nine integer counters per week with no content. See [`docs/PRIVACY.md`](docs/PRIVACY.md) and [`docs/TELEMETRY.md`](docs/TELEMETRY.md).
+- Data export bundles your model, lifetime stats, and imported vocabulary packs into a single `.zip` you control. The telemetry contributor ID is **excluded** from exports so contributions stay unlinkable across machines.
 - Auto-update fetches release metadata from GitHub. Installers are verified against an EV-signed certificate before launching.
 
 ## License

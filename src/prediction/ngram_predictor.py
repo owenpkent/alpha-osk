@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import time
 from collections import defaultdict
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -122,8 +123,18 @@ class NgramPredictor:
         # sighted _candidate_threshold times before entering user_vocab.
         # Keeps random consonant clusters and one-off keyboard slips out
         # of predictions.  Gboard / AOSP LatinIME use a similar gate.
+        # Parallel _candidate_last_seen tracks the most-recent sighting
+        # time so accidental sightings expire if never reinforced — see
+        # _sweep_stale_candidates.
         self._candidate_counts: Dict[str, int] = defaultdict(int)
+        self._candidate_last_seen: Dict[str, float] = {}
         self._candidate_threshold: int = 3
+        # 30 days. A candidate not re-sighted within this window is
+        # dropped at the next decay tick. Picks a balance between
+        # forgiving slow learners (a word the user uses once a fortnight
+        # still gets to 3 sightings before timing out) and not letting
+        # stale typos linger forever in the pool.
+        self._candidate_max_age_seconds: float = 30 * 86400
 
         # Load Google 10K wordlist (frequency-ranked) if available
         self._load_frequency_wordlist()
@@ -574,8 +585,10 @@ class NgramPredictor:
             # Unknown but plausible — accumulate sightings in the
             # candidate pool and only promote once the threshold is hit.
             self._candidate_counts[word] += 1
+            self._candidate_last_seen[word] = time.time()
             if self._candidate_counts[word] >= self._candidate_threshold:
                 count = self._candidate_counts.pop(word)
+                self._candidate_last_seen.pop(word, None)
                 self.unigrams[word] += count
                 self.user_vocab[word] += count
                 self._user_total += count
@@ -656,16 +669,45 @@ class NgramPredictor:
                     min_freq, int(self.bigrams[prev_word][word] * factor)
                 )
 
-        # Decay candidate counts too — a word seen once long ago
-        # shouldn't slowly accumulate toward promotion across sessions.
+        # Time-based sweep: drop candidates not seen within the max-age
+        # window before applying the multiplicative decay. An accidental
+        # pill click on a typo shouldn't sit in the pool indefinitely
+        # just because the user types fast enough to keep the
+        # learn-call decay sparse.
+        self._sweep_stale_candidates()
+
+        # Multiplicative decay: a word seen once long ago shouldn't
+        # slowly accumulate toward promotion across sessions even if
+        # within the time window.
         for word in list(self._candidate_counts):
             decayed = int(self._candidate_counts[word] * factor)
             if decayed < 1:
                 del self._candidate_counts[word]
+                self._candidate_last_seen.pop(word, None)
             else:
                 self._candidate_counts[word] = decayed
 
         _logger.debug("Applied recency decay (factor=%.2f)", factor)
+
+    def _sweep_stale_candidates(self) -> None:
+        """Drop candidate entries older than ``_candidate_max_age_seconds``.
+
+        Called from :meth:`_apply_decay`. Entries lacking a timestamp
+        (e.g. loaded from a pre-timestamp save file) are stamped with
+        the current time on first sweep so they get the full age
+        window from that point rather than being instantly expired.
+        """
+        now = time.time()
+        cutoff = now - self._candidate_max_age_seconds
+        for word in list(self._candidate_counts):
+            last = self._candidate_last_seen.get(word)
+            if last is None:
+                # Backfill: stamp now and re-check next sweep.
+                self._candidate_last_seen[word] = now
+                continue
+            if last < cutoff:
+                del self._candidate_counts[word]
+                self._candidate_last_seen.pop(word, None)
 
     def blacklist_word(self, word: str) -> None:
         """Permanently suppress a word from predictions."""
@@ -763,13 +805,66 @@ class NgramPredictor:
         return None
 
     def learn_word(self, word: str) -> None:
-        """Learn a single word (boost its frequency)."""
+        """Learn a single word (boost its frequency).
+
+        Bypasses the candidate gate — used for explicit user actions
+        (right-click → Show more, vocab pack import) where the user has
+        deliberately signalled "boost this word." For implicit signals
+        like a prediction pill click, route through
+        :meth:`learn_from_pill_click` instead so an accidental click on a
+        brand-new word doesn't permanently inflate the model.
+        """
         word = word.lower().strip()
         if word:
             self.unigrams[word] += 5
             self.user_vocab[word] += 5
             self._user_total += 5
             self.total_words += 5
+
+    # Per-click weight when promoting a candidate through the pill-click
+    # path. Matches the +5 that :meth:`learn_word` applies for known
+    # words, so a word that promotes at the threshold lands with
+    # threshold * 5 weight rather than a single sighting.
+    _PILL_CLICK_WEIGHT: int = 5
+
+    def learn_from_pill_click(self, word: str) -> None:
+        """Reinforce a word the user selected from the prediction bar.
+
+        Known words (base dict or already in user_vocab) get the same
+        +5 boost :meth:`learn_word` applies. Unknown words route through
+        the candidate gate: each click is one sighting, recorded in
+        ``_candidate_counts`` / ``_candidate_last_seen``; promotion
+        only happens after ``_candidate_threshold`` clicks. Without
+        this gate a single click on a fuzzy- or PPM-generated pill
+        would inject a never-typed word into ``user_vocab`` permanently
+        with weight 5.
+        """
+        word = word.lower().strip()
+        if not word:
+            return
+        if word in self._base_unigrams or word in self.user_vocab:
+            # Known word — reinforce immediately, no gate.
+            self.unigrams[word] += self._PILL_CLICK_WEIGHT
+            self.user_vocab[word] += self._PILL_CLICK_WEIGHT
+            self._user_total += self._PILL_CLICK_WEIGHT
+            self.total_words += self._PILL_CLICK_WEIGHT
+            return
+        # Plausibility filter: a brand-new word coming via a pill click
+        # already cleared a higher bar than free-typing (an engine
+        # generated it from the user's prefix), but the same shape
+        # filter learn() uses still applies for defence in depth.
+        if not self._is_plausible_word(word):
+            return
+        self._candidate_counts[word] += 1
+        self._candidate_last_seen[word] = time.time()
+        if self._candidate_counts[word] >= self._candidate_threshold:
+            count = self._candidate_counts.pop(word)
+            self._candidate_last_seen.pop(word, None)
+            weight = count * self._PILL_CLICK_WEIGHT
+            self.unigrams[word] += weight
+            self.user_vocab[word] += weight
+            self._user_total += weight
+            self.total_words += weight
 
     def reinforce_context(self, context: str, selected_word: str) -> None:
         """Add +1 to the trailing edges into ``selected_word``.
@@ -858,6 +953,7 @@ class NgramPredictor:
             "blacklist_type_count": dict(self._blacklist_type_count),
             "capitalization": dict(self.capitalization),
             "candidate_counts": dict(self._candidate_counts),
+            "candidate_last_seen": dict(self._candidate_last_seen),
         }
         path.parent.mkdir(parents=True, exist_ok=True)
         with open(path, "w") as f:
@@ -944,6 +1040,14 @@ class NgramPredictor:
             self.preferred = defaultdict(int, data.get("preferred", {}))
             self._blacklist_type_count = defaultdict(int, data.get("blacklist_type_count", {}))
             self._candidate_counts = defaultdict(int, data.get("candidate_counts", {}))
+            # Coerce loaded timestamps to float; older saves don't have
+            # this key, in which case the sweep backfills the field on
+            # first run rather than instantly expiring legacy entries.
+            raw_last_seen = data.get("candidate_last_seen", {}) or {}
+            self._candidate_last_seen = {
+                str(w): float(t) for w, t in raw_last_seen.items()
+                if w in self._candidate_counts
+            }
             # Merge saved capitalization with built-in proper nouns (user overrides win)
             self.capitalization.update(caps)
             _logger.info("Model loaded from %s (%d blacklisted, %d capitalizations)",
@@ -1107,6 +1211,7 @@ class NgramPredictor:
         self.preferred.clear()
         self._blacklist_type_count.clear()
         self._candidate_counts.clear()
+        self._candidate_last_seen.clear()
         self._learn_count = 0
         # Clear learned capitalization so user-typed forms don't persist
         self.capitalization.clear()

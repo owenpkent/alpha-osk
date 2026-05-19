@@ -72,6 +72,23 @@ class TestHybridLearning:
         predictor.learn_from_selection("I want", "pizza")
         assert predictor._ngram.unigrams["pizza"] > 0
 
+    def test_learn_from_selection_gates_unknown_word(self, predictor: HybridPredictor):
+        # A brand-new word that the engine generated (e.g. fuzzy /
+        # PPM completion of a typed prefix) must pass through the
+        # candidate gate, not land in user_vocab on the first click.
+        predictor.learn_from_selection("hello", "zephyrish")
+        assert predictor._ngram.user_vocab.get("zephyrish", 0) == 0
+        assert predictor._ngram._candidate_counts["zephyrish"] == 1
+        # Trailing bigram still gets +1 — context was validated by
+        # this click even if the unigram is still gated.
+        assert predictor._ngram.bigrams["hello"]["zephyrish"] == 1
+
+    def test_learn_from_selection_promotes_after_threshold(self, predictor: HybridPredictor):
+        for _ in range(3):
+            predictor.learn_from_selection("hello", "zephyrish")
+        # Promoted with cumulative click weight.
+        assert predictor._ngram.user_vocab["zephyrish"] > 0
+
     def test_learn_from_selection_targets_trailing_edge(self, predictor: HybridPredictor):
         # Type a sentence so all the bigrams in the running context exist.
         predictor.learn("I have asked")

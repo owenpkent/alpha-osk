@@ -1352,6 +1352,187 @@ class KeyboardBridge(QObject):
         self._predictor.save()
 
     # ------------------------------------------------------------------
+    #  Export / import (data backup — see src/data_export.py)
+    # ------------------------------------------------------------------
+
+    @Slot(result=str)
+    def getDefaultExportDir(self) -> str:
+        """Return the default directory for the export / import file picker.
+
+        Defaults to ``<config_dir>/exports/`` — the same folder the
+        rescue archives already live in, and a sibling of the model
+        files being exported. Using the config dir avoids an
+        elevation pitfall on Windows: ``run.py`` UAC-elevates the
+        process, so ``QStandardPaths.DocumentsLocation`` would resolve
+        to the *elevated* user's profile (often an admin account)
+        rather than the interactive user's. The config dir always
+        tracks the running user's actual data location, so the export
+        lands next to the data it's exporting.
+        """
+        from .platform import get_config_dir
+        exports = get_config_dir() / "exports"
+        exports.mkdir(parents=True, exist_ok=True)
+        return str(exports)
+
+    @Slot(result=str)
+    def getSuggestedExportName(self) -> str:
+        """Default filename including a timestamp."""
+        from . import data_export
+        return data_export.suggested_export_name()
+
+    @Slot(result=str)
+    def pickExportPath(self) -> str:
+        """Open a native Save-File dialog pre-populated with a sensible
+        default directory + filename. Returns the chosen path or an
+        empty string if the user cancelled.
+
+        Goes through Python's :class:`QFileDialog` rather than the QML
+        ``Platform.FileDialog`` because the labs dialog has no portable
+        initial-filename property across Qt versions (``currentFile``
+        is honoured on some platforms, ignored on others). Routing
+        through Python lets us pass a full initial path including the
+        suggested timestamped filename so the user just clicks Save.
+        """
+        try:
+            from PySide6.QtWidgets import QFileDialog
+
+            from . import data_export
+            default_dir = self.getDefaultExportDir()
+            suggested = data_export.suggested_export_name()
+            initial = str(Path(default_dir) / suggested)
+            path, _ = QFileDialog.getSaveFileName(
+                None,
+                "Save Alpha-OSK data export",
+                initial,
+                "Alpha-OSK export (*.zip)",
+            )
+            return path or ""
+        except Exception as exc:  # pragma: no cover — defensive
+            _logger.exception("pickExportPath failed: %s", exc)
+            return ""
+
+    @Slot(result=str)
+    def pickImportPath(self) -> str:
+        """Open a native Open-File dialog rooted at the default export
+        directory. Returns the chosen path or empty string on cancel."""
+        try:
+            from PySide6.QtWidgets import QFileDialog
+            default_dir = self.getDefaultExportDir()
+            path, _ = QFileDialog.getOpenFileName(
+                None,
+                "Open Alpha-OSK data export",
+                default_dir,
+                "Alpha-OSK export (*.zip);;All files (*)",
+            )
+            return path or ""
+        except Exception as exc:  # pragma: no cover — defensive
+            _logger.exception("pickImportPath failed: %s", exc)
+            return ""
+
+    @Slot(str, result=str)
+    def exportUserData(self, dest_path: str) -> str:
+        """Write the current model + analytics + packs to *dest_path*.
+
+        Returns an empty string on success, or a human-readable error
+        message on failure. The QML side shows the message verbatim
+        in the result toast.
+
+        Saves the in-memory model to disk first so the export
+        reflects the running session and not a stale on-disk copy.
+        """
+        from . import data_export
+        try:
+            self._predictor.save()
+            try:
+                self._analytics.save()
+            except Exception as exc:  # pragma: no cover — analytics is best-effort
+                _logger.warning("Analytics save before export failed: %s", exc)
+            from .platform import get_config_dir
+            summary = data_export.export_user_data(get_config_dir(), Path(dest_path))
+            self._add_debug_log(
+                f"Exported {len(summary.files)} files ({len(summary.pack_ids)} packs) "
+                f"to {summary.path}"
+            )
+            return ""
+        except data_export.DataExportError as exc:
+            self._add_debug_log(f"Export failed: {exc}")
+            return str(exc)
+        except Exception as exc:  # pragma: no cover — last-resort
+            _logger.exception("Unexpected error during export")
+            return f"Unexpected error: {exc}"
+
+    @Slot(str, result="QVariant")
+    def inspectUserExport(self, src_path: str) -> dict:
+        """Preview an export file without applying it.
+
+        Returns a dict with ``ok`` (bool), and on success ``files`` (list),
+        ``pack_ids`` (list), ``app_version`` (str), ``exported_at`` (str),
+        ``bytes`` (int), ``schema_version`` (int). On failure returns
+        ``{ok: False, error: <message>}``.
+
+        QML uses this to show a "you're about to replace your data
+        with X" confirmation summary before the user commits.
+        """
+        from . import data_export
+        try:
+            summary = data_export.inspect_export(Path(src_path))
+            return {
+                "ok": True,
+                "files": summary.files,
+                "pack_ids": summary.pack_ids,
+                "app_version": summary.app_version,
+                "exported_at": summary.exported_at,
+                "bytes": summary.bytes,
+                "schema_version": summary.schema_version,
+            }
+        except data_export.DataExportError as exc:
+            return {"ok": False, "error": str(exc)}
+
+    @Slot(str, result=str)
+    def importUserData(self, src_path: str) -> str:
+        """Replace the current user data with the contents of *src_path*.
+
+        A rescue export of the current state is written to
+        ``<config_dir>/exports/`` first (see :func:`import_user_data`).
+        The predictor is reloaded from disk after files are replaced
+        so the live session reflects the imported state — no restart
+        required.
+
+        Returns empty string on success, error message on failure.
+        """
+        from . import data_export
+        try:
+            from .platform import get_config_dir
+            data_export.import_user_data(Path(src_path), get_config_dir())
+            self._predictor.reload_from_disk()
+            try:
+                self._analytics.reload_from_disk()
+            except AttributeError:
+                # Older analytics module — fall back to a process-level
+                # reload by reading the file directly. Live numbers
+                # will lag until the next save/load cycle on next
+                # launch. Don't fail the whole import.
+                _logger.warning(
+                    "TypingAnalytics has no reload_from_disk(); lifetime stats"
+                    " will display stale values until next launch."
+                )
+            except Exception as exc:  # pragma: no cover
+                _logger.warning("Analytics reload after import failed: %s", exc)
+            self._current_word = ""
+            self._context_buffer = ""
+            self._sentence_buffer = ""
+            self._predictions = []
+            self.predictionsChanged.emit([])
+            self._add_debug_log(f"Imported user data from {src_path}")
+            return ""
+        except data_export.DataExportError as exc:
+            self._add_debug_log(f"Import failed: {exc}")
+            return str(exc)
+        except Exception as exc:  # pragma: no cover — last-resort
+            _logger.exception("Unexpected error during import")
+            return f"Unexpected error: {exc}"
+
+    # ------------------------------------------------------------------
     #  Auto-update (see src/updater.py for the security model)
     # ------------------------------------------------------------------
 

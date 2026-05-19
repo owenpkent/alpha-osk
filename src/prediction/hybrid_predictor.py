@@ -689,23 +689,26 @@ class HybridPredictor(QObject):
         """
         Learn when user selects a prediction.
 
-        Boosts the selected word's unigram via :meth:`learn_word` and
-        strengthens only the trailing (prev, selected) bigram and
-        (prev2, prev1, selected) trigram via
-        :meth:`NgramPredictor.reinforce_context`.
+        Routes the selected word through
+        :meth:`NgramPredictor.learn_from_pill_click` — known words get
+        the immediate +5 boost, unknown words pass through the
+        3-sighting candidate gate. Without the gate, a single click on
+        a fuzzy/PPM-generated pill for a never-typed word would inject
+        it permanently into ``user_vocab``.
 
-        Earlier this passed the entire ``context + selected_word`` to
-        :meth:`NgramPredictor.learn`, which re-incremented every bigram
-        in the running context on each prediction click — inflating the
-        early-context edges in proportion to how many predictions the
-        user picked per sentence. Targeted reinforcement gives a clean
-        +1 to the edge that was actually validated by the click.
+        Trailing bigram / trigram edges are still reinforced
+        immediately via :meth:`NgramPredictor.reinforce_context`. The
+        context edge was validated by *this* click; deferring it would
+        delay legitimate context learning. A bigram pointing into a
+        not-yet-promoted unigram surfaces the word only when that same
+        context recurs, which is exactly the loop we want for "click
+        more times to promote."
 
         Args:
             context: The context when prediction was made
             selected_word: The word the user selected
         """
-        self._ngram.learn_word(selected_word)
+        self._ngram.learn_from_pill_click(selected_word)
         self._ngram.reinforce_context(context, selected_word)
 
     def save(self) -> None:
@@ -719,6 +722,32 @@ class HybridPredictor(QObject):
             self._ppm.save(ppm_path)
 
         _logger.info("Models saved")
+
+    def reload_from_disk(self) -> None:
+        """Re-read ngram + ppm models from disk and re-discover packs.
+
+        Used after :func:`src.data_export.import_user_data` has
+        replaced the on-disk model files and the packs directory in
+        place. ``NgramPredictor.load`` already replaces (not merges)
+        the in-memory tables, so this is a straight swap of the
+        snapshot. The pack manager is reset and re-scans the now-
+        replaced packs directory so the Settings panel reflects the
+        imported state.
+
+        Enabled-pack state is reset — packs come back disabled and
+        the user re-enables what they want. Re-enabling persists
+        application-side via the Qt settings layer.
+        """
+        ngram_path = self._model_dir / "ngram_model.json"
+        if ngram_path.exists():
+            self._ngram.load(ngram_path)
+        ppm_path = self._model_dir / "ppm_model.json"
+        if self._enable_ppm and ppm_path.exists():
+            self._ppm.load(ppm_path)
+        self._pack_manager._packs.clear()
+        self._pack_manager._discover_packs()
+        self.packsChanged.emit()
+        _logger.info("Predictor reloaded from disk")
 
     def _load_training_corpus(self) -> None:
         """Load default training corpus for better predictions."""

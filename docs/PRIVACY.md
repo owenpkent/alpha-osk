@@ -49,6 +49,24 @@ If you opt back in later, you get a **new** `anon_id`. Your prior contribution a
 
 If you reinstall Alpha-OSK or delete `%APPDATA%\alpha-osk\` (Windows) or `~/.config/alpha-osk/` (Linux), you start fresh. New `anon_id`, lifetime counters back to zero. Your old row in the database becomes orphaned and gets cleaned up by the 365-day rule.
 
+## Data export (backup / move to a new computer)
+
+Settings → Data & Privacy → Data Backup lets you export your prediction model, lifetime analytics, and imported vocabulary packs to a single `.zip` file you can copy to a USB stick, cloud drive, or another machine. Importing that file on the new machine restores your state without a reinstall.
+
+What the export contains:
+
+- Your prediction model (`ngram_model.json`, `ppm_model.json`).
+- Lifetime analytics (`analytics.json` — the counters shown on the dashboard).
+- Imported vocabulary packs (the folders under `packs/`).
+- A manifest with the schema version, the Alpha-OSK version that wrote the file, an ISO-8601 UTC timestamp, and the list of files.
+
+What the export does **not** contain:
+
+- **Your telemetry contributor ID.** `telemetry.json` is intentionally excluded. Carrying the `anon_id` to a new machine would link your contributions across machines, which the "Opting out" section above promises won't happen. When you turn telemetry back on after import, the new machine generates a fresh `anon_id`.
+- Settings (theme, layout, toggles, window size). Those live in the OS settings layer (Windows registry / Linux config) and are quick to reconfigure on the new machine.
+
+Importing replaces your current data on that machine. Before any overwrite, Alpha-OSK saves your existing state as a timestamped **rescue export** in `<config>/exports/rescue-<timestamp>.zip` so you can roll back by importing that file.
+
 ## Federated learning
 
 A separate planned feature (`docs/FEDERATED_LEARNING.md`) that would share *learning updates* across users to improve prediction quality for everyone. **Not yet implemented.** When it ships, it will be a separate opt-in toggle with its own clear explanation, distinct from this telemetry toggle. Federated learning never sends raw text either, but it sends more than telemetry does (n-gram statistical updates, with differential-privacy noise added). Worth understanding the trade-off separately before opting in.

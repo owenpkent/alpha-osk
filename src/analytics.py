@@ -80,6 +80,31 @@ class TypingAnalytics(QObject):
         from .platform import get_config_dir
         return get_config_dir() / "analytics.json"
 
+    def reload_from_disk(self) -> None:
+        """Re-read lifetime stats from disk after an external swap.
+
+        Used by the import path in :class:`KeyboardBridge` after
+        ``analytics.json`` has been replaced by an imported archive.
+        Resets in-memory lifetime counters then re-loads from the
+        new file. Session counters are intentionally left alone — the
+        running session is the user's *current* activity, not part of
+        the imported snapshot.
+        """
+        self._alltime_keystrokes = 0
+        self._alltime_words = 0
+        self._alltime_predictions = 0
+        self._alltime_keystrokes_saved = 0
+        self._alltime_sessions = 0
+        self._alltime_minutes = 0.0
+        self._alltime_backspaces = 0
+        self._alltime_prediction_offers = 0
+        self._alltime_prediction_rank_sum = 0
+        self._alltime_prediction_rank_count = 0
+        self._alltime_top_pick_count = 0
+        self._alltime_word_freq = Counter()
+        self._alltime_key_freq = Counter()
+        self._load_alltime()
+
     def _load_alltime(self) -> None:
         """Load all-time stats from disk."""
         if not self._stats_path.exists():

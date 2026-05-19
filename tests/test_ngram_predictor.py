@@ -515,8 +515,105 @@ class TestFragmentFilter:
     def test_learn_word_bypasses_gate(self):
         p = NgramPredictor()
         p.learn_word("zephyrish")
-        # Explicit user add — the gate doesn't apply.
+        # Explicit user add (right-click → Show more, vocab pack
+        # import) — the gate doesn't apply.
         assert p.user_vocab.get("zephyrish", 0) > 0
+
+
+class TestLearnFromPillClick:
+    """Pill clicks must pass the same 3-sighting gate that free-typing
+    does for unknown words. Otherwise a single click on a fuzzy/PPM-
+    generated pill permanently injects a never-typed word into the
+    model with weight 5."""
+
+    def test_first_click_lands_in_candidate_pool(self):
+        p = NgramPredictor()
+        p.learn_from_pill_click("zephyrish")
+        # Not promoted yet.
+        assert p.user_vocab.get("zephyrish", 0) == 0
+        assert p.unigrams.get("zephyrish", 0) == 0
+        # Sighting recorded.
+        assert p._candidate_counts["zephyrish"] == 1
+        assert "zephyrish" in p._candidate_last_seen
+
+    def test_three_clicks_promote_with_full_weight(self):
+        p = NgramPredictor()
+        for _ in range(3):
+            p.learn_from_pill_click("zephyrish")
+        # Promoted with cumulative weight (3 * _PILL_CLICK_WEIGHT).
+        assert p.user_vocab["zephyrish"] == 15
+        assert p.unigrams["zephyrish"] == 15
+        # Pool drained for this word.
+        assert "zephyrish" not in p._candidate_counts
+        assert "zephyrish" not in p._candidate_last_seen
+        # Invariant preserved.
+        assert p._user_total == sum(p.user_vocab.values())
+
+    def test_known_base_word_bypasses_gate(self):
+        p = NgramPredictor()
+        # "hello" is in the Google 10K base dict — pill click on a
+        # known word reinforces immediately, no gate.
+        before = p.unigrams.get("hello", 0)
+        p.learn_from_pill_click("hello")
+        assert p.unigrams["hello"] == before + 5
+        assert p.user_vocab["hello"] == 5
+
+    def test_already_promoted_word_bypasses_gate(self):
+        p = NgramPredictor()
+        # Promote first via learn().
+        for _ in range(3):
+            p.learn("zephyrish")
+        before = p.user_vocab["zephyrish"]
+        p.learn_from_pill_click("zephyrish")
+        # Now in user_vocab — pill click adds +5 directly.
+        assert p.user_vocab["zephyrish"] == before + 5
+
+    def test_implausible_word_rejected(self):
+        p = NgramPredictor()
+        p.learn_from_pill_click("xqz")  # no vowels
+        assert "xqz" not in p._candidate_counts
+        assert "xqz" not in p.user_vocab
+
+    def test_clicks_update_last_seen(self):
+        p = NgramPredictor()
+        import time
+        p.learn_from_pill_click("zephyrish")
+        t1 = p._candidate_last_seen["zephyrish"]
+        time.sleep(0.01)
+        p.learn_from_pill_click("zephyrish")
+        t2 = p._candidate_last_seen["zephyrish"]
+        assert t2 > t1
+
+
+class TestStaleCandidateSweep:
+    """Candidates not re-sighted within the max-age window expire on
+    the next decay tick. Stops an accidental pill click on a typo
+    from sitting in the pool indefinitely."""
+
+    def test_stale_candidate_dropped_by_sweep(self):
+        p = NgramPredictor()
+        p.learn_from_pill_click("zephyrish")
+        # Backdate the timestamp past the cutoff.
+        p._candidate_last_seen["zephyrish"] = 0.0
+        p._sweep_stale_candidates()
+        assert "zephyrish" not in p._candidate_counts
+        assert "zephyrish" not in p._candidate_last_seen
+
+    def test_fresh_candidate_survives_sweep(self):
+        p = NgramPredictor()
+        p.learn_from_pill_click("zephyrish")
+        p._sweep_stale_candidates()
+        assert p._candidate_counts.get("zephyrish") == 1
+
+    def test_missing_timestamp_is_backfilled(self):
+        p = NgramPredictor()
+        # Simulate a candidate loaded from a pre-timestamp save file.
+        p._candidate_counts["zephyrish"] = 1
+        # No entry in _candidate_last_seen.
+        p._sweep_stale_candidates()
+        # Not expired, backfilled.
+        assert p._candidate_counts.get("zephyrish") == 1
+        assert "zephyrish" in p._candidate_last_seen
 
 
 class TestBaseWordlistFiltering:
@@ -603,11 +700,44 @@ class TestBaseWordlistFiltering:
         q.load(path)
         assert q._candidate_counts.get("zephyrish", 0) == 1
 
+    def test_candidate_last_seen_persists_across_save_load(self, tmp_path):
+        p = NgramPredictor()
+        p.learn("zephyrish")
+        stamped = p._candidate_last_seen["zephyrish"]
+        path = tmp_path / "model.json"
+        p.save(path)
+
+        q = NgramPredictor()
+        q.load(path)
+        assert q._candidate_last_seen.get("zephyrish") == stamped
+
+    def test_load_tolerates_missing_last_seen_field(self, tmp_path):
+        """An older save file without candidate_last_seen should still
+        load — the sweep backfills the timestamp on first run rather
+        than instantly expiring legacy candidates."""
+        import json
+        path = tmp_path / "old_model.json"
+        path.write_text(json.dumps({
+            "unigrams": {"hello": 100},
+            "bigrams": {}, "trigrams": {},
+            "user_vocab": {},
+            "total_words": 100,
+            "candidate_counts": {"zephyrish": 1},
+            # No candidate_last_seen key.
+        }))
+        p = NgramPredictor()
+        p.load(path)
+        assert p._candidate_counts.get("zephyrish") == 1
+        # Backfilled on the next sweep.
+        p._sweep_stale_candidates()
+        assert "zephyrish" in p._candidate_last_seen
+
     def test_clear_user_data_resets_candidates(self):
         p = NgramPredictor()
         p.learn("zephyrish")
         p.clear_user_data()
         assert len(p._candidate_counts) == 0
+        assert len(p._candidate_last_seen) == 0
 
 
 class TestUserTotalIncremental:

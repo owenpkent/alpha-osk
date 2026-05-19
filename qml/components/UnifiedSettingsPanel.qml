@@ -1343,6 +1343,264 @@ Item {
                             }
                         }
 
+                        // -- Data Backup --
+                        // Export the user's model + analytics + packs
+                        // to a single .zip, import to restore on a new
+                        // machine.  Telemetry anon_id is excluded by
+                        // src/data_export.py -- contributions must not
+                        // be linkable across machines.
+                        SettingsSection {
+                            title: "Data Backup"
+                            Layout.fillWidth: true
+
+                            ColumnLayout {
+                                id: dataBackupCol
+                                Layout.fillWidth: true
+                                spacing: 6
+
+                                property string statusMessage: ""
+                                property string statusColor: "#aaffaa"
+                                property string pendingImportPath: ""
+                                property var pendingImportSummary: null
+
+                                Text {
+                                    text: "Back up your learned words, predictions, lifetime stats, and imported vocabulary packs to a single file. Move it to another computer to restore your data."
+                                    color: "#aaa"
+                                    font.pixelSize: 10
+                                    wrapMode: Text.WordWrap
+                                    Layout.fillWidth: true
+                                }
+
+                                Text {
+                                    text: "Default folder: " + (keyboard ? keyboard.getDefaultExportDir() : "")
+                                    color: "#777"
+                                    font.pixelSize: 9
+                                    wrapMode: Text.WrapAnywhere
+                                    Layout.fillWidth: true
+                                }
+
+                                // Status / error toast
+                                Text {
+                                    text: dataBackupCol.statusMessage
+                                    color: dataBackupCol.statusColor
+                                    font.pixelSize: 11
+                                    wrapMode: Text.WordWrap
+                                    Layout.fillWidth: true
+                                    visible: dataBackupCol.statusMessage !== ""
+                                }
+
+                                // Export button
+                                Rectangle {
+                                    Layout.fillWidth: true
+                                    implicitHeight: 30
+                                    radius: 5
+                                    color: exportDataArea.containsMouse ? "#3a5a3a" : "#2a3a2a"
+                                    border.color: "#4a6a4a"
+
+                                    Text {
+                                        anchors.centerIn: parent
+                                        text: "Export Data…"
+                                        color: "#aaffaa"
+                                        font.pixelSize: 12
+                                    }
+
+                                    MouseArea {
+                                        id: exportDataArea
+                                        anchors.fill: parent
+                                        hoverEnabled: true
+                                        cursorShape: Qt.PointingHandCursor
+                                        onClicked: {
+                                            if (!keyboard) return
+                                            // Native Save dialog opens via Python
+                                            // QFileDialog so the suggested filename
+                                            // pre-populates -- the QML labs dialog
+                                            // ignores initial-filename hints on
+                                            // some Qt versions.
+                                            var path = keyboard.pickExportPath()
+                                            if (path === "") return
+                                            var err = keyboard.exportUserData(path)
+                                            if (err === "") {
+                                                dataBackupCol.statusMessage = "Exported to " + path
+                                                dataBackupCol.statusColor = "#aaffaa"
+                                            } else {
+                                                dataBackupCol.statusMessage = "Export failed: " + err
+                                                dataBackupCol.statusColor = "#ffaaaa"
+                                            }
+                                            dataBackupStatusTimer.restart()
+                                        }
+                                    }
+                                }
+
+                                // Import button
+                                Rectangle {
+                                    Layout.fillWidth: true
+                                    implicitHeight: 30
+                                    radius: 5
+                                    color: importDataArea.containsMouse ? "#3a3a5a" : "#2a2a3a"
+                                    border.color: "#4a4a6a"
+
+                                    Text {
+                                        anchors.centerIn: parent
+                                        text: "Import Data…"
+                                        color: "#aabbff"
+                                        font.pixelSize: 12
+                                    }
+
+                                    MouseArea {
+                                        id: importDataArea
+                                        anchors.fill: parent
+                                        hoverEnabled: true
+                                        cursorShape: Qt.PointingHandCursor
+                                        onClicked: {
+                                            if (!keyboard) return
+                                            var path = keyboard.pickImportPath()
+                                            if (path === "") return
+                                            var summary = keyboard.inspectUserExport(path)
+                                            if (summary.ok) {
+                                                dataBackupCol.pendingImportPath = path
+                                                dataBackupCol.pendingImportSummary = summary
+                                                dataBackupCol.statusMessage = ""
+                                            } else {
+                                                dataBackupCol.statusMessage = "Cannot use this file: " + summary.error
+                                                dataBackupCol.statusColor = "#ffaaaa"
+                                                dataBackupStatusTimer.restart()
+                                            }
+                                        }
+                                    }
+                                }
+
+                                // Pending-import preview + confirm/cancel
+                                ColumnLayout {
+                                    Layout.fillWidth: true
+                                    spacing: 4
+                                    visible: dataBackupCol.pendingImportPath !== ""
+
+                                    Rectangle {
+                                        Layout.fillWidth: true
+                                        radius: 5
+                                        color: "#332a1a"
+                                        border.color: "#aa6633"
+                                        implicitHeight: importPreviewCol.implicitHeight + 12
+
+                                        ColumnLayout {
+                                            id: importPreviewCol
+                                            anchors.left: parent.left
+                                            anchors.right: parent.right
+                                            anchors.verticalCenter: parent.verticalCenter
+                                            anchors.leftMargin: 8
+                                            anchors.rightMargin: 8
+                                            spacing: 2
+
+                                            Text {
+                                                text: "About to replace your data"
+                                                color: "#ffcc88"
+                                                font.pixelSize: 11
+                                                font.bold: true
+                                            }
+                                            Text {
+                                                text: "Exported by Alpha-OSK v" + (dataBackupCol.pendingImportSummary ? dataBackupCol.pendingImportSummary.app_version : "")
+                                                color: "#ccc"
+                                                font.pixelSize: 10
+                                            }
+                                            Text {
+                                                text: "Date: " + (dataBackupCol.pendingImportSummary ? dataBackupCol.pendingImportSummary.exported_at : "")
+                                                color: "#ccc"
+                                                font.pixelSize: 10
+                                                Layout.fillWidth: true
+                                                elide: Text.ElideRight
+                                            }
+                                            Text {
+                                                text: (dataBackupCol.pendingImportSummary
+                                                      ? dataBackupCol.pendingImportSummary.files.length + " files, "
+                                                        + dataBackupCol.pendingImportSummary.pack_ids.length + " vocabulary packs"
+                                                      : "")
+                                                color: "#ccc"
+                                                font.pixelSize: 10
+                                            }
+                                            Text {
+                                                text: "Your current data will be saved to a rescue file in the exports folder before overwrite."
+                                                color: "#999"
+                                                font.pixelSize: 9
+                                                wrapMode: Text.WordWrap
+                                                Layout.fillWidth: true
+                                            }
+                                        }
+                                    }
+
+                                    RowLayout {
+                                        Layout.fillWidth: true
+                                        spacing: 6
+
+                                        Rectangle {
+                                            Layout.fillWidth: true
+                                            implicitHeight: 28
+                                            radius: 5
+                                            color: applyImportArea.containsMouse ? "#5a3a3a" : "#3a2a2a"
+                                            border.color: "#aa6666"
+                                            Text {
+                                                anchors.centerIn: parent
+                                                text: "Replace My Data"
+                                                color: "#ffcccc"
+                                                font.pixelSize: 11
+                                                font.bold: true
+                                            }
+                                            MouseArea {
+                                                id: applyImportArea
+                                                anchors.fill: parent
+                                                hoverEnabled: true
+                                                cursorShape: Qt.PointingHandCursor
+                                                onClicked: {
+                                                    if (!keyboard || dataBackupCol.pendingImportPath === "") return
+                                                    var err = keyboard.importUserData(dataBackupCol.pendingImportPath)
+                                                    if (err === "") {
+                                                        dataBackupCol.statusMessage = "Imported. Re-enable vocabulary packs from Your Language Model if needed."
+                                                        dataBackupCol.statusColor = "#aaffaa"
+                                                    } else {
+                                                        dataBackupCol.statusMessage = "Import failed: " + err
+                                                        dataBackupCol.statusColor = "#ffaaaa"
+                                                    }
+                                                    dataBackupCol.pendingImportPath = ""
+                                                    dataBackupCol.pendingImportSummary = null
+                                                    dataBackupStatusTimer.restart()
+                                                }
+                                            }
+                                        }
+
+                                        Rectangle {
+                                            Layout.preferredWidth: 80
+                                            implicitHeight: 28
+                                            radius: 5
+                                            color: cancelImportArea.containsMouse ? "#3a3a3a" : "#2a2a2a"
+                                            border.color: "#4a4a4a"
+                                            Text {
+                                                anchors.centerIn: parent
+                                                text: "Cancel"
+                                                color: "#aaa"
+                                                font.pixelSize: 11
+                                            }
+                                            MouseArea {
+                                                id: cancelImportArea
+                                                anchors.fill: parent
+                                                hoverEnabled: true
+                                                cursorShape: Qt.PointingHandCursor
+                                                onClicked: {
+                                                    dataBackupCol.pendingImportPath = ""
+                                                    dataBackupCol.pendingImportSummary = null
+                                                    dataBackupCol.statusMessage = ""
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+
+                                Timer {
+                                    id: dataBackupStatusTimer
+                                    interval: 6000
+                                    onTriggered: dataBackupCol.statusMessage = ""
+                                }
+                            }
+                        }
+
                         // -- Privacy --
                         // Opt-in usage telemetry. OFF by default. The
                         // toggle's persisted state lives in the
