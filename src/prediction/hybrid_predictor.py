@@ -134,7 +134,7 @@ class HybridPredictor(QObject):
         # Active merge strategy.  Default "rank" preserves byte-identical
         # behaviour with prior versions; "rrf", "linear", "loglinear" are
         # opt-in alternatives surfaced via Settings → Smart Typing → Suggestion Engine.
-        # See ``docs/HYBRID_MERGING.md`` for the trade-offs.
+        # See ``docs/architecture/HYBRID_MERGING.md`` for the trade-offs.
         self._merge_strategy: str = "rank"
 
     def _load_llm_async(self) -> None:
@@ -240,7 +240,7 @@ class HybridPredictor(QObject):
         """Merge candidate lists from each predictor into a final ranking.
 
         Dispatches to the active strategy (``_merge_strategy``) — see
-        ``docs/HYBRID_MERGING.md`` for the menu.  Each strategy returns
+        ``docs/architecture/HYBRID_MERGING.md`` for the menu.  Each strategy returns
         a ``Dict[str, float]`` of combined scores (and populates
         ``sources`` for debug logging); the shared ``_finalize_scores``
         applies dispreference penalty, short-word filter, sentence-start
@@ -830,7 +830,7 @@ class HybridPredictor(QObject):
         """The active merge strategy name.
 
         One of ``"rank"`` (default), ``"rrf"``, ``"linear"``,
-        ``"loglinear"``.  See ``docs/HYBRID_MERGING.md`` for the
+        ``"loglinear"``.  See ``docs/architecture/HYBRID_MERGING.md`` for the
         trade-offs between them.
         """
         return self._merge_strategy

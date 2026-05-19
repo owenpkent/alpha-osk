@@ -22,7 +22,7 @@ Item {
     property int predictionCount: 8
     property bool autoSpaceAfterPunctuation: true
     property bool autoCapitalizeAfterPunctuation: false
-    // Merge strategy -- see docs/HYBRID_MERGING.md.  "rank" is the
+    // Merge strategy -- see docs/architecture/HYBRID_MERGING.md.  "rank" is the
     // default and historical behaviour; the others are alternatives.
     property string mergeStrategy: "rank"
 
@@ -671,7 +671,7 @@ Item {
                         // Picks the formula used to merge candidate words from
                         // the n-gram, PPM, and fuzzy predictors.  Default is
                         // "rank" -- the historical rank-based fusion every
-                        // existing user has been on.  See docs/HYBRID_MERGING.md
+                        // existing user has been on.  See docs/architecture/HYBRID_MERGING.md
                         // for the trade-offs.
                         SettingsSection {
                             title: "Suggestion Engine"
@@ -1608,7 +1608,7 @@ Item {
                         // not in appSettings, because the bridge owns the
                         // anon_id lifecycle and we want a single source of
                         // truth. See docs/PRIVACY.md (user-facing) and
-                        // docs/TELEMETRY.md (design).
+                        // docs/architecture/TELEMETRY.md (design).
                         SettingsSection {
                             title: "Privacy"
                             Layout.fillWidth: true

@@ -125,7 +125,7 @@ bundled.
 `build/linux/build.py` emits both a plaintext lockfile
 (`freeze_lockfile`) and a CycloneDX 1.6 SBOM (`emit_sbom`) alongside
 the AppImage / .deb / tarball. Same shape and rationale as the Windows
-build — see `docs/WINDOWS.md` § *Dependency Lockfile & SBOM* for what
+build — see `WINDOWS.md` § *Dependency Lockfile & SBOM* for what
 each artefact is for, the CI-time `osv-scan` job that reads both
 lockfiles for transitive CVEs, and how to bump the toolchain.
 
@@ -192,7 +192,7 @@ menus once the user integrates the AppImage (e.g. via
 ## See also
 
 - [WINDOWS.md](WINDOWS.md) — Windows build / EV signing / NSIS installer.
-- [PLATFORM_ARCHITECTURE.md](PLATFORM_ARCHITECTURE.md) — cross-platform
+- [PLATFORM_ARCHITECTURE.md](../architecture/PLATFORM_ARCHITECTURE.md) — cross-platform
   design rationale for the key-synthesizer abstraction.
 - [AUTO_UPDATE.md](AUTO_UPDATE.md) — the auto-updater (currently
   Windows-only, Linux story TBD).

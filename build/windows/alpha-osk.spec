@@ -24,7 +24,7 @@ executable is ``dist/alpha-osk/alpha-osk.exe``.
 
 After Building
 --------------
-1. Sign with your EV certificate (see docs/WINDOWS.md).
+1. Sign with your EV certificate (see docs/build/WINDOWS.md).
 2. Copy to ``C:\\Program Files\\Alpha-OSK\\`` for UIAccess to work.
 3. Create a Start Menu shortcut if desired.
 

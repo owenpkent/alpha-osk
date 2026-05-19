@@ -2,10 +2,10 @@ id,category,phase,task,status,depends_on,due,effort,where
 T01,Product,Done,Analytics dashboard redesign (single section + 4 tiles + drop quality score),Done,,2026-05-07,—,commit 2530be4
 T02,Product,Done,Telemetry client (src/telemetry.py) + 26 tests,Done,,2026-05-07,—,commit 0f737d1
 T03,Product,Done,Bridge wiring + Settings Privacy UI,Done,,2026-05-07,—,commit 0f737d1
-T04,Product,Done,docs/TELEMETRY.md + docs/PRIVACY.md,Done,,2026-05-07,—,commit 0f737d1
+T04,Product,Done,../architecture/TELEMETRY.md + ../PRIVACY.md,Done,,2026-05-07,—,commit 0f737d1
 T05,Product,Done,backend/cf-worker scaffold (TypeScript + D1 + cron),Done,,2026-05-07,—,backend/cf-worker/
 T06,Product,Done,Deployment workflow + WINDOWS release-checklist gate,Done,,2026-05-07,—,commit 8225178
-T07,Product,Done,Launch plan + CSV tracker,Done,,2026-05-07,—,docs/LAUNCH_PLAN.md
+T07,Product,Done,Launch plan + CSV tracker,Done,,2026-05-07,—,LAUNCH_PLAN.md
 T08,Product,Setup,Confirm Cloudflare account access,Pending,,2026-05-08,S,Cloudflare dashboard
 T09,Product,Setup,Create D1 database (wrangler d1 create alpha-osk-telemetry),Pending,T08,2026-05-08,S,backend/cf-worker/README.md
 T10,Product,Setup,Paste database_id into wrangler.toml (copy from .example),Pending,T09,2026-05-08,S,backend/cf-worker/wrangler.toml
@@ -37,7 +37,7 @@ T35,Product,Ship,Confirm Privacy section + auto-update toast appear in updated b
 T36,Operations,Ship,npx wrangler tail for first 24h to catch malformed payloads,Pending,T33,2026-05-28,M,wrangler tail
 T37,Product,Post-launch,Watch aggregate counter for 4-8 weeks of real data,Deferred,T33,2026-06-25,—,backend
 T38,Product,Post-launch,Design + ship public stats page (alpha-osk.com/impact or similar),Deferred,T37,2026-07-15,L,—
-T39,Product,Post-launch,Federated learning Phase 1 (separate workstream),Deferred,,2026-08-01,L,docs/FEDERATED_LEARNING.md
+T39,Product,Post-launch,Federated learning Phase 1 (separate workstream),Deferred,,2026-08-01,L,FEDERATED_LEARNING.md
 M01,Content,Hype-foundation,Brand personal YouTube channel for OKStudio content (banner + about + playlist),Pending,,2026-05-08,M,YouTube Studio
 M02,Asset,Hype-foundation,Set up Buttondown newsletter at okstud.io/list (free tier + embedded form),Pending,,2026-05-08,M,Buttondown
 M03,Operations,Hype-foundation,Set up OKStudio Slack workspace (#general #support #showcase #announcements),Pending,,2026-05-09,M,Slack

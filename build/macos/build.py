@@ -32,7 +32,7 @@ Prerequisites
   ``.app`` opens via right-click → Open.  Wire in
   ``codesign_identity`` on the ``BUNDLE()`` call in ``alpha-osk.spec``
   + a ``notarytool submit`` step once a Developer ID cert is in
-  hand.  See docs/MACOS.md (TODO) when that lands.
+  hand.  See docs/build/MACOS.md (TODO) when that lands.
 
 Output
 ------

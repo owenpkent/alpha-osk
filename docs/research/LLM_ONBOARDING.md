@@ -136,8 +136,8 @@ User types key → Fuzzy Recognition (spatial correction)
 | `build/windows/build.py` | Full build pipeline: PyInstaller → Sign → NSIS → Verify |
 | `build/windows/sign.py` | Code signing with retry logic (matches gitconnect pattern) |
 | `build/windows/installer.nsh` | NSIS installer macros (shortcuts, cleanup) |
-| `docs/WINDOWS.md` | Windows setup, signing, and deployment guide |
-| `docs/PLATFORM_ARCHITECTURE.md` | Cross-platform design rationale and decisions |
+| `../build/WINDOWS.md` | Windows setup, signing, and deployment guide |
+| `../architecture/PLATFORM_ARCHITECTURE.md` | Cross-platform design rationale and decisions |
 
 ---
 
@@ -206,7 +206,7 @@ That's it! No AI/LLM download required. Predictions work out of the box with n-g
 ```powershell
 pip install pyinstaller
 pyinstaller build/windows/alpha-osk.spec
-# Then EV code-sign and install to Program Files — see docs/WINDOWS.md
+# Then EV code-sign and install to Program Files — see ../build/WINDOWS.md
 ```
 
 ---

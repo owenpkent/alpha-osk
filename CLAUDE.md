@@ -55,7 +55,7 @@ All in `src/prediction/`. Orchestrated by `hybrid_predictor.py`:
 | `vocabulary_pack.py` | Custom vocab pack import (no built-ins ship — see *Vocabulary Packs* section) |
 | `transformer_predictor.py` | Optional LLM re-ranking (disabled by default) |
 
-Deep-dive design docs for each algorithm: `docs/FUZZY_RECOGNITION.md` (spatial model + tunable constants), `docs/PPM.md` (variable-order character model + PPMD escape), `docs/HYBRID_MERGING.md` (merge weights + validation + capitalization), `docs/SWIPE_TYPING.md` (shape-matching swipe decoder).
+Deep-dive design docs for each algorithm: `docs/architecture/FUZZY_RECOGNITION.md` (spatial model + tunable constants), `docs/architecture/PPM.md` (variable-order character model + PPMD escape), `docs/architecture/HYBRID_MERGING.md` (merge weights + validation + capitalization), `docs/architecture/SWIPE_TYPING.md` (shape-matching swipe decoder).
 
 ## Auto-Capitalization & Proper Nouns
 
@@ -162,7 +162,7 @@ If you add a new input source (e.g. a voice-dictation slot, another popup with i
 
 ## Swipe / Glide Typing
 
-Drag the mouse across letters to type a whole word in one gesture, like Gboard. Off by default; toggle in *Settings → Smart Typing → Suggestions → Swipe Typing*. Design doc: `docs/SWIPE_TYPING.md`.
+Drag the mouse across letters to type a whole word in one gesture, like Gboard. Off by default; toggle in *Settings → Smart Typing → Suggestions → Swipe Typing*. Design doc: `docs/architecture/SWIPE_TYPING.md`.
 
 | File | Role |
 |------|------|
@@ -415,13 +415,13 @@ Commercial keyboards (Gboard/LatinIME, Presage) treat prediction and spell-check
 
 ## Modular Layouts
 
-Design doc at `docs/MODULAR_LAYOUTS.md`. Inspired by Octavium's (`C:\Users\Owen\dev\Octavium`) Layout/KeyDef data model. Four levels of modularity: (1) Built-in JSON layout packs (video editing, gaming, streaming). (2) User-created layouts via editor. (3) Panel composition — snap independent panels (QWERTY, numpad, macros) into a grid. (4) App-aware auto-switching based on foreground window.
+Design doc at `docs/architecture/MODULAR_LAYOUTS.md`. Inspired by Octavium's (`C:\Users\Owen\dev\Octavium`) Layout/KeyDef data model. Four levels of modularity: (1) Built-in JSON layout packs (video editing, gaming, streaming). (2) User-created layouts via editor. (3) Panel composition — snap independent panels (QWERTY, numpad, macros) into a grid. (4) App-aware auto-switching based on foreground window.
 
 Action types: `char`, `special`, `hotkey`, `text`, `macro`, `launch`, `layout`, `midi`. Profiles bundle layout + theme + window position + auto-switch rules.
 
 ## Auto-Update
 
-Implemented in `src/updater.py`. Flow walkthrough, threat model + defences table, and the per-defence rationale all live in `docs/AUTO_UPDATE.md`. Release checklist is in `docs/WINDOWS.md`.
+Implemented in `src/updater.py`. Flow walkthrough, threat model + defences table, and the per-defence rationale all live in `docs/build/AUTO_UPDATE.md`. Release checklist is in `docs/build/WINDOWS.md`.
 
 > ⚠️ **Releases live in a separate public repo** — `okstudio1/alpha-osk-releases`. The updater's API URL is hard-pinned to that repo, so `gh release create` must always pass `--repo okstudio1/alpha-osk-releases`. (Historical note: the source repo `owenpkent/alpha-osk` was private until 2026-05-16; the split was originally a private/public boundary, and is now preserved because the pinned updater URL relies on the releases repo being its own canonical source-of-truth.)
 
@@ -442,7 +442,7 @@ Four pieces cover the journey from "user clicks install" to "new keyboard appear
 
 ## Accessibility Ecosystem
 
-Design doc at `docs/ECOSYSTEM.md`. Alpha-OSK is part of a four-tool adaptive input platform:
+Design doc at `docs/roadmap/ECOSYSTEM.md`. Alpha-OSK is part of a four-tool adaptive input platform:
 
 | Tool | Repo | Output |
 |------|------|--------|
@@ -453,15 +453,15 @@ Design doc at `docs/ECOSYSTEM.md`. Alpha-OSK is part of a four-tool adaptive inp
 
 All four: same developer, same EV cert, PySide6/Qt (except MacroVox: Tauri), mouse-driven, accessibility-first. Integration phases: coexistence → launch/trigger → profile auto-switch → shared input layer → unified UI.
 
-See also: `docs/MACROVOX_INTEGRATION.md` (voice dictation), `docs/MODULAR_LAYOUTS.md` (custom layouts inspired by Octavium/Nimbus).
+See also: `docs/roadmap/MACROVOX_INTEGRATION.md` (voice dictation), `docs/architecture/MODULAR_LAYOUTS.md` (custom layouts inspired by Octavium/Nimbus).
 
 ## Federated Learning
 
-Design doc at `docs/FEDERATED_LEARNING.md`. Not yet implemented — Phase 1 (local delta computation) is the next step.
+Design doc at `docs/roadmap/FEDERATED_LEARNING.md`. Not yet implemented — Phase 1 (local delta computation) is the next step.
 
 ## Opt-in Telemetry
 
-Design: `docs/TELEMETRY.md`. User-facing privacy: `docs/PRIVACY.md`. Backend: `backend/cf-worker/` (Cloudflare Worker + D1).
+Design: `docs/architecture/TELEMETRY.md`. User-facing privacy: `docs/PRIVACY.md`. Backend: `backend/cf-worker/` (Cloudflare Worker + D1).
 
 **Off by default.** When enabled (Settings → Data & Privacy → Privacy → "Share anonymous usage stats"), the client sends a weekly POST containing nine integers: `anon_id`, `app_version`, `os`, `keystrokes`, `words`, `predictions`, `keystrokes_saved`, `minutes`, `sessions`, `prediction_offers`. These are exactly the lifetime counters already shown on the Analytics dashboard. **Never sent**: content, word frequencies, key frequencies, IP, hostname, or any per-session breakdown.
 
@@ -472,7 +472,7 @@ Design: `docs/TELEMETRY.md`. User-facing privacy: `docs/PRIVACY.md`. Backend: `b
 - `backend/cf-worker/` — Cloudflare Worker (TypeScript) exposing `POST /v1/submit`, `GET /v1/aggregate`, `POST /v1/forget`, plus a daily cron that prunes users with `last_seen` older than 365 days.
 
 ### Endpoint configuration
-`DEFAULT_ENDPOINT` in `src/telemetry.py` is the empty string. While empty, the client treats the endpoint as "not configured" and silently no-ops every submit (consent toggle still works, just no data leaves the machine). Set this constant per-build before shipping a release that has telemetry enabled. Plan is to flip it on after the worker is deployed and the schema is verified against real submissions. Full deployment + dev-validation workflow is in `docs/TELEMETRY.md` § "Deployment & release"; the Windows release checklist (`docs/WINDOWS.md` step 2a) gates on this.
+`DEFAULT_ENDPOINT` in `src/telemetry.py` is the empty string. While empty, the client treats the endpoint as "not configured" and silently no-ops every submit (consent toggle still works, just no data leaves the machine). Set this constant per-build before shipping a release that has telemetry enabled. Plan is to flip it on after the worker is deployed and the schema is verified against real submissions. Full deployment + dev-validation workflow is in `docs/architecture/TELEMETRY.md` § "Deployment & release"; the Windows release checklist (`docs/build/WINDOWS.md` step 2a) gates on this.
 
 ### anon_id lifecycle
 UUID4 generated on first opt-in. **Cleared on opt-out**, so re-opt-in gets a new id and prior contributions cannot be linked. If the user wants their already-submitted row deleted, the "Delete my contributed data" button POSTs to `/v1/forget` (returns 204 regardless of whether the id existed). Reinstall or `~/.config/alpha-osk/` deletion also resets the id.
@@ -492,7 +492,7 @@ None needed. Privacy mode (password-field detection) suppresses `_current_word`,
 
 ## Building & Signing a Release (Windows)
 
-Full step-by-step release checklist, signing details, troubleshooting table, and bundle-size notes are in `docs/WINDOWS.md` (sections "Building a Standalone Executable", "Code Signing", "Release Checklist"). Asset/icon regeneration in `docs/BRANDING.md`. Quick mental model:
+Full step-by-step release checklist, signing details, troubleshooting table, and bundle-size notes are in `docs/build/WINDOWS.md` (sections "Building a Standalone Executable", "Code Signing", "Release Checklist"). Asset/icon regeneration in `docs/build/BRANDING.md`. Quick mental model:
 
 1. Bump `src/__version__.py` (single source of truth — `build/windows/build.py` reads from it).
 2. Update `CHANGELOG.md`, commit.
@@ -550,7 +550,7 @@ explicit follow-up phases. **First-run gotcha:** macOS requires an
 Accessibility TCC grant (System Settings → Privacy & Security →
 Accessibility) before `CGEventPost` reaches other apps — without it
 the OSK UI works but keystrokes silently no-op. Full plan + phase
-breakdown + troubleshooting in `docs/MACOS.md`.
+breakdown + troubleshooting in `docs/build/MACOS.md`.
 
 ## Linux build
 
@@ -582,7 +582,7 @@ Key files:
 must be installed on the host. The bundle will start without them but
 key synthesis will silently no-op.
 
-See `docs/LINUX.md` for deeper coverage (troubleshooting, AppImage
+See `docs/build/LINUX.md` for deeper coverage (troubleshooting, AppImage
 internals, spec customization).
 
 ## Git Conventions
@@ -621,7 +621,7 @@ If you change the security reporting flow, the CoC contact email, or the contrib
 - **Modifier reset only runs at startup** — `KeyboardBridge.__init__` calls `synth.reset_modifier_state()` to clear any Ctrl/Alt/Shift/Super pinned by a crashed prior instance. Do **not** call this on a timer or in response to user events: it would release a modifier the user is *physically* holding (Alt-codes, Ctrl-scroll, etc.). Any future reconciliation during a live session must query the server first (`XQueryKeymap` via ctypes or python-xlib) to distinguish "we held this" from "the user is holding this."
 - **Sticky modifier auto-release lives in two parallel blocks — keep them in sync.** `_press_char` (character keys) and `pressSpecialKey` (Backspace/Tab/Return/arrows/F-keys/etc.) each end with their own copy of the Shift/Ctrl/Alt/Win release sequence (Python state flip + `release_modifier()` + change-signal emit, plus `_update_layer()` for Shift). Earlier the special-key block was missing Shift, so Shift+Tab fired the chord correctly but `_shift_active` stayed True and `hold_modifier("shift")`'s OS-side down stayed in place. Every subsequent click came out under Shift until the user tapped Shift again to toggle off, matching the user-reported "it keeps holding shift" symptom. The Windows on-screen keyboard treats Shift as one-shot for chord and character keys alike; we match that. New keystroke paths that take their own branch (autocorrect retype, prediction-pill insertion, edit-mode shortcuts, future macro/hotkey types) must mirror the same release block or the bug regresses for that path only. Coverage in `tests/test_keyboard_bridge.py::TestModifiers::test_{shift,alt,win}_auto_releases_after_special_key` and `test_shift_special_key_emits_change_signal`.
 - **External callers reach `NgramPredictor` via `HybridPredictor` forwarders** — don't access `keyboard._predictor._ngram` from `keyboard_bridge.py` or new code. Use `get_unigram_freqs()` / `get_capitalized()` or add a new forwarder. The swipe path is the canonical example (see `processSwipe`).
-- **Merge strategy default MUST stay `"rank"`.** `HybridPredictor._merge_strategy` defaults to `"rank"` and `appSettings.savedMergeStrategy` likewise. Four strategies are live (`rank` / `rrf` / `linear` / `loglinear`); the alternatives are confidence-aware and re-rank predictions noticeably differently from the historical behaviour. Changing the default would silently shift every existing user's pill ranking on the next launch — there's no migration prompt and no way for the user to know what changed. If a future strategy beats `rank` on held-out data, ship it as a new option and prompt; do not flip the default. See `docs/HYBRID_MERGING.md`.
+- **Merge strategy default MUST stay `"rank"`.** `HybridPredictor._merge_strategy` defaults to `"rank"` and `appSettings.savedMergeStrategy` likewise. Four strategies are live (`rank` / `rrf` / `linear` / `loglinear`); the alternatives are confidence-aware and re-rank predictions noticeably differently from the historical behaviour. Changing the default would silently shift every existing user's pill ranking on the next launch — there's no migration prompt and no way for the user to know what changed. If a future strategy beats `rank` on held-out data, ship it as a new option and prompt; do not flip the default. See `docs/architecture/HYBRID_MERGING.md`.
 - **Each predictor must produce both `predict()` and `predict_with_scores()`.** The merge strategies in `HybridPredictor._merge_predictions` consume score tuples; the LLM rerank path and external callers (e.g. swipe) consume word lists. Today both are wrappers over the same internal sorted list — `predict()` strips scores, `predict_with_scores()` returns them. If you add a new predictor, mirror this contract; if you change one, change the other. The shared post-processing (`_finalize_scores`) and per-source helpers (`_normalise_source`, `_bigram_bonus`, `_source_weights`) are the seams to extend before adding a new strategy.
 - **`NgramPredictor._user_total` is an invariant** — every mutation to `user_vocab` (in `learn`, `learn_word`, `_apply_decay`, `clear_user_data`, `load`) must keep it equal to `sum(user_vocab.values())`. `predict()` reads it every keystroke; the consistency tests in `tests/test_ngram_predictor.py::TestUserTotalIncremental` will catch a missed site.
 - **Window height is bound to content — do NOT persist it or assign it imperatively.** `Main.qml` declares `height: outerLayout.implicitHeight + 60`, and only `savedWindowWidth` is restored at startup. An earlier version also persisted height, which broke the binding the moment `Component.onCompleted` did `root.height = savedWindowHeight` — once the binding was dead, any width change made the keyboard either clip the bottom row or grow empty bands above/below the keys. The user has no vertical resize handle (both edges are `SizeHorCursor`), so width is the only knob; height auto-follows. If you ever need to add height persistence, you also need a re-binding strategy (`Qt.binding(...)`, or an `onHeightChanged` clamp to expected) — don't just assign and walk away.
@@ -651,4 +651,4 @@ Right-click on a char key types its shifted variant without flipping the sticky 
 - `Main.qml` per-key `onKeyRightPressed` resolves the output: prefer `kd.shifted` from the layout JSON (covers `1`→`!`, `,`→`<`); fall back to `kd.key.toUpperCase()` for letters; otherwise no-op.
 - The handler routes through `keyboard.pressKeyLiteral(rch)`, **not** `pressKey` — the latter would lowercase the chosen `'A'` back to `'a'` (see the `pressKey` watch-out above).
 
-The companion long-press → accents feature is **not** implemented — see `docs/LONG_PRESS_ALTERNATES.md` for the design and the reason it's deferred (press-on-release timing change is hostile to slow-motor users until we have a way to scope the latency to keys with alternates).
+The companion long-press → accents feature is **not** implemented — see `docs/architecture/LONG_PRESS_ALTERNATES.md` for the design and the reason it's deferred (press-on-release timing change is hostile to slow-motor users until we have a way to scope the latency to keys with alternates).

@@ -125,7 +125,7 @@ The prediction engine is the most novel component of the system and the most sal
 | `swipe_recognizer.py` | Shape-matching gesture decoder for glide typing. |
 | `transformer_predictor.py` | Optional LLM re-ranking pass. Disabled by default; not on the hot path. |
 
-For deep design treatments of each, see `docs/PPM.md`, `docs/FUZZY_RECOGNITION.md`, `docs/HYBRID_MERGING.md`, and `docs/SWIPE_TYPING.md`.
+For deep design treatments of each, see `architecture/PPM.md`, `architecture/FUZZY_RECOGNITION.md`, `architecture/HYBRID_MERGING.md`, and `architecture/SWIPE_TYPING.md`.
 
 #### 3.1.1 Why layered
 
@@ -141,7 +141,7 @@ This layered approach mirrors Presage's "natural language as a combination of re
 
 **`FuzzyRecognizer` (`fuzzy_recognizer.py`).** Owns a `SpatialKeyModel` (Gaussian distribution over neighbouring keys keyed by Euclidean distance on the QWERTY layout, σ = `spatial_uncertainty / 2`, default σ = 0.7) and a `FuzzyWordGenerator` that combines the spatial beam search with a SymSpell-backed edit-distance lookup (`src/prediction/symspell.py`). Two query paths: `get_fuzzy_predictions(context, n)` returns ranked candidates for the merge, and `should_autocorrect(typed, candidate)` runs the two-tier threshold (§3.7) when the system has to decide whether to *commit* a correction (e.g. on space) versus merely *suggest* it. The recogniser is the most numerically tuned component. Its constants are spelled out in §3.6.
 
-**`HybridPredictor` (`hybrid_predictor.py`).** The orchestrator. Holds references to one `NgramPredictor`, one `PPMWordPredictor`, one `FuzzyRecognizer`, one `PackManager`, and (optionally) one `TransformerPredictor`. The `predict()` entry point runs the three primary predictors in sequence (not in threads. Python's GIL would defeat parallelism here, and each predictor is fast enough that single-threaded sequential is simpler and still meets the <30 ms latency budget). It then dispatches to a strategy-specific scorer (`_score_rank` / `_score_rrf` / `_score_linear` / `_score_loglinear`) keyed on the user's selection in *Settings → Smart Typing → Suggestion Engine*; default is `rank`. Source weights are shared across every strategy (`_source_weights` returns 3.0/0.3/0.6 for next-word, 1.0/0.8/0.6 for mid-word completion). The default rank strategy scores each candidate as the sum of `weight / (rank + 1)` from every source it appeared in. Consensus boost (RRF) substitutes `weight / (60 + rank + 1)` so the rank-1 vs rank-2 gap shrinks and consensus across sources matters more. Confidence-weighted (linear) normalises each source's raw scores into a sum-to-1 distribution and combines `Σ w_i · P_i(w)`. Multiplicative (log-linear) does the same per-source normalisation but combines `Σ w_i · log P_i(w)` with a 1e-6 floor for words missing from a source. Equivalent to `Π P_i(w)^w_i`. Klakow (1998) showed log-linear beats linear interpolation by ~20% relative perplexity on n-gram smoothing. Across every strategy, the spatial-bigram cross-talk (`1 + log1p(bigram_count) / 2`) re-weights fuzzy candidates against the previous word's bigram table. The only context signal fuzzy has access to. Dispreference penalties divide the score by `(1 + count · 0.5)` and capitalisation is applied last (`_finalize_scores`), so all internal scoring is case-insensitive. Full strategy trade-offs and migration history live in `docs/HYBRID_MERGING.md`.
+**`HybridPredictor` (`hybrid_predictor.py`).** The orchestrator. Holds references to one `NgramPredictor`, one `PPMWordPredictor`, one `FuzzyRecognizer`, one `PackManager`, and (optionally) one `TransformerPredictor`. The `predict()` entry point runs the three primary predictors in sequence (not in threads. Python's GIL would defeat parallelism here, and each predictor is fast enough that single-threaded sequential is simpler and still meets the <30 ms latency budget). It then dispatches to a strategy-specific scorer (`_score_rank` / `_score_rrf` / `_score_linear` / `_score_loglinear`) keyed on the user's selection in *Settings → Smart Typing → Suggestion Engine*; default is `rank`. Source weights are shared across every strategy (`_source_weights` returns 3.0/0.3/0.6 for next-word, 1.0/0.8/0.6 for mid-word completion). The default rank strategy scores each candidate as the sum of `weight / (rank + 1)` from every source it appeared in. Consensus boost (RRF) substitutes `weight / (60 + rank + 1)` so the rank-1 vs rank-2 gap shrinks and consensus across sources matters more. Confidence-weighted (linear) normalises each source's raw scores into a sum-to-1 distribution and combines `Σ w_i · P_i(w)`. Multiplicative (log-linear) does the same per-source normalisation but combines `Σ w_i · log P_i(w)` with a 1e-6 floor for words missing from a source. Equivalent to `Π P_i(w)^w_i`. Klakow (1998) showed log-linear beats linear interpolation by ~20% relative perplexity on n-gram smoothing. Across every strategy, the spatial-bigram cross-talk (`1 + log1p(bigram_count) / 2`) re-weights fuzzy candidates against the previous word's bigram table. The only context signal fuzzy has access to. Dispreference penalties divide the score by `(1 + count · 0.5)` and capitalisation is applied last (`_finalize_scores`), so all internal scoring is case-insensitive. Full strategy trade-offs and migration history live in `architecture/HYBRID_MERGING.md`.
 
 **`VocabularyPack` and `PackManager` (`vocabulary_pack.py`).** A pack is a folder of plain-text files: `dictionary.txt` (one word per line), optional `bigrams.txt` (whitespace-separated pairs), `trigrams.txt`, and a `pack.json` metadata stub. `PackManager` enumerates packs from the user's import directory (`%APPDATA%/alpha-osk/packs/` on Windows, `~/.config/alpha-osk/packs/` on Linux), tracks which are enabled, and on enable calls `apply_to_predictor(ngram)` to write the pack's contents *into* the n-gram model's tables. All three tables are merged with `max(existing, pack_weight)` (`PACK_UNIGRAM_WEIGHT = 3`, `PACK_BIGRAM_WEIGHT = PACK_TRIGRAM_WEIGHT = 30`) so a pack never flattens an organically-learned high-frequency word. The pack establishes a floor, the user's own typing can climb above it. The architectural point: packs are not an independent predictor at merge time. They are a *modifier* of the n-gram tables, applied at enable-time. This is why the merge layer sees three predictors (n-gram, PPM, fuzzy), not four.
 
@@ -239,7 +239,7 @@ The recogniser (`SwipeRecognizer`) is a simplified SHARK² shape-matcher. It pre
 score(word) = log(freq + 1) − 8 · mean_normalized_distance
 ```
 
-where `mean_normalized_distance` is the average distance between the user's path and the ideal path through the word's key centres, normalised by key width. The top-ranked word is typed via `send_text` followed by a space; alternates appear in the prediction bar so the user can re-pick if the top result is wrong. Design rationale and the trade-offs against a full HMM-based gesture decoder are in `docs/SWIPE_TYPING.md`.
+where `mean_normalized_distance` is the average distance between the user's path and the ideal path through the word's key centres, normalised by key width. The top-ranked word is typed via `send_text` followed by a space; alternates appear in the prediction bar so the user can re-pick if the top result is wrong. Design rationale and the trade-offs against a full HMM-based gesture decoder are in `architecture/SWIPE_TYPING.md`.
 
 ### 3.9 Word suppression and rehabilitation
 
@@ -360,7 +360,7 @@ Both the n-gram and PPM model loaders reject files over 50 MB. The n-gram loader
 
 Lifetime stats and learned vocabulary are the part of a user's setup that takes the longest to rebuild from scratch. Settings (theme, layout, panel toggles) live in the Qt settings layer and are quick to reconfigure manually; the irreplaceable artefact is the prediction model that has accumulated over months of typing. *Settings → Data & Privacy → Data Backup* writes the model, lifetime stats, and imported vocabulary packs into a single `.zip` the user controls. The implementation lives in `src/data_export.py`.
 
-**What's in the archive.** A `manifest.json` (schema version, app version, ISO-8601 UTC timestamp, file list, pack id list) plus `models/ngram_model.json`, `models/ppm_model.json`, `analytics.json`, and `packs/<id>/...` for each imported pack. `telemetry.json` is **deliberately excluded** so the contributor `anon_id` does not link contributions across machines (the user's data-policy promise in §5.6 and `docs/PRIVACY.md` would otherwise be silently broken). A fresh `anon_id` is generated on the new machine when telemetry is re-enabled.
+**What's in the archive.** A `manifest.json` (schema version, app version, ISO-8601 UTC timestamp, file list, pack id list) plus `models/ngram_model.json`, `models/ppm_model.json`, `analytics.json`, and `packs/<id>/...` for each imported pack. `telemetry.json` is **deliberately excluded** so the contributor `anon_id` does not link contributions across machines (the user's data-policy promise in §5.6 and `PRIVACY.md` would otherwise be silently broken). A fresh `anon_id` is generated on the new machine when telemetry is re-enabled.
 
 **Import is replace, not merge.** The imported state is "the user's full snapshot at export time", so imported files overwrite the corresponding files in the config directory and packs not in the archive are removed. Before any overwrite, the current state is written to a timestamped rescue archive at `<config_dir>/exports/rescue-<ts>.zip`, so a regrettable import is one click away from a rollback. Rescue-write failures are logged but do not abort the import; correctness of the import path takes priority over the safety net. Model files are replaced via tempfile-then-rename so a partial write cannot corrupt the existing file. After files are replaced, `HybridPredictor.reload_from_disk()` re-reads the models and re-discovers packs; `TypingAnalytics.reload_from_disk()` re-reads lifetime counters. The user does not need to restart the application. Enabled-pack state is intentionally reset (imported packs come back disabled and the user re-enables what they want, matching what would happen if they imported each pack one at a time on the new machine).
 
@@ -370,7 +370,7 @@ Regression coverage for the validation properties is in `tests/test_data_export.
 
 ### 5.6 Opt-in usage telemetry (1.1.0+)
 
-Alpha-OSK has a community-impact pipeline designed to let users contribute to a shared "X million keystrokes saved" aggregate. **It is off by default, and currently a no-op even when on**, because `DEFAULT_ENDPOINT` is the empty string in `src/telemetry.py` and the backend Cloudflare Worker is not yet deployed to a production URL. The client, the consent toggle, and the dashboard surface are present in 1.1.0 so the wiring can be validated against the agreed schema before the endpoint goes live; the client begins actually submitting only when `DEFAULT_ENDPOINT` is set in a future release. Both the user-facing data policy (`docs/PRIVACY.md`) and the design (`docs/TELEMETRY.md`) are versioned in the repo.
+Alpha-OSK has a community-impact pipeline designed to let users contribute to a shared "X million keystrokes saved" aggregate. **It is off by default, and currently a no-op even when on**, because `DEFAULT_ENDPOINT` is the empty string in `src/telemetry.py` and the backend Cloudflare Worker is not yet deployed to a production URL. The client, the consent toggle, and the dashboard surface are present in 1.1.0 so the wiring can be validated against the agreed schema before the endpoint goes live; the client begins actually submitting only when `DEFAULT_ENDPOINT` is set in a future release. Both the user-facing data policy (`PRIVACY.md`) and the design (`architecture/TELEMETRY.md`) are versioned in the repo.
 
 The toggle lives in *Settings → Data & Privacy → Privacy → "Share anonymous usage stats"*. When on, a weekly POST sends nine integer fields: a randomly-generated `anon_id` (UUID4), `app_version`, `os` (`windows` / `linux`), and the seven lifetime counters that already render on the in-app dashboard (`keystrokes`, `words`, `predictions`, `keystrokes_saved`, `minutes`, `sessions`, `prediction_offers`). **Nothing else.** The pipeline never sends content, word frequencies, key frequencies, IP, hostname, machine identifiers, or per-session breakdowns. The privacy-mode interaction is implicit: privacy mode (§5.2) suppresses learning and counter increments at the analytics layer, so password-field activity never enters the lifetime totals in the first place. The telemetry layer just forwards what the dashboard would show.
 
@@ -391,7 +391,7 @@ The `DEFAULT_ENDPOINT` constant in `src/telemetry.py` is the kill switch. While 
 
 ### 5.7 Auto-update threat model
 
-Auto-update fetches from the release repository `okstudio1/alpha-osk-releases`, which is separate from the source repo `owenpkent/alpha-osk`. Both are public; the split is preserved because the updater's API URL is hard-pinned to the releases repo. The threat model and per-defence rationale are in `docs/AUTO_UPDATE.md`; the short version is:
+Auto-update fetches from the release repository `okstudio1/alpha-osk-releases`, which is separate from the source repo `owenpkent/alpha-osk`. Both are public; the split is preserved because the updater's API URL is hard-pinned to the releases repo. The threat model and per-defence rationale are in `build/AUTO_UPDATE.md`; the short version is:
 
 - The update endpoint is `https://api.github.com/repos/okstudio1/alpha-osk-releases/releases/latest` over HTTPS with system-trusted CA roots.
 - The downloaded asset filename must match `Alpha-OSK-Setup-{version}.exe` exactly. Anything else is rejected before execution.
@@ -433,11 +433,11 @@ UIAccess is granted at install time via the `uiAccess="true"` manifest entry and
 
 Linux builds use a parallel pipeline in `build/linux/build.py` that produces a PyInstaller bundle and, optionally, an AppImage (`--appimage --fetch-appimagetool`). Signing is not part of the Linux flow. AppImage is unsigned by design, and EV signing is Windows-specific. The AppImage entry script (`build/linux/AppRun`) points `QT_PLUGIN_PATH` and `QML2_IMPORT_PATH` at the bundled Qt and defaults `QT_QPA_PLATFORM=xcb`.
 
-`xdotool` and `ydotool` are *not* bundled. They are OS-level tools that must be installed on the host. The bundle starts without them but key synthesis silently no-ops, which is a known limitation discussed in `docs/LINUX.md`.
+`xdotool` and `ydotool` are *not* bundled. They are OS-level tools that must be installed on the host. The bundle starts without them but key synthesis silently no-ops, which is a known limitation discussed in `build/LINUX.md`.
 
 ### 7.3 Update flow
 
-The auto-update flow is documented end-to-end in `docs/AUTO_UPDATE.md`. The user-facing toggle is *Settings → Data & Privacy → Updates → Check for updates on startup* (persisted in QML settings). The Windows path uses NSIS silent install with a taskkill of the running OSK in `customInit` (so the new executable can be written) and an auto-relaunch through `explorer.exe` in `customInstall` (so the relaunched process runs at the user's medium IL, not the installer's high IL).
+The auto-update flow is documented end-to-end in `build/AUTO_UPDATE.md`. The user-facing toggle is *Settings → Data & Privacy → Updates → Check for updates on startup* (persisted in QML settings). The Windows path uses NSIS silent install with a taskkill of the running OSK in `customInit` (so the new executable can be written) and an auto-relaunch through `explorer.exe` in `customInstall` (so the relaunched process runs at the user's medium IL, not the installer's high IL).
 
 ### 7.4 Dependency lockfiles, SBOMs, and CVE scanning
 
@@ -461,7 +461,7 @@ A third platform port is scaffolded but not yet shipped. The platform abstractio
 
 The hard part is **input delivery**. Naïve `CGEventPost(kCGHIDEventTap, ev)` posts to whatever app is currently frontmost, and on macOS clicking the OSK window activates the OSK as the foreground app (even with `NSApplicationActivationPolicyAccessory`, `Qt.WindowDoesNotAcceptFocus`, `Qt.Tool`, and `hidesOnDeactivate=NO`, all of which help on other surfaces but do not prevent click-activation of a plain NSWindow in Qt 6). The synthesised keystroke then lands back in Alpha-OSK rather than the editor the user was typing into. The working pattern installs an `NSWorkspaceDidActivateApplicationNotification` observer at synth init, records the pid of every non-self app that activates, and posts each event via `CGEventPostToPid(target_pid, ev)`. Pid-targeted delivery is frontmost-independent, so the event lands in the editor whether or not Alpha-OSK is the foreground app at the instant of dispatch. A cold-start window before any target has been recorded falls back to `CGEventPost`; in practice users tab into a target editor before clicking the OSK, so the fallback is rare.
 
-**First-run gotcha.** macOS requires an Accessibility TCC grant (System Settings → Privacy & Security → Accessibility) before `CGEventPostToPid` reaches other apps. Without it, the UI works but keystrokes silently no-op. Explicit follow-up phases include code signing with a Developer ID certificate, notarisation, auto-update parity with the Windows path, and `AXUIElement`-based password-field detection (the macOS analogue of UI Automation on Windows and AT-SPI 2 on Linux). Full plan and phase breakdown are in `docs/MACOS.md`.
+**First-run gotcha.** macOS requires an Accessibility TCC grant (System Settings → Privacy & Security → Accessibility) before `CGEventPostToPid` reaches other apps. Without it, the UI works but keystrokes silently no-op. Explicit follow-up phases include code signing with a Developer ID certificate, notarisation, auto-update parity with the Windows path, and `AXUIElement`-based password-field detection (the macOS analogue of UI Automation on Windows and AT-SPI 2 on Linux). Full plan and phase breakdown are in `build/MACOS.md`.
 
 ---
 
@@ -509,13 +509,13 @@ In rough priority order:
 
 ### 8.3 Federated learning
 
-Federated learning would let users contribute to a shared model without sending raw keystrokes anywhere. The design is in `docs/FEDERATED_LEARNING.md`. Phase 1 (local delta computation. The user's machine produces a "diff" against the base model that summarises learned vocabulary) is the next step. Phases 2 and 3 (secure aggregation, differential privacy budgets) follow.
+Federated learning would let users contribute to a shared model without sending raw keystrokes anywhere. The design is in `roadmap/FEDERATED_LEARNING.md`. Phase 1 (local delta computation. The user's machine produces a "diff" against the base model that summarises learned vocabulary) is the next step. Phases 2 and 3 (secure aggregation, differential privacy budgets) follow.
 
 The motivation is strongest for the disability-community vocabulary case: users with rare conditions, specific medical equipment, or specialised AAC needs benefit disproportionately from shared vocabulary, but the same users have the strongest privacy concerns about raw keystroke data. Federated learning is the standard answer.
 
 ### 8.4 Ecosystem integration
 
-Alpha-OSK is one of four tools in an adaptive-input platform (see `docs/ECOSYSTEM.md`):
+Alpha-OSK is one of four tools in an adaptive-input platform (see `roadmap/ECOSYSTEM.md`):
 
 | Tool | Output |
 |------|--------|
@@ -524,7 +524,7 @@ Alpha-OSK is one of four tools in an adaptive-input platform (see `docs/ECOSYSTE
 | Octavium | MIDI (virtual piano / pads) |
 | Nimbus | Joystick (vJoy / ViGEm) |
 
-All four target the same mouse-driven, accessibility-first user. Integration phases progress from coexistence (today) → cross-launch and trigger → profile auto-switch → shared input layer → unified UI. The `docs/MACROVOX_INTEGRATION.md` and `docs/MODULAR_LAYOUTS.md` documents cover specific integration paths.
+All four target the same mouse-driven, accessibility-first user. Integration phases progress from coexistence (today) → cross-launch and trigger → profile auto-switch → shared input layer → unified UI. The `roadmap/MACROVOX_INTEGRATION.md` and `architecture/MODULAR_LAYOUTS.md` documents cover specific integration paths.
 
 ---
 
@@ -542,18 +542,18 @@ The accessibility-driven engineering decisions (the non-focus invariant, sticky 
 
 ### Internal design docs
 
-- `docs/PPM.md`: variable-order character model with PPMD escape.
-- `docs/FUZZY_RECOGNITION.md`: spatial model and tunable constants.
-- `docs/HYBRID_MERGING.md`: merge weights, validation, capitalisation pipeline.
-- `docs/SWIPE_TYPING.md`: shape-matching swipe decoder.
-- `docs/AUTO_UPDATE.md`: update flow, threat model, defences.
-- `docs/TELEMETRY.md`: opt-in usage stats. Payload schema, anon_id lifecycle, backend, deployment workflow.
-- `docs/PRIVACY.md`: user-facing data policy.
-- `docs/PLATFORM_ARCHITECTURE.md`: cross-platform abstraction details.
-- `docs/FEDERATED_LEARNING.md`: federated-learning roadmap (separate from §5.6 telemetry; not yet implemented).
-- `docs/ECOSYSTEM.md`: four-tool adaptive-input platform.
-- `docs/SECURITY_AUDIT.md`: pack-import hardening, model load caps.
-- `docs/LINUX.md` / `docs/WINDOWS.md`: platform-specific build and packaging.
+- `architecture/PPM.md`: variable-order character model with PPMD escape.
+- `architecture/FUZZY_RECOGNITION.md`: spatial model and tunable constants.
+- `architecture/HYBRID_MERGING.md`: merge weights, validation, capitalisation pipeline.
+- `architecture/SWIPE_TYPING.md`: shape-matching swipe decoder.
+- `build/AUTO_UPDATE.md`: update flow, threat model, defences.
+- `architecture/TELEMETRY.md`: opt-in usage stats. Payload schema, anon_id lifecycle, backend, deployment workflow.
+- `PRIVACY.md`: user-facing data policy.
+- `architecture/PLATFORM_ARCHITECTURE.md`: cross-platform abstraction details.
+- `roadmap/FEDERATED_LEARNING.md`: federated-learning roadmap (separate from §5.6 telemetry; not yet implemented).
+- `roadmap/ECOSYSTEM.md`: four-tool adaptive-input platform.
+- `research/SECURITY_AUDIT.md`: pack-import hardening, model load caps.
+- `build/LINUX.md` / `build/WINDOWS.md`: platform-specific build and packaging.
 
 ### External references
 

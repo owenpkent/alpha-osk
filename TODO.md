@@ -73,7 +73,7 @@
 - [x] **UIAccess manifest** — `build/windows/alpha-osk.exe.manifest` for EV-signed builds
 - [x] **PyInstaller spec** — `build/windows/alpha-osk.spec` for standalone .exe builds
 - [x] **Cross-platform model storage** — AppData on Windows, .config on Linux
-- [x] **Documentation** — `docs/WINDOWS.md`, `docs/PLATFORM_ARCHITECTURE.md`
+- [x] **Documentation** — `docs/build/WINDOWS.md`, `docs/architecture/PLATFORM_ARCHITECTURE.md`
 - [x] **Updated all docs** — README, LLM_ONBOARDING, DESIGN for cross-platform
 
 ## Phase 8: Windows Polish ✅
@@ -83,7 +83,7 @@
 - [x] **NSIS installer** — `build/windows/installer.nsh` (kill running app, old-version cleanup, shortcuts, AppData prompt)
 - [x] **App icon** — `build/windows/alpha-osk.ico` wired into PyInstaller spec
 - [x] **Shortcut helpers** — `create_start_menu_shortcut()`, `create_desktop_shortcut()`, `add_to_startup()`, `remove_from_startup()` in `src/platform/windows.py`
-- [x] **Documentation updated** — `docs/WINDOWS.md` with real eToken signing steps, NSIS details, troubleshooting
+- [x] **Documentation updated** — `docs/build/WINDOWS.md` with real eToken signing steps, NSIS details, troubleshooting
 
 ### Remaining (manual steps)
 

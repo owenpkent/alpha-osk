@@ -164,7 +164,7 @@ def freeze_lockfile(version: str) -> Path | None:
     Not a CycloneDX / SPDX SBOM (no licenses, no purls), but it's the
     cheapest possible answer to "what shipped in version X.Y.Z?" --
     a single text file, no new build dep.  The proper SBOM upgrade
-    path is documented in docs/LINUX.md alongside docs/WINDOWS.md.
+    path is documented in docs/build/LINUX.md alongside docs/build/WINDOWS.md.
 
     Returns the lockfile path on success, None on failure.
     """
@@ -205,7 +205,7 @@ def emit_sbom(version: str) -> Path | None:
 
     Mirror of the Windows build's ``emit_sbom``.  See
     ``build/windows/build.py::emit_sbom`` and
-    ``docs/WINDOWS.md`` § *Dependency Lockfile & SBOM* for the
+    ``docs/build/WINDOWS.md`` § *Dependency Lockfile & SBOM* for the
     rationale on shipping both the plaintext lockfile and the
     structured SBOM alongside each release.
 

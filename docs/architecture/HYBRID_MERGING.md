@@ -59,7 +59,7 @@ for word in scores:
 |-----------|--------|-----|-----|
 | **Next-word** (space at end) | 3.0 | 0.3 | N-gram *is* the next-word authority; PPM produces character fragments that look like words but aren't ranked by word frequency.  Trusting PPM here produces noise. |
 | **Mid-word** (completion) | 1.0 | 0.8 | N-gram still knows which dictionary words are common, but PPM is genuinely useful for partial prefixes the dictionary hasn't seen yet. |
-| Fuzzy | 0.6 | 0.6 | Single tuned default — used to vary by accessibility profile, but the profile system was removed (see `docs/FUZZY_RECOGNITION.md`).  0.6 is loud enough that legitimate spatial-correction candidates can beat n-gram on a clear typo, quiet enough that they don't drown out a clean partial-prefix completion. |
+| Fuzzy | 0.6 | 0.6 | Single tuned default — used to vary by accessibility profile, but the profile system was removed (see `FUZZY_RECOGNITION.md`).  0.6 is loud enough that legitimate spatial-correction candidates can beat n-gram on a clear typo, quiet enough that they don't drown out a clean partial-prefix completion. |
 
 The `/ (i + 1)` is positional decay — rank-1 matters more than rank-5
 from the same source.  It's linear, not exponential, so rank-10
@@ -256,7 +256,7 @@ Every `_decay_interval` learn calls, `ngram._apply_decay` multiplies
 all user-vocab and user-learned bigram counts by `_decay_factor` (0.95
 by default).  This prevents a flurry of typing on one topic from
 dominating predictions months later.  PPM does **not** currently decay
-— see `docs/PPM.md` "Known Limits".
+— see `PPM.md` "Known Limits".
 
 ## Trade-offs Baked into the Weights
 
@@ -268,7 +268,7 @@ dominating predictions months later.  PPM does **not** currently decay
   across six "accessibility profiles") but the profile UI was confusing
   and the per-user dials never carried their weight.  Now there's one
   generous default tuned to surface diagonal-neighbour mistypes the way
-  Gboard does.  See `docs/FUZZY_RECOGNITION.md`.
+  Gboard does.  See `FUZZY_RECOGNITION.md`.
 - **Positional decay is linear** — Rank-based, not probability-based.
   Fine for short lists; if `n` grew to 20+, an exponential decay
   would better reflect how users actually scan pill bars.
@@ -616,7 +616,7 @@ comparable.
    keyboards score the literal typed characters as one of the
    candidates, so autocorrect only fires when an alternative scores
    1.5–2× higher.  We don't — autocorrect uses a flat confidence
-   threshold.  (Also called out in `docs/FUZZY_RECOGNITION.md`.)
+   threshold.  (Also called out in `FUZZY_RECOGNITION.md`.)
 2. **Key-distance weights in the final ranking.**  Fuzzy's spatial
    model feeds candidate generation but not final merge scores.  A
    nearby-key match should count more than a far-key match even
@@ -657,7 +657,7 @@ it.  CLAUDE.md "Things to Watch Out For" calls this out.
   https://presage.sourceforge.io/documentation/presage/doc/html/classMeritocracyCombiner.html
 - **LatinIME (AOSP)** — trie-based dictionary with weighted edit
   distance and n-gram LM scoring.
-- **Dasher** — `docs/PPM.md` for full references.
+- **Dasher** — `PPM.md` for full references.
 
 ### Foundational research
 - **Goodman, Venolia, Steury, & Parker (2002)** — *Language modeling

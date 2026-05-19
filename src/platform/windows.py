@@ -58,7 +58,7 @@ UAC dialog).  To bypass this restriction, Alpha-OSK can be built with a
 - The keyboard can appear above UAC consent prompts.
 
 The manifest file ``alpha-osk.exe.manifest`` enables this.  See
-``docs/WINDOWS.md`` for signing instructions.
+``docs/build/WINDOWS.md`` for signing instructions.
 
 Virtual-Key Code Reference
 --------------------------
@@ -71,8 +71,8 @@ None beyond Python's standard library (``ctypes``).
 See Also
 --------
 - ``base.py`` — abstract interface this class implements.
-- ``docs/PLATFORM_ARCHITECTURE.md`` — design rationale.
-- ``docs/WINDOWS.md`` — Windows-specific setup and signing guide.
+- ``docs/architecture/PLATFORM_ARCHITECTURE.md`` — design rationale.
+- ``docs/build/WINDOWS.md`` — Windows-specific setup and signing guide.
 """
 
 from __future__ import annotations

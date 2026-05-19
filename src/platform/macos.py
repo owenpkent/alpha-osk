@@ -52,7 +52,7 @@ Dependencies
 See Also
 --------
 - ``base.py`` — abstract interface this class implements.
-- ``docs/PLATFORM_ARCHITECTURE.md`` — design rationale.
+- ``docs/architecture/PLATFORM_ARCHITECTURE.md`` — design rationale.
 """
 
 from __future__ import annotations

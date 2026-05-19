@@ -171,7 +171,7 @@ Confidence-weighted / Multiplicative) — the formula varies by
 strategy, the relative trust between predictors does not.  The
 rationale: n-gram *is* the word-level authority; PPM shines when the
 word is partial or absent from the dictionary.  See
-`docs/HYBRID_MERGING.md` for the full scoring rules and strategy
+`HYBRID_MERGING.md` for the full scoring rules and strategy
 trade-offs.
 
 PPM emits scores via `predict_with_scores()` — raw chained-character

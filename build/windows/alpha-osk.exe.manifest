@@ -26,7 +26,7 @@
   public mechanism for a third-party app to appear on the Secure Desktop,
   no matter how it's signed.
 
-  See docs/WINDOWS.md → "UAC and the Secure Desktop" for the
+  See docs/build/WINDOWS.md → "UAC and the Secure Desktop" for the
   PromptOnSecureDesktop=0 workaround that moves UAC consent prompts back
   to the regular desktop, where UIAccess does work.
 
@@ -49,7 +49,7 @@
 
   How to Sign
   ===========
-  See docs/WINDOWS.md for full signing instructions.  Quick summary:
+  See docs/build/WINDOWS.md for full signing instructions.  Quick summary:
 
     signtool sign /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 ^
       /f your-ev-cert.pfx /p YOUR_PASSWORD alpha-osk.exe
@@ -67,7 +67,7 @@
   ========
   - https://learn.microsoft.com/en-us/windows/win32/winauto/uiauto-securityoverview
   - https://learn.microsoft.com/en-us/windows/security/application-security/application-control/user-account-control/how-it-works
-  - docs/WINDOWS.md
+  - docs/build/WINDOWS.md
 -->
 <assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
 

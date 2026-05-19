@@ -44,7 +44,7 @@ See Also
 - ``build/windows/sign.py`` — Signing script with retry logic.
 - ``build/windows/alpha-osk.spec`` — PyInstaller build specification.
 - ``build/windows/installer.nsh`` — NSIS installer customizations.
-- ``docs/WINDOWS.md`` — Full Windows guide.
+- ``docs/build/WINDOWS.md`` — Full Windows guide.
 """
 
 from __future__ import annotations
@@ -296,7 +296,7 @@ def freeze_lockfile() -> Path | None:
     Not a CycloneDX / SPDX SBOM (no licenses, no purls, no signed
     statements), but it's the cheapest possible answer to "what shipped
     in version X.Y.Z?" -- a single text file, no new build dependency.
-    The proper SBOM upgrade path is documented in docs/WINDOWS.md.
+    The proper SBOM upgrade path is documented in docs/build/WINDOWS.md.
 
     Returns the lockfile path on success, None on failure.
     """
@@ -902,7 +902,7 @@ def main() -> int:
     # --skip-build is for) should still update their filenames.
     # Lockfile = pip freeze (human/pip-friendly).
     # SBOM     = CycloneDX 1.6 (machine/scanner-friendly).
-    # See docs/WINDOWS.md "Dependency Lockfile & SBOM" for the
+    # See docs/build/WINDOWS.md "Dependency Lockfile & SBOM" for the
     # rationale on shipping both.
     lockfile_path = freeze_lockfile()
     if lockfile_path is None:

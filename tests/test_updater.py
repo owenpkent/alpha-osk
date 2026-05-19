@@ -439,7 +439,7 @@ class TestDownloadAndInstall:
 class TestInstallerLaunchingCallback:
     """``on_installer_launching`` is the hook the bridge uses to fire
     the pre-update toast in the live OSK so the user knows why the
-    keyboard is about to disappear. See docs/AUTO_UPDATE.md § Update
+    keyboard is about to disappear. See docs/build/AUTO_UPDATE.md § Update
     progress indicator."""
 
     def _info(self) -> UpdateInfo:

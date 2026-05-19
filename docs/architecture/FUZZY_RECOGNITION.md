@@ -136,7 +136,7 @@ are merged with n-gram and PPM suggestions using
 `FuzzyRecognizer.prediction_weight` as the per-source weight; the
 formula that combines them depends on the active merge strategy
 (Default / Consensus boost / Confidence-weighted / Multiplicative).
-See `docs/HYBRID_MERGING.md`.
+See `HYBRID_MERGING.md`.
 
 The bigram bonus on fuzzy candidates (`_bigram_bonus`,
 `1 + log1p(count) / 2`) applies in every strategy — fuzzy is the only

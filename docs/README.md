@@ -1,344 +1,77 @@
 # Alpha-OSK Documentation
 
-Welcome to the Alpha-OSK documentation. This directory contains comprehensive guides on the philosophy, technical innovations, and implementation details of the project.
+The canonical reference is the [white paper](WHITEPAPER.md). User-facing privacy lives in [`PRIVACY.md`](PRIVACY.md). Everything else is grouped into four buckets below.
+
+For the codebase orientation that pairs with these docs, read [`CLAUDE.md`](../CLAUDE.md) at the repo root.
 
 ---
 
-## 📚 Documentation Index
+## Top-level
 
-### Philosophy & Vision
+- [`WHITEPAPER.md`](WHITEPAPER.md): the canonical reference paper. Architecture, prediction stack, privacy and security model, and the open work. Read this if you want one document that explains the whole system.
+- [`PRIVACY.md`](PRIVACY.md): user-facing data policy. What's stored locally, what (optionally) leaves your machine, and how to delete contributed data.
 
-**[`PHILOSOPHY.md`](PHILOSOPHY.md)** - Core design philosophy and principles
+## `architecture/`: how the running system works
 
-Learn about the information-theoretic foundations, accessibility-first design, and the principles borrowed from the Dasher Project. This document explains **why** we make the decisions we make.
+Active design docs for the engine, the platform abstraction, and the user-facing extensibility surfaces. Edit when the code in that area changes.
 
-**Key topics:**
-- Information-efficient design
-- Accessibility first, always
-- Continuous, natural interaction
-- Adaptive learning
-- Transparency and openness
+- [`architecture/HYBRID_MERGING.md`](architecture/HYBRID_MERGING.md): how the n-gram, PPM, and fuzzy predictors are combined, the four merge strategies, capitalisation pipeline, validation.
+- [`architecture/PPM.md`](architecture/PPM.md): variable-order character model with PPMD escape, used for next-character prediction inside a partial word.
+- [`architecture/FUZZY_RECOGNITION.md`](architecture/FUZZY_RECOGNITION.md): spatial error correction, tunable constants, the relationship to SymSpell.
+- [`architecture/SWIPE_TYPING.md`](architecture/SWIPE_TYPING.md): shape-matching gesture decoder (simplified SHARK²).
+- [`architecture/PLATFORM_ARCHITECTURE.md`](architecture/PLATFORM_ARCHITECTURE.md): cross-platform abstraction details (key synthesis, password-field detection, config paths).
+- [`architecture/MODULAR_LAYOUTS.md`](architecture/MODULAR_LAYOUTS.md): custom keyboard layouts inspired by Octavium / Nimbus.
+- [`architecture/LONG_PRESS_ALTERNATES.md`](architecture/LONG_PRESS_ALTERNATES.md): long-press accent picker design (deferred; rationale in the doc).
+- [`architecture/EXTRA_BUTTONS.md`](architecture/EXTRA_BUTTONS.md): brainstorm of beyond-keyboard button options.
+- [`architecture/TELEMETRY.md`](architecture/TELEMETRY.md): opt-in usage-stats pipeline (payload schema, anon_id lifecycle, backend, deployment workflow).
 
-**Best quotes:**
-> *"Writing can be described as zooming in on an alphabetical library, steering as you go."* — Dasher Project
+## `build/`: packaging, signing, releases, updates
 
-> *"We alter the SIZE of the shelf space devoted to each book in proportion to the probability of the corresponding text."*
+Per-platform build pipelines and the auto-update path. Edit when the release process or platform handling changes.
 
----
+- [`build/WINDOWS.md`](build/WINDOWS.md): Windows build, EV signing, NSIS installer, release checklist, troubleshooting.
+- [`build/LINUX.md`](build/LINUX.md): Linux build pipeline, AppImage internals, troubleshooting.
+- [`build/MACOS.md`](build/MACOS.md): macOS port plan, phase breakdown, TCC and SEI specifics.
+- [`build/AUTO_UPDATE.md`](build/AUTO_UPDATE.md): auto-update flow, threat model, signature verification.
+- [`build/BRANDING.md`](build/BRANDING.md): asset regeneration (icons, installer images).
 
-### Technical Implementation
+## `roadmap/`: planned, not-yet-built
 
-**[`TECHNICAL_INNOVATIONS.md`](TECHNICAL_INNOVATIONS.md)** - Dasher Project innovations
+Forward-looking design docs and active launch planning. Convert entries into `architecture/` or `build/` once they ship.
 
-Detailed technical analysis of 8 major innovations from the **Dasher Project** (Cambridge University) and how they can be implemented in Alpha-OSK.
+- [`roadmap/LAUNCH_PLAN.md`](roadmap/LAUNCH_PLAN.md): release prep checklist.
+- [`roadmap/launch_tasks.csv`](roadmap/launch_tasks.csv): structured task tracking.
+- [`roadmap/FEDERATED_LEARNING.md`](roadmap/FEDERATED_LEARNING.md): federated-learning roadmap (separate from §5.6 telemetry; not yet implemented).
+- [`roadmap/ECOSYSTEM.md`](roadmap/ECOSYSTEM.md): four-tool adaptive-input platform (Alpha-OSK + MacroVox + Octavium + Nimbus).
+- [`roadmap/MACROVOX_INTEGRATION.md`](roadmap/MACROVOX_INTEGRATION.md): voice-dictation integration plan.
+- [`roadmap/DOCUMENT_IMPORT.md`](roadmap/DOCUMENT_IMPORT.md): import-from-document feature spec.
 
-**[`MOBILE_KEYBOARD_INNOVATIONS.md`](MOBILE_KEYBOARD_INNOVATIONS.md)** - Mobile keyboard innovations
+## `research/`: background, philosophy, audits, brainstorms
 
-Technical approaches from **Gboard** and **SwiftKey** including fuzzy/spatial recognition, gesture typing, smart autocorrect, and personalized dictionaries.
+Reference material that informed the design but isn't a living spec. Useful for context; not authoritative for current behaviour.
 
-**Dasher innovations (8 total):**
-1. Alphabet System, 2. PPM Language Model, 3. Adaptive Learning, 4. Visual Probability Encoding, 5. Training Text System, 6. Direct Input Integration, 7. Switch Scanning Mode, 8. Performance Optimization
-
-**Mobile keyboard innovations (6 total):**
-1. Fuzzy/Spatial Recognition, 2. Gesture Typing, 3. Next-Word Prediction, 4. Smart Autocorrect, 5. Personalized Dictionary, 6. Multi-Language Support
-
-**Implementation roadmap:**
-- Phase 1: Quick wins (1-2 weeks)
-- Phase 2: Core enhancements (2-4 weeks)
-- Phase 3: Advanced features (1-2 months)
-- Phase 4: Accessibility (2-4 weeks)
-
----
-
-### Prediction System
-
-**[`PREDICTION_OPTIONS.md`](PREDICTION_OPTIONS.md)** - Comparison of prediction approaches
-
-Analysis of different prediction strategies and the rationale for Alpha-OSK's hybrid approach.
-
-**[`HYBRID_MERGING.md`](HYBRID_MERGING.md)** - How the four predictors combine
-
-Scoring rules in `HybridPredictor._merge_predictions`, the four user-selectable merge strategies (Default / Consensus boost / Confidence-weighted / Multiplicative), industry research informing the design (Goodman 2002, Klakow 1998, Gboard EMNLP 2024, Presage's `MeritocracyCombiner`), and the LLM rerank refinement layer.
-
-**[`FUZZY_RECOGNITION.md`](FUZZY_RECOGNITION.md)** - Spatial error correction
-
-The `FuzzyRecognizer`'s spatial Gaussian model, SymSpell-backed edit-distance lookup, and the autocorrect two-tier threshold.  Explains how the Gboard-leaning constants are tuned and how fuzzy candidates plug into the merge.
-
-**[`PPM.md`](PPM.md)** - Character-level PPM (Dasher algorithm)
-
-Variable-order character model with PPMD escape, role in the hybrid engine, and known limits.
+- [`research/PHILOSOPHY.md`](research/PHILOSOPHY.md): project philosophy and information-theoretic foundations.
+- [`research/USER_PERSPECTIVE.md`](research/USER_PERSPECTIVE.md): user-lens framing of the project.
+- [`research/DESIGN.md`](research/DESIGN.md): early overall design notes.
+- [`research/INNOVATION_SOURCES.md`](research/INNOVATION_SOURCES.md): index of innovations drawn from Dasher, Gboard, LatinIME, Presage, etc.
+- [`research/TECHNICAL_INNOVATIONS.md`](research/TECHNICAL_INNOVATIONS.md): deep dive into the Dasher Project innovations.
+- [`research/MOBILE_KEYBOARD_INNOVATIONS.md`](research/MOBILE_KEYBOARD_INNOVATIONS.md): deep dive into the Gboard / SwiftKey approaches.
+- [`research/LEARNING_IMPROVEMENTS.md`](research/LEARNING_IMPROVEMENTS.md): exploration of learning-loop changes.
+- [`research/PREDICTION_OPTIONS.md`](research/PREDICTION_OPTIONS.md): exploration of prediction-stack options.
+- [`research/TRAINING_DATA_STRATEGY.md`](research/TRAINING_DATA_STRATEGY.md): training-data sourcing strategy.
+- [`research/STRATEGIC_OPPORTUNITIES.md`](research/STRATEGIC_OPPORTUNITIES.md): strategic positioning notes.
+- [`research/SECURITY_AUDIT.md`](research/SECURITY_AUDIT.md): security-audit record from the hardening pass.
+- [`research/LLM_ONBOARDING.md`](research/LLM_ONBOARDING.md): early AI-onboarding doc (largely superseded by [`../CLAUDE.md`](../CLAUDE.md)).
+- [`research/LLM_ONBOARDING_TEMPLATE.md`](research/LLM_ONBOARDING_TEMPLATE.md): template for the above.
+- [`research/CONSTELLATION_INTEGRATION_GUIDE.md`](research/CONSTELLATION_INTEGRATION_GUIDE.md): Constellation cross-project integration guide.
+- [`research/SLIDES_WORKFLOW.md`](research/SLIDES_WORKFLOW.md): presentation/slides workflow.
 
 ---
 
-### Security
-
-**[`SECURITY_AUDIT.md`](SECURITY_AUDIT.md)** - Security audit and recommendations
-
-Comprehensive audit covering secrets management, network exposure, subprocess safety, file I/O, deserialization, dependencies, logging, privilege handling, and input validation. Includes hardening recommendations for production deployment.
-
----
-
-## 🎯 Quick Reference
-
-### For New Contributors
-
-1. **Start here:** [`PHILOSOPHY.md`](PHILOSOPHY.md) - Understand the "why"
-2. **Then read:** [`TECHNICAL_INNOVATIONS.md`](TECHNICAL_INNOVATIONS.md) - Learn the "how"
-3. **Check:** [`LLM_ONBOARDING.md`](LLM_ONBOARDING.md) - Quick project overview
-
-### For Developers
-
-**Key principles when coding:**
-1. Does this reduce effort?
-2. Is this accessible?
-3. Is this intelligent?
-4. Is this documented?
-5. Is this open?
-
-### For Researchers
-
-Alpha-OSK builds on decades of HCI research, particularly:
-- **Dasher Project** (Cambridge University) - Information-theoretic text entry
-- **PPM algorithms** - Language modeling
-- **Accessibility research** - Assistive technology design
-
-See [`PHILOSOPHY.md`](PHILOSOPHY.md) for full references.
-
----
-
-## 🔗 External Resources
-
-### Dasher Project
-- [Official Website](https://dasher.at)
-- [How Dasher Works](https://dasher.at/docs/concepts/how-dasher-works/)
-- [Research Publications](https://dasher.at/docs/research/publications/)
-- [Development Guide](https://dasher.at/docs/development/)
-
-### Related Projects
-- [GNOME On-Board](https://launchpad.net/onboard) - Linux on-screen keyboard
-- [Dasher GitHub](https://github.com/dasher-project/dasher) - Source code
-
----
-
-## 📖 Document Relationships
-
-```
-PHILOSOPHY.md
-    ↓ (inspires)
-TECHNICAL_INNOVATIONS.md + MOBILE_KEYBOARD_INNOVATIONS.md
-    ↓ (implements)
-src/prediction/
-    ├── ngram_predictor.py      # Word-level frequency prediction
-    ├── ppm_predictor.py        # Character-level PPM (Dasher algorithm)
-    ├── fuzzy_recognizer.py     # Spatial error correction + accessibility profiles
-    ├── transformer_predictor.py # Optional LLM re-ranking (disabled by default)
-    └── hybrid_predictor.py     # Orchestrates all predictors
-```
-
-**Philosophy → Technical Design → Implementation**
-
----
-
-## 🚀 Implementation Status
-
-### Completed ✅
-
-**UI & Window:**
-- **Title bar** with drag handle, minimize, close buttons
-- **Resizable window** - Drag left or right edges; closed-form key sizing distributes width proportionally across all visible panels (main, nav, numpad) with sub-pixel rounding protection and dynamic minimum-width enforcement to prevent key clipping
-- **Multi-monitor DPI** — Window size stays correct when dragged between monitors with different scaling; fixed via Qt `PassThrough` DPI rounding policy + `onScreenChanged` clamp in QML
-- **Settings popup window** - All settings in a separate floating window (⚙ button), positioned to the right of the keyboard
-- **Data-driven theme engine** — 5 built-in themes (Dark, Light, Blue, Green, Purple), defined as a single JS object map. Adding a theme requires one data entry, no code changes.
-- **Window transparency** — Adjustable opacity slider (30%–100%) in settings. Background becomes transparent while keys remain fully opaque and readable.
-- **Visual polish** — Ripple effect on key press (expands from touch point), smooth bounce animation, enhanced gradient depth, improved typography (DemiBold, Inter font stack).
-- **Audio feedback** — Optional key click sounds via QSoundEffect. Toggle in settings. Gracefully degrades if QtMultimedia is unavailable.
-- Modern prediction bar with improved readability
-
-**Keyboard Layout:**
-- **Data-driven layouts** — QWERTY, Dvorak, and Colemak defined as JSON files in `data/layouts/`. Switchable in settings, persisted across sessions.
-- **Keyboard shortcuts** - Ctrl+C, Ctrl+V, Ctrl+Z, etc. work correctly
-- Sticky modifiers (Shift, Ctrl, Alt, Win)
-- Toggleable panels (Function keys, Navigation, Numpad)
-- **Key Repeat** - Hold backspace/delete to repeat
-
-**Prediction:**
-- Hybrid prediction engine (n-gram + PPM + fuzzy)
-- **PPM Language Model** - Character-level prediction (Dasher algorithm)
-- **Fuzzy/Spatial Recognition** - Motor challenge support
-- **Next-word Prediction** - Suggests words after clicking a prediction
-- **Training Corpus** - Pre-loaded with common phrases
-- **Smart Punctuation** - Auto-removes space before ? ! . , ; :
-
-**Analytics:**
-- **Session analytics dashboard** — Live stats in settings: words per minute, prediction hit rate, correction rate, top words, session duration. Polls every 2 seconds.
-
-**Accessibility Profiles:**
-Six profiles that adjust how aggressively the keyboard compensates for motor challenges:
-
-| Profile | Key Target Size | Hold Delay | Autocorrect | Best For |
-|---------|----------------|-----------|-------------|----------|
-| Precise | Strict (0.5) | None | Off | Users with full motor control who want exact targeting |
-| Normal | Standard (1.0) | None | On | Most users — balanced accuracy and assistance |
-| Mild Tremor | Wider (1.5) | 100ms | On | Slight hand tremor or reduced finger precision |
-| Moderate Tremor | Wide (2.0) | 200ms | On | Noticeable tremor, needs more forgiveness |
-| Severe Tremor | Widest (2.5) | 300ms | On | Significant motor challenges, maximum assistance |
-| Limited Mobility | Wide (2.0) | 150ms | On | Reduced range of motion, difficulty reaching distant keys |
-
-Settings adjust `spatial_uncertainty` (how far from center a press is still counted), `confidence_threshold` (how sure the system must be before autocorrecting), `prediction_weight` (how much the predictor compensates), and `key_hold_delay` (minimum press duration to prevent accidental triggers).
-
-**Settings Panel (popup window):**
-- Keyboard layout selector (QWERTY / Dvorak / Colemak)
-- Layout toggles: Function keys, Navigation keys, Numpad
-- Suggestions: toggle, count (3–10)
-- Accessibility profiles with descriptive labels
-- Custom vocabulary pack import (drop a folder with `dictionary.txt`)
-- Theme selector (5 themes)
-- Appearance: key click sound toggle, window opacity slider
-- Session analytics dashboard
-- Data management: save model, clear learned data
-- Developer: Debug mode toggle
-- Draggable, frameless, always-on-top; does not overlay the keyboard
-
-### Architecture Decision: No LLM/AI Toggle in Settings ✂️
-The transformer model (DistilGPT-2) toggle has been removed from the settings UI:
-- **Reason:** Model not available by default; exposing the toggle causes confusion
-- **Current prediction stack:** N-gram + PPM + Fuzzy — no AI dependency
-- **Future:** AI toggle may return when a lightweight model ships with the app
-
-### Current State: Prediction Quality 🔧
-The prediction system is functional but still learning:
-- **Next-word prediction works** - Suggests words after clicking a prediction
-- **Training corpus is small** - Only 5,859 characters (needs expansion)
-- **N-gram dominates** - Word-level predictions weighted 3x over character-level
-- **PPM is learning** - Character-level model adapts as you type
-- **Improving with use** - System learns from your selections
-
-**To improve predictions:**
-1. Use the keyboard regularly - it learns from your typing
-2. Import text files via Prediction Settings (⚡ button)
-3. Expand `data/training_corpus.txt` with domain-specific text
-
-### Planned 📋
-- Switch scanning mode
-- AT-SPI direct input (bypass xdotool)
-- Multi-language alphabet support
-- Eye-tracking integration
-- Gesture typing (swipe)
-
-See [`TECHNICAL_INNOVATIONS.md`](TECHNICAL_INNOVATIONS.md) for detailed roadmap.
-
----
-
-## 💡 Contributing
-
-When adding new features or documentation:
-
-1. **Check philosophy alignment** - Does it fit our principles?
-2. **Document the "why"** - Not just the "what"
-3. **Include examples** - Code snippets, use cases
-4. **Reference research** - Stand on shoulders of giants
-5. **Think accessibility** - Will this work for all users?
-
----
-
-## 📝 Documentation Standards
-
-### For Technical Docs
-- Include code examples
-- Explain algorithms, not just APIs
-- Show before/after comparisons
-- Provide implementation roadmaps
-
-### For Philosophy Docs
-- Use quotes from research
-- Explain principles with examples
-- Connect to real user needs
-- Reference academic sources
-
-### For All Docs
-- Write for future contributors
-- Assume reader is intelligent but unfamiliar
-- Use clear headings and structure
-- Include visual aids when helpful
-
----
-
-## 🎓 Learning Path
-
-**New to assistive technology?**
-1. Read Dasher's ["How It Works"](https://dasher.at/docs/concepts/how-dasher-works/)
-2. Try Dasher yourself to understand the paradigm
-3. Read our [`PHILOSOPHY.md`](PHILOSOPHY.md)
-4. Explore the codebase with context
-
-**Want to contribute code?**
-1. Understand the philosophy first
-2. Read [`TECHNICAL_INNOVATIONS.md`](TECHNICAL_INNOVATIONS.md)
-3. Pick a Phase 1 task (quick wins)
-4. Submit PR with clear documentation
-
-**Interested in research?**
-1. Review Dasher's [publications](https://dasher.at/docs/research/publications/)
-2. Identify gaps or improvements
-3. Propose experiments
-4. Document findings
-
----
-
-## 📊 Metrics & Goals
-
-### Prediction Accuracy
-- **Current:** ~70% top-3 accuracy
-- **Target:** 85% top-3 accuracy (with PPM)
-- **Stretch:** 90% with adaptive learning
-
-### Performance
-- **Current:** <10ms n-gram prediction
-- **Target:** <50ms PPM prediction
-- **Requirement:** <100ms total latency
-
-### Accessibility
-- **Current:** Mouse/touchscreen support
-- **Target:** Switch scanning mode
-- **Stretch:** Eye-tracking integration
-
----
-
-## 🔍 Finding Information
-
-**Looking for...**
-- **Why we do things this way?** → [`PHILOSOPHY.md`](PHILOSOPHY.md)
-- **How to implement feature X?** → [`TECHNICAL_INNOVATIONS.md`](TECHNICAL_INNOVATIONS.md)
-- **Quick project overview?** → [`LLM_ONBOARDING.md`](LLM_ONBOARDING.md)
-- **Prediction comparison?** → [`PREDICTION_OPTIONS.md`](PREDICTION_OPTIONS.md)
-- **Code architecture?** → [`LLM_ONBOARDING.md`](LLM_ONBOARDING.md#architecture)
-- **Security posture?** → [`SECURITY_AUDIT.md`](SECURITY_AUDIT.md)
-
----
-
-## 🙏 Acknowledgments
-
-This documentation builds on:
-- **Dasher Project** - 25+ years of research and development
-- **GNOME On-Board** - Pioneering Linux accessibility
-- **The accessibility community** - Real users with real needs
-
-Special thanks to:
-- David MacKay and the Cambridge Inference Group
-- All Dasher contributors and researchers
-- The open-source accessibility community
-
----
-
-## 📄 License
-
-All documentation is licensed under the same terms as Alpha-OSK (see main LICENSE file).
-
-When referencing Dasher research, please cite:
-> Ward, D. J., Blackwell, A. F., & MacKay, D. J. (2002). *Dasher—a data entry interface using continuous gestures and language models.* UIST '00.
-
----
-
-*Last updated: February 2026*
-
-**Questions?** Open an issue or discussion on GitHub.
+## When to put a doc where
+
+- **Top-level docs** (`WHITEPAPER.md`, `PRIVACY.md`): user-facing or canonical-reference. Anything an end user or external reviewer should see without drilling.
+- **`architecture/`**: a live system that's currently shipping. The code in `src/` should match what the doc says.
+- **`build/`**: anything specific to producing a release artefact or shipping it to users.
+- **`roadmap/`**: designed but not yet implemented. Move out of `roadmap/` once it ships.
+- **`research/`**: written to inform a decision (or capture an audit) but not the source of truth for current behaviour.

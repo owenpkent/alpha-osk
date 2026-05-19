@@ -3,7 +3,7 @@
 Cloudflare Worker that receives anonymous, opt-in usage stats from
 Alpha-OSK clients and exposes a public aggregate counter.
 
-Design: `docs/TELEMETRY.md`. Privacy story: `docs/PRIVACY.md`.
+Design: `docs/architecture/TELEMETRY.md`. Privacy story: `docs/PRIVACY.md`.
 
 ## One-time setup
 
@@ -82,7 +82,7 @@ The CASCADE on `submissions_latest.anon_id` cleans up the child row.
 
 ## Threat model
 
-See `docs/TELEMETRY.md` § "Threat model". Short version: an attacker
+See `docs/architecture/TELEMETRY.md` § "Threat model". Short version: an attacker
 who compromises this worker can see anon_ids and lifetime counters
 (no IP, no UA, no content) and could backfill fake submissions to
 poison the aggregate (limited by per-counter sanity ceilings and

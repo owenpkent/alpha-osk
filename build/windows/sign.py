@@ -43,7 +43,7 @@ See Also
 --------
 - ``gitconnect/windows-desktop/build/sign.js`` — The original JS version
   this script is modeled after.
-- ``docs/WINDOWS.md`` — Full Windows build and deployment guide.
+- ``docs/build/WINDOWS.md`` — Full Windows build and deployment guide.
 """
 
 from __future__ import annotations

@@ -40,7 +40,7 @@ Architecture
     ├── windows.py           # Windows backend (SendInput via ctypes)
     └── macos.py             # macOS backend (Quartz CGEvent via pyobjc)
 
-See also: ``docs/PLATFORM_ARCHITECTURE.md`` for detailed design rationale.
+See also: ``docs/architecture/PLATFORM_ARCHITECTURE.md`` for detailed design rationale.
 """
 
 from __future__ import annotations

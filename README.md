@@ -73,7 +73,7 @@ Download the latest installer from the public releases repo:
 |----------|------|-------|
 | Windows  | `Alpha-OSK-Setup-X.Y.Z.exe` | EV-signed, includes auto-update. Runs the installer; the keyboard appears on first launch. |
 | Linux    | `Alpha-OSK-X.Y.Z-x86_64.AppImage` | Unsigned by design. `chmod +x` and run. Needs `xdotool` (X11) or `ydotool` (Wayland) installed at the OS level. |
-| macOS    | In progress | Tracked in [`docs/MACOS.md`](docs/MACOS.md). Synthesiser and window flags scaffolded; code-signing and notarisation still to do. |
+| macOS    | In progress | Tracked in [`docs/build/MACOS.md`](docs/build/MACOS.md). Synthesiser and window flags scaffolded; code-signing and notarisation still to do. |
 
 ### From source
 
@@ -244,11 +244,22 @@ src/
 build/                 Per-platform packaging: windows/, linux/, macos/
 backend/cf-worker/     Cloudflare Worker for telemetry aggregation (optional)
 data/                  Dictionaries, n-gram seed corpora, keyboard layouts
-docs/                  Design docs (HYBRID_MERGING, FUZZY_RECOGNITION, PPM, SWIPE_TYPING, WINDOWS, LINUX, MACOS, WHITEPAPER, ...)
+docs/                  Design docs (see Documentation section below)
 tests/                 pytest suite
 ```
 
 For a guided tour, read [`CLAUDE.md`](CLAUDE.md). It's primarily an AI-onboarding document but is also the clearest map of the codebase: prediction engine internals, QML/Python bridge patterns, platform gotchas, build pipeline, settings architecture. For the architectural reasoning, read the [white paper](docs/WHITEPAPER.md).
+
+## Documentation
+
+- [`docs/WHITEPAPER.md`](docs/WHITEPAPER.md): the canonical reference paper.
+- [`docs/PRIVACY.md`](docs/PRIVACY.md): user-facing data policy.
+- [`docs/architecture/`](docs/architecture/): how the running system works (hybrid merging, PPM, fuzzy, swipe, platform abstraction, telemetry design, layouts).
+- [`docs/build/`](docs/build/): packaging, signing, releases, auto-update (Windows, Linux, macOS, branding).
+- [`docs/roadmap/`](docs/roadmap/): planned, not-yet-built (launch plan, federated learning, ecosystem, MacroVox integration, document import).
+- [`docs/research/`](docs/research/): background material, philosophy, audits, brainstorms.
+
+The full index lives in [`docs/README.md`](docs/README.md).
 
 ## Development
 
@@ -273,7 +284,7 @@ For security issues, follow [`SECURITY.md`](SECURITY.md). Do not file public iss
 
 - Learning is on-device only. Your typing never leaves your computer unless you opt into telemetry.
 - Password fields are auto-detected (Windows UI Automation, Linux AT-SPI) and pause learning automatically. There's also a manual Learning / Paused toggle in the title bar.
-- Telemetry is opt-in and off by default. The client and the consent toggle are in the build, but the submission endpoint isn't deployed yet, so opting in is currently a no-op. When the endpoint goes live, opting in would send nine integer counters per week and never any content. See [`docs/PRIVACY.md`](docs/PRIVACY.md) and [`docs/TELEMETRY.md`](docs/TELEMETRY.md).
+- Telemetry is opt-in and off by default. The client and the consent toggle are in the build, but the submission endpoint isn't deployed yet, so opting in is currently a no-op. When the endpoint goes live, opting in would send nine integer counters per week and never any content. See [`docs/PRIVACY.md`](docs/PRIVACY.md) and [`docs/architecture/TELEMETRY.md`](docs/architecture/TELEMETRY.md).
 - Data export bundles your model, lifetime stats, and imported vocabulary packs into a single `.zip` you control. The telemetry contributor ID is **excluded** from exports so contributions stay unlinkable across machines.
 - Auto-update fetches release metadata from GitHub. Installers are verified against an EV-signed certificate before launching.
 
@@ -294,7 +305,7 @@ Alpha-OSK is part of a four-tool adaptive-input platform built by the same autho
 - **Octavium**: MIDI control (virtual piano and pads)
 - **Nimbus**: joystick (vJoy / ViGEm)
 
-See [`docs/ECOSYSTEM.md`](docs/ECOSYSTEM.md) for the integration plan.
+See [`docs/roadmap/ECOSYSTEM.md`](docs/roadmap/ECOSYSTEM.md) for the integration plan.
 
 ---
 

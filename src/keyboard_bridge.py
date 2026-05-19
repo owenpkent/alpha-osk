@@ -9,7 +9,7 @@ using the platform abstraction layer:
   for elevated-window support (requires EV code-signed binary).
 
 The bridge is platform-agnostic — all OS-specific logic lives in
-``src/platform/``.  See ``docs/PLATFORM_ARCHITECTURE.md``.
+``src/platform/``.  See ``docs/architecture/PLATFORM_ARCHITECTURE.md``.
 """
 
 from __future__ import annotations
@@ -278,7 +278,7 @@ class KeyboardBridge(QObject):
     # warning the user that the keyboard is about to disappear for
     # ~30 s while the install runs and the relauncher brings it back.
     # Without this, the silence between taskkill and relaunch reads as
-    # "the update broke the keyboard" — see docs/AUTO_UPDATE.md § Update
+    # "the update broke the keyboard" — see docs/build/AUTO_UPDATE.md § Update
     # progress indicator.
     updateInstallHandoffPending = Signal(str)
     # Streaming download progress for the update installer. Bytes
@@ -368,7 +368,7 @@ class KeyboardBridge(QObject):
         # from the analytics dashboard's getter so there is one source
         # of truth.  Settings → Data & Privacy → Privacy controls it; the QTimer below
         # checks once an hour whether the weekly window has elapsed.
-        # See docs/TELEMETRY.md (design) and docs/PRIVACY.md (user-facing).
+        # See docs/architecture/TELEMETRY.md (design) and docs/PRIVACY.md (user-facing).
         self._telemetry = TelemetryClient(
             analytics_provider=self._analytics.get_session_stats,
             app_version=APP_VERSION,

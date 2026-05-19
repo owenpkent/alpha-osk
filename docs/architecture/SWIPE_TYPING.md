@@ -37,7 +37,7 @@ mouse press / drag / release on keyboard area
 
 The bridge uses `HybridPredictor.get_unigram_freqs()` /
 `get_capitalized()` rather than reaching through to `_ngram` directly.
-See `docs/HYBRID_MERGING.md` → "Public API for External Callers".
+See `HYBRID_MERGING.md` → "Public API for External Callers".
 
 Tap fall-through is what lets a single key still work normally even when
 swipe mode is on — short gestures hit the key under the release point.

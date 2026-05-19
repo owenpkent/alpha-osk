@@ -381,7 +381,7 @@ def get_venv_python():
 
 ### 5. Document
 
-- Add a `docs/MACOS.md` guide.
+- Add a `../build/MACOS.md` guide.
 - Update this file.
 - Update `README.md`.
 
@@ -614,8 +614,8 @@ retry logic (matching gitconnect's `build/sign.js`).
 
 | File | Purpose |
 |------|---------|
-| `docs/WINDOWS.md` | Windows setup, signing, NSIS, UIAccess, troubleshooting |
-| `docs/PLATFORM_ARCHITECTURE.md` | This file — design rationale and decisions |
+| `../build/WINDOWS.md` | Windows setup, signing, NSIS, UIAccess, troubleshooting |
+| `PLATFORM_ARCHITECTURE.md` | This file — design rationale and decisions |
 
 ---
 

@@ -44,7 +44,7 @@ Window {
         // Prediction merge strategy.  "rank" (default) is the
         // historical rank-based fusion; "rrf" / "linear" / "loglinear"
         // are alternatives surfaced via Settings → Smart Typing → Suggestion Engine.
-        // See docs/HYBRID_MERGING.md for the trade-offs.  Default
+        // See docs/architecture/HYBRID_MERGING.md for the trade-offs.  Default
         // MUST stay "rank" — every existing user's pill ranking
         // depends on it.
         property string savedMergeStrategy: "rank"

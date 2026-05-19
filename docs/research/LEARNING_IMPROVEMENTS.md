@@ -10,7 +10,7 @@ of these are committed — they're options to choose from when there's
 appetite for the work.
 
 This is not a comparison of prediction *engines* (that's
-`docs/PREDICTION_OPTIONS.md` from earlier in the project). This is about
+`PREDICTION_OPTIONS.md` from earlier in the project). This is about
 making the engine we already have less brittle.
 
 ---
@@ -77,7 +77,7 @@ the per-strategy scorers (`_score_rank` / `_score_rrf` /
   to prevent `log(0)` when a word is missing from a source).
 - All hand-tuned.  The weights are shared across every merge
   strategy; the formula varies, the relative trust between predictors
-  does not.  See `docs/HYBRID_MERGING.md` for strategy trade-offs.
+  does not.  See `../architecture/HYBRID_MERGING.md` for strategy trade-offs.
 
 ### Autocorrect thresholds
 

@@ -14,7 +14,7 @@
 ; This is REQUIRED for UIAccess to work (EV-signed .exe must reside
 ; in a "secure location" per Windows security policy).
 ;
-; See docs/WINDOWS.md for full UIAccess explanation.
+; See docs/build/WINDOWS.md for full UIAccess explanation.
 
 !macro customInit
   ; Bring installer to front (critical after UAC elevation — otherwise

@@ -7,7 +7,7 @@
 //
 // Plus a scheduled handler that prunes users inactive for >365 days.
 //
-// Design notes live in docs/TELEMETRY.md. Privacy story lives in
+// Design notes live in docs/architecture/TELEMETRY.md. Privacy story lives in
 // docs/PRIVACY.md. Schema lives in schema.sql.
 
 export interface Env {

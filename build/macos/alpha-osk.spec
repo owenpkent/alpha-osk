@@ -183,7 +183,7 @@ coll = COLLECT(
 
 # Icon: prefer .icns (native), fall back to .png so unsigned dev
 # builds still surface *something*.  Generating the .icns asset is a
-# follow-up alongside Windows .ico and Linux .png in docs/BRANDING.md.
+# follow-up alongside Windows .ico and Linux .png in docs/build/BRANDING.md.
 _icns = PROJECT_ROOT / 'build' / 'macos' / 'alpha-osk.icns'
 _png = PROJECT_ROOT / 'assets' / 'logo-1024.png'
 _icon = str(_icns) if _icns.exists() else (str(_png) if _png.exists() else None)

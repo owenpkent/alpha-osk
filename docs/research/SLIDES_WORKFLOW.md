@@ -290,7 +290,7 @@ your-project/
 
 Copy these files to any project:
 1. `templates/slideshow-template.html`
-2. `docs/SLIDES_WORKFLOW.md`
+2. `SLIDES_WORKFLOW.md`
 3. `run.py` (or integrate the server logic)
 
 ### Option B: Create a Shared Package

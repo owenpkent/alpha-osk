@@ -25,8 +25,8 @@ What it does:
 5. Launches ``src.keyboard_app`` inside the virtual environment.
 
 See Also:
-    - ``docs/WINDOWS.md`` — Windows-specific setup guide.
-    - ``docs/PLATFORM_ARCHITECTURE.md`` — cross-platform design.
+    - ``docs/build/WINDOWS.md`` — Windows-specific setup guide.
+    - ``docs/architecture/PLATFORM_ARCHITECTURE.md`` — cross-platform design.
 """
 
 import sys
@@ -230,7 +230,7 @@ def ensure_admin_windows():
     SendInput is blocked by UIPI when the keyboard process runs at a lower
     integrity level than the focused window.  Running as admin bypasses UIPI
     for all standard applications.  (Full elevated-window + UAC-screen support
-    still requires an EV-signed UIAccess binary — see docs/WINDOWS.md.)
+    still requires an EV-signed UIAccess binary — see docs/build/WINDOWS.md.)
 
     If already admin, returns immediately.  Otherwise, triggers a UAC prompt
     and re-launches; the original process then exits.

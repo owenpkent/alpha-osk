@@ -18,11 +18,11 @@ This is a meaningful enough scope to warrant a **minor version bump (1.1.0)** ra
 | Analytics dashboard | ✓ **shipped to main** | commit `2530be4` (initial), `8225178` (docs) |
 | Telemetry client + bridge wiring | ✓ **shipped to main** | commit `0f737d1`. `DEFAULT_ENDPOINT=""` so it's inert |
 | Settings → Data & Privacy → Privacy UI | ✓ **shipped to main** | toggle + two-step delete button, untested in dev |
-| Telemetry docs | ✓ **shipped to main** | `docs/TELEMETRY.md`, `docs/PRIVACY.md` |
+| Telemetry docs | ✓ **shipped to main** | `../architecture/TELEMETRY.md`, `../PRIVACY.md` |
 | CF Worker code | ✓ **scaffolded** | `backend/cf-worker/`, TypeScript + D1 schema + cron |
 | CF Worker **deployed** | ✗ **not started** | blocker on telemetry going live |
 | `DEFAULT_ENDPOINT` set | ✗ **blocked on deploy** | trivial change once URL is known |
-| Dev-validate Privacy UI | ✗ **pending** | per `docs/TELEMETRY.md` § "Test in dev" |
+| Dev-validate Privacy UI | ✗ **pending** | per `../architecture/TELEMETRY.md` § "Test in dev" |
 | Version bump to 1.1.0 | ✗ **pending** | one-line edit to `src/__version__.py` |
 | Release build (Windows) | ✗ **pending** | `python build/windows/build.py` from non-elevated shell, eToken plugged in |
 | Release build (Linux) | ✗ **pending** | `python build/linux/build.py --appimage --fetch-appimagetool` |
@@ -40,14 +40,14 @@ This is a meaningful enough scope to warrant a **minor version bump (1.1.0)** ra
 - [ ] `npm run deploy`. Note the printed worker URL.
 - [ ] Smoke-test with the curl examples in `backend/cf-worker/README.md`. Confirm `POST /v1/submit` returns 204 and `GET /v1/aggregate` returns the row.
 - [ ] Set `DEFAULT_ENDPOINT` in `src/telemetry.py` to the worker URL. Commit.
-- [ ] Run the dev-validation checklist in `docs/TELEMETRY.md` § "3. Test in dev, then ship a release". Specifically: toggle persists, force-submit lands a row in D1, delete-button removes it, opt-out clears `anon_id`, opt-back-in generates a new one.
+- [ ] Run the dev-validation checklist in `../architecture/TELEMETRY.md` § "3. Test in dev, then ship a release". Specifically: toggle persists, force-submit lands a row in D1, delete-button removes it, opt-out clears `anon_id`, opt-back-in generates a new one.
 
 ### Week 2 (2026-05-15 → 2026-05-21): release prep
 
 - [ ] Bump `src/__version__.py` to `1.1.0`.
 - [ ] In `CHANGELOG.md`, replace `## [Unreleased]` heading with `## [1.1.0] — 2026-05-26` (move existing entries under it). Add a fresh empty `## [Unreleased]` above.
 - [ ] Run `python check.py --full` (the `--full` flag enables the coverage gate; matches CI exactly, ~3 min).
-- [ ] `python build/windows/build.py` from a non-elevated shell with the eToken plugged in. (See `docs/WINDOWS.md` for the signing requirement.)
+- [ ] `python build/windows/build.py` from a non-elevated shell with the eToken plugged in. (See `../build/WINDOWS.md` for the signing requirement.)
 - [ ] Test the installer in `release/` on a clean account or VM. Specifically: install, launch OSK, open Settings → Data & Privacy → Privacy, toggle on, restart, confirm toggle persisted.
 - [ ] `python build/linux/build.py --appimage --fetch-appimagetool` if the Linux build is also shipping this cycle.
 
@@ -67,8 +67,8 @@ This is a meaningful enough scope to warrant a **minor version bump (1.1.0)** ra
 | First production submissions are also the first integration test | Dev-validation checklist in Week 1; smoke-test live worker before flipping `DEFAULT_ENDPOINT` |
 | Privacy UI was unit-tested but never seen in dev | Step in Week 1 explicitly opens Settings → Data & Privacy → Privacy |
 | Auto-update flow has churn (1.0.16 fix is recent) | End-to-end install-old → update → confirm-new in Week 3, before announcement |
-| eToken not present at build time → unsigned binary | `docs/WINDOWS.md` "Code Signing" section covers the most common trap (must be non-elevated shell) |
-| Misconfigured `DEFAULT_ENDPOINT` (staging URL, typo) routes opt-in users to wrong DB | `docs/WINDOWS.md` step 2a is the gate; verify before build |
+| eToken not present at build time → unsigned binary | `../build/WINDOWS.md` "Code Signing" section covers the most common trap (must be non-elevated shell) |
+| Misconfigured `DEFAULT_ENDPOINT` (staging URL, typo) routes opt-in users to wrong DB | `../build/WINDOWS.md` step 2a is the gate; verify before build |
 | User opts in, sees "0% picked the first suggestion" because counter is fresh | Already fixed: that subtext was removed from the Predictions Used tile after Owen flagged it |
 
 ## Decisions deferred
@@ -86,7 +86,7 @@ This is a meaningful enough scope to warrant a **minor version bump (1.1.0)** ra
 
 ## Task tracker
 
-`docs/launch_tasks.csv` is the row-level tracker (76 tasks, ID-keyed, with dependency arrows). Open it in Excel / Numbers / Sheets / a CSV viewer to filter by `status`, `phase`, or `category`. The markdown checklist above covers the engineering critical path; the CSV adds the marketing surface and is the source of truth.
+`launch_tasks.csv` is the row-level tracker (76 tasks, ID-keyed, with dependency arrows). Open it in Excel / Numbers / Sheets / a CSV viewer to filter by `status`, `phase`, or `category`. The markdown checklist above covers the engineering critical path; the CSV adds the marketing surface and is the source of truth.
 
 ### Categories (column `category`)
 

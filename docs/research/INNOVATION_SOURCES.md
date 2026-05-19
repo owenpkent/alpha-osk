@@ -162,7 +162,7 @@ Alpha-OSK draws technical inspiration from multiple sources. This document provi
    - Research-backed approaches
    - Accessibility-focused features
 
-4. **Finally:** [`README.md`](README.md)
+4. **Finally:** [`README.md`](../README.md)
    - Navigation and quick reference
    - Implementation status
    - Contributing guidelines

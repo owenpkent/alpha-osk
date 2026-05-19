@@ -377,4 +377,4 @@ AI assistants should clean up temp files when done. If you see orphaned temp fil
 
 ## Questions?
 
-Reach out to Owen or refer to the [Constellation README](./README.md) for workflow details.
+Reach out to Owen or refer to the [Constellation README](../README.md) for workflow details.

@@ -1,6 +1,6 @@
 # Telemetry — Design
 
-Anonymous, opt-in usage statistics that aggregate into a public "X million keystrokes saved" counter. **Off by default.** Distinct from federated learning (`docs/FEDERATED_LEARNING.md`): telemetry collects a handful of integer counters; federated learning collects model deltas. They could share infrastructure later but currently do not.
+Anonymous, opt-in usage statistics that aggregate into a public "X million keystrokes saved" counter. **Off by default.** Distinct from federated learning (`../roadmap/FEDERATED_LEARNING.md`): telemetry collects a handful of integer counters; federated learning collects model deltas. They could share infrastructure later but currently do not.
 
 ## What goes over the wire
 
@@ -159,7 +159,7 @@ In dev (`python run.py`):
 - Toggle off. Confirm the `anon_id` in `telemetry.json` is cleared.
 - Toggle back on. Confirm a NEW `anon_id` is generated (this is the unlinkable-cycle guarantee — verify it actually works).
 
-After dev validation, follow the normal release checklist in `docs/WINDOWS.md`. The release-checklist line for telemetry is: "verify `DEFAULT_ENDPOINT` is set to the production worker URL, not empty / not a staging URL".
+After dev validation, follow the normal release checklist in `../build/WINDOWS.md`. The release-checklist line for telemetry is: "verify `DEFAULT_ENDPOINT` is set to the production worker URL, not empty / not a staging URL".
 
 ### 4. (Later) The public stats page
 

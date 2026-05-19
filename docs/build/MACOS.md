@@ -248,7 +248,7 @@ downsample cleanly at every size — sharper small icons.
   - `com.apple.security.device.audio-input` — only if voice features ever ship.
   - `com.apple.security.automation.apple-events` — false unless we script other apps directly.
   - Accessibility itself is a TCC user grant, not an entitlement.
-- Update `docs/MACOS.md` § *Release checklist* with the codesign + notarize commands once they're verified end-to-end.
+- Update `MACOS.md` § *Release checklist* with the codesign + notarize commands once they're verified end-to-end.
 
 ### Phase 4 — AXUIElement password detection ✅
 Implemented in `src/platform/password_detect.py::_MacOSAXDetector`.

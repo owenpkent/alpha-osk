@@ -530,7 +530,7 @@ Check `src/telemetry.py::DEFAULT_ENDPOINT`. It must be either:
 - the empty string (telemetry stays inert; safe for any release), **or**
 - the **production** Cloudflare Worker URL (not a staging URL, not localhost).
 
-Shipping a release with a staging URL would route real users' opt-in submissions to the wrong database. Shipping with localhost would silently fail every submit. Full deployment workflow is in `docs/TELEMETRY.md` § "Deployment & release".
+Shipping a release with a staging URL would route real users' opt-in submissions to the wrong database. Shipping with localhost would silently fail every submit. Full deployment workflow is in `../architecture/TELEMETRY.md` § "Deployment & release".
 
 ### 3. Commit
 

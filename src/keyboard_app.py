@@ -31,8 +31,8 @@ Cross-Platform Behaviour
 See Also
 --------
 - ``src/platform/`` — OS-specific key synthesis backends.
-- ``docs/PLATFORM_ARCHITECTURE.md`` — design rationale.
-- ``docs/WINDOWS.md`` — Windows build / signing guide.
+- ``docs/architecture/PLATFORM_ARCHITECTURE.md`` — design rationale.
+- ``docs/build/WINDOWS.md`` — Windows build / signing guide.
 """
 
 from __future__ import annotations

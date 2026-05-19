@@ -6,7 +6,7 @@ vocabulary packs into a single ``.zip`` archive that can be moved
 between machines. Telemetry state (``telemetry.json`` — contains the
 anon_id) is intentionally excluded. Copying it across machines would
 link the user's contributions, which the telemetry consent docs
-explicitly promise not to do (see ``docs/TELEMETRY.md``).
+explicitly promise not to do (see ``docs/architecture/TELEMETRY.md``).
 
 Archive layout
 --------------

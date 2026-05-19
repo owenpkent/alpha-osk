@@ -75,7 +75,7 @@ Ties to MacroVox and the broader ecosystem.
 - **Listen now.** Handoff to MacroVox to dictate the next sentence. A mode-switch tile.
 - **Voice tag.** Brief verbal note that an AI helper expands into prose.
 
-**Effort:** medium for TTS (Windows SAPI, Linux `espeak` or `festival`), high for full voice-mode integration with MacroVox (touches the ecosystem-handoff problem in `docs/ECOSYSTEM.md`).
+**Effort:** medium for TTS (Windows SAPI, Linux `espeak` or `festival`), high for full voice-mode integration with MacroVox (touches the ecosystem-handoff problem in `../roadmap/ECOSYSTEM.md`).
 
 ### Smart contextual bar
 
@@ -114,7 +114,7 @@ A small row whose buttons change based on what the foreground app is, what's sel
 
 ### Profile / mode switching
 
-Already designed in `docs/MODULAR_LAYOUTS.md`.
+Already designed in `MODULAR_LAYOUTS.md`.
 
 - One-click swap: Coding / Email / Chat / Gaming.
 - Each profile = layout + theme + window position + active panels + enabled extras.
@@ -124,14 +124,14 @@ Already designed in `docs/MODULAR_LAYOUTS.md`.
 
 ### Ecosystem handoff
 
-The four-tool accessibility stack from `docs/ECOSYSTEM.md`: Alpha-OSK, MacroVox, Octavium, Nimbus.
+The four-tool accessibility stack from `../roadmap/ECOSYSTEM.md`: Alpha-OSK, MacroVox, Octavium, Nimbus.
 
 - **Switch to Octavium.** Launch or focus Octavium, hide self.
 - **Switch to Nimbus.** Same for joystick mode.
 - **Switch to MacroVox.** Same for voice dictation.
 - **Unified launcher** tile in the title bar.
 
-**Effort:** medium. Each is a process launch plus window-state coordination. The deeper integration (shared input layer, unified UI) is a multi-phase project tracked in `docs/ECOSYSTEM.md`.
+**Effort:** medium. Each is a process launch plus window-state coordination. The deeper integration (shared input layer, unified UI) is a multi-phase project tracked in `../roadmap/ECOSYSTEM.md`.
 
 ## Cross-cutting design questions
 
@@ -161,7 +161,7 @@ Hard-coded buttons age badly. Long-term, the right shape is a tile manifest:
 }
 ```
 
-This mirrors the action model in `docs/MODULAR_LAYOUTS.md` (`char`, `special`, `hotkey`, `text`, `macro`, `launch`, `layout`, `midi`). Ship the first batch hard-coded, but use the same action types so the manifest path is a future refactor, not a rewrite.
+This mirrors the action model in `MODULAR_LAYOUTS.md` (`char`, `special`, `hotkey`, `text`, `macro`, `launch`, `layout`, `midi`). Ship the first batch hard-coded, but use the same action types so the manifest path is a future refactor, not a rewrite.
 
 ### Settings real estate
 
@@ -183,7 +183,7 @@ Together (~2-3 weeks) these cover the "compress chords into clicks" and "compres
 
 ## Cross-references
 
-- `docs/MODULAR_LAYOUTS.md`: action types and the broader customisation story.
-- `docs/ECOSYSTEM.md`: MacroVox / Octavium / Nimbus integration surface.
-- `docs/MACROVOX_INTEGRATION.md`: voice-dictation specifics.
-- `docs/LONG_PRESS_ALTERNATES.md`: why we don't already have a long-press → accents UI, and the constraints that apply to any press-on-release feature.
+- `MODULAR_LAYOUTS.md`: action types and the broader customisation story.
+- `../roadmap/ECOSYSTEM.md`: MacroVox / Octavium / Nimbus integration surface.
+- `../roadmap/MACROVOX_INTEGRATION.md`: voice-dictation specifics.
+- `LONG_PRESS_ALTERNATES.md`: why we don't already have a long-press → accents UI, and the constraints that apply to any press-on-release feature.

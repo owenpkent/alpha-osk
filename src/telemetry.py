@@ -7,7 +7,7 @@ data. Privacy mode counters are already excluded from the source values
 in keyboard_bridge.py, so password-field activity never enters the
 totals.
 
-Design: docs/TELEMETRY.md
+Design: docs/architecture/TELEMETRY.md
 Privacy: docs/PRIVACY.md
 """
 
