@@ -9,6 +9,8 @@
 
 ## Abstract
 
+> *The smartest keyboard you'll never touch.*
+
 Alpha-OSK is an on-screen keyboard (OSK) for Windows and Linux designed for users whose primary input device is a mouse or pointer rather than a physical keyboard. It targets people with motor impairments (muscular dystrophy, ALS, spinal cord injury, severe arthritis, post-stroke hemiparesis) for whom every avoided keystroke is meaningful. The system pairs a Qt Quick (QML) UI with a Python bridge, synthesises keystrokes through OS-native APIs (`SendInput` on Windows, `xdotool`/`ydotool` on Linux), and runs a hybrid CPU-only prediction engine (n-gram + variable-order PPM + spatial fuzzy recognition) that learns the user's vocabulary on-device. There is no GPU, no cloud round-trip, and no LLM dependency. The system is **off-network by default**: predictions, learning, and analytics are local-only. As of 1.1.0, an opt-in usage-stats client (a small weekly POST of lifetime counters; never any content) is wired into the application as the future path for a public community-impact aggregate; the submission endpoint is not yet deployed, so the client silently no-ops every submit regardless of the toggle, and the feature is off by default. The pipeline, the kill-switch behaviour, and the threat model are described in §5.6. This paper describes the architecture, the prediction stack, the accessibility-driven engineering trade-offs that shaped the system, the privacy and security model, and the open work.
 
 ---

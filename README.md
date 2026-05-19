@@ -4,9 +4,9 @@
 
 # Alpha-OSK
 
-**Type into any Windows or Linux app by clicking on-screen keys.**
+**The smartest keyboard you'll never touch.**
 
-Built for people who can't comfortably use a physical keyboard. Prediction that learns as you go, with no LLM, no GPU, and no data leaving your machine.
+Type into any Windows or Linux app by clicking on-screen keys. Built for people who can't comfortably use a physical keyboard. Prediction that learns as you go, with no LLM, no GPU, and no data leaving your machine.
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![CI](https://github.com/okstudio1/alpha-osk/actions/workflows/ci.yml/badge.svg)](https://github.com/okstudio1/alpha-osk/actions/workflows/ci.yml)
