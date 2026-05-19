@@ -16,5 +16,8 @@
     "@cyclonedx/cyclonedx-npm": "^4.2.1",
     "typescript": "^5.4.0",
     "wrangler": "^4.0.0"
+  },
+  "overrides": {
+    "ws": "^8.20.1"
   }
 }
