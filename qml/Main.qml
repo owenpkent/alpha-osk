@@ -33,6 +33,9 @@ Window {
         property bool savedAutoSaveOnExit: true
         property bool savedSwipeEnabled: false
         property bool savedRightClickShift: true
+        // Flash a small bubble above a key showing the character it just
+        // typed (left- or right-click).  Mobile-keyboard "key preview".
+        property bool savedKeyPreview: true
         property bool savedAutoCheckUpdates: true
         // Hold-to-repeat timing (Backspace, arrow keys, Delete, PgUp/PgDn).
         // Defaults match KeyButton.qml's hardcoded values.  Exposed in
@@ -296,6 +299,10 @@ Window {
     // — left-click behaviour is unchanged whether this is on or off.
     property bool rightClickShift: appSettings.savedRightClickShift
 
+    // When on, every key press (left- or right-click) flashes a brief
+    // preview bubble above the key showing the character that was typed.
+    property bool keyPreviewEnabled: appSettings.savedKeyPreview
+
     // Char-key registry — populated by each KeyButton on creation; consumed
     // by SwipeOverlay for hit testing and by buildSwipeLayout() for the
     // recogniser's key-centre map.
@@ -315,6 +322,27 @@ Window {
             }
         }
         swipeLayoutPushTimer.restart()
+    }
+
+    // Briefly float a preview bubble above a key showing the character it
+    // just typed.  Right-click sends the shifted variant (e.g. "," → "<",
+    // "a" → "A") without flipping sticky shift, and that glyph isn't
+    // always the one drawn on the key, so the bubble confirms what
+    // actually reached the OS.  Mirrors the mobile-keyboard "key preview"
+    // pattern: shown on press, hidden on release.  ``item`` is the
+    // KeyButton; coordinates are mapped into the overlay the bubble is
+    // parented to.
+    function showKeyPreview(item, ch) {
+        if (!item || !ch) return
+        var pt = item.mapToItem(Overlay.overlay, item.width / 2, 0)
+        keyPreviewBubble.previewText = ch
+        keyPreviewBubble.x = pt.x - keyPreviewBubble.width / 2
+        keyPreviewBubble.y = pt.y - keyPreviewBubble.height - 6
+        keyPreviewBubble.show()
+    }
+
+    function hideKeyPreview() {
+        keyPreviewBubble.hide()
     }
 
 
@@ -1207,6 +1235,11 @@ Window {
                                     if (kd.type === "char") {
                                         var ch = root.shiftOn && kd.shifted ? kd.shifted : kd.key
                                         keyboard.pressKey(ch)
+                                        // displayText already reflects shift/
+                                        // caps casing, so it matches the char
+                                        // pressKey actually sends to the OS.
+                                        if (root.keyPreviewEnabled)
+                                            root.showKeyPreview(keyBtn, keyBtn.displayText)
                                     } else if (kd.type === "modifier") {
                                         switch(kd.action) {
                                             case "shift": keyboard.toggleShift(); break
@@ -1243,7 +1276,15 @@ Window {
                                         return
                                     }
                                     keyboard.pressKeyLiteral(rch)
+                                    if (root.keyPreviewEnabled)
+                                        root.showKeyPreview(keyBtn, rch)
                                 }
+
+                                // Dismiss the preview on release — true
+                                // phone behaviour: bubble lives only while
+                                // the key is held (with a min-visible floor
+                                // so fast clicks still register).
+                                onKeyReleased: root.hideKeyPreview()
                             }
                         }
                     }
@@ -2317,6 +2358,88 @@ Window {
             }
         }
 
+        // Key-press preview bubble — flashed just above a key to confirm
+        // the character that was actually typed (the shifted variant on
+        // right-click isn't always the glyph drawn on the key).  Shown on
+        // press, hidden on release, like a phone.  Positioned by
+        // root.showKeyPreview(); fixed width so the first show centers
+        // correctly before the content is measured.
+        Popup {
+            id: keyPreviewBubble
+            parent: Overlay.overlay
+            property string previewText: ""
+            // True once the key is released while the min-visible floor is
+            // still running — close() then fires when that timer elapses.
+            property bool pendingHide: false
+            width: 40
+            height: 40
+            modal: false
+            dim: false
+            closePolicy: Popup.NoAutoClose
+
+            background: Rectangle {
+                color: root.themeAccent
+                border.color: Qt.lighter(root.themeAccent, 1.4)
+                border.width: 1
+                radius: 8
+            }
+
+            contentItem: Text {
+                text: keyPreviewBubble.previewText
+                // Match KeyButton's contrast rule: dark text on bright
+                // accents, white on dark.
+                color: {
+                    var bg = root.themeAccent
+                    var lum = bg.r * 0.299 + bg.g * 0.587 + bg.b * 0.114
+                    return lum > 0.5 ? "#111111" : "#ffffff"
+                }
+                font.pixelSize: 20
+                font.weight: Font.Bold
+                font.family: "Segoe UI, Inter, Ubuntu, Noto Sans, sans-serif"
+                horizontalAlignment: Text.AlignHCenter
+                verticalAlignment: Text.AlignVCenter
+            }
+
+            // Just like a phone: the bubble shows on press and hides on
+            // release.  Two guards make that robust on a mouse-driven OSK:
+            //   * minTimer — a short visibility floor so a lightning-fast
+            //     click (press+release in a few ms) still flashes long
+            //     enough to register, instead of opening and closing in
+            //     the same frame.
+            //   * safetyTimer — WS_EX_NOACTIVATE can swallow the mouse
+            //     release when the cursor leaves the OSK, so force the
+            //     bubble closed after a bound that comfortably exceeds any
+            //     real tap, in case keyReleased never arrives.
+            Timer {
+                id: keyPreviewMinTimer
+                interval: 110
+                onTriggered: if (keyPreviewBubble.pendingHide) keyPreviewBubble.close()
+            }
+            Timer {
+                id: keyPreviewSafetyTimer
+                interval: 1500
+                onTriggered: keyPreviewBubble.close()
+            }
+
+            function show() {
+                pendingHide = false
+                open()
+                keyPreviewMinTimer.restart()
+                keyPreviewSafetyTimer.restart()
+            }
+
+            function hide() {
+                keyPreviewSafetyTimer.stop()
+                // Honour the visibility floor: if the press was shorter
+                // than minTimer, defer the close until the floor elapses.
+                if (keyPreviewMinTimer.running) {
+                    pendingHide = true
+                } else {
+                    close()
+                }
+            }
+        }
+
 
 
         // Debug Panel
@@ -2493,6 +2616,7 @@ Window {
             autoSaveOnExit: root.autoSaveOnExit
             swipeEnabled: root.swipeEnabled
             rightClickShift: root.rightClickShift
+            keyPreviewEnabled: root.keyPreviewEnabled
             repeatDelay: root.repeatDelay
             repeatInterval: root.repeatInterval
             compatMode: root.compatMode
@@ -2550,6 +2674,9 @@ Window {
                 } else if (setting === "rightClickShift") {
                     root.rightClickShift = value
                     appSettings.savedRightClickShift = value
+                } else if (setting === "keyPreview") {
+                    root.keyPreviewEnabled = value
+                    appSettings.savedKeyPreview = value
                 } else if (setting === "repeatDelay") {
                     root.repeatDelay = value
                     appSettings.savedRepeatDelay = value

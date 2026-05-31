@@ -32,6 +32,8 @@ Item {
     // Input methods
     property bool swipeEnabled: false
     property bool rightClickShift: true
+    // Flash a preview bubble above a key showing the typed character.
+    property bool keyPreviewEnabled: true
     // Hold-to-repeat timing (ms).  Defaults must match KeyButton.qml.
     property int repeatDelay: 500
     property int repeatInterval: 120
@@ -777,6 +779,13 @@ Item {
                                     text: "Right-Click for Shifted Character"
                                     checked: unifiedSettings.rightClickShift
                                     onToggled: function(c) { unifiedSettings.settingChanged("rightClickShift", c) }
+                                }
+
+                                SettingsToggle {
+                                    Layout.fillWidth: true
+                                    text: "Show Key Preview Popup"
+                                    checked: unifiedSettings.keyPreviewEnabled
+                                    onToggled: function(c) { unifiedSettings.settingChanged("keyPreview", c) }
                                 }
 
                                 // Compatibility Mode has three meaningful

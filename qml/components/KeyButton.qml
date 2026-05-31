@@ -77,6 +77,11 @@ Item {
     // but the auto-repeat timer never starts — right-click is a
     // deliberate one-shot, not a hold.
     signal keyRightPressed()
+    // Emitted whenever a press ends — normal release, cancel, or the
+    // cursor dragging off the key (which under WS_EX_NOACTIVATE can be
+    // the only signal we get).  Callers use it to dismiss press-tied
+    // transient UI such as the key-preview bubble.
+    signal keyReleased()
 
     width: keyWidth
     height: keyHeight
@@ -297,6 +302,7 @@ Item {
 
         onReleased: {
             keyRoot._visualPressed = false
+            keyRoot.keyReleased()
             pressSafetyTimer.stop()
             repeatTimer.stop()
             repeatTimer.interval = keyRoot.repeatDelay
@@ -306,6 +312,7 @@ Item {
 
         onCanceled: {
             keyRoot._visualPressed = false
+            keyRoot.keyReleased()
             pressSafetyTimer.stop()
             repeatTimer.stop()
             repeatTimer.interval = keyRoot.repeatDelay
@@ -321,6 +328,7 @@ Item {
         // being interacted with, so it shouldn't look held down.
         onContainsMouseChanged: {
             if (!containsMouse) {
+                if (keyRoot._visualPressed) keyRoot.keyReleased()
                 keyRoot._visualPressed = false
                 repeatTimer.stop()
                 repeatTimer.interval = keyRoot.repeatDelay
