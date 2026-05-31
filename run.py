@@ -53,6 +53,33 @@ def check_python_version():
     return True
 
 
+def _is_wayland_session():
+    """True if the current Linux session is Wayland (not X11/xcb)."""
+    if os.environ.get("WAYLAND_DISPLAY"):
+        return True
+    return os.environ.get("XDG_SESSION_TYPE", "").lower() == "wayland"
+
+
+def _have_xcb_cursor():
+    """
+    True if libxcb-cursor (Qt 6.5+ xcb-plugin dependency) can be loaded.
+
+    Tries to dlopen the runtime soname directly — ``ctypes.util.find_library``
+    is unreliable for this library (it shells out to ``gcc``/``ldconfig`` and
+    often misses it). A successful ``CDLL`` is the same load the Qt plugin
+    performs, so this mirrors what actually has to work at startup.
+    """
+    import ctypes
+
+    for soname in ("libxcb-cursor.so.0", "libxcb-cursor.so"):
+        try:
+            ctypes.CDLL(soname)
+            return True
+        except OSError:
+            continue
+    return False
+
+
 def check_system_deps():
     """
     Check for platform-specific system-level dependencies.
@@ -75,6 +102,18 @@ def check_system_deps():
                 "  WARNING: Neither xdotool nor ydotool found.\n"
                 "  Key synthesis won't work. Install with:\n"
                 "    sudo apt install xdotool"
+            )
+        # Qt 6.5+ requires libxcb-cursor for the xcb platform plugin. When
+        # it's missing the plugin fails to load with a cryptic "Could not
+        # load the Qt platform plugin xcb" message that points nowhere near
+        # the actual fix. Only relevant under X11 (Wayland sessions use the
+        # wayland plugin), so gate on not being a Wayland session.
+        if not _is_wayland_session() and not _have_xcb_cursor():
+            warnings.append(
+                "  WARNING: libxcb-cursor not found.\n"
+                "  Qt's xcb plugin needs it or the keyboard won't start.\n"
+                "  Install with:\n"
+                "    sudo apt install libxcb-cursor0"
             )
     elif IS_WINDOWS:
         # SendInput is always available via ctypes — no external deps.

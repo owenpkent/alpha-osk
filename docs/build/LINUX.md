@@ -12,6 +12,10 @@ The Windows counterpart lives in [WINDOWS.md](WINDOWS.md).
 sudo apt install xdotool    # X11 (most desktops)
 sudo apt install ydotool    # Wayland (requires user-space daemon setup)
 
+# Qt 6.5+ xcb platform plugin dependency (X11 sessions) — without it the
+# keyboard exits with "Could not load the Qt platform plugin xcb"
+sudo apt install libxcb-cursor0
+
 # Optional: enable password-field auto-detection (see Privacy Mode below)
 sudo apt install python3-gi gir1.2-atspi-2.0
 
@@ -180,6 +184,7 @@ menus once the user integrates the AppImage (e.g. via
 |---------|--------------|-----|
 | `ModuleNotFoundError` at runtime | Missing hidden import in spec | Add it to `hiddenimports` in `build/linux/alpha-osk.spec` |
 | Bundle runs but no keys typed | `xdotool` / `ydotool` not installed on host | `sudo apt install xdotool` |
+| `Could not load the Qt platform plugin "xcb"` at launch | Qt 6.5+ needs `libxcb-cursor`, missing on the host | `sudo apt install libxcb-cursor0` (`run.py` now preflight-warns for this on X11) |
 | Window flashes and exits under Wayland | Qt picked Wayland plugin; `xdotool` is X11-only | `QT_QPA_PLATFORM=xcb ./alpha-osk` (or use `ydotool` for native Wayland) |
 | AppImage won't run | Missing `libfuse2` on the host | `sudo apt install libfuse2` (required to mount AppImages) |
 | `libtiff.so.5` warning at build time | Qt imageformats plugin looks for it | Benign — we don't use TIFF; warning doesn't affect the bundle |
