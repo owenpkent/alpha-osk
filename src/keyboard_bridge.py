@@ -35,6 +35,7 @@ from .platform import CURRENT_PLATFORM, create_key_synthesizer
 from .platform.base import KeySynthesizerBase
 from .platform.password_detect import is_password_field
 from .prediction import HybridPredictor, SwipeRecognizer
+from .snippets import SnippetStore
 from .telemetry import TelemetryClient
 from .updater import UpdateInfo, check_for_update, download_and_install
 
@@ -298,6 +299,11 @@ class KeyboardBridge(QObject):
     editKeyTyped = Signal(str)          # char to insert at cursor
     editSpecialPressed = Signal(str)    # special key name (backspace, left, etc.)
 
+    # Emitted after the snippet list changes (add / edit / delete /
+    # move) so the Snippets popup re-queries getSnippets() and rebuilds
+    # its rows.
+    snippetsChanged = Signal(list)
+
     def __init__(self, parent: Optional[QObject] = None) -> None:
         super().__init__(parent)
         self._shift_active = False
@@ -363,6 +369,14 @@ class KeyboardBridge(QObject):
 
         # Analytics
         self._analytics = TypingAnalytics(parent=self)
+
+        # Snippets — user-defined quick-insert text (name, email, phone,
+        # address, canned phrases).  Tapped from the title-bar Snippets
+        # popup and inserted verbatim via _send_text.  The store seeds
+        # four empty labelled slots on first launch and saves on every
+        # mutation, so there is no on-quit save path to wire up.
+        self._snippets = SnippetStore()
+        self._snippets.load()
 
         # Telemetry — opt-in, off by default.  Pulls lifetime counters
         # from the analytics dashboard's getter so there is one source
@@ -1181,6 +1195,67 @@ class KeyboardBridge(QObject):
         self._context_buffer = ""
         self.predictionsChanged.emit([])
 
+    # ------------------------------------------------------------------
+    #  Snippets — user-defined quick-insert text (see src/snippets.py)
+    # ------------------------------------------------------------------
+
+    @Slot(result="QVariantList")
+    def getSnippets(self) -> List[Dict[str, str]]:
+        """Return the snippet list as ``[{label, value}, ...]`` for QML."""
+        return self._snippets.get_all()
+
+    @Slot(int)
+    def insertSnippet(self, index: int) -> None:
+        """Type the snippet at *index* verbatim into the focused app.
+
+        Snippets are full literal inserts (no prefix matching, no
+        autocorrect), so they go straight through ``_send_text`` and
+        work the same in every app — compat mode's BackSpace+retype
+        dance exists to replace a *typed prefix* and isn't relevant to a
+        fresh insert.  Privacy mode does NOT block insertion: privacy is
+        about not *learning* from typing, and the user may well need to
+        drop their address into a sensitive form.
+
+        After inserting, the typing context is cleared so the verbatim
+        text (which may carry punctuation or newlines) can't corrupt the
+        next prediction's prefix matching.
+        """
+        if self._edit_mode_active:
+            return
+        value = self._snippets.get_value(index)
+        if not value:
+            return
+        self._send_text(value)
+        self._current_word = ""
+        self._word_typed_under_caps_lock = False
+        self._auto_space_pending = False
+        self._predictions = []
+        self.predictionsChanged.emit([])
+
+    @Slot(int, str, str)
+    def setSnippet(self, index: int, label: str, value: str) -> None:
+        """Replace the label + value of the snippet at *index*."""
+        if self._snippets.set(index, label, value):
+            self.snippetsChanged.emit(self._snippets.get_all())
+
+    @Slot()
+    def addSnippet(self) -> None:
+        """Append a new blank snippet (for the user to fill in) and notify QML."""
+        if self._snippets.add("New", ""):
+            self.snippetsChanged.emit(self._snippets.get_all())
+
+    @Slot(int)
+    def deleteSnippet(self, index: int) -> None:
+        """Remove the snippet at *index* and notify QML."""
+        if self._snippets.delete(index):
+            self.snippetsChanged.emit(self._snippets.get_all())
+
+    @Slot(int, int)
+    def moveSnippet(self, index: int, direction: int) -> None:
+        """Move the snippet at *index* up (-1) or down (+1) one position."""
+        if self._snippets.move(index, direction):
+            self.snippetsChanged.emit(self._snippets.get_all())
+
     # --- Properties for QML ---
 
     def _get_shift_active(self) -> bool:
@@ -1518,6 +1593,11 @@ class KeyboardBridge(QObject):
                 )
             except Exception as exc:  # pragma: no cover
                 _logger.warning("Analytics reload after import failed: %s", exc)
+            try:
+                self._snippets.reload_from_disk()
+                self.snippetsChanged.emit(self._snippets.get_all())
+            except Exception as exc:  # pragma: no cover — defensive
+                _logger.warning("Snippet reload after import failed: %s", exc)
             self._current_word = ""
             self._context_buffer = ""
             self._sentence_buffer = ""

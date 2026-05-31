@@ -16,6 +16,7 @@ A normal ``.zip``::
     models/ngram_model.json
     models/ppm_model.json
     analytics.json
+    snippets.json
     packs/<pack_id>/dictionary.txt
     packs/<pack_id>/bigrams.txt          (optional)
     packs/<pack_id>/trigrams.txt         (optional)
@@ -70,6 +71,12 @@ _MODEL_FILES = {
     "models/ngram_model.json": "models/ngram_model.json",
     "models/ppm_model.json": "models/ppm_model.json",
     "analytics.json": "analytics.json",
+    # User-defined quick-insert snippets (name / email / phone / address
+    # / canned phrases).  Included so the user's snippets move between
+    # machines with the rest of their data.  Like the model files this
+    # is replace-on-import; the bridge calls SnippetStore.reload_from_disk
+    # afterwards so the running session picks it up without a restart.
+    "snippets.json": "snippets.json",
 }
 
 # Hard caps. A legitimate export grown through normal use sits well

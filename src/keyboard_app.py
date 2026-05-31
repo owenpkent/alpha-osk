@@ -569,6 +569,47 @@ def _apply_macos_window_flags(root) -> None:
         _logger.warning("Failed to apply macOS NSWindow flags: %s", exc)
 
 
+def _wire_snippets_window(root) -> None:
+    """Apply OSK focus-suppression to the floating Snippets window.
+
+    The Snippets window is a separate top-level ``Window`` declared in
+    Main.qml (objectName ``snippetsWindow``) so it can float anywhere on
+    the desktop, outside the keyboard. Like the main window it must never
+    steal focus from the app the user is typing into, so on Windows it
+    needs ``WS_EX_NOACTIVATE`` applied via Win32 — the Qt
+    ``WindowDoesNotAcceptFocus`` flag alone doesn't stop click-activation
+    there. The native handle only exists once the window has been shown,
+    so we (re)apply on every visibility change rather than once at
+    startup.
+
+    No-op on non-Windows (the Qt flag is sufficient on X11/Wayland, and
+    macOS uses the Accessory activation policy applied app-wide). Silent
+    on any failure — the feature still works, it just might briefly take
+    focus when first shown.
+    """
+    if CURRENT_PLATFORM != "windows":
+        return
+    try:
+        from PySide6.QtCore import QObject
+
+        win = root.findChild(QObject, "snippetsWindow")
+        if win is None:
+            _logger.warning("snippetsWindow not found; skipping focus-suppression")
+            return
+
+        def _apply() -> None:
+            try:
+                if win.property("visible"):
+                    _apply_windows_extended_styles(win)
+            except Exception as exc:  # pragma: no cover — defensive
+                _logger.debug("snippetsWindow style apply failed: %s", exc)
+
+        win.visibleChanged.connect(_apply)
+        _logger.info("Wired snippetsWindow focus-suppression")
+    except Exception as exc:  # pragma: no cover — defensive
+        _logger.warning("Failed to wire snippetsWindow: %s", exc)
+
+
 def _migrate_legacy_compat_settings() -> None:
     """Rename legacy compat-mode setting keys to the current names.
 
@@ -782,6 +823,7 @@ def main() -> int:
     root = engine.rootObjects()[0]
     if root:
         _apply_window_flags(root)
+        _wire_snippets_window(root)
 
     # --- System tray icon ---
     tray = QSystemTrayIcon(app_icon, app)

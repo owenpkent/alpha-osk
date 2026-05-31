@@ -73,6 +73,13 @@ Window {
         // either grew empty bands or clipped the bottom row depending
         // on how the saved height compared to the content's needs.
         property int savedWindowWidth: 0
+        // Window POSITION — restored on launch, saved (debounced) on
+        // drag. Sentinel -1000000 = "never positioned", which routes to
+        // the centered/bottom default on a fresh install. Unlike height,
+        // position is safe to persist imperatively: x/y are plain
+        // properties, not bound to content.
+        property int savedWindowX: -1000000
+        property int savedWindowY: -1000000
     }
 
     // Set when Component.onCompleted finishes restoring the saved
@@ -91,6 +98,8 @@ Window {
         onTriggered: {
             if (root._geometryRestored) {
                 appSettings.savedWindowWidth = root.width
+                appSettings.savedWindowX = Math.round(root.x)
+                appSettings.savedWindowY = Math.round(root.y)
             }
         }
     }
@@ -190,8 +199,20 @@ Window {
             root.width = w
         }
 
-        root.x = (Screen.width - root.width) / 2
-        root.y = Screen.height - root.height - 40
+        // Restore the saved position if we have one, else center
+        // horizontally and anchor near the bottom of the screen.
+        // Clamp back on-screen in case the display layout changed
+        // (monitor unplugged, resolution drop) since the last run.
+        if (appSettings.savedWindowX > -1000000
+                && appSettings.savedWindowY > -1000000) {
+            root.x = Math.max(0, Math.min(appSettings.savedWindowX,
+                                          Screen.width - root.width))
+            root.y = Math.max(0, Math.min(appSettings.savedWindowY,
+                                          Screen.height - root.height))
+        } else {
+            root.x = (Screen.width - root.width) / 2
+            root.y = Screen.height - root.height - 40
+        }
         root._loaded = true
 
         // Surface the post-update toast if the auto-update relauncher
@@ -295,6 +316,7 @@ Window {
         }
         swipeLayoutPushTimer.restart()
     }
+
 
     // Coalesce many register/unregister calls during a layout swap into one
     // setSwipeLayout push to Python.
@@ -401,6 +423,14 @@ Window {
         swipeLayoutPushTimer.restart()
         if (_geometryRestored) saveGeometryTimer.restart()
     }
+
+    // Persist window position when the user drags it (title-bar drag
+    // updates root.x/root.y). Debounced through the same timer as width
+    // so a drag doesn't hammer the registry. Gated on _geometryRestored
+    // so Qt's construction-time x/y churn isn't persisted before the
+    // saved value is restored.
+    onXChanged: { if (_geometryRestored) saveGeometryTimer.restart() }
+    onYChanged: { if (_geometryRestored) saveGeometryTimer.restart() }
 
     // Multi-monitor DPI fix: when Qt moves the window to a screen with a
     // different scale factor it can mis-size the window.  Clamp to the new
@@ -547,7 +577,7 @@ Window {
             MouseArea {
                 id: dragArea
                 anchors.fill: parent
-                anchors.rightMargin: 230  // Leave space for buttons (privacy widened for "Learning"/"Paused" text)
+                anchors.rightMargin: 264  // Leave space for buttons (privacy "Learning"/"Paused" text + Snippets icon)
                 cursorShape: Qt.SizeAllCursor
                 
                 property real startMouseX
@@ -779,6 +809,38 @@ Window {
                         cursorShape: Qt.PointingHandCursor
                         onClicked: {
                             if (keyboard) keyboard.setPrivacyMode(!root.privacyMode)
+                        }
+                    }
+                }
+
+                // Snippets button: opens the quick-insert popup of
+                // saved personal info / phrases the user taps to type
+                // in one click. Sits next to Learning for discoverability.
+                Rectangle {
+                    width: 28
+                    height: 24
+                    radius: 4
+                    color: snippetsBtn.containsMouse ? "#444" : "transparent"
+
+                    ToolTip.visible: snippetsBtn.containsMouse
+                    ToolTip.text: qsTr("Snippets: saved text you tap to type")
+                    ToolTip.delay: 400
+
+                    Text {
+                        anchors.centerIn: parent
+                        text: "☰"
+                        font.pixelSize: 15
+                        color: snippetsWindow.visible ? root.themeAccent : "#999"
+                    }
+
+                    MouseArea {
+                        id: snippetsBtn
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: {
+                            if (snippetsWindow.visible) snippetsWindow.hide()
+                            else snippetsWindow.openList()
                         }
                     }
                 }
@@ -1604,6 +1666,440 @@ Window {
             }
         }
 
+        // Snippets popup: a tap-to-insert list of the user's saved
+        // quick text (name, email, phone, address, canned phrases).
+        //
+        // This is a SEPARATE top-level Window, not a Popup. A Popup is
+        // clipped to its parent window's overlay, so it can't be dragged
+        // outside the keyboard. A standalone Window can float anywhere on
+        // the desktop. It carries the same OSK window flags as the main
+        // window (frameless, stays-on-top, does-not-accept-focus) so it
+        // never steals focus from the app the user is typing into; the
+        // Python side applies WS_EX_NOACTIVATE to it too (see
+        // _apply_window_flags / the snippetsWindowReady signal).
+        //
+        // Two views share the window (an editingIndex switch: -1 list,
+        // >= 0 editor). Edit mode is only turned on while the editor is
+        // showing, so tapping a snippet in the list still synthesises to
+        // the OS via the bridge's insertSnippet slot. The header is a
+        // drag handle.
+        Window {
+            id: snippetsWindow
+            // objectName lets the Python side find this window to apply
+            // WS_EX_NOACTIVATE (so clicking it never steals focus).
+            objectName: "snippetsWindow"
+            width: 360
+            height: Math.max(160, snipContent.implicitHeight + 24)
+            minimumWidth: 360
+            minimumHeight: 160
+            color: "transparent"
+            title: "Alpha-OSK Snippets"
+            flags: Qt.Window | Qt.FramelessWindowHint
+                   | Qt.WindowStaysOnTopHint | Qt.WindowDoesNotAcceptFocus
+
+            // -1 = list view; >= 0 = editing that snippet index.
+            property int editingIndex: -1
+            // Which editor field OSK keys flow to while editing.
+            property string editTarget: "value"
+            property var snippetList: []
+
+            function refresh() {
+                snippetList = keyboard ? keyboard.getSnippets() : []
+            }
+
+            function activeField() {
+                return editTarget === "label" ? snipLabelField : snipValueField
+            }
+
+            function openList() {
+                editingIndex = -1
+                if (keyboard) keyboard.setEditMode(false)
+                refresh()
+                // Center over the keyboard the first time; afterwards the
+                // user's dragged position is kept (x/y persist while the
+                // window object lives).
+                if (!_positioned) {
+                    snippetsWindow.x = root.x + (root.width - snippetsWindow.width) / 2
+                    snippetsWindow.y = Math.max(0, root.y - snippetsWindow.height - 8)
+                    _positioned = true
+                }
+                snippetsWindow.show()
+                snippetsWindow.raise()
+            }
+            property bool _positioned: false
+
+            function beginEdit(idx) {
+                refresh()
+                var s = snippetList[idx]
+                snipLabelField.text = s ? s.label : ""
+                snipValueField.text = s ? s.value : ""
+                editTarget = "value"
+                editingIndex = idx
+                if (keyboard) keyboard.setEditMode(true)
+                snipValueField.forceActiveFocus()
+            }
+
+            function endEdit() {
+                if (keyboard) keyboard.setEditMode(false)
+                editingIndex = -1
+            }
+
+            function saveEdit() {
+                if (editingIndex >= 0 && keyboard) {
+                    keyboard.setSnippet(editingIndex, snipLabelField.text.trim(), snipValueField.text)
+                    editSavedToast.flash()
+                }
+                endEdit()
+            }
+
+            onVisibleChanged: {
+                if (!visible && keyboard) keyboard.setEditMode(false)
+            }
+
+            // While the editor is open, OSK key presses are short-
+            // circuited in the bridge and routed here instead of being
+            // synthesised to the OS. Apply them to whichever editor
+            // field is active (label or value).
+            Connections {
+                target: keyboard
+                enabled: snippetsWindow.visible
+
+                function onSnippetsChanged(list) {
+                    snippetsWindow.snippetList = list
+                }
+
+                function onEditKeyTyped(ch) {
+                    if (snippetsWindow.editingIndex < 0) return
+                    var f = snippetsWindow.activeField()
+                    if (f.selectedText)
+                        f.remove(f.selectionStart, f.selectionEnd)
+                    f.insert(f.cursorPosition, ch)
+                }
+
+                function onEditSpecialPressed(name) {
+                    if (snippetsWindow.editingIndex < 0) return
+                    var f = snippetsWindow.activeField()
+                    var pos = f.cursorPosition
+                    var len = f.length
+                    if (name === "backspace") {
+                        if (f.selectedText) f.remove(f.selectionStart, f.selectionEnd)
+                        else if (pos > 0) f.remove(pos - 1, pos)
+                    } else if (name === "delete") {
+                        if (f.selectedText) f.remove(f.selectionStart, f.selectionEnd)
+                        else if (pos < len) f.remove(pos, pos + 1)
+                    } else if (name === "left") {
+                        f.cursorPosition = Math.max(0, pos - 1)
+                    } else if (name === "right") {
+                        f.cursorPosition = Math.min(len, pos + 1)
+                    } else if (name === "home") {
+                        f.cursorPosition = 0
+                    } else if (name === "end") {
+                        f.cursorPosition = len
+                    } else if (name === "space") {
+                        if (f.selectedText) f.remove(f.selectionStart, f.selectionEnd)
+                        f.insert(f.cursorPosition, " ")
+                    } else if (name === "return" || name === "enter") {
+                        snippetsWindow.saveEdit()
+                    } else if (name === "escape") {
+                        snippetsWindow.endEdit()
+                    }
+                }
+            }
+
+            // Window background (rounded card).
+            Rectangle {
+                anchors.fill: parent
+                color: root.themeBackground
+                border.color: root.themeAccent
+                border.width: 1
+                radius: 8
+            }
+
+            ColumnLayout {
+                id: snipContent
+                anchors.fill: parent
+                anchors.margins: 12
+                spacing: 8
+
+                // Header — drag handle for the whole window.
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 6
+
+                    Item {
+                        Layout.fillWidth: true
+                        Layout.preferredHeight: 28
+
+                        Row {
+                            anchors.verticalCenter: parent.verticalCenter
+                            spacing: 6
+                            Row {
+                                anchors.verticalCenter: parent.verticalCenter
+                                spacing: 3
+                                Repeater {
+                                    model: 4
+                                    Rectangle { width: 3; height: 3; radius: 1.5; color: "#666" }
+                                }
+                            }
+                            Text {
+                                anchors.verticalCenter: parent.verticalCenter
+                                text: snippetsWindow.editingIndex >= 0 ? qsTr("Edit snippet") : qsTr("Snippets")
+                                color: root.themeTextColor
+                                font.pixelSize: 14
+                                font.weight: Font.DemiBold
+                            }
+                        }
+
+                        MouseArea {
+                            id: snipDragArea
+                            anchors.fill: parent
+                            cursorShape: Qt.SizeAllCursor
+                            property real startMx
+                            property real startMy
+                            property real startX
+                            property real startY
+                            onPressed: function(mouse) {
+                                var g = mapToGlobal(mouse.x, mouse.y)
+                                startMx = g.x; startMy = g.y
+                                startX = snippetsWindow.x; startY = snippetsWindow.y
+                            }
+                            onPositionChanged: function(mouse) {
+                                if (!pressed) return
+                                // Free movement anywhere on the desktop —
+                                // this is a real top-level window, so no
+                                // overlay clamp is needed.
+                                var g = mapToGlobal(mouse.x, mouse.y)
+                                snippetsWindow.x = startX + (g.x - startMx)
+                                snippetsWindow.y = startY + (g.y - startMy)
+                            }
+                        }
+                    }
+
+                    Rectangle {
+                        width: 28; height: 28; radius: 4
+                        color: snipCloseMa.containsMouse ? "#c33" : "transparent"
+                        Text {
+                            anchors.centerIn: parent; text: "✕"
+                            font.pixelSize: 13
+                            color: snipCloseMa.containsMouse ? "#fff" : "#999"
+                        }
+                        MouseArea {
+                            id: snipCloseMa; anchors.fill: parent; hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: snippetsWindow.hide()
+                        }
+                    }
+                }
+
+                // ---- List view ----
+                ColumnLayout {
+                    Layout.fillWidth: true
+                    spacing: 6
+                    visible: snippetsWindow.editingIndex < 0
+
+                    Repeater {
+                        model: snippetsWindow.snippetList
+                        delegate: RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 4
+
+                            // Primary action: insert if it has a value,
+                            // otherwise open the editor (so an empty slot
+                            // is never a dead tap).
+                            Rectangle {
+                                Layout.fillWidth: true
+                                Layout.preferredHeight: 44
+                                radius: 6
+                                color: insMa.containsMouse
+                                       ? Qt.lighter(root.themeKeyColor, 1.2) : root.themeKeyColor
+                                border.color: "#444"; border.width: 1
+
+                                ColumnLayout {
+                                    anchors.fill: parent
+                                    anchors.leftMargin: 10
+                                    anchors.rightMargin: 10
+                                    spacing: 0
+                                    Text {
+                                        Layout.fillWidth: true
+                                        text: (modelData.label && modelData.label.length)
+                                              ? modelData.label : qsTr("(unnamed)")
+                                        color: root.themeTextColor
+                                        font.pixelSize: 13
+                                        font.weight: Font.DemiBold
+                                        elide: Text.ElideRight
+                                    }
+                                    Text {
+                                        Layout.fillWidth: true
+                                        text: (modelData.value && modelData.value.length)
+                                              ? modelData.value : qsTr("empty, tap to fill in")
+                                        color: "#999"
+                                        font.pixelSize: 11
+                                        elide: Text.ElideRight
+                                    }
+                                }
+                                MouseArea {
+                                    id: insMa
+                                    anchors.fill: parent
+                                    hoverEnabled: true
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: {
+                                        if (modelData.value && modelData.value.length > 0) {
+                                            if (keyboard) keyboard.insertSnippet(index)
+                                            snippetsWindow.hide()
+                                        } else {
+                                            snippetsWindow.beginEdit(index)
+                                        }
+                                    }
+                                }
+                            }
+
+                            // Edit
+                            Rectangle {
+                                width: 38; height: 44; radius: 6
+                                color: edMa.containsMouse ? "#2a4a6a" : "#1e3450"
+                                border.color: "#46a"; border.width: 1
+                                Text { anchors.centerIn: parent; text: "✎"; font.pixelSize: 16; color: "#9cf" }
+                                MouseArea {
+                                    id: edMa; anchors.fill: parent; hoverEnabled: true
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: snippetsWindow.beginEdit(index)
+                                }
+                            }
+
+                            // Delete
+                            Rectangle {
+                                width: 38; height: 44; radius: 6
+                                color: delMa.containsMouse ? "#6a2a2a" : "#3e1e1e"
+                                border.color: "#a44"; border.width: 1
+                                Text { anchors.centerIn: parent; text: "✕"; font.pixelSize: 15; color: "#f88" }
+                                MouseArea {
+                                    id: delMa; anchors.fill: parent; hoverEnabled: true
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: if (keyboard) keyboard.deleteSnippet(index)
+                                }
+                            }
+                        }
+                    }
+
+                    // Add button
+                    Rectangle {
+                        Layout.fillWidth: true
+                        Layout.preferredHeight: 38
+                        radius: 6
+                        color: addMa.containsMouse ? "#2a5a2a" : "#1e3e1e"
+                        border.color: "#4a4"; border.width: 1
+                        Text {
+                            anchors.centerIn: parent; text: qsTr("+ Add snippet")
+                            color: "#8d8"; font.pixelSize: 13; font.weight: Font.DemiBold
+                        }
+                        MouseArea {
+                            id: addMa; anchors.fill: parent; hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: {
+                                if (keyboard) {
+                                    keyboard.addSnippet()
+                                    snippetsWindow.refresh()
+                                    snippetsWindow.beginEdit(snippetsWindow.snippetList.length - 1)
+                                }
+                            }
+                        }
+                    }
+
+                    Text {
+                        Layout.fillWidth: true
+                        text: qsTr("Tap a snippet to type it. Pencil edits, trash removes.")
+                        color: "#777"; font.pixelSize: 10
+                        wrapMode: Text.WordWrap
+                    }
+                }
+
+                // ---- Edit view ----
+                ColumnLayout {
+                    Layout.fillWidth: true
+                    spacing: 6
+                    visible: snippetsWindow.editingIndex >= 0
+
+                    Text { text: qsTr("Label (shown on the button)"); color: "#aaa"; font.pixelSize: 11 }
+                    TextField {
+                        id: snipLabelField
+                        Layout.fillWidth: true
+                        Layout.preferredHeight: 36
+                        color: "#f0f0f0"; font.pixelSize: 14
+                        selectionColor: root.themeAccent; selectedTextColor: "#fff"
+                        leftPadding: 10; rightPadding: 10
+                        background: Rectangle {
+                            color: "#1a1a2a"; radius: 6
+                            border.color: snippetsWindow.editTarget === "label" ? root.themeAccent : "#444"
+                            border.width: snippetsWindow.editTarget === "label" ? 2 : 1
+                        }
+                        MouseArea {
+                            anchors.fill: parent
+                            cursorShape: Qt.IBeamCursor
+                            onClicked: { snippetsWindow.editTarget = "label"; snipLabelField.forceActiveFocus() }
+                        }
+                    }
+
+                    Text { text: qsTr("Text to type"); color: "#aaa"; font.pixelSize: 11 }
+                    TextField {
+                        id: snipValueField
+                        Layout.fillWidth: true
+                        Layout.preferredHeight: 36
+                        color: "#f0f0f0"; font.pixelSize: 14
+                        selectionColor: root.themeAccent; selectedTextColor: "#fff"
+                        leftPadding: 10; rightPadding: 10
+                        background: Rectangle {
+                            color: "#1a1a2a"; radius: 6
+                            border.color: snippetsWindow.editTarget === "value" ? root.themeAccent : "#444"
+                            border.width: snippetsWindow.editTarget === "value" ? 2 : 1
+                        }
+                        MouseArea {
+                            anchors.fill: parent
+                            cursorShape: Qt.IBeamCursor
+                            onClicked: { snippetsWindow.editTarget = "value"; snipValueField.forceActiveFocus() }
+                        }
+                    }
+
+                    Text {
+                        Layout.fillWidth: true
+                        text: qsTr("Type with the keyboard below. The highlighted box is where text goes. Tap the other box to switch.")
+                        color: "#777"; font.pixelSize: 10
+                        wrapMode: Text.WordWrap
+                    }
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: 6
+                        Item { Layout.fillWidth: true }
+                        Rectangle {
+                            width: 84; height: 36; radius: 6
+                            color: snipCancelMa.containsMouse ? "#6a2a2a" : "#3e1e1e"
+                            border.color: "#a44"; border.width: 1
+                            Text { anchors.centerIn: parent; text: qsTr("Cancel"); color: "#f88"; font.pixelSize: 13 }
+                            MouseArea {
+                                id: snipCancelMa; anchors.fill: parent; hoverEnabled: true
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: snippetsWindow.endEdit()
+                            }
+                        }
+                        Rectangle {
+                            width: 84; height: 36; radius: 6
+                            color: snipSaveMa.containsMouse ? "#2a6a2a" : "#1e3e1e"
+                            border.color: "#4a4"; border.width: 1
+                            Text {
+                                anchors.centerIn: parent; text: qsTr("Save")
+                                color: "#6f6"; font.pixelSize: 13; font.weight: Font.Bold
+                            }
+                            MouseArea {
+                                id: snipSaveMa; anchors.fill: parent; hoverEnabled: true
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: snippetsWindow.saveEdit()
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         // Post-update toast — shown once on the first launch after the
         // auto-updater applied a new version. Confirms to the user
         // that the install completed (the previous flow gave no signal:
@@ -1820,6 +2316,7 @@ Window {
                 contextClearedToastTimer.restart()
             }
         }
+
 
 
         // Debug Panel
