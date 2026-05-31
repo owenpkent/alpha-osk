@@ -97,9 +97,11 @@ function from `user32.dll`, accessed via Python's built-in `ctypes` module.
 
 | Mode | Used For | How It Works |
 |------|----------|--------------|
-| **Virtual-Key** | Special keys, modifier combos, modifier+punctuation chords | Sends `KEYBDINPUT` with the virtual-key code in `wVk` and the layout scancode in `wScan` |
-| **Scancode** | ASCII text characters (default) | Sends `KEYBDINPUT` with `wVk = 0`, the layout scancode in `wScan`, and the `KEYEVENTF_SCANCODE` flag set |
+| **Scancode** | ASCII text characters **and** modifier combos / chords (Ctrl+C, Ctrl+V, Alt+Tab) and held modifiers | Sends `KEYBDINPUT` with `wVk = 0`, the layout scancode in `wScan`, and the `KEYEVENTF_SCANCODE` flag set — indistinguishable from a physical keypress |
+| **Virtual-Key** | Fallback only — keys with no scancode on the active layout (some media / browser keys) | Sends `KEYBDINPUT` with the virtual-key code in `wVk` and the layout scancode (if any) in `wScan`, **without** `KEYEVENTF_SCANCODE` |
 | **Unicode** | Per-character fallback when scancode is unsafe | Sends `KEYBDINPUT` with `wVk = 0`, the UTF-16 code point in `wScan`, and the `KEYEVENTF_UNICODE` flag set |
+
+> **Chords use scancode mode for remote-desktop relay.** Modifier combos (`send_key`) and held modifiers (`hold_modifier` / `release_modifier`) route through `_make_vk_scancode_event`, which sets `KEYEVENTF_SCANCODE` just like the character path. Remote-desktop tools (TeamViewer / RDP / VNC / AnyDesk) forward keystrokes **by scancode over the wire** and reliably relay scancode-mode events but drop the modifier half of a `wVk`-mode chord. The earlier Virtual-Key chord path made plain typing work over TeamViewer while **Ctrl+V / Ctrl+C silently failed** (the remote saw a bare `v`). Virtual-Key mode is now only a fallback for keys with no scancode. See `tests/test_platform.py::TestWindowsChordScancodeMode`.
 
 ### Why Scancode Mode for ASCII
 
@@ -781,6 +783,7 @@ higher-integrity windows) without granting broad admin access.  See the
 | Keys don't appear in any app | SendInput failing | Check logs for errors; restart Alpha-OSK |
 | Keys don't appear in **elevated** apps | No UIAccess | Sign with EV cert and install to Program Files |
 | Keys don't appear in **Blender / VirtualBox / a DirectInput game** | Pre-1.x.y versions used Unicode-only injection (`VK_PACKET`) which raw-input apps filter out | Update to a build that includes scancode-mode dispatch (see "Three Injection Modes" above). If still broken, file a bug with the app name and the foreground-window class. |
+| **Plain typing works over TeamViewer/RDP/VNC but Ctrl+V / Ctrl+C / other shortcuts do nothing** | Earlier builds sent chords in Virtual-Key mode; remote-desktop clients forward by scancode and dropped the modifier, so Ctrl+V arrived as a bare `v` | Update to a build where chords use scancode mode (see the chord note under "Three Injection Modes"). Letters always worked because text already used scancode mode. |
 | Keys appear but **wrong case** in a specific app | OS Caps Lock LED out of sync with the OSK's Caps button | Toggle the OSK Caps button to resync, or press the physical Caps Lock once. The scancode path queries the OS Caps Lock LED, so the OSK side reflects whatever the OS thinks. |
 | Keys appear but wrong characters on a non-US layout | Most chars take the scancode path which is layout-aware via `VkKeyScanW`; a few exotic chars fall back to Unicode mode (also layout-independent). File a bug with the layout name and the failing chars. |
 

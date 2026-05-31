@@ -332,7 +332,12 @@ class TestWindowsSendKeyPunctuationChord:
         synth = win_mod.WindowsKeySynthesizer.__new__(win_mod.WindowsKeySynthesizer)
         captured: list = []
         synth._inject = lambda events: captured.append(list(events))
-        synth._make_key_event = lambda vk, key_down: ("vk", vk, key_down)
+        # send_key builds chord events via _make_vk_scancode_event (scancode
+        # mode, for remote-desktop relay). Stub it to a tuple so these tests
+        # stay focused on VK resolution / shift-prepend / unicode fallback;
+        # the scancode-mode flags themselves are covered by
+        # TestWindowsChordScancodeMode below.
+        synth._make_vk_scancode_event = lambda vk, key_down: ("vk", vk, key_down)
         synth._make_unicode_events = lambda c: [("uni", c)]
 
         class _StubUser32:
@@ -663,6 +668,84 @@ class TestWindowsScancodeDispatch:
         assert captured == [[
             ("uni", "a"), ("uni", "b"), ("uni", "c"),
         ]]
+
+
+class TestWindowsChordScancodeMode:
+    """Modifier chords (Ctrl+V, Alt+Tab) and held modifiers must inject in
+    *scancode mode* (``KEYEVENTF_SCANCODE``, ``wVk=0``), not wVk mode.
+
+    Remote-desktop tools (TeamViewer / RDP / VNC) forward keystrokes by
+    scancode over the wire and reliably relay scancode-mode events but drop
+    the modifier half of a wVk-mode chord — the symptom being plain typing
+    works over TeamViewer but Ctrl+V silently fails. ``send_text``'s letters
+    were already scancode mode; this verifies ``send_key`` / ``hold_modifier``
+    match.
+    """
+
+    def _make_synth(self, vsc: dict[int, int]):
+        from src.platform import windows as win_mod
+
+        synth = win_mod.WindowsKeySynthesizer.__new__(win_mod.WindowsKeySynthesizer)
+
+        class _StubUser32:
+            def MapVirtualKeyW(self_inner, vk, mode):
+                if mode == win_mod.MAPVK_VK_TO_VSC:
+                    return vsc.get(vk, 0)
+                return 0
+
+        synth._user32 = _StubUser32()
+        return synth
+
+    def test_scancode_mode_for_normal_vk(self):
+        from src.platform import windows as win_mod
+        synth = self._make_synth({0x41: 0x1E})  # VK_A → scancode 0x1E
+        ev = synth._make_vk_scancode_event(0x41, key_down=True)
+        ki = ev._input.ki
+        assert ki.wVk == 0                       # scancode mode ignores wVk
+        assert ki.wScan == 0x1E
+        assert ki.dwFlags & win_mod.KEYEVENTF_SCANCODE
+        assert not (ki.dwFlags & win_mod.KEYEVENTF_KEYUP)
+
+    def test_keyup_sets_keyup_flag(self):
+        from src.platform import windows as win_mod
+        synth = self._make_synth({0x41: 0x1E})
+        ev = synth._make_vk_scancode_event(0x41, key_down=False)
+        assert ev._input.ki.dwFlags & win_mod.KEYEVENTF_KEYUP
+
+    def test_extended_key_sets_extended_flag(self):
+        from src.platform import windows as win_mod
+        # VK_LEFT is in _EXTENDED_KEYS → must carry the E0 prefix flag.
+        synth = self._make_synth({win_mod.VK_LEFT: 0x4B})
+        ev = synth._make_vk_scancode_event(win_mod.VK_LEFT, key_down=True)
+        ki = ev._input.ki
+        assert ki.dwFlags & win_mod.KEYEVENTF_SCANCODE
+        assert ki.dwFlags & win_mod.KEYEVENTF_EXTENDEDKEY
+
+    def test_no_scancode_falls_back_to_wvk_mode(self):
+        from src.platform import windows as win_mod
+        # A VK with no scancode on this layout (MapVirtualKeyW → 0) must fall
+        # back to the wVk-mode builder rather than emit wScan=0 scancode mode.
+        synth = self._make_synth({})  # everything → 0
+        captured = {}
+        synth._make_key_event = (
+            lambda vk, key_down: captured.update(vk=vk, key_down=key_down) or "fallback"
+        )
+        result = synth._make_vk_scancode_event(0x99, key_down=True)
+        assert result == "fallback"
+        assert captured == {"vk": 0x99, "key_down": True}
+
+    def test_hold_modifier_uses_scancode_mode(self):
+        from src.platform import windows as win_mod
+        synth = self._make_synth({win_mod.VK_CONTROL: 0x1D})
+        captured: list = []
+        synth._inject = lambda events: captured.append(list(events))
+        synth._log_send = lambda msg: None
+        synth.hold_modifier("ctrl")
+        assert len(captured) == 1 and len(captured[0]) == 1
+        ki = captured[0][0]._input.ki
+        assert ki.wVk == 0
+        assert ki.wScan == 0x1D
+        assert ki.dwFlags & win_mod.KEYEVENTF_SCANCODE
 
 
 class TestPlatformInfo:

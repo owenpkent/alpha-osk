@@ -435,25 +435,27 @@ class WindowsKeySynthesizer(KeySynthesizerBase):
 
         events: List[INPUT] = []
 
-        # Press modifiers
+        # Press modifiers.  Scancode mode (not wVk) so the chord relays over
+        # remote-desktop tools the same way typed letters do — see
+        # _make_vk_scancode_event for the full rationale.
         for mod in modifiers:
             mod_vk = _KEY_MAP.get(mod)
             if mod_vk is not None:
-                events.append(self._make_key_event(mod_vk, key_down=True))
+                events.append(self._make_vk_scancode_event(mod_vk, key_down=True))
 
         # Press + release action key
         if unicode_fallback:
             events.extend(self._make_unicode_events(key_name))
         else:
             assert vk is not None
-            events.append(self._make_key_event(vk, key_down=True))
-            events.append(self._make_key_event(vk, key_down=False))
+            events.append(self._make_vk_scancode_event(vk, key_down=True))
+            events.append(self._make_vk_scancode_event(vk, key_down=False))
 
         # Release modifiers (reverse order)
         for mod in reversed(modifiers):
             mod_vk = _KEY_MAP.get(mod)
             if mod_vk is not None:
-                events.append(self._make_key_event(mod_vk, key_down=False))
+                events.append(self._make_vk_scancode_event(mod_vk, key_down=False))
 
         self._inject(events)
         self._log_send(
@@ -694,17 +696,76 @@ class WindowsKeySynthesizer(KeySynthesizerBase):
             return None
         return vk, bool(shift_state & 1)
 
+    def _make_vk_scancode_event(self, vk: int, key_down: bool) -> INPUT:
+        """
+        Build a **scancode-mode** INPUT event for a virtual key.
+
+        This is the primary builder for modifier-chord and held-modifier
+        synthesis (Ctrl+C, Ctrl+V, Alt+Tab, Win+S, Ctrl+click, …).  It
+        resolves the VK to its scancode and emits the event with
+        ``KEYEVENTF_SCANCODE`` set and ``wVk=0`` — exactly the form a
+        physical keypress produces, and the same form the character path
+        (``_make_scancode_event``) already uses.
+
+        Why this matters for remote desktop
+        -----------------------------------
+        Remote-desktop tools (TeamViewer / RDP / VNC / AnyDesk) forward
+        keystrokes **by scancode** over the wire.  ``send_text``'s letters
+        already go out in scancode mode and arrive on the remote machine;
+        chords used to go through ``_make_key_event`` (``wVk``-mode with a
+        scancode *hint* but no ``KEYEVENTF_SCANCODE`` flag), and the remote
+        side dropped the modifier half — so Ctrl+V landed as a bare ``v``.
+        Symptom: plain typing works over TeamViewer but Ctrl+V / Ctrl+C
+        silently fail.  Sending the chord in true scancode mode makes the
+        modifier relay the same reliable way the letters do.
+
+        Falls back to ``_make_key_event`` (wVk-mode) only when the VK has
+        no scancode under the active layout (``MapVirtualKeyW`` → 0), e.g.
+        certain media/browser keys — those have no physical-key analogue to
+        forward anyway, so wVk-mode is the best we can do.
+        """
+        try:
+            scancode = self._user32.MapVirtualKeyW(vk, MAPVK_VK_TO_VSC)
+        except (OSError, ValueError):
+            scancode = 0
+
+        # No scancode on this layout — fall back to the wVk-mode event.
+        if not scancode:
+            return self._make_key_event(vk, key_down)
+
+        flags = KEYEVENTF_SCANCODE
+        if not key_down:
+            flags |= KEYEVENTF_KEYUP
+        if vk in _EXTENDED_KEYS:
+            # Windows prepends the E0 prefix when EXTENDEDKEY is set, so the
+            # base scancode from MapVirtualKeyW is correct for arrows/nav.
+            flags |= KEYEVENTF_EXTENDEDKEY
+
+        inp = INPUT()
+        inp.type = INPUT_KEYBOARD
+        inp._input.ki.wVk = 0
+        inp._input.ki.wScan = scancode
+        inp._input.ki.dwFlags = flags
+        inp._input.ki.time = 0
+        inp._input.ki.dwExtraInfo = 0
+        return inp
+
     def _make_key_event(self, vk: int, key_down: bool) -> INPUT:
         """
-        Build an INPUT structure for a virtual-key press or release.
+        Build a ``wVk``-mode INPUT structure for a virtual-key press/release.
+
+        **Fallback path.**  Chord and held-modifier synthesis now prefer
+        ``_make_vk_scancode_event`` (true scancode mode) so they relay over
+        remote-desktop tools the same way typed letters do; this builder is
+        used only when a VK has no scancode under the active layout.
 
         Automatically sets ``KEYEVENTF_EXTENDEDKEY`` for navigation and
         edit keys that require it, and populates ``wScan`` with the
         scancode looked up via ``MapVirtualKeyW`` under the current
         keyboard layout.
 
-        Populating the scancode is required for remote-desktop tools
-        (TeamViewer / RDP / VNC / AnyDesk) — they forward keystrokes
+        Populating the scancode was an earlier partial fix for remote-desktop
+        tools (TeamViewer / RDP / VNC / AnyDesk) — they forward keystrokes
         by *scancode* over the wire.  With ``wScan=0`` the remote side
         either drops the event or forwards it with broken modifier
         state, which manifests as Ctrl+V (and friends) silently failing
@@ -996,17 +1057,22 @@ class WindowsKeySynthesizer(KeySynthesizerBase):
         return events
 
     def hold_modifier(self, key_name: str) -> None:
-        """Send a modifier key-down so it stays held at the OS level."""
+        """Send a modifier key-down so it stays held at the OS level.
+
+        Scancode mode so a held modifier (sticky Shift/Ctrl/Alt/Win) is
+        relayed over remote-desktop tools — otherwise Ctrl+click / Shift+drag
+        on the remote machine would see a bare click with no modifier.
+        """
         vk = _KEY_MAP.get(key_name)
         if vk is not None:
-            self._inject([self._make_key_event(vk, key_down=True)])
+            self._inject([self._make_vk_scancode_event(vk, key_down=True)])
             self._log_send(f"hold modifier {key_name} (vk=0x{vk:02X})")
 
     def release_modifier(self, key_name: str) -> None:
         """Send a modifier key-up to release a held modifier."""
         vk = _KEY_MAP.get(key_name)
         if vk is not None:
-            self._inject([self._make_key_event(vk, key_down=False)])
+            self._inject([self._make_vk_scancode_event(vk, key_down=False)])
             self._log_send(f"release modifier {key_name} (vk=0x{vk:02X})")
 
     def _inject(self, events: List[INPUT]) -> None:
