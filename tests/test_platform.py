@@ -722,7 +722,6 @@ class TestWindowsChordScancodeMode:
         assert ki.dwFlags & win_mod.KEYEVENTF_EXTENDEDKEY
 
     def test_no_scancode_falls_back_to_wvk_mode(self):
-        from src.platform import windows as win_mod
         # A VK with no scancode on this layout (MapVirtualKeyW → 0) must fall
         # back to the wVk-mode builder rather than emit wScan=0 scancode mode.
         synth = self._make_synth({})  # everything → 0

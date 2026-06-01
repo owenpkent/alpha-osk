@@ -696,6 +696,41 @@ def _configure_logging() -> Path | None:
     return log_path
 
 
+# Stable per-application identity for the Windows taskbar.  Must match the
+# AppUserModelID set on the installer's Start Menu / Desktop shortcuts so a
+# pinned shortcut groups with the running window.  Format convention is
+# ``Company.Product`` (see Microsoft's AppUserModelID guidance).
+APP_USER_MODEL_ID = "OKStudio.AlphaOSK"
+
+
+def _set_windows_app_user_model_id() -> None:
+    """Give the process an explicit AppUserModelID on Windows.
+
+    Without this, Windows can't tie the OSK window's taskbar button back
+    to the application identity once the Qt window appears.  The button is
+    created at launch with the exe's embedded icon, then re-derives an
+    identity from the bare process and falls back to the generic default
+    icon the moment the window shows — the "taskbar icon reverts to the
+    default after opening" symptom.  ``SetCurrentProcessExplicitAppUserModelID``
+    pins the identity up front so the taskbar keeps using our icon.
+
+    Must run *before* the first top-level window is created (ideally before
+    ``QApplication``), or Windows has already cached the derived identity.
+    No-op on non-Windows and best-effort on Windows (a failure here only
+    costs the taskbar icon, never startup).
+    """
+    if CURRENT_PLATFORM != "windows":
+        return
+    try:
+        import ctypes
+
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
+            APP_USER_MODEL_ID
+        )
+    except Exception as exc:  # pragma: no cover - platform/runtime dependent
+        _logger.debug("SetCurrentProcessExplicitAppUserModelID failed: %s", exc)
+
+
 def main() -> int:
     """Launch the Alpha-OSK on-screen keyboard."""
     # CLI dispatch — the post-update relauncher re-invokes this binary
@@ -717,6 +752,11 @@ def main() -> int:
 
     # Platform-specific environment setup (must happen before QApp)
     _setup_platform_env()
+
+    # Claim an explicit taskbar identity before any window exists, so the
+    # taskbar button keeps our icon instead of reverting to the generic
+    # default once the OSK window appears.  No-op off Windows.
+    _set_windows_app_user_model_id()
 
     # Log platform info
     pinfo = get_platform_info()
