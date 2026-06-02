@@ -212,6 +212,35 @@ class TestModifierState:
         bridge.pressSpecialKey("left")
         assert not bridge._win_active
 
+    def test_shift_persists_through_arrow_key(self, bridge: KeyboardBridge):
+        # Regression: holding Shift and pressing an arrow (to extend a
+        # selection) used to drop Shift after the first press, so the
+        # second arrow no longer extended the selection — and an
+        # auto-repeating held arrow lost Shift after its first tick. Nav
+        # keys must keep Shift held across presses; the user taps Shift
+        # again to release it.
+        bridge.toggleShift()
+        for key in ("left", "right", "up", "down", "home", "end",
+                    "pageup", "pagedown"):
+            bridge.pressSpecialKey(key)
+            assert bridge._shift_active, f"shift dropped after {key}"
+
+    def test_ctrl_persists_through_arrow_key(self, bridge: KeyboardBridge):
+        # Ctrl+arrow (jump by word) and Ctrl+Shift+arrow (select by word)
+        # need Ctrl held across presses for the same reason as Shift.
+        bridge.toggleCtrl()
+        bridge.pressSpecialKey("right")
+        assert bridge._ctrl_active
+        bridge.pressSpecialKey("right")
+        assert bridge._ctrl_active
+
+    def test_shift_still_releases_after_tab(self, bridge: KeyboardBridge):
+        # Non-nav special keys keep the one-shot behaviour: Shift+Tab
+        # drops Shift so the next click isn't under Shift.
+        bridge.toggleShift()
+        bridge.pressSpecialKey("tab")
+        assert not bridge._shift_active
+
     def test_shift_special_key_emits_change_signal(self, bridge: KeyboardBridge):
         # QML binds the Shift key highlight to shiftActiveChanged; the
         # auto-release path has to emit the signal or the visual stays

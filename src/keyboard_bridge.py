@@ -209,6 +209,14 @@ def _window_needs_compat_mode(hwnd: int) -> bool:
     return False
 
 
+# Cursor-movement keys. When a sticky modifier is held, pressing one of
+# these should KEEP Shift/Ctrl held (extend selection / word-jump across
+# multiple presses) instead of auto-releasing after the first press. See
+# the auto-release block in pressSpecialKey for the full rationale.
+_NAV_KEYS = frozenset({
+    "left", "right", "up", "down", "home", "end", "pageup", "pagedown",
+})
+
 _logger = logging.getLogger("KeyboardBridge")
 
 
@@ -971,12 +979,30 @@ class KeyboardBridge(QObject):
         # user tapped Shift again. The character-key path in _press_char
         # already auto-releases all four; special keys must match so the
         # chord behaviour mirrors the Windows on-screen keyboard.
-        if self._shift_active and not self._caps_lock_active:
+        #
+        # Exception: cursor-movement keys. When a modifier is held, the
+        # user is almost always building a compound action across several
+        # presses — Shift+arrow to extend a selection, Ctrl+arrow to jump
+        # by word, Ctrl+Shift+arrow to select by word. Auto-releasing
+        # Shift/Ctrl after the first arrow press breaks that: the second
+        # press lands without the modifier, and an auto-repeating held
+        # arrow drops the modifier after its very first tick (the reported
+        # "holding shift + arrow stops holding shift"). So for navigation
+        # keys we keep Shift and Ctrl held; the user taps the modifier
+        # again to release it when done, same as Shift+click/Shift+drag
+        # selection extension. Alt/Win combos (Alt+Left = back,
+        # Win+arrow = snap) are one-shot, so those still auto-release.
+        keep_selection_modifiers = key_name in _NAV_KEYS
+        if (
+            self._shift_active
+            and not self._caps_lock_active
+            and not keep_selection_modifiers
+        ):
             self._shift_active = False
             self._synth.release_modifier("shift")
             self._update_layer()
             self.shiftActiveChanged.emit(self._shift_active)
-        if self._ctrl_active:
+        if self._ctrl_active and not keep_selection_modifiers:
             self._synth.release_modifier("ctrl")
             self._ctrl_active = False
             self.ctrlActiveChanged.emit(self._ctrl_active)
