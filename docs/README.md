@@ -30,6 +30,7 @@ Active design docs for the engine, the platform abstraction, and the user-facing
 Per-platform build pipelines and the auto-update path. Edit when the release process or platform handling changes.
 
 - [`build/WINDOWS.md`](build/WINDOWS.md): Windows build, EV signing, NSIS installer, release checklist, troubleshooting.
+- [`build/CPP_WINDOWS.md`](build/CPP_WINDOWS.md): the C++ / Qt6 Windows rewrite (`cpp-rewrite` branch) — toolchain, CMake build, deploy, status table, source map.
 - [`build/LINUX.md`](build/LINUX.md): Linux build pipeline, AppImage internals, troubleshooting.
 - [`build/MACOS.md`](build/MACOS.md): macOS port plan, phase breakdown, TCC and SEI specifics.
 - [`build/AUTO_UPDATE.md`](build/AUTO_UPDATE.md): auto-update flow, threat model, signature verification.

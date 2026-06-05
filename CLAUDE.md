@@ -15,6 +15,30 @@ python run.py          # Creates venv, installs deps, launches keyboard
 python -m pytest       # Run tests (269+ tests)
 ```
 
+## C++ / Qt6 Rewrite (`cpp-rewrite` branch)
+
+There is a native **C++ / Qt6 port** of the backend on the `cpp-rewrite` branch.
+It **reuses the QML UI (`qml/`) and data files (`data/`) unchanged** and rewrites
+only the Python `src/` backend in C++ under `cpp/`. Motivation: drop the bundled
+Python runtime (the PyInstaller build is ~85 MB and trips SmartScreen/AV), ship a
+single native exe, native-speed prediction. The QML <-> bridge contract maps 1:1
+onto a C++ `QObject` (`@Slot` -> `Q_INVOKABLE`, `Signal` -> Qt signal).
+
+**Ported and verified:** app bootstrap + Win32 window flags, `SendInput`
+synthesis, the full typing state machine, the n-gram + PPM + fuzzy prediction
+stack (`rank` merge + autocorrect, reading the existing `ngram_model.json` /
+`ppm_model.json`), swipe typing, key-click audio (Win32 `PlaySound`), and the
+settings setter slots. **Stubbed** (no-op so the reused QML never calls a missing
+method): snippets, vocab packs, telemetry, auto-update, data backup, compat
+auto-detect, password detection, analytics tracking.
+
+Build/run, toolchain, status table, and the C++ <- Python source map are in
+[`docs/build/CPP_WINDOWS.md`](docs/build/CPP_WINDOWS.md); the in-tree quick
+reference is [`cpp/README.md`](cpp/README.md). Build into `build-cpp/` (NOT
+`build/`, which holds the committed Python packaging pipeline). When porting more
+features, keep behaviour faithful to the Python source — the rest of this file is
+the behavioural contract for both implementations.
+
 ## Architecture Overview
 
 ```

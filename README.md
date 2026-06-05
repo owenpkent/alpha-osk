@@ -38,7 +38,7 @@ You can't use a physical keyboard comfortably, or you're setting it up for someo
 
 You're a developer evaluating Alpha-OSK as a reference, a contributor, or someone porting a piece of it to your own tool.
 
-**Jump to** [Architecture](#architecture) and [`CLAUDE.md`](CLAUDE.md) for the codebase map.
+**Jump to** [Architecture](#architecture) and [`CLAUDE.md`](CLAUDE.md) for the codebase map. A native C++ / Qt6 port (reusing this QML UI) is in progress on the `cpp-rewrite` branch — see [`docs/build/CPP_WINDOWS.md`](docs/build/CPP_WINDOWS.md).
 
 </td>
 <td width="33%" valign="top">

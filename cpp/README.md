@@ -1,5 +1,8 @@
 # Alpha-OSK -- C++ / Qt6 Windows rewrite (`cpp-rewrite` branch)
 
+> Quick reference. The canonical build/run doc with the full status table and
+> troubleshooting is [`docs/build/CPP_WINDOWS.md`](../docs/build/CPP_WINDOWS.md).
+
 This is a native C++ / Qt6 port of the backend. The **QML UI under `qml/` and
 the data files under `data/` are reused unchanged** from the Python app; only
 the Python backend (`src/`) is rewritten in C++ here under `cpp/`.
