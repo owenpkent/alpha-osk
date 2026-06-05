@@ -2,10 +2,12 @@
 
 #include "Paths.h"
 #include "platform/KeySynthesizer.h"
+#include "platform/PasswordDetect.h"
 #include "prediction/HybridPredictor.h"
 
 #include <QDateTime>
 #include <QDir>
+#include <QTimer>
 #include <QFile>
 #include <QFileInfo>
 #include <QJsonArray>
@@ -83,6 +85,13 @@ KeyboardBridge::KeyboardBridge(QObject *parent)
     const QString clickPath = QDir(QDir(paths::dataDir()).filePath("sounds")).filePath("click.wav");
     if (QFileInfo::exists(clickPath))
         m_clickWavPath = clickPath;
+
+    // Auto-pause learning on password fields: poll focus every 200 ms (the
+    // per-keystroke sync check closes the gap between polls).
+    m_passwordTimer = new QTimer(this);
+    m_passwordTimer->setInterval(200);
+    connect(m_passwordTimer, &QTimer::timeout, this, [this] { checkPasswordField(); });
+    m_passwordTimer->start();
 }
 
 KeyboardBridge::~KeyboardBridge()
@@ -102,6 +111,12 @@ QString KeyboardBridge::appVersion() const
 
 void KeyboardBridge::shutdown()
 {
+    // Stop the focus poll before tearing anything down (a late timeout firing
+    // against a half-destroyed bridge would crash).
+    if (m_passwordTimer)
+        m_passwordTimer->stop();
+    passworddetect::shutdown();
+
     // Release any OS-held sticky modifier so quitting doesn't pin it desktop-wide.
     if (m_shift) { m_synth->releaseModifier("shift"); m_shift = false; }
     if (m_ctrl)  { m_synth->releaseModifier("ctrl");  m_ctrl = false; }
@@ -198,6 +213,8 @@ void KeyboardBridge::pressChar(const QString &key, bool literal)
         return;
     }
 
+    checkPasswordFieldSync(); // close the 200 ms race before this key is learned
+
     const QString ch = casedChar();
 
     // 6. Punctuation-space cleanup: remove an auto-space we inserted.
@@ -291,6 +308,8 @@ void KeyboardBridge::pressSpecialKey(const QString &keyName)
         emit editSpecialPressed(keyName.toLower());
         return;
     }
+
+    checkPasswordFieldSync();
 
     m_autoSpacePending = false;
     const QString lower = keyName.toLower();
@@ -734,17 +753,53 @@ void KeyboardBridge::setMergeStrategy(const QString &s)
 
 void KeyboardBridge::setPrivacyMode(bool on)
 {
-    if (on == m_privacy)
+    m_privacyManual = on; // manual override; auto-detection layers on top
+    updatePrivacyState();
+}
+
+void KeyboardBridge::checkPasswordField()
+{
+    if (m_passwordDetectEnabled)
+        setAutoPrivacy(passworddetect::isPasswordField());
+}
+
+void KeyboardBridge::checkPasswordFieldSync()
+{
+    if (!m_passwordDetectEnabled)
         return;
-    m_privacy = on;
-    if (on) {
-        m_currentWord.clear();
-        m_contextBuffer.clear();
-        m_sentenceBuffer.clear();
-        m_predictions.clear();
-        emit predictionsChanged({});
-    }
-    emit privacyModeChanged(on);
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    if (now - m_lastSyncPasswordCheck < 50) // rate-limit the hot path
+        return;
+    m_lastSyncPasswordCheck = now;
+    setAutoPrivacy(passworddetect::isPasswordField());
+}
+
+void KeyboardBridge::setAutoPrivacy(bool detected)
+{
+    if (detected == m_privacyAuto)
+        return;
+    m_privacyAuto = detected;
+    updatePrivacyState();
+}
+
+void KeyboardBridge::updatePrivacyState()
+{
+    const bool effective = m_privacyManual || m_privacyAuto;
+    if (effective == m_privacy)
+        return;
+    m_privacy = effective;
+    if (effective)
+        enterPrivacyMode();
+    emit privacyModeChanged(effective);
+}
+
+void KeyboardBridge::enterPrivacyMode()
+{
+    m_currentWord.clear();
+    m_contextBuffer.clear();
+    m_sentenceBuffer.clear();
+    m_predictions.clear();
+    emit predictionsChanged({});
 }
 
 // ----- word management ---------------------------------------------------

@@ -14,6 +14,7 @@
 
 class KeySynthesizer;
 class HybridPredictor;
+class QTimer;
 
 // The QML context object ("keyboard"). Translates UI events into OS key
 // synthesis + prediction updates, and owns the modifier/typing state machine.
@@ -198,6 +199,13 @@ private:
     void loadLayouts();
     static QString mapSpecial(const QString &qmlName);
 
+    // Privacy / password detection.
+    void checkPasswordField();        // 200 ms poll
+    void checkPasswordFieldSync();    // per-keystroke, rate-limited
+    void setAutoPrivacy(bool detected);
+    void updatePrivacyState();        // recompute m_privacy from manual || auto
+    void enterPrivacyMode();          // scrub buffers + clear pills
+
     // Modifier / layer state.
     bool m_shift = false;
     bool m_caps = false;
@@ -220,8 +228,15 @@ private:
     bool m_autoCapAfterPunct = false;
     bool m_autoSaveOnExit = true;
     bool m_autocorrectEnabled = false;
-    bool m_privacy = false;
     int m_predictionCount = 8;
+
+    // Privacy: m_privacy is the effective state (manual OR auto-detected).
+    bool m_privacy = false;
+    bool m_privacyManual = false;
+    bool m_privacyAuto = false;
+    bool m_passwordDetectEnabled = true;
+    qint64 m_lastSyncPasswordCheck = 0;
+    QTimer *m_passwordTimer = nullptr;
 
     // Compat mode.
     bool m_compatManual = false;

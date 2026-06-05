@@ -27,6 +27,7 @@ add_executable(alpha-osk
     cpp/KeyboardBridge.cpp
     cpp/platform/KeySynthesizer.cpp
     cpp/platform/WindowsKeySynthesizer.cpp
+    cpp/platform/PasswordDetect.cpp
     cpp/prediction/NgramPredictor.cpp
     cpp/prediction/HybridPredictor.cpp
     cpp/prediction/PPMPredictor.cpp
@@ -47,7 +48,7 @@ target_link_libraries(alpha-osk PRIVATE
 )
 
 if(WIN32)
-    target_link_libraries(alpha-osk PRIVATE user32 shell32 ole32 winmm)
+    target_link_libraries(alpha-osk PRIVATE user32 shell32 ole32 oleaut32 winmm uiautomationcore)
 endif()
 
 # In a dev build the exe loads qml/Main.qml and data/ from the source tree.
