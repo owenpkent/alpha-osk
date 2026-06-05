@@ -1,5 +1,6 @@
 #pragma once
 
+#include "SnippetStore.h"
 #include "prediction/SwipeRecognizer.h"
 
 #include <QHash>
@@ -113,12 +114,12 @@ public:
     Q_INVOKABLE void setDebugMode(bool) {}
     Q_INVOKABLE void clearDebugLog() {}
 
-    Q_INVOKABLE QVariantList getSnippets() const { return {}; }
-    Q_INVOKABLE void setSnippet(int, const QString &, const QString &) {}
-    Q_INVOKABLE void insertSnippet(int) {}
-    Q_INVOKABLE void deleteSnippet(int) {}
-    Q_INVOKABLE void addSnippet() {}
-    Q_INVOKABLE void moveSnippet(int, int) {}
+    Q_INVOKABLE QVariantList getSnippets();
+    Q_INVOKABLE void setSnippet(int index, const QString &label, const QString &value);
+    Q_INVOKABLE void insertSnippet(int index);
+    Q_INVOKABLE void deleteSnippet(int index);
+    Q_INVOKABLE void addSnippet();
+    Q_INVOKABLE void moveSnippet(int index, int direction);
 
     Q_INVOKABLE QVariant getAnalytics() const { return QVariantMap{}; }
     Q_INVOKABLE QVariant getVisualizationData() const;
@@ -232,6 +233,9 @@ private:
     QString m_clickWavPath;
     SwipeRecognizer m_swipe;
     bool m_swipeEnabled = false;
+
+    // Snippets (quick-insert text).
+    SnippetStore m_snippetStore;
 
     // Layouts.
     QHash<QString, QJsonObject> m_layouts;

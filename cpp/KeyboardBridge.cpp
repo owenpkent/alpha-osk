@@ -848,3 +848,51 @@ QString KeyboardBridge::getSuggestedExportName() const
     const QString ts = QDateTime::currentDateTime().toString("yyyy-MM-dd-HHmmss");
     return QStringLiteral("Alpha-OSK-Export-%1.zip").arg(ts);
 }
+
+// ----- snippets ----------------------------------------------------------
+
+QVariantList KeyboardBridge::getSnippets()
+{
+    return m_snippetStore.getAll();
+}
+
+void KeyboardBridge::setSnippet(int index, const QString &label, const QString &value)
+{
+    m_snippetStore.set(index, label, value);
+    emit snippetsChanged(m_snippetStore.getAll());
+}
+
+void KeyboardBridge::addSnippet()
+{
+    m_snippetStore.add(QStringLiteral("New"), QString());
+    emit snippetsChanged(m_snippetStore.getAll());
+}
+
+void KeyboardBridge::deleteSnippet(int index)
+{
+    m_snippetStore.remove(index);
+    emit snippetsChanged(m_snippetStore.getAll());
+}
+
+void KeyboardBridge::moveSnippet(int index, int direction)
+{
+    m_snippetStore.move(index, direction);
+    emit snippetsChanged(m_snippetStore.getAll());
+}
+
+void KeyboardBridge::insertSnippet(int index)
+{
+    if (m_editMode)
+        return; // never fire while a snippet field is being edited
+    const QString value = m_snippetStore.getValue(index);
+    if (value.isEmpty())
+        return; // empty slot: the QML opens the editor instead of inserting
+    // Verbatim insert (same path swipe / predictions use). Deliberately NOT
+    // gated by privacy mode -- dropping an address into a form is a valid need.
+    m_synth->sendText(value);
+    // Clear typing state so the inserted punctuation/newlines can't corrupt the
+    // next prediction's prefix matching.
+    m_currentWord.clear();
+    m_predictions.clear();
+    emit predictionsChanged({});
+}

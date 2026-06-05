@@ -23,6 +23,7 @@ add_executable(alpha-osk
     cpp/main.cpp
     cpp/WinUtil.cpp
     cpp/Paths.cpp
+    cpp/SnippetStore.cpp
     cpp/KeyboardBridge.cpp
     cpp/platform/KeySynthesizer.cpp
     cpp/platform/WindowsKeySynthesizer.cpp

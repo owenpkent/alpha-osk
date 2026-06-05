@@ -1,5 +1,6 @@
 #include "KeyboardBridge.h"
 #include "Paths.h"
+#include "SnippetStore.h"
 #include "WinUtil.h"
 #include "prediction/HybridPredictor.h"
 #include "prediction/SwipeRecognizer.h"
@@ -65,6 +66,12 @@ int main(int argc, char *argv[])
             }
         trace.append(vertices.last());
         out << "swipe t->h->e -> " << sw.decode(trace, predictor.ngram()->unigrams(), 8).join(", ") << "\n";
+
+        SnippetStore snippets;
+        QStringList labels;
+        for (const QVariant &s : snippets.getAll())
+            labels << s.toMap().value("label").toString();
+        out << "snippets -> " << labels.join(", ") << "\n";
 
         out.flush();
         return 0;
