@@ -139,11 +139,11 @@ public:
 
     Q_INVOKABLE QString getDefaultExportDir() const;
     Q_INVOKABLE QString getSuggestedExportName() const;
-    Q_INVOKABLE QString pickExportPath() { return QString(); }
-    Q_INVOKABLE QString pickImportPath() { return QString(); }
-    Q_INVOKABLE QString exportUserData(const QString &) { return QStringLiteral("Data backup is not available in this build yet."); }
-    Q_INVOKABLE QVariant inspectUserExport(const QString &) { return QVariantMap{{"ok", false}, {"error", "not available"}}; }
-    Q_INVOKABLE QString importUserData(const QString &) { return QStringLiteral("Data import is not available in this build yet."); }
+    Q_INVOKABLE QString pickExportPath();
+    Q_INVOKABLE QString pickImportPath();
+    Q_INVOKABLE QString exportUserData(const QString &dest);
+    Q_INVOKABLE QVariant inspectUserExport(const QString &src);
+    Q_INVOKABLE QString importUserData(const QString &src);
 
     Q_INVOKABLE bool getTelemetryEnabled() const;
     Q_INVOKABLE void setTelemetryEnabled(bool on);

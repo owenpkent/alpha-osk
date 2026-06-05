@@ -1,4 +1,5 @@
 #include "Analytics.h"
+#include "DataExport.h"
 #include "KeyboardBridge.h"
 #include "Paths.h"
 #include "SnippetStore.h"
@@ -9,6 +10,7 @@
 #include <QPointF>
 
 #include <QApplication>
+#include <QDir>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
 #include <QQmlError>
@@ -84,6 +86,14 @@ int main(int argc, char *argv[])
             << " saved=" << st.value("keystrokesSaved").toInt()
             << " savings%=" << st.value("savingsPercent").toDouble()
             << " acceptance%=" << st.value("acceptanceRate").toDouble() << "\n";
+
+        // Data-backup roundtrip: export the real config dir to a temp zip and
+        // inspect it (read-only; does NOT import / overwrite anything).
+        const QString tmpZip = QDir::temp().filePath("alpha-osk-selftest-export.zip");
+        const ExportSummary ex = dataexport::exportUserData(paths::configDir(), tmpZip);
+        const ExportSummary insp = dataexport::inspectExport(tmpZip);
+        out << "data-backup -> export ok=" << ex.ok << " files=" << ex.files.size()
+            << " inspect ok=" << insp.ok << " schema=" << insp.schemaVersion << "\n";
 
         out.flush();
         return 0;

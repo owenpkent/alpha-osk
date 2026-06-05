@@ -1,5 +1,6 @@
 #include "KeyboardBridge.h"
 
+#include "DataExport.h"
 #include "Paths.h"
 #include "TelemetryClient.h"
 #include "WinUtil.h"
@@ -20,6 +21,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QRegularExpression>
+#include <QFileDialog>
 #include <QStandardPaths>
 
 #ifdef Q_OS_WIN
@@ -1044,6 +1046,60 @@ QString KeyboardBridge::getSuggestedExportName() const
 {
     const QString ts = QDateTime::currentDateTime().toString("yyyy-MM-dd-HHmmss");
     return QStringLiteral("Alpha-OSK-Export-%1.zip").arg(ts);
+}
+
+// ----- data backup (export / import) -------------------------------------
+
+QString KeyboardBridge::pickExportPath()
+{
+    const QString start = QDir(getDefaultExportDir()).filePath(getSuggestedExportName());
+    return QFileDialog::getSaveFileName(nullptr, QStringLiteral("Export Alpha-OSK data"),
+                                        start, QStringLiteral("Zip archives (*.zip)"));
+}
+
+QString KeyboardBridge::pickImportPath()
+{
+    return QFileDialog::getOpenFileName(nullptr, QStringLiteral("Import Alpha-OSK data"),
+                                        getDefaultExportDir(), QStringLiteral("Zip archives (*.zip)"));
+}
+
+QString KeyboardBridge::exportUserData(const QString &dest)
+{
+    const ExportSummary s = dataexport::exportUserData(paths::configDir(), dest);
+    return s.ok ? QString() : s.error;
+}
+
+QVariant KeyboardBridge::inspectUserExport(const QString &src)
+{
+    const ExportSummary s = dataexport::inspectExport(src);
+    QVariantMap m;
+    m.insert("ok", s.ok);
+    m.insert("error", s.error);
+    m.insert("files", QVariant(s.files));
+    m.insert("pack_ids", QVariant(s.packIds));
+    m.insert("app_version", s.appVersion);
+    m.insert("exported_at", s.exportedAt);
+    m.insert("bytes", double(s.bytes));
+    m.insert("schema_version", s.schemaVersion);
+    return m;
+}
+
+QString KeyboardBridge::importUserData(const QString &src)
+{
+    const ExportSummary s = dataexport::importUserData(src, paths::configDir());
+    if (!s.ok)
+        return s.error;
+    // Pick up the imported state without a restart.
+    m_predictor->reloadFromDisk();
+    m_analytics.reloadFromDisk();
+    m_snippetStore.reloadFromDisk();
+    m_currentWord.clear();
+    m_contextBuffer.clear();
+    m_sentenceBuffer.clear();
+    m_predictions.clear();
+    emit predictionsChanged({});
+    emit snippetsChanged(m_snippetStore.getAll());
+    return QString();
 }
 
 // ----- telemetry + update ------------------------------------------------

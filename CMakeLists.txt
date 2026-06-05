@@ -26,6 +26,7 @@ add_executable(alpha-osk
     cpp/SnippetStore.cpp
     cpp/Analytics.cpp
     cpp/TelemetryClient.cpp
+    cpp/DataExport.cpp
     cpp/KeyboardBridge.cpp
     cpp/platform/KeySynthesizer.cpp
     cpp/platform/WindowsKeySynthesizer.cpp
@@ -48,6 +49,7 @@ target_link_libraries(alpha-osk PRIVATE
     Qt6::QuickControls2
     Qt6::Widgets
     Qt6::Network
+    Qt6::GuiPrivate
 )
 
 if(WIN32)
