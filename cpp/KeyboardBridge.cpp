@@ -830,11 +830,37 @@ QVariant KeyboardBridge::getVisualizationData() const
     return viz;
 }
 
+QVariantList KeyboardBridge::getAvailablePacks() const
+{
+    return m_predictor->getAvailablePacks();
+}
+
+QVariantList KeyboardBridge::getEnabledPacks() const
+{
+    QVariantList out;
+    for (const QString &id : m_predictor->getEnabledPacks())
+        out << id;
+    return out;
+}
+
+bool KeyboardBridge::enableVocabularyPack(const QString &id)
+{
+    return m_predictor->enableVocabularyPack(id);
+}
+
+bool KeyboardBridge::disableVocabularyPack(const QString &id)
+{
+    return m_predictor->disableVocabularyPack(id);
+}
+
+QString KeyboardBridge::importVocabularyPack(const QString &sourceDir)
+{
+    return m_predictor->importVocabularyPack(sourceDir);
+}
+
 QString KeyboardBridge::getUserPacksDir() const
 {
-    const QString dir = QDir(paths::configDir()).filePath("packs");
-    QDir().mkpath(dir);
-    return dir;
+    return m_predictor->getUserPacksDir();
 }
 
 QString KeyboardBridge::getDefaultExportDir() const

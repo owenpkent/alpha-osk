@@ -68,6 +68,14 @@ public:
 
     void clearUserData();
 
+    // Vocabulary-pack injection: max()-merge pack vocab into the live tables
+    // (matches PackManager.apply_to_predictor). Touches unigrams/bigrams/
+    // trigrams only -- not the base/user scoring tables -- so pack words become
+    // valid candidates and gain bigram/trigram context, exactly like Python.
+    void injectVocab(const QSet<QString> &words, int unigramWeight,
+                     const QHash<QString, QHash<QString, int>> &bigrams,
+                     const QHash<QString, QHash<QString, int>> &trigrams);
+
     static QStringList tokenize(const QString &text);
 
 private:

@@ -3,8 +3,10 @@
 #include "FuzzyRecognizer.h"
 #include "NgramPredictor.h"
 #include "PPMPredictor.h"
+#include "VocabularyPack.h"
 
 #include <QObject>
+#include <QVariantList>
 #include <QString>
 #include <QStringList>
 
@@ -59,6 +61,14 @@ public:
 
     NgramPredictor *ngram() const { return m_ngram.get(); }
 
+    // Vocabulary packs.
+    QVariantList getAvailablePacks() const;
+    QStringList getEnabledPacks() const;
+    bool enableVocabularyPack(const QString &id);
+    bool disableVocabularyPack(const QString &id);
+    QString importVocabularyPack(const QString &sourceDir);
+    QString getUserPacksDir() const;
+
     QString mergeStrategy() const { return m_mergeStrategy; }
     void setMergeStrategy(const QString &s) { m_mergeStrategy = s; }
 
@@ -83,6 +93,7 @@ private:
     std::unique_ptr<PPMPredictor> m_ppm;
     std::unique_ptr<PPMWordPredictor> m_ppmWord;
     std::unique_ptr<FuzzyRecognizer> m_fuzzy;
+    std::unique_ptr<PackManager> m_packs;
     CommonMisspellings m_misspellings;
     QString m_modelPath;
     QString m_ppmModelPath;

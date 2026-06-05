@@ -577,6 +577,20 @@ bool NgramPredictor::inVocab(const QString &lowerWord) const
     return m_unigrams.contains(lowerWord);
 }
 
+void NgramPredictor::injectVocab(const QSet<QString> &words, int unigramWeight,
+                                 const QHash<QString, QHash<QString, int>> &bigrams,
+                                 const QHash<QString, QHash<QString, int>> &trigrams)
+{
+    for (const QString &w : words)
+        m_unigrams[w] = qMax(m_unigrams.value(w, 0), unigramWeight);
+    for (auto it = bigrams.constBegin(); it != bigrams.constEnd(); ++it)
+        for (auto j = it.value().constBegin(); j != it.value().constEnd(); ++j)
+            m_bigrams[it.key()][j.key()] = qMax(m_bigrams[it.key()].value(j.key(), 0), j.value());
+    for (auto it = trigrams.constBegin(); it != trigrams.constEnd(); ++it)
+        for (auto j = it.value().constBegin(); j != it.value().constEnd(); ++j)
+            m_trigrams[it.key()][j.key()] = qMax(m_trigrams[it.key()].value(j.key(), 0), j.value());
+}
+
 void NgramPredictor::clearUserData()
 {
     m_userVocab.clear();

@@ -32,6 +32,7 @@ add_executable(alpha-osk
     cpp/prediction/PPMPredictor.cpp
     cpp/prediction/FuzzyRecognizer.cpp
     cpp/prediction/SwipeRecognizer.cpp
+    cpp/prediction/VocabularyPack.cpp
 )
 
 target_include_directories(alpha-osk PRIVATE cpp)

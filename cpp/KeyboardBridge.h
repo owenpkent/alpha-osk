@@ -125,11 +125,11 @@ public:
     Q_INVOKABLE QVariant getVisualizationData() const;
     Q_INVOKABLE QVariant getWordContext(const QString &) const { return QVariantMap{}; }
 
-    Q_INVOKABLE QVariantList getAvailablePacks() const { return {}; }
-    Q_INVOKABLE QVariantList getEnabledPacks() const { return {}; }
-    Q_INVOKABLE bool enableVocabularyPack(const QString &) { return false; }
-    Q_INVOKABLE bool disableVocabularyPack(const QString &) { return false; }
-    Q_INVOKABLE QString importVocabularyPack(const QString &) { return QString(); }
+    Q_INVOKABLE QVariantList getAvailablePacks() const;
+    Q_INVOKABLE QVariantList getEnabledPacks() const;
+    Q_INVOKABLE bool enableVocabularyPack(const QString &id);
+    Q_INVOKABLE bool disableVocabularyPack(const QString &id);
+    Q_INVOKABLE QString importVocabularyPack(const QString &sourceDir);
     Q_INVOKABLE QString getUserPacksDir() const;
 
     Q_INVOKABLE QString getDefaultExportDir() const;

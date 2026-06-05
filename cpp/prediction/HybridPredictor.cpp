@@ -48,6 +48,10 @@ HybridPredictor::HybridPredictor(QObject *parent)
     m_fuzzy->setFrequencies(freqs);
 
     m_misspellings.load(QDir(dataDir).filePath("common_misspellings.txt"));
+
+    // Vocabulary packs (import-only; none enabled until the user toggles one).
+    m_packs = std::make_unique<PackManager>();
+    m_packs->applyToPredictor(m_ngram.get());
 }
 
 bool HybridPredictor::isValidWord(const QString &word) const
@@ -185,6 +189,53 @@ void HybridPredictor::reloadFromDisk()
 {
     m_ngram->load(m_modelPath);
     m_ppm->load(m_ppmModelPath);
+    // Re-discover packs; enabled state resets (matches the Python import path).
+    m_packs = std::make_unique<PackManager>();
+    m_packs->applyToPredictor(m_ngram.get());
+    emit packsChanged();
+}
+
+QVariantList HybridPredictor::getAvailablePacks() const
+{
+    return m_packs->getAllPackInfo();
+}
+
+QStringList HybridPredictor::getEnabledPacks() const
+{
+    return m_packs->getEnabledPacks();
+}
+
+bool HybridPredictor::enableVocabularyPack(const QString &id)
+{
+    const bool ok = m_packs->enablePack(id);
+    if (ok) {
+        m_packs->applyToPredictor(m_ngram.get());
+        emit packsChanged();
+    }
+    return ok;
+}
+
+bool HybridPredictor::disableVocabularyPack(const QString &id)
+{
+    // Note: like the Python original, the pack's already-injected vocabulary
+    // stays in the predictor until the next restart (apply uses max()-merge).
+    const bool ok = m_packs->disablePack(id);
+    if (ok)
+        emit packsChanged();
+    return ok;
+}
+
+QString HybridPredictor::importVocabularyPack(const QString &sourceDir)
+{
+    const QString id = m_packs->importPack(sourceDir);
+    if (!id.isEmpty())
+        emit packsChanged();
+    return id;
+}
+
+QString HybridPredictor::getUserPacksDir() const
+{
+    return m_packs->userPacksDir();
 }
 
 void HybridPredictor::learnFromSelection(const QString &context, const QString &selectedWord)
