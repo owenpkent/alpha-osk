@@ -35,7 +35,7 @@ Ordered by the commits that landed them on `cpp-rewrite`:
 | Swipe typing | done | SHARK² shape decoder; `setSwipeEnabled`/`setSwipeLayout`/`processSwipe` wired against the unigram vocabulary. |
 | Key-click audio | done | Win32 `PlaySound` (winmm) instead of pulling in the QtMultimedia module. |
 | Settings | done | Persisted by the QML `Settings` element (org/app names set); the bridge setter slots (layout / merge-strategy / auto-space / auto-cap / prediction-count / compat / privacy) are functional. |
-| Snippets | stub | `getSnippets`/`insertSnippet`/etc. are no-ops. |
+| Snippets | done | `SnippetStore` reads/writes `snippets.json`; insert sends the value verbatim. Reads the user's existing file. |
 | Vocab packs, telemetry, auto-update, data backup | stub | No-op / minimal stubs so the reused QML never calls a missing method. |
 | Compat auto-detect, password detection, analytics tracking | stub | Manual compat toggle works; foreground-window inspection is deferred. |
 
@@ -128,6 +128,6 @@ The algorithm deep-dives that governed the port are unchanged and still apply:
 
 Live keystroke synthesis into other apps and the interactive UI (swipe gesture,
 pill clicks, modifier holds) still need a human-in-the-loop pass — they cannot
-be verified headlessly. Next feature candidates: snippets, then packaging
-(WIN32 subsystem to drop the console window, a clean `windeployqt` dist folder),
-then the remaining stubbed features.
+be verified headlessly. Next feature candidates: packaging (WIN32 subsystem to
+drop the console window, a clean `windeployqt` dist folder), then the remaining
+stubbed features (vocab packs, telemetry, auto-update, data backup).
