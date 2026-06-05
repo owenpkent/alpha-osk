@@ -15,7 +15,9 @@
 
 class KeySynthesizer;
 class HybridPredictor;
+class TelemetryClient;
 class QTimer;
+class QNetworkAccessManager;
 
 // The QML context object ("keyboard"). Translates UI events into OS key
 // synthesis + prediction updates, and owns the modifier/typing state machine.
@@ -143,12 +145,12 @@ public:
     Q_INVOKABLE QVariant inspectUserExport(const QString &) { return QVariantMap{{"ok", false}, {"error", "not available"}}; }
     Q_INVOKABLE QString importUserData(const QString &) { return QStringLiteral("Data import is not available in this build yet."); }
 
-    Q_INVOKABLE bool getTelemetryEnabled() const { return false; }
-    Q_INVOKABLE void setTelemetryEnabled(bool) {}
-    Q_INVOKABLE void forgetTelemetryData() {}
+    Q_INVOKABLE bool getTelemetryEnabled() const;
+    Q_INVOKABLE void setTelemetryEnabled(bool on);
+    Q_INVOKABLE void forgetTelemetryData();
 
-    Q_INVOKABLE void checkForUpdate() { emit updateUnavailable(); }
-    Q_INVOKABLE void installUpdate() {}
+    Q_INVOKABLE void checkForUpdate();
+    Q_INVOKABLE void installUpdate();
     Q_INVOKABLE void dismissUpdate() {}
     Q_INVOKABLE QVariant consumeUpdateHandoff() { return QVariant(); }
 
@@ -267,6 +269,11 @@ private:
     QHash<QString, QJsonObject> m_layouts;
     QStringList m_layoutOrder;
     QString m_currentLayout = QStringLiteral("qwerty");
+
+    // Telemetry (opt-in; off + endpoint-empty by default) + update check.
+    TelemetryClient *m_telemetry = nullptr;
+    QTimer *m_telemetryTimer = nullptr;
+    QNetworkAccessManager *m_updateNam = nullptr;
 
     KeySynthesizer *m_synth = nullptr;
     HybridPredictor *m_predictor = nullptr;

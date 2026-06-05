@@ -15,7 +15,7 @@ if(NOT DEFINED CMAKE_PREFIX_PATH AND DEFINED ENV{QT_ROOT})
     set(CMAKE_PREFIX_PATH "$ENV{QT_ROOT}")
 endif()
 
-find_package(Qt6 REQUIRED COMPONENTS Core Gui Qml Quick QuickControls2 Widgets)
+find_package(Qt6 REQUIRED COMPONENTS Core Gui Qml Quick QuickControls2 Widgets Network)
 
 qt_standard_project_setup()
 
@@ -25,6 +25,7 @@ add_executable(alpha-osk
     cpp/Paths.cpp
     cpp/SnippetStore.cpp
     cpp/Analytics.cpp
+    cpp/TelemetryClient.cpp
     cpp/KeyboardBridge.cpp
     cpp/platform/KeySynthesizer.cpp
     cpp/platform/WindowsKeySynthesizer.cpp
@@ -46,6 +47,7 @@ target_link_libraries(alpha-osk PRIVATE
     Qt6::Quick
     Qt6::QuickControls2
     Qt6::Widgets
+    Qt6::Network
 )
 
 if(WIN32)

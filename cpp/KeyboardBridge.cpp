@@ -1,6 +1,7 @@
 #include "KeyboardBridge.h"
 
 #include "Paths.h"
+#include "TelemetryClient.h"
 #include "WinUtil.h"
 #include "platform/KeySynthesizer.h"
 #include "platform/PasswordDetect.h"
@@ -8,7 +9,12 @@
 
 #include <QDateTime>
 #include <QDir>
+#include <QJsonArray>
+#include <QNetworkAccessManager>
+#include <QNetworkReply>
+#include <QNetworkRequest>
 #include <QTimer>
+#include <QUrl>
 #include <QFile>
 #include <QFileInfo>
 #include <QJsonArray>
@@ -63,6 +69,35 @@ const QSet<QString> &navKeys()
     return s;
 }
 
+QList<int> parseVersionTuple(QString tag)
+{
+    if (tag.startsWith('v') || tag.startsWith('V'))
+        tag = tag.mid(1);
+    static const QRegularExpression leadingDigits("^(\\d+)");
+    const QStringList parts = tag.split('.');
+    QList<int> out;
+    for (int i = 0; i < 3; ++i) {
+        int n = 0;
+        if (i < parts.size()) {
+            const QRegularExpressionMatch m = leadingDigits.match(parts[i]);
+            if (m.hasMatch())
+                n = m.captured(1).toInt();
+        }
+        out.append(n);
+    }
+    return out;
+}
+
+bool isNewerVersion(const QString &candidate, const QString &baseline)
+{
+    const QList<int> a = parseVersionTuple(candidate);
+    const QList<int> b = parseVersionTuple(baseline);
+    for (int i = 0; i < 3; ++i)
+        if (a[i] != b[i])
+            return a[i] > b[i];
+    return false;
+}
+
 } // namespace
 
 KeyboardBridge::KeyboardBridge(QObject *parent)
@@ -100,6 +135,16 @@ KeyboardBridge::KeyboardBridge(QObject *parent)
     m_foregroundTimer->setInterval(250);
     connect(m_foregroundTimer, &QTimer::timeout, this, [this] { checkForegroundWindow(); });
     m_foregroundTimer->start();
+
+    // Telemetry: off by default; endpoint empty so submits no-op. Hourly tick;
+    // the weekly window is checked inside maybeSubmit.
+    m_telemetry = new TelemetryClient([this] { return m_analytics.getSessionStats(); },
+                                      QString::fromLatin1(APP_VERSION_STR),
+                                      QStringLiteral("windows"), this);
+    m_telemetryTimer = new QTimer(this);
+    m_telemetryTimer->setInterval(60 * 60 * 1000);
+    connect(m_telemetryTimer, &QTimer::timeout, this, [this] { m_telemetry->maybeSubmit(); });
+    m_telemetryTimer->start();
 }
 
 KeyboardBridge::~KeyboardBridge()
@@ -125,6 +170,10 @@ void KeyboardBridge::shutdown()
         m_passwordTimer->stop();
     if (m_foregroundTimer)
         m_foregroundTimer->stop();
+    if (m_telemetryTimer)
+        m_telemetryTimer->stop();
+    if (m_telemetry)
+        m_telemetry->submitOnQuit();
     passworddetect::shutdown();
 
     // Release any OS-held sticky modifier so quitting doesn't pin it desktop-wide.
@@ -995,6 +1044,77 @@ QString KeyboardBridge::getSuggestedExportName() const
 {
     const QString ts = QDateTime::currentDateTime().toString("yyyy-MM-dd-HHmmss");
     return QStringLiteral("Alpha-OSK-Export-%1.zip").arg(ts);
+}
+
+// ----- telemetry + update ------------------------------------------------
+
+bool KeyboardBridge::getTelemetryEnabled() const
+{
+    return m_telemetry->enabled();
+}
+
+void KeyboardBridge::setTelemetryEnabled(bool on)
+{
+    if (on)
+        m_telemetry->enable();
+    else
+        m_telemetry->disable();
+}
+
+void KeyboardBridge::forgetTelemetryData()
+{
+    m_telemetry->forget();
+}
+
+void KeyboardBridge::checkForUpdate()
+{
+    if (!m_updateNam)
+        m_updateNam = new QNetworkAccessManager(this);
+    QNetworkRequest req(QUrl(QStringLiteral(
+        "https://api.github.com/repos/okstudio1/alpha-osk-releases/releases/latest")));
+    req.setHeader(QNetworkRequest::UserAgentHeader, QByteArray("Alpha-OSK"));
+    req.setRawHeader("Accept", "application/vnd.github+json");
+    QNetworkReply *reply = m_updateNam->get(req);
+    connect(reply, &QNetworkReply::finished, this, [this, reply] {
+        reply->deleteLater();
+        if (reply->error() != QNetworkReply::NoError) {
+            emit updateUnavailable();
+            return;
+        }
+        const QJsonDocument doc = QJsonDocument::fromJson(reply->readAll());
+        if (!doc.isObject()) {
+            emit updateUnavailable();
+            return;
+        }
+        const QJsonObject o = doc.object();
+        const QString tag = o.value("tag_name").toString();
+        const QString notes = o.value("body").toString();
+        QString assetName;
+        for (const QJsonValue &a : o.value("assets").toArray()) {
+            const QString n = a.toObject().value("name").toString();
+            if (n.endsWith(QLatin1String(".exe"))) {
+                assetName = n;
+                break;
+            }
+        }
+        if (isNewerVersion(tag, QString::fromLatin1(APP_VERSION_STR))) {
+            QString ver = tag;
+            if (ver.startsWith('v') || ver.startsWith('V'))
+                ver = ver.mid(1);
+            emit updateAvailable(ver, assetName, notes);
+        } else {
+            emit updateUnavailable();
+        }
+    });
+}
+
+void KeyboardBridge::installUpdate()
+{
+    // The C++ rewrite has no signed installer pipeline yet; don't silently run
+    // the Python release installer over this build. Report honestly instead.
+    emit updateInstallFailed(QStringLiteral(
+        "Automatic install isn't available in this build yet. "
+        "Download the latest release manually."));
 }
 
 // ----- snippets ----------------------------------------------------------
