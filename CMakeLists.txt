@@ -28,6 +28,8 @@ add_executable(alpha-osk
     cpp/platform/WindowsKeySynthesizer.cpp
     cpp/prediction/NgramPredictor.cpp
     cpp/prediction/HybridPredictor.cpp
+    cpp/prediction/PPMPredictor.cpp
+    cpp/prediction/FuzzyRecognizer.cpp
 )
 
 target_include_directories(alpha-osk PRIVATE cpp)

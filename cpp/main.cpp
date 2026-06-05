@@ -36,7 +36,9 @@ int main(int argc, char *argv[])
         out << "model dir: " << paths::modelDir() << "\n";
         out << "data dir:  " << paths::dataDir() << "\n";
         HybridPredictor predictor;
-        const QStringList contexts = {"", "th", "hel", "I want to ", "the quick brown "};
+        const QStringList contexts = {
+            "", "th", "hel", "I want to ", "the quick brown ",
+            "teh", "recieve", "wrk", "thsi", "hte"}; // typos -> fuzzy correction
         for (const QString &c : contexts) {
             out << "predict(\"" << c << "\") -> "
                 << predictor.predict(c, 8).join(QStringLiteral(", ")) << "\n";

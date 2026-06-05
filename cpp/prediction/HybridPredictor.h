@@ -1,6 +1,8 @@
 #pragma once
 
+#include "FuzzyRecognizer.h"
 #include "NgramPredictor.h"
+#include "PPMPredictor.h"
 
 #include <QObject>
 #include <QString>
@@ -29,8 +31,8 @@ public:
     bool unlearnWord(const QString &word) { return m_ngram->unlearnWord(word); }
     void learnFromSelection(const QString &context, const QString &selectedWord);
 
-    void save() const { m_ngram->save(m_modelPath); }
-    void reloadFromDisk() { m_ngram->load(m_modelPath); }
+    void save() const;
+    void reloadFromDisk();
     void clearUserData() { m_ngram->clearUserData(); }
 
     QString getCapitalized(const QString &word, bool sentenceStart = false) const
@@ -71,11 +73,18 @@ signals:
 private:
     bool isValidWord(const QString &word) const;
     bool candidatePasses(const QString &word, bool isNextWord) const;
+    double bigramBonus(const QString &word, const QHash<QString, int> &table) const;
+    QHash<QString, int> fuzzyBigramTable(const QString &context) const;
     QStringList finalizeScores(const QHash<QString, double> &scores,
                                const QStringList &order, int n,
                                bool isNextWord, const QString &context) const;
 
     std::unique_ptr<NgramPredictor> m_ngram;
+    std::unique_ptr<PPMPredictor> m_ppm;
+    std::unique_ptr<PPMWordPredictor> m_ppmWord;
+    std::unique_ptr<FuzzyRecognizer> m_fuzzy;
+    CommonMisspellings m_misspellings;
     QString m_modelPath;
+    QString m_ppmModelPath;
     QString m_mergeStrategy = QStringLiteral("rank");
 };
