@@ -28,9 +28,9 @@ onto a C++ `QObject` (`@Slot` -> `Q_INVOKABLE`, `Signal` -> Qt signal).
 synthesis, the full typing state machine, the n-gram + PPM + fuzzy prediction
 stack (`rank` merge + autocorrect, reading the existing `ngram_model.json` /
 `ppm_model.json`), swipe typing, key-click audio (Win32 `PlaySound`), and the
-settings setter slots, and snippets. **Stubbed** (no-op so the reused QML never
-calls a missing method): vocab packs, telemetry, auto-update, data backup, compat
-auto-detect, password detection, analytics tracking.
+settings setter slots, snippets, and vocabulary packs. **Stubbed** (no-op so the
+reused QML never calls a missing method): telemetry, auto-update, data backup,
+compat auto-detect, password detection, analytics tracking.
 
 Build/run, toolchain, status table, and the C++ <- Python source map are in
 [`docs/build/CPP_WINDOWS.md`](docs/build/CPP_WINDOWS.md); the in-tree quick
