@@ -1,6 +1,7 @@
 #include "KeyboardBridge.h"
 
 #include "Paths.h"
+#include "WinUtil.h"
 #include "platform/KeySynthesizer.h"
 #include "platform/PasswordDetect.h"
 #include "prediction/HybridPredictor.h"
@@ -92,6 +93,13 @@ KeyboardBridge::KeyboardBridge(QObject *parent)
     m_passwordTimer->setInterval(200);
     connect(m_passwordTimer, &QTimer::timeout, this, [this] { checkPasswordField(); });
     m_passwordTimer->start();
+
+    // Foreground monitor: reset stale context on app switch + drive compat
+    // auto-detect (IDE / remote-desktop insertion path).
+    m_foregroundTimer = new QTimer(this);
+    m_foregroundTimer->setInterval(250);
+    connect(m_foregroundTimer, &QTimer::timeout, this, [this] { checkForegroundWindow(); });
+    m_foregroundTimer->start();
 }
 
 KeyboardBridge::~KeyboardBridge()
@@ -115,6 +123,8 @@ void KeyboardBridge::shutdown()
     // against a half-destroyed bridge would crash).
     if (m_passwordTimer)
         m_passwordTimer->stop();
+    if (m_foregroundTimer)
+        m_foregroundTimer->stop();
     passworddetect::shutdown();
 
     // Release any OS-held sticky modifier so quitting doesn't pin it desktop-wide.
@@ -813,6 +823,40 @@ void KeyboardBridge::enterPrivacyMode()
     m_sentenceBuffer.clear();
     m_predictions.clear();
     emit predictionsChanged({});
+}
+
+void KeyboardBridge::checkForegroundWindow()
+{
+    const quintptr hwnd = winutil::foregroundWindowId();
+    if (hwnd == 0)
+        return; // detection unavailable on this platform
+    if (hwnd != m_lastForegroundHwnd && m_lastForegroundHwnd != 0) {
+        // App switch: the typing context is stale for the new window.
+        m_predictions.clear();
+        m_currentWord.clear();
+        m_wordTypedUnderCaps = false;
+        m_sentenceBuffer.clear();
+        m_contextBuffer.clear();
+        emit predictionsChanged({});
+    }
+    updateCompatAuto(hwnd);
+    m_lastForegroundHwnd = hwnd;
+}
+
+void KeyboardBridge::updateCompatAuto(quintptr hwnd)
+{
+    if (!m_compatAutoEnabled || !hwnd)
+        return;
+    const bool active = winutil::windowNeedsCompatMode(hwnd);
+    if (active != m_compatAutoActive)
+        m_compatAutoActive = active; // debounced: only toggles on change
+}
+
+void KeyboardBridge::setCompatAutoDetect(bool on)
+{
+    m_compatAutoEnabled = on;
+    if (on)
+        updateCompatAuto(m_lastForegroundHwnd);
 }
 
 // ----- word management ---------------------------------------------------

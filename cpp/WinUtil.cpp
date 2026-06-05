@@ -1,5 +1,8 @@
 #include "WinUtil.h"
 
+#include <QFileInfo>
+#include <QSet>
+#include <QString>
 #include <QWindow>
 
 #ifdef Q_OS_WIN
@@ -8,6 +11,86 @@
 #endif
 
 namespace winutil {
+
+#ifdef Q_OS_WIN
+namespace {
+
+// Remote-desktop client window classes (exact match).
+const QSet<QString> &compatWindowClasses()
+{
+    static const QSet<QString> s = {
+        "TscShellContainerClass", "RDPViewer", "UIMainClass",       // MS RDP
+        "TV_TitleBar", "TV_Client", "TV_FullScreen", "#32770TVMainForm", // TeamViewer
+        "AnyDeskMainWindow", "AnyDeskMainView",
+        "TightVNCClassName", "VNCMDI_Window", "VNCviewer", "RealVNCClass",
+        "UltraVNCClass", "TVNVncCtrl",
+        "RustDesk", "ParsecHostWindow", "SplashtopRemoteDesktopClass"};
+    return s;
+}
+
+// Owning-process exe basenames (lowercase, exact match): remote-desktop tools +
+// IDEs whose editors intercept keystrokes (VS Code / Monaco forks, JetBrains).
+const QSet<QString> &compatProcessNames()
+{
+    static const QSet<QString> s = {
+        "teamviewer.exe", "tv_w32.exe", "tv_x64.exe", "mstsc.exe", "msrdc.exe",
+        "anydesk.exe", "vncviewer.exe", "tvnviewer.exe", "uvnc.exe", "winvnc.exe",
+        "rustdesk.exe", "splashtop.exe", "stp.exe", "logmein.exe", "parsecd.exe",
+        "moonlight.exe",
+        // VS Code + Monaco forks
+        "code.exe", "code - insiders.exe", "cursor.exe", "windsurf.exe",
+        "codium.exe", "code-oss.exe", "positron.exe", "trae.exe",
+        // JetBrains family
+        "idea64.exe", "pycharm64.exe", "webstorm64.exe", "phpstorm64.exe",
+        "clion64.exe", "goland64.exe", "rider64.exe", "rubymine64.exe",
+        "datagrip64.exe", "dataspell64.exe", "studio64.exe", "studio.exe"};
+    return s;
+}
+
+} // namespace
+#endif
+
+quintptr winutil::foregroundWindowId()
+{
+#ifdef Q_OS_WIN
+    return reinterpret_cast<quintptr>(GetForegroundWindow());
+#else
+    return 0;
+#endif
+}
+
+bool winutil::windowNeedsCompatMode(quintptr hwndInt)
+{
+#ifdef Q_OS_WIN
+    HWND hwnd = reinterpret_cast<HWND>(hwndInt);
+    if (!hwnd)
+        return false;
+    wchar_t cls[256] = {0};
+    if (GetClassNameW(hwnd, cls, 256) > 0
+        && compatWindowClasses().contains(QString::fromWCharArray(cls)))
+        return true;
+
+    DWORD pid = 0;
+    GetWindowThreadProcessId(hwnd, &pid);
+    if (!pid)
+        return false;
+    HANDLE handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+    if (!handle)
+        return false;
+    bool match = false;
+    wchar_t exe[512] = {0};
+    DWORD size = 512;
+    if (QueryFullProcessImageNameW(handle, 0, exe, &size)) {
+        const QString name = QFileInfo(QString::fromWCharArray(exe)).fileName().toLower();
+        match = compatProcessNames().contains(name);
+    }
+    CloseHandle(handle);
+    return match;
+#else
+    Q_UNUSED(hwndInt);
+    return false;
+#endif
+}
 
 void setAppUserModelId()
 {

@@ -94,7 +94,7 @@ public:
     Q_INVOKABLE void setAutoSaveOnExit(bool on) { m_autoSaveOnExit = on; }
     Q_INVOKABLE void setAutocorrectEnabled(bool on) { m_autocorrectEnabled = on; }
     Q_INVOKABLE void setCompatMode(bool on) { m_compatManual = on; }
-    Q_INVOKABLE void setCompatAutoDetect(bool on) { m_compatAutoEnabled = on; }
+    Q_INVOKABLE void setCompatAutoDetect(bool on);
     Q_INVOKABLE void setMergeStrategy(const QString &s);
     Q_INVOKABLE void setPrivacyMode(bool on);
 
@@ -208,6 +208,10 @@ private:
     void updatePrivacyState();        // recompute m_privacy from manual || auto
     void enterPrivacyMode();          // scrub buffers + clear pills
 
+    // Foreground-window monitor (app-switch reset + compat auto-detect).
+    void checkForegroundWindow();     // 250 ms poll
+    void updateCompatAuto(quintptr hwnd);
+
     // Modifier / layer state.
     bool m_shift = false;
     bool m_caps = false;
@@ -244,6 +248,8 @@ private:
     bool m_compatManual = false;
     bool m_compatAutoEnabled = true;
     bool m_compatAutoActive = false;
+    QTimer *m_foregroundTimer = nullptr;
+    quintptr m_lastForegroundHwnd = 0;
 
     // Audio + swipe.
     bool m_audioEnabled = false;

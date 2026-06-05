@@ -1,9 +1,20 @@
 #pragma once
 
+#include <QtGlobal>
+
 class QWindow;
 
 // Windows-specific window tuning. No-ops on other platforms.
 namespace winutil {
+
+// The foreground window handle as an integer (0 if unavailable / non-Windows).
+// Used only to detect app switches, so the exact value doesn't matter.
+quintptr foregroundWindowId();
+
+// True if the window's class or owning-process exe matches the curated
+// remote-desktop / IDE whitelist that needs compatibility-mode insertion
+// (BackSpace+retype rather than suffix-only). False on non-Windows / on error.
+bool windowNeedsCompatMode(quintptr hwnd);
 
 // Tag the process so the taskbar keeps our icon. Must run before the first
 // top-level window is created. (SetCurrentProcessExplicitAppUserModelID)
