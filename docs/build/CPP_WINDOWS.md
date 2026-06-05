@@ -39,8 +39,8 @@ Ordered by the commits that landed them on `cpp-rewrite`:
 | Vocab packs | done | Import-only `PackManager` (discover / enable / disable / import via the hardened path); enabled packs inject vocab into the n-gram tables. |
 | Password detection + privacy | done | UIA (+ Win32 fallback) auto-pauses learning on password fields; manual privacy toggle layers on top. |
 | Analytics tracking | done | Session + lifetime counters in `analytics.json`; the dashboard tiles (keystrokes/time/effort saved, acceptance) compute from real data. |
+| Compat auto-detect | done | 250 ms foreground poll; pill insertion switches to BackSpace+retype in remote-desktop / IDE windows (class + exe whitelist). |
 | Telemetry, auto-update, data backup | stub | No-op / minimal stubs so the reused QML never calls a missing method. |
-| Compat auto-detect | stub | Manual compat toggle works; foreground-window inspection is deferred. |
 
 Everything stubbed is present as a method on the bridge so the reused QML never
 hits a missing-member error at runtime.
