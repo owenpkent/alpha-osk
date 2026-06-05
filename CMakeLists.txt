@@ -30,6 +30,7 @@ add_executable(alpha-osk
     cpp/prediction/HybridPredictor.cpp
     cpp/prediction/PPMPredictor.cpp
     cpp/prediction/FuzzyRecognizer.cpp
+    cpp/prediction/SwipeRecognizer.cpp
 )
 
 target_include_directories(alpha-osk PRIVATE cpp)
@@ -44,7 +45,7 @@ target_link_libraries(alpha-osk PRIVATE
 )
 
 if(WIN32)
-    target_link_libraries(alpha-osk PRIVATE user32 shell32 ole32)
+    target_link_libraries(alpha-osk PRIVATE user32 shell32 ole32 winmm)
 endif()
 
 # In a dev build the exe loads qml/Main.qml and data/ from the source tree.

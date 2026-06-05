@@ -1,8 +1,11 @@
 #pragma once
 
+#include "prediction/SwipeRecognizer.h"
+
 #include <QHash>
 #include <QJsonObject>
 #include <QObject>
+#include <QPointF>
 #include <QString>
 #include <QStringList>
 #include <QVariant>
@@ -100,11 +103,13 @@ public:
     Q_INVOKABLE void undisprefer(const QString &word);
     Q_INVOKABLE void editPrediction(const QString &oldWord, const QString &newWord);
 
+    // ----- audio + swipe -------------------------------------------------
+    Q_INVOKABLE void setAudioEnabled(bool on);
+    Q_INVOKABLE void setSwipeEnabled(bool on);
+    Q_INVOKABLE void setSwipeLayout(const QVariant &centers);
+    Q_INVOKABLE void processSwipe(const QVariant &points);
+
     // ----- LATER feature stubs (keep the reused QML from erroring) --------
-    Q_INVOKABLE void setAudioEnabled(bool) {}
-    Q_INVOKABLE void setSwipeEnabled(bool) {}
-    Q_INVOKABLE void setSwipeLayout(const QVariant &) {}
-    Q_INVOKABLE void processSwipe(const QVariant &) {}
     Q_INVOKABLE void setDebugMode(bool) {}
     Q_INVOKABLE void clearDebugLog() {}
 
@@ -180,6 +185,7 @@ private slots:
 private:
     // State machine helpers.
     void pressChar(const QString &key, bool literal);
+    void playClick();
     void sendKeyWithActiveMods(const QString &keyName);
     void updatePredictions();
     void updateLayer();
@@ -220,6 +226,12 @@ private:
     bool m_compatManual = false;
     bool m_compatAutoEnabled = true;
     bool m_compatAutoActive = false;
+
+    // Audio + swipe.
+    bool m_audioEnabled = false;
+    QString m_clickWavPath;
+    SwipeRecognizer m_swipe;
+    bool m_swipeEnabled = false;
 
     // Layouts.
     QHash<QString, QJsonObject> m_layouts;

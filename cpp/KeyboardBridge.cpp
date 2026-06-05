@@ -13,6 +13,14 @@
 #include <QRegularExpression>
 #include <QStandardPaths>
 
+#ifdef Q_OS_WIN
+#  ifndef NOMINMAX
+#    define NOMINMAX
+#  endif
+#  include <windows.h>
+#  include <mmsystem.h>
+#endif
+
 #ifndef APP_VERSION_STR
 #define APP_VERSION_STR "0.0.0"
 #endif
@@ -71,6 +79,10 @@ KeyboardBridge::KeyboardBridge(QObject *parent)
             this, &KeyboardBridge::llmAvailableChanged);
 
     loadLayouts();
+
+    const QString clickPath = QDir(QDir(paths::dataDir()).filePath("sounds")).filePath("click.wav");
+    if (QFileInfo::exists(clickPath))
+        m_clickWavPath = clickPath;
 }
 
 KeyboardBridge::~KeyboardBridge()
@@ -172,6 +184,8 @@ void KeyboardBridge::pressChar(const QString &key, bool literal)
         return (m_shift || m_caps) ? key.toUpper() : key.toLower();
     };
 
+    playClick();
+
     // 1. Edit-mode intercept: route to the popup TextField, not the OS.
     if (m_editMode) {
         emit editKeyTyped(casedChar());
@@ -271,6 +285,8 @@ void KeyboardBridge::pressChar(const QString &key, bool literal)
 
 void KeyboardBridge::pressSpecialKey(const QString &keyName)
 {
+    playClick();
+
     if (m_editMode) {
         emit editSpecialPressed(keyName.toLower());
         return;
@@ -371,6 +387,82 @@ void KeyboardBridge::sendKeyWithActiveMods(const QString &keyName)
     if (m_alt)   mods << "alt";
     if (m_win)   mods << "win";
     m_synth->sendKey(keyName, mods.isEmpty() ? QStringList() : mods);
+}
+
+void KeyboardBridge::playClick()
+{
+#ifdef Q_OS_WIN
+    if (m_audioEnabled && !m_clickWavPath.isEmpty())
+        PlaySoundW(reinterpret_cast<LPCWSTR>(m_clickWavPath.utf16()), nullptr,
+                   SND_FILENAME | SND_ASYNC | SND_NODEFAULT);
+#endif
+}
+
+void KeyboardBridge::setAudioEnabled(bool on)
+{
+    if (on == m_audioEnabled)
+        return;
+    m_audioEnabled = on;
+    emit audioEnabledChanged(on);
+}
+
+void KeyboardBridge::setSwipeEnabled(bool on)
+{
+    if (on == m_swipeEnabled)
+        return;
+    m_swipeEnabled = on;
+    emit swipeEnabledChanged(on);
+}
+
+void KeyboardBridge::setSwipeLayout(const QVariant &centers)
+{
+    QHash<QChar, QPointF> layout;
+    const QVariantMap m = centers.toMap();
+    for (auto it = m.constBegin(); it != m.constEnd(); ++it) {
+        if (it.key().isEmpty())
+            continue;
+        const QVariantList xy = it.value().toList();
+        if (xy.size() >= 2)
+            layout.insert(it.key().at(0), QPointF(xy[0].toDouble(), xy[1].toDouble()));
+    }
+    m_swipe.setLayout(layout);
+}
+
+void KeyboardBridge::processSwipe(const QVariant &points)
+{
+    if (!m_swipeEnabled || m_privacy)
+        return;
+
+    QVector<QPointF> trace;
+    const QVariantList pts = points.toList();
+    for (const QVariant &e : pts) {
+        const QVariantList xy = e.toList();
+        if (xy.size() >= 2)
+            trace.append(QPointF(xy[0].toDouble(), xy[1].toDouble()));
+        else if (e.canConvert<QPointF>())
+            trace.append(e.toPointF());
+    }
+    if (trace.size() < 4)
+        return;
+
+    const QStringList results = m_swipe.decode(trace, m_predictor->ngram()->unigrams(), 8);
+    if (results.isEmpty())
+        return;
+
+    const QString top = results.first();
+    const QString capped = m_predictor->getCapitalized(top);
+    m_synth->sendText(capped + " ");
+    m_autoSpacePending = true;
+
+    m_predictor->learnFromSelection(m_contextBuffer, top);
+    m_contextBuffer += capped + " ";
+    m_sentenceBuffer += capped + " ";
+    boundContext(200);
+    m_currentWord.clear();
+    m_wordTypedUnderCaps = false;
+
+    m_predictions = displayCased(results);
+    emit predictionsChanged(m_predictions);
 }
 
 void KeyboardBridge::releaseStickyAll()

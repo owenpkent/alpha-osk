@@ -2,6 +2,9 @@
 #include "Paths.h"
 #include "WinUtil.h"
 #include "prediction/HybridPredictor.h"
+#include "prediction/SwipeRecognizer.h"
+
+#include <QPointF>
 
 #include <QApplication>
 #include <QQmlApplicationEngine>
@@ -43,6 +46,26 @@ int main(int argc, char *argv[])
             out << "predict(\"" << c << "\") -> "
                 << predictor.predict(c, 8).join(QStringLiteral(", ")) << "\n";
         }
+
+        // Swipe decode check: build a QWERTY layout + a synthetic t->h->e trace.
+        SwipeRecognizer sw;
+        QHash<QChar, QPointF> layout;
+        const char *rows[] = {"qwertyuiop", "asdfghjkl", "zxcvbnm"};
+        for (int r = 0; r < 3; ++r)
+            for (int col = 0; rows[r][col]; ++col)
+                layout.insert(QChar(rows[r][col]), QPointF(col, r));
+        sw.setLayout(layout);
+        const QVector<QPointF> vertices = {QPointF(4, 0), QPointF(5, 1), QPointF(2, 0)}; // t,h,e
+        QVector<QPointF> trace;
+        for (int i = 0; i + 1 < vertices.size(); ++i)
+            for (int s = 0; s < 8; ++s) {
+                const double t = s / 8.0;
+                trace.append(QPointF(vertices[i].x() + t * (vertices[i + 1].x() - vertices[i].x()),
+                                     vertices[i].y() + t * (vertices[i + 1].y() - vertices[i].y())));
+            }
+        trace.append(vertices.last());
+        out << "swipe t->h->e -> " << sw.decode(trace, predictor.ngram()->unigrams(), 8).join(", ") << "\n";
+
         out.flush();
         return 0;
     }
