@@ -216,6 +216,8 @@ void KeyboardBridge::pressChar(const QString &key, bool literal)
     checkPasswordFieldSync(); // close the 200 ms race before this key is learned
 
     const QString ch = casedChar();
+    if (!m_privacy)
+        m_analytics.recordKeystroke(ch);
 
     // 6. Punctuation-space cleanup: remove an auto-space we inserted.
     if (noSpaceBefore().contains(ch) && m_autoSpacePending
@@ -321,6 +323,7 @@ void KeyboardBridge::pressSpecialKey(const QString &keyName)
         if (lower == QLatin1String("space")) {
             if (!m_currentWord.isEmpty()) {
                 m_predictor->recordTypedWord(m_currentWord);
+                m_analytics.recordWordCompleted(m_currentWord);
                 m_predictor->learnCapitalization(m_currentWord, !m_wordTypedUnderCaps);
                 m_sentenceBuffer += m_currentWord + " ";
                 m_contextBuffer += m_currentWord + " ";
@@ -331,6 +334,7 @@ void KeyboardBridge::pressSpecialKey(const QString &keyName)
                 updatePredictions();
             }
         } else if (lower == QLatin1String("backspace")) {
+            m_analytics.recordBackspace();
             if (!m_currentWord.isEmpty()) {
                 m_currentWord.chop(1);
                 if (m_currentWord.isEmpty())
@@ -342,8 +346,10 @@ void KeyboardBridge::pressSpecialKey(const QString &keyName)
                 updatePredictions();
             }
         } else if (lower == QLatin1String("return")) {
-            if (!m_currentWord.isEmpty())
+            if (!m_currentWord.isEmpty()) {
+                m_analytics.recordWordCompleted(m_currentWord);
                 m_sentenceBuffer += m_currentWord + " ";
+            }
             if (!m_sentenceBuffer.trimmed().isEmpty())
                 m_predictor->learn(m_sentenceBuffer.trimmed());
             m_sentenceBuffer.clear();
@@ -613,6 +619,8 @@ void KeyboardBridge::updatePredictions()
 void KeyboardBridge::onPredictionsReady(const QStringList &predictions)
 {
     m_predictions = displayCased(predictions);
+    if (!m_predictions.isEmpty())
+        m_analytics.recordPredictionOffered();
     emit predictionsChanged(m_predictions);
 }
 
@@ -661,6 +669,11 @@ QStringList KeyboardBridge::displayCased(const QStringList &predictions) const
 
 void KeyboardBridge::pressPrediction(const QString &word)
 {
+    const int idx = m_predictions.indexOf(word);
+    const int rank = idx >= 0 ? idx + 1 : 1;
+    const int saved = word.size() - m_currentWord.size() + 1; // +1 for the auto-space
+    m_analytics.recordPredictionSelected(word, rank, qMax(0, saved));
+
     if (inCompatMode() && !m_currentWord.isEmpty()) {
         for (int i = 0; i < m_currentWord.size(); ++i)
             m_synth->sendKey(QStringLiteral("BackSpace"));
@@ -848,6 +861,16 @@ void KeyboardBridge::editPrediction(const QString &oldWord, const QString &newWo
 }
 
 // ----- misc stubs that need a real value ---------------------------------
+
+QVariant KeyboardBridge::getAnalytics() const
+{
+    return m_analytics.getSessionStats();
+}
+
+void KeyboardBridge::saveAnalytics()
+{
+    m_analytics.save();
+}
 
 QVariant KeyboardBridge::getVisualizationData() const
 {

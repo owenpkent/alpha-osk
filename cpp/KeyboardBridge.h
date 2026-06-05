@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Analytics.h"
 #include "SnippetStore.h"
 #include "prediction/SwipeRecognizer.h"
 
@@ -59,6 +60,7 @@ public:
 
     // Called from QApplication::aboutToQuit.
     void shutdown();
+    void saveAnalytics();
 
     // ----- MVP typing ----------------------------------------------------
     Q_INVOKABLE void pressKey(const QString &key);          // lowercases, then casing
@@ -122,7 +124,7 @@ public:
     Q_INVOKABLE void addSnippet();
     Q_INVOKABLE void moveSnippet(int index, int direction);
 
-    Q_INVOKABLE QVariant getAnalytics() const { return QVariantMap{}; }
+    Q_INVOKABLE QVariant getAnalytics() const;
     Q_INVOKABLE QVariant getVisualizationData() const;
     Q_INVOKABLE QVariant getWordContext(const QString &) const { return QVariantMap{}; }
 
@@ -251,6 +253,9 @@ private:
 
     // Snippets (quick-insert text).
     SnippetStore m_snippetStore;
+
+    // Typing analytics (session + lifetime).
+    TypingAnalytics m_analytics;
 
     // Layouts.
     QHash<QString, QJsonObject> m_layouts;

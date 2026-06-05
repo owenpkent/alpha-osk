@@ -1,3 +1,4 @@
+#include "Analytics.h"
 #include "KeyboardBridge.h"
 #include "Paths.h"
 #include "SnippetStore.h"
@@ -73,6 +74,17 @@ int main(int argc, char *argv[])
             labels << s.toMap().value("label").toString();
         out << "snippets -> " << labels.join(", ") << "\n";
 
+        TypingAnalytics analytics;
+        for (int i = 0; i < 10; ++i)
+            analytics.recordKeystroke("a");
+        analytics.recordPredictionOffered();
+        analytics.recordPredictionSelected("hello", 1, 4);
+        const QVariantMap st = analytics.getSessionStats();
+        out << "analytics -> keystrokes=" << st.value("totalKeystrokes").toInt()
+            << " saved=" << st.value("keystrokesSaved").toInt()
+            << " savings%=" << st.value("savingsPercent").toDouble()
+            << " acceptance%=" << st.value("acceptanceRate").toDouble() << "\n";
+
         out.flush();
         return 0;
     }
@@ -122,6 +134,7 @@ int main(int argc, char *argv[])
     QObject::connect(&app, &QApplication::aboutToQuit, [&bridge]() {
         if (bridge.autoSaveOnExit())
             bridge.savePredictionModel();
+        bridge.saveAnalytics();
         bridge.shutdown();
     });
 
