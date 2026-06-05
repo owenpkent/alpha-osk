@@ -1,3 +1,7 @@
+# C++ / Qt6 rewrite (cpp-rewrite branch) build output + toolchain marker
+/build-cpp/
+.toolchain-ready
+
 # Python
 __pycache__/
 *.py[cod]
