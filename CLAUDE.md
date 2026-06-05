@@ -30,9 +30,9 @@ stack (`rank` merge + autocorrect, reading the existing `ngram_model.json` /
 `ppm_model.json`), swipe typing, key-click audio (Win32 `PlaySound`), and the
 settings setter slots, snippets, vocabulary packs, password-field detection +
 privacy auto-pause, typing analytics, compat-mode auto-detect, opt-in telemetry,
-and the auto-update version check. **Stubbed / deferred**: data backup
-(export/import), and auto-update *install* (needs a signed C++ installer
-pipeline; the version check works).
+the auto-update version check, and data backup (export/import). The feature port
+is complete. **Deferred**: auto-update *install* (needs a signed C++ installer
+pipeline; the version check works) and packaging (WIN32 subsystem, installer).
 
 Build/run, toolchain, status table, and the C++ <- Python source map are in
 [`docs/build/CPP_WINDOWS.md`](docs/build/CPP_WINDOWS.md); the in-tree quick
