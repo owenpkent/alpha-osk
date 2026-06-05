@@ -40,7 +40,9 @@ Ordered by the commits that landed them on `cpp-rewrite`:
 | Password detection + privacy | done | UIA (+ Win32 fallback) auto-pauses learning on password fields; manual privacy toggle layers on top. |
 | Analytics tracking | done | Session + lifetime counters in `analytics.json`; the dashboard tiles (keystrokes/time/effort saved, acceptance) compute from real data. |
 | Compat auto-detect | done | 250 ms foreground poll; pill insertion switches to BackSpace+retype in remote-desktop / IDE windows (class + exe whitelist). |
-| Telemetry, auto-update, data backup | stub | No-op / minimal stubs so the reused QML never calls a missing method. |
+| Telemetry | done | Opt-in consent + anon_id lifecycle + weekly/quit submit; `DEFAULT_ENDPOINT` empty so no data leaves the machine. |
+| Auto-update | partial | Version check reports newer releases honestly; install is deferred until a signed C++ installer pipeline exists. |
+| Data backup | stub | `.zip` export/import not yet ported. |
 
 Everything stubbed is present as a method on the bridge so the reused QML never
 hits a missing-member error at runtime.
@@ -132,5 +134,6 @@ The algorithm deep-dives that governed the port are unchanged and still apply:
 Live keystroke synthesis into other apps and the interactive UI (swipe gesture,
 pill clicks, modifier holds) still need a human-in-the-loop pass — they cannot
 be verified headlessly. Next feature candidates: packaging (WIN32 subsystem to
-drop the console window, a clean `windeployqt` dist folder), then the remaining
-stubbed features (telemetry, auto-update, data backup).
+drop the console window, a clean `windeployqt` dist folder + a signed installer
+pipeline -- which also unblocks auto-update install), then data backup (the last
+fully-stubbed feature).

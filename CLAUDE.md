@@ -29,9 +29,10 @@ synthesis, the full typing state machine, the n-gram + PPM + fuzzy prediction
 stack (`rank` merge + autocorrect, reading the existing `ngram_model.json` /
 `ppm_model.json`), swipe typing, key-click audio (Win32 `PlaySound`), and the
 settings setter slots, snippets, vocabulary packs, password-field detection +
-privacy auto-pause, typing analytics, and compat-mode auto-detect. **Stubbed**
-(no-op so the reused QML never calls a missing method): telemetry, auto-update,
-data backup.
+privacy auto-pause, typing analytics, compat-mode auto-detect, opt-in telemetry,
+and the auto-update version check. **Stubbed / deferred**: data backup
+(export/import), and auto-update *install* (needs a signed C++ installer
+pipeline; the version check works).
 
 Build/run, toolchain, status table, and the C++ <- Python source map are in
 [`docs/build/CPP_WINDOWS.md`](docs/build/CPP_WINDOWS.md); the in-tree quick
