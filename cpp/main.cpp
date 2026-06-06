@@ -9,13 +9,18 @@
 
 #include <QPointF>
 
+#include <QAction>
 #include <QApplication>
 #include <QDir>
+#include <QIcon>
+#include <QMenu>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
 #include <QQmlError>
 #include <QQuickStyle>
+#include <QSystemTrayIcon>
 #include <QTextStream>
+#include <QTimer>
 #include <QUrl>
 #include <QWindow>
 #include <QtGlobal>
@@ -103,6 +108,13 @@ int main(int argc, char *argv[])
     // without warnings -- matches QT_QUICK_CONTROLS_STYLE=Basic in the Python app.
     QQuickStyle::setStyle(QStringLiteral("Basic"));
 
+    // App-wide icon for the window, Alt+Tab, and (below) the system tray. The
+    // exe's embedded icon (Explorer / taskbar at launch) comes from the .rc
+    // resource compiled in by CMake; this drives the live Qt windows. Empty
+    // QIcon if no asset is found, which Qt treats as "use the default".
+    const QIcon appIcon(paths::iconPath());
+    app.setWindowIcon(appIcon);
+
     KeyboardBridge bridge;
 
     QQmlApplicationEngine engine;
@@ -140,6 +152,50 @@ int main(int argc, char *argv[])
                              });
         }
     }
+
+    // --- System tray icon ---
+    // Mirrors keyboard_app.py: single click toggles show/hide, double click
+    // minimizes to the taskbar. On Windows Qt delivers Trigger then DoubleClick
+    // for a double click, so a single click is held in a timer and only fires
+    // if no DoubleClick arrives within the system's double-click interval.
+    QSystemTrayIcon tray(appIcon, &app);
+    QMenu trayMenu;
+    QAction *showAction = trayMenu.addAction(QStringLiteral("Show / Hide"));
+    trayMenu.addSeparator();
+    QAction *quitAction = trayMenu.addAction(QStringLiteral("Quit Alpha-OSK"));
+
+    auto toggleVisibility = [root]() {
+        if (!root)
+            return;
+        if (root->isVisible()) {
+            root->hide();
+        } else {
+            root->show();
+            root->raise();
+        }
+    };
+
+    QTimer traySingleClickTimer;
+    traySingleClickTimer.setSingleShot(true);
+    traySingleClickTimer.setInterval(QApplication::doubleClickInterval());
+    QObject::connect(&traySingleClickTimer, &QTimer::timeout, &app, toggleVisibility);
+
+    QObject::connect(showAction, &QAction::triggered, &app, toggleVisibility);
+    QObject::connect(quitAction, &QAction::triggered, &app, &QApplication::quit);
+    QObject::connect(&tray, &QSystemTrayIcon::activated, &app,
+                     [&traySingleClickTimer, root](QSystemTrayIcon::ActivationReason reason) {
+                         if (reason == QSystemTrayIcon::Trigger) {
+                             traySingleClickTimer.start();
+                         } else if (reason == QSystemTrayIcon::DoubleClick) {
+                             traySingleClickTimer.stop();
+                             if (root)
+                                 root->showMinimized();
+                         }
+                     });
+
+    tray.setContextMenu(&trayMenu);
+    tray.setToolTip(QStringLiteral("Alpha-OSK"));
+    tray.show();
 
     QObject::connect(&app, &QApplication::aboutToQuit, [&bridge]() {
         if (bridge.autoSaveOnExit())

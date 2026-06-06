@@ -26,6 +26,7 @@ Ordered by the commits that landed them on `cpp-rewrite`:
 | Area | State | Notes |
 |---|---|---|
 | App bootstrap | done | `QApplication` + `QQmlApplicationEngine`, `keyboard` context property, no-focus window flags (`WS_EX_NOACTIVATE` + always-on-top), `AppUserModelID`, high-DPI passthrough, save-then-shutdown on quit. |
+| App icon + system tray | done | `setWindowIcon` (live window / Alt+Tab) + `QSystemTrayIcon` (single-click show/hide, double-click minimize, Show-Hide / Quit menu) mirroring `keyboard_app.py`; embedded exe icon via a CMake-generated Windows `.rc` (resource ID 1 -> `build/windows/alpha-osk.ico`). Asset resolution (`Paths.cpp::iconPath()`) mirrors the Python `_icon_path()`. |
 | Key synthesis | done | Behaviour-identical Win32 `SendInput` port: scancode-first ASCII + chords, Unicode fallback, dead-key / AltGr / Caps-Lock bail ladder, `EXTENDEDKEY`, sticky `hold/release_modifier`, `replaceText` (Shift+Left selection, BackSpace+retype in terminals). |
 | Typing state machine | done | Press flow, word-boundary handling, backspace buffer-trim + mid-word rehydration, suffix-only pill insertion (+ replace / compat fallbacks), sticky auto-release with the nav-key exception, caps/shift pill mirroring. |
 | Prediction: n-gram | done | Unigram/bigram/trigram linear interpolation, completion + next-word, learn-on-type, candidate promotion, recency decay, suppression/boost, "I"-family caps. Reads the existing `ngram_model.json`. |
@@ -133,6 +134,8 @@ The algorithm deep-dives that governed the port are unchanged and still apply:
 
 Live keystroke synthesis into other apps and the interactive UI (swipe gesture,
 pill clicks, modifier holds) still need a human-in-the-loop pass — they cannot
-be verified headlessly. The feature port is complete; what remains is packaging
-(WIN32 subsystem to drop the console window, a clean `windeployqt` dist folder +
-a signed installer pipeline), which also unblocks auto-update *install*.
+be verified headlessly. The feature port is complete; what remains is the rest
+of packaging (the WIN32 GUI subsystem to drop the console window, a clean
+`windeployqt` dist folder, and a signed installer pipeline), which also unblocks
+auto-update *install*. The embedded exe icon is already wired in (a
+CMake-generated `.rc`), so the installer / shortcut icons will inherit it.

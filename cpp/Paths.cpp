@@ -4,6 +4,7 @@
 #include <QDir>
 #include <QFileInfo>
 #include <QStandardPaths>
+#include <QStringList>
 
 #ifndef APP_PROJECT_ROOT
 #define APP_PROJECT_ROOT ""
@@ -66,6 +67,28 @@ QString dataDir()
 QString qmlMainPath()
 {
     return QDir(projectRoot()).filePath(QStringLiteral("qml/Main.qml"));
+}
+
+QString iconPath()
+{
+    const QDir root(projectRoot());
+    QStringList candidates;
+#if defined(Q_OS_WIN)
+    // .ico is the native multi-resolution Win32 format. Same assets the
+    // PyInstaller spec / NSIS installer embed.
+    candidates << root.filePath(QStringLiteral("build/windows/alpha-osk.ico"))
+               << root.filePath(QStringLiteral("alpha-osk.ico"));
+#elif defined(Q_OS_MAC)
+    candidates << root.filePath(QStringLiteral("build/macos/alpha-osk.icns"));
+#endif
+    // PNG fallback for every platform (Linux has no native icon container).
+    candidates << root.filePath(QStringLiteral("assets/logo-1024.png"));
+
+    for (const QString &p : candidates) {
+        if (QFileInfo::exists(p))
+            return p;
+    }
+    return QString();
 }
 
 } // namespace paths

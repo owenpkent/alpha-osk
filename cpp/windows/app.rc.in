@@ -1,0 +1,10 @@
+// Generated from app.rc.in by CMake (configure_file, @ONLY).
+//
+// Embeds the Alpha-OSK icon as the application icon for alpha-osk.exe so
+// Explorer, the taskbar, and the Alt+Tab thumbnail show it. Windows uses the
+// lowest-numbered ICON resource as the executable's icon, so this is ID 1.
+//
+// This only sets the *file* icon. The live Qt window / tray icon is set in
+// main.cpp via app.setWindowIcon(), and the taskbar identity is pinned by
+// winutil::setAppUserModelId().
+1 ICON "@APP_ICON_ICO@"

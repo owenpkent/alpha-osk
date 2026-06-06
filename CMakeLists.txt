@@ -54,6 +54,20 @@ target_link_libraries(alpha-osk PRIVATE
 
 if(WIN32)
     target_link_libraries(alpha-osk PRIVATE user32 shell32 ole32 oleaut32 winmm uiautomationcore)
+
+    # Embed the app icon so Explorer / the taskbar show it for alpha-osk.exe.
+    # The icon path is baked into the generated .rc as an absolute path, so the
+    # resource compiler finds it regardless of the build directory. (Does NOT
+    # switch to the WIN32 GUI subsystem -- the console subsystem is kept so
+    # --selftest can still write to stdout.)
+    enable_language(RC)
+    set(APP_ICON_ICO "${CMAKE_CURRENT_SOURCE_DIR}/build/windows/alpha-osk.ico")
+    if(EXISTS "${APP_ICON_ICO}")
+        configure_file(cpp/windows/app.rc.in "${CMAKE_CURRENT_BINARY_DIR}/app.rc" @ONLY)
+        target_sources(alpha-osk PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/app.rc")
+    else()
+        message(WARNING "App icon not found at ${APP_ICON_ICO}; exe will use the default icon.")
+    endif()
 endif()
 
 # In a dev build the exe loads qml/Main.qml and data/ from the source tree.

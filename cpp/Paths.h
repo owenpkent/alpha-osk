@@ -27,4 +27,10 @@ QString projectRoot();
 QString dataDir();          // projectRoot()/data
 QString qmlMainPath();      // projectRoot()/qml/Main.qml
 
+// App icon for the window / taskbar / system tray. Mirrors the Python
+// _icon_path(): prefer the platform-native multi-resolution asset (.ico on
+// Windows, .icns on macOS), then fall back to the 1024px PNG so a stripped dev
+// checkout still gets some icon. Empty string if nothing is found.
+QString iconPath();
+
 } // namespace paths

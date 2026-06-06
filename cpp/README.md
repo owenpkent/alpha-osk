@@ -21,6 +21,12 @@ Implemented and verified:
   `qml/Main.qml`, the `keyboard` context property, no-focus window flags
   (`WS_EX_NOACTIVATE` + always-on-top), `AppUserModelID`, high-DPI passthrough,
   save-then-shutdown on quit. (`main.cpp`, `WinUtil.*`)
+- **App icon + system tray** -- `setWindowIcon` for the live window / Alt+Tab,
+  a `QSystemTrayIcon` (single click toggles show/hide, double click minimizes,
+  Show-Hide / Quit menu), and the embedded exe icon via a CMake-generated
+  Windows `.rc` (resource ID 1, points at `build/windows/alpha-osk.ico`).
+  Icon asset resolution mirrors the Python `_icon_path()`. (`main.cpp`,
+  `Paths.cpp` `iconPath()`, `cpp/windows/app.rc.in`, `CMakeLists.txt`)
 - **Key synthesis** -- behavior-identical port of the Win32 `SendInput` backend:
   scancode-first ASCII + chords (so input reaches Blender/games and relays over
   RDP), Unicode fallback, the full dead-key / AltGr / Caps-Lock bail ladder,
