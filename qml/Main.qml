@@ -873,42 +873,9 @@ Window {
                     }
                 }
 
-                // Clear-context button. Wipes the prediction context
-                // buffers (current word, sentence buffer, sliding
-                // 200-char context) so the next pill is computed from
-                // scratch. App-switch already does this automatically,
-                // but the foreground-window poll misses things like
-                // tab changes inside a browser or a focus change to a
-                // child window that keeps the same hwnd, so a manual
-                // override is the escape hatch.
-                Rectangle {
-                    width: 28
-                    height: 24
-                    radius: 4
-                    color: clearCtxBtn.containsMouse ? "#444" : "transparent"
-
-                    ToolTip.visible: clearCtxBtn.containsMouse
-                    ToolTip.text: qsTr("Clear suggestion context")
-                    ToolTip.delay: 400
-
-                    Text {
-                        anchors.centerIn: parent
-                        text: "⟲"
-                        font.pixelSize: 16
-                        color: "#999"
-                    }
-
-                    MouseArea {
-                        id: clearCtxBtn
-                        anchors.fill: parent
-                        hoverEnabled: true
-                        cursorShape: Qt.PointingHandCursor
-                        onClicked: {
-                            if (keyboard) keyboard.resetContext()
-                            contextClearedToast.flash()
-                        }
-                    }
-                }
+                // (Clear-context button moved into the prediction bar below —
+                // it's a bigger, easier target parked at the right end of the
+                // suggestion pills. See `clearCtxPill` in predBar.)
 
                 // Settings button (gear icon) - opens unified settings
                 Rectangle {
@@ -1027,6 +994,10 @@ Window {
                 property real predFontSize: Math.max(14, root.keyH * 0.36)
                 property real predHorizontalPad: Math.max(24, root.keyW * 0.58)
                 property real predMinWidth: Math.max(48, root.keyW * 1.25)
+                // Right-edge zone reserved for the clear-context button so the
+                // centered pill row never slides under it. Subtracted from both
+                // sides of the pill row's available width to keep pills centered.
+                property real clearCtxReserve: predPillHeight + 16
                 Layout.preferredHeight: root.suggestionsEnabled ? predPillHeight + 4 : 0
                 Layout.bottomMargin: root.suggestionsEnabled ? 4 : 0
                 clip: true
@@ -1070,7 +1041,7 @@ Window {
                             property real maxPillWidth: {
                                 var count = root.predictions.length
                                 if (count <= 0) return naturalWidth
-                                var avail = root.width - 32 - (count - 1) * predRow.spacing
+                                var avail = root.width - 32 - predBar.clearCtxReserve * 2 - (count - 1) * predRow.spacing
                                 return Math.max(predBar.predPillHeight * 1.4, avail / count)
                             }
                             width: Math.min(naturalWidth, maxPillWidth)
@@ -1136,6 +1107,56 @@ Window {
                         }
                     }
 
+                }
+
+                // Clear-context button parked at the right end of the
+                // suggestion bar: a big, easy target that wipes the prediction
+                // context buffers (current word, sentence buffer, sliding
+                // 200-char context) so the next pill is computed from scratch.
+                // App-switch clears context automatically, but the
+                // foreground-window poll misses things like browser tab changes
+                // or a focus change to a child window with the same hwnd, so
+                // this is the manual escape hatch. Hidden when suggestions are
+                // off (the bar collapses to zero height anyway).
+                Rectangle {
+                    id: clearCtxPill
+                    visible: root.suggestionsEnabled
+                    anchors.right: parent.right
+                    anchors.rightMargin: 8
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: predBar.predPillHeight
+                    height: predBar.predPillHeight
+                    radius: width / 2
+                    color: clearCtxBtn.containsMouse ? Qt.lighter(root.themeKeyColor, 1.3)
+                                                     : Qt.rgba(0, 0, 0, 0.18)
+                    border.color: clearCtxBtn.containsMouse ? root.themeAccent
+                                                            : Qt.rgba(1, 1, 1, 0.18)
+                    border.width: 1
+
+                    ToolTip.visible: clearCtxBtn.containsMouse
+                    ToolTip.text: qsTr("Clear suggestion context")
+                    ToolTip.delay: 400
+
+                    Text {
+                        anchors.centerIn: parent
+                        text: "⟲"
+                        font.pixelSize: predBar.predFontSize * 1.35
+                        color: clearCtxBtn.containsMouse ? root.themeTextColor : "#bbb"
+                    }
+
+                    MouseArea {
+                        id: clearCtxBtn
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: {
+                            if (keyboard) keyboard.resetContext()
+                            contextClearedToast.flash()
+                        }
+                    }
+
+                    Behavior on color { ColorAnimation { duration: 100 } }
+                    Behavior on border.color { ColorAnimation { duration: 100 } }
                 }
 
             }
