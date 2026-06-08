@@ -867,13 +867,24 @@ void KeyboardBridge::updatePrivacyState()
     emit privacyModeChanged(effective);
 }
 
-void KeyboardBridge::enterPrivacyMode()
+void KeyboardBridge::resetTypingContext()
 {
+    // Shared by the app-switch and focused-element-switch paths below: once the
+    // caret moves to a different window or control, the partial word / sentence
+    // / context buffers describe text that's no longer where the caret is, so
+    // predictions built from them would be wrong. Same fields enterPrivacyMode
+    // scrubs (for the different reason of keeping sensitive input out).
     m_currentWord.clear();
     m_contextBuffer.clear();
     m_sentenceBuffer.clear();
+    m_wordTypedUnderCaps = false;
     m_predictions.clear();
     emit predictionsChanged({});
+}
+
+void KeyboardBridge::enterPrivacyMode()
+{
+    resetTypingContext();
 }
 
 void KeyboardBridge::checkForegroundWindow()
@@ -881,14 +892,26 @@ void KeyboardBridge::checkForegroundWindow()
     const quintptr hwnd = winutil::foregroundWindowId();
     if (hwnd == 0)
         return; // detection unavailable on this platform
-    if (hwnd != m_lastForegroundHwnd && m_lastForegroundHwnd != 0) {
+    const bool windowSwitched = (hwnd != m_lastForegroundHwnd && m_lastForegroundHwnd != 0);
+    if (windowSwitched) {
         // App switch: the typing context is stale for the new window.
-        m_predictions.clear();
-        m_currentWord.clear();
-        m_wordTypedUnderCaps = false;
-        m_sentenceBuffer.clear();
-        m_contextBuffer.clear();
-        emit predictionsChanged({});
+        resetTypingContext();
+    }
+    // Element-level focus: catches the caret moving between two controls
+    // *inside the same window* (e.g. two text boxes on one web page), which the
+    // window-handle check above is blind to. Windows/UIA only; empty elsewhere,
+    // making this a no-op. Empty also means "couldn't read it" — we leave the
+    // baseline alone so a transient UIA hiccup never wipes context.
+    const QString token = passworddetect::focusToken();
+    if (!token.isEmpty()) {
+        if (!windowSwitched && !m_lastFocusToken.isEmpty() && token != m_lastFocusToken) {
+            resetTypingContext();
+        }
+        m_lastFocusToken = token;
+    } else if (windowSwitched) {
+        // Window changed but the element is unreadable; drop the stale token so
+        // the next readable one re-seeds instead of mismatching.
+        m_lastFocusToken.clear();
     }
     updateCompatAuto(hwnd);
     m_lastForegroundHwnd = hwnd;

@@ -209,6 +209,7 @@ private:
     void setAutoPrivacy(bool detected);
     void updatePrivacyState();        // recompute m_privacy from manual || auto
     void enterPrivacyMode();          // scrub buffers + clear pills
+    void resetTypingContext();        // drop stale word/sentence/context + pills
 
     // Foreground-window monitor (app-switch reset + compat auto-detect).
     void checkForegroundWindow();     // 250 ms poll
@@ -252,6 +253,12 @@ private:
     bool m_compatAutoActive = false;
     QTimer *m_foregroundTimer = nullptr;
     quintptr m_lastForegroundHwnd = 0;
+    // Identity of the last-focused control (UIA RuntimeId, empty elsewhere).
+    // Catches focus moving between two text boxes in the same window, which
+    // m_lastForegroundHwnd can't see. Empty means "no baseline yet / unknown"
+    // (focusToken() never returns empty for a real element), so an empty
+    // reading never triggers a wipe.
+    QString m_lastFocusToken;
 
     // Audio + swipe.
     bool m_audioEnabled = false;

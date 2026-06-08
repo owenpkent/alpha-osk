@@ -71,6 +71,7 @@ class TestForegroundWindow:
         bridge._predictions = ["hello"]
 
         monkeypatch.setattr(bridge, "_get_foreground_window_id", lambda: 200)
+        monkeypatch.setattr("src.keyboard_bridge.focused_element_token", lambda: None)
         bridge._check_foreground_window()
 
         assert bridge._current_word == ""
@@ -84,6 +85,7 @@ class TestForegroundWindow:
         bridge._last_foreground_hwnd = 0
         bridge._current_word = "hel"
         monkeypatch.setattr(bridge, "_get_foreground_window_id", lambda: 42)
+        monkeypatch.setattr("src.keyboard_bridge.focused_element_token", lambda: None)
         bridge._check_foreground_window()
         assert bridge._current_word == "hel"          # preserved
         assert bridge._last_foreground_hwnd == 42     # but seeded
@@ -96,6 +98,60 @@ class TestForegroundWindow:
         bridge._check_foreground_window()
         assert bridge._current_word == "hel"
         assert bridge._last_foreground_hwnd == 100    # unchanged
+
+    def test_focus_token_change_clears_same_window(self, bridge: KeyboardBridge, monkeypatch):
+        """Same window, focus moved to a different control (e.g. another text
+        box) → context resets even though the window handle is unchanged."""
+        bridge._last_foreground_hwnd = 100
+        bridge._last_focus_token = "A"
+        bridge._current_word = "hel"
+        bridge._context_buffer = "earlier "
+        bridge._sentence_buffer = "earlier "
+        bridge._predictions = ["hello"]
+
+        monkeypatch.setattr(bridge, "_get_foreground_window_id", lambda: 100)
+        monkeypatch.setattr("src.keyboard_bridge.focused_element_token", lambda: "B")
+        bridge._check_foreground_window()
+
+        assert bridge._current_word == ""
+        assert bridge._context_buffer == ""
+        assert bridge._sentence_buffer == ""
+        assert bridge._predictions == []
+        assert bridge._last_focus_token == "B"
+        assert bridge._last_foreground_hwnd == 100    # window never changed
+
+    def test_focus_token_same_preserves_context(self, bridge: KeyboardBridge, monkeypatch):
+        """Caret staying in the same control (same token) must not wipe."""
+        bridge._last_foreground_hwnd = 100
+        bridge._last_focus_token = "A"
+        bridge._current_word = "hel"
+        monkeypatch.setattr(bridge, "_get_foreground_window_id", lambda: 100)
+        monkeypatch.setattr("src.keyboard_bridge.focused_element_token", lambda: "A")
+        bridge._check_foreground_window()
+        assert bridge._current_word == "hel"
+        assert bridge._last_focus_token == "A"
+
+    def test_focus_token_first_sighting_seeds_only(self, bridge: KeyboardBridge, monkeypatch):
+        """First time we read a token (baseline None) seeds it without wiping."""
+        bridge._last_foreground_hwnd = 100
+        bridge._last_focus_token = None
+        bridge._current_word = "hel"
+        monkeypatch.setattr(bridge, "_get_foreground_window_id", lambda: 100)
+        monkeypatch.setattr("src.keyboard_bridge.focused_element_token", lambda: "A")
+        bridge._check_foreground_window()
+        assert bridge._current_word == "hel"          # preserved
+        assert bridge._last_focus_token == "A"        # seeded
+
+    def test_focus_token_unreadable_keeps_baseline(self, bridge: KeyboardBridge, monkeypatch):
+        """A None token ('don't know') must not wipe or clobber the baseline."""
+        bridge._last_foreground_hwnd = 100
+        bridge._last_focus_token = "A"
+        bridge._current_word = "hel"
+        monkeypatch.setattr(bridge, "_get_foreground_window_id", lambda: 100)
+        monkeypatch.setattr("src.keyboard_bridge.focused_element_token", lambda: None)
+        bridge._check_foreground_window()
+        assert bridge._current_word == "hel"
+        assert bridge._last_focus_token == "A"        # unchanged
 
 
 class TestModifierState:

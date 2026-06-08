@@ -96,6 +96,35 @@ def is_password_field() -> bool:
         return False
 
 
+def focused_element_token() -> Optional[str]:
+    """Return a stable identity string for the focused UI element, or None.
+
+    Distinguishes *which control* has focus, finer-grained than
+    ``GetForegroundWindow``: two text boxes inside the same top-level
+    window (e.g. two ``<input>`` fields on one web page) are different
+    elements with different tokens, but the caret moving within one box
+    keeps the same token.
+
+    Returns ``None`` on any platform/detector without element-level focus
+    tracking (currently Windows UIA only), when no element is focused, or
+    on any internal failure.  Callers treat ``None`` as "don't know" and
+    leave state untouched, so a transient failure never wipes context.
+    """
+    global _detector
+    if _detector is None:
+        _detector = _create_detector()
+    token = getattr(_detector, "focus_token", None)
+    if not callable(token):
+        return None
+    try:
+        result = token()
+    except Exception:
+        return None
+    # getattr erases the type; narrow it back so a misbehaving detector
+    # can't hand us a non-string.
+    return result if isinstance(result, str) else None
+
+
 def shutdown() -> None:
     """Release any resources held by the active detector.
 
@@ -458,6 +487,46 @@ if sys.platform == "win32":
                 # us) must never raise into the caller.
                 pass
 
+    # SAFEARRAY helpers (oleaut32) — used to read the int array a UIA
+    # RuntimeId comes back as.  argtypes are pinned so ctypes marshals the
+    # pointers correctly on 64-bit.
+    _oleaut32 = ctypes.windll.oleaut32
+    _oleaut32.SafeArrayGetLBound.argtypes = [
+        ctypes.c_void_p, ctypes.c_uint, ctypes.POINTER(ctypes.c_long)]
+    _oleaut32.SafeArrayGetLBound.restype = ctypes.c_long
+    _oleaut32.SafeArrayGetUBound.argtypes = [
+        ctypes.c_void_p, ctypes.c_uint, ctypes.POINTER(ctypes.c_long)]
+    _oleaut32.SafeArrayGetUBound.restype = ctypes.c_long
+    _oleaut32.SafeArrayGetElement.argtypes = [
+        ctypes.c_void_p, ctypes.POINTER(ctypes.c_long),
+        ctypes.POINTER(ctypes.c_long)]
+    _oleaut32.SafeArrayGetElement.restype = ctypes.c_long
+    _oleaut32.SafeArrayDestroy.argtypes = [ctypes.c_void_p]
+    _oleaut32.SafeArrayDestroy.restype = ctypes.c_long
+
+    def _safearray_i4_to_str(psa: ctypes.c_void_p) -> Optional[str]:
+        """Read a one-dimensional SAFEARRAY of VT_I4 into a 'a,b,c' string.
+
+        Returns None on any SafeArray error.  Does not free ``psa`` — the
+        caller owns it and must SafeArrayDestroy.
+        """
+        lb = ctypes.c_long()
+        ub = ctypes.c_long()
+        if _oleaut32.SafeArrayGetLBound(psa, 1, ctypes.byref(lb)) != 0:
+            return None
+        if _oleaut32.SafeArrayGetUBound(psa, 1, ctypes.byref(ub)) != 0:
+            return None
+        parts = []
+        idx = ctypes.c_long()
+        val = ctypes.c_long()
+        for i in range(lb.value, ub.value + 1):
+            idx.value = i
+            if _oleaut32.SafeArrayGetElement(
+                    psa, ctypes.byref(idx), ctypes.byref(val)) != 0:
+                return None
+            parts.append(str(val.value))
+        return ",".join(parts) if parts else None
+
     class _WindowsUIADetector:
         """Detect password fields via IUIAutomation COM interface."""
 
@@ -545,6 +614,50 @@ if sys.platform == "win32":
 
             except Exception:
                 return False
+            finally:
+                _com_release(element)
+
+        def focus_token(self) -> Optional[str]:
+            """Stable identity string for the focused element, or None.
+
+            Uses the element's UIA RuntimeId — an int array UIA keeps
+            stable for the element's lifetime and unique on the desktop.
+            It's the right signal for "did focus move to a different
+            control": unlike the element's screen rectangle it survives
+            scrolling and window moves, and unlike the window handle it
+            differs between two text boxes in the same browser window.
+            """
+            if not self.available or not self._automation:
+                return None
+
+            element = ctypes.c_void_p()
+            try:
+                # IUIAutomation::GetFocusedElement — vtable index 8
+                get_focused = _vtable_func(
+                    self._automation, 8,
+                    ctypes.c_long, ctypes.POINTER(ctypes.c_void_p),
+                )
+                hr = get_focused(self._automation, ctypes.byref(element))
+                if hr != 0 or not element:
+                    return None
+
+                # IUIAutomationElement::GetRuntimeId — vtable index 4.
+                # Hands back a freshly-allocated SAFEARRAY we must destroy.
+                psa = ctypes.c_void_p()
+                get_rid = _vtable_func(
+                    element, 4,
+                    ctypes.c_long, ctypes.POINTER(ctypes.c_void_p),
+                )
+                hr = get_rid(element, ctypes.byref(psa))
+                if hr != 0 or not psa:
+                    return None
+                try:
+                    return _safearray_i4_to_str(psa)
+                finally:
+                    _oleaut32.SafeArrayDestroy(psa)
+
+            except Exception:
+                return None
             finally:
                 _com_release(element)
 

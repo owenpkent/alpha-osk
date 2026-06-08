@@ -33,7 +33,7 @@ from .__version__ import __version__ as APP_VERSION
 from .analytics import TypingAnalytics
 from .platform import CURRENT_PLATFORM, create_key_synthesizer
 from .platform.base import KeySynthesizerBase
-from .platform.password_detect import is_password_field
+from .platform.password_detect import focused_element_token, is_password_field
 from .prediction import HybridPredictor, SwipeRecognizer
 from .snippets import SnippetStore
 from .telemetry import TelemetryClient
@@ -498,6 +498,11 @@ class KeyboardBridge(QObject):
         # switches apps. WS_EX_NOACTIVATE means onActiveChanged doesn't fire
         # reliably in QML, so we poll from Python instead.
         self._last_foreground_hwnd = 0
+        # Identity of the last-focused UI element (UIA RuntimeId on Windows,
+        # None elsewhere). Lets the foreground poll notice focus moving
+        # between two controls inside the *same* window — e.g. two text
+        # boxes on one web page — which the window-handle check can't see.
+        self._last_focus_token: Optional[str] = None
         self._foreground_timer = QTimer(self)
         self._foreground_timer.setInterval(250)
         self._foreground_timer.timeout.connect(self._check_foreground_window)
@@ -2039,15 +2044,32 @@ class KeyboardBridge(QObject):
         hwnd = self._get_foreground_window_id()
         if hwnd == 0:
             return  # detection unavailable on this platform
-        if hwnd != self._last_foreground_hwnd and self._last_foreground_hwnd != 0:
+        window_switched = (
+            hwnd != self._last_foreground_hwnd
+            and self._last_foreground_hwnd != 0
+        )
+        if window_switched:
             # Foreground window changed — user switched apps
-            self._predictions = []
-            self._current_word = ""
-            self._word_typed_under_caps_lock = False
-            self._sentence_buffer = ""
-            self._context_buffer = ""
-            self.predictionsChanged.emit([])
+            self._reset_typing_context()
             _logger.debug("Foreground window changed — predictions cleared")
+        # Element-level focus: catches the caret moving between two controls
+        # *inside the same window* (e.g. two text boxes on one web page),
+        # which the window-handle check above is blind to. Windows/UIA only;
+        # focused_element_token() returns None elsewhere, making this a no-op.
+        # None means "couldn't read it" — we leave the baseline alone so a
+        # transient UIA hiccup never wipes context.
+        token = focused_element_token()
+        if token is not None:
+            if (not window_switched
+                    and self._last_focus_token is not None
+                    and token != self._last_focus_token):
+                self._reset_typing_context()
+                _logger.debug("Focused element changed — predictions cleared")
+            self._last_focus_token = token
+        elif window_switched:
+            # Window changed but the element is unreadable; drop the stale
+            # token so the next readable one re-seeds instead of mismatching.
+            self._last_focus_token = None
         # Update auto-detect for compat mode on every poll (cheap on
         # Windows — class lookup is a syscall, process check only fires
         # on class miss).  Auto-active toggling is debounced internally
@@ -2162,14 +2184,27 @@ class KeyboardBridge(QObject):
             else:
                 _logger.info("Password field cleared — privacy mode OFF")
 
-    def _enter_privacy_mode(self) -> None:
-        """Scrub all buffers to prevent sensitive data from leaking to the model."""
+    def _reset_typing_context(self) -> None:
+        """Drop all in-progress typing state because the context went stale.
+
+        Shared by the app-switch and focused-element-switch paths in
+        ``_check_foreground_window``: once the caret moves to a different
+        window or control, the partial word / sentence / context buffers
+        describe text that's no longer where the caret is, so predictions
+        built from them would be wrong.  Clears the same fields as
+        ``_enter_privacy_mode`` (which scrubs for the different reason of
+        keeping sensitive input out of the model).
+        """
         self._predictions = []
-        self.predictionsChanged.emit([])
         self._current_word = ""
         self._word_typed_under_caps_lock = False
-        self._context_buffer = ""
         self._sentence_buffer = ""
+        self._context_buffer = ""
+        self.predictionsChanged.emit([])
+
+    def _enter_privacy_mode(self) -> None:
+        """Scrub all buffers to prevent sensitive data from leaking to the model."""
+        self._reset_typing_context()
 
     @Slot(bool)
     def setPrivacyMode(self, enabled: bool) -> None:
