@@ -290,13 +290,18 @@ void KeyboardBridge::pressChar(const QString &key, bool literal)
 
     // 8. Modifier-chord branch: this keystroke is a shortcut, not text.
     if (m_ctrl || m_alt || m_win) {
-        sendKeyWithActiveMods(key.toLower());
+        sendKeyWithActiveMods(key.toLower(), keyHoldSeconds());
         releaseStickyAll();
         return;
     }
 
-    // 9. Normal text path.
-    m_synth->sendText(ch);
+    // 9. Normal text path. In game mode send the single char as a held key so a
+    // frame-polling game observes the press; sendKey resolves the char's VK and
+    // applies shift for case the same way sendText's scancode path does.
+    if (m_gameAutoActive)
+        sendKeyWithActiveMods(ch, keyHoldSeconds());
+    else
+        m_synth->sendText(ch);
 
     if (!m_privacy) {
         m_currentWord += ch;
@@ -378,7 +383,9 @@ void KeyboardBridge::pressSpecialKey(const QString &keyName)
     const QString lower = keyName.toLower();
     const QString mapped = mapSpecial(lower);
 
-    sendKeyWithActiveMods(mapped);
+    // Game mode holds the key down briefly so a polling game catches it
+    // (arrows, F-keys, space, Return are common in-game commands).
+    sendKeyWithActiveMods(mapped, keyHoldSeconds());
 
     if (!m_privacy) {
         if (lower == QLatin1String("space")) {
@@ -465,14 +472,14 @@ QString KeyboardBridge::mapSpecial(const QString &qmlName)
     return m.value(qmlName, qmlName);
 }
 
-void KeyboardBridge::sendKeyWithActiveMods(const QString &keyName)
+void KeyboardBridge::sendKeyWithActiveMods(const QString &keyName, double holdSeconds)
 {
     QStringList mods;
     if (m_shift) mods << "shift";
     if (m_ctrl)  mods << "ctrl";
     if (m_alt)   mods << "alt";
     if (m_win)   mods << "win";
-    m_synth->sendKey(keyName, mods.isEmpty() ? QStringList() : mods);
+    m_synth->sendKey(keyName, mods.isEmpty() ? QStringList() : mods, holdSeconds);
 }
 
 void KeyboardBridge::playClick()
@@ -914,6 +921,9 @@ void KeyboardBridge::checkForegroundWindow()
         m_lastFocusToken.clear();
     }
     updateCompatAuto(hwnd);
+    // Same poll: flip the game key-hold path on/off based on whether the
+    // foreground app is a known polling game (Age of Empires, ...).
+    updateGameAuto(hwnd);
     m_lastForegroundHwnd = hwnd;
 }
 
@@ -924,6 +934,24 @@ void KeyboardBridge::updateCompatAuto(quintptr hwnd)
     const bool active = winutil::windowNeedsCompatMode(hwnd);
     if (active != m_compatAutoActive)
         m_compatAutoActive = active; // debounced: only toggles on change
+}
+
+void KeyboardBridge::updateGameAuto(quintptr hwnd)
+{
+    if (!hwnd)
+        return;
+    const bool active = winutil::windowIsGame(hwnd);
+    if (active != m_gameAutoActive)
+        m_gameAutoActive = active; // debounced: only toggles on change
+}
+
+// How long (seconds) to hold a single key down when the foreground app is a
+// game. ~50 ms spans 1.5 frames at 30 fps and 3 frames at 60 fps, comfortably
+// crossing at least one keyboard-state poll. Only applied on the game path so
+// normal typing keeps its zero-latency atomic injection.
+double KeyboardBridge::keyHoldSeconds() const
+{
+    return m_gameAutoActive ? 0.05 : 0.0;
 }
 
 void KeyboardBridge::setCompatAutoDetect(bool on)

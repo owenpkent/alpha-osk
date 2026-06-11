@@ -80,6 +80,7 @@ from __future__ import annotations
 import ctypes
 import ctypes.wintypes as wintypes
 import logging
+import time
 from typing import Dict, List, Optional, Tuple
 
 from .base import KeySynthesizerBase
@@ -395,6 +396,7 @@ class WindowsKeySynthesizer(KeySynthesizerBase):
         self,
         key_name: str,
         modifiers: Optional[List[str]] = None,
+        hold_seconds: float = 0.0,
     ) -> None:
         """
         Send a single key press+release, optionally with modifiers.
@@ -411,6 +413,15 @@ class WindowsKeySynthesizer(KeySynthesizerBase):
             key_name: Platform-neutral key name or single character.
             modifiers: Optional modifier names (``"ctrl"``, ``"alt"``,
                        ``"shift"``, ``"win"``).
+            hold_seconds: When > 0, hold the action key down for this long
+                       between its key-down and key-up by splitting the
+                       injection into two ``SendInput`` calls (down-batch,
+                       sleep, up-batch).  This is the game-compat path:
+                       games poll keyboard state per render frame, so a
+                       zero-gap down/up can land entirely between two polls
+                       and be missed.  Modifiers stay held across the hold.
+                       The default 0.0 keeps the original single atomic
+                       batch (fastest, correct for normal apps).
         """
         modifiers = list(modifiers or [])
 
@@ -431,6 +442,36 @@ class WindowsKeySynthesizer(KeySynthesizerBase):
                 unicode_fallback = True
         elif vk is None:
             _logger.warning("Unknown key name: %s", key_name)
+            return
+
+        # Game-compat held path: when a hold is requested and this isn't the
+        # Unicode fallback (game hotkeys are ASCII letters/digits that always
+        # resolve to a VK), split into a down-batch and an up-batch with a real
+        # sleep between, so a frame-polling game observes the key held across at
+        # least one poll.  Modifiers wrap the held key the same as the atomic
+        # path: pressed in the down-batch, released in the up-batch.
+        if hold_seconds > 0 and not unicode_fallback:
+            assert vk is not None
+            down: List[INPUT] = []
+            for mod in modifiers:
+                mod_vk = _KEY_MAP.get(mod)
+                if mod_vk is not None:
+                    down.append(self._make_vk_scancode_event(mod_vk, key_down=True))
+            down.append(self._make_vk_scancode_event(vk, key_down=True))
+            self._inject(down)
+
+            time.sleep(hold_seconds)
+
+            up: List[INPUT] = [self._make_vk_scancode_event(vk, key_down=False)]
+            for mod in reversed(modifiers):
+                mod_vk = _KEY_MAP.get(mod)
+                if mod_vk is not None:
+                    up.append(self._make_vk_scancode_event(mod_vk, key_down=False))
+            self._inject(up)
+            self._log_send(
+                f"key={key_name} (held {hold_seconds * 1000:.0f}ms)"
+                + (f" mods={modifiers}" if modifiers else "")
+            )
             return
 
         events: List[INPUT] = []

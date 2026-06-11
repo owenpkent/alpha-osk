@@ -209,6 +209,173 @@ def _window_needs_compat_mode(hwnd: int) -> bool:
     return False
 
 
+# Games whose foreground window should switch key synthesis to the held
+# down/up path (see _window_is_game / _GAME_KEY_HOLD_SECONDS). Games read the
+# keyboard by polling state once per render frame (DirectInput / Raw Input /
+# GetAsyncKeyState), so a zero-gap key-down+key-up injected in one SendInput
+# batch can land entirely between two polls and be missed: the user sees the
+# keystroke do nothing. Holding the key down for ~one frame fixes it. Matched
+# by exe basename (lowercased), exactly like _COMPAT_PROCESS_NAMES; extend this
+# set as reports of other unresponsive games come in.
+_GAME_PROCESS_NAMES = frozenset({
+    # Age of Empires family
+    "aoe2de_s.exe",     # Age of Empires II: Definitive Edition
+    "aoe3de_s.exe",     # Age of Empires III: Definitive Edition
+    "aoede_s.exe",      # Age of Empires: Definitive Edition
+    "reliccardinal.exe",  # Age of Empires IV
+    "age2_x1.exe",      # Age of Empires II: The Conquerors (classic)
+    "age2_x2.exe",      # AoE II HD: Forgotten Empires
+    "aoe2hd.exe",       # Age of Empires II: HD Edition
+    "empires2.exe",     # Age of Empires II (original)
+})
+
+
+def _owning_exe_name(hwnd: int) -> Optional[str]:
+    """Lowercased basename of ``hwnd``'s owning-process exe, or None.
+
+    None on non-Windows or any failure (fail-safe). Same Win32 path
+    ``_window_needs_compat_mode`` uses for its exe lookup.
+    """
+    import sys
+    if sys.platform != "win32" or not hwnd:
+        return None
+    try:
+        import ctypes
+        from ctypes import wintypes
+        user32 = ctypes.windll.user32          # type: ignore[attr-defined]
+        kernel32 = ctypes.windll.kernel32      # type: ignore[attr-defined]
+        pid = wintypes.DWORD(0)
+        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+        if not pid.value:
+            return None
+        PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+        handle = kernel32.OpenProcess(
+            PROCESS_QUERY_LIMITED_INFORMATION, False, pid.value,
+        )
+        if not handle:
+            return None
+        try:
+            exe_buf = ctypes.create_unicode_buffer(512)
+            size = wintypes.DWORD(512)
+            if kernel32.QueryFullProcessImageNameW(
+                handle, 0, exe_buf, ctypes.byref(size),
+            ):
+                return Path(exe_buf.value).name.lower()
+        finally:
+            kernel32.CloseHandle(handle)
+    except (OSError, AttributeError):
+        pass
+    return None
+
+
+def _window_is_borderless_fullscreen(hwnd: int) -> bool:
+    """Whether ``hwnd`` is a borderless window covering its whole monitor.
+
+    This is the catch-all for unlisted games: a borderless / exclusive-
+    fullscreen game (no title bar, rect spanning the entire monitor,
+    including the taskbar strip) looks like this, while a normal maximized
+    window keeps its ``WS_CAPTION`` title bar and leaves the taskbar
+    visible, so it does not match. Requiring BOTH "covers the full
+    monitor" AND "no caption" keeps the false-positive surface down to
+    fullscreen media players / slideshows, where a 50 ms key hold is
+    harmless. (Fullscreen productivity apps like an F11 browser or a
+    fullscreen IDE are excluded separately in ``_window_is_game`` by exe
+    name.)
+
+    Returns False on non-Windows or any failure (fail-safe).
+    """
+    import sys
+    if sys.platform != "win32" or not hwnd:
+        return False
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        class RECT(ctypes.Structure):
+            _fields_ = [
+                ("left", wintypes.LONG), ("top", wintypes.LONG),
+                ("right", wintypes.LONG), ("bottom", wintypes.LONG),
+            ]
+
+        class MONITORINFO(ctypes.Structure):
+            _fields_ = [
+                ("cbSize", wintypes.DWORD), ("rcMonitor", RECT),
+                ("rcWork", RECT), ("dwFlags", wintypes.DWORD),
+            ]
+
+        # Local WinDLL instance so setting argtypes/restype (needed to keep the
+        # 64-bit HMONITOR handle from being truncated to int) doesn't mutate the
+        # shared ``ctypes.windll.user32`` prototypes other call sites rely on.
+        user32 = ctypes.WinDLL("user32")
+        user32.GetWindowRect.argtypes = [wintypes.HWND, ctypes.POINTER(RECT)]
+        user32.GetWindowRect.restype = wintypes.BOOL
+        user32.MonitorFromWindow.argtypes = [wintypes.HWND, wintypes.DWORD]
+        user32.MonitorFromWindow.restype = ctypes.c_void_p
+        user32.GetMonitorInfoW.argtypes = [ctypes.c_void_p, ctypes.POINTER(MONITORINFO)]
+        user32.GetMonitorInfoW.restype = wintypes.BOOL
+        user32.GetWindowLongW.argtypes = [wintypes.HWND, ctypes.c_int]
+        user32.GetWindowLongW.restype = wintypes.LONG
+
+        hwnd_h = wintypes.HWND(hwnd)
+        rect = RECT()
+        if not user32.GetWindowRect(hwnd_h, ctypes.byref(rect)):
+            return False
+        MONITOR_DEFAULTTONEAREST = 2
+        hmon = user32.MonitorFromWindow(hwnd_h, MONITOR_DEFAULTTONEAREST)
+        if not hmon:
+            return False
+        mi = MONITORINFO()
+        mi.cbSize = ctypes.sizeof(MONITORINFO)
+        if not user32.GetMonitorInfoW(hmon, ctypes.byref(mi)):
+            return False
+        m = mi.rcMonitor
+        covers = (
+            rect.left <= m.left and rect.top <= m.top
+            and rect.right >= m.right and rect.bottom >= m.bottom
+        )
+        if not covers:
+            return False
+        GWL_STYLE = -16
+        WS_CAPTION = 0x00C00000
+        style = user32.GetWindowLongW(hwnd_h, GWL_STYLE)
+        return bool((style & WS_CAPTION) == 0)
+    except (OSError, AttributeError):
+        return False
+
+
+def _window_is_game(hwnd: int) -> bool:
+    """Whether ``hwnd`` should use the held key-synthesis path.
+
+    Two signals, in order:
+    1. Owning-process exe in ``_GAME_PROCESS_NAMES`` (catches games even
+       in windowed mode).
+    2. Borderless-fullscreen heuristic (``_window_is_borderless_fullscreen``),
+       the zero-config catch-all for unlisted games. Skipped for exes in
+       ``_COMPAT_PROCESS_NAMES`` (IDEs / remote-desktop clients): those are
+       productivity apps that are sometimes run fullscreen, and adding a
+       50 ms key hold there would lag normal typing.
+
+    Returns False on non-Windows or any failure (fail-safe).
+    """
+    import sys
+    if sys.platform != "win32" or not hwnd:
+        return False
+    exe = _owning_exe_name(hwnd)
+    if exe is not None:
+        if exe in _GAME_PROCESS_NAMES:
+            return True
+        if exe in _COMPAT_PROCESS_NAMES:
+            return False
+    return _window_is_borderless_fullscreen(hwnd)
+
+
+# How long (seconds) to hold a single key down when the foreground app is a
+# game. ~50 ms spans 1.5 frames at 30 fps and 3 frames at 60 fps, comfortably
+# crossing at least one keyboard-state poll. Only applied on the game path so
+# normal typing keeps its zero-latency atomic injection.
+_GAME_KEY_HOLD_SECONDS = 0.05
+
+
 # Cursor-movement keys. When a sticky modifier is held, pressing one of
 # these should KEEP Shift/Ctrl held (extend selection / word-jump across
 # multiple presses) instead of auto-releasing after the first press. See
@@ -473,6 +640,13 @@ class KeyboardBridge(QObject):
         self._compat_auto_enabled = True
         self._compat_auto_active = False
 
+        # Game auto-compat: whether the current foreground window belongs to a
+        # known polling game (``_GAME_PROCESS_NAMES``).  When True, single keys
+        # are synthesised with a brief key-down hold so a frame-polling game
+        # observes the press.  Updated by ``_check_foreground_window`` on every
+        # poll, the same place ``_compat_auto_active`` is.
+        self._game_auto_active = False
+
         # Swipe / glide typing — off by default, toggled in settings.
         # The recognizer needs the keyboard layout (key centres) before it
         # can decode anything; QML pushes that via setSwipeLayout().
@@ -516,12 +690,15 @@ class KeyboardBridge(QObject):
 
     # --- Key synthesis (delegated to platform layer) ---
 
-    def _send_key(self, key_name: str) -> None:
+    def _send_key(self, key_name: str, hold_seconds: float = 0.0) -> None:
         """
         Send a single key event via the platform synthesizer.
 
         Automatically attaches any active sticky modifiers (Ctrl, Alt, Win)
         to the keystroke.
+
+        ``hold_seconds`` > 0 holds the key down briefly (game-compat path,
+        see ``_key_hold_seconds`` / ``WindowsKeySynthesizer.send_key``).
         """
         # Gather active modifiers
         modifiers = []
@@ -534,7 +711,13 @@ class KeyboardBridge(QObject):
         if self._win_active:
             modifiers.append("win")
 
-        self._synth.send_key(key_name, modifiers=modifiers if modifiers else None)
+        mods = modifiers if modifiers else None
+        # Only thread hold_seconds through when actually holding (game mode) so
+        # the common zero-hold call keeps its original two-arg signature.
+        if hold_seconds > 0:
+            self._synth.send_key(key_name, modifiers=mods, hold_seconds=hold_seconds)
+        else:
+            self._synth.send_key(key_name, modifiers=mods)
 
     def _send_text(self, text: str) -> None:
         """Send a string of text via the platform synthesizer."""
@@ -661,7 +844,7 @@ class KeyboardBridge(QObject):
         # Use _send_key for modifier combos (Ctrl+C, Win+Shift+S, etc.)
         # Send the lowercase key — Shift is included as a modifier by _send_key
         if self._ctrl_active or self._alt_active or self._win_active:
-            self._send_key(key.lower())
+            self._send_key(key.lower(), hold_seconds=self._key_hold_seconds())
             # Don't update _current_word or predictions — this was a shortcut,
             # not text input. Skip the rest of character handling.
             # Auto-release shift after one keypress (not caps lock)
@@ -684,6 +867,12 @@ class KeyboardBridge(QObject):
                 self._win_active = False
                 self.winActiveChanged.emit(self._win_active)
             return
+        elif self._in_game_mode():
+            # Polling game: send the single char as a held key so it survives
+            # a per-frame keyboard-state poll. send_key resolves the char's VK
+            # and applies shift for case the same way send_text's scancode
+            # path does, so the held tap matches what would otherwise be typed.
+            self._send_key(char, hold_seconds=self._key_hold_seconds())
         else:
             self._send_text(char)
 
@@ -887,7 +1076,9 @@ class KeyboardBridge(QObject):
                 autocorrected = True
 
         if not autocorrected:
-            self._send_key(xdotool_key)
+            # Game mode holds the key down briefly so a polling game catches
+            # it (arrows, F-keys, space, Return are common in-game commands).
+            self._send_key(xdotool_key, hold_seconds=self._key_hold_seconds())
 
         # Privacy mode — send the key but don't track context or learn
         if self._privacy_mode:
@@ -2025,6 +2216,32 @@ class KeyboardBridge(QObject):
                 "Compat auto-active: %s (hwnd=%s)", new_active, hwnd,
             )
 
+    def _update_game_auto(self, hwnd: int) -> None:
+        """Inspect ``hwnd`` and update ``_game_auto_active``.
+
+        Called from ``_check_foreground_window`` on every foreground change.
+        Cheap on a class/exe miss; fail-safe to False on any error.
+        """
+        if not hwnd:
+            return
+        try:
+            new_active = _window_is_game(hwnd)
+        except Exception:
+            new_active = False
+        if new_active != self._game_auto_active:
+            self._game_auto_active = new_active
+            _logger.debug(
+                "Game key-hold auto-active: %s (hwnd=%s)", new_active, hwnd,
+            )
+
+    def _in_game_mode(self) -> bool:
+        """Whether the foreground app is a known polling game."""
+        return self._game_auto_active
+
+    def _key_hold_seconds(self) -> float:
+        """Per-key down-hold to use right now: nonzero only in game mode."""
+        return _GAME_KEY_HOLD_SECONDS if self._game_auto_active else 0.0
+
     @property
     def autoSaveOnExit(self) -> bool:
         """Whether to auto-save prediction model on exit."""
@@ -2075,6 +2292,9 @@ class KeyboardBridge(QObject):
         # on class miss).  Auto-active toggling is debounced internally
         # so this isn't noisy.
         self._update_compat_auto(hwnd)
+        # Same poll: flip the game key-hold path on/off based on whether the
+        # foreground app is a known polling game (Age of Empires, ...).
+        self._update_game_auto(hwnd)
         # macOS: feed the foreground pid into the synthesizer's target
         # tracking.  Redundant with the NSWorkspace activation observer
         # in MacOSKeySynthesizer but acts as defence-in-depth: the

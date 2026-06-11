@@ -80,6 +80,7 @@ class KeySynthesizerBase(ABC):
         self,
         key_name: str,
         modifiers: Optional[List[str]] = None,
+        hold_seconds: float = 0.0,
     ) -> None:
         """
         Inject a single keystroke, optionally modified.
@@ -94,6 +95,17 @@ class KeySynthesizerBase(ABC):
                 ``"ctrl"``, ``"alt"``, ``"shift"``, ``"win"`` (Super on
                 Linux, Win on Windows).  The backend builds the correct
                 key combination.
+            hold_seconds:
+                How long to hold the action key down between its key-down
+                and key-up events, in seconds.  The default ``0.0`` sends
+                down+up in one atomic batch (fastest, correct for normal
+                apps).  A small positive value (~0.05) keeps the key
+                physically held across one or more game render frames so
+                games that *poll* keyboard state per frame (DirectInput /
+                Raw Input / ``GetAsyncKeyState``) actually observe the
+                press.  A zero-gap down/up can fall entirely between two
+                polls and be missed.  See the bridge's game-compat path.
+                Backends may ignore this if they can't hold a key.
 
         Example::
 

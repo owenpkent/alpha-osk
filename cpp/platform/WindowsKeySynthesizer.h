@@ -24,7 +24,8 @@ public:
     bool isAvailable() const override;
     QString backendName() const override;
 
-    void sendKey(const QString &keyName, const QStringList &modifiers = {}) override;
+    void sendKey(const QString &keyName, const QStringList &modifiers = {},
+                 double holdSeconds = 0.0) override;
     void sendText(const QString &text) override;
     void sendCombination(const QStringList &keys) override;
     void holdModifier(const QString &keyName) override;

@@ -16,6 +16,12 @@ quintptr foregroundWindowId();
 // (BackSpace+retype rather than suffix-only). False on non-Windows / on error.
 bool windowNeedsCompatMode(quintptr hwnd);
 
+// True if the window's owning-process exe is a known polling game (Age of
+// Empires, ...). Games read the keyboard by polling state per render frame, so
+// a zero-gap key-down+key-up can be missed; single keys are held down briefly
+// in this case. False on non-Windows / on error.
+bool windowIsGame(quintptr hwnd);
+
 // Tag the process so the taskbar keeps our icon. Must run before the first
 // top-level window is created. (SetCurrentProcessExplicitAppUserModelID)
 void setAppUserModelId();

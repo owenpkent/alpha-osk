@@ -47,6 +47,69 @@ const QSet<QString> &compatProcessNames()
     return s;
 }
 
+// Owning-process exe basenames (lowercase, exact match) of games whose
+// foreground window should switch key synthesis to the held down/up path.
+// Games poll keyboard state per render frame, so a zero-gap key-down+key-up
+// injected in one SendInput batch can land between two polls and be missed.
+// Extend this set as reports of other unresponsive games come in.
+const QSet<QString> &gameProcessNames()
+{
+    static const QSet<QString> s = {
+        "aoe2de_s.exe",       // Age of Empires II: Definitive Edition
+        "aoe3de_s.exe",       // Age of Empires III: Definitive Edition
+        "aoede_s.exe",        // Age of Empires: Definitive Edition
+        "reliccardinal.exe",  // Age of Empires IV
+        "age2_x1.exe",        // Age of Empires II: The Conquerors (classic)
+        "age2_x2.exe",        // AoE II HD: Forgotten Empires
+        "aoe2hd.exe",         // Age of Empires II: HD Edition
+        "empires2.exe"};      // Age of Empires II (original)
+    return s;
+}
+
+// Lowercased basename of hwnd's owning-process exe, or empty on failure.
+QString owningExeName(HWND hwnd)
+{
+    DWORD pid = 0;
+    GetWindowThreadProcessId(hwnd, &pid);
+    if (!pid)
+        return QString();
+    HANDLE handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+    if (!handle)
+        return QString();
+    QString name;
+    wchar_t exe[512] = {0};
+    DWORD size = 512;
+    if (QueryFullProcessImageNameW(handle, 0, exe, &size))
+        name = QFileInfo(QString::fromWCharArray(exe)).fileName().toLower();
+    CloseHandle(handle);
+    return name;
+}
+
+// A borderless window covering its whole monitor (no title bar, rect spans the
+// entire monitor including the taskbar strip): the catch-all shape of an
+// unlisted borderless / exclusive-fullscreen game. A normal maximized window
+// keeps WS_CAPTION and leaves the taskbar visible, so it doesn't match.
+bool windowIsBorderlessFullscreen(HWND hwnd)
+{
+    RECT rect;
+    if (!GetWindowRect(hwnd, &rect))
+        return false;
+    HMONITOR mon = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+    if (!mon)
+        return false;
+    MONITORINFO mi;
+    mi.cbSize = sizeof(mi);
+    if (!GetMonitorInfoW(mon, &mi))
+        return false;
+    const RECT &m = mi.rcMonitor;
+    const bool covers = rect.left <= m.left && rect.top <= m.top
+                     && rect.right >= m.right && rect.bottom >= m.bottom;
+    if (!covers)
+        return false;
+    const LONG style = GetWindowLongW(hwnd, GWL_STYLE);
+    return (style & WS_CAPTION) == 0;
+}
+
 } // namespace
 #endif
 
@@ -86,6 +149,32 @@ bool winutil::windowNeedsCompatMode(quintptr hwndInt)
     }
     CloseHandle(handle);
     return match;
+#else
+    Q_UNUSED(hwndInt);
+    return false;
+#endif
+}
+
+bool winutil::windowIsGame(quintptr hwndInt)
+{
+#ifdef Q_OS_WIN
+    HWND hwnd = reinterpret_cast<HWND>(hwndInt);
+    if (!hwnd)
+        return false;
+    // 1. Exe in the game list (catches games even in windowed mode).
+    const QString exe = owningExeName(hwnd);
+    if (!exe.isEmpty()) {
+        if (gameProcessNames().contains(exe))
+            return true;
+        // 2. Productivity apps (IDEs / remote desktop) are sometimes run
+        // fullscreen; don't let the heuristic add a key-hold that would lag
+        // normal typing there.
+        if (compatProcessNames().contains(exe))
+            return false;
+    }
+    // 3. Borderless-fullscreen heuristic: zero-config catch-all for unlisted
+    // games.
+    return windowIsBorderlessFullscreen(hwnd);
 #else
     Q_UNUSED(hwndInt);
     return false;

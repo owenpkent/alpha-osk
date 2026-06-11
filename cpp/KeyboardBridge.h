@@ -192,7 +192,7 @@ private:
     // State machine helpers.
     void pressChar(const QString &key, bool literal);
     void playClick();
-    void sendKeyWithActiveMods(const QString &keyName);
+    void sendKeyWithActiveMods(const QString &keyName, double holdSeconds = 0.0);
     void updatePredictions();
     void updateLayer();
     void boundContext(int limit);
@@ -214,6 +214,8 @@ private:
     // Foreground-window monitor (app-switch reset + compat auto-detect).
     void checkForegroundWindow();     // 250 ms poll
     void updateCompatAuto(quintptr hwnd);
+    void updateGameAuto(quintptr hwnd);   // flip the game key-hold path on/off
+    double keyHoldSeconds() const;        // nonzero only in game mode
 
     // Modifier / layer state.
     bool m_shift = false;
@@ -251,6 +253,9 @@ private:
     bool m_compatManual = false;
     bool m_compatAutoEnabled = true;
     bool m_compatAutoActive = false;
+    // Game auto-compat: foreground app is a known polling game, so single keys
+    // are held down briefly (keyHoldSeconds) to survive a per-frame state poll.
+    bool m_gameAutoActive = false;
     QTimer *m_foregroundTimer = nullptr;
     quintptr m_lastForegroundHwnd = 0;
     // Identity of the last-focused control (UIA RuntimeId, empty elsewhere).

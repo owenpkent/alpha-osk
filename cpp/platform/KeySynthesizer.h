@@ -20,8 +20,14 @@ public:
     virtual QString backendName() const = 0;
 
     // Press+release one key, optionally with modifiers held around it. All
-    // events are injected atomically (one SendInput on Windows).
-    virtual void sendKey(const QString &keyName, const QStringList &modifiers = {}) = 0;
+    // events are injected atomically (one SendInput on Windows) when
+    // holdSeconds == 0. When holdSeconds > 0, the action key is held down for
+    // that long between its key-down and key-up (the game-compat path: games
+    // poll keyboard state per render frame, so a zero-gap down/up can fall
+    // between two polls and be missed). Backends may ignore holdSeconds if they
+    // can't hold a key.
+    virtual void sendKey(const QString &keyName, const QStringList &modifiers = {},
+                         double holdSeconds = 0.0) = 0;
 
     // Type a string verbatim (per-char scancode mode, Unicode fallback).
     virtual void sendText(const QString &text) = 0;

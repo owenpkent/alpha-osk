@@ -325,7 +325,8 @@ QString WindowsKeySynthesizer::backendName() const
     return m_uiAccess ? QStringLiteral("SendInput+UIAccess") : QStringLiteral("SendInput");
 }
 
-void WindowsKeySynthesizer::sendKey(const QString &keyName, const QStringList &modifiers)
+void WindowsKeySynthesizer::sendKey(const QString &keyName, const QStringList &modifiers,
+                                    double holdSeconds)
 {
     QStringList mods = modifiers;
     int vk = resolveVk(keyName);
@@ -343,6 +344,34 @@ void WindowsKeySynthesizer::sendKey(const QString &keyName, const QStringList &m
         }
     } else if (vk < 0) {
         qWarning() << "send_key: unknown key name" << keyName;
+        return;
+    }
+
+    // Game-compat held path: when a hold is requested and this isn't the
+    // Unicode fallback (game hotkeys are ASCII letters/digits that always
+    // resolve to a VK), split into a down-batch and an up-batch with a real
+    // sleep between, so a frame-polling game observes the key held across at
+    // least one poll. Modifiers wrap the held key (down in the down-batch,
+    // released in the up-batch), the same as the atomic path.
+    if (holdSeconds > 0.0 && !unicodeFallback) {
+        std::vector<INPUT> down;
+        for (const QString &mod : mods) {
+            const int mvk = keyMap().value(mod, -1);
+            if (mvk >= 0)
+                down.push_back(makeVkScancodeEvent(mvk, true));
+        }
+        down.push_back(makeVkScancodeEvent(vk, true));
+        inject(down);
+
+        Sleep(static_cast<DWORD>(holdSeconds * 1000.0));
+
+        std::vector<INPUT> up{makeVkScancodeEvent(vk, false)};
+        for (auto it = mods.crbegin(); it != mods.crend(); ++it) {
+            const int mvk = keyMap().value(*it, -1);
+            if (mvk >= 0)
+                up.push_back(makeVkScancodeEvent(mvk, false));
+        }
+        inject(up);
         return;
     }
 
@@ -438,7 +467,7 @@ void WindowsKeySynthesizer::replaceText(int backspaceCount, const QString &text)
 
 bool WindowsKeySynthesizer::isAvailable() const { return false; }
 QString WindowsKeySynthesizer::backendName() const { return QStringLiteral("none"); }
-void WindowsKeySynthesizer::sendKey(const QString &, const QStringList &) {}
+void WindowsKeySynthesizer::sendKey(const QString &, const QStringList &, double) {}
 void WindowsKeySynthesizer::sendText(const QString &) {}
 void WindowsKeySynthesizer::sendCombination(const QStringList &) {}
 void WindowsKeySynthesizer::holdModifier(const QString &) {}

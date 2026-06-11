@@ -360,6 +360,98 @@ class TestKeyPress:
         bridge._synth.send_key.assert_called()
 
 
+class TestGameKeyHold:
+    """Game auto-compat: single keys are held down so polling games catch them.
+
+    A zero-gap key-down+key-up injected in one SendInput batch can land
+    entirely between two of a game's per-frame keyboard-state polls and be
+    missed; holding the key down ~one frame fixes it.
+    """
+
+    def test_char_uses_send_text_when_not_a_game(self, bridge: KeyboardBridge):
+        bridge._game_auto_active = False
+        bridge.pressKey("q")
+        bridge._synth.send_text.assert_called_with("q")
+
+    def test_char_held_via_send_key_in_game_mode(self, bridge: KeyboardBridge):
+        bridge._game_auto_active = True
+        bridge.pressKey("q")
+        # Routed through send_key with a positive hold, NOT the atomic send_text.
+        bridge._synth.send_text.assert_not_called()
+        _, kwargs = bridge._synth.send_key.call_args
+        assert kwargs.get("hold_seconds", 0) > 0
+
+    def test_special_key_held_in_game_mode(self, bridge: KeyboardBridge):
+        bridge._game_auto_active = True
+        bridge.pressSpecialKey("up")
+        _, kwargs = bridge._synth.send_key.call_args
+        assert kwargs.get("hold_seconds", 0) > 0
+
+    def test_special_key_not_held_outside_game(self, bridge: KeyboardBridge):
+        bridge._game_auto_active = False
+        bridge.pressSpecialKey("up")
+        # Original two-arg signature preserved when not holding.
+        bridge._synth.send_key.assert_called_with("Up", modifiers=None)
+
+    def test_key_hold_seconds_gate(self, bridge: KeyboardBridge):
+        bridge._game_auto_active = False
+        assert bridge._key_hold_seconds() == 0.0
+        bridge._game_auto_active = True
+        assert bridge._key_hold_seconds() > 0.0
+
+    def test_window_is_game_false_off_windows(self, monkeypatch):
+        import sys
+
+        from src import keyboard_bridge
+        monkeypatch.setattr(sys, "platform", "linux")
+        assert keyboard_bridge._window_is_game(12345) is False
+
+    def test_borderless_fullscreen_false_off_windows(self, monkeypatch):
+        import sys
+
+        from src import keyboard_bridge
+        monkeypatch.setattr(sys, "platform", "linux")
+        assert keyboard_bridge._window_is_borderless_fullscreen(12345) is False
+
+    def test_game_match_takes_priority_over_compat(self, monkeypatch):
+        # Exe in the game list wins; compat exclusion / fullscreen heuristic
+        # are not consulted.
+        import sys
+
+        from src import keyboard_bridge
+        monkeypatch.setattr(sys, "platform", "win32")
+        monkeypatch.setattr(keyboard_bridge, "_owning_exe_name", lambda h: "aoe2de_s.exe")
+        assert keyboard_bridge._window_is_game(999) is True
+
+    def test_compat_exe_excluded_from_fullscreen_heuristic(self, monkeypatch):
+        # A fullscreen IDE must NOT be treated as a game even if it's borderless
+        # fullscreen, which would lag normal typing.
+        import sys
+
+        from src import keyboard_bridge
+        monkeypatch.setattr(sys, "platform", "win32")
+        monkeypatch.setattr(keyboard_bridge, "_owning_exe_name", lambda h: "code.exe")
+        called = {"heuristic": False}
+
+        def _flag(_h):
+            called["heuristic"] = True
+            return True
+
+        monkeypatch.setattr(keyboard_bridge, "_window_is_borderless_fullscreen", _flag)
+        assert keyboard_bridge._window_is_game(999) is False
+        assert called["heuristic"] is False  # short-circuited before the heuristic
+
+    def test_unlisted_fullscreen_window_is_game(self, monkeypatch):
+        # Unknown exe + borderless fullscreen -> treated as a game.
+        import sys
+
+        from src import keyboard_bridge
+        monkeypatch.setattr(sys, "platform", "win32")
+        monkeypatch.setattr(keyboard_bridge, "_owning_exe_name", lambda h: "somegame.exe")
+        monkeypatch.setattr(keyboard_bridge, "_window_is_borderless_fullscreen", lambda h: True)
+        assert keyboard_bridge._window_is_game(999) is True
+
+
 class TestContextTracking:
     """Context buffer for prediction."""
 

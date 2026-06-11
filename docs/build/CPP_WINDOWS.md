@@ -41,6 +41,7 @@ Ordered by the commits that landed them on `cpp-rewrite`:
 | Password detection + privacy | done | UIA (+ Win32 fallback) auto-pauses learning on password fields; manual privacy toggle layers on top. |
 | Analytics tracking | done | Session + lifetime counters in `analytics.json`; the dashboard tiles (keystrokes/time/effort saved, acceptance) compute from real data. |
 | Compat auto-detect | done | 250 ms foreground poll; pill insertion switches to BackSpace+retype in remote-desktop / IDE windows (class + exe whitelist). |
+| Game key-hold compat | done | Same 250 ms poll flags polling games (`winutil::windowIsGame`: exe whitelist + borderless-fullscreen heuristic, IDEs/remote excluded); single keys are then synthesised as down -> 50 ms hold -> up so a per-frame keyboard-state poll catches them. Mirrors the Python `_window_is_game` / `_GAME_KEY_HOLD_SECONDS` path. |
 | Context reset on focus change | done | The same 250 ms foreground poll resets typing context (`resetTypingContext`) on app switch (window-handle change) *and* when focus moves between two controls inside one window (e.g. two text boxes on a web page) via the focused element's UIA RuntimeId (`passworddetect::focusToken`). |
 | Telemetry | done | Opt-in consent + anon_id lifecycle + weekly/quit submit; `DEFAULT_ENDPOINT` empty so no data leaves the machine. |
 | Data backup | done | `.zip` export/import (models + analytics + snippets + packs) via QZip; hardened (zip-slip, size caps, allow-list); telemetry excluded; rescue archive on import. |

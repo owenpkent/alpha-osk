@@ -11,7 +11,7 @@ class NullKeySynthesizer : public KeySynthesizer
 public:
     bool isAvailable() const override { return false; }
     QString backendName() const override { return QStringLiteral("none"); }
-    void sendKey(const QString &, const QStringList &) override {}
+    void sendKey(const QString &, const QStringList &, double) override {}
     void sendText(const QString &) override {}
     void sendCombination(const QStringList &) override {}
 };
