@@ -10,7 +10,7 @@ Window {
     visible: true
     // Default size gives keyW ≈ 56px; user can freely resize and keys scale
     width: 940
-    height: outerLayout.implicitHeight + 60  // Extra height for title bar + bottom padding
+    height: outerLayout.implicitHeight + 80  // Extra height for the (taller) title bar + bottom padding
     minimumWidth: Math.round(30 * totalKeyUnits + layoutFixedPixels)  // keyW ≈ 30px — smallest usable touch target
     minimumHeight: 200
     color: "transparent"
@@ -69,7 +69,7 @@ Window {
         // — that path runs on a fresh install.
         //
         // Height is deliberately NOT persisted: it's bound to the
-        // keyboard's content (`height: outerLayout.implicitHeight + 60`),
+        // keyboard's content (`height: outerLayout.implicitHeight + 80`),
         // so the only user-controllable dimension is width.  An earlier
         // version saved both, which broke the height binding the moment
         // it was imperatively restored on launch — the keyboard then
@@ -587,7 +587,12 @@ Window {
             anchors.top: parent.top
             anchors.left: parent.left
             anchors.right: parent.right
-            height: 28
+            // Tall, generous drag strip: the window never takes focus, so the
+            // title bar is the only way to move it — a small bar is a hard
+            // target for limited motor control. If you change this, also bump
+            // outerLayout.anchors.topMargin and the root window-height offset
+            // (`outerLayout.implicitHeight + 80`) by the same amount.
+            height: 48
             property color baseColor: Qt.darker(root.themeBackground, 1.1)
             color: Qt.rgba(baseColor.r, baseColor.g, baseColor.b, root.windowOpacity)
             radius: 10
@@ -612,17 +617,34 @@ Window {
                 property real startMouseY
                 property real startWinX
                 property real startWinY
-                
+                // True once a compositor-driven move has taken over the
+                // drag (see onPressed). When set, onPositionChanged stays
+                // out of the way so the manual path doesn't fight the WM.
+                property bool sysMoveActive: false
+
                 onPressed: function(mouse) {
                     var global = mapToGlobal(mouse.x, mouse.y)
                     startMouseX = global.x
                     startMouseY = global.y
                     startWinX = root.x
                     startWinY = root.y
+                    // Prefer a WM-driven interactive move on Linux/macOS.
+                    // Mutter (and most X11 WMs) clamp a managed window's
+                    // programmatic ConfigureRequest moves to keep it
+                    // on-screen, so the manual path below can never push the
+                    // keyboard past a screen edge. startSystemMove() issues a
+                    // _NET_WM_MOVERESIZE the compositor lets travel off-screen
+                    // — and the WindowDoesNotAcceptFocus hint keeps it from
+                    // stealing keyboard focus during the move. Windows isn't
+                    // clamped this way and its SC_MOVE loop can activate a
+                    // WS_EX_NOACTIVATE window, so it keeps the manual path.
+                    sysMoveActive = false
+                    if (Qt.platform.os !== "windows" && root.startSystemMove)
+                        sysMoveActive = root.startSystemMove() === true
                 }
-                
+
                 onPositionChanged: function(mouse) {
-                    if (pressed) {
+                    if (pressed && !sysMoveActive) {
                         var global = mapToGlobal(mouse.x, mouse.y)
                         root.x = startWinX + (global.x - startMouseX)
                         root.y = startWinY + (global.y - startMouseY)
@@ -630,15 +652,35 @@ Window {
                 }
             }
             
-            // Drag indicator dots
-            Row {
+            // Drag handle — a prominent grip so the title bar (which never
+            // takes focus, so there's no cursor cue) is an easy, obvious
+            // target to grab. dragArea above does the actual move; this is
+            // the visual affordance and a bigger aim point. It accepts no
+            // mouse events itself, so presses fall through to dragArea.
+            Rectangle {
                 anchors.left: parent.left
-                anchors.leftMargin: 12
+                anchors.leftMargin: 10
                 anchors.verticalCenter: parent.verticalCenter
-                spacing: 3
-                Repeater {
-                    model: 5
-                    Rectangle { width: 3; height: 3; radius: 1.5; color: "#555" }
+                height: 30
+                width: gripGrid.implicitWidth + 22
+                radius: 8
+                color: Qt.rgba(root.themeTextColor.r, root.themeTextColor.g,
+                               root.themeTextColor.b, 0.12)
+                Grid {
+                    id: gripGrid
+                    anchors.centerIn: parent
+                    rows: 2
+                    columns: 6
+                    rowSpacing: 4
+                    columnSpacing: 5
+                    Repeater {
+                        model: 12
+                        Rectangle {
+                            width: 4; height: 4; radius: 2
+                            color: Qt.rgba(root.themeTextColor.r, root.themeTextColor.g,
+                                           root.themeTextColor.b, 0.6)
+                        }
+                    }
                 }
             }
             
@@ -1002,7 +1044,7 @@ Window {
             id: outerLayout
             anchors.fill: parent
             anchors.margins: 8
-            anchors.topMargin: 32  // Account for title bar
+            anchors.topMargin: 52  // Account for the 48px title bar + 4px gap
             spacing: 0
 
             // ===== Update Banner =====
@@ -1899,13 +1941,21 @@ Window {
                             property real startMy
                             property real startX
                             property real startY
+                            property bool sysMoveActive: false
                             onPressed: function(mouse) {
                                 var g = mapToGlobal(mouse.x, mouse.y)
                                 startMx = g.x; startMy = g.y
                                 startX = snippetsWindow.x; startY = snippetsWindow.y
+                                // Hand the drag to the compositor on
+                                // Linux/macOS so it can travel off-screen
+                                // (see the main-window dragArea for why the
+                                // manual ConfigureRequest path gets clamped).
+                                sysMoveActive = false
+                                if (Qt.platform.os !== "windows" && snippetsWindow.startSystemMove)
+                                    sysMoveActive = snippetsWindow.startSystemMove() === true
                             }
                             onPositionChanged: function(mouse) {
-                                if (!pressed) return
+                                if (!pressed || sysMoveActive) return
                                 // Free movement anywhere on the desktop —
                                 // this is a real top-level window, so no
                                 // overlay clamp is needed.
