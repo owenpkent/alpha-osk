@@ -436,7 +436,7 @@ Window {
 
     property real keyW: Math.max(30, (root.width - layoutFixedPixels) / totalKeyUnits)
     // keyH simply tracks keyW at the keycap aspect ratio.  This works
-    // because the window's `height` is bound to `outerLayout.implicitHeight + 60`
+    // because the window's `height` is bound to `outerLayout.implicitHeight + 80`
     // — i.e. the window auto-sizes to whatever the content needs.  The
     // user only resizes width (the resize handles are SizeHorCursor),
     // and height follows.  No height-budget arithmetic needed.
