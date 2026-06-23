@@ -1207,17 +1207,82 @@ Window {
                     spacing: 8
                     visible: root.suggestionsEnabled && !root.privacyMode
 
+                    // Measures word widths in the same font the pills render
+                    // so the fair-share allocation below can size every pill
+                    // centrally, without each delegate publishing its own
+                    // implicitWidth back up to the parent.
+                    FontMetrics {
+                        id: predMetrics
+                        font.pixelSize: predBar.predFontSize
+                        font.weight: Font.Medium
+                        font.family: "Ubuntu, Noto Sans, sans-serif"
+                    }
+
+                    // Max-min fair pill widths. Every pill first claims its
+                    // natural width (text + padding); when the words don't all
+                    // fit on the row, the short pills keep their natural size
+                    // and the leftover space flows to the long ones. This is
+                    // what stops a long word from being elided to "..." while
+                    // "I"/"the" sit in half-empty pills next to it. The binding
+                    // reads predictions, window width and pill geometry so it
+                    // re-evaluates whenever any of them change.
+                    property var pillWidthList: predRow.computePillWidths(
+                        root.predictions, root.width, predBar.predFontSize,
+                        predBar.predHorizontalPad, predBar.predMinWidth,
+                        predBar.predPillHeight, predRow.spacing)
+
+                    function computePillWidths(preds, totalWidth, fontSize, hPad, minNat, pillH, spacing) {
+                        var n = preds.length
+                        if (n <= 0)
+                            return []
+                        var nat = []
+                        for (var i = 0; i < n; i++)
+                            nat.push(Math.max(minNat, predMetrics.advanceWidth(preds[i]) + hPad))
+                        var avail = totalWidth - 32 - (n - 1) * spacing
+                        var floor = pillH * 1.4
+                        var widths = new Array(n)
+                        var settled = new Array(n)
+                        var remaining = avail
+                        var unsettled = n
+                        // Water-fill: pills that fit under the current fair
+                        // share settle at their natural width and release the
+                        // slack, raising the share for the rest. Repeats until
+                        // no more pills can settle (≤ n passes).
+                        for (var pass = 0; pass < n; pass++) {
+                            if (unsettled <= 0)
+                                break
+                            var share = remaining / unsettled
+                            var changed = false
+                            for (var j = 0; j < n; j++) {
+                                if (!settled[j] && nat[j] <= share) {
+                                    widths[j] = nat[j]
+                                    settled[j] = true
+                                    remaining -= nat[j]
+                                    unsettled--
+                                    changed = true
+                                }
+                            }
+                            if (!changed)
+                                break
+                        }
+                        // Whatever is left over wants more than its fair share
+                        // (several long words competing); split the remainder
+                        // evenly, floored so a pill can't collapse to nothing.
+                        if (unsettled > 0) {
+                            var share2 = remaining / unsettled
+                            for (var k = 0; k < n; k++)
+                                if (!settled[k])
+                                    widths[k] = Math.max(floor, share2)
+                        }
+                        return widths
+                    }
+
                     Repeater {
                         model: root.suggestionsEnabled && !root.privacyMode && root.predictions.length > 0 ? root.predictions : []
                         delegate: Rectangle {
-                            property real naturalWidth: Math.max(predBar.predMinWidth, predText.implicitWidth + predBar.predHorizontalPad)
-                            property real maxPillWidth: {
-                                var count = root.predictions.length
-                                if (count <= 0) return naturalWidth
-                                var avail = root.width - 32 - (count - 1) * predRow.spacing
-                                return Math.max(predBar.predPillHeight * 1.4, avail / count)
-                            }
-                            width: Math.min(naturalWidth, maxPillWidth)
+                            width: index < predRow.pillWidthList.length
+                                   ? predRow.pillWidthList[index]
+                                   : predBar.predMinWidth
                             height: predBar.predPillHeight
                             radius: Math.max(4, predBar.predPillHeight * 0.22)
                             color: predMouse.containsMouse ? Qt.lighter(root.themeKeyColor, 1.3) : root.themeKeyColor
