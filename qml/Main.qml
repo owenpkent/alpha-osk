@@ -90,6 +90,67 @@ Window {
     // restore itself doesn't fire a no-op save.
     property bool _geometryRestored: false
 
+    // Off-screen "Tuck away" state (X11 only — see docs/architecture/GOTCHAS.md
+    // "Tuck away"). `tucked`: the keyboard is parked off the bottom edge as a
+    // DOCK-type window (the one type GNOME/Mutter won't clamp back on-screen),
+    // with only the title bar peeking in as a grab handle. preTuckX/Y hold the
+    // on-screen position to restore when un-tucked. tuckSupported gates the
+    // title-bar button (false off X11). The tuck position is deliberately never
+    // persisted (see the saveGeometryTimer guard).
+    property bool tuckSupported: false
+    property bool tucked: false
+    property real preTuckX: 0
+    property real preTuckY: 0
+
+    // Flip the keyboard between its normal on-screen state and the parked,
+    // mostly-off-screen state. Ordering matters both ways (the window-type
+    // change and the move travel on separate X connections, so we sequence
+    // them): tucking flips to DOCK first, then moves off-screen a beat later
+    // (tuckMoveTimer) so Mutter sees DOCK before the off-work-area move and
+    // doesn't clamp it; un-tucking moves back on-screen first, then reverts to
+    // NORMAL so the re-clamp lands on an already-on-screen window (a no-op).
+    function toggleTuck() {
+        if (!root.tuckSupported || !keyboard) return
+        if (!root.tucked) {
+            root.preTuckX = root.x
+            root.preTuckY = root.y
+            root.tucked = true
+            keyboard.setWindowDock(root, true)
+            tuckMoveTimer.restart()
+        } else {
+            root.x = root.preTuckX
+            root.y = root.preTuckY
+            root.tucked = false
+            keyboard.setWindowDock(root, false)
+        }
+    }
+
+    Timer {
+        id: tuckMoveTimer
+        interval: 60
+        repeat: false
+        onTriggered: {
+            // Slide down so only the title bar remains on-screen at the bottom
+            // edge as a grab handle; the keys hang off the bottom of the work
+            // area (allowed now that the window is DOCK-typed).
+            root.x = root.preTuckX
+            root.y = Screen.virtualY + Screen.height - titleBar.height
+        }
+    }
+
+    // Safety net: if the keyboard was parked off-screen (DOCK) and then hidden
+    // and re-shown via the tray, bring it back to a usable on-screen NORMAL
+    // state instead of reappearing off-screen. Tuck's own move doesn't change
+    // visibility, so this only fires on the tray hide→show path.
+    onVisibilityChanged: {
+        if (root.tucked && root.visibility !== Window.Hidden) {
+            root.x = root.preTuckX
+            root.y = root.preTuckY
+            root.tucked = false
+            keyboard.setWindowDock(root, false)
+        }
+    }
+
     // Debounce window-resize writes — onWidthChanged / onHeightChanged
     // fire on every pixel during a drag, and Settings.write hits the
     // OS registry/config synchronously.  Wait 300 ms after the last
@@ -99,7 +160,10 @@ Window {
         interval: 300
         repeat: false
         onTriggered: {
-            if (root._geometryRestored) {
+            // Never persist the parked off-screen position — preTuckX/Y (the
+            // last real on-screen spot) was already saved before tucking, and
+            // un-tucking restores it and fires a fresh save.
+            if (root._geometryRestored && !root.tucked) {
                 appSettings.savedWindowWidth = root.width
                 appSettings.savedWindowX = Math.round(root.x)
                 appSettings.savedWindowY = Math.round(root.y)
@@ -217,6 +281,11 @@ Window {
             root.y = Screen.height - root.height - 40
         }
         root._loaded = true
+
+        // The off-screen "Tuck away" button only works on X11 (the only
+        // session where GNOME clamps the window on-screen and the DOCK-type
+        // escape applies). Hide it everywhere else.
+        if (keyboard) root.tuckSupported = keyboard.tuckSupported()
 
         // Surface the post-update toast if the auto-update relauncher
         // dropped a fresh handoff breadcrumb before we launched. The
@@ -610,45 +679,44 @@ Window {
             MouseArea {
                 id: dragArea
                 anchors.fill: parent
-                anchors.rightMargin: 264  // Leave space for buttons (privacy "Learning"/"Paused" text + Snippets icon)
+                anchors.rightMargin: 298  // Leave space for buttons (privacy "Learning"/"Paused" text, Snippets, Tuck, etc.)
                 cursorShape: Qt.SizeAllCursor
                 
                 property real startMouseX
                 property real startMouseY
                 property real startWinX
                 property real startWinY
-                // True once a compositor-driven move has taken over the
-                // drag (see onPressed). When set, onPositionChanged stays
-                // out of the way so the manual path doesn't fight the WM.
-                property bool sysMoveActive: false
 
+                // Manual x/y drag on EVERY platform — deliberately NOT
+                // startSystemMove(). This window is WindowDoesNotAcceptFocus,
+                // and on X11/Mutter a WM-driven _NET_WM_MOVERESIZE interactive
+                // move intermittently fails to take a pointer grab for a
+                // non-focusable window. Worse, startSystemMove() returns true
+                // the instant it *sends* the request (not when the WM performs
+                // it), so the old code set sysMoveActive=true and suppressed
+                // this manual fallback — leaving the drag silently dead on the
+                // presses where Mutter declined. The ButtonPress here
+                // establishes the implicit X11 pointer grab; because we never
+                // call startSystemMove() we never release it, so every
+                // MotionNotify is delivered to this MouseArea unconditionally
+                // and the drag tracks the cursor deterministically (same path
+                // Windows always used, and the leftResize handle below).
+                // Trade-off: Mutter clamps the programmatic move on-screen, so
+                // the keyboard can't be pushed past a screen edge — use the
+                // Minimize button to stash it. See docs/architecture/GOTCHAS.md.
                 onPressed: function(mouse) {
                     var global = mapToGlobal(mouse.x, mouse.y)
                     startMouseX = global.x
                     startMouseY = global.y
                     startWinX = root.x
                     startWinY = root.y
-                    // Prefer a WM-driven interactive move on Linux/macOS.
-                    // Mutter (and most X11 WMs) clamp a managed window's
-                    // programmatic ConfigureRequest moves to keep it
-                    // on-screen, so the manual path below can never push the
-                    // keyboard past a screen edge. startSystemMove() issues a
-                    // _NET_WM_MOVERESIZE the compositor lets travel off-screen
-                    // — and the WindowDoesNotAcceptFocus hint keeps it from
-                    // stealing keyboard focus during the move. Windows isn't
-                    // clamped this way and its SC_MOVE loop can activate a
-                    // WS_EX_NOACTIVATE window, so it keeps the manual path.
-                    sysMoveActive = false
-                    if (Qt.platform.os !== "windows" && root.startSystemMove)
-                        sysMoveActive = root.startSystemMove() === true
                 }
 
                 onPositionChanged: function(mouse) {
-                    if (pressed && !sysMoveActive) {
-                        var global = mapToGlobal(mouse.x, mouse.y)
-                        root.x = startWinX + (global.x - startMouseX)
-                        root.y = startWinY + (global.y - startMouseY)
-                    }
+                    if (!pressed) return
+                    var global = mapToGlobal(mouse.x, mouse.y)
+                    root.x = startWinX + (global.x - startMouseX)
+                    root.y = startWinY + (global.y - startMouseY)
                 }
             }
             
@@ -979,6 +1047,40 @@ Window {
                     }
                 }
                 
+                // Tuck away / Bring back (X11 only — root.tuckSupported).
+                // Parks the keyboard off the bottom edge as a DOCK-type window
+                // so GNOME/Mutter won't clamp it back on-screen, leaving the
+                // title bar as a grab handle; tap again to restore. This is the
+                // sanctioned "push it off-screen" affordance — the everyday
+                // drag stays on-screen by design. See docs/architecture/GOTCHAS.md.
+                Rectangle {
+                    width: 28
+                    height: 24
+                    radius: 4
+                    visible: root.tuckSupported
+                    color: tuckBtn.containsMouse ? "#444" : "transparent"
+
+                    ToolTip.visible: tuckBtn.containsMouse
+                    ToolTip.text: root.tucked ? qsTr("Bring keyboard back")
+                                              : qsTr("Tuck keyboard off-screen")
+                    ToolTip.delay: 400
+
+                    Text {
+                        anchors.centerIn: parent
+                        text: root.tucked ? "⤒" : "⤓"
+                        font.pixelSize: 15
+                        color: root.tucked ? root.themeAccent : "#999"
+                    }
+
+                    MouseArea {
+                        id: tuckBtn
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: root.toggleTuck()
+                    }
+                }
+
                 // Standard Windows minimize. Drops the OSK to the
                 // taskbar; click the taskbar entry to restore. Works
                 // because we no longer apply Qt.Tool / WS_EX_TOOLWINDOW
@@ -1941,24 +2043,21 @@ Window {
                             property real startMy
                             property real startX
                             property real startY
-                            property bool sysMoveActive: false
+                            // Manual x/y drag on every platform — same reason
+                            // as the main-window dragArea: this window is
+                            // WindowDoesNotAcceptFocus, so a WM-driven
+                            // startSystemMove() is unreliable on X11/Mutter and
+                            // its true-on-send return value used to suppress
+                            // this fallback, killing the drag. Never call
+                            // startSystemMove(), so the implicit press grab
+                            // stays and motion tracking is deterministic.
                             onPressed: function(mouse) {
                                 var g = mapToGlobal(mouse.x, mouse.y)
                                 startMx = g.x; startMy = g.y
                                 startX = snippetsWindow.x; startY = snippetsWindow.y
-                                // Hand the drag to the compositor on
-                                // Linux/macOS so it can travel off-screen
-                                // (see the main-window dragArea for why the
-                                // manual ConfigureRequest path gets clamped).
-                                sysMoveActive = false
-                                if (Qt.platform.os !== "windows" && snippetsWindow.startSystemMove)
-                                    sysMoveActive = snippetsWindow.startSystemMove() === true
                             }
                             onPositionChanged: function(mouse) {
-                                if (!pressed || sysMoveActive) return
-                                // Free movement anywhere on the desktop —
-                                // this is a real top-level window, so no
-                                // overlay clamp is needed.
+                                if (!pressed) return
                                 var g = mapToGlobal(mouse.x, mouse.y)
                                 snippetsWindow.x = startX + (g.x - startMx)
                                 snippetsWindow.y = startY + (g.y - startMy)

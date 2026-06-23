@@ -1222,6 +1222,45 @@ class KeyboardBridge(QObject):
         self.predictionsChanged.emit([])
 
     # ------------------------------------------------------------------
+    #  Off-screen "Tuck away" — see src/platform/x11_window.py and the
+    #  "Tuck away" notes in docs/architecture/GOTCHAS.md.
+    # ------------------------------------------------------------------
+
+    @Slot(result=bool)
+    def tuckSupported(self) -> bool:
+        """Whether the off-screen 'Tuck away' affordance works this session.
+
+        Only X11 has the on-screen clamp that tuck exists to escape (and the
+        DOCK-type clamp-escape that does it). Off X11 the title-bar button is
+        hidden — Windows/macOS aren't clamped and Wayland can't escape it.
+        """
+        try:
+            from .platform.x11_window import is_x11
+
+            return is_x11()
+        except Exception:  # pragma: no cover - defensive
+            return False
+
+    @Slot("QVariant", bool)
+    def setWindowDock(self, window: Any, dock: bool) -> None:
+        """Promote a QML window to DOCK type (``dock=True``) or revert to NORMAL.
+
+        DOCK is the one window type Mutter exempts from the on-screen clamp
+        while keeping always-on-top + no-focus, so the keyboard can be parked
+        off a screen edge. The cost (no taskbar entry, inert ``showMinimized``)
+        is why QML only flips to DOCK *while parked* and reverts to NORMAL on
+        return. No-op off X11. The window object is passed straight from QML;
+        its native id is resolved here.
+        """
+        try:
+            from .platform.x11_window import set_window_dock
+
+            win_id = int(window.winId()) if window is not None else 0
+            set_window_dock(win_id, bool(dock))
+        except Exception:  # pragma: no cover - defensive
+            _logger.debug("setWindowDock failed", exc_info=True)
+
+    # ------------------------------------------------------------------
     #  Snippets — user-defined quick-insert text (see src/snippets.py)
     # ------------------------------------------------------------------
 
