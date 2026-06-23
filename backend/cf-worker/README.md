@@ -5,6 +5,12 @@ Alpha-OSK clients and exposes a public aggregate counter.
 
 Design: `docs/architecture/TELEMETRY.md`. Privacy story: `docs/PRIVACY.md`.
 
+## Prerequisites
+
+**Node ≥22.** Recent Wrangler 4.x hard-errors on older Node ("Wrangler
+requires at least Node.js v22.0.0"), so `npm run dev` / `npm run deploy`
+need Node 22+. `npm install` and `npm run sbom` still work on Node 20.
+
 ## One-time setup
 
 ```bash
