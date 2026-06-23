@@ -13,11 +13,14 @@
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20250101.0",
-    "@cyclonedx/cyclonedx-npm": "^4.2.1",
+    "@cyclonedx/cyclonedx-npm": "^5.0.0",
     "typescript": "^5.4.0",
-    "wrangler": "^4.0.0"
+    "wrangler": "^4.104.0"
   },
   "overrides": {
-    "ws": "^8.20.1"
+    "ws": "^8.20.1",
+    "undici": "^7.28.0",
+    "tar": "^7.5.16",
+    "js-yaml": "^4.2.0"
   }
 }
