@@ -211,11 +211,19 @@ Modifier keys are **sticky** — tap once to activate, tap again to deactivate. 
 - **Modifier+key combos work**: e.g., tap Ctrl, then tap C → sends Ctrl+C.
 - **Auto-release**: After any key press (character or special), active modifiers are released at the OS level and deactivated. Shift specifically auto-releases after one keypress (caps lock pins it on instead) — Ctrl/Alt/Win behave the same way.
 
+### Super/Meta is never held on Linux (`win` modifier)
+
+The one exception to "held at the OS level": on Linux, `LinuxKeySynthesizer.hold_modifier()` **skips `win`/`super` entirely** (early-return, no `xdotool keydown super`). Holding Super is a window-manager gesture trigger — while it's down, Mutter/KWin grab the pointer for window move/resize (Super+drag = move, Super+right-button = resize), so *every* mouse click (including clicks on the OSK's own keys) is swallowed as a WM gesture instead of reaching the keyboard. The user then can't tap Win again to release it and is stuck (the reported "stuck in a right-click scenario" bug). `toggleWin` in the bridge is unchanged and cross-platform-uniform — it still calls `hold_modifier("win")`; the platform layer is where the no-op lives, because the WM-grab is a Linux/X11/Wayland quirk. **Super+`<key>` combos still work** (Win+D, Win+L, Win+arrow) because `send_key()` emits them as an atomic `xdotool key super+<key>` chord that presses and releases Super in one shot. Holding Super buys nothing for an OSK anyway — you can't Super+drag with the same mouse you click keys with. `release_modifier("win")` is left functional (a `keyup super` when Super isn't down is a harmless no-op and clears any externally-stuck Super). Windows still holds `VK_LWIN` — the WM-grab problem is Linux-specific. See `tests/test_platform.py::TestLinuxSuperNeverHeld`.
+
+### Clean state on open (`resetModifiers`)
+
+`KeyboardBridge.resetModifiers()` (`@Slot`) drops every held modifier (Shift/Ctrl/Alt/Win) — releasing the OS-level state via `reset_modifier_state()` and clearing the bridge flags + their key highlights — so a session never starts with a modifier stuck from a prior run, a crash mid-chord, or an external grab. Called from `Main.qml`'s `Component.onCompleted`. Caps Lock is intentionally **not** reset (it holds nothing at the OS level so it can't get stuck, and it's a deliberate persistent toggle). This complements the OS-only `reset_modifier_state()` already called in the bridge `__init__`.
+
 ### Implementation
 - `keyboard_bridge.py`: `toggleShift()` / `toggleCtrl()` / `toggleAlt()` / `toggleWin()` call `_synth.hold_modifier()` on activate and `_synth.release_modifier()` on deactivate. All auto-release paths in `pressKey()` and `pressSpecialKey()` also call `release_modifier()`. `shutdown()` releases any still-held modifiers so quitting with one "active" doesn't pin it at the X server / Wayland compositor / Windows kernel.
 - `platform/base.py`: `hold_modifier()` and `release_modifier()` — default no-op.
 - `platform/windows.py`: Sends `VK_CONTROL` / `VK_MENU` / `VK_LWIN` key-down or key-up via `SendInput`.
-- `platform/linux.py`: Uses `xdotool keydown/keyup` or `ydotool key --key-down/--key-up`.
+- `platform/linux.py`: Uses `xdotool keydown/keyup` or `ydotool key --key-down/--key-up`. **`hold_modifier` skips `win`/`super`** — see the Super/Meta note above.
 
 ## Settings Panel Structure
 

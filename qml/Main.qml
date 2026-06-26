@@ -231,6 +231,13 @@ Window {
             keyboard.setAudioEnabled(true)
         }
 
+        // Enter a clean input state: drop any sticky modifier (Shift/
+        // Ctrl/Alt/Win) left held from a prior run, a crash mid-chord, or
+        // an external grab, and clear its key highlight. Without this a
+        // stuck Super on Linux turns every click into a window-manager
+        // move/resize gesture and the user can't recover.
+        if (keyboard) keyboard.resetModifiers()
+
         // Load punctuation and auto-save settings
         if (keyboard) {
             keyboard.setAutoSpaceAfterPunctuation(appSettings.savedAutoSpaceAfterPunctuation)

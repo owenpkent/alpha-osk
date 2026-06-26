@@ -244,8 +244,22 @@ class LinuxKeySynthesizer(KeySynthesizerBase):
             _run(["ydotool", "type", text])
 
     def hold_modifier(self, key_name: str) -> None:
-        """Send a modifier key-down so it stays held at the OS level."""
+        """Send a modifier key-down so it stays held at the OS level.
+
+        Super/Meta is deliberately *never* held on Linux. While Super is
+        held, X11/Wayland window managers grab the pointer for window
+        move/resize gestures (Super+drag = move, Super+right-button =
+        resize), so every mouse click — including clicks on the OSK's own
+        keys — is swallowed as a WM gesture instead of reaching the
+        keyboard. The user then can't tap Win again to release it and is
+        stuck. We skip the hold; Super+<key> combos (Win+D, Win+L,
+        Win+arrow) still work because send_key() emits them as an atomic
+        ``xdotool key super+<key>`` chord. (Holding Super buys nothing
+        anyway — you can't Super+drag from an on-screen keyboard.)
+        """
         if not self._tool:
+            return
+        if key_name in ("win", "super"):
             return
         mapped = "super" if key_name == "win" else key_name
         if self._tool == "xdotool":
@@ -256,7 +270,13 @@ class LinuxKeySynthesizer(KeySynthesizerBase):
             _run(["ydotool", "key", "--key-down", mapped])
 
     def release_modifier(self, key_name: str) -> None:
-        """Send a modifier key-up to release a held modifier."""
+        """Send a modifier key-up to release a held modifier.
+
+        Kept functional for ``win``/``super`` even though ``hold_modifier``
+        never holds it: issuing a ``keyup super`` is a harmless no-op when
+        Super isn't down, and acts as defensive cleanup if Super ever got
+        stuck (e.g. a physical Super key, or an external grab).
+        """
         if not self._tool:
             return
         mapped = "super" if key_name == "win" else key_name

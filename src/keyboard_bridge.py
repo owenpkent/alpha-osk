@@ -1089,6 +1089,40 @@ class KeyboardBridge(QObject):
             self._synth.release_modifier("win")
         self.winActiveChanged.emit(self._win_active)
 
+    @Slot()
+    def resetModifiers(self) -> None:
+        """Drop every held modifier and clear its UI highlight — a clean slate.
+
+        Called from QML when the keyboard opens (``Component.onCompleted``)
+        so we never start a session with a modifier left active from a
+        prior run, a crash mid-chord, or an external grab. Belt-and-braces
+        alongside the OS-level reset in ``__init__``: this one also clears
+        the bridge's own flags and emits the change signals so the on-key
+        highlights match reality.
+
+        Resets Shift / Ctrl / Alt / Win (the four that hold at the OS
+        level and can leave a click "stuck" under a modifier). Caps Lock
+        is intentionally left as-is — it holds nothing at the OS level, so
+        it can't get stuck, and it's a deliberate persistent toggle a user
+        may have turned on on purpose.
+        """
+        # Release anything still held at the X server / compositor / kernel.
+        self._synth.reset_modifier_state()
+        if self._shift_active:
+            self._shift_active = False
+            self.shiftActiveChanged.emit(False)
+        if self._ctrl_active:
+            self._ctrl_active = False
+            self.ctrlActiveChanged.emit(False)
+        if self._alt_active:
+            self._alt_active = False
+            self.altActiveChanged.emit(False)
+        if self._win_active:
+            self._win_active = False
+            self.winActiveChanged.emit(False)
+        # Shift feeds the upper/lower layer; resync after clearing it.
+        self._update_layer()
+
     @Slot(str)
     def switchLayer(self, layer: str) -> None:
         """Switch keyboard layer (lower, upper, numbers, symbols)."""
