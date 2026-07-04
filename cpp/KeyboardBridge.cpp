@@ -178,11 +178,13 @@ void KeyboardBridge::shutdown()
         m_telemetry->submitOnQuit();
     passworddetect::shutdown();
 
-    // Release any OS-held sticky modifier so quitting doesn't pin it desktop-wide.
+    // Release any OS-held modifier (sticky or right-click-locked) so
+    // quitting doesn't pin it desktop-wide.
     if (m_shift) { m_synth->releaseModifier("shift"); m_shift = false; }
     if (m_ctrl)  { m_synth->releaseModifier("ctrl");  m_ctrl = false; }
     if (m_alt)   { m_synth->releaseModifier("alt");   m_alt = false; }
     if (m_win)   { m_synth->releaseModifier("win");   m_win = false; }
+    m_shiftLocked = m_ctrlLocked = m_altLocked = m_winLocked = false;
 }
 
 // ----- layouts -----------------------------------------------------------
@@ -265,7 +267,7 @@ void KeyboardBridge::pressChar(const QString &key, bool literal)
     // 1. Edit-mode intercept: route to the popup TextField, not the OS.
     if (m_editMode) {
         emit editKeyTyped(casedChar());
-        if (m_shift && !m_caps) {
+        if (m_shift && !m_caps && !m_shiftLocked) {
             m_shift = false;
             m_synth->releaseModifier("shift");
             updateLayer();
@@ -432,24 +434,26 @@ void KeyboardBridge::pressSpecialKey(const QString &keyName)
 
     // Auto-release block #2: keep Shift/Ctrl held on nav keys (selection /
     // word-jump persist across presses); Alt/Win are always one-shot.
+    // A right-click-locked modifier stays held regardless of key type
+    // (same as the nav-key exception, but the user opted in explicitly).
     const bool keepSelection = navKeys().contains(lower);
-    if (m_shift && !m_caps && !keepSelection) {
+    if (m_shift && !m_caps && !keepSelection && !m_shiftLocked) {
         m_shift = false;
         m_synth->releaseModifier("shift");
         updateLayer();
         emit shiftActiveChanged(false);
     }
-    if (m_ctrl && !keepSelection) {
+    if (m_ctrl && !keepSelection && !m_ctrlLocked) {
         m_ctrl = false;
         m_synth->releaseModifier("ctrl");
         emit ctrlActiveChanged(false);
     }
-    if (m_alt) {
+    if (m_alt && !m_altLocked) {
         m_alt = false;
         m_synth->releaseModifier("alt");
         emit altActiveChanged(false);
     }
-    if (m_win) {
+    if (m_win && !m_winLocked) {
         m_win = false;
         m_synth->releaseModifier("win");
         emit winActiveChanged(false);
@@ -560,23 +564,25 @@ void KeyboardBridge::processSwipe(const QVariant &points)
 
 void KeyboardBridge::releaseStickyAll()
 {
-    if (m_shift && !m_caps) {
+    // A right-click-locked modifier stays held (it's exempt from the
+    // per-keystroke auto-release until the user releases it).
+    if (m_shift && !m_caps && !m_shiftLocked) {
         m_shift = false;
         m_synth->releaseModifier("shift");
         updateLayer();
         emit shiftActiveChanged(false);
     }
-    if (m_ctrl) {
+    if (m_ctrl && !m_ctrlLocked) {
         m_ctrl = false;
         m_synth->releaseModifier("ctrl");
         emit ctrlActiveChanged(false);
     }
-    if (m_alt) {
+    if (m_alt && !m_altLocked) {
         m_alt = false;
         m_synth->releaseModifier("alt");
         emit altActiveChanged(false);
     }
-    if (m_win) {
+    if (m_win && !m_winLocked) {
         m_win = false;
         m_synth->releaseModifier("win");
         emit winActiveChanged(false);
@@ -604,10 +610,12 @@ void KeyboardBridge::rehydrateCurrentWordFromContext()
 void KeyboardBridge::toggleShift()
 {
     m_shift = !m_shift;
-    if (m_shift)
+    if (m_shift) {
         m_synth->holdModifier("shift");
-    else
+    } else {
         m_synth->releaseModifier("shift");
+        clearLock("shift"); // a tap also clears a right-click lock
+    }
     updateLayer();
     emit shiftActiveChanged(m_shift);
 }
@@ -624,31 +632,111 @@ void KeyboardBridge::toggleCapsLock()
 void KeyboardBridge::toggleCtrl()
 {
     m_ctrl = !m_ctrl;
-    if (m_ctrl)
+    if (m_ctrl) {
         m_synth->holdModifier("ctrl");
-    else
+    } else {
         m_synth->releaseModifier("ctrl");
+        clearLock("ctrl");
+    }
     emit ctrlActiveChanged(m_ctrl);
 }
 
 void KeyboardBridge::toggleAlt()
 {
     m_alt = !m_alt;
-    if (m_alt)
+    if (m_alt) {
         m_synth->holdModifier("alt");
-    else
+    } else {
         m_synth->releaseModifier("alt");
+        clearLock("alt");
+    }
     emit altActiveChanged(m_alt);
 }
 
 void KeyboardBridge::toggleWin()
 {
     m_win = !m_win;
-    if (m_win)
+    if (m_win) {
         m_synth->holdModifier("win");
-    else
+    } else {
         m_synth->releaseModifier("win");
+        clearLock("win");
+    }
     emit winActiveChanged(m_win);
+}
+
+void KeyboardBridge::clearLock(const QString &name)
+{
+    // Drop a right-click lock without touching the held/active state.
+    // Called from the sticky toggleX paths: a plain tap on a locked
+    // modifier should also clear the lock so the user isn't stuck.
+    if (name == QLatin1String("shift")) {
+        if (!m_shiftLocked) return;
+        m_shiftLocked = false;
+        emit shiftLockedChanged(false);
+    } else if (name == QLatin1String("ctrl")) {
+        if (!m_ctrlLocked) return;
+        m_ctrlLocked = false;
+        emit ctrlLockedChanged(false);
+    } else if (name == QLatin1String("alt")) {
+        if (!m_altLocked) return;
+        m_altLocked = false;
+        emit altLockedChanged(false);
+    } else if (name == QLatin1String("win")) {
+        if (!m_winLocked) return;
+        m_winLocked = false;
+        emit winLockedChanged(false);
+    }
+}
+
+void KeyboardBridge::lockModifier(const QString &name)
+{
+    // Right-click a modifier → toggle a persistent "lock" (held down).
+    // A locked modifier is held at the OS level and exempt from the
+    // per-keystroke auto-release, so Ctrl+C, Ctrl+V, ... (or a long
+    // Shift-selection) run without re-tapping. Right-click again (or
+    // tap the key) to release. Caps Lock is already persistent, so it
+    // is not lockable here.
+    const QString n = name.toLower();
+
+    bool *active = nullptr;
+    bool *locked = nullptr;
+    if (n == QLatin1String("shift"))     { active = &m_shift; locked = &m_shiftLocked; }
+    else if (n == QLatin1String("ctrl")) { active = &m_ctrl;  locked = &m_ctrlLocked; }
+    else if (n == QLatin1String("alt"))  { active = &m_alt;   locked = &m_altLocked; }
+    else if (n == QLatin1String("win"))  { active = &m_win;   locked = &m_winLocked; }
+    else return;
+
+    const bool wasActive = *active;
+    const bool newLocked = !*locked;
+    const bool newActive = newLocked; // lock on → held; lock off → released
+    *locked = newLocked;
+    *active = newActive;
+
+    // Only touch the OS hold when the held state actually flips, so
+    // locking an already-sticky-active modifier doesn't re-send a
+    // redundant key-down.
+    if (newActive && !wasActive)
+        m_synth->holdModifier(n);
+    else if (!newActive && wasActive)
+        m_synth->releaseModifier(n);
+
+    if (n == QLatin1String("shift"))
+        updateLayer();
+
+    // Emit the locked-changed for this modifier, then the active-changed
+    // if the held state flipped.
+    if (n == QLatin1String("shift"))     emit shiftLockedChanged(newLocked);
+    else if (n == QLatin1String("ctrl")) emit ctrlLockedChanged(newLocked);
+    else if (n == QLatin1String("alt"))  emit altLockedChanged(newLocked);
+    else if (n == QLatin1String("win"))  emit winLockedChanged(newLocked);
+
+    if (newActive != wasActive) {
+        if (n == QLatin1String("shift"))     emit shiftActiveChanged(newActive);
+        else if (n == QLatin1String("ctrl")) emit ctrlActiveChanged(newActive);
+        else if (n == QLatin1String("alt"))  emit altActiveChanged(newActive);
+        else if (n == QLatin1String("win"))  emit winActiveChanged(newActive);
+    }
 }
 
 void KeyboardBridge::switchLayer(const QString &layer)

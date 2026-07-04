@@ -176,6 +176,7 @@ Item {
                             spacing: 6
 
                             HelpText { text: "<b>Modifier keys</b> (Shift, Ctrl, Alt, Win) are <b>sticky</b>. Click once to activate, click again to deactivate. They auto-release after one keystroke (except Caps Lock, which stays until you toggle it off)." }
+                            HelpText { text: "<b>Right-click a modifier</b> (Shift, Ctrl, Alt, Win) to <b>lock it held down</b> · it gets a gold ring and a 🔒 badge and stays held across many keystrokes, so you can do Ctrl+C then Ctrl+V, hold Shift to drag-select, or Ctrl+click links without re-tapping. Right-click it again (or left-click it) to release." }
                             HelpText { text: "<b>Shift + click</b> and <b>Ctrl + click</b> work too · activate the modifier, then click in the target app to extend selection, open a link, etc." }
                             HelpText { text: "<b>Caps Lock and Shift are independent.</b> Toggling Caps does not also flip Shift. Caps uppercases letters; Shift also picks shifted glyphs (<code>!</code> on <code>1</code>)." }
                             HelpText { text: "<b>Right-click a character key</b> to type its shifted variant once without flipping sticky Shift. Letters become uppercase, symbols use their shifted glyph (<code>1</code> → <code>!</code>, <code>,</code> → <code>&lt;</code>). Toggle in <b>Settings → Smart Typing → Input</b>." }

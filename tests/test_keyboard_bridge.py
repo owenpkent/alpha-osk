@@ -309,6 +309,97 @@ class TestModifierState:
         assert emissions and emissions[-1] is False
 
 
+class TestModifierLock:
+    """Right-click 'lock' (held-down) modifiers.
+
+    A locked modifier is held at the OS level and exempt from the
+    per-keystroke auto-release, so the user can fire several combos or
+    hold Shift across many keys without re-tapping.
+    """
+
+    def test_lock_ctrl_holds_at_os_level(self, bridge: KeyboardBridge):
+        bridge.lockModifier("ctrl")
+        assert bridge._ctrl_locked
+        assert bridge._ctrl_active
+        bridge._synth.hold_modifier.assert_called_with("ctrl")
+
+    def test_locked_ctrl_survives_chord(self, bridge: KeyboardBridge):
+        # The whole point: Ctrl+C then Ctrl+V without re-tapping Ctrl.
+        bridge.lockModifier("ctrl")
+        bridge.pressKey("c")
+        assert bridge._ctrl_active, "locked Ctrl released after a chord"
+        bridge.pressKey("v")
+        assert bridge._ctrl_active
+
+    def test_locked_shift_survives_character(self, bridge: KeyboardBridge):
+        # Locked Shift keeps producing uppercase across many letters.
+        bridge.lockModifier("shift")
+        bridge.pressKey("a")
+        bridge._synth.send_text.assert_called_with("A")
+        bridge.pressKey("b")
+        assert bridge._shift_active
+        bridge._synth.send_text.assert_called_with("B")
+
+    def test_locked_alt_survives_special_key(self, bridge: KeyboardBridge):
+        bridge.lockModifier("alt")
+        bridge.pressSpecialKey("tab")
+        assert bridge._alt_active  # Alt+Tab held for repeat cycling
+
+    def test_locked_ctrl_survives_non_nav_special(self, bridge: KeyboardBridge):
+        # A sticky Ctrl drops after Backspace; a locked one must not.
+        bridge.lockModifier("ctrl")
+        bridge.pressSpecialKey("backspace")
+        assert bridge._ctrl_active
+
+    def test_second_lock_releases(self, bridge: KeyboardBridge):
+        bridge.lockModifier("ctrl")
+        bridge._synth.release_modifier.reset_mock()
+        bridge.lockModifier("ctrl")
+        assert not bridge._ctrl_locked
+        assert not bridge._ctrl_active
+        bridge._synth.release_modifier.assert_called_with("ctrl")
+
+    def test_tap_clears_lock(self, bridge: KeyboardBridge):
+        # A plain left-tap on a locked modifier releases it (easy way out).
+        bridge.lockModifier("ctrl")
+        bridge.toggleCtrl()
+        assert not bridge._ctrl_locked
+        assert not bridge._ctrl_active
+
+    def test_lock_over_sticky_active_no_redundant_hold(self, bridge: KeyboardBridge):
+        # Right-clicking an already-sticky-active modifier should lock it
+        # without re-sending a key-down (it's already held).
+        bridge.toggleCtrl()  # sticky active
+        bridge._synth.hold_modifier.reset_mock()
+        bridge.lockModifier("ctrl")
+        assert bridge._ctrl_locked
+        bridge._synth.hold_modifier.assert_not_called()
+
+    def test_lock_emits_locked_signal(self, bridge: KeyboardBridge):
+        emissions = []
+        bridge.ctrlLockedChanged.connect(emissions.append)
+        bridge.lockModifier("ctrl")
+        assert emissions and emissions[-1] is True
+        bridge.lockModifier("ctrl")
+        assert emissions[-1] is False
+
+    def test_lock_shift_switches_to_upper_layer(self, bridge: KeyboardBridge):
+        bridge.lockModifier("shift")
+        assert bridge._current_layer == "upper"
+
+    def test_lock_unknown_modifier_is_noop(self, bridge: KeyboardBridge):
+        bridge.lockModifier("caps")  # caps is already persistent
+        assert not bridge._shift_locked
+        assert not bridge._ctrl_locked
+
+    def test_shutdown_releases_locked_modifier(self, bridge: KeyboardBridge):
+        bridge.lockModifier("ctrl")
+        bridge._synth.release_modifier.reset_mock()
+        bridge.shutdown()
+        bridge._synth.release_modifier.assert_any_call("ctrl")
+        assert not bridge._ctrl_locked
+
+
 class TestLayerManagement:
     """Keyboard layer switching."""
 

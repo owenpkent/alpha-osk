@@ -250,6 +250,10 @@ class TestWindowsReplaceText:
         # the scancode-resolution logic which has its own coverage in
         # TestWindowsScancodeDispatch.
         synth._make_char_scancode_events = lambda c: None
+        # replace_text now probes whether Shift is already held (to avoid
+        # releasing a sticky/locked Shift). Default to not-held so the
+        # existing Shift-wrap assertions stand; overridden per-test below.
+        synth._modifier_already_held = lambda mod: False
         # Bypass GetForegroundWindow / GetClassNameW directly. Mocking
         # them via ctypes is brittle off-Windows.
         synth._get_foreground_window_class = lambda: foreground_class
@@ -295,6 +299,25 @@ class TestWindowsReplaceText:
             ("vk", VK_SHIFT, False),
             ("uni", "h"), ("uni", "i"),
         ]]
+
+    def test_held_shift_not_wrapped_in_selection(self):
+        # Regression for right-click "lock": when Shift is already held
+        # (locked or sticky), replace_text must NOT emit its own Shift
+        # press/release — the Left presses select under the standing hold,
+        # and a trailing Shift key-up would silently release the locked
+        # Shift while the OSK still shows it held.
+        from src.platform.windows import VK_LEFT, VK_SHIFT
+        synth, captured = self._make_synth("Chrome_WidgetWin_1")
+        synth._modifier_already_held = lambda mod: mod == "shift"
+        synth.replace_text(2, "hi")
+        # No Shift bookends; Left presses ride the standing hold.
+        assert captured == [[
+            ("vk", VK_LEFT, True),  ("vk", VK_LEFT, False),
+            ("vk", VK_LEFT, True),  ("vk", VK_LEFT, False),
+            ("uni", "h"), ("uni", "i"),
+        ]]
+        assert ("vk", VK_SHIFT, True) not in captured[0]
+        assert ("vk", VK_SHIFT, False) not in captured[0]
 
     def test_zero_backspace_in_terminal_just_types(self):
         synth, captured = self._make_synth("ConsoleWindowClass")
@@ -343,6 +366,12 @@ class TestWindowsSendKeyPunctuationChord:
         class _StubUser32:
             def VkKeyScanW(self_inner, ch):
                 return vk_scan_results.get(ch, -1)
+
+            # send_key now probes whether each modifier is already held
+            # (to avoid dropping a sticky/locked hold). No modifier is
+            # held in these chord tests, so report all keys up.
+            def GetAsyncKeyState(self_inner, vk):
+                return 0
         synth._user32 = _StubUser32()
         return synth, captured
 
@@ -398,6 +427,24 @@ class TestWindowsSendKeyPunctuationChord:
             ("vk", VK_CONTROL, True),
             ("uni", "ñ"),
             ("vk", VK_CONTROL, False),
+        ]]
+
+    def test_already_held_modifier_is_not_wrapped(self):
+        # Regression for right-click "lock": when Ctrl is already held at
+        # the OS (hold_modifier put it down, and it must STAY down), send_key
+        # must NOT wrap the action key with a Ctrl down/up. The trailing
+        # Ctrl-up would silently release the lock, breaking a following
+        # Ctrl+click / Alt+Tab even though the OSK still shows it held.
+        from src.platform.windows import VK_CONTROL
+        synth, captured = self._make_synth({"-": 0x00BD})
+        # Report Ctrl physically held; everything else up.
+        synth._user32.GetAsyncKeyState = (
+            lambda vk: 0x8000 if vk == VK_CONTROL else 0
+        )
+        synth.send_key("-", modifiers=["ctrl"])
+        # Only the action key — Ctrl is supplied by the standing hold.
+        assert captured == [[
+            ("vk", 0xBD, True), ("vk", 0xBD, False),
         ]]
 
 

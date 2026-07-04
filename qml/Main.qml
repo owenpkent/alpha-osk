@@ -380,6 +380,13 @@ Window {
     property bool ctrlOn: keyboard ? keyboard.ctrlActive : false
     property bool altOn: keyboard ? keyboard.altActive : false
     property bool winOn: keyboard ? keyboard.winActive : false
+    // Right-click "lock" (held-down) state for each modifier — drives a
+    // distinct indicator so a locked key reads differently from a sticky
+    // one-shot press.
+    property bool shiftLocked: keyboard ? keyboard.shiftLocked : false
+    property bool ctrlLocked: keyboard ? keyboard.ctrlLocked : false
+    property bool altLocked: keyboard ? keyboard.altLocked : false
+    property bool winLocked: keyboard ? keyboard.winLocked : false
     property string layer: keyboard ? keyboard.currentLayer : "lower"
     property bool showNumbers: layer === "numbers"
     property bool showSymbols: layer === "symbols"
@@ -503,6 +510,10 @@ Window {
         function onCtrlActiveChanged(active) { root.ctrlOn = active }
         function onAltActiveChanged(active) { root.altOn = active }
         function onWinActiveChanged(active) { root.winOn = active }
+        function onShiftLockedChanged(locked) { root.shiftLocked = locked }
+        function onCtrlLockedChanged(locked) { root.ctrlLocked = locked }
+        function onAltLockedChanged(locked) { root.altLocked = locked }
+        function onWinLockedChanged(locked) { root.winLocked = locked }
         function onCurrentLayerChanged(newLayer) { root.layer = newLayer }
         
         // Prediction updates
@@ -1232,6 +1243,18 @@ Window {
                                         default: return false
                                     }
                                 }
+                                // Right-click "lock" indicator — a held-down
+                                // modifier (see onKeyRightPressed below).
+                                isLocked: {
+                                    if (!kd.stateKey) return false
+                                    switch(kd.stateKey) {
+                                        case "shiftOn": return root.shiftLocked
+                                        case "ctrlOn": return root.ctrlLocked
+                                        case "altOn": return root.altLocked
+                                        case "winOn": return root.winLocked
+                                        default: return false
+                                    }
+                                }
                                 keyColor: {
                                     switch(kd.style || "default") {
                                         case "secondary": return Qt.darker(root.themeKeyColor, 1.3)
@@ -1285,6 +1308,19 @@ Window {
                                 // clicking Shift or Enter has no obvious
                                 // meaning.
                                 onKeyRightPressed: {
+                                    // Right-click a modifier → hold it down
+                                    // (locked). Independent of the right-
+                                    // click-shift setting: a modifier has no
+                                    // "shifted variant", and holding Ctrl/
+                                    // Shift/Alt is the whole point of the
+                                    // gesture. Caps Lock is already a
+                                    // persistent toggle, so it's skipped.
+                                    if (kd.type === "modifier") {
+                                        if (kd.action === "shift" || kd.action === "ctrl"
+                                                || kd.action === "alt" || kd.action === "win")
+                                            keyboard.lockModifier(kd.action)
+                                        return
+                                    }
                                     if (!root.rightClickShift) return
                                     if (kd.type !== "char") return
                                     var rch = ""

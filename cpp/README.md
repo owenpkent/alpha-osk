@@ -30,7 +30,9 @@ Implemented and verified:
 - **Key synthesis** -- behavior-identical port of the Win32 `SendInput` backend:
   scancode-first ASCII + chords (so input reaches Blender/games and relays over
   RDP), Unicode fallback, the full dead-key / AltGr / Caps-Lock bail ladder,
-  `EXTENDEDKEY` handling, sticky `hold/release_modifier`, and `replaceText`
+  `EXTENDEDKEY` handling, sticky `hold/release_modifier` (with the
+  already-held skip-wrap so a right-click-locked modifier's standing hold
+  isn't dropped by a trailing key-up), and `replaceText`
   (Shift+Left selection, BackSpace+retype in terminals).
   (`platform/WindowsKeySynthesizer.*`)
 - **Prediction** -- n-gram engine (unigram/bigram/trigram linear interpolation,
@@ -41,7 +43,8 @@ Implemented and verified:
 - **Bridge state machine** -- the full typing path: `pressKey`/`pressKeyLiteral`/
   `pressSpecialKey`, word-boundary handling, backspace buffer-trim + mid-word
   rehydration, suffix-only pill insertion (+ replace / compat fallbacks),
-  sticky-modifier auto-release with the nav-key exception, caps/shift pill
+  sticky-modifier auto-release with the nav-key exception, right-click
+  modifier lock (`lockModifier`, held until released), caps/shift pill
   mirroring. (`KeyboardBridge.*`)
 
 Deferred (present as no-op / minimal stubs so the reused QML never calls a

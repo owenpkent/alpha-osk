@@ -41,6 +41,10 @@ private:
     // Punctuation single-char fallback for chords. Returns false if unresolved.
     static bool resolveCharVk(QChar ch, int &vk, bool &needsShift);
     static bool isExtendedVk(int vk);
+    // True if a modifier is already down at the OS (sticky hold / right-click
+    // lock / physical). sendKey skips wrapping such a modifier so its standing
+    // hold isn't dropped by a trailing key-up. Mirrors windows.py.
+    static bool modifierAlreadyHeld(const QString &mod);
 
     // Decide whether scancode mode is safe for this char and how to send it.
     struct ScanResolve { int vk; UINT scancode; bool needsShift; };

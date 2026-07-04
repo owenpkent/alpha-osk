@@ -33,6 +33,12 @@ class KeyboardBridge : public QObject
     Q_PROPERTY(bool ctrlActive READ ctrlActive NOTIFY ctrlActiveChanged)
     Q_PROPERTY(bool altActive READ altActive NOTIFY altActiveChanged)
     Q_PROPERTY(bool winActive READ winActive NOTIFY winActiveChanged)
+    // Right-click "lock" (held-down) state, surfaced separately so QML
+    // can draw a distinct indicator on a held modifier.
+    Q_PROPERTY(bool shiftLocked READ shiftLocked NOTIFY shiftLockedChanged)
+    Q_PROPERTY(bool ctrlLocked READ ctrlLocked NOTIFY ctrlLockedChanged)
+    Q_PROPERTY(bool altLocked READ altLocked NOTIFY altLockedChanged)
+    Q_PROPERTY(bool winLocked READ winLocked NOTIFY winLockedChanged)
     Q_PROPERTY(QString currentLayer READ currentLayer NOTIFY currentLayerChanged)
     Q_PROPERTY(bool synthAvailable READ synthAvailable CONSTANT)
     Q_PROPERTY(QString appVersion READ appVersion CONSTANT)
@@ -50,6 +56,10 @@ public:
     bool ctrlActive() const { return m_ctrl; }
     bool altActive() const { return m_alt; }
     bool winActive() const { return m_win; }
+    bool shiftLocked() const { return m_shiftLocked; }
+    bool ctrlLocked() const { return m_ctrlLocked; }
+    bool altLocked() const { return m_altLocked; }
+    bool winLocked() const { return m_winLocked; }
     QString currentLayer() const { return m_currentLayer; }
     bool synthAvailable() const;
     QString appVersion() const;
@@ -73,6 +83,7 @@ public:
     Q_INVOKABLE void toggleCtrl();
     Q_INVOKABLE void toggleAlt();
     Q_INVOKABLE void toggleWin();
+    Q_INVOKABLE void lockModifier(const QString &name); // right-click hold
     Q_INVOKABLE void switchLayer(const QString &layer);
     Q_INVOKABLE void pressPrediction(const QString &word);
     Q_INVOKABLE void clearPredictions();
@@ -160,6 +171,10 @@ signals:
     void ctrlActiveChanged(bool active);
     void altActiveChanged(bool active);
     void winActiveChanged(bool active);
+    void shiftLockedChanged(bool locked);
+    void ctrlLockedChanged(bool locked);
+    void altLockedChanged(bool locked);
+    void winLockedChanged(bool locked);
     void currentLayerChanged(const QString &layer);
     void predictionsChanged(const QStringList &predictions);
     void predictionsRefined(const QStringList &predictions);
@@ -197,6 +212,7 @@ private:
     void updateLayer();
     void boundContext(int limit);
     void releaseStickyAll();          // press_char block #1 (no nav exception)
+    void clearLock(const QString &name); // drop a right-click lock flag + notify
     void rehydrateCurrentWordFromContext();
     QStringList displayCased(const QStringList &predictions) const;
     bool inCompatMode() const;
@@ -223,6 +239,12 @@ private:
     bool m_ctrl = false;
     bool m_alt = false;
     bool m_win = false;
+    // Right-click "lock": a locked modifier is held and exempt from the
+    // per-keystroke auto-release. A locked modifier is always also active.
+    bool m_shiftLocked = false;
+    bool m_ctrlLocked = false;
+    bool m_altLocked = false;
+    bool m_winLocked = false;
     QString m_currentLayer = QStringLiteral("lower");
     bool m_editMode = false;
 

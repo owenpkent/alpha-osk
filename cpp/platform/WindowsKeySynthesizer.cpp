@@ -347,6 +347,17 @@ void WindowsKeySynthesizer::sendKey(const QString &keyName, const QStringList &m
         return;
     }
 
+    // Only wrap the action key with modifiers that aren't ALREADY held at the
+    // OS. A sticky or right-click-locked modifier was put down by holdModifier
+    // and must STAY down; wrapping it here would append a trailing key-up that
+    // silently releases it (breaking Ctrl+click / Shift+drag / Alt+Tab after
+    // the keystroke). Mirrors the shiftAlready guard in makeCharScancodeEvents
+    // and src/platform/windows.py::send_key.
+    QStringList wrapMods;
+    for (const QString &mod : mods)
+        if (!modifierAlreadyHeld(mod))
+            wrapMods.push_back(mod);
+
     // Game-compat held path: when a hold is requested and this isn't the
     // Unicode fallback (game hotkeys are ASCII letters/digits that always
     // resolve to a VK), split into a down-batch and an up-batch with a real
@@ -355,7 +366,7 @@ void WindowsKeySynthesizer::sendKey(const QString &keyName, const QStringList &m
     // released in the up-batch), the same as the atomic path.
     if (holdSeconds > 0.0 && !unicodeFallback) {
         std::vector<INPUT> down;
-        for (const QString &mod : mods) {
+        for (const QString &mod : wrapMods) {
             const int mvk = keyMap().value(mod, -1);
             if (mvk >= 0)
                 down.push_back(makeVkScancodeEvent(mvk, true));
@@ -366,7 +377,7 @@ void WindowsKeySynthesizer::sendKey(const QString &keyName, const QStringList &m
         Sleep(static_cast<DWORD>(holdSeconds * 1000.0));
 
         std::vector<INPUT> up{makeVkScancodeEvent(vk, false)};
-        for (auto it = mods.crbegin(); it != mods.crend(); ++it) {
+        for (auto it = wrapMods.crbegin(); it != wrapMods.crend(); ++it) {
             const int mvk = keyMap().value(*it, -1);
             if (mvk >= 0)
                 up.push_back(makeVkScancodeEvent(mvk, false));
@@ -377,7 +388,7 @@ void WindowsKeySynthesizer::sendKey(const QString &keyName, const QStringList &m
 
     std::vector<INPUT> events;
     // Press modifiers (scancode mode -> relays over remote desktop).
-    for (const QString &mod : mods) {
+    for (const QString &mod : wrapMods) {
         const int mvk = keyMap().value(mod, -1);
         if (mvk >= 0)
             events.push_back(makeVkScancodeEvent(mvk, true));
@@ -390,13 +401,21 @@ void WindowsKeySynthesizer::sendKey(const QString &keyName, const QStringList &m
         events.push_back(makeVkScancodeEvent(vk, true));
         events.push_back(makeVkScancodeEvent(vk, false));
     }
-    // Release modifiers in reverse.
-    for (auto it = mods.crbegin(); it != mods.crend(); ++it) {
+    // Release modifiers in reverse -- only the ones we pressed.
+    for (auto it = wrapMods.crbegin(); it != wrapMods.crend(); ++it) {
         const int mvk = keyMap().value(*it, -1);
         if (mvk >= 0)
             events.push_back(makeVkScancodeEvent(mvk, false));
     }
     inject(events);
+}
+
+bool WindowsKeySynthesizer::modifierAlreadyHeld(const QString &mod)
+{
+    const int vk = keyMap().value(mod, -1);
+    if (vk < 0)
+        return false;
+    return (GetAsyncKeyState(vk) & 0x8000) != 0;
 }
 
 void WindowsKeySynthesizer::sendText(const QString &text)
@@ -449,13 +468,20 @@ void WindowsKeySynthesizer::replaceText(int backspaceCount, const QString &text)
         }
     } else {
         // Default: Shift+Left selection then overwrite (keeps compose areas open).
+        // Skip our own Shift wrap when Shift is already held (sticky/lock): the
+        // Left presses select under the standing hold, and a trailing Shift
+        // key-up here would silently release a right-click-locked Shift. Same
+        // guard as sendKey.
         if (backspaceCount > 0) {
-            events.push_back(makeKeyEvent(VK_SHIFT, true));
+            const bool shiftAlready = modifierAlreadyHeld(QStringLiteral("shift"));
+            if (!shiftAlready)
+                events.push_back(makeKeyEvent(VK_SHIFT, true));
             for (int i = 0; i < backspaceCount; ++i) {
                 events.push_back(makeKeyEvent(VK_LEFT, true));
                 events.push_back(makeKeyEvent(VK_LEFT, false));
             }
-            events.push_back(makeKeyEvent(VK_SHIFT, false));
+            if (!shiftAlready)
+                events.push_back(makeKeyEvent(VK_SHIFT, false));
         }
     }
     std::vector<INPUT> typed = typedEventsFor(text);
