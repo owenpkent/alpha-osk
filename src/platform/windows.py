@@ -444,6 +444,18 @@ class WindowsKeySynthesizer(KeySynthesizerBase):
             _logger.warning("Unknown key name: %s", key_name)
             return
 
+        # Only wrap the action key with modifiers that aren't ALREADY held
+        # at the OS level.  A sticky or right-click-locked modifier was put
+        # down by ``hold_modifier`` and is meant to STAY down; wrapping it
+        # here would append a trailing key-up that silently releases it
+        # (breaking Ctrl+click / Shift+drag / Alt+Tab after the keystroke —
+        # the OSK would show the modifier held while the OS saw it up).
+        # A modifier the user is physically holding is skipped for the same
+        # reason.  This mirrors the ``shift_already_held`` guard in
+        # ``_make_char_scancode_events`` — the standing hold supplies the
+        # chord, so the action key just needs pressing.
+        wrap_mods = [m for m in modifiers if not self._modifier_already_held(m)]
+
         # Game-compat held path: when a hold is requested and this isn't the
         # Unicode fallback (game hotkeys are ASCII letters/digits that always
         # resolve to a VK), split into a down-batch and an up-batch with a real
@@ -453,7 +465,7 @@ class WindowsKeySynthesizer(KeySynthesizerBase):
         if hold_seconds > 0 and not unicode_fallback:
             assert vk is not None
             down: List[INPUT] = []
-            for mod in modifiers:
+            for mod in wrap_mods:
                 mod_vk = _KEY_MAP.get(mod)
                 if mod_vk is not None:
                     down.append(self._make_vk_scancode_event(mod_vk, key_down=True))
@@ -463,7 +475,7 @@ class WindowsKeySynthesizer(KeySynthesizerBase):
             time.sleep(hold_seconds)
 
             up: List[INPUT] = [self._make_vk_scancode_event(vk, key_down=False)]
-            for mod in reversed(modifiers):
+            for mod in reversed(wrap_mods):
                 mod_vk = _KEY_MAP.get(mod)
                 if mod_vk is not None:
                     up.append(self._make_vk_scancode_event(mod_vk, key_down=False))
@@ -479,7 +491,7 @@ class WindowsKeySynthesizer(KeySynthesizerBase):
         # Press modifiers.  Scancode mode (not wVk) so the chord relays over
         # remote-desktop tools the same way typed letters do — see
         # _make_vk_scancode_event for the full rationale.
-        for mod in modifiers:
+        for mod in wrap_mods:
             mod_vk = _KEY_MAP.get(mod)
             if mod_vk is not None:
                 events.append(self._make_vk_scancode_event(mod_vk, key_down=True))
@@ -492,8 +504,8 @@ class WindowsKeySynthesizer(KeySynthesizerBase):
             events.append(self._make_vk_scancode_event(vk, key_down=True))
             events.append(self._make_vk_scancode_event(vk, key_down=False))
 
-        # Release modifiers (reverse order)
-        for mod in reversed(modifiers):
+        # Release modifiers (reverse order) — only the ones we pressed.
+        for mod in reversed(wrap_mods):
             mod_vk = _KEY_MAP.get(mod)
             if mod_vk is not None:
                 events.append(self._make_vk_scancode_event(mod_vk, key_down=False))
@@ -597,12 +609,20 @@ class WindowsKeySynthesizer(KeySynthesizerBase):
         events = []
 
         if backspace_count > 0:
-            # Hold Shift, press Left N times, release Shift → selects N chars
-            events.append(self._make_key_event(VK_SHIFT, key_down=True))
+            # Hold Shift, press Left N times, release Shift → selects N chars.
+            # Skip our own Shift press/release when Shift is ALREADY held
+            # (sticky toggle or right-click lock): the Left presses select
+            # under the standing hold, and emitting a trailing Shift key-up
+            # here would silently release the user's held Shift while the OSK
+            # still shows it locked.  Same guard as send_key.
+            shift_already_held = self._modifier_already_held("shift")
+            if not shift_already_held:
+                events.append(self._make_key_event(VK_SHIFT, key_down=True))
             for _ in range(backspace_count):
                 events.append(self._make_key_event(VK_LEFT, key_down=True))
                 events.append(self._make_key_event(VK_LEFT, key_down=False))
-            events.append(self._make_key_event(VK_SHIFT, key_down=False))
+            if not shift_already_held:
+                events.append(self._make_key_event(VK_SHIFT, key_down=False))
 
         # Typing the replacement overwrites the selection
         events.extend(_typed_events_for(text))
@@ -1096,6 +1116,24 @@ class WindowsKeySynthesizer(KeySynthesizerBase):
                     events.append(inp)
 
         return events
+
+    def _modifier_already_held(self, mod: str) -> bool:
+        """True if ``mod`` is currently down at the OS level.
+
+        Held either by ``hold_modifier`` (sticky toggle or right-click
+        lock) or physically by the user.  ``send_key`` uses this to avoid
+        wrapping the action key with a modifier that is already down — the
+        trailing release would otherwise drop a hold the caller intends to
+        keep.  Same ``GetAsyncKeyState`` mechanism as the shift check in
+        ``_make_char_scancode_events``.
+        """
+        vk = _KEY_MAP.get(mod)
+        if vk is None:
+            return False
+        try:
+            return bool(self._user32.GetAsyncKeyState(vk) & 0x8000)
+        except (OSError, ValueError):
+            return False
 
     def hold_modifier(self, key_name: str) -> None:
         """Send a modifier key-down so it stays held at the OS level.

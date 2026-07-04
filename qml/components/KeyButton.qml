@@ -19,6 +19,10 @@ Item {
     property real radius: 8
     property bool isSpecial: false
     property bool isActive: false  // For modifier keys (shift, ctrl, etc.)
+    // Right-click "lock": the modifier is held down until released. Drawn
+    // with a distinct ring + corner padlock so it reads differently from
+    // a sticky one-shot press (which just uses the isActive highlight).
+    property bool isLocked: false
     property bool isWide: false
 
     // Key repeat settings.  Default OFF — only callers that clearly
@@ -169,10 +173,11 @@ Item {
              : mouseArea.containsMouse ? Qt.lighter(keyColor, 1.25)
              : keyColor
 
-        border.color: isActive ? Qt.lighter(accentColor, 1.3)
+        border.color: keyRoot.isLocked ? "#ffd84d"
+                    : isActive ? Qt.lighter(accentColor, 1.3)
                     : mouseArea.containsMouse ? Qt.lighter(borderColor, 1.4)
                     : borderColor
-        border.width: 1
+        border.width: keyRoot.isLocked ? 2 : 1
 
         // Subtle gradient overlay — enhanced depth on press
         Rectangle {
@@ -232,6 +237,31 @@ Item {
             font.weight: isSpecial ? Font.DemiBold : Font.DemiBold
             horizontalAlignment: Text.AlignHCenter
             verticalAlignment: Text.AlignVCenter
+        }
+
+        // Right-click "lock" badge — a small padlock in the top-right
+        // corner, shown only while the modifier is held down. Pairs with
+        // the gold ring above so the held state is unmistakable.
+        Rectangle {
+            visible: keyRoot.isLocked
+            width: 15
+            height: 15
+            radius: 4
+            anchors.top: parent.top
+            anchors.right: parent.right
+            anchors.topMargin: 3
+            anchors.rightMargin: 3
+            color: "#ffd84d"
+            border.color: Qt.rgba(0, 0, 0, 0.35)
+            border.width: 1
+            Text {
+                anchors.centerIn: parent
+                text: "🔒"  // 🔒 padlock
+                font.pixelSize: 9
+                color: "#1a1a1a"
+                horizontalAlignment: Text.AlignHCenter
+                verticalAlignment: Text.AlignVCenter
+            }
         }
 
         // Smooth color transition
