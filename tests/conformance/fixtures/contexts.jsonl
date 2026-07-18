@@ -1,0 +1,13 @@
+{"id": "empty", "mode": "predict", "context": "", "n": 5, "pillar": "ngram", "note": "cold start, no context"}
+{"id": "prefix-th", "mode": "predict", "context": "th", "n": 5, "pillar": "ngram", "note": "single common prefix completion"}
+{"id": "prefix-hel", "mode": "predict", "context": "hel", "n": 5, "pillar": "ngram", "note": "prefix completion"}
+{"id": "nextword-I", "mode": "predict", "context": "I ", "n": 5, "pillar": "ngram", "note": "trailing space => next-word after 'I'"}
+{"id": "nextword-i-want-to", "mode": "predict", "context": "I want to ", "n": 5, "pillar": "ngram", "note": "trigram-context next-word"}
+{"id": "nextword-quick-brown", "mode": "predict", "context": "the quick brown ", "n": 5, "pillar": "ngram", "note": "bigram/trigram next-word"}
+{"id": "prefix-caps-Hel", "mode": "predict", "context": "Hel", "n": 5, "pillar": "ngram", "note": "casing mirror onto pills"}
+{"id": "ppm-rare-prefix-xyl", "mode": "predict", "context": "xyl", "n": 5, "pillar": "ppm", "note": "rare prefix; leans on PPM char model"}
+{"id": "ppm-midword-progr", "mode": "predict", "context": "I am progr", "n": 5, "pillar": "ppm", "note": "long partial, PPM-driven completion"}
+{"id": "fuzzy-teh", "mode": "autocorrect", "typed_word": "teh", "context": "", "pillar": "fuzzy", "note": "transposition -> the"}
+{"id": "fuzzy-recieve", "mode": "autocorrect", "typed_word": "recieve", "context": "", "pillar": "fuzzy", "note": "common misspelling -> receive"}
+{"id": "fuzzy-wrk", "mode": "autocorrect", "typed_word": "wrk", "context": "", "pillar": "fuzzy", "note": "deletion -> work"}
+{"id": "fuzzy-deliberate-thru", "mode": "autocorrect", "typed_word": "thru", "context": "", "pillar": "fuzzy", "note": "deliberate typing: must NOT autocorrect (expect null)"}
