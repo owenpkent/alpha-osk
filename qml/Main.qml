@@ -10,7 +10,7 @@ Window {
     visible: true
     // Default size gives keyW ≈ 56px; user can freely resize and keys scale
     width: 940
-    height: outerLayout.implicitHeight + 60  // Extra height for title bar + bottom padding
+    height: outerLayout.implicitHeight + 80  // Extra height for the (taller) title bar + bottom padding
     minimumWidth: Math.round(30 * totalKeyUnits + layoutFixedPixels)  // keyW ≈ 30px — smallest usable touch target
     minimumHeight: 200
     color: "transparent"
@@ -69,7 +69,7 @@ Window {
         // — that path runs on a fresh install.
         //
         // Height is deliberately NOT persisted: it's bound to the
-        // keyboard's content (`height: outerLayout.implicitHeight + 60`),
+        // keyboard's content (`height: outerLayout.implicitHeight + 80`),
         // so the only user-controllable dimension is width.  An earlier
         // version saved both, which broke the height binding the moment
         // it was imperatively restored on launch — the keyboard then
@@ -90,6 +90,67 @@ Window {
     // restore itself doesn't fire a no-op save.
     property bool _geometryRestored: false
 
+    // Off-screen "Tuck away" state (X11 only — see docs/architecture/GOTCHAS.md
+    // "Tuck away"). `tucked`: the keyboard is parked off the bottom edge as a
+    // DOCK-type window (the one type GNOME/Mutter won't clamp back on-screen),
+    // with only the title bar peeking in as a grab handle. preTuckX/Y hold the
+    // on-screen position to restore when un-tucked. tuckSupported gates the
+    // title-bar button (false off X11). The tuck position is deliberately never
+    // persisted (see the saveGeometryTimer guard).
+    property bool tuckSupported: false
+    property bool tucked: false
+    property real preTuckX: 0
+    property real preTuckY: 0
+
+    // Flip the keyboard between its normal on-screen state and the parked,
+    // mostly-off-screen state. Ordering matters both ways (the window-type
+    // change and the move travel on separate X connections, so we sequence
+    // them): tucking flips to DOCK first, then moves off-screen a beat later
+    // (tuckMoveTimer) so Mutter sees DOCK before the off-work-area move and
+    // doesn't clamp it; un-tucking moves back on-screen first, then reverts to
+    // NORMAL so the re-clamp lands on an already-on-screen window (a no-op).
+    function toggleTuck() {
+        if (!root.tuckSupported || !keyboard) return
+        if (!root.tucked) {
+            root.preTuckX = root.x
+            root.preTuckY = root.y
+            root.tucked = true
+            keyboard.setWindowDock(root, true)
+            tuckMoveTimer.restart()
+        } else {
+            root.x = root.preTuckX
+            root.y = root.preTuckY
+            root.tucked = false
+            keyboard.setWindowDock(root, false)
+        }
+    }
+
+    Timer {
+        id: tuckMoveTimer
+        interval: 60
+        repeat: false
+        onTriggered: {
+            // Slide down so only the title bar remains on-screen at the bottom
+            // edge as a grab handle; the keys hang off the bottom of the work
+            // area (allowed now that the window is DOCK-typed).
+            root.x = root.preTuckX
+            root.y = Screen.virtualY + Screen.height - titleBar.height
+        }
+    }
+
+    // Safety net: if the keyboard was parked off-screen (DOCK) and then hidden
+    // and re-shown via the tray, bring it back to a usable on-screen NORMAL
+    // state instead of reappearing off-screen. Tuck's own move doesn't change
+    // visibility, so this only fires on the tray hide→show path.
+    onVisibilityChanged: {
+        if (root.tucked && root.visibility !== Window.Hidden) {
+            root.x = root.preTuckX
+            root.y = root.preTuckY
+            root.tucked = false
+            keyboard.setWindowDock(root, false)
+        }
+    }
+
     // Debounce window-resize writes — onWidthChanged / onHeightChanged
     // fire on every pixel during a drag, and Settings.write hits the
     // OS registry/config synchronously.  Wait 300 ms after the last
@@ -99,7 +160,10 @@ Window {
         interval: 300
         repeat: false
         onTriggered: {
-            if (root._geometryRestored) {
+            // Never persist the parked off-screen position — preTuckX/Y (the
+            // last real on-screen spot) was already saved before tucking, and
+            // un-tucking restores it and fires a fresh save.
+            if (root._geometryRestored && !root.tucked) {
                 appSettings.savedWindowWidth = root.width
                 appSettings.savedWindowX = Math.round(root.x)
                 appSettings.savedWindowY = Math.round(root.y)
@@ -167,6 +231,13 @@ Window {
             keyboard.setAudioEnabled(true)
         }
 
+        // Enter a clean input state: drop any sticky modifier (Shift/
+        // Ctrl/Alt/Win) left held from a prior run, a crash mid-chord, or
+        // an external grab, and clear its key highlight. Without this a
+        // stuck Super on Linux turns every click into a window-manager
+        // move/resize gesture and the user can't recover.
+        if (keyboard) keyboard.resetModifiers()
+
         // Load punctuation and auto-save settings
         if (keyboard) {
             keyboard.setAutoSpaceAfterPunctuation(appSettings.savedAutoSpaceAfterPunctuation)
@@ -217,6 +288,11 @@ Window {
             root.y = Screen.height - root.height - 40
         }
         root._loaded = true
+
+        // The off-screen "Tuck away" button only works on X11 (the only
+        // session where GNOME clamps the window on-screen and the DOCK-type
+        // escape applies). Hide it everywhere else.
+        if (keyboard) root.tuckSupported = keyboard.tuckSupported()
 
         // Surface the post-update toast if the auto-update relauncher
         // dropped a fresh handoff breadcrumb before we launched. The
@@ -443,7 +519,7 @@ Window {
 
     property real keyW: Math.max(30, (root.width - layoutFixedPixels) / totalKeyUnits)
     // keyH simply tracks keyW at the keycap aspect ratio.  This works
-    // because the window's `height` is bound to `outerLayout.implicitHeight + 60`
+    // because the window's `height` is bound to `outerLayout.implicitHeight + 80`
     // — i.e. the window auto-sizes to whatever the content needs.  The
     // user only resizes width (the resize handles are SizeHorCursor),
     // and height follows.  No height-budget arithmetic needed.
@@ -598,7 +674,12 @@ Window {
             anchors.top: parent.top
             anchors.left: parent.left
             anchors.right: parent.right
-            height: 28
+            // Tall, generous drag strip: the window never takes focus, so the
+            // title bar is the only way to move it — a small bar is a hard
+            // target for limited motor control. If you change this, also bump
+            // outerLayout.anchors.topMargin and the root window-height offset
+            // (`outerLayout.implicitHeight + 80`) by the same amount.
+            height: 48
             property color baseColor: Qt.darker(root.themeBackground, 1.1)
             color: Qt.rgba(baseColor.r, baseColor.g, baseColor.b, root.windowOpacity)
             radius: 10
@@ -616,14 +697,31 @@ Window {
             MouseArea {
                 id: dragArea
                 anchors.fill: parent
-                anchors.rightMargin: 264  // Leave space for buttons (privacy "Learning"/"Paused" text + Snippets icon)
+                anchors.rightMargin: 298  // Leave space for buttons (privacy "Learning"/"Paused" text, Snippets, Tuck, etc.)
                 cursorShape: Qt.SizeAllCursor
                 
                 property real startMouseX
                 property real startMouseY
                 property real startWinX
                 property real startWinY
-                
+
+                // Manual x/y drag on EVERY platform — deliberately NOT
+                // startSystemMove(). This window is WindowDoesNotAcceptFocus,
+                // and on X11/Mutter a WM-driven _NET_WM_MOVERESIZE interactive
+                // move intermittently fails to take a pointer grab for a
+                // non-focusable window. Worse, startSystemMove() returns true
+                // the instant it *sends* the request (not when the WM performs
+                // it), so the old code set sysMoveActive=true and suppressed
+                // this manual fallback — leaving the drag silently dead on the
+                // presses where Mutter declined. The ButtonPress here
+                // establishes the implicit X11 pointer grab; because we never
+                // call startSystemMove() we never release it, so every
+                // MotionNotify is delivered to this MouseArea unconditionally
+                // and the drag tracks the cursor deterministically (same path
+                // Windows always used, and the leftResize handle below).
+                // Trade-off: Mutter clamps the programmatic move on-screen, so
+                // the keyboard can't be pushed past a screen edge — use the
+                // Minimize button to stash it. See docs/architecture/GOTCHAS.md.
                 onPressed: function(mouse) {
                     var global = mapToGlobal(mouse.x, mouse.y)
                     startMouseX = global.x
@@ -631,25 +729,44 @@ Window {
                     startWinX = root.x
                     startWinY = root.y
                 }
-                
+
                 onPositionChanged: function(mouse) {
-                    if (pressed) {
-                        var global = mapToGlobal(mouse.x, mouse.y)
-                        root.x = startWinX + (global.x - startMouseX)
-                        root.y = startWinY + (global.y - startMouseY)
-                    }
+                    if (!pressed) return
+                    var global = mapToGlobal(mouse.x, mouse.y)
+                    root.x = startWinX + (global.x - startMouseX)
+                    root.y = startWinY + (global.y - startMouseY)
                 }
             }
             
-            // Drag indicator dots
-            Row {
+            // Drag handle — a prominent grip so the title bar (which never
+            // takes focus, so there's no cursor cue) is an easy, obvious
+            // target to grab. dragArea above does the actual move; this is
+            // the visual affordance and a bigger aim point. It accepts no
+            // mouse events itself, so presses fall through to dragArea.
+            Rectangle {
                 anchors.left: parent.left
-                anchors.leftMargin: 12
+                anchors.leftMargin: 10
                 anchors.verticalCenter: parent.verticalCenter
-                spacing: 3
-                Repeater {
-                    model: 5
-                    Rectangle { width: 3; height: 3; radius: 1.5; color: "#555" }
+                height: 30
+                width: gripGrid.implicitWidth + 22
+                radius: 8
+                color: Qt.rgba(root.themeTextColor.r, root.themeTextColor.g,
+                               root.themeTextColor.b, 0.12)
+                Grid {
+                    id: gripGrid
+                    anchors.centerIn: parent
+                    rows: 2
+                    columns: 6
+                    rowSpacing: 4
+                    columnSpacing: 5
+                    Repeater {
+                        model: 12
+                        Rectangle {
+                            width: 4; height: 4; radius: 2
+                            color: Qt.rgba(root.themeTextColor.r, root.themeTextColor.g,
+                                           root.themeTextColor.b, 0.6)
+                        }
+                    }
                 }
             }
             
@@ -915,6 +1032,40 @@ Window {
                     }
                 }
                 
+                // Tuck away / Bring back (X11 only — root.tuckSupported).
+                // Parks the keyboard off the bottom edge as a DOCK-type window
+                // so GNOME/Mutter won't clamp it back on-screen, leaving the
+                // title bar as a grab handle; tap again to restore. This is the
+                // sanctioned "push it off-screen" affordance — the everyday
+                // drag stays on-screen by design. See docs/architecture/GOTCHAS.md.
+                Rectangle {
+                    width: 28
+                    height: 24
+                    radius: 4
+                    visible: root.tuckSupported
+                    color: tuckBtn.containsMouse ? "#444" : "transparent"
+
+                    ToolTip.visible: tuckBtn.containsMouse
+                    ToolTip.text: root.tucked ? qsTr("Bring keyboard back")
+                                              : qsTr("Tuck keyboard off-screen")
+                    ToolTip.delay: 400
+
+                    Text {
+                        anchors.centerIn: parent
+                        text: root.tucked ? "⤒" : "⤓"
+                        font.pixelSize: 15
+                        color: root.tucked ? root.themeAccent : "#999"
+                    }
+
+                    MouseArea {
+                        id: tuckBtn
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: root.toggleTuck()
+                    }
+                }
+
                 // Standard Windows minimize. Drops the OSK to the
                 // taskbar; click the taskbar entry to restore. Works
                 // because we no longer apply Qt.Tool / WS_EX_TOOLWINDOW
@@ -980,7 +1131,7 @@ Window {
             id: outerLayout
             anchors.fill: parent
             anchors.margins: 8
-            anchors.topMargin: 32  // Account for title bar
+            anchors.topMargin: 52  // Account for the 48px title bar + 4px gap
             spacing: 0
 
             // ===== Update Banner =====
@@ -1045,17 +1196,82 @@ Window {
                     spacing: 8
                     visible: root.suggestionsEnabled && !root.privacyMode
 
+                    // Measures word widths in the same font the pills render
+                    // so the fair-share allocation below can size every pill
+                    // centrally, without each delegate publishing its own
+                    // implicitWidth back up to the parent.
+                    FontMetrics {
+                        id: predMetrics
+                        font.pixelSize: predBar.predFontSize
+                        font.weight: Font.Medium
+                        font.family: "Ubuntu, Noto Sans, sans-serif"
+                    }
+
+                    // Max-min fair pill widths. Every pill first claims its
+                    // natural width (text + padding); when the words don't all
+                    // fit on the row, the short pills keep their natural size
+                    // and the leftover space flows to the long ones. This is
+                    // what stops a long word from being elided to "..." while
+                    // "I"/"the" sit in half-empty pills next to it. The binding
+                    // reads predictions, window width and pill geometry so it
+                    // re-evaluates whenever any of them change.
+                    property var pillWidthList: predRow.computePillWidths(
+                        root.predictions, root.width, predBar.predFontSize,
+                        predBar.predHorizontalPad, predBar.predMinWidth,
+                        predBar.predPillHeight, predRow.spacing)
+
+                    function computePillWidths(preds, totalWidth, fontSize, hPad, minNat, pillH, spacing) {
+                        var n = preds.length
+                        if (n <= 0)
+                            return []
+                        var nat = []
+                        for (var i = 0; i < n; i++)
+                            nat.push(Math.max(minNat, predMetrics.advanceWidth(preds[i]) + hPad))
+                        var avail = totalWidth - 32 - (n - 1) * spacing
+                        var floor = pillH * 1.4
+                        var widths = new Array(n)
+                        var settled = new Array(n)
+                        var remaining = avail
+                        var unsettled = n
+                        // Water-fill: pills that fit under the current fair
+                        // share settle at their natural width and release the
+                        // slack, raising the share for the rest. Repeats until
+                        // no more pills can settle (≤ n passes).
+                        for (var pass = 0; pass < n; pass++) {
+                            if (unsettled <= 0)
+                                break
+                            var share = remaining / unsettled
+                            var changed = false
+                            for (var j = 0; j < n; j++) {
+                                if (!settled[j] && nat[j] <= share) {
+                                    widths[j] = nat[j]
+                                    settled[j] = true
+                                    remaining -= nat[j]
+                                    unsettled--
+                                    changed = true
+                                }
+                            }
+                            if (!changed)
+                                break
+                        }
+                        // Whatever is left over wants more than its fair share
+                        // (several long words competing); split the remainder
+                        // evenly, floored so a pill can't collapse to nothing.
+                        if (unsettled > 0) {
+                            var share2 = remaining / unsettled
+                            for (var k = 0; k < n; k++)
+                                if (!settled[k])
+                                    widths[k] = Math.max(floor, share2)
+                        }
+                        return widths
+                    }
+
                     Repeater {
                         model: root.suggestionsEnabled && !root.privacyMode && root.predictions.length > 0 ? root.predictions : []
                         delegate: Rectangle {
-                            property real naturalWidth: Math.max(predBar.predMinWidth, predText.implicitWidth + predBar.predHorizontalPad)
-                            property real maxPillWidth: {
-                                var count = root.predictions.length
-                                if (count <= 0) return naturalWidth
-                                var avail = root.width - 32 - predBar.clearCtxReserve * 2 - (count - 1) * predRow.spacing
-                                return Math.max(predBar.predPillHeight * 1.4, avail / count)
-                            }
-                            width: Math.min(naturalWidth, maxPillWidth)
+                            width: index < predRow.pillWidthList.length
+                                   ? predRow.pillWidthList[index]
+                                   : predBar.predMinWidth
                             height: predBar.predPillHeight
                             radius: Math.max(4, predBar.predPillHeight * 0.22)
                             color: predMouse.containsMouse ? Qt.lighter(root.themeKeyColor, 1.3) : root.themeKeyColor
@@ -1956,6 +2172,14 @@ Window {
                             property real startMy
                             property real startX
                             property real startY
+                            // Manual x/y drag on every platform — same reason
+                            // as the main-window dragArea: this window is
+                            // WindowDoesNotAcceptFocus, so a WM-driven
+                            // startSystemMove() is unreliable on X11/Mutter and
+                            // its true-on-send return value used to suppress
+                            // this fallback, killing the drag. Never call
+                            // startSystemMove(), so the implicit press grab
+                            // stays and motion tracking is deterministic.
                             onPressed: function(mouse) {
                                 var g = mapToGlobal(mouse.x, mouse.y)
                                 startMx = g.x; startMy = g.y
@@ -1963,9 +2187,6 @@ Window {
                             }
                             onPositionChanged: function(mouse) {
                                 if (!pressed) return
-                                // Free movement anywhere on the desktop —
-                                // this is a real top-level window, so no
-                                // overlay clamp is needed.
                                 var g = mapToGlobal(mouse.x, mouse.y)
                                 snippetsWindow.x = startX + (g.x - startMx)
                                 snippetsWindow.y = startY + (g.y - startMy)

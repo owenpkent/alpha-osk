@@ -305,7 +305,7 @@ This pattern generalises: any future input source that needs OSK keystrokes to l
 
 ### 4.6 Window-height invariant
 
-The OSK window height is *bound* to the keyboard content's implicit height: `height: outerLayout.implicitHeight + 60`. There is no vertical resize handle (both edges are `SizeHorCursor`), and only the window *width* is persisted across launches.
+The OSK window height is *bound* to the keyboard content's implicit height: `height: outerLayout.implicitHeight + 80`. There is no vertical resize handle (both edges are `SizeHorCursor`), and only the window *width* is persisted across launches.
 
 An earlier version also persisted height. The first time `Component.onCompleted` ran `root.height = savedWindowHeight`, the binding broke (Qt binds are one-shot and any imperative assignment severs them). After that, any width change scaled the keyboard but the height was frozen. The user got either clipped bottom rows or empty bands above and below the keys, with no way to fix it. The fix was to delete the height-persistence path entirely. If height persistence is ever reintroduced, it must use `Qt.binding(...)` or a re-clamp in `onHeightChanged` to keep the binding live.
 

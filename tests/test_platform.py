@@ -228,6 +228,64 @@ class TestLinuxSendKeyPunctuationChord:
         assert calls == [["ydotool", "key", "minus"]]
 
 
+class TestLinuxSuperNeverHeld:
+    """Super/Meta must never be *held* on Linux.
+
+    Regression: tapping Win held Super down (``xdotool keydown super``),
+    and while Super is held the window manager grabs the pointer for
+    window move/resize — every click (including on the OSK's own keys)
+    became a WM gesture and the user got stuck, unable to tap Win again
+    to release it. The hold is skipped; Super+<key> combos still fire as
+    an atomic chord through ``send_key``.
+    """
+
+    def _make_synth(self, tool, monkeypatch):
+        from src.platform import linux as linux_mod
+
+        calls: list[list[str]] = []
+        monkeypatch.setattr(linux_mod, "_run", lambda cmd: calls.append(cmd))
+        synth = linux_mod.LinuxKeySynthesizer.__new__(linux_mod.LinuxKeySynthesizer)
+        synth._tool = tool
+        return synth, calls
+
+    def test_hold_win_is_noop_xdotool(self, monkeypatch):
+        synth, calls = self._make_synth("xdotool", monkeypatch)
+        synth.hold_modifier("win")
+        assert calls == []  # No keydown super — the trap is never armed.
+
+    def test_hold_super_is_noop_xdotool(self, monkeypatch):
+        # Accept the raw keysym too, in case a caller passes "super".
+        synth, calls = self._make_synth("xdotool", monkeypatch)
+        synth.hold_modifier("super")
+        assert calls == []
+
+    def test_hold_win_is_noop_ydotool(self, monkeypatch):
+        synth, calls = self._make_synth("ydotool", monkeypatch)
+        synth.hold_modifier("win")
+        assert calls == []
+
+    def test_hold_ctrl_still_holds(self, monkeypatch):
+        # Only Super is special — Ctrl/Alt/Shift still hold so Ctrl+click
+        # / Shift+drag selection in the target app keep working.
+        synth, calls = self._make_synth("xdotool", monkeypatch)
+        synth.hold_modifier("ctrl")
+        assert calls == [["xdotool", "keydown", "ctrl"]]
+
+    def test_win_combo_still_chords(self, monkeypatch):
+        # Win+D etc. must still work — emitted as a self-contained chord
+        # that presses and releases Super atomically, never leaving it held.
+        synth, calls = self._make_synth("xdotool", monkeypatch)
+        synth.send_key("d", modifiers=["win"])
+        assert calls == [["xdotool", "key", "--clearmodifiers", "super+d"]]
+
+    def test_release_win_still_issues_defensive_keyup(self, monkeypatch):
+        # release stays functional — a keyup when Super isn't down is a
+        # harmless no-op and clears any externally-stuck Super.
+        synth, calls = self._make_synth("xdotool", monkeypatch)
+        synth.release_modifier("win")
+        assert calls == [["xdotool", "keyup", "super"]]
+
+
 class TestWindowsReplaceText:
     """WindowsKeySynthesizer.replace_text() — terminal-aware select-and-replace.
 

@@ -1385,6 +1385,40 @@ class KeyboardBridge(QObject):
         if new_active != was_active:
             getattr(self, f"{name}ActiveChanged").emit(new_active)
 
+    @Slot()
+    def resetModifiers(self) -> None:
+        """Drop every held modifier and clear its UI highlight — a clean slate.
+
+        Called from QML when the keyboard opens (``Component.onCompleted``)
+        so we never start a session with a modifier left active from a
+        prior run, a crash mid-chord, or an external grab. Belt-and-braces
+        alongside the OS-level reset in ``__init__``: this one also clears
+        the bridge's own flags and emits the change signals so the on-key
+        highlights match reality.
+
+        Resets Shift / Ctrl / Alt / Win (the four that hold at the OS
+        level and can leave a click "stuck" under a modifier). Caps Lock
+        is intentionally left as-is — it holds nothing at the OS level, so
+        it can't get stuck, and it's a deliberate persistent toggle a user
+        may have turned on on purpose.
+        """
+        # Release anything still held at the X server / compositor / kernel.
+        self._synth.reset_modifier_state()
+        if self._shift_active:
+            self._shift_active = False
+            self.shiftActiveChanged.emit(False)
+        if self._ctrl_active:
+            self._ctrl_active = False
+            self.ctrlActiveChanged.emit(False)
+        if self._alt_active:
+            self._alt_active = False
+            self.altActiveChanged.emit(False)
+        if self._win_active:
+            self._win_active = False
+            self.winActiveChanged.emit(False)
+        # Shift feeds the upper/lower layer; resync after clearing it.
+        self._update_layer()
+
     @Slot(str)
     def switchLayer(self, layer: str) -> None:
         """Switch keyboard layer (lower, upper, numbers, symbols)."""
@@ -1516,6 +1550,45 @@ class KeyboardBridge(QObject):
         self._sentence_buffer = ""
         self._context_buffer = ""
         self.predictionsChanged.emit([])
+
+    # ------------------------------------------------------------------
+    #  Off-screen "Tuck away" — see src/platform/x11_window.py and the
+    #  "Tuck away" notes in docs/architecture/GOTCHAS.md.
+    # ------------------------------------------------------------------
+
+    @Slot(result=bool)
+    def tuckSupported(self) -> bool:
+        """Whether the off-screen 'Tuck away' affordance works this session.
+
+        Only X11 has the on-screen clamp that tuck exists to escape (and the
+        DOCK-type clamp-escape that does it). Off X11 the title-bar button is
+        hidden — Windows/macOS aren't clamped and Wayland can't escape it.
+        """
+        try:
+            from .platform.x11_window import is_x11
+
+            return is_x11()
+        except Exception:  # pragma: no cover - defensive
+            return False
+
+    @Slot("QVariant", bool)
+    def setWindowDock(self, window: Any, dock: bool) -> None:
+        """Promote a QML window to DOCK type (``dock=True``) or revert to NORMAL.
+
+        DOCK is the one window type Mutter exempts from the on-screen clamp
+        while keeping always-on-top + no-focus, so the keyboard can be parked
+        off a screen edge. The cost (no taskbar entry, inert ``showMinimized``)
+        is why QML only flips to DOCK *while parked* and reverts to NORMAL on
+        return. No-op off X11. The window object is passed straight from QML;
+        its native id is resolved here.
+        """
+        try:
+            from .platform.x11_window import set_window_dock
+
+            win_id = int(window.winId()) if window is not None else 0
+            set_window_dock(win_id, bool(dock))
+        except Exception:  # pragma: no cover - defensive
+            _logger.debug("setWindowDock failed", exc_info=True)
 
     # ------------------------------------------------------------------
     #  Snippets — user-defined quick-insert text (see src/snippets.py)
