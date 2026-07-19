@@ -222,24 +222,44 @@ def check_certificate() -> bool:
         # CREATE_NO_WINDOW: certutil is console-mode + we suppress its
         # output via capture_output, so without this flag the GUI parent
         # pops an empty cmd window during certificate detection.
+        #
+        # timeout is generous (90s): with a SafeNet eToken plugged in,
+        # ``certutil -store -user My`` enumerates the hardware token and
+        # is routinely slow (tens of seconds).  This is only an advisory
+        # pre-check -- sign.py selects the cert by thumbprint and fails
+        # loudly if it is genuinely absent -- so on timeout/error we
+        # PROCEED rather than silently disabling signing.  (An earlier
+        # 30s timeout here caused signed releases to ship UNSIGNED
+        # whenever the token was slow to enumerate.)
         result = subprocess.run(
             ["certutil", "-store", "-user", "My"],
-            capture_output=True, text=True, timeout=30,
+            capture_output=True, text=True, timeout=90,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
-        if CERTIFICATE_SHA1.lower() in result.stdout.lower():
-            success("EV certificate found (OK Studio Inc.)")
-            return True
-        else:
-            warning(
-                "EV certificate not found in user store.\n"
-                "  Ensure the SafeNet eToken is plugged in.\n"
-                "  Verify with: certutil -store -user My"
-            )
-            return False
+    except subprocess.TimeoutExpired:
+        warning(
+            "certutil cert enumeration timed out (common when a SafeNet\n"
+            "  eToken is plugged in -- it is slow to enumerate).\n"
+            "  Proceeding with signing anyway; signtool selects the cert\n"
+            "  by thumbprint and will fail loudly if it is truly absent."
+        )
+        return True
     except Exception as e:
-        warning(f"Could not check certificate: {e}")
-        return False
+        warning(
+            f"Could not run certutil pre-check ({e}); proceeding anyway.\n"
+            "  signtool will fail loudly if the certificate is absent."
+        )
+        return True
+
+    if CERTIFICATE_SHA1.lower() in result.stdout.lower():
+        success("EV certificate found (OK Studio Inc.)")
+        return True
+    warning(
+        "EV certificate not found in user store.\n"
+        "  Ensure the SafeNet eToken is plugged in.\n"
+        "  Verify with: certutil -store -user My"
+    )
+    return False
 
 
 # ---------------------------------------------------------------------------
