@@ -99,8 +99,12 @@ Other useful docs in `docs/`:
 2. Make your change, with tests.
 3. Run `python check.py` locally.
 4. Push and open a PR using the template.
-5. CI runs ruff + mypy + pytest + OSV vulnerability scan. Merges are
-   gated on a clean run.
+5. CI runs ruff + mypy + pytest + OSV vulnerability scan. `main` is a
+   protected branch: the merge button stays disabled until five required
+   checks pass green: `Lint`, `Type Check`, `Test (ubuntu-latest)`,
+   `Test (windows-latest)`, and `OSV Scanner (deps CVE check)`. A new CVE
+   advisory in a dependency lockfile fails the OSV gate and blocks the
+   merge just like a failing test would.
 6. A maintainer will review. Iterate as needed.
 
 If your PR touches the prediction engine, build pipeline, or telemetry,
