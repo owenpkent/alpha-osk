@@ -338,12 +338,18 @@ class MacOSKeySynthesizer(KeySynthesizerBase):
         self,
         key_name: str,
         modifiers: Optional[List[str]] = None,
+        hold_seconds: float = 0.0,
     ) -> None:
         """Send a keycode-based key event (optionally chorded).
 
         Falls back to :meth:`send_text` when ``key_name`` is a single
         printable character with no resolvable keycode (rare on US
         layouts, but possible for accented input).
+
+        ``hold_seconds`` (the game-compat key-hold) is accepted for
+        interface parity but currently ignored on macOS; the Windows
+        polling-game failure mode this targets does not apply to the
+        macOS build's current scope.
         """
         if not self._available:
             _logger.debug("send_key no-op: synth unavailable")

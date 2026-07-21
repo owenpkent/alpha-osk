@@ -456,6 +456,13 @@ Window {
     property bool ctrlOn: keyboard ? keyboard.ctrlActive : false
     property bool altOn: keyboard ? keyboard.altActive : false
     property bool winOn: keyboard ? keyboard.winActive : false
+    // Right-click "lock" (held-down) state for each modifier — drives a
+    // distinct indicator so a locked key reads differently from a sticky
+    // one-shot press.
+    property bool shiftLocked: keyboard ? keyboard.shiftLocked : false
+    property bool ctrlLocked: keyboard ? keyboard.ctrlLocked : false
+    property bool altLocked: keyboard ? keyboard.altLocked : false
+    property bool winLocked: keyboard ? keyboard.winLocked : false
     property string layer: keyboard ? keyboard.currentLayer : "lower"
     property bool showNumbers: layer === "numbers"
     property bool showSymbols: layer === "symbols"
@@ -579,6 +586,10 @@ Window {
         function onCtrlActiveChanged(active) { root.ctrlOn = active }
         function onAltActiveChanged(active) { root.altOn = active }
         function onWinActiveChanged(active) { root.winOn = active }
+        function onShiftLockedChanged(locked) { root.shiftLocked = locked }
+        function onCtrlLockedChanged(locked) { root.ctrlLocked = locked }
+        function onAltLockedChanged(locked) { root.altLocked = locked }
+        function onWinLockedChanged(locked) { root.winLocked = locked }
         function onCurrentLayerChanged(newLayer) { root.layer = newLayer }
         
         // Prediction updates
@@ -990,42 +1001,9 @@ Window {
                     }
                 }
 
-                // Clear-context button. Wipes the prediction context
-                // buffers (current word, sentence buffer, sliding
-                // 200-char context) so the next pill is computed from
-                // scratch. App-switch already does this automatically,
-                // but the foreground-window poll misses things like
-                // tab changes inside a browser or a focus change to a
-                // child window that keeps the same hwnd, so a manual
-                // override is the escape hatch.
-                Rectangle {
-                    width: 28
-                    height: 24
-                    radius: 4
-                    color: clearCtxBtn.containsMouse ? "#444" : "transparent"
-
-                    ToolTip.visible: clearCtxBtn.containsMouse
-                    ToolTip.text: qsTr("Clear suggestion context")
-                    ToolTip.delay: 400
-
-                    Text {
-                        anchors.centerIn: parent
-                        text: "⟲"
-                        font.pixelSize: 16
-                        color: "#999"
-                    }
-
-                    MouseArea {
-                        id: clearCtxBtn
-                        anchors.fill: parent
-                        hoverEnabled: true
-                        cursorShape: Qt.PointingHandCursor
-                        onClicked: {
-                            if (keyboard) keyboard.resetContext()
-                            contextClearedToast.flash()
-                        }
-                    }
-                }
+                // (Clear-context button moved into the prediction bar below —
+                // it's a bigger, easier target parked at the right end of the
+                // suggestion pills. See `clearCtxPill` in predBar.)
 
                 // Settings button (gear icon) - opens unified settings
                 Rectangle {
@@ -1178,6 +1156,10 @@ Window {
                 property real predFontSize: Math.max(14, root.keyH * 0.36)
                 property real predHorizontalPad: Math.max(24, root.keyW * 0.58)
                 property real predMinWidth: Math.max(48, root.keyW * 1.25)
+                // Right-edge zone reserved for the clear-context button so the
+                // centered pill row never slides under it. Subtracted from both
+                // sides of the pill row's available width to keep pills centered.
+                property real clearCtxReserve: predPillHeight + 16
                 Layout.preferredHeight: root.suggestionsEnabled ? predPillHeight + 4 : 0
                 Layout.bottomMargin: root.suggestionsEnabled ? 4 : 0
                 clip: true
@@ -1354,6 +1336,56 @@ Window {
 
                 }
 
+                // Clear-context button parked at the right end of the
+                // suggestion bar: a big, easy target that wipes the prediction
+                // context buffers (current word, sentence buffer, sliding
+                // 200-char context) so the next pill is computed from scratch.
+                // App-switch clears context automatically, but the
+                // foreground-window poll misses things like browser tab changes
+                // or a focus change to a child window with the same hwnd, so
+                // this is the manual escape hatch. Hidden when suggestions are
+                // off (the bar collapses to zero height anyway).
+                Rectangle {
+                    id: clearCtxPill
+                    visible: root.suggestionsEnabled
+                    anchors.right: parent.right
+                    anchors.rightMargin: 8
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: predBar.predPillHeight
+                    height: predBar.predPillHeight
+                    radius: width / 2
+                    color: clearCtxBtn.containsMouse ? Qt.lighter(root.themeKeyColor, 1.3)
+                                                     : Qt.rgba(0, 0, 0, 0.18)
+                    border.color: clearCtxBtn.containsMouse ? root.themeAccent
+                                                            : Qt.rgba(1, 1, 1, 0.18)
+                    border.width: 1
+
+                    ToolTip.visible: clearCtxBtn.containsMouse
+                    ToolTip.text: qsTr("Clear suggestion context")
+                    ToolTip.delay: 400
+
+                    Text {
+                        anchors.centerIn: parent
+                        text: "⟲"
+                        font.pixelSize: predBar.predFontSize * 1.35
+                        color: clearCtxBtn.containsMouse ? root.themeTextColor : "#bbb"
+                    }
+
+                    MouseArea {
+                        id: clearCtxBtn
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: {
+                            if (keyboard) keyboard.resetContext()
+                            contextClearedToast.flash()
+                        }
+                    }
+
+                    Behavior on color { ColorAnimation { duration: 100 } }
+                    Behavior on border.color { ColorAnimation { duration: 100 } }
+                }
+
             }
 
             RowLayout {
@@ -1427,6 +1459,18 @@ Window {
                                         default: return false
                                     }
                                 }
+                                // Right-click "lock" indicator — a held-down
+                                // modifier (see onKeyRightPressed below).
+                                isLocked: {
+                                    if (!kd.stateKey) return false
+                                    switch(kd.stateKey) {
+                                        case "shiftOn": return root.shiftLocked
+                                        case "ctrlOn": return root.ctrlLocked
+                                        case "altOn": return root.altLocked
+                                        case "winOn": return root.winLocked
+                                        default: return false
+                                    }
+                                }
                                 keyColor: {
                                     switch(kd.style || "default") {
                                         case "secondary": return Qt.darker(root.themeKeyColor, 1.3)
@@ -1480,6 +1524,19 @@ Window {
                                 // clicking Shift or Enter has no obvious
                                 // meaning.
                                 onKeyRightPressed: {
+                                    // Right-click a modifier → hold it down
+                                    // (locked). Independent of the right-
+                                    // click-shift setting: a modifier has no
+                                    // "shifted variant", and holding Ctrl/
+                                    // Shift/Alt is the whole point of the
+                                    // gesture. Caps Lock is already a
+                                    // persistent toggle, so it's skipped.
+                                    if (kd.type === "modifier") {
+                                        if (kd.action === "shift" || kd.action === "ctrl"
+                                                || kd.action === "alt" || kd.action === "win")
+                                            keyboard.lockModifier(kd.action)
+                                        return
+                                    }
                                     if (!root.rightClickShift) return
                                     if (kd.type !== "char") return
                                     var rch = ""

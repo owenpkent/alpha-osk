@@ -37,6 +37,7 @@ import logging
 import os
 import shutil
 import subprocess
+import time
 from typing import Dict, List, Optional
 
 from .base import KeySynthesizerBase
@@ -186,6 +187,7 @@ class LinuxKeySynthesizer(KeySynthesizerBase):
         self,
         key_name: str,
         modifiers: Optional[List[str]] = None,
+        hold_seconds: float = 0.0,
     ) -> None:
         """
         Send a single key event, optionally with modifier keys.
@@ -197,6 +199,11 @@ class LinuxKeySynthesizer(KeySynthesizerBase):
             key_name: Platform-neutral key name (xdotool keysym).
             modifiers: Optional list of ``"ctrl"``, ``"alt"``, ``"shift"``,
                        ``"win"`` strings.
+            hold_seconds: When > 0, hold the action key down for this long
+                       (game-compat path, see the base class).  Implemented
+                       for xdotool via ``keydown`` → sleep → ``keyup``;
+                       ignored on ydotool, which falls back to the normal
+                       press+release.
         """
         if not self._tool:
             _logger.warning("No synth tool — cannot send key: %s", key_name)
@@ -211,6 +218,20 @@ class LinuxKeySynthesizer(KeySynthesizerBase):
         # is malformed; ``ctrl+minus`` is canonical).  Letters/digits
         # pass through unchanged.
         action_key = _CHAR_TO_KEYSYM.get(key_name, key_name)
+
+        # Game-compat held path (xdotool only): hold the action key down for
+        # hold_seconds so a frame-polling game observes the press.  Modifiers
+        # are held around the action key via keydown/keyup.
+        if hold_seconds > 0 and self._tool == "xdotool":
+            for mod in mapped_mods:
+                _run(["xdotool", "keydown", mod])
+            self._log_send(f"xdotool keydown {action_key} (held {hold_seconds * 1000:.0f}ms)")
+            _run(["xdotool", "keydown", "--clearmodifiers", action_key])
+            time.sleep(hold_seconds)
+            _run(["xdotool", "keyup", action_key])
+            for mod in reversed(mapped_mods):
+                _run(["xdotool", "keyup", mod])
+            return
 
         if self._tool == "xdotool":
             if mapped_mods:

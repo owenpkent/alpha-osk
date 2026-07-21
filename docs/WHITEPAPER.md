@@ -39,7 +39,7 @@ Section 2 lays out the runtime architecture and the two boundaries that dominate
 
 <p align="center">
   <img src="../assets/screenshots/dark-theme-keyboard.png" alt="Alpha-OSK full keyboard in the Dark theme, showing function row, QWERTY block, navigation cluster, and numpad." width="900" />
-  <br /><em>Figure 1. Full keyboard surface. Left to right: function row (F1–F12), QWERTY block with sticky modifier keys, navigation cluster (PrtSc / ScrLk / Pause / Ins / Home / PgUp / Del / End / PgDn / arrows), and numpad. Title bar carries (right side) the update indicator, Learning / Paused privacy toggle, clear-context, settings, minimize, and close. Width is user-resizable from either edge; height auto-fits content.</em>
+  <br /><em>Figure 1. Full keyboard surface. Left to right: function row (F1–F12), QWERTY block with sticky modifier keys, navigation cluster (PrtSc / ScrLk / Pause / Ins / Home / PgUp / Del / End / PgDn / arrows), and numpad. Title bar carries (right side) the update indicator, Learning / Paused privacy toggle, settings, minimize, and close; the clear-context button (⟲) sits at the right end of the suggestion bar. Width is user-resizable from either edge; height auto-fits content.</em>
 </p>
 
 ---

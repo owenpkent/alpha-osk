@@ -33,7 +33,7 @@ from .__version__ import __version__ as APP_VERSION
 from .analytics import TypingAnalytics
 from .platform import CURRENT_PLATFORM, create_key_synthesizer
 from .platform.base import KeySynthesizerBase
-from .platform.password_detect import is_password_field
+from .platform.password_detect import focused_element_token, is_password_field
 from .prediction import HybridPredictor, SwipeRecognizer
 from .snippets import SnippetStore
 from .telemetry import TelemetryClient
@@ -209,6 +209,173 @@ def _window_needs_compat_mode(hwnd: int) -> bool:
     return False
 
 
+# Games whose foreground window should switch key synthesis to the held
+# down/up path (see _window_is_game / _GAME_KEY_HOLD_SECONDS). Games read the
+# keyboard by polling state once per render frame (DirectInput / Raw Input /
+# GetAsyncKeyState), so a zero-gap key-down+key-up injected in one SendInput
+# batch can land entirely between two polls and be missed: the user sees the
+# keystroke do nothing. Holding the key down for ~one frame fixes it. Matched
+# by exe basename (lowercased), exactly like _COMPAT_PROCESS_NAMES; extend this
+# set as reports of other unresponsive games come in.
+_GAME_PROCESS_NAMES = frozenset({
+    # Age of Empires family
+    "aoe2de_s.exe",     # Age of Empires II: Definitive Edition
+    "aoe3de_s.exe",     # Age of Empires III: Definitive Edition
+    "aoede_s.exe",      # Age of Empires: Definitive Edition
+    "reliccardinal.exe",  # Age of Empires IV
+    "age2_x1.exe",      # Age of Empires II: The Conquerors (classic)
+    "age2_x2.exe",      # AoE II HD: Forgotten Empires
+    "aoe2hd.exe",       # Age of Empires II: HD Edition
+    "empires2.exe",     # Age of Empires II (original)
+})
+
+
+def _owning_exe_name(hwnd: int) -> Optional[str]:
+    """Lowercased basename of ``hwnd``'s owning-process exe, or None.
+
+    None on non-Windows or any failure (fail-safe). Same Win32 path
+    ``_window_needs_compat_mode`` uses for its exe lookup.
+    """
+    import sys
+    if sys.platform != "win32" or not hwnd:
+        return None
+    try:
+        import ctypes
+        from ctypes import wintypes
+        user32 = ctypes.windll.user32          # type: ignore[attr-defined]
+        kernel32 = ctypes.windll.kernel32      # type: ignore[attr-defined]
+        pid = wintypes.DWORD(0)
+        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+        if not pid.value:
+            return None
+        PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+        handle = kernel32.OpenProcess(
+            PROCESS_QUERY_LIMITED_INFORMATION, False, pid.value,
+        )
+        if not handle:
+            return None
+        try:
+            exe_buf = ctypes.create_unicode_buffer(512)
+            size = wintypes.DWORD(512)
+            if kernel32.QueryFullProcessImageNameW(
+                handle, 0, exe_buf, ctypes.byref(size),
+            ):
+                return Path(exe_buf.value).name.lower()
+        finally:
+            kernel32.CloseHandle(handle)
+    except (OSError, AttributeError):
+        pass
+    return None
+
+
+def _window_is_borderless_fullscreen(hwnd: int) -> bool:
+    """Whether ``hwnd`` is a borderless window covering its whole monitor.
+
+    This is the catch-all for unlisted games: a borderless / exclusive-
+    fullscreen game (no title bar, rect spanning the entire monitor,
+    including the taskbar strip) looks like this, while a normal maximized
+    window keeps its ``WS_CAPTION`` title bar and leaves the taskbar
+    visible, so it does not match. Requiring BOTH "covers the full
+    monitor" AND "no caption" keeps the false-positive surface down to
+    fullscreen media players / slideshows, where a 50 ms key hold is
+    harmless. (Fullscreen productivity apps like an F11 browser or a
+    fullscreen IDE are excluded separately in ``_window_is_game`` by exe
+    name.)
+
+    Returns False on non-Windows or any failure (fail-safe).
+    """
+    import sys
+    if sys.platform != "win32" or not hwnd:
+        return False
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        class RECT(ctypes.Structure):
+            _fields_ = [
+                ("left", wintypes.LONG), ("top", wintypes.LONG),
+                ("right", wintypes.LONG), ("bottom", wintypes.LONG),
+            ]
+
+        class MONITORINFO(ctypes.Structure):
+            _fields_ = [
+                ("cbSize", wintypes.DWORD), ("rcMonitor", RECT),
+                ("rcWork", RECT), ("dwFlags", wintypes.DWORD),
+            ]
+
+        # Local WinDLL instance so setting argtypes/restype (needed to keep the
+        # 64-bit HMONITOR handle from being truncated to int) doesn't mutate the
+        # shared ``ctypes.windll.user32`` prototypes other call sites rely on.
+        user32 = ctypes.WinDLL("user32")
+        user32.GetWindowRect.argtypes = [wintypes.HWND, ctypes.POINTER(RECT)]
+        user32.GetWindowRect.restype = wintypes.BOOL
+        user32.MonitorFromWindow.argtypes = [wintypes.HWND, wintypes.DWORD]
+        user32.MonitorFromWindow.restype = ctypes.c_void_p
+        user32.GetMonitorInfoW.argtypes = [ctypes.c_void_p, ctypes.POINTER(MONITORINFO)]
+        user32.GetMonitorInfoW.restype = wintypes.BOOL
+        user32.GetWindowLongW.argtypes = [wintypes.HWND, ctypes.c_int]
+        user32.GetWindowLongW.restype = wintypes.LONG
+
+        hwnd_h = wintypes.HWND(hwnd)
+        rect = RECT()
+        if not user32.GetWindowRect(hwnd_h, ctypes.byref(rect)):
+            return False
+        MONITOR_DEFAULTTONEAREST = 2
+        hmon = user32.MonitorFromWindow(hwnd_h, MONITOR_DEFAULTTONEAREST)
+        if not hmon:
+            return False
+        mi = MONITORINFO()
+        mi.cbSize = ctypes.sizeof(MONITORINFO)
+        if not user32.GetMonitorInfoW(hmon, ctypes.byref(mi)):
+            return False
+        m = mi.rcMonitor
+        covers = (
+            rect.left <= m.left and rect.top <= m.top
+            and rect.right >= m.right and rect.bottom >= m.bottom
+        )
+        if not covers:
+            return False
+        GWL_STYLE = -16
+        WS_CAPTION = 0x00C00000
+        style = user32.GetWindowLongW(hwnd_h, GWL_STYLE)
+        return bool((style & WS_CAPTION) == 0)
+    except (OSError, AttributeError):
+        return False
+
+
+def _window_is_game(hwnd: int) -> bool:
+    """Whether ``hwnd`` should use the held key-synthesis path.
+
+    Two signals, in order:
+    1. Owning-process exe in ``_GAME_PROCESS_NAMES`` (catches games even
+       in windowed mode).
+    2. Borderless-fullscreen heuristic (``_window_is_borderless_fullscreen``),
+       the zero-config catch-all for unlisted games. Skipped for exes in
+       ``_COMPAT_PROCESS_NAMES`` (IDEs / remote-desktop clients): those are
+       productivity apps that are sometimes run fullscreen, and adding a
+       50 ms key hold there would lag normal typing.
+
+    Returns False on non-Windows or any failure (fail-safe).
+    """
+    import sys
+    if sys.platform != "win32" or not hwnd:
+        return False
+    exe = _owning_exe_name(hwnd)
+    if exe is not None:
+        if exe in _GAME_PROCESS_NAMES:
+            return True
+        if exe in _COMPAT_PROCESS_NAMES:
+            return False
+    return _window_is_borderless_fullscreen(hwnd)
+
+
+# How long (seconds) to hold a single key down when the foreground app is a
+# game. ~50 ms spans 1.5 frames at 30 fps and 3 frames at 60 fps, comfortably
+# crossing at least one keyboard-state poll. Only applied on the game path so
+# normal typing keeps its zero-latency atomic injection.
+_GAME_KEY_HOLD_SECONDS = 0.05
+
+
 # Cursor-movement keys. When a sticky modifier is held, pressing one of
 # these should KEEP Shift/Ctrl held (extend selection / word-jump across
 # multiple presses) instead of auto-releasing after the first press. See
@@ -241,6 +408,15 @@ class KeyboardBridge(QObject):
     ctrlActiveChanged = Signal(bool)
     altActiveChanged = Signal(bool)
     winActiveChanged = Signal(bool)
+    # "Locked" = a modifier the user right-clicked to hold down.  Unlike
+    # the sticky/one-shot active state, a locked modifier survives the
+    # per-keystroke auto-release, so several combos (Ctrl+C, Ctrl+V) or a
+    # long Shift-selection can run without re-tapping.  Surfaced
+    # separately so QML can draw a distinct "held" indicator.
+    shiftLockedChanged = Signal(bool)
+    ctrlLockedChanged = Signal(bool)
+    altLockedChanged = Signal(bool)
+    winLockedChanged = Signal(bool)
     currentLayerChanged = Signal(str)
 
     # Prediction signals
@@ -319,6 +495,14 @@ class KeyboardBridge(QObject):
         self._ctrl_active = False
         self._alt_active = False
         self._win_active = False
+        # Right-click "lock" flags: a locked modifier is held at the OS
+        # level and exempt from the per-keystroke auto-release below.
+        # A locked modifier is always also active (held); clearing the
+        # lock releases it.
+        self._shift_locked = False
+        self._ctrl_locked = False
+        self._alt_locked = False
+        self._win_locked = False
         self._current_layer = "lower"  # "lower", "upper", "numbers", "symbols"
         self._edit_mode_active = False  # prediction-edit popup open → redirect OSK keys
 
@@ -473,6 +657,13 @@ class KeyboardBridge(QObject):
         self._compat_auto_enabled = True
         self._compat_auto_active = False
 
+        # Game auto-compat: whether the current foreground window belongs to a
+        # known polling game (``_GAME_PROCESS_NAMES``).  When True, single keys
+        # are synthesised with a brief key-down hold so a frame-polling game
+        # observes the press.  Updated by ``_check_foreground_window`` on every
+        # poll, the same place ``_compat_auto_active`` is.
+        self._game_auto_active = False
+
         # Swipe / glide typing — off by default, toggled in settings.
         # The recognizer needs the keyboard layout (key centres) before it
         # can decode anything; QML pushes that via setSwipeLayout().
@@ -498,6 +689,11 @@ class KeyboardBridge(QObject):
         # switches apps. WS_EX_NOACTIVATE means onActiveChanged doesn't fire
         # reliably in QML, so we poll from Python instead.
         self._last_foreground_hwnd = 0
+        # Identity of the last-focused UI element (UIA RuntimeId on Windows,
+        # None elsewhere). Lets the foreground poll notice focus moving
+        # between two controls inside the *same* window — e.g. two text
+        # boxes on one web page — which the window-handle check can't see.
+        self._last_focus_token: Optional[str] = None
         self._foreground_timer = QTimer(self)
         self._foreground_timer.setInterval(250)
         self._foreground_timer.timeout.connect(self._check_foreground_window)
@@ -511,12 +707,15 @@ class KeyboardBridge(QObject):
 
     # --- Key synthesis (delegated to platform layer) ---
 
-    def _send_key(self, key_name: str) -> None:
+    def _send_key(self, key_name: str, hold_seconds: float = 0.0) -> None:
         """
         Send a single key event via the platform synthesizer.
 
         Automatically attaches any active sticky modifiers (Ctrl, Alt, Win)
         to the keystroke.
+
+        ``hold_seconds`` > 0 holds the key down briefly (game-compat path,
+        see ``_key_hold_seconds`` / ``WindowsKeySynthesizer.send_key``).
         """
         # Gather active modifiers
         modifiers = []
@@ -529,7 +728,13 @@ class KeyboardBridge(QObject):
         if self._win_active:
             modifiers.append("win")
 
-        self._synth.send_key(key_name, modifiers=modifiers if modifiers else None)
+        mods = modifiers if modifiers else None
+        # Only thread hold_seconds through when actually holding (game mode) so
+        # the common zero-hold call keeps its original two-arg signature.
+        if hold_seconds > 0:
+            self._synth.send_key(key_name, modifiers=mods, hold_seconds=hold_seconds)
+        else:
+            self._synth.send_key(key_name, modifiers=mods)
 
     def _send_text(self, text: str) -> None:
         """Send a string of text via the platform synthesizer."""
@@ -611,8 +816,13 @@ class KeyboardBridge(QObject):
             else:
                 char = key.lower()
             self.editKeyTyped.emit(char)
-            # Auto-release shift after one keypress (caps lock persists).
-            if self._shift_active and not self._caps_lock_active:
+            # Auto-release shift after one keypress (caps lock persists;
+            # a right-click-locked Shift also stays held).
+            if (
+                self._shift_active
+                and not self._caps_lock_active
+                and not self._shift_locked
+            ):
                 self._shift_active = False
                 self._synth.release_modifier("shift")
                 self._update_layer()
@@ -656,29 +866,40 @@ class KeyboardBridge(QObject):
         # Use _send_key for modifier combos (Ctrl+C, Win+Shift+S, etc.)
         # Send the lowercase key — Shift is included as a modifier by _send_key
         if self._ctrl_active or self._alt_active or self._win_active:
-            self._send_key(key.lower())
+            self._send_key(key.lower(), hold_seconds=self._key_hold_seconds())
             # Don't update _current_word or predictions — this was a shortcut,
             # not text input. Skip the rest of character handling.
-            # Auto-release shift after one keypress (not caps lock)
-            if self._shift_active and not self._caps_lock_active:
+            # Auto-release each modifier after one keypress unless it's
+            # right-click-locked (held down until the user releases it) —
+            # locked lets Ctrl+C, Ctrl+V, ... fire without re-tapping.
+            if (
+                self._shift_active
+                and not self._caps_lock_active
+                and not self._shift_locked
+            ):
                 self._shift_active = False
                 self._synth.release_modifier("shift")
                 self._update_layer()
                 self.shiftActiveChanged.emit(self._shift_active)
-            # Auto-release ctrl/alt/win after one keypress
-            if self._ctrl_active:
+            if self._ctrl_active and not self._ctrl_locked:
                 self._synth.release_modifier("ctrl")
                 self._ctrl_active = False
                 self.ctrlActiveChanged.emit(self._ctrl_active)
-            if self._alt_active:
+            if self._alt_active and not self._alt_locked:
                 self._synth.release_modifier("alt")
                 self._alt_active = False
                 self.altActiveChanged.emit(self._alt_active)
-            if self._win_active:
+            if self._win_active and not self._win_locked:
                 self._synth.release_modifier("win")
                 self._win_active = False
                 self.winActiveChanged.emit(self._win_active)
             return
+        elif self._in_game_mode():
+            # Polling game: send the single char as a held key so it survives
+            # a per-frame keyboard-state poll. send_key resolves the char's VK
+            # and applies shift for case the same way send_text's scancode
+            # path does, so the held tap matches what would otherwise be typed.
+            self._send_key(char, hold_seconds=self._key_hold_seconds())
         else:
             self._send_text(char)
 
@@ -775,23 +996,28 @@ class KeyboardBridge(QObject):
                 self._predictions = []
                 self.predictionsChanged.emit([])
 
-        # Auto-release shift after one keypress (not caps lock)
-        if self._shift_active and not self._caps_lock_active:
+        # Auto-release shift after one keypress (not caps lock, not a
+        # right-click-locked hold)
+        if (
+            self._shift_active
+            and not self._caps_lock_active
+            and not self._shift_locked
+        ):
             self._shift_active = False
             self._synth.release_modifier("shift")
             self._update_layer()
             self.shiftActiveChanged.emit(self._shift_active)
 
-        # Auto-release ctrl/alt/win after one keypress
-        if self._ctrl_active:
+        # Auto-release ctrl/alt/win after one keypress unless locked
+        if self._ctrl_active and not self._ctrl_locked:
             self._synth.release_modifier("ctrl")
             self._ctrl_active = False
             self.ctrlActiveChanged.emit(self._ctrl_active)
-        if self._alt_active:
+        if self._alt_active and not self._alt_locked:
             self._synth.release_modifier("alt")
             self._alt_active = False
             self.altActiveChanged.emit(self._alt_active)
-        if self._win_active:
+        if self._win_active and not self._win_locked:
             self._synth.release_modifier("win")
             self._win_active = False
             self.winActiveChanged.emit(self._win_active)
@@ -882,7 +1108,9 @@ class KeyboardBridge(QObject):
                 autocorrected = True
 
         if not autocorrected:
-            self._send_key(xdotool_key)
+            # Game mode holds the key down briefly so a polling game catches
+            # it (arrows, F-keys, space, Return are common in-game commands).
+            self._send_key(xdotool_key, hold_seconds=self._key_hold_seconds())
 
         # Privacy mode — send the key but don't track context or learn
         if self._privacy_mode:
@@ -992,25 +1220,32 @@ class KeyboardBridge(QObject):
         # again to release it when done, same as Shift+click/Shift+drag
         # selection extension. Alt/Win combos (Alt+Left = back,
         # Win+arrow = snap) are one-shot, so those still auto-release.
+        # A right-click-locked modifier stays held regardless of key type
+        # (same as the nav-key exception, but the user opted in explicitly).
         keep_selection_modifiers = key_name in _NAV_KEYS
         if (
             self._shift_active
             and not self._caps_lock_active
             and not keep_selection_modifiers
+            and not self._shift_locked
         ):
             self._shift_active = False
             self._synth.release_modifier("shift")
             self._update_layer()
             self.shiftActiveChanged.emit(self._shift_active)
-        if self._ctrl_active and not keep_selection_modifiers:
+        if (
+            self._ctrl_active
+            and not keep_selection_modifiers
+            and not self._ctrl_locked
+        ):
             self._synth.release_modifier("ctrl")
             self._ctrl_active = False
             self.ctrlActiveChanged.emit(self._ctrl_active)
-        if self._alt_active:
+        if self._alt_active and not self._alt_locked:
             self._synth.release_modifier("alt")
             self._alt_active = False
             self.altActiveChanged.emit(self._alt_active)
-        if self._win_active:
+        if self._win_active and not self._win_locked:
             self._synth.release_modifier("win")
             self._win_active = False
             self.winActiveChanged.emit(self._win_active)
@@ -1036,6 +1271,7 @@ class KeyboardBridge(QObject):
             self._synth.hold_modifier("shift")
         else:
             self._synth.release_modifier("shift")
+            self._clear_lock("shift")  # a tap also clears a right-click lock
         self._update_layer()
         self.shiftActiveChanged.emit(self._shift_active)
 
@@ -1067,6 +1303,7 @@ class KeyboardBridge(QObject):
             self._synth.hold_modifier("ctrl")
         else:
             self._synth.release_modifier("ctrl")
+            self._clear_lock("ctrl")
         self.ctrlActiveChanged.emit(self._ctrl_active)
 
     @Slot()
@@ -1077,6 +1314,7 @@ class KeyboardBridge(QObject):
             self._synth.hold_modifier("alt")
         else:
             self._synth.release_modifier("alt")
+            self._clear_lock("alt")
         self.altActiveChanged.emit(self._alt_active)
 
     @Slot()
@@ -1087,6 +1325,7 @@ class KeyboardBridge(QObject):
             self._synth.hold_modifier("win")
         else:
             self._synth.release_modifier("win")
+            self._clear_lock("win")
         self.winActiveChanged.emit(self._win_active)
 
     @Slot()
@@ -1122,6 +1361,63 @@ class KeyboardBridge(QObject):
             self.winActiveChanged.emit(False)
         # Shift feeds the upper/lower layer; resync after clearing it.
         self._update_layer()
+
+    # Lockable modifiers. The lock helpers derive attribute and signal
+    # names from these (``_{name}_active`` / ``_{name}_locked`` /
+    # ``{name}LockedChanged``), so the four modifiers stay DRY.
+    _MODIFIERS = ("shift", "ctrl", "alt", "win")
+
+    def _clear_lock(self, name: str) -> None:
+        """Drop a right-click lock without touching the active/held state.
+
+        Called from the sticky ``toggleX`` paths when they turn a
+        modifier off: a plain tap on a locked modifier should also clear
+        the lock so the user isn't stuck holding it.
+        """
+        attr = f"_{name}_locked"
+        if getattr(self, attr):
+            setattr(self, attr, False)
+            getattr(self, f"{name}LockedChanged").emit(False)
+
+    @Slot(str)
+    def lockModifier(self, name: str) -> None:
+        """Right-click a modifier → toggle a persistent 'lock' (held down).
+
+        A locked modifier is held at the OS level and is exempt from the
+        per-keystroke auto-release, so the user can fire several combos
+        (Ctrl+C, Ctrl+V, ...) or hold Shift across many keys without
+        re-tapping. Right-click again (or tap the key) to release. Caps
+        Lock is already a persistent toggle, so it is not lockable here.
+        """
+        name = name.lower()
+        if name not in self._MODIFIERS:
+            return
+
+        active_attr = f"_{name}_active"
+        locked_attr = f"_{name}_locked"
+        was_active = getattr(self, active_attr)
+        new_locked = not getattr(self, locked_attr)
+        # Locking implies held; unlocking releases entirely.
+        new_active = new_locked
+
+        setattr(self, locked_attr, new_locked)
+        setattr(self, active_attr, new_active)
+
+        # Only touch the OS hold when the held state actually flips, so a
+        # right-click that locks an already-sticky-active modifier doesn't
+        # re-send a redundant key-down (and unlocking a modifier that was
+        # only sticky-active still releases it).
+        if new_active and not was_active:
+            self._synth.hold_modifier(name)
+        elif not new_active and was_active:
+            self._synth.release_modifier(name)
+
+        if name == "shift":
+            self._update_layer()
+
+        getattr(self, f"{name}LockedChanged").emit(new_locked)
+        if new_active != was_active:
+            getattr(self, f"{name}ActiveChanged").emit(new_active)
 
     @Slot(str)
     def switchLayer(self, layer: str) -> None:
@@ -1372,6 +1668,18 @@ class KeyboardBridge(QObject):
     def _get_win_active(self) -> bool:
         return self._win_active
 
+    def _get_shift_locked(self) -> bool:
+        return self._shift_locked
+
+    def _get_ctrl_locked(self) -> bool:
+        return self._ctrl_locked
+
+    def _get_alt_locked(self) -> bool:
+        return self._alt_locked
+
+    def _get_win_locked(self) -> bool:
+        return self._win_locked
+
     def _get_current_layer(self) -> str:
         return self._current_layer
 
@@ -1383,6 +1691,10 @@ class KeyboardBridge(QObject):
     ctrlActive = Property(bool, _get_ctrl_active, notify=ctrlActiveChanged)
     altActive = Property(bool, _get_alt_active, notify=altActiveChanged)
     winActive = Property(bool, _get_win_active, notify=winActiveChanged)
+    shiftLocked = Property(bool, _get_shift_locked, notify=shiftLockedChanged)
+    ctrlLocked = Property(bool, _get_ctrl_locked, notify=ctrlLockedChanged)
+    altLocked = Property(bool, _get_alt_locked, notify=altLockedChanged)
+    winLocked = Property(bool, _get_win_locked, notify=winLockedChanged)
     currentLayer = Property(str, _get_current_layer, notify=currentLayerChanged)
     synthAvailable = Property(bool, _get_synth_available, constant=True)
     # Exposed so the Settings panel can show the running version next to
@@ -1928,6 +2240,8 @@ class KeyboardBridge(QObject):
         except Exception as e:
             _logger.info("telemetry on-quit submit failed: %s", e)
 
+        # Release any held modifier — sticky or right-click-locked — so
+        # quitting with one "active" doesn't pin it at the OS level.
         if self._shift_active:
             self._synth.release_modifier("shift")
             self._shift_active = False
@@ -1940,6 +2254,8 @@ class KeyboardBridge(QObject):
         if self._win_active:
             self._synth.release_modifier("win")
             self._win_active = False
+        self._shift_locked = self._ctrl_locked = False
+        self._alt_locked = self._win_locked = False
 
         # Release the password detector's COM interface + CoInitializeEx
         # token.  Negligible at process exit (the OS reaps it anyway) but
@@ -2093,6 +2409,32 @@ class KeyboardBridge(QObject):
                 "Compat auto-active: %s (hwnd=%s)", new_active, hwnd,
             )
 
+    def _update_game_auto(self, hwnd: int) -> None:
+        """Inspect ``hwnd`` and update ``_game_auto_active``.
+
+        Called from ``_check_foreground_window`` on every foreground change.
+        Cheap on a class/exe miss; fail-safe to False on any error.
+        """
+        if not hwnd:
+            return
+        try:
+            new_active = _window_is_game(hwnd)
+        except Exception:
+            new_active = False
+        if new_active != self._game_auto_active:
+            self._game_auto_active = new_active
+            _logger.debug(
+                "Game key-hold auto-active: %s (hwnd=%s)", new_active, hwnd,
+            )
+
+    def _in_game_mode(self) -> bool:
+        """Whether the foreground app is a known polling game."""
+        return self._game_auto_active
+
+    def _key_hold_seconds(self) -> float:
+        """Per-key down-hold to use right now: nonzero only in game mode."""
+        return _GAME_KEY_HOLD_SECONDS if self._game_auto_active else 0.0
+
     @property
     def autoSaveOnExit(self) -> bool:
         """Whether to auto-save prediction model on exit."""
@@ -2112,20 +2454,40 @@ class KeyboardBridge(QObject):
         hwnd = self._get_foreground_window_id()
         if hwnd == 0:
             return  # detection unavailable on this platform
-        if hwnd != self._last_foreground_hwnd and self._last_foreground_hwnd != 0:
+        window_switched = (
+            hwnd != self._last_foreground_hwnd
+            and self._last_foreground_hwnd != 0
+        )
+        if window_switched:
             # Foreground window changed — user switched apps
-            self._predictions = []
-            self._current_word = ""
-            self._word_typed_under_caps_lock = False
-            self._sentence_buffer = ""
-            self._context_buffer = ""
-            self.predictionsChanged.emit([])
+            self._reset_typing_context()
             _logger.debug("Foreground window changed — predictions cleared")
+        # Element-level focus: catches the caret moving between two controls
+        # *inside the same window* (e.g. two text boxes on one web page),
+        # which the window-handle check above is blind to. Windows/UIA only;
+        # focused_element_token() returns None elsewhere, making this a no-op.
+        # None means "couldn't read it" — we leave the baseline alone so a
+        # transient UIA hiccup never wipes context.
+        token = focused_element_token()
+        if token is not None:
+            if (not window_switched
+                    and self._last_focus_token is not None
+                    and token != self._last_focus_token):
+                self._reset_typing_context()
+                _logger.debug("Focused element changed — predictions cleared")
+            self._last_focus_token = token
+        elif window_switched:
+            # Window changed but the element is unreadable; drop the stale
+            # token so the next readable one re-seeds instead of mismatching.
+            self._last_focus_token = None
         # Update auto-detect for compat mode on every poll (cheap on
         # Windows — class lookup is a syscall, process check only fires
         # on class miss).  Auto-active toggling is debounced internally
         # so this isn't noisy.
         self._update_compat_auto(hwnd)
+        # Same poll: flip the game key-hold path on/off based on whether the
+        # foreground app is a known polling game (Age of Empires, ...).
+        self._update_game_auto(hwnd)
         # macOS: feed the foreground pid into the synthesizer's target
         # tracking.  Redundant with the NSWorkspace activation observer
         # in MacOSKeySynthesizer but acts as defence-in-depth: the
@@ -2235,14 +2597,27 @@ class KeyboardBridge(QObject):
             else:
                 _logger.info("Password field cleared — privacy mode OFF")
 
-    def _enter_privacy_mode(self) -> None:
-        """Scrub all buffers to prevent sensitive data from leaking to the model."""
+    def _reset_typing_context(self) -> None:
+        """Drop all in-progress typing state because the context went stale.
+
+        Shared by the app-switch and focused-element-switch paths in
+        ``_check_foreground_window``: once the caret moves to a different
+        window or control, the partial word / sentence / context buffers
+        describe text that's no longer where the caret is, so predictions
+        built from them would be wrong.  Clears the same fields as
+        ``_enter_privacy_mode`` (which scrubs for the different reason of
+        keeping sensitive input out of the model).
+        """
         self._predictions = []
-        self.predictionsChanged.emit([])
         self._current_word = ""
         self._word_typed_under_caps_lock = False
-        self._context_buffer = ""
         self._sentence_buffer = ""
+        self._context_buffer = ""
+        self.predictionsChanged.emit([])
+
+    def _enter_privacy_mode(self) -> None:
+        """Scrub all buffers to prevent sensitive data from leaking to the model."""
+        self._reset_typing_context()
 
     @Slot(bool)
     def setPrivacyMode(self, enabled: bool) -> None:

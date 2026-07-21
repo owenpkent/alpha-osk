@@ -71,6 +71,7 @@ class TestForegroundWindow:
         bridge._predictions = ["hello"]
 
         monkeypatch.setattr(bridge, "_get_foreground_window_id", lambda: 200)
+        monkeypatch.setattr("src.keyboard_bridge.focused_element_token", lambda: None)
         bridge._check_foreground_window()
 
         assert bridge._current_word == ""
@@ -84,6 +85,7 @@ class TestForegroundWindow:
         bridge._last_foreground_hwnd = 0
         bridge._current_word = "hel"
         monkeypatch.setattr(bridge, "_get_foreground_window_id", lambda: 42)
+        monkeypatch.setattr("src.keyboard_bridge.focused_element_token", lambda: None)
         bridge._check_foreground_window()
         assert bridge._current_word == "hel"          # preserved
         assert bridge._last_foreground_hwnd == 42     # but seeded
@@ -96,6 +98,60 @@ class TestForegroundWindow:
         bridge._check_foreground_window()
         assert bridge._current_word == "hel"
         assert bridge._last_foreground_hwnd == 100    # unchanged
+
+    def test_focus_token_change_clears_same_window(self, bridge: KeyboardBridge, monkeypatch):
+        """Same window, focus moved to a different control (e.g. another text
+        box) → context resets even though the window handle is unchanged."""
+        bridge._last_foreground_hwnd = 100
+        bridge._last_focus_token = "A"
+        bridge._current_word = "hel"
+        bridge._context_buffer = "earlier "
+        bridge._sentence_buffer = "earlier "
+        bridge._predictions = ["hello"]
+
+        monkeypatch.setattr(bridge, "_get_foreground_window_id", lambda: 100)
+        monkeypatch.setattr("src.keyboard_bridge.focused_element_token", lambda: "B")
+        bridge._check_foreground_window()
+
+        assert bridge._current_word == ""
+        assert bridge._context_buffer == ""
+        assert bridge._sentence_buffer == ""
+        assert bridge._predictions == []
+        assert bridge._last_focus_token == "B"
+        assert bridge._last_foreground_hwnd == 100    # window never changed
+
+    def test_focus_token_same_preserves_context(self, bridge: KeyboardBridge, monkeypatch):
+        """Caret staying in the same control (same token) must not wipe."""
+        bridge._last_foreground_hwnd = 100
+        bridge._last_focus_token = "A"
+        bridge._current_word = "hel"
+        monkeypatch.setattr(bridge, "_get_foreground_window_id", lambda: 100)
+        monkeypatch.setattr("src.keyboard_bridge.focused_element_token", lambda: "A")
+        bridge._check_foreground_window()
+        assert bridge._current_word == "hel"
+        assert bridge._last_focus_token == "A"
+
+    def test_focus_token_first_sighting_seeds_only(self, bridge: KeyboardBridge, monkeypatch):
+        """First time we read a token (baseline None) seeds it without wiping."""
+        bridge._last_foreground_hwnd = 100
+        bridge._last_focus_token = None
+        bridge._current_word = "hel"
+        monkeypatch.setattr(bridge, "_get_foreground_window_id", lambda: 100)
+        monkeypatch.setattr("src.keyboard_bridge.focused_element_token", lambda: "A")
+        bridge._check_foreground_window()
+        assert bridge._current_word == "hel"          # preserved
+        assert bridge._last_focus_token == "A"        # seeded
+
+    def test_focus_token_unreadable_keeps_baseline(self, bridge: KeyboardBridge, monkeypatch):
+        """A None token ('don't know') must not wipe or clobber the baseline."""
+        bridge._last_foreground_hwnd = 100
+        bridge._last_focus_token = "A"
+        bridge._current_word = "hel"
+        monkeypatch.setattr(bridge, "_get_foreground_window_id", lambda: 100)
+        monkeypatch.setattr("src.keyboard_bridge.focused_element_token", lambda: None)
+        bridge._check_foreground_window()
+        assert bridge._current_word == "hel"
+        assert bridge._last_focus_token == "A"        # unchanged
 
 
 class TestModifierState:
@@ -279,6 +335,97 @@ class TestModifierState:
         assert emissions and emissions[-1] is False
 
 
+class TestModifierLock:
+    """Right-click 'lock' (held-down) modifiers.
+
+    A locked modifier is held at the OS level and exempt from the
+    per-keystroke auto-release, so the user can fire several combos or
+    hold Shift across many keys without re-tapping.
+    """
+
+    def test_lock_ctrl_holds_at_os_level(self, bridge: KeyboardBridge):
+        bridge.lockModifier("ctrl")
+        assert bridge._ctrl_locked
+        assert bridge._ctrl_active
+        bridge._synth.hold_modifier.assert_called_with("ctrl")
+
+    def test_locked_ctrl_survives_chord(self, bridge: KeyboardBridge):
+        # The whole point: Ctrl+C then Ctrl+V without re-tapping Ctrl.
+        bridge.lockModifier("ctrl")
+        bridge.pressKey("c")
+        assert bridge._ctrl_active, "locked Ctrl released after a chord"
+        bridge.pressKey("v")
+        assert bridge._ctrl_active
+
+    def test_locked_shift_survives_character(self, bridge: KeyboardBridge):
+        # Locked Shift keeps producing uppercase across many letters.
+        bridge.lockModifier("shift")
+        bridge.pressKey("a")
+        bridge._synth.send_text.assert_called_with("A")
+        bridge.pressKey("b")
+        assert bridge._shift_active
+        bridge._synth.send_text.assert_called_with("B")
+
+    def test_locked_alt_survives_special_key(self, bridge: KeyboardBridge):
+        bridge.lockModifier("alt")
+        bridge.pressSpecialKey("tab")
+        assert bridge._alt_active  # Alt+Tab held for repeat cycling
+
+    def test_locked_ctrl_survives_non_nav_special(self, bridge: KeyboardBridge):
+        # A sticky Ctrl drops after Backspace; a locked one must not.
+        bridge.lockModifier("ctrl")
+        bridge.pressSpecialKey("backspace")
+        assert bridge._ctrl_active
+
+    def test_second_lock_releases(self, bridge: KeyboardBridge):
+        bridge.lockModifier("ctrl")
+        bridge._synth.release_modifier.reset_mock()
+        bridge.lockModifier("ctrl")
+        assert not bridge._ctrl_locked
+        assert not bridge._ctrl_active
+        bridge._synth.release_modifier.assert_called_with("ctrl")
+
+    def test_tap_clears_lock(self, bridge: KeyboardBridge):
+        # A plain left-tap on a locked modifier releases it (easy way out).
+        bridge.lockModifier("ctrl")
+        bridge.toggleCtrl()
+        assert not bridge._ctrl_locked
+        assert not bridge._ctrl_active
+
+    def test_lock_over_sticky_active_no_redundant_hold(self, bridge: KeyboardBridge):
+        # Right-clicking an already-sticky-active modifier should lock it
+        # without re-sending a key-down (it's already held).
+        bridge.toggleCtrl()  # sticky active
+        bridge._synth.hold_modifier.reset_mock()
+        bridge.lockModifier("ctrl")
+        assert bridge._ctrl_locked
+        bridge._synth.hold_modifier.assert_not_called()
+
+    def test_lock_emits_locked_signal(self, bridge: KeyboardBridge):
+        emissions = []
+        bridge.ctrlLockedChanged.connect(emissions.append)
+        bridge.lockModifier("ctrl")
+        assert emissions and emissions[-1] is True
+        bridge.lockModifier("ctrl")
+        assert emissions[-1] is False
+
+    def test_lock_shift_switches_to_upper_layer(self, bridge: KeyboardBridge):
+        bridge.lockModifier("shift")
+        assert bridge._current_layer == "upper"
+
+    def test_lock_unknown_modifier_is_noop(self, bridge: KeyboardBridge):
+        bridge.lockModifier("caps")  # caps is already persistent
+        assert not bridge._shift_locked
+        assert not bridge._ctrl_locked
+
+    def test_shutdown_releases_locked_modifier(self, bridge: KeyboardBridge):
+        bridge.lockModifier("ctrl")
+        bridge._synth.release_modifier.reset_mock()
+        bridge.shutdown()
+        bridge._synth.release_modifier.assert_any_call("ctrl")
+        assert not bridge._ctrl_locked
+
+
 class TestLayerManagement:
     """Keyboard layer switching."""
 
@@ -328,6 +475,98 @@ class TestKeyPress:
     def test_press_space(self, bridge: KeyboardBridge):
         bridge.pressSpecialKey("space")
         bridge._synth.send_key.assert_called()
+
+
+class TestGameKeyHold:
+    """Game auto-compat: single keys are held down so polling games catch them.
+
+    A zero-gap key-down+key-up injected in one SendInput batch can land
+    entirely between two of a game's per-frame keyboard-state polls and be
+    missed; holding the key down ~one frame fixes it.
+    """
+
+    def test_char_uses_send_text_when_not_a_game(self, bridge: KeyboardBridge):
+        bridge._game_auto_active = False
+        bridge.pressKey("q")
+        bridge._synth.send_text.assert_called_with("q")
+
+    def test_char_held_via_send_key_in_game_mode(self, bridge: KeyboardBridge):
+        bridge._game_auto_active = True
+        bridge.pressKey("q")
+        # Routed through send_key with a positive hold, NOT the atomic send_text.
+        bridge._synth.send_text.assert_not_called()
+        _, kwargs = bridge._synth.send_key.call_args
+        assert kwargs.get("hold_seconds", 0) > 0
+
+    def test_special_key_held_in_game_mode(self, bridge: KeyboardBridge):
+        bridge._game_auto_active = True
+        bridge.pressSpecialKey("up")
+        _, kwargs = bridge._synth.send_key.call_args
+        assert kwargs.get("hold_seconds", 0) > 0
+
+    def test_special_key_not_held_outside_game(self, bridge: KeyboardBridge):
+        bridge._game_auto_active = False
+        bridge.pressSpecialKey("up")
+        # Original two-arg signature preserved when not holding.
+        bridge._synth.send_key.assert_called_with("Up", modifiers=None)
+
+    def test_key_hold_seconds_gate(self, bridge: KeyboardBridge):
+        bridge._game_auto_active = False
+        assert bridge._key_hold_seconds() == 0.0
+        bridge._game_auto_active = True
+        assert bridge._key_hold_seconds() > 0.0
+
+    def test_window_is_game_false_off_windows(self, monkeypatch):
+        import sys
+
+        from src import keyboard_bridge
+        monkeypatch.setattr(sys, "platform", "linux")
+        assert keyboard_bridge._window_is_game(12345) is False
+
+    def test_borderless_fullscreen_false_off_windows(self, monkeypatch):
+        import sys
+
+        from src import keyboard_bridge
+        monkeypatch.setattr(sys, "platform", "linux")
+        assert keyboard_bridge._window_is_borderless_fullscreen(12345) is False
+
+    def test_game_match_takes_priority_over_compat(self, monkeypatch):
+        # Exe in the game list wins; compat exclusion / fullscreen heuristic
+        # are not consulted.
+        import sys
+
+        from src import keyboard_bridge
+        monkeypatch.setattr(sys, "platform", "win32")
+        monkeypatch.setattr(keyboard_bridge, "_owning_exe_name", lambda h: "aoe2de_s.exe")
+        assert keyboard_bridge._window_is_game(999) is True
+
+    def test_compat_exe_excluded_from_fullscreen_heuristic(self, monkeypatch):
+        # A fullscreen IDE must NOT be treated as a game even if it's borderless
+        # fullscreen, which would lag normal typing.
+        import sys
+
+        from src import keyboard_bridge
+        monkeypatch.setattr(sys, "platform", "win32")
+        monkeypatch.setattr(keyboard_bridge, "_owning_exe_name", lambda h: "code.exe")
+        called = {"heuristic": False}
+
+        def _flag(_h):
+            called["heuristic"] = True
+            return True
+
+        monkeypatch.setattr(keyboard_bridge, "_window_is_borderless_fullscreen", _flag)
+        assert keyboard_bridge._window_is_game(999) is False
+        assert called["heuristic"] is False  # short-circuited before the heuristic
+
+    def test_unlisted_fullscreen_window_is_game(self, monkeypatch):
+        # Unknown exe + borderless fullscreen -> treated as a game.
+        import sys
+
+        from src import keyboard_bridge
+        monkeypatch.setattr(sys, "platform", "win32")
+        monkeypatch.setattr(keyboard_bridge, "_owning_exe_name", lambda h: "somegame.exe")
+        monkeypatch.setattr(keyboard_bridge, "_window_is_borderless_fullscreen", lambda h: True)
+        assert keyboard_bridge._window_is_game(999) is True
 
 
 class TestContextTracking:
