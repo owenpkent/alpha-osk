@@ -41,8 +41,10 @@ Features originally written for Windows that now also work on Linux:
 | Atomic prediction replacement (`replace_text`) | ✅ | ✅ | `xdotool key shift+Left…` chord chain; `ydotool --key-down shift` + Left×N + `--key-up shift` |
 | App-switch context reset | ✅ | ❌ | `xdotool getactivewindow` polled every 250 ms; Wayland compositors don't expose focused window to unprivileged clients |
 | Password-field auto privacy mode | ✅ | ✅ (if toolkit speaks AT-SPI) | `gi.repository.Atspi` focus listener — needs `python3-gi` + `gir1.2-atspi-2.0` |
-| Sticky-modifier hold / release | ✅ | ✅ | `xdotool keydown/keyup` or `ydotool key --key-down/--key-up` |
+| Sticky-modifier hold / release | ✅ | ✅ | `xdotool keydown/keyup` or `ydotool key --key-down/--key-up`. **Super/Meta (Win) is never held** — see note below |
 | Defensive modifier release on startup | ✅ | ✅ | `LinuxKeySynthesizer.reset_modifier_state()` (see Troubleshooting) |
+
+> **Super/Meta (the Win key) is sent only as a chord, never held.** Holding Super down makes the window manager (Mutter/KWin) grab the pointer for window move/resize gestures, so every click — including on the OSK's own keys — is swallowed as a WM gesture and the keyboard becomes unusable until the hold is released. `LinuxKeySynthesizer.hold_modifier()` therefore skips `win`/`super`; Super+`<key>` combos (Win+D, Win+L, Win+arrow) still work because they go out as an atomic `xdotool key super+<key>` chord. Other modifiers (Shift/Ctrl/Alt) are still held so Shift+drag selection etc. work in the target app.
 
 ### Privacy Mode (password auto-detection)
 

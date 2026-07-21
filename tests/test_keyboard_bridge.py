@@ -212,6 +212,32 @@ class TestModifierState:
         bridge.pressSpecialKey("left")
         assert not bridge._win_active
 
+    def test_reset_modifiers_clears_all_held(self, bridge: KeyboardBridge):
+        # Clean-slate on open: any sticky modifier left active (from a
+        # prior run, a crash mid-chord, or an external grab) is dropped so
+        # the user never starts a session with a stuck modifier.
+        bridge.toggleShift()
+        bridge.toggleCtrl()
+        bridge.toggleAlt()
+        bridge.toggleWin()
+        bridge.resetModifiers()
+        assert not bridge._shift_active
+        assert not bridge._ctrl_active
+        assert not bridge._alt_active
+        assert not bridge._win_active
+
+    def test_reset_modifiers_releases_os_state(self, bridge: KeyboardBridge):
+        bridge._synth.reset_modifier_state.reset_mock()
+        bridge.resetModifiers()
+        bridge._synth.reset_modifier_state.assert_called_once()
+
+    def test_reset_modifiers_preserves_caps_lock(self, bridge: KeyboardBridge):
+        # Caps Lock holds nothing at the OS level (can't get stuck) and is
+        # a deliberate persistent toggle — reset must not flip it off.
+        bridge.toggleCapsLock()
+        bridge.resetModifiers()
+        assert bridge._caps_lock_active
+
     def test_shift_persists_through_arrow_key(self, bridge: KeyboardBridge):
         # Regression: holding Shift and pressing an arrow (to extend a
         # selection) used to drop Shift after the first press, so the
