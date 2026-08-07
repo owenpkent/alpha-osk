@@ -5,6 +5,13 @@
 pytest>=9.0.3
 pytest-cov>=5.0.0
 pytest-mock>=3.12.0
+# Property-based tests (tests/test_property_*.py).  Generates adversarial
+# inputs for the import-hardening paths and the prediction-engine
+# invariants, where hand-picked examples only cover the cases we thought
+# of.  Deterministic in CI: the profile in tests/conftest.py fixes the
+# example count and disables the .hypothesis example database, so a run
+# cannot pass locally and fail on CI from a stale corpus.
+hypothesis>=6.100.0
 
 # Linting & formatting
 ruff>=0.4.0

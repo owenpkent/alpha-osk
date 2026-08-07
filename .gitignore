@@ -52,3 +52,7 @@ backend/cf-worker/cf-worker-sbom.cyclonedx.json
 
 # Project specific
 *.log
+
+# Hypothesis example database (the test profile sets database=None, so this
+# should never appear, but a manual run with a different profile would.)
+.hypothesis/
