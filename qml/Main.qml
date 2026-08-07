@@ -1294,6 +1294,20 @@ Window {
                 property real predFontSize: Math.max(14, root.keyH * 0.36)
                 property real predHorizontalPad: Math.max(24, root.keyW * 0.58)
                 property real predMinWidth: Math.max(48, root.keyW * 1.25)
+                // Horizontal inset the pill's Text actually reserves on EACH
+                // side.  Load-bearing that `computeFit` and the delegate read
+                // the same number: the fitter's whole no-elide guarantee is
+                // "pill width >= text width + what the delegate eats", so if
+                // these two drift the guarantee is silently false.  They did
+                // drift — the fitter floored padding at `hPad * 0.45` while
+                // the delegate ate `2 * hPad * 0.28` = `hPad * 0.56`, a ~4 px
+                // deficit at compact-view geometry.  Pills whose width came
+                // out text-driven were then born one or two characters too
+                // narrow, and only the leftover-slack water-fill below
+                // rescued them.  With a full row and slack near zero, nothing
+                // rescued them and they elided — the exact bug the fitter was
+                // written to prevent.
+                property real predTextInset: Math.max(6, predHorizontalPad * 0.28)
                 // Right-edge zone owned by the clear-context button (its own
                 // width + the 8 px right margin + an 8 px gap).  The pill row
                 // is both *sized* and *centred* inside the space left over, so
@@ -1367,7 +1381,7 @@ Window {
                         root.predictions, root.width, predBar.predFontSize,
                         predBar.predHorizontalPad, predBar.predMinWidth,
                         predBar.predPillHeight, predRow.spacing,
-                        predBar.clearCtxReserve)
+                        predBar.clearCtxReserve, predBar.predTextInset)
 
                     // Kept as the name the width tests read.
                     readonly property var pillWidthList: predRow.fit.widths
@@ -1392,7 +1406,7 @@ Window {
                     // Only one case can still elide: a single word too long for
                     // the whole bar, where there is nothing left to drop. The
                     // hover ToolTip covers it.
-                    function computeFit(preds, totalWidth, fontSize, hPad, minNat, pillH, spacing, reserve) {
+                    function computeFit(preds, totalWidth, fontSize, hPad, minNat, pillH, spacing, reserve, inset) {
                         var out = { words: [], widths: [] }
                         var n = preds.length
                         if (n <= 0)
@@ -1400,12 +1414,18 @@ Window {
 
                         var avail = totalWidth - 32 - reserve
                         // Padding compresses to this before any pill is
-                        // dropped; below it the text crowds the pill border.
-                        var minPad = Math.max(14, hPad * 0.45)
+                        // dropped.  It is exactly what the delegate's Text
+                        // reserves (`inset` per side) and never less: this
+                        // number IS the no-elide guarantee, so deriving it
+                        // from anything but the delegate's own inset makes
+                        // "tight" a width the word provably cannot render in.
+                        var minPad = Math.max(14, 2 * inset)
 
                         var text = []
                         for (var i = 0; i < n; i++)
-                            text.push(predMetrics.advanceWidth(preds[i]))
+                            // Ceil: Text elides on a sub-pixel overflow too, and
+                            // the delegate's width is the float we hand back.
+                            text.push(Math.ceil(predMetrics.advanceWidth(preds[i])))
 
                         // Narrowest a pill may be and still show its whole word.
                         function tight(idx) { return Math.max(minNat, text[idx] + minPad) }
@@ -1503,8 +1523,10 @@ Window {
                                 anchors.verticalCenter: parent.verticalCenter
                                 anchors.left: parent.left
                                 anchors.right: parent.right
-                                anchors.leftMargin: Math.max(6, predBar.predHorizontalPad * 0.28)
-                                anchors.rightMargin: Math.max(6, predBar.predHorizontalPad * 0.28)
+                                // Same property computeFit sizes against — see
+                                // predBar.predTextInset. Do not inline this.
+                                anchors.leftMargin: predBar.predTextInset
+                                anchors.rightMargin: predBar.predTextInset
                                 horizontalAlignment: Text.AlignHCenter
                                 text: modelData
                                 color: predMouse.containsMouse ? Qt.lighter(root.themeTextColor, 1.3) : root.themeTextColor
