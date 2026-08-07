@@ -20,7 +20,7 @@ welcome, especially from users of adaptive technology.
 - **Report bugs** using the bug report template.
 - **Request features** using the feature request template.
 - **Improve docs** — typos, clearer wording, missing context.
-- **Add tests** — the suite is large (270+) but coverage gaps exist.
+- **Add tests** — the suite is large (840) but coverage gaps exist.
 - **Code changes** — see "Development setup" below.
 
 If you are unsure whether a change is wanted, open an issue first to
@@ -45,6 +45,30 @@ python -m pytest                    # full suite
 python -m pytest tests/test_keyboard_bridge.py
 python -m pytest -k "fuzzy"
 ```
+
+Two suites are property-based (`tests/test_property_*.py`, using
+[Hypothesis](https://hypothesis.readthedocs.io/)): they cover the archive
+and vocabulary-pack import paths, where the property is "nothing outside
+the destination directory is ever touched", and the prediction-engine
+invariants that the rest of the code is allowed to assume. They run under a
+fixed profile declared in `tests/conftest.py` with the example database
+disabled, so they are deterministic — a run cannot pass locally and fail on
+CI because of a cached corpus. To iterate faster while developing:
+
+```bash
+python -m pytest tests/test_property_import_hardening.py \
+  -p no:randomly --hypothesis-profile=alpha-osk-fast
+```
+
+If one fails, the report prints the exact generated input that broke it.
+Reproduce it by pasting the `@reproduce_failure(...)` decorator Hypothesis
+suggests onto the test, or just add the shrunk case as a plain example
+test — a minimal counterexample usually deserves to be pinned permanently.
+
+Some QML tests (`tests/test_qml_*.py`) need Qt's GL/xkb system libraries.
+They skip themselves with a message naming the missing library if it is not
+present, rather than failing the run; on Debian/Ubuntu, `sudo apt-get
+install libegl1 libgl1 libxkbcommon0` is enough to make them run.
 
 ### Pre-push check
 

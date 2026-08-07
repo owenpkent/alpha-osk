@@ -180,7 +180,7 @@ Yes on Windows (Unicode keystroke injection covers anything in BMP and supplemen
 | Anonymous telemetry (opt-in) | Client + UI shipped, endpoint not yet deployed |
 | Analytics dashboard | Shipping |
 | Data backup (export / import) | Shipping |
-| Test suite | 641 tests passing |
+| Test suite | 840 tests passing |
 | macOS port | In progress |
 | Federated learning | Designed, not implemented |
 | Voice dictation | Lives in sibling project (MacroVox) |
@@ -225,7 +225,9 @@ Yes on Windows (Unicode keystroke injection covers anything in BMP and supplemen
 ### Reliability
 
 - Single-instance lock prevents accidental duplicates
-- 641 tests covering prediction, platform abstraction, bridge, vocab packs, telemetry, data export
+- 840 tests covering prediction, platform abstraction, bridge, vocab packs, telemetry, data export,
+  including property-based suites that generate adversarial inputs for the archive / pack import
+  paths and the prediction-engine invariants
 - CI runs ruff + mypy + pytest + OSV CVE scan on every push and PR
 - All-time analytics persist across sessions (keystrokes saved, time saved, acceptance rate)
 - CycloneDX SBOM and a `pip freeze` lockfile ship alongside every Windows and Linux installer
@@ -267,7 +269,7 @@ The full index lives in [`docs/README.md`](docs/README.md).
 
 ```bash
 python run.py                               # Launch the keyboard
-python -m pytest                            # Run the test suite (641 tests)
+python -m pytest                            # Run the test suite (840 tests)
 python check.py                             # Pre-push gate: ruff + mypy + pytest (~85s)
 python check.py --full                      # Adds coverage gate (~3min, matches CI)
 python build/windows/build.py               # Build signed Windows installer

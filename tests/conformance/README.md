@@ -101,6 +101,7 @@ the diff.
 
 Per `cpp/prediction/HybridPredictor.h`, the C++ engine is n-gram-only right now
 (PPM/fuzzy stubbed), which contradicts the "done" status in
-`docs/build/CPP_WINDOWS.md`. That discrepancy is exactly what this harness exists to
+`docs/build/CPP_WINDOWS.md` (both of those files live on the `cpp-rewrite`
+branch, not on `main`). That discrepancy is exactly what this harness exists to
 resolve empirically — the `ngram`-tagged fixtures are the ones expected to match
 first; `ppm`/`fuzzy` fixtures will diverge until those pillars are genuinely ported.

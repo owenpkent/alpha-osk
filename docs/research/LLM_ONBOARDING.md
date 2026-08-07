@@ -180,7 +180,7 @@ The keyboard has toggleable sections (via Settings ⚙ button):
 
 | Panel | Keys | Default |
 |-------|------|---------|
-| Number Row | `` ` `` 1-0 `-` `=` (13 x 1u, flush with the compact grid) | Off |
+| Number Row | `Esc` 1-0 `-` `=` (13 x 1u, flush with the compact grid) | Off |
 | Function Row | Esc, F1-F12, PrtSc, ScrLk, Pause | Off |
 | Navigation | Ins, Del, Home, End, PgUp, PgDn, Arrows | Off |
 | Numpad | Full number pad with NumLock | Off |

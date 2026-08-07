@@ -19,8 +19,12 @@ Active design docs for the engine, the platform abstraction, and the user-facing
 - [`architecture/PPM.md`](architecture/PPM.md): variable-order character model with PPMD escape, used for next-character prediction inside a partial word.
 - [`architecture/FUZZY_RECOGNITION.md`](architecture/FUZZY_RECOGNITION.md): spatial error correction, tunable constants, the relationship to SymSpell.
 - [`architecture/SWIPE_TYPING.md`](architecture/SWIPE_TYPING.md): shape-matching gesture decoder (simplified SHARK²).
+- [`architecture/PREDICTION_NOTES.md`](architecture/PREDICTION_NOTES.md): the "unified system" framing across the predictors, fragment filter and repetition gate, autocorrect thresholds, reinforcement and backspace-as-negative-signal, prioritised future work.
 - [`architecture/PLATFORM_ARCHITECTURE.md`](architecture/PLATFORM_ARCHITECTURE.md): cross-platform abstraction details (key synthesis, password-field detection, config paths).
+- [`architecture/COMPACT_VIEW.md`](architecture/COMPACT_VIEW.md): the denser 13x4 keyboard for small screens, its measurements, and the layer model behind `?123`.
 - [`architecture/MODULAR_LAYOUTS.md`](architecture/MODULAR_LAYOUTS.md): custom keyboard layouts inspired by Octavium / Nimbus.
+- [`architecture/BACKEND_PARITY.md`](architecture/BACKEND_PARITY.md): what the Python and C++ backends each implement, and the cross-backend conformance harness.
+- [`architecture/GOTCHAS.md`](architecture/GOTCHAS.md): the implementation traps and invariants. Read before touching keystroke synthesis, the prediction context buffers, window flags, or the build pipeline.
 - [`architecture/LONG_PRESS_ALTERNATES.md`](architecture/LONG_PRESS_ALTERNATES.md): long-press accent picker design (deferred; rationale in the doc).
 - [`architecture/EXTRA_BUTTONS.md`](architecture/EXTRA_BUTTONS.md): brainstorm of beyond-keyboard button options.
 - [`architecture/TELEMETRY.md`](architecture/TELEMETRY.md): opt-in usage-stats pipeline (payload schema, anon_id lifecycle, backend, deployment workflow).

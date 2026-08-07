@@ -54,7 +54,7 @@ Alpha-OSK is an AI-powered on-screen keyboard for Windows and Linux. Users click
 
 ```bash
 python run.py          # Creates venv, installs deps, launches keyboard
-python -m pytest       # Run tests (269+ tests)
+python -m pytest       # Run tests (840 tests)
 ```
 
 ## Architecture Overview
@@ -355,9 +355,49 @@ The spatial layout (`QWERTY_POSITIONS`) covers a-z plus 0-9 - the digit row sits
 python -m pytest                    # All tests
 python -m pytest tests/test_keyboard_bridge.py  # Bridge tests
 python -m pytest -k "fuzzy"         # Fuzzy recognizer tests
+python -m pytest -k "property"      # Property-based suites only
 ```
 
 Linting: `ruff check src/`, type checking: `mypy src/`
+
+### Property-based tests
+
+`tests/test_property_import_hardening.py` and
+`tests/test_property_prediction_invariants.py` use Hypothesis. They exist
+because the things they cover are the ones where hand-picked examples are
+weakest: adversarial *inputs* (an archive member or pack folder can be
+named anything) and adversarial *orderings* (an incrementally maintained
+counter breaks on the sequence nobody thought to write down).
+
+- **Import hardening**: the property is "nothing outside the destination
+  directory is ever created, modified or removed", asserted end-to-end
+  against a sandbox holding a canary tree, plus the allow-list invariants.
+  Note the deliberate inverse test (`test_the_legitimate_layout_is_still_accepted`):
+  an allow-list that rejected everything would satisfy every containment
+  property while silently turning import into a no-op.
+- **Engine invariants**: `_user_total == sum(user_vocab.values())` checked
+  after *every individual* mutation across generated operation sequences,
+  so a failure names the operation rather than the sequence. Plus the
+  spatial model's normalisation and the `_context_buffer` / `_current_word`
+  accounting.
+
+Determinism is load-bearing: the `alpha-osk` profile in `tests/conftest.py`
+sets `database=None` and `derandomize=True`, so these cannot pass locally
+and fail on CI from a stale `.hypothesis` corpus. Use
+`--hypothesis-profile=alpha-osk-fast` (25 examples) while iterating. **Don't
+add `assume()` to filter a generated value down to a narrow case** — it
+throws away most examples and trips the `filter_too_much` health check;
+build a strategy that generates the interesting shape directly, and branch
+on the predicate instead of discarding.
+
+**Two traps these tests already hit**, worth knowing before writing more:
+- The bridge's buffer accounting is a per-keystroke *delta*, not a mirror
+  of the screen. Space with no word in progress deliberately commits
+  nothing, so an equality model flags a non-defect.
+- Privacy mode must be set via `setPrivacyMode()`, not by poking
+  `_privacy_mode`. Every keystroke calls `_check_password_field_sync()` to
+  close the 200 ms polling race, and that overwrites a hand-set flag on the
+  first press; only `_privacy_mode_manual` makes it stand down.
 
 ### Pre-push check
 
