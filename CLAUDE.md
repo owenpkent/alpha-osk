@@ -54,7 +54,7 @@ Alpha-OSK is an AI-powered on-screen keyboard for Windows and Linux. Users click
 
 ```bash
 python run.py          # Creates venv, installs deps, launches keyboard
-python -m pytest       # Run tests (840 tests)
+python -m pytest       # Run tests (842 tests)
 ```
 
 ## Architecture Overview
@@ -218,13 +218,21 @@ When Caps Lock is on, the prediction pills also render uppercase. The pills must
 
 Three rules, in priority order:
 
-1. **No elide.** Each word's *tight* width is `FontMetrics.advanceWidth(word) + minPad` (floored at `predMinWidth`), where `minPad = max(14, predHorizontalPad * 0.45)`. Padding compresses to that first; if the set still doesn't fit, `count` decrements until the survivors fit at tight width. A dedicated `FontMetrics { id: predMetrics }` measures in the *same* font the pills render (pixelSize / weight / family), so the parent sizes every pill centrally instead of each delegate publishing its own `implicitWidth` back up.
+1. **No elide.** Each word's *tight* width is `ceil(FontMetrics.advanceWidth(word)) + minPad` (floored at `predMinWidth`), where **`minPad = max(14, 2 * predBar.predTextInset)`**. Padding compresses to that first; if the set still doesn't fit, `count` decrements until the survivors fit at tight width. A dedicated `FontMetrics { id: predMetrics }` measures in the *same* font the pills render (pixelSize / weight / family), so the parent sizes every pill centrally instead of each delegate publishing its own `implicitWidth` back up.
+
+   **`predBar.predTextInset` is the single source of truth for horizontal padding, and that is load-bearing.** It is what the delegate's `Text` sets `anchors.leftMargin` / `rightMargin` to, *and* what `computeFit` reserves. Deriving the two from different numbers makes "tight" a width the word provably cannot render in, and the no-elide guarantee silently becomes false. That is exactly what happened: the fitter floored padding at `predHorizontalPad * 0.45` while the delegate ate `2 * predHorizontalPad * 0.28` = `0.56` of it, so for any `predHorizontalPad` above ~26 (every window wider than ~700 px, and all of Compact View) text-driven pills were born 1-5 px too narrow. Rule 2's water-fill usually topped them back up, which is why it looked fine; when the row packed tightly enough that slack ran out, they elided. **Never inline the inset at either site.** Widths are also `ceil`'d because `Text` elides on a sub-pixel overflow and the width handed back is a float.
 2. **Leftover space is handed back as padding, max-min fair**: a pill wanting less than the current fair share settles at what it wants and releases the rest, raising the share for the others (<= count passes); still-hungry pills split what remains. This is what stops "I"/"the" sitting in half-empty pills beside a cramped long word.
 3. **`predBar.clearCtxReserve` is subtracted from the available width** so the row can never reach the ⟲ button (see the invariant below).
 
 Only one case can still elide: a single word wider than the whole bar, where there is nothing left to drop. It's clamped to the available width and the hover `ToolTip` (gated on `predText.truncated`) reveals it. Consequence to be aware of: raising *Settings -> Smart Typing -> Suggestions -> max count* past what the window can hold no longer shows more pills, it just gets clipped by the fitter - the lever for more visible suggestions is a wider window.
 
 The `fit` binding reads `root.predictions`, `root.width` and the `predBar.pred*` geometry props directly so it re-evaluates whenever predictions, window width or pill sizing change. Headless-verified against real Qt `FontMetrics` + the QML binding engine in `tests/test_qml_prediction_bar.py`, which asserts on `Text.truncated` (the same flag the ToolTip is gated on, so the test can't disagree with what the user sees).
+
+**Two traps in testing this bar, both of which already produced a test that could not fail.** Read these before adding an assertion here:
+- **`root.findChildren(QObject, "predictionPillText")` returns an empty list.** A `Repeater`'s delegates are re-parented as *visual* children; their QObject parent is the delegate model, not the item tree. Every truncation assertion in the file went through `findChildren` and so ran against zero pills for its whole life, which is how a real eliding regression shipped underneath a class named `TestNoPillIsEverTruncated`. Use the `_pill_texts` helper (walks `childItems()`) and assert the result is non-empty at the call site. Reading `root.contentItem` also needs `from PySide6.QtQuick import QQuickItem` somewhere in the module or PySide raises `Can't find converter for 'QQuickItem*'`.
+- **Never assert `contentWidth <= width`.** Once a `Text` elides, `contentWidth` measures the *shortened* string, so it fits by construction and the comparison can never fail. It reads like arithmetic proof and is unfalsifiable. `Text.truncated` is the only honest signal.
+
+Also: the failure mode here is a **knife-edge**, so spot-checking a few round window widths proves nothing. `test_every_pill_has_room_for_its_own_text` sweeps 260 configurations (both view modes x 720-1240 px) because the deficit only bites where the row packs tightly enough that the water-fill cannot cover it. With the bug present that sweep failed 130 of 260; at 940 px non-compact, the obvious width to check by hand, it did not fail at all.
 - **`predBar.clearCtxReserve` is load-bearing, not decorative.** The clear-context (⟲) button owns a strip at the right edge; that width is subtracted inside `computeFit` *and* the row is positioned with an explicit `x` (not `anchors.centerIn`, which centres on the full bar) so pills are centred in what's left. It was declared but never used at first, and the right-hand pill rendered underneath the button. Reserved on the right only: taking the same bite from the left would re-centre the row in the window at twice the width cost and make long words elide sooner. Guarded by `tests/test_qml_prediction_bar.py::TestClearButtonNeverCoversPills`.
 
 ## Editing a Prediction (OSK-friendly edit popup)

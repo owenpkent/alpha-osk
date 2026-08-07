@@ -20,7 +20,7 @@ welcome, especially from users of adaptive technology.
 - **Report bugs** using the bug report template.
 - **Request features** using the feature request template.
 - **Improve docs** — typos, clearer wording, missing context.
-- **Add tests** — the suite is large (840) but coverage gaps exist.
+- **Add tests**: the suite is large (842) but coverage gaps exist.
 - **Code changes** — see "Development setup" below.
 
 If you are unsure whether a change is wanted, open an issue first to
@@ -69,6 +69,23 @@ Some QML tests (`tests/test_qml_*.py`) need Qt's GL/xkb system libraries.
 They skip themselves with a message naming the missing library if it is not
 present, rather than failing the run; on Debian/Ubuntu, `sudo apt-get
 install libegl1 libgl1 libxkbcommon0` is enough to make them run.
+
+If you write a headless QML test, know that both of these have already
+shipped a test that could not fail:
+
+- **`root.findChildren(QObject, name)` does not find a `Repeater`'s
+  delegates.** They are re-parented as *visual* children, so the call
+  returns an empty list and your assertions pass over nothing. Walk
+  `childItems()` from `root.contentItem` instead, and assert the result is
+  non-empty so a broken lookup fails loudly. See `_pill_texts` in
+  `tests/test_qml_prediction_bar.py`.
+- **Do not assert `contentWidth <= width` on an eliding `Text`.** Once it
+  elides, `contentWidth` measures the shortened string, so the comparison
+  is true by construction. Assert on `Text.truncated`.
+
+More generally: when a test guards against a rendering defect, check that
+it fails against the broken code before you trust it. Both bugs above were
+found only because someone re-ran the new test on the pre-fix tree.
 
 ### Pre-push check
 
