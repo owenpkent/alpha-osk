@@ -27,6 +27,11 @@ Window {
         property bool savedSuggestionsEnabled: true
         property real savedWindowOpacity: 1.0
         property string savedLayout: "qwerty"
+        // Compact view — a denser 13×4 grid with a ?123 layer, for small
+        // screens.  Orthogonal to savedLayout (which letter arrangement);
+        // see the Compact view block near `currentLayout` for how the two
+        // resolve into one layout id.
+        property bool savedCompactView: false
         property bool savedAudioEnabled: false
         property bool savedAutoSpaceAfterPunctuation: true
         property bool savedAutoCapitalizeAfterPunctuation: false
@@ -255,12 +260,12 @@ Window {
         root.autoCheckUpdates = appSettings.savedAutoCheckUpdates
         if (root.autoCheckUpdates) updateCheckTimer.start()
 
-        // Load saved keyboard layout
-        if (keyboard && appSettings.savedLayout !== "qwerty") {
-            keyboard.setLayout(appSettings.savedLayout)
-            root.currentLayout = appSettings.savedLayout
-        }
-        root.layoutRows = keyboard ? keyboard.getLayoutRows() : []
+        // Load saved keyboard layout.  applyLayout() resolves the letter
+        // arrangement + the compact-view toggle into a single layout id, so
+        // both preferences are honoured on a cold start.
+        root.currentLayout = appSettings.savedLayout
+        if (keyboard) applyLayout()
+        else root.layoutRows = []
 
         // Compute the panel-state-aware default width ONLY on a
         // fresh install (no persisted width). Otherwise the
@@ -317,6 +322,21 @@ Window {
     onShowNumpadChanged: {
         if (_loaded) root.width += showNumpad ? 250 : -250
         appSettings.savedShowNumpad = showNumpad
+    }
+
+    // Switching view density re-resolves the layout, then resizes the window
+    // so the *key size* is preserved rather than the window width — giving
+    // the screen back is the entire point of compact view, so keeping the
+    // window the same size and just growing the keys would miss it.
+    onCompactViewChanged: {
+        appSettings.savedCompactView = compactView
+        if (!_loaded || !keyboard) return
+        var keyWBefore = root.keyW
+        applyLayout()
+        Qt.callLater(function() {
+            var target = Math.round(keyWBefore * root.totalKeyUnits + root.layoutFixedPixels)
+            root.width = Math.max(root.minimumWidth, target)
+        })
     }
 
     // Clear suggestions when the window loses activation (user clicked away)
@@ -475,6 +495,47 @@ Window {
     property var layoutRows: keyboard ? keyboard.getLayoutRows() : []
     property string currentLayout: appSettings.savedLayout
 
+    // ===== Compact view =====
+    // A *view* preference, orthogonal to which letter arrangement is picked:
+    // `currentLayout` stays "qwerty"/"dvorak"/"colemak" and the compact
+    // variant is derived from it ("qwerty" + "-compact").  Layouts with no
+    // compact variant fall back to full size, so the toggle is always safe.
+    property bool compactView: appSettings.savedCompactView
+    property var availableLayouts: keyboard ? keyboard.getAvailableLayouts() : []
+
+    function hasLayout(id) {
+        for (var i = 0; i < availableLayouts.length; i++)
+            if (availableLayouts[i].id === id) return true
+        return false
+    }
+
+    // Resolve the layout id the bridge should actually be on, given the
+    // letter arrangement + the compact toggle.
+    function resolveLayoutId(base, compact) {
+        var variant = base + "-compact"
+        return (compact && hasLayout(variant)) ? variant : base
+    }
+
+    function applyLayout() {
+        if (!keyboard) return
+        keyboard.setLayout(resolveLayoutId(root.currentLayout, root.compactView))
+        root.layoutRows = keyboard.getLayoutRows()
+        root.activeLayer = "base"
+    }
+
+    // A layout may split its rows across named layers — the compact view has
+    // a "base" layer and a "sym" (?123) layer.  Rows with no `layer` field
+    // always render, so the full-size layouts are untouched by this.
+    property string activeLayer: "base"
+    property var visibleRows: {
+        var out = []
+        for (var i = 0; i < layoutRows.length; i++) {
+            var r = layoutRows[i]
+            if (!r.layer || r.layer === root.activeLayer) out.push(r)
+        }
+        return out
+    }
+
     // Layout toggles (modular panels)
     property bool showFunctionRow: false
     property bool showNavigation: false
@@ -501,19 +562,38 @@ Window {
     // All visible panels share the window width proportionally, avoiding static estimates.
     property real keySpacing: Math.max(1, Math.floor(root.width * 0.0025))
 
-    // Total key-width units across all visible sections:
-    // Widest row is the number row (15 keys): Esc(1) + `(1) + 10 nums + -(1) + =(1) + Backspace(1.5) = 15.5 units
+    // The widest visible row drives sizing — every narrower row is centred
+    // against it.  Derived from the layout data rather than hardcoded so a
+    // layout with a different column count sizes itself correctly: the
+    // full-size layouts resolve to the historical 15.5u / 14 gaps (number
+    // row: Esc + ` + 10 digits + - + = + 1.5u Backspace), while the compact
+    // view resolves to 13.0u / 12 gaps.  The fallback keeps the pre-load
+    // frame identical to what the full-size layout will produce.
+    property var _widestRow: {
+        var bestUnits = 0, bestGaps = 0
+        var rows = root.visibleRows
+        for (var i = 0; i < rows.length; i++) {
+            var keys = rows[i].keys
+            if (!keys || !keys.length) continue
+            var u = 0
+            for (var j = 0; j < keys.length; j++) u += (keys[j].width || 1.0)
+            if (u > bestUnits) { bestUnits = u; bestGaps = keys.length - 1 }
+        }
+        return bestUnits > 0 ? { units: bestUnits, gaps: bestGaps }
+                             : { units: 15.5, gaps: 14 }
+    }
+
     // Nav panel: 3 keys × 1.0 = 3.0 units;  Numpad: 4 keys × 1.0 = 4.0 units
     // (The 0.9× multiplier on nav/numpad keys was bumped to 1.0× so
     // labels like "PrtSc"/"PgDn" don't clip — keep this in sync with
     // the keyW bindings on the panels themselves below.)
-    property real totalKeyUnits: 15.5
+    property real totalKeyUnits: _widestRow.units
         + (showNavigation ? 3.0 : 0)
         + (showNumpad ? 4.0 : 0)
 
-    // Fixed-pixel overhead: margins(8×2=16) + number-row gaps(15 keys → 14×keySpacing)
+    // Fixed-pixel overhead: margins(8×2=16) + widest-row gaps(N-1 × keySpacing)
     // + per-panel: separator(1) + 2 inner grid gaps + 2×RowLayout spacing(6)
-    property real layoutFixedPixels: 16 + 14 * keySpacing
+    property real layoutFixedPixels: 16 + _widestRow.gaps * keySpacing
         + (showNavigation ? 1 + 2 * keySpacing + 12 : 0)
         + (showNumpad ? 1 + 3 * keySpacing + 12 : 0)
 
@@ -598,7 +678,13 @@ Window {
         function onPredictionLoading(loading) { root.predictionsLoading = loading }
         
         // Layout updates
-        function onLayoutDataChanged(rows) { root.layoutRows = rows }
+        // Always land on the base layer after a layout swap — leaving the
+        // user on a ?123 layer that the new layout may not even define
+        // would render an empty keyboard.
+        function onLayoutDataChanged(rows) {
+            root.layoutRows = rows
+            root.activeLayer = "base"
+        }
 
         // Debug updates
         function onDebugLogChanged(log) { root.debugLog = log }
@@ -1416,7 +1502,7 @@ Window {
 
                     // ===== Data-Driven Keyboard Rows =====
                 Repeater {
-                    model: root.layoutRows
+                    model: root.visibleRows
 
                     Row {
                         Layout.alignment: Qt.AlignHCenter
@@ -1508,6 +1594,14 @@ Window {
                                             case "alt": keyboard.toggleAlt(); break
                                             case "win": keyboard.toggleWin(); break
                                         }
+                                    } else if (kd.type === "layer") {
+                                        // Layer switch (?123 / ABC) — purely a
+                                        // QML-side view change.  Deliberately
+                                        // does NOT go through keyboard.setLayout:
+                                        // that would persist as the user's
+                                        // layout preference and report the
+                                        // symbol layer from getCurrentLayout().
+                                        root.activeLayer = kd.target || "base"
                                     } else {
                                         keyboard.pressSpecialKey(kd.action)
                                     }
@@ -2886,6 +2980,7 @@ Window {
             themeData: root.themeData
             windowOpacity: root.windowOpacity
             currentLayout: root.currentLayout
+            compactView: root.compactView
             audioEnabled: root.audioEnabled
             suggestionsEnabled: root.suggestionsEnabled
             predictionCount: keyboard ? keyboard.predictionCount : 8
@@ -2922,9 +3017,11 @@ Window {
                     root.windowOpacity = value
                     appSettings.savedWindowOpacity = value
                 } else if (setting === "layout") {
-                    if (keyboard) keyboard.setLayout(value)
                     root.currentLayout = value
                     appSettings.savedLayout = value
+                    root.applyLayout()
+                } else if (setting === "compactView") {
+                    root.compactView = value
                 } else if (setting === "audio") {
                     if (keyboard) keyboard.setAudioEnabled(value)
                     root.audioEnabled = value

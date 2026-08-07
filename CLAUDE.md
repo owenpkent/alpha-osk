@@ -291,8 +291,8 @@ The parent (`Main.qml`'s settings popup window) calls `settingsPanel.resetToHome
 
 | Top-level | Section | What's inside |
 |-----------|---------|---------------|
-| **Appearance** | Panels | Function row / Navigation / Numpad toggles |
-| | Keyboard Layout | qwerty / dvorak / colemak picker |
+| **Appearance** | Panels | Function row / Navigation / Numpad toggles, Compact View |
+| | Keyboard Layout | qwerty / dvorak / colemak picker (compact variants are filtered out - see *Compact View*) |
 | | Theme | 9-theme color picker |
 | | Sound & Opacity | Key click sound, opacity slider |
 | **Smart Typing** | Suggestions | Show suggestions, auto-space, auto-cap, swipe, max count |
@@ -480,6 +480,44 @@ The earlier composite Prediction Quality Score (0-100, weighted savings + hit ra
 Full notes in **`docs/architecture/PREDICTION_NOTES.md`** (the "unified system" framing, fragment filter + repetition gate, autocorrect thresholds, reinforcement-on-click, backspace-as-negative-signal, the prioritized future-work gaps, and reference implementations). Per-algorithm deep dives: `FUZZY_RECOGNITION.md`, `PPM.md`, `HYBRID_MERGING.md`, `SWIPE_TYPING.md`.
 
 Load-bearing defaults to keep in mind: **space-time autocorrect is OFF by default** (`KeyboardBridge._autocorrect_enabled = False` - corrections surface as pills, never silent overwrites); the autocorrect gate skips typings under 3 chars and runs an absolute + relative threshold so deliberate typings ("thru", "lol") survive; n-gram scoring is linear interpolation in probability space (lambda = 0.5/0.3/0.2); unknown words promote into `user_vocab` only after 3 sightings (pill clicks gated the same way).
+
+## Compact View
+
+A denser 13x4 keyboard for small screens. Off by default; toggle in *Settings ->
+Appearance -> Panels -> Compact View*. Design doc + measurements:
+`docs/architecture/COMPACT_VIEW.md`.
+
+Load-bearing facts:
+
+- **Every row in a compact layout must total the same unit count** (13.0 for
+  `qwerty-compact`). `Main.qml` centres any narrower row, so an unequal row
+  brings back the exact side gutters this view exists to remove. Enforced by
+  `tests/test_layouts.py::TestCompactLayout::test_every_row_is_exactly_13_units`.
+- **Layers are a QML-side view concept - the backends never see them.** Rows may
+  carry a `"layer"` field; `Main.qml` filters `layoutRows` into `visibleRows` by
+  `root.activeLayer`. Rows *without* a `layer` field always render, which is what
+  keeps the full-size layouts working. A `"type": "layer"` key sets
+  `activeLayer`; it deliberately does **not** call `keyboard.setLayout()` (that
+  would persist as the user's layout preference and make `getCurrentLayout()`
+  report the symbol layer). `activeLayer` resets to `"base"` on every layout
+  change - stranding the user on a `sym` layer the next layout doesn't define
+  would render an empty keyboard.
+- **Because it's data + QML only, it needed zero backend work on either Python
+  or C++.** Don't "port" it; both backends get it from the shared `qml/` +
+  `data/` contract.
+- **`totalKeyUnits` is now derived, not hardcoded.** `_widestRow` in `Main.qml`
+  computes the widest visible row's units + gap count. Full-size layouts resolve
+  to exactly the historical 15.5u / 14 gaps, so the default 940 px window is
+  unchanged. Don't reintroduce the constant.
+- **Compact is orthogonal to letter arrangement.** `currentLayout` stays
+  qwerty/dvorak/colemak; `resolveLayoutId()` combines it with the `compactView`
+  bool into `<layout>-compact`. A layout with no compact variant falls back to
+  full size, so the toggle is always safe. Adding compact Dvorak = drop
+  `data/layouts/dvorak-compact.json` in place, no code change.
+- QML-only behaviour can't be covered by the Python suite, so
+  `tests/test_qml_compact_view.py` loads the real `Main.qml` headlessly
+  (`QT_QPA_PLATFORM=offscreen`) and fails on QML warnings. That's the only guard
+  against a binding error shipping as a blank keyboard.
 
 ## Modular Layouts
 

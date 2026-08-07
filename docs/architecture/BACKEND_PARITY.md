@@ -41,6 +41,7 @@ Python status columns reflect `main`; C++ columns reflect the `cpp-rewrite` bran
 | Right-click modifier lock | 🚧 ¹ | 🚧 ¹ | 🚧 ¹ | ✅ | ❌ | ❌ |
 | Key-click audio | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ |
 | Key preview bubble (pure QML) | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ |
+| Compact view + layers (pure QML + data) ⁷ | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ |
 | **Prediction engine** | | | | | | |
 | n-gram (uni/bi/trigram) | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ |
 | PPM (char model) | ✅ | ✅ | ✅ | 🚧 ² | ❌ | ❌ |
@@ -86,6 +87,13 @@ Python status columns reflect `main`; C++ columns reflect the `cpp-rewrite` bran
 6. Compat auto-detect matches on Windows `.exe` basenames (VS Code / JetBrains /
    RDP). The mechanism is Windows-specific today; the Linux/macOS equivalent is
    unbuilt, so it reads as N/A rather than missing.
+7. **Free on every backend.** The compact view is a layout JSON plus QML row
+   filtering — keyboard *layers* are a QML-side view concept the backends never
+   see, and `_load_layouts` already globs `data/layouts/*.json`. So there was no
+   port: both backends gained it from the shared `qml/` + `data/` contract, and
+   the C++ columns track the C++ backend's general state rather than this
+   feature. See [`COMPACT_VIEW.md`](COMPACT_VIEW.md). A row like this is the
+   argument for keeping `qml/` and `data/` shared.
 
 ## Keeping this current
 
