@@ -37,7 +37,7 @@
         {"type": "char", "key": "k", "width": 1.0},
         {"type": "char", "key": "l", "width": 1.0},
         {"type": "char", "key": "'", "shifted": "\"", "width": 1.0, "fontSize": 14, "style": "secondary"},
-        {"type": "special", "action": "escape", "display": "Esc", "width": 1.0, "fontSize": 11, "style": "special"},
+        {"type": "special", "action": "delete", "display": "Del", "width": 1.0, "fontSize": 11, "style": "special"},
         {"type": "special", "action": "pagedown", "display": "PgDn", "width": 1.0, "fontSize": 11, "style": "special"}
       ]
     },
@@ -109,7 +109,7 @@
         {"type": "char", "key": "'", "shifted": "\"", "width": 1.0, "fontSize": 14, "style": "secondary"},
         {"type": "char", "key": "`", "shifted": "~", "width": 1.0, "fontSize": 14, "style": "secondary"},
         {"type": "special", "action": "insert", "display": "Ins", "width": 1.0, "fontSize": 11, "style": "special"},
-        {"type": "special", "action": "delete", "display": "Del", "width": 1.0, "fontSize": 11, "style": "special"},
+        {"type": "special", "action": "escape", "display": "Esc", "width": 1.0, "fontSize": 11, "style": "special"},
         {"type": "modifier", "action": "caps", "display": "Caps", "width": 1.0, "fontSize": 10, "stateKey": "capsOn", "style": "special"},
         {"type": "special", "action": "pagedown", "display": "PgDn", "width": 1.0, "fontSize": 11, "style": "special"}
       ]

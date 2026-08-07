@@ -33,7 +33,7 @@ These are exactly the lifetime numbers shown on your Analytics dashboard. Nothin
 - Per-session data. Only your running totals.
 - Your IP address. Not logged on the server.
 - Your machine. No hostname, MAC address, hardware ID, or operating-system install ID.
-- Anything from typing into a password field. Privacy mode (the "Learning" / "Paused" toggle in the title bar) blocks all tracking when a password field is focused, so password-field activity never enters the totals in the first place.
+- Anything from typing into a password field. Privacy mode (the "Learning" switch in the title bar) blocks all tracking when a password field is focused, so password-field activity never enters the totals in the first place.
 
 ### Where the data goes
 

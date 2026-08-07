@@ -39,7 +39,7 @@ Section 2 lays out the runtime architecture and the two boundaries that dominate
 
 <p align="center">
   <img src="../assets/screenshots/dark-theme-keyboard.png" alt="Alpha-OSK full keyboard in the Dark theme, showing function row, QWERTY block, navigation cluster, and numpad." width="900" />
-  <br /><em>Figure 1. Full keyboard surface. Left to right: function row (F1–F12), QWERTY block with sticky modifier keys, navigation cluster (PrtSc / ScrLk / Pause / Ins / Home / PgUp / Del / End / PgDn / arrows), and numpad. Title bar carries (right side) the update indicator, Learning / Paused privacy toggle, settings, minimize, and close; the clear-context button (⟲) sits at the right end of the suggestion bar. Width is user-resizable from either edge; height auto-fits content.</em>
+  <br /><em>Figure 1. Full keyboard surface. Left to right: function row (F1–F12), QWERTY block with sticky modifier keys, navigation cluster (PrtSc / ScrLk / Pause / Ins / Home / PgUp / Del / End / PgDn / arrows), and numpad. Title bar carries (right side) the update indicator, the Learning privacy switch, settings, minimize, and close; the clear-context button (⟲) sits at the right end of the suggestion bar. Width is user-resizable from either edge; height auto-fits content. (Screenshot predates the Delete key on the QWERTY row and the switch-style Learning control.)</em>
 </p>
 
 ---
@@ -313,8 +313,35 @@ This is a small example of a pattern that recurs: accessibility constraints (in 
 
 <p align="center">
   <img src="../assets/screenshots/settings-appearance.png" alt="Appearance settings panel: panel-visibility toggles for function row, navigation, and numpad; layout picker for QWERTY / Dvorak / Colemak; nine-theme picker; sound and opacity controls." width="420" />
-  <br /><em>Figure 2. Appearance panel from the drill-down settings menu. Panel-visibility toggles (function row / navigation / numpad) let users strip the keyboard to the minimum surface their precision can hit reliably. The layout picker covers QWERTY, Dvorak, and Colemak. Nine themes ship, including a high-contrast Blackboard option. Opacity is a continuous slider (default 100%) for users who need to see through the keyboard at the cost of contrast.</em>
+  <br /><em>Figure 2. Appearance panel from the drill-down settings menu. Panel-visibility toggles let users strip the keyboard to the minimum surface their precision can hit reliably. The layout picker covers QWERTY, Dvorak, and Colemak. Nine themes ship, including a high-contrast Blackboard option. Opacity is a continuous slider (default 100%) for users who need to see through the keyboard at the cost of contrast. (Screenshot predates the Number Row and Compact View toggles described in §4.7.)</em>
 </p>
+
+### 4.7 Compact view: geometry for a pointer, not ten fingers
+
+The default layout is a faithful replica of a 104-key physical keyboard, and most of what makes such a keyboard wide exists to serve ten fingers resting on a home row: a 6-unit space bar reachable by either thumb, duplicated right-hand Shift / Ctrl / Alt, a dedicated number row. None of that serves a single pointer. Because key size is derived from the widest row and every narrower row is centred, the surplus width did not compress, it became symmetric dead space: 26% of the keyboard's width on the space row alone, scaling proportionally so it was no better on a small screen.
+
+Before rearranging anything, mean pointer travel was measured across four candidate arrangements, weighting every character-pair transition by its frequency in English:
+
+| Arrangement | Footprint | Mean travel |
+|---|--:|--:|
+| Desktop mirror (default) | 15.5u x 5 | 195 px |
+| Compact 10x4 | 10u x 4 | 189 px |
+| Compact 13x4 (shipped) | 13u x 4 | 186 px |
+| Square 7x6 (QWERTY wrapped) | 7u x 6 | 179 px |
+
+**Rearranging the letters buys nothing.** Every variant lands within 8%, because QWERTY adjacency dominates the distribution and all of them preserve it. Even the radical square wrap saves 8% while destroying the visual scan, and QWERTY *is* the visual index for a user who reads the keyboard rather than touch-types it. So the letters stay exactly where they are and the win comes entirely from deleting what a pointer cannot use: net 33% less area, 16% narrower, 20% shorter, or equivalently +20% key size at a fixed window width.
+
+The implementation constraint is one line: **every row totals exactly 13.0 units**. Equal rows leave nothing to centre, so the gutters vanish by construction and no stretching or justification logic exists anywhere in the QML. It also means the layout has no spare capacity, which is a real design cost, not a footnote: adding forward-delete to the base layer required moving Escape to the symbol layer, because there was no fourteenth column to put it in. Digits are recoverable without leaving compact via a separate 13-unit Number Row panel.
+
+Layers are a QML-side view concept. Rows may carry a `layer` field and the view filters on it; rows without one always render, which is why the full-size layouts were untouched. Consequently the entire feature is data plus QML, and neither the Python backend nor the C++ rewrite needed a single change.
+
+### 4.8 Suggestion pills: drop, do not truncate
+
+Prediction pills are sized by max-min fair allocation rather than an equal split, so a long word is not clipped while "I" and "the" sit in half-empty pills beside it. That handles one long word among short ones. It does not handle *several* long words competing, and the original even-split fallback for that case produced the worst possible outcome: eight `documentation`-family candidates in a 940 px window all rendered as `docu...`, eight identical buttons with nothing to choose between them.
+
+The resolution is a priority order rather than a better fit function. Padding compresses first; if the set still does not fit, candidates are dropped from the tail, which is the lowest-ranked end, until the survivors fit at full text width; leftover space is then handed back as padding, max-min fair. **A pill the user cannot read is not a suggestion**, so five whole words strictly dominate eight elided ones. The only remaining elide is a single word wider than the whole bar, where there is nothing left to drop.
+
+The visible consequence is that raising the maximum-suggestion count past what the window can hold no longer adds pills. That is the correct behaviour under the priority order, and it makes window width, not a count setting, the real lever on how many suggestions a user sees.
 
 ---
 
@@ -336,7 +363,7 @@ A typed password should never enter the prediction model. Two paths enforce this
 1. **Background polling.** A 200 ms `QTimer` calls `is_password_field()` from `src/platform/password_detect.py`, which uses Windows UI Automation (`IUIAutomation::GetFocusedElement` → `UIA_IsPasswordPropertyId`). UIA covers native applications and modern browsers that expose accessibility metadata. A Win32 fallback (`EM_GETPASSWORDCHAR`) catches older Win32-only apps.
 2. **Per-keystroke synchronous check.** `pressKey` and `pressSpecialKey` call `_check_password_field_sync()` rate-limited to ~50 ms. This closes the race window where the user types the first characters of a password between timer ticks. Without the synchronous check, those characters would reach the prediction cache before the timer fires.
 
-When privacy mode is active (auto-detected or manually toggled by the "Learning" / "Paused" button in the title bar), keystrokes still reach the OS, but `_current_word`, predictions, and learning are all suppressed. The prediction bar shows "Learning paused".
+When privacy mode is active (auto-detected, or set manually with the "Learning" switch in the title bar), keystrokes still reach the OS, but `_current_word`, predictions, and learning are all suppressed. The prediction bar shows "Learning paused".
 
 On Linux, the equivalent uses AT-SPI 2 (`gi.repository.Atspi`). A daemon thread owns a GLib event loop and listens for `object:state-changed:focused`; whenever focus lands on an accessible whose state set contains `STATE_PASSWORD_TEXT`, the privacy flag flips on. Coverage spans GTK (`GtkEntry` with `visibility=false`), Qt (`QLineEdit` in Password echo mode), and browsers that expose accessibility metadata. If `gi` fails to import or AT-SPI is not running, the detector falls back silently to the null detector and the user can still toggle privacy mode manually.
 

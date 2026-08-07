@@ -83,6 +83,21 @@ class TestEveryLayout:
                         f"{path.stem}: unhandled modifier {key['action']!r}"
                     )
 
+    def test_delete_is_on_the_entry_layer(self, path: Path) -> None:
+        """Forward-delete must be one tap away, not behind a ?123 hop.
+
+        Backspace alone means the caret has to be walked past a mistake and
+        back; on a pointer-driven keyboard that is several extra clicks.
+        Rows with no `layer` field are the full-size layouts' single layer.
+        """
+        data = json.loads(path.read_text(encoding="utf-8"))
+        entry = [r for r in data["rows"] if r.get("layer", "base") == "base"]
+        actions = {
+            k.get("action") for r in entry for k in r["keys"]
+            if k.get("type") == "special"
+        }
+        assert "delete" in actions, f"{path.stem}: no Del key on the base layer"
+
     def test_modifiers_carry_a_state_key(self, path: Path) -> None:
         # Without stateKey the QML `isActive` binding can never highlight the
         # key, so a toggled modifier looks inactive while it is held.
@@ -218,6 +233,22 @@ class TestCompactLayout:
                     assert key["width"] == 2.0, (
                         f"{key['action']} in {row['id']} is {key['width']}u"
                     )
+
+    def test_esc_is_still_reachable_from_the_sym_layer(self, compact: dict) -> None:
+        """Del took Esc's base-layer slot; Esc took Del's on ?123.
+
+        There is no spare unit in a 13u row, so putting Del on the base layer
+        had to cost something. Esc was the only non-protected key there (see
+        test_keys_owen_named_are_on_the_base_layer for the protected set) and
+        it is far rarer than forward-delete in text entry. Guard that the
+        swap was a trade and not a deletion.
+        """
+        sym_rows = [r for r in compact["rows"] if r["layer"] == "sym"]
+        actions = {
+            k.get("action") for r in sym_rows for k in r["keys"]
+            if k.get("type") == "special"
+        }
+        assert "escape" in actions
 
     def test_alphabet_is_complete_on_the_base_layer(self, compact: dict) -> None:
         base_rows = [r for r in compact["rows"] if r["layer"] == "base"]

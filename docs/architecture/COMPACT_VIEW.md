@@ -67,10 +67,19 @@ stretching or justification logic exists anywhere in the QML.
 ```
 Base layer                              ?123 layer
   q w e r t y u i o p [ ⌫ ] PgUp          1 2 3 4 5 6 7 8 9 0 [ ⌫ ] PgUp
- Tab a s d f g h j k l ' Esc PgDn        Tab - = [ ] \ ; ' ` Ins Del Caps PgDn
+ Tab a s d f g h j k l ' Del PgDn        Tab - = [ ] \ ; ' ` Ins Esc Caps PgDn
   ⇧ z x c v b n m , / [Enter] Home        ⇧ ! @ # $ % ^ & ( ) [Enter] Home
  ?123 Ctl ⊞ Alt [space] . ← ↑ ↓ → End    ABC Ctl ⊞ Alt [space] . ← ↑ ↓ → End
 ```
+
+**Del and Esc trade layers.** A 13u row has no spare unit, so putting
+forward-delete on the base layer had to cost something, and Esc was the only
+key there that isn't in the protected set below. Backspace-only editing means
+walking the caret past a mistake and back, which is several extra clicks with a
+pointer; Esc is comparatively rare in text entry. `Enter`/`Backspace` staying 2u
+and the nav column staying put both rule out the alternatives.
+`tests/test_layouts.py::TestCompactLayout::test_esc_is_still_reachable_from_the_sym_layer`
+guards that this stayed a trade rather than becoming a deletion.
 
 Design rules, all enforced by `tests/test_layouts.py`:
 
@@ -85,6 +94,24 @@ Design rules, all enforced by `tests/test_layouts.py`:
   than it shows: `/`→`?`, `,`→`<`, `.`→`>`, `'`→`"`.
 - `.` sits beside Space (phone convention) rather than next to `,`; that is what
   pays for `/` on row 3 without a fourteenth column.
+
+## Getting the digits back without leaving compact
+
+*Settings → Appearance → Panels → **Number Row*** adds a standalone
+`` ` `` `1`–`0` `-` `=` strip above the keyboard (`qml/components/NumberRow.qml`,
+off by default). Thirteen 1u keys, so it is exactly 13.0u and sits flush over a
+compact grid with no gutters.
+
+It is a panel rather than a fifth row in the layout JSON because the compact
+layout's two layers must both be four rows of 13u (`test_has_exactly_two_layers_of_four_rows`),
+and because a panel toggles independently of which letter arrangement is
+selected. It behaves like any other char key: shift shows and types the shifted
+glyph, right-click types it without flipping sticky shift, both flash the key
+preview, and every digit registers in `charKeyRegistry` so the swipe overlay
+passes taps through instead of swallowing them.
+
+Enabling it alongside a full-size layout is allowed but pointless: those layouts
+carry their own number row, so you get a narrower centred duplicate.
 
 ## How layers work
 

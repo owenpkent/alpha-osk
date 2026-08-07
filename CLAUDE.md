@@ -212,13 +212,20 @@ When Caps Lock is on, the prediction pills also render uppercase. The pills must
 
 `_display_cased` *also* mirrors **every** uppercase position from the typed prefix onto the displayed pill, not just the first letter. If the user typed "Hel" the pills show "Hello"/"Help"; if they right-clicked each letter to type "HEL", the pills show "HELlo"/"HELp"; if they typed "iP" (mid-word cap via right-click), the pill shows "iPhone". The gate is `any(c.isupper() for c in cw)` and the body iterates each prediction position, force-uppercasing it when the corresponding `cw[i]` is uppercase. The mirror runs **regardless of whether the pill strict-prefix-matches the typed letters**, which is the difference from the original implementation. The earlier version short-circuited to pass-through whenever `w.lower().startswith(cw.lower())` was False, which silently dropped the cap on every fuzzy / autocorrect candidate (typing "Hwl" for "Hel" -> fuzzy returns "hello" -> "hello" doesn't strict-prefix "hwl" -> cap lost). Mirroring unconditionally fixes that. Two reasons capitalised pills still matter even when the prefix matches: (1) the displayed pill must reflect what the user typed so they can tell which pill matches their prefix, and (2) the suffix-only insert path uses a case-sensitive `startswith`, so "hello".startswith("HEL") is False and the click would fall through to a full replace, clobbering the user's capitals. Sentence-start and proper-noun capitalisation still flow through `NgramPredictor.get_capitalized` upstream; this layer only mirrors the *typed* prefix back into the displayed form.
 
-### Prediction pill widths (no "..." truncation)
+### Prediction pill widths (never "..." truncation)
 
-Pills size with **max-min fair allocation**, not an equal split - this is what stops a long word from being elided to "..." while "I"/"the" sit in half-empty pills beside it. The whole computation lives in `predRow.computePillWidths(...)` in `qml/Main.qml`, bound to `predRow.pillWidthList` and indexed per-delegate (`width: predRow.pillWidthList[index]`).
+**The bar drops low-ranked pills rather than eliding any of them.** Eight `documentation`-family candidates in a 940 px window rendered as eight identical `docu...` pills, which is unusable - every pill looks the same, so there is nothing to choose between. Showing five readable words beats showing eight unreadable ones. The whole computation lives in `predRow.computeFit(...)` in `qml/Main.qml`, which returns `{words, widths}`; the Repeater's model is `predRow.fit.words` (a **prefix** of `root.predictions`, so anything dropped is the lowest-ranked) and each delegate takes `predRow.fit.widths[index]`. `predRow.pillWidthList` is a read-only alias kept for the tests.
 
-- Each word's **natural width** = `FontMetrics.advanceWidth(word) + predHorizontalPad`, floored at `predMinWidth`. A dedicated `FontMetrics { id: predMetrics }` measures in the *same* font the pills render (pixelSize / weight / family), so the parent can size every pill centrally instead of each delegate publishing its own `implicitWidth` back up. (The earlier code read `predText.implicitWidth` per-delegate and capped each pill at `avail / count` - the equal-split that caused the elide.)
-- **Water-fill**: pills whose natural width fits under the current fair share settle at natural width and release their slack, raising the share for the rest; repeat (<= n passes). Leftover that no pill can absorb (several long words competing) is split evenly and floored at `predPillHeight * 1.4` so a pill can't collapse. Only this last, genuinely-pathological case still elides - and the hover `ToolTip` (gated on `predText.truncated`) reveals the full word there.
-- The `pillWidthList` binding reads `root.predictions`, `root.width`, and the `predBar.pred*` geometry props directly so it re-evaluates whenever predictions, window width, or pill sizing change. Headless-verified against real Qt `FontMetrics` + the QML binding engine (see the design note: short words keep natural width; one long word among short ones renders in full).
+Three rules, in priority order:
+
+1. **No elide.** Each word's *tight* width is `FontMetrics.advanceWidth(word) + minPad` (floored at `predMinWidth`), where `minPad = max(14, predHorizontalPad * 0.45)`. Padding compresses to that first; if the set still doesn't fit, `count` decrements until the survivors fit at tight width. A dedicated `FontMetrics { id: predMetrics }` measures in the *same* font the pills render (pixelSize / weight / family), so the parent sizes every pill centrally instead of each delegate publishing its own `implicitWidth` back up.
+2. **Leftover space is handed back as padding, max-min fair**: a pill wanting less than the current fair share settles at what it wants and releases the rest, raising the share for the others (<= count passes); still-hungry pills split what remains. This is what stops "I"/"the" sitting in half-empty pills beside a cramped long word.
+3. **`predBar.clearCtxReserve` is subtracted from the available width** so the row can never reach the ⟲ button (see the invariant below).
+
+Only one case can still elide: a single word wider than the whole bar, where there is nothing left to drop. It's clamped to the available width and the hover `ToolTip` (gated on `predText.truncated`) reveals it. Consequence to be aware of: raising *Settings -> Smart Typing -> Suggestions -> max count* past what the window can hold no longer shows more pills, it just gets clipped by the fitter - the lever for more visible suggestions is a wider window.
+
+The `fit` binding reads `root.predictions`, `root.width` and the `predBar.pred*` geometry props directly so it re-evaluates whenever predictions, window width or pill sizing change. Headless-verified against real Qt `FontMetrics` + the QML binding engine in `tests/test_qml_prediction_bar.py`, which asserts on `Text.truncated` (the same flag the ToolTip is gated on, so the test can't disagree with what the user sees).
+- **`predBar.clearCtxReserve` is load-bearing, not decorative.** The clear-context (⟲) button owns a strip at the right edge; that width is subtracted inside `computeFit` *and* the row is positioned with an explicit `x` (not `anchors.centerIn`, which centres on the full bar) so pills are centred in what's left. It was declared but never used at first, and the right-hand pill rendered underneath the button. Reserved on the right only: taking the same bite from the left would re-centre the row in the window at twice the width cost and make long words elide sooner. Guarded by `tests/test_qml_prediction_bar.py::TestClearButtonNeverCoversPills`.
 
 ## Editing a Prediction (OSK-friendly edit popup)
 
@@ -291,7 +298,7 @@ The parent (`Main.qml`'s settings popup window) calls `settingsPanel.resetToHome
 
 | Top-level | Section | What's inside |
 |-----------|---------|---------------|
-| **Appearance** | Panels | Function row / Navigation / Numpad toggles, Compact View |
+| **Appearance** | Panels | Number row / Function row / Navigation / Numpad toggles, Compact View |
 | | Keyboard Layout | qwerty / dvorak / colemak picker (compact variants are filtered out - see *Compact View*) |
 | | Theme | 9-theme color picker |
 | | Sound & Opacity | Key click sound, opacity slider |
@@ -411,7 +418,7 @@ Protects sensitive input (passwords, PINs) from leaking into the prediction mode
   1. A background `QTimer` polls every 200ms (`_check_password_field`). Catches focus changes that happen between keystrokes.
   2. **Every keystroke** (`pressKey`/`pressSpecialKey`) also calls `_check_password_field_sync()`, rate-limited to ~50ms via `_last_sync_password_check`. Closes the race window where the first characters after focus lands on a password field would otherwise reach the prediction cache before the timer fires.
 - Detection uses Windows UI Automation COM (`IUIAutomation::GetFocusedElement` -> `UIA_IsPasswordPropertyId`) in native apps and browsers. Falls back to Win32 `EM_GETPASSWORDCHAR` if UIA fails.
-- **Manual toggle**: "Learning" / "Paused" text button in the title bar. Overrides auto-detection. Used to be a play/pause Canvas icon but the media-player metaphor read as "is something playing" rather than "is the keyboard learning"; see the title-bar bullet in *Things to Watch Out For* for the full rationale.
+- **Manual toggle**: the **Learning** switch in the title bar (static label + a sliding knob; accent when on, red when paused). Overrides auto-detection. Two earlier designs (a play/pause Canvas icon, then a text label that swapped between "Learning" and "Paused") both had to be read and interpreted; see the title-bar bullet in *Things to Watch Out For* for the full rationale.
 - **When active**: Keystrokes still reach the OS, but `_current_word`, predictions, and learning are all suppressed. The prediction bar shows "Learning paused".
 
 ### Key files
@@ -514,10 +521,19 @@ Load-bearing facts:
   bool into `<layout>-compact`. A layout with no compact variant falls back to
   full size, so the toggle is always safe. Adding compact Dvorak = drop
   `data/layouts/dvorak-compact.json` in place, no code change.
+- **Del sits on the base layer, Esc on `?123`.** A 13u row has no spare unit, so
+  the two traded places; Esc was the only base-layer key not in the protected
+  "never behind a hop" set. Don't swap them back without reading the rationale
+  in `docs/architecture/COMPACT_VIEW.md`.
+- **Digits come back via a panel, not a fifth row.** *Settings → Appearance →
+  Panels → Number Row* renders `qml/components/NumberRow.qml` (13 x 1u, flush
+  with the compact grid) above the keyboard. It must register its keys through
+  `registerFn` or the swipe overlay swallows every tap on them.
 - QML-only behaviour can't be covered by the Python suite, so
-  `tests/test_qml_compact_view.py` loads the real `Main.qml` headlessly
-  (`QT_QPA_PLATFORM=offscreen`) and fails on QML warnings. That's the only guard
-  against a binding error shipping as a blank keyboard.
+  `tests/test_qml_compact_view.py` and `tests/test_qml_prediction_bar.py` load
+  the real `Main.qml` headlessly (`QT_QPA_PLATFORM=offscreen`) and fail on QML
+  warnings. That's the only guard against a binding error shipping as a blank
+  keyboard.
 
 ## Modular Layouts
 

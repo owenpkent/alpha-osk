@@ -9,6 +9,7 @@ Item {
 
     // Layout properties
     property bool showFunctionRow: false
+    property bool showNumberRow: false
     property bool showNavigation: false
     property bool showNumpad: false
     property string currentTheme: "dark"
@@ -360,6 +361,17 @@ Item {
                             ColumnLayout {
                                 Layout.fillWidth: true
                                 spacing: 4
+
+                                SettingsToggle {
+                                    Layout.fillWidth: true
+                                    text: "Number Row"
+                                    description: "Adds ` 1-0 - = above the keyboard. "
+                                               + "For Compact View, where the digits sit "
+                                               + "behind ?123; the full-size layouts "
+                                               + "already have one."
+                                    checked: unifiedSettings.showNumberRow
+                                    onToggled: function(c) { unifiedSettings.settingChanged("numberRow", c) }
+                                }
 
                                 SettingsToggle {
                                     Layout.fillWidth: true
