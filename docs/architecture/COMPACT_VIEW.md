@@ -68,7 +68,7 @@ stretching or justification logic exists anywhere in the QML.
 Base layer                              ?123 layer
   q w e r t y u i o p [ ⌫ ] PgUp          1 2 3 4 5 6 7 8 9 0 [ ⌫ ] PgUp
  Tab a s d f g h j k l ' Del PgDn        Tab - = [ ] \ ; ' ` Ins Esc Caps PgDn
-  ⇧ z x c v b n m , / [Enter] Home        ⇧ ! @ # $ % ^ & ( ) [Enter] Home
+  ⇧ z x c v b n m , / [Enter] Home        ⇧ ! @ # $ % : & ( ) [Enter] Home
  ?123 Ctl ⊞ Alt [space] . ← ↑ ↓ → End    ABC Ctl ⊞ Alt [space] . ← ↑ ↓ → End
 ```
 
@@ -92,23 +92,46 @@ Design rules, all enforced by `tests/test_layouts.py`:
   additionally auto-repeats, so a 1u target would regress against full size.
 - **Right-click covers the shifted variants**, so the base layer reaches more
   than it shows: `/`→`?`, `,`→`<`, `.`→`>`, `'`→`"`.
+- **`:` gets a dedicated key on the `?123` layer**, in the slot `^` used to
+  hold. Row 2 of that layer already carries `;`→`:` as a shifted variant, but a
+  shifted variant is invisible: the keycap reads `;` and nothing on screen says
+  a colon is one right-click away, so in practice the layer read as "no colon".
+  Row 3 exists to surface exactly those shifted glyphs as their own keys, and it
+  was already one short of the full set (`*` is missing for the same 13u
+  reason), so `^` — the rarest of the nine in prose — pays for it. `^` is
+  unchanged on row 1 as the shifted variant of `6`.
 - `.` sits beside Space (phone convention) rather than next to `,`; that is what
   pays for `/` on row 3 without a fourteenth column.
 
 ## Getting the digits back without leaving compact
 
 *Settings → Appearance → Panels → **Number Row*** adds a standalone
-`` ` `` `1`–`0` `-` `=` strip above the keyboard (`qml/components/NumberRow.qml`,
+`Esc` `1`–`0` `-` `=` strip above the keyboard (`qml/components/NumberRow.qml`,
 off by default). Thirteen 1u keys, so it is exactly 13.0u and sits flush over a
 compact grid with no gutters.
 
 It is a panel rather than a fifth row in the layout JSON because the compact
 layout's two layers must both be four rows of 13u (`test_has_exactly_two_layers_of_four_rows`),
 and because a panel toggles independently of which letter arrangement is
-selected. It behaves like any other char key: shift shows and types the shifted
-glyph, right-click types it without flipping sticky shift, both flash the key
-preview, and every digit registers in `charKeyRegistry` so the swipe overlay
-passes taps through instead of swallowing them.
+selected. The digits behave like any other char key: shift shows and types the
+shifted glyph, right-click types it without flipping sticky shift, both flash
+the key preview, and every digit registers in `charKeyRegistry` so the swipe
+overlay passes taps through instead of swallowing them.
+
+**The leading slot is `Esc`, not the physical keyboard's `` ` ``.** The Del/Esc
+trade above put Esc behind a hop, and "get me out of this dialog" is a bad key
+to make people navigate to. This row restores it at the top-left corner where a
+real keyboard keeps it. Nothing is lost: `` ` ``→`~` stays on `?123` row 2, and
+the full-size layouts carry their own `` ` `` in the layout JSON. The Esc here
+duplicates the `?123` one deliberately — this panel is optional and off by
+default, so `?123` has to stay the fallback for anyone who never enables it.
+
+Two consequences of Esc being a special key rather than a char key: it takes no
+key-preview bubble (a bubble over Esc isn't "what it typed", matching the main
+grid), and it is **not** in `charKeyRegistry`, because a phantom "Esc" centre
+would corrupt every swipe shape match. That makes it a dead tap while swipe
+typing is on — which is exactly how Backspace, Tab and Enter already behave
+under the overlay, not a regression specific to this row.
 
 Enabling it alongside a full-size layout is allowed but pointless: those layouts
 carry their own number row, so you get a narrower centred duplicate.

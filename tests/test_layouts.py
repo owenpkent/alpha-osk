@@ -266,6 +266,36 @@ class TestCompactLayout:
         }
         assert digits == set("0123456789")
 
+    def test_colon_has_a_dedicated_key_on_the_sym_layer(
+        self, compact: dict
+    ) -> None:
+        """A shifted variant is invisible, so `;`→`:` read as "no colon".
+
+        Row 2 of ?123 carries `;` with `shifted: ":"`, but the keycap says
+        `;` and nothing on screen signals that a colon is one right-click
+        away. Row 3 exists to surface those glyphs as keys in their own
+        right, so the colon gets one there.
+        """
+        sym_rows = [r for r in compact["rows"] if r["layer"] == "sym"]
+        chars = [
+            k for r in sym_rows for k in r["keys"] if k.get("type") == "char"
+        ]
+        assert ":" in {k["key"] for k in chars}
+
+    def test_caret_survives_the_colon_taking_its_slot(
+        self, compact: dict
+    ) -> None:
+        """`^` paid for the colon's 1u — a trade, not a deletion.
+
+        It is the rarest of row 3's symbols in prose, and it stays
+        reachable as the shifted variant of `6` on row 1.
+        """
+        sym_rows = [r for r in compact["rows"] if r["layer"] == "sym"]
+        chars = [
+            k for r in sym_rows for k in r["keys"] if k.get("type") == "char"
+        ]
+        assert "^" in {k.get("shifted") for k in chars}
+
     def test_shifted_variants_cover_the_punctuation_owen_asked_for(
         self, compact: dict
     ) -> None:

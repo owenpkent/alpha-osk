@@ -124,7 +124,7 @@
         {"type": "char", "key": "#", "width": 1.0, "fontSize": 14, "style": "secondary"},
         {"type": "char", "key": "$", "width": 1.0, "fontSize": 14, "style": "secondary"},
         {"type": "char", "key": "%", "width": 1.0, "fontSize": 14, "style": "secondary"},
-        {"type": "char", "key": "^", "width": 1.0, "fontSize": 14, "style": "secondary"},
+        {"type": "char", "key": ":", "width": 1.0, "fontSize": 14, "style": "secondary"},
         {"type": "char", "key": "&", "width": 1.0, "fontSize": 14, "style": "secondary"},
         {"type": "char", "key": "(", "width": 1.0, "fontSize": 14, "style": "secondary"},
         {"type": "char", "key": ")", "width": 1.0, "fontSize": 14, "style": "secondary"},

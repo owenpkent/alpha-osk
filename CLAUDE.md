@@ -524,11 +524,21 @@ Load-bearing facts:
 - **Del sits on the base layer, Esc on `?123`.** A 13u row has no spare unit, so
   the two traded places; Esc was the only base-layer key not in the protected
   "never behind a hop" set. Don't swap them back without reading the rationale
-  in `docs/architecture/COMPACT_VIEW.md`.
+  in `docs/architecture/COMPACT_VIEW.md`. The Number Row panel (below) puts a
+  second Esc back at the top-left; that duplicate is deliberate, because the
+  panel is optional and `?123` has to stay the fallback when it's hidden.
+- **`:` has its own key on `?123` row 3**, in the slot `^` used to hold. Row 2
+  already carried `;`→`:`, but a shifted variant is invisible (the keycap reads
+  `;`), so the layer read as having no colon. `^` is still the shifted variant
+  of `6` on row 1.
 - **Digits come back via a panel, not a fifth row.** *Settings → Appearance →
   Panels → Number Row* renders `qml/components/NumberRow.qml` (13 x 1u, flush
-  with the compact grid) above the keyboard. It must register its keys through
-  `registerFn` or the swipe overlay swallows every tap on them.
+  with the compact grid) above the keyboard. Its 12 char keys must register
+  through `registerFn` or the swipe overlay swallows every tap on them. Its
+  leading key is **Esc, not `` ` ``** (backtick lives on `?123` row 2), and Esc
+  deliberately does *not* register: a phantom "Esc" centre would corrupt every
+  swipe shape match. That makes it a dead tap while swipe is on, exactly like
+  Backspace/Tab/Enter already are under the overlay.
 - QML-only behaviour can't be covered by the Python suite, so
   `tests/test_qml_compact_view.py` and `tests/test_qml_prediction_bar.py` load
   the real `Main.qml` headlessly (`QT_QPA_PLATFORM=offscreen`) and fail on QML

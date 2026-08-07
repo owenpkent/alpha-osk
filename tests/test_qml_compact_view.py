@@ -212,3 +212,103 @@ class TestNoGuttersInCompactView:
                 f"{layer} layer has unequal rows {units} — the narrower ones "
                 "get centred and the side gutters return"
             )
+
+
+class TestNumberRowPanel:
+    """The optional `Esc 1-0 - =` strip (qml/components/NumberRow.qml).
+
+    Off by default, and the only surface that puts Esc back on the base
+    layer after the Del/Esc trade documented in COMPACT_VIEW.md.
+    """
+
+    @pytest.fixture
+    def number_row_defs(self, qapp) -> list[dict]:
+        """`keyDefs` read off a standalone NumberRow instance."""
+        from PySide6.QtQml import QQmlComponent, QQmlEngine
+
+        engine = QQmlEngine()
+        component = QQmlComponent(
+            engine, QUrl.fromLocalFile(str(REPO_ROOT / "qml" / "components" / "NumberRow.qml"))
+        )
+        assert component.errors() == [], [e.toString() for e in component.errors()]
+        item = component.create()
+        assert item is not None
+        value = item.property("keyDefs")
+        defs = value.toVariant() if hasattr(value, "toVariant") else value
+        try:
+            yield defs
+        finally:
+            del item
+            del engine
+
+    def test_is_still_exactly_thirteen_units(self, number_row_defs) -> None:
+        """13 x 1u is what makes it sit flush over the compact grid."""
+        assert len(number_row_defs) == 13
+
+    def test_leading_key_is_escape(self, number_row_defs) -> None:
+        """Esc, not the physical keyboard's backtick.
+
+        Compact traded Esc onto the ?123 layer to make room for Del, which
+        put "get me out of this dialog" behind a hop. This row restores it
+        at the top-left corner where a real keyboard keeps it.
+        """
+        assert number_row_defs[0].get("special") == "escape"
+        assert number_row_defs[0].get("display") == "Esc"
+
+    def test_backtick_is_gone_from_the_panel(self, number_row_defs) -> None:
+        """Nothing in the row types ` or ~ any more — Esc took the slot."""
+        typed = {d.get("key") for d in number_row_defs}
+        typed |= {d.get("shifted") for d in number_row_defs}
+        assert "`" not in typed
+        assert "~" not in typed
+
+    def test_backtick_survives_on_the_sym_layer(self) -> None:
+        """The slot was a trade, not a deletion (mirrors the Esc guard in
+        tests/test_layouts.py::TestCompactLayout)."""
+        import json
+
+        compact = json.loads(
+            (REPO_ROOT / "data" / "layouts" / "qwerty-compact.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        sym_chars = [
+            k for r in compact["rows"] if r["layer"] == "sym"
+            for k in r["keys"] if k.get("type") == "char"
+        ]
+        assert "`" in {k["key"] for k in sym_chars}
+        assert "~" in {k.get("shifted") for k in sym_chars}
+
+    def test_digits_still_cover_the_full_span(self, number_row_defs) -> None:
+        keys = [d.get("key") for d in number_row_defs if d.get("key")]
+        assert keys == list("1234567890-=")
+
+    def test_escape_stays_out_of_the_swipe_registry(self, qml_root) -> None:
+        """A phantom "Esc" key centre would corrupt every swipe shape match.
+
+        The panel's 12 char keys must register; its Esc must not. Asserted
+        in compact view, where the base layer carries no digits and no
+        `-`/`=` (those live on ?123), so every one of the 12 can only have
+        come from this panel.
+
+        The cost of staying out is that Esc is a dead tap while swipe
+        typing is on, which is how every other special key already behaves
+        under the overlay.
+        """
+        root, warnings, _ = qml_root
+        root.setProperty("compactView", True)
+        root.setProperty("showNumberRow", True)
+        QCoreApplication.processEvents()
+
+        entries = root.property("charKeyRegistry").toVariant()
+        keys = [e["kd"]["key"] for e in entries]
+
+        assert set("1234567890-=") <= set(keys)
+        # registerCharKey only admits single-character char keys, so an Esc
+        # that slipped through would show up as a multi-char entry.
+        assert all(len(k) == 1 for k in keys), (
+            "non-character key leaked into the swipe registry: "
+            f"{[k for k in keys if len(k) != 1]}"
+        )
+        assert "Esc" not in keys
+        assert _real_warnings(warnings) == []
