@@ -25,9 +25,22 @@ pytest.importorskip("PySide6")
 # Must be set before QGuiApplication is constructed.
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import QCoreApplication, QObject, QSettings, QUrl  # noqa: E402
-from PySide6.QtGui import QGuiApplication  # noqa: E402
-from PySide6.QtQml import QQmlApplicationEngine  # noqa: E402
+# PySide6 imports fine on a bare headless box, but QtGui dlopens the host's
+# libEGL / libGL and raises ImportError if they are absent. That happens at
+# module scope, which pytest reports as a *collection* error and which aborts
+# the whole run rather than failing this one module. Degrade to a skip so a
+# contributor without the Qt system libs still gets the rest of the suite.
+# CI installs the libs (see .github/workflows/ci.yml) so these still run there.
+try:
+    from PySide6.QtCore import QCoreApplication, QObject, QSettings, QUrl  # noqa: E402
+    from PySide6.QtGui import QGuiApplication  # noqa: E402
+    from PySide6.QtQml import QQmlApplicationEngine  # noqa: E402
+except ImportError as exc:  # pragma: no cover - environment-dependent
+    pytest.skip(
+        f"Qt GUI libraries unavailable ({exc}); install libegl1/libgl1 to run "
+        "the headless QML tests",
+        allow_module_level=True,
+    )
 
 from src.keyboard_bridge import KeyboardBridge  # noqa: E402
 
