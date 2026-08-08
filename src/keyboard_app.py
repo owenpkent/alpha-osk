@@ -41,9 +41,11 @@ import logging
 import logging.handlers
 import os
 import sys
+import time
+from collections.abc import Callable
 from pathlib import Path
 
-from PySide6.QtCore import QSettings, QSharedMemory, Qt, QTimer, QUrl
+from PySide6.QtCore import QSettings, QSharedMemory, Qt, QUrl
 from PySide6.QtGui import QIcon
 from PySide6.QtQml import QQmlApplicationEngine
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
@@ -731,6 +733,61 @@ def _set_windows_app_user_model_id() -> None:
         _logger.debug("SetCurrentProcessExplicitAppUserModelID failed: %s", exc)
 
 
+class _TrayClickRouter:
+    """Turn raw tray activations into exactly one show/hide toggle per click.
+
+    Lives at module level, rather than as a closure in ``main()``, purely so
+    the tests can reach it without a running ``QApplication``.  Two
+    behaviours are worth pinning down:
+
+    **A tray click never minimizes.** Earlier builds mapped double-click to
+    ``root.showMinimized()``.  No mainstream tray app does that (Discord,
+    Slack and qBittorrent all just show/hide), and it is the wrong answer
+    for an OSK besides: the user asked the tray to put the keyboard away,
+    and parking it behind a taskbar entry only moves the problem.  The
+    title-bar minus button is still the way to minimize to the taskbar.
+
+    **A double click toggles once, not twice.** Windows delivers a double
+    click as Trigger, DoubleClick, Trigger, so acting on every activation
+    would flip the window straight back to where it started.  Collapsing a
+    burst into one toggle is also what lets the toggle fire *immediately*:
+    the old code had to sit on each click for the full double-click
+    interval to learn whether a second one was coming, and a tray click
+    that lags half a second reads as broken.
+
+    ``double_click_interval_ms`` is a callable (normally
+    ``QApplication.doubleClickInterval``) so the live system setting is
+    read per click rather than snapshotted at startup.
+    """
+
+    def __init__(
+        self,
+        toggle: Callable[[], None],
+        double_click_interval_ms: Callable[[], int],
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        self._toggle = toggle
+        self._double_click_interval_ms = double_click_interval_ms
+        self._clock = clock
+        # Time of the last *toggle*, not the last activation: stamping this
+        # on suppressed events too would let a stream of clicks keep
+        # re-arming the guard, and the tray icon would go dead.
+        self._last_toggle: float | None = None
+
+    def __call__(self, reason: QSystemTrayIcon.ActivationReason) -> None:
+        if reason not in (
+            QSystemTrayIcon.ActivationReason.Trigger,
+            QSystemTrayIcon.ActivationReason.DoubleClick,
+        ):
+            return
+        now = self._clock()
+        if self._last_toggle is not None:
+            if (now - self._last_toggle) * 1000.0 < self._double_click_interval_ms():
+                return
+        self._last_toggle = now
+        self._toggle()
+
+
 def main() -> int:
     """Launch the Alpha-OSK on-screen keyboard."""
     # CLI dispatch — the post-update relauncher re-invokes this binary
@@ -873,44 +930,25 @@ def main() -> int:
     quit_action = tray_menu.addAction("Quit Alpha-OSK")
 
     def _toggle_visibility() -> None:
+        """Bring the keyboard up, or put it away again.
+
+        This is the mainstream tray convention (Discord, Slack,
+        qBittorrent): click to show, click again to hide back to the tray.
+        It deliberately never minimizes; see :class:`_TrayClickRouter`.
+        """
         if root.isVisible():
             root.hide()
         else:
             root.show()
             root.raise_()
 
-    def _minimize_window() -> None:
-        """Minimize on tray double-click, matching the in-window − button.
-
-        Now that the OSK has a normal taskbar entry (no WS_EX_TOOLWINDOW),
-        ``showMinimized()`` does what users expect: drops to the taskbar,
-        clicking the taskbar restores. The tray icon stays as a backup
-        path — the single-click toggle still works — but isn't the only
-        way back anymore.
-        """
-        root.showMinimized()
-
-    # Tray single-click vs. double-click: we want a single click to
-    # toggle show/hide (current behaviour) and a double click to
-    # minimize.  On Windows, Qt delivers Trigger first, then DoubleClick,
-    # for a double click — so we start a timer on Trigger and only
-    # fire the single-click action if no DoubleClick arrives within the
-    # system's double-click interval.  If DoubleClick arrives first,
-    # the pending Trigger is cancelled.
-    tray_single_click_timer = QTimer(app)
-    tray_single_click_timer.setSingleShot(True)
-    tray_single_click_timer.setInterval(app.doubleClickInterval())
-    tray_single_click_timer.timeout.connect(_toggle_visibility)
-
-    def _on_tray_activated(reason: "QSystemTrayIcon.ActivationReason") -> None:
-        if reason == QSystemTrayIcon.ActivationReason.Trigger:
-            tray_single_click_timer.start()
-        elif reason == QSystemTrayIcon.ActivationReason.DoubleClick:
-            tray_single_click_timer.stop()
-            _minimize_window()
+    # Held in a local (not inlined into connect) so the router outlives the
+    # call: PySide does not promise to keep a strong reference to a callable
+    # object used as a slot, and main() is on the stack for the app's life.
+    tray_click_router = _TrayClickRouter(_toggle_visibility, app.doubleClickInterval)
 
     show_action.triggered.connect(_toggle_visibility)
-    tray.activated.connect(_on_tray_activated)
+    tray.activated.connect(tray_click_router)
     quit_action.triggered.connect(app.quit)
     tray.setContextMenu(tray_menu)
     tray.setToolTip("Alpha-OSK")
