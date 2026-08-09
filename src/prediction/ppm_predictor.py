@@ -26,6 +26,7 @@ _logger = logging.getLogger("PPMPredictor")
 @dataclass
 class PPMNode:
     """Node in the PPM trie structure."""
+
     count: int = 0
     children: Dict[str, "PPMNode"] = field(default_factory=dict)
 
@@ -61,10 +62,7 @@ class PPMPredictor:
     """
 
     def __init__(
-        self,
-        max_order: int = 8,
-        alphabet: Optional[str] = None,
-        model_path: Optional[Path] = None
+        self, max_order: int = 8, alphabet: Optional[str] = None, model_path: Optional[Path] = None
     ):
         """
         Initialize PPM predictor.
@@ -155,7 +153,7 @@ class PPMPredictor:
             Dict mapping character -> probability
         """
         context = self._normalize(context)
-        context = context[-self.max_order:]  # Limit context length
+        context = context[-self.max_order :]  # Limit context length
 
         # Initialize with uniform over alphabet
         probs = {c: 1.0 / len(self.alphabet) for c in self.alphabet}
@@ -250,11 +248,7 @@ class PPMPredictor:
         return completions[:n]
 
     def _beam_search_words(
-        self,
-        context: str,
-        partial: str,
-        beam_width: int = 15,
-        max_length: int = 15
+        self, context: str, partial: str, beam_width: int = 15, max_length: int = 15
     ) -> List[Tuple[str, float]]:
         """
         Beam search for word completions.
@@ -355,13 +349,11 @@ class PPMPredictor:
 
     def save(self, path: Path) -> None:
         """Save model to JSON file."""
+
         def node_to_dict(node: PPMNode) -> dict:
             return {
                 "count": node.count,
-                "children": {
-                    char: node_to_dict(child)
-                    for char, child in node.children.items()
-                }
+                "children": {char: node_to_dict(child) for char, child in node.children.items()},
             }
 
         data = {
@@ -384,6 +376,7 @@ class PPMPredictor:
 
     def load(self, path: Path) -> None:
         """Load model from JSON file."""
+
         def dict_to_node(d: dict) -> PPMNode:
             node = PPMNode(count=d.get("count", 0))
             for char, child_dict in d.get("children", {}).items():
@@ -395,7 +388,8 @@ class PPMPredictor:
             if file_size > self._MAX_MODEL_FILE_BYTES:
                 _logger.warning(
                     "PPM model %s too large (%d bytes); skipping load.",
-                    path, file_size,
+                    path,
+                    file_size,
                 )
                 return
 
@@ -435,6 +429,7 @@ class PPMPredictor:
 
     def get_stats(self) -> dict:
         """Get model statistics."""
+
         def count_nodes(node: PPMNode) -> int:
             return 1 + sum(count_nodes(c) for c in node.children.values())
 
@@ -473,11 +468,7 @@ class PPMWordPredictor:
     for practical word completion.
     """
 
-    def __init__(
-        self,
-        ppm: Optional[PPMPredictor] = None,
-        dictionary: Optional[Set[str]] = None
-    ):
+    def __init__(self, ppm: Optional[PPMPredictor] = None, dictionary: Optional[Set[str]] = None):
         """
         Initialize word predictor.
 
@@ -520,9 +511,7 @@ class PPMWordPredictor:
         """
         return [word for word, _ in self.predict_with_scores(context, n)]
 
-    def predict_with_scores(
-        self, context: str, n: int = 5
-    ) -> List[Tuple[str, float]]:
+    def predict_with_scores(self, context: str, n: int = 5) -> List[Tuple[str, float]]:
         """Predict words with their PPM probability scores.
 
         Scores are the raw PPM character-product probabilities for
@@ -564,16 +553,14 @@ class PPMWordPredictor:
         if len(self._completion_cache) >= self._cache_max_size:
             # Clear oldest entries
             keys = list(self._completion_cache.keys())
-            for key in keys[:len(keys) // 2]:
+            for key in keys[: len(keys) // 2]:
                 del self._completion_cache[key]
 
         self._completion_cache[cache_key] = predictions
 
         return predictions[:n]
 
-    def _get_predictions(
-        self, context: str, partial: str, n: int
-    ) -> List[Tuple[str, float]]:
+    def _get_predictions(self, context: str, partial: str, n: int) -> List[Tuple[str, float]]:
         """Get word predictions with PPM scores using PPM + dictionary."""
         predictions: List[Tuple[str, float]] = []
         seen: set[str] = set()
@@ -581,15 +568,14 @@ class PPMWordPredictor:
         # 1. Dictionary words matching partial
         if partial:
             matches = [
-                w for w in self.dictionary
-                if w.startswith(partial) and len(w) > len(partial)
+                w for w in self.dictionary if w.startswith(partial) and len(w) > len(partial)
             ]
 
             # Score by PPM probability
             scored: List[Tuple[str, float]] = []
             for word in matches[:50]:  # Limit for speed
                 # Get PPM probability for this completion
-                completion = word[len(partial):]
+                completion = word[len(partial) :]
                 ctx = context + " " + partial if context else partial
 
                 prob = 1.0
@@ -609,9 +595,7 @@ class PPMWordPredictor:
 
         # 2. PPM beam search for novel completions
         if len(predictions) < n:
-            ppm_preds = self.ppm.predict_word(
-                context, partial, n - len(predictions)
-            )
+            ppm_preds = self.ppm.predict_word(context, partial, n - len(predictions))
             for word, prob in ppm_preds:
                 if word not in seen:
                     seen.add(word)

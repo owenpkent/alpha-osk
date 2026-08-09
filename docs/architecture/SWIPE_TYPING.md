@@ -42,6 +42,27 @@ See `HYBRID_MERGING.md` → "Public API for External Callers".
 Tap fall-through is what lets a single key still work normally even when
 swipe mode is on — short gestures hit the key under the release point.
 
+**It only covers character keys.** The overlay's MouseArea fills the whole
+main-keyboard block and takes every press (`preventStealing: true`), and the
+release handler dispatches solely through `keyRegistry`. That registry is
+populated by `Main.qml`'s `registerCharKey`, which early-returns unless
+`kd.type === "char"` and the key is a single character — because the same
+list feeds `pushSwipeLayout()`, and a "Backspace" entry would put a phantom
+key centre into every shape match.
+
+The consequence is that **while swipe typing is on, every special key inside
+the overlay's rectangle is a dead tap**: Backspace, Tab, Enter, Del, the
+arrows, and the Esc on the Number Row panel. Modifiers and the keys outside
+the block (title bar, prediction pills, nav/numpad panels) are unaffected.
+Swipe is off by default, which is why this has gone unreported.
+
+Fixing it means separating the two jobs the registry currently does: keep
+`charKeyRegistry` as the swipe key-centre map, and add a parallel hit-test
+list that carries every tappable key with enough type information for the
+release handler to route a special through `pressSpecialKey` instead of
+`keyPressed`. Do not "fix" it by admitting specials into `charKeyRegistry`,
+which would corrupt the recogniser.
+
 ## Algorithm — Simplified SHARK² / Shape Writer
 
 (Kristensson & Zhai, UIST 2004 — the algorithm Gboard descends from.)
@@ -122,6 +143,12 @@ to do if you want to revive sentence-start or proper-noun cap.
 - **Visual hit-testing of taps walks the registry linearly.**  Fine for
   the ~50 char keys in the standard layout; if layouts grow large,
   switch to a spatial index (grid bucket).
+- **Special keys under the overlay are dead taps while swipe is on.**
+  Backspace, Tab, Enter, Del and the arrows are not in `charKeyRegistry`,
+  so the tap fall-through cannot dispatch them.  See "How a Gesture Flows"
+  above for why they are excluded and what the fix looks like.  This is the
+  most user-visible gap in the feature: a user who enables swipe loses
+  Backspace, which is the one key an imprecise typist needs most.
 
 ## References
 

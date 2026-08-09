@@ -44,6 +44,28 @@ finding.
   marketplace), or a downstream consumer asks how to verify the
   binary independently of the EV cert.
 
+## socket/License score 70 -- pypi/hypothesis (MPL-2.0)
+
+- **Finding:** Socket Security flags `hypothesis` with a License
+  score of 70/100 (amber) on PR #14. Its other four scores are
+  98-100. The score reflects the license class, not a defect:
+  hypothesis is MPL-2.0, weak copyleft, and Socket ranks that below
+  permissive MIT/BSD/Apache.
+- **Decided:** 2026-08-07. Skip.
+- **Reason:** MPL-2.0 obligations are file-level and attach to
+  *distributing* covered files. Alpha-OSK does neither thing that
+  would trigger them: hypothesis is unmodified, declared only in
+  `requirements-dev.txt`, imported by nothing under `src/`, and now
+  named in both PyInstaller `excludes` lists so it cannot reach a
+  shipped bundle even by accident. MPL-2.0 also explicitly permits
+  combination with a differently-licensed Larger Work, so the MIT
+  license on Alpha-OSK itself is unaffected. Both Socket checks pass;
+  this is an informational score, not a gate.
+- **Revisit when:** hypothesis (or another MPL/copyleft package)
+  moves into `requirements.txt`, or any shipped module imports it --
+  at which point the installer would be distributing MPL code and the
+  notice/source-availability obligations become real.
+
 ## How to add an exception
 
 Document the finding (rule ID + score), the date the decision was

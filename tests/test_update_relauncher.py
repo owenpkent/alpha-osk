@@ -21,6 +21,7 @@ class TestProcessAlive:
     def test_current_pid_returns_true(self):
         # Our own process is definitely alive.
         import os
+
         assert relauncher._process_alive(os.getpid()) is True
 
     def test_nonexistent_pid_returns_false(self):
@@ -115,6 +116,7 @@ class TestRunRelauncherIntegration:
         # write happens after the parent's death, so mtime > death by
         # whatever the install took (seconds at minimum).
         import os as _os
+
         target_exe = tmp_path / "alpha-osk.exe"
         target_exe.write_bytes(b"freshly installed")
         future_mtime = time.time() + 3600
@@ -124,16 +126,23 @@ class TestRunRelauncherIntegration:
         argv = [
             "alpha-osk.exe",
             "--update-relauncher",
-            "--parent-pid", "999999999",  # already dead
-            "--new-version", "1.0.16",
-            "--previous-version", "1.0.15",
-            "--target-exe", str(target_exe),
-            "--config-dir", str(config_dir),
+            "--parent-pid",
+            "999999999",  # already dead
+            "--new-version",
+            "1.0.16",
+            "--previous-version",
+            "1.0.15",
+            "--target-exe",
+            str(target_exe),
+            "--config-dir",
+            str(config_dir),
         ]
 
         # Bypass the 5-second installer-grace sleep so the test is fast.
-        with patch.object(relauncher, "_INSTALLER_GRACE_S", 0), \
-             patch.object(relauncher, "_NEW_EXE_TIMEOUT_S", 2):
+        with (
+            patch.object(relauncher, "_INSTALLER_GRACE_S", 0),
+            patch.object(relauncher, "_NEW_EXE_TIMEOUT_S", 2),
+        ):
             with patch.object(relauncher, "_launch_new_osk", return_value=True) as mock_launch:
                 rc = relauncher.run_relauncher(argv)
 
@@ -154,15 +163,22 @@ class TestRunRelauncherIntegration:
         argv = [
             "alpha-osk.exe",
             "--update-relauncher",
-            "--parent-pid", "12345",
-            "--new-version", "1.0.16",
-            "--previous-version", "1.0.15",
-            "--target-exe", str(target_exe),
-            "--config-dir", str(config_dir),
+            "--parent-pid",
+            "12345",
+            "--new-version",
+            "1.0.16",
+            "--previous-version",
+            "1.0.15",
+            "--target-exe",
+            str(target_exe),
+            "--config-dir",
+            str(config_dir),
         ]
 
-        with patch.object(relauncher, "_PARENT_EXIT_TIMEOUT_S", 0.5), \
-             patch.object(relauncher, "_process_alive", return_value=True):
+        with (
+            patch.object(relauncher, "_PARENT_EXIT_TIMEOUT_S", 0.5),
+            patch.object(relauncher, "_process_alive", return_value=True),
+        ):
             rc = relauncher.run_relauncher(argv)
 
         assert rc == 2  # parent-exit timeout
@@ -175,21 +191,29 @@ class TestRunRelauncherIntegration:
         argv = [
             "alpha-osk.exe",
             "--update-relauncher",
-            "--parent-pid", "999999999",
-            "--new-version", "1.0.16",
-            "--previous-version", "1.0.15",
-            "--target-exe", str(target_exe),
-            "--config-dir", str(config_dir),
+            "--parent-pid",
+            "999999999",
+            "--new-version",
+            "1.0.16",
+            "--previous-version",
+            "1.0.15",
+            "--target-exe",
+            str(target_exe),
+            "--config-dir",
+            str(config_dir),
         ]
 
-        with patch.object(relauncher, "_INSTALLER_GRACE_S", 0), \
-             patch.object(relauncher, "_NEW_EXE_TIMEOUT_S", 0.5):
+        with (
+            patch.object(relauncher, "_INSTALLER_GRACE_S", 0),
+            patch.object(relauncher, "_NEW_EXE_TIMEOUT_S", 0.5),
+        ):
             rc = relauncher.run_relauncher(argv)
 
         assert rc == 3  # new-exe timeout
 
     def test_returns_error_when_launch_fails(self, tmp_path):
         import os as _os
+
         target_exe = tmp_path / "alpha-osk.exe"
         target_exe.write_bytes(b"x")
         future_mtime = time.time() + 3600
@@ -199,16 +223,23 @@ class TestRunRelauncherIntegration:
         argv = [
             "alpha-osk.exe",
             "--update-relauncher",
-            "--parent-pid", "999999999",
-            "--new-version", "1.0.16",
-            "--previous-version", "1.0.15",
-            "--target-exe", str(target_exe),
-            "--config-dir", str(config_dir),
+            "--parent-pid",
+            "999999999",
+            "--new-version",
+            "1.0.16",
+            "--previous-version",
+            "1.0.15",
+            "--target-exe",
+            str(target_exe),
+            "--config-dir",
+            str(config_dir),
         ]
 
-        with patch.object(relauncher, "_INSTALLER_GRACE_S", 0), \
-             patch.object(relauncher, "_NEW_EXE_TIMEOUT_S", 2), \
-             patch.object(relauncher, "_launch_new_osk", return_value=False):
+        with (
+            patch.object(relauncher, "_INSTALLER_GRACE_S", 0),
+            patch.object(relauncher, "_NEW_EXE_TIMEOUT_S", 2),
+            patch.object(relauncher, "_launch_new_osk", return_value=False),
+        ):
             rc = relauncher.run_relauncher(argv)
 
         assert rc == 4  # launch failed
@@ -222,19 +253,18 @@ class TestIsDevTarget:
     target from a python interpreter target (dev-mode invocation)."""
 
     def test_python_exe_is_dev_target(self):
-        assert relauncher._is_dev_target(
-            r"C:\Users\Owen\AppData\Local\Programs\Python\Python311\python.exe"
-        ) is True
+        assert (
+            relauncher._is_dev_target(
+                r"C:\Users\Owen\AppData\Local\Programs\Python\Python311\python.exe"
+            )
+            is True
+        )
 
     def test_pythonw_is_dev_target(self):
-        assert relauncher._is_dev_target(
-            r"C:\Python311\pythonw.exe"
-        ) is True
+        assert relauncher._is_dev_target(r"C:\Python311\pythonw.exe") is True
 
     def test_alpha_osk_exe_is_not_dev_target(self):
-        assert relauncher._is_dev_target(
-            r"C:\Program Files\Alpha-OSK\alpha-osk.exe"
-        ) is False
+        assert relauncher._is_dev_target(r"C:\Program Files\Alpha-OSK\alpha-osk.exe") is False
 
     def test_case_insensitive(self):
         assert relauncher._is_dev_target(r"C:\PYTHON311\PYTHON.EXE") is True
@@ -264,6 +294,7 @@ class TestNewExeReady:
         # File predates parent death — this is the OLD exe, installer
         # hasn't finished writing yet. Returning True here would race.
         import os as _os
+
         target = tmp_path / "alpha-osk.exe"
         target.write_bytes(b"x")
         old_mtime = time.time() - 3600
@@ -272,6 +303,7 @@ class TestNewExeReady:
 
     def test_accepts_fresh_exe_when_after_mtime_set(self, tmp_path):
         import os as _os
+
         target = tmp_path / "alpha-osk.exe"
         target.write_bytes(b"x")
         future_mtime = time.time() + 3600
@@ -289,6 +321,7 @@ class TestShowSplashFlag:
         # Same setup as TestRunRelauncherIntegration.test_happy_path
         # but explicitly assert the headless dispatch path is taken.
         import os as _os
+
         target_exe = tmp_path / "alpha-osk.exe"
         target_exe.write_bytes(b"freshly installed")
         future_mtime = time.time() + 3600
@@ -298,19 +331,25 @@ class TestShowSplashFlag:
         argv = [
             "alpha-osk.exe",
             "--update-relauncher",
-            "--parent-pid", "999999999",
-            "--new-version", "1.0.18",
-            "--previous-version", "1.0.17",
-            "--target-exe", str(target_exe),
-            "--config-dir", str(config_dir),
+            "--parent-pid",
+            "999999999",
+            "--new-version",
+            "1.0.18",
+            "--previous-version",
+            "1.0.17",
+            "--target-exe",
+            str(target_exe),
+            "--config-dir",
+            str(config_dir),
         ]
 
         called: list[bool] = []
-        with patch.object(relauncher, "_INSTALLER_GRACE_S", 0), \
-             patch.object(relauncher, "_NEW_EXE_TIMEOUT_S", 2), \
-             patch.object(relauncher, "_run_with_splash",
-                          lambda args: called.append(True) or 0), \
-             patch.object(relauncher, "_launch_new_osk", return_value=True):
+        with (
+            patch.object(relauncher, "_INSTALLER_GRACE_S", 0),
+            patch.object(relauncher, "_NEW_EXE_TIMEOUT_S", 2),
+            patch.object(relauncher, "_run_with_splash", lambda args: called.append(True) or 0),
+            patch.object(relauncher, "_launch_new_osk", return_value=True),
+        ):
             rc = relauncher.run_relauncher(argv)
 
         assert rc == 0
@@ -321,17 +360,23 @@ class TestShowSplashFlag:
         argv = [
             "alpha-osk.exe",
             "--update-relauncher",
-            "--parent-pid", "1",
-            "--new-version", "1.0.18",
-            "--previous-version", "1.0.17",
-            "--target-exe", str(tmp_path / "alpha-osk.exe"),
-            "--config-dir", str(config_dir),
+            "--parent-pid",
+            "1",
+            "--new-version",
+            "1.0.18",
+            "--previous-version",
+            "1.0.17",
+            "--target-exe",
+            str(tmp_path / "alpha-osk.exe"),
+            "--config-dir",
+            str(config_dir),
             "--show-splash",
         ]
 
         observed: list[object] = []
-        with patch.object(relauncher, "_run_with_splash",
-                          lambda args: observed.append(args.show_splash) or 0):
+        with patch.object(
+            relauncher, "_run_with_splash", lambda args: observed.append(args.show_splash) or 0
+        ):
             rc = relauncher.run_relauncher(argv)
 
         assert rc == 0
@@ -343,6 +388,7 @@ class TestShowSplashFlag:
         # because python.exe never gets a fresh mtime, leaving a stuck
         # window. The dispatcher must short-circuit to headless instead.
         import os as _os
+
         # Point target_exe at this Python interpreter to mimic dev mode.
         target_exe = tmp_path / "python.exe"
         target_exe.write_bytes(b"x")
@@ -353,20 +399,28 @@ class TestShowSplashFlag:
         argv = [
             "alpha-osk.exe",
             "--update-relauncher",
-            "--parent-pid", "999999999",
-            "--new-version", "1.0.18",
-            "--previous-version", "1.0.17",
-            "--target-exe", str(target_exe),
-            "--config-dir", str(config_dir),
+            "--parent-pid",
+            "999999999",
+            "--new-version",
+            "1.0.18",
+            "--previous-version",
+            "1.0.17",
+            "--target-exe",
+            str(target_exe),
+            "--config-dir",
+            str(config_dir),
             "--show-splash",
         ]
 
         splash_called: list[bool] = []
-        with patch.object(relauncher, "_INSTALLER_GRACE_S", 0), \
-             patch.object(relauncher, "_NEW_EXE_TIMEOUT_S", 2), \
-             patch.object(relauncher, "_run_with_splash",
-                          lambda args: splash_called.append(True) or 0), \
-             patch.object(relauncher, "_launch_new_osk", return_value=True):
+        with (
+            patch.object(relauncher, "_INSTALLER_GRACE_S", 0),
+            patch.object(relauncher, "_NEW_EXE_TIMEOUT_S", 2),
+            patch.object(
+                relauncher, "_run_with_splash", lambda args: splash_called.append(True) or 0
+            ),
+            patch.object(relauncher, "_launch_new_osk", return_value=True),
+        ):
             rc = relauncher.run_relauncher(argv)
 
         assert rc == 0
@@ -380,6 +434,7 @@ class TestShowSplashFlag:
         # the relauncher MUST still get the keyboard back. Falling
         # back to the silent headless path is the right behaviour.
         import os as _os
+
         target_exe = tmp_path / "alpha-osk.exe"
         target_exe.write_bytes(b"x")
         future_mtime = time.time() + 3600
@@ -389,11 +444,16 @@ class TestShowSplashFlag:
         argv = [
             "alpha-osk.exe",
             "--update-relauncher",
-            "--parent-pid", "999999999",
-            "--new-version", "1.0.18",
-            "--previous-version", "1.0.17",
-            "--target-exe", str(target_exe),
-            "--config-dir", str(config_dir),
+            "--parent-pid",
+            "999999999",
+            "--new-version",
+            "1.0.18",
+            "--previous-version",
+            "1.0.17",
+            "--target-exe",
+            str(target_exe),
+            "--config-dir",
+            str(config_dir),
             "--show-splash",
         ]
 
@@ -401,11 +461,12 @@ class TestShowSplashFlag:
             raise RuntimeError("no display server")
 
         launch_calls: list[object] = []
-        with patch.object(relauncher, "_INSTALLER_GRACE_S", 0), \
-             patch.object(relauncher, "_NEW_EXE_TIMEOUT_S", 2), \
-             patch.object(relauncher, "_run_with_splash", boom), \
-             patch.object(relauncher, "_launch_new_osk",
-                          lambda p: launch_calls.append(p) or True):
+        with (
+            patch.object(relauncher, "_INSTALLER_GRACE_S", 0),
+            patch.object(relauncher, "_NEW_EXE_TIMEOUT_S", 2),
+            patch.object(relauncher, "_run_with_splash", boom),
+            patch.object(relauncher, "_launch_new_osk", lambda p: launch_calls.append(p) or True),
+        ):
             rc = relauncher.run_relauncher(argv)
 
         assert rc == 0

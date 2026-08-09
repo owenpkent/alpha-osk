@@ -106,7 +106,11 @@ a = Analysis(
         'sklearn', 'scikit-learn',
         'PIL', 'cv2', 'openai',
         # Exclude dev/test tools
-        'pytest', 'pytest_cov', 'coverage', 'mypy', 'ruff',
+        # hypothesis is MPL-2.0 while Alpha-OSK is MIT. It is test-only and
+        # nothing under src/ imports it, so PyInstaller would not follow it
+        # in anyway -- named here so that stays true by declaration rather
+        # than by accident, and so no MPL code can reach a shipped bundle.
+        'pytest', 'pytest_cov', 'coverage', 'mypy', 'ruff', 'hypothesis',
         'IPython', 'notebook', 'jupyter',
         'pygments', 'pyinstaller',
         # Exclude other unneeded heavy packages

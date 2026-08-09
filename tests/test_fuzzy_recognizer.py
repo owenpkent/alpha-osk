@@ -18,6 +18,7 @@ class TestQWERTYLayout:
 
     def test_all_letters_present(self):
         import string
+
         for letter in string.ascii_lowercase:
             assert letter in QWERTY_POSITIONS, f"Missing key: {letter}"
 
@@ -296,6 +297,7 @@ class TestFuzzyRecognizer:
 
     def test_typed_baseline_plausible_returns_log1p_one(self):
         import math
+
         # Plausible shape (vowel + consonant) → rare-real-word
         # baseline used by the relative-margin check.
         assert FuzzyRecognizer._typed_baseline("hello") == math.log1p(1)

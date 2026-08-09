@@ -41,9 +41,11 @@ import logging
 import logging.handlers
 import os
 import sys
+import time
+from collections.abc import Callable
 from pathlib import Path
 
-from PySide6.QtCore import QSettings, QSharedMemory, Qt, QTimer, QUrl
+from PySide6.QtCore import QSettings, QSharedMemory, Qt, QUrl
 from PySide6.QtGui import QIcon
 from PySide6.QtQml import QQmlApplicationEngine
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
@@ -114,9 +116,7 @@ def _surface_existing_alpha_osk() -> None:
 
         user32 = ctypes.windll.user32
 
-        EnumWindowsProc = ctypes.WINFUNCTYPE(
-            ctypes.c_bool, wintypes.HWND, wintypes.LPARAM
-        )
+        EnumWindowsProc = ctypes.WINFUNCTYPE(ctypes.c_bool, wintypes.HWND, wintypes.LPARAM)
         user32.EnumWindows.argtypes = [EnumWindowsProc, wintypes.LPARAM]
         user32.EnumWindows.restype = ctypes.c_bool
         user32.GetWindowTextW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
@@ -366,7 +366,12 @@ def _apply_windows_extended_styles(root) -> None:
         SWP_NOACTIVATE = 0x0010
         SWP_FRAMECHANGED = 0x0020
         ok = user32.SetWindowPos(
-            hwnd, 0, 0, 0, 0, 0,
+            hwnd,
+            0,
+            0,
+            0,
+            0,
+            0,
             SWP_NOSIZE | SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED,
         )
         if not ok:
@@ -375,10 +380,7 @@ def _apply_windows_extended_styles(root) -> None:
                 kernel32.GetLastError(),
             )
 
-        _logger.info(
-            "Applied Windows extended styles: "
-            "WS_EX_NOACTIVATE | WS_EX_TOPMOST"
-        )
+        _logger.info("Applied Windows extended styles: WS_EX_NOACTIVATE | WS_EX_TOPMOST")
     except Exception as e:
         _logger.warning("Failed to apply Windows extended styles: %s", e)
 
@@ -451,8 +453,7 @@ def _apply_macos_activation_policy() -> None:
         )
     except Exception as exc:
         _logger.warning(
-            "Failed to set Accessory activation policy: %s — OSK may "
-            "steal focus when clicked",
+            "Failed to set Accessory activation policy: %s — OSK may steal focus when clicked",
             exc,
         )
 
@@ -510,8 +511,7 @@ def _apply_macos_window_flags(root) -> None:
         ns_window = ns_view.window()
         if ns_window is None:
             _logger.warning(
-                "Could not obtain NSWindow from QML root — macOS window "
-                "flags not applied"
+                "Could not obtain NSWindow from QML root — macOS window flags not applied"
             )
             return
 
@@ -528,7 +528,8 @@ def _apply_macos_window_flags(root) -> None:
         is_panel = bool(ns_window.isKindOfClass_(NSPanel))
         _logger.debug(
             "QML root NSWindow class=%s is_panel=%s",
-            cls_name, is_panel,
+            cls_name,
+            is_panel,
         )
 
         ns_window.setLevel_(NSFloatingWindowLevel)
@@ -558,7 +559,8 @@ def _apply_macos_window_flags(root) -> None:
                 pass
             _logger.debug(
                 "NSPanel styleMask: %#x → %#x (added NonactivatingPanel)",
-                current_mask, new_mask,
+                current_mask,
+                new_mask,
             )
 
         _logger.info(
@@ -646,7 +648,8 @@ def _migrate_legacy_compat_settings() -> None:
             settings.remove(legacy_manual_key)
             _logger.info(
                 "Migrated %s=%s → savedCompatMode",
-                legacy_manual_key, legacy_manual,
+                legacy_manual_key,
+                legacy_manual,
             )
         if settings.contains(legacy_auto_key):
             legacy_auto = settings.value(legacy_auto_key, True, type=bool)
@@ -654,7 +657,8 @@ def _migrate_legacy_compat_settings() -> None:
             settings.remove(legacy_auto_key)
             _logger.info(
                 "Migrated %s=%s → savedCompatAutoDetect",
-                legacy_auto_key, legacy_auto,
+                legacy_auto_key,
+                legacy_auto,
             )
         settings.setValue("compatSettingsMigrated", True)
     finally:
@@ -683,7 +687,10 @@ def _configure_logging() -> Path | None:
     try:
         log_path = get_config_dir() / "alpha-osk.log"
         file_handler = logging.handlers.RotatingFileHandler(
-            log_path, maxBytes=2 * 1024 * 1024, backupCount=3, encoding="utf-8",
+            log_path,
+            maxBytes=2 * 1024 * 1024,
+            backupCount=3,
+            encoding="utf-8",
         )
         file_handler.setFormatter(logging.Formatter(fmt))
         root.addHandler(file_handler)
@@ -724,11 +731,64 @@ def _set_windows_app_user_model_id() -> None:
     try:
         import ctypes
 
-        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
-            APP_USER_MODEL_ID
-        )
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(APP_USER_MODEL_ID)
     except Exception as exc:  # pragma: no cover - platform/runtime dependent
         _logger.debug("SetCurrentProcessExplicitAppUserModelID failed: %s", exc)
+
+
+class _TrayClickRouter:
+    """Turn raw tray activations into exactly one show/hide toggle per click.
+
+    Lives at module level, rather than as a closure in ``main()``, purely so
+    the tests can reach it without a running ``QApplication``.  Two
+    behaviours are worth pinning down:
+
+    **A tray click never minimizes.** Earlier builds mapped double-click to
+    ``root.showMinimized()``.  No mainstream tray app does that (Discord,
+    Slack and qBittorrent all just show/hide), and it is the wrong answer
+    for an OSK besides: the user asked the tray to put the keyboard away,
+    and parking it behind a taskbar entry only moves the problem.  The
+    title-bar minus button is still the way to minimize to the taskbar.
+
+    **A double click toggles once, not twice.** Windows delivers a double
+    click as Trigger, DoubleClick, Trigger, so acting on every activation
+    would flip the window straight back to where it started.  Collapsing a
+    burst into one toggle is also what lets the toggle fire *immediately*:
+    the old code had to sit on each click for the full double-click
+    interval to learn whether a second one was coming, and a tray click
+    that lags half a second reads as broken.
+
+    ``double_click_interval_ms`` is a callable (normally
+    ``QApplication.doubleClickInterval``) so the live system setting is
+    read per click rather than snapshotted at startup.
+    """
+
+    def __init__(
+        self,
+        toggle: Callable[[], None],
+        double_click_interval_ms: Callable[[], int],
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        self._toggle = toggle
+        self._double_click_interval_ms = double_click_interval_ms
+        self._clock = clock
+        # Time of the last *toggle*, not the last activation: stamping this
+        # on suppressed events too would let a stream of clicks keep
+        # re-arming the guard, and the tray icon would go dead.
+        self._last_toggle: float | None = None
+
+    def __call__(self, reason: QSystemTrayIcon.ActivationReason) -> None:
+        if reason not in (
+            QSystemTrayIcon.ActivationReason.Trigger,
+            QSystemTrayIcon.ActivationReason.DoubleClick,
+        ):
+            return
+        now = self._clock()
+        if self._last_toggle is not None:
+            if (now - self._last_toggle) * 1000.0 < self._double_click_interval_ms():
+                return
+        self._last_toggle = now
+        self._toggle()
 
 
 def main() -> int:
@@ -742,6 +802,7 @@ def main() -> int:
     # for the polling logic and rationale.
     if "--update-relauncher" in sys.argv:
         from src._update_relauncher import run_relauncher
+
         return run_relauncher(sys.argv)
 
     log_path = _configure_logging()
@@ -815,8 +876,7 @@ def main() -> int:
     if not bridge.synthAvailable:
         if CURRENT_PLATFORM == "linux":
             _logger.warning(
-                "No key synthesis tool found. "
-                "Install xdotool: sudo apt install xdotool"
+                "No key synthesis tool found. Install xdotool: sudo apt install xdotool"
             )
         elif CURRENT_PLATFORM == "macos":
             _logger.warning(
@@ -827,8 +887,7 @@ def main() -> int:
             )
         else:
             _logger.warning(
-                "Key synthesis not available. "
-                "Keystrokes will not be sent to other applications."
+                "Key synthesis not available. Keystrokes will not be sent to other applications."
             )
 
     # Set up QML engine
@@ -841,6 +900,7 @@ def main() -> int:
     def _on_qml_warnings(warnings: list) -> None:
         for w in warnings:
             _logger.warning("QML: %s", w.toString())
+
     engine.warnings.connect(_on_qml_warnings)
 
     # Expose bridge to QML
@@ -873,44 +933,25 @@ def main() -> int:
     quit_action = tray_menu.addAction("Quit Alpha-OSK")
 
     def _toggle_visibility() -> None:
+        """Bring the keyboard up, or put it away again.
+
+        This is the mainstream tray convention (Discord, Slack,
+        qBittorrent): click to show, click again to hide back to the tray.
+        It deliberately never minimizes; see :class:`_TrayClickRouter`.
+        """
         if root.isVisible():
             root.hide()
         else:
             root.show()
             root.raise_()
 
-    def _minimize_window() -> None:
-        """Minimize on tray double-click, matching the in-window − button.
-
-        Now that the OSK has a normal taskbar entry (no WS_EX_TOOLWINDOW),
-        ``showMinimized()`` does what users expect: drops to the taskbar,
-        clicking the taskbar restores. The tray icon stays as a backup
-        path — the single-click toggle still works — but isn't the only
-        way back anymore.
-        """
-        root.showMinimized()
-
-    # Tray single-click vs. double-click: we want a single click to
-    # toggle show/hide (current behaviour) and a double click to
-    # minimize.  On Windows, Qt delivers Trigger first, then DoubleClick,
-    # for a double click — so we start a timer on Trigger and only
-    # fire the single-click action if no DoubleClick arrives within the
-    # system's double-click interval.  If DoubleClick arrives first,
-    # the pending Trigger is cancelled.
-    tray_single_click_timer = QTimer(app)
-    tray_single_click_timer.setSingleShot(True)
-    tray_single_click_timer.setInterval(app.doubleClickInterval())
-    tray_single_click_timer.timeout.connect(_toggle_visibility)
-
-    def _on_tray_activated(reason: "QSystemTrayIcon.ActivationReason") -> None:
-        if reason == QSystemTrayIcon.ActivationReason.Trigger:
-            tray_single_click_timer.start()
-        elif reason == QSystemTrayIcon.ActivationReason.DoubleClick:
-            tray_single_click_timer.stop()
-            _minimize_window()
+    # Held in a local (not inlined into connect) so the router outlives the
+    # call: PySide does not promise to keep a strong reference to a callable
+    # object used as a slot, and main() is on the stack for the app's life.
+    tray_click_router = _TrayClickRouter(_toggle_visibility, app.doubleClickInterval)
 
     show_action.triggered.connect(_toggle_visibility)
-    tray.activated.connect(_on_tray_activated)
+    tray.activated.connect(tray_click_router)
     quit_action.triggered.connect(app.quit)
     tray.setContextMenu(tray_menu)
     tray.setToolTip("Alpha-OSK")

@@ -33,14 +33,18 @@ def _install_fake_gi(monkeypatch, *, init_rc: int = 0, raise_on_init: bool = Fal
         if raise_on_init:
             raise RuntimeError("bus missing")
         return init_rc
+
     fake_atspi.init = _init  # type: ignore[attr-defined]
 
     # Keep a slot we can call from the test to deliver a focus event.
     registered: list = []
 
     class _Listener:
-        def __init__(self, callback): self.callback = callback
-        def register(self, _name): pass
+        def __init__(self, callback):
+            self.callback = callback
+
+        def register(self, _name):
+            pass
 
     class _EventListener:
         @staticmethod
@@ -50,9 +54,9 @@ def _install_fake_gi(monkeypatch, *, init_rc: int = 0, raise_on_init: bool = Fal
             return listener
 
     fake_atspi.EventListener = _EventListener  # type: ignore[attr-defined]
-    fake_atspi.event_main = lambda: None       # type: ignore[attr-defined]
-    fake_atspi.event_quit = lambda: None       # type: ignore[attr-defined]
-    fake_atspi._listeners = registered         # type: ignore[attr-defined]
+    fake_atspi.event_main = lambda: None  # type: ignore[attr-defined]
+    fake_atspi.event_quit = lambda: None  # type: ignore[attr-defined]
+    fake_atspi._listeners = registered  # type: ignore[attr-defined]
 
     fake_repo.Atspi = fake_atspi  # type: ignore[attr-defined]
 
@@ -66,6 +70,7 @@ def _state_set(contains_password: bool):
     class _StateSet:
         def contains(self, token):
             return contains_password and token == "PASSWORD_TEXT_SENTINEL"
+
     return _StateSet()
 
 
@@ -101,7 +106,9 @@ class TestLinuxATSPI:
 
         source = types.SimpleNamespace(get_state_set=lambda: _state_set(True))
         event = types.SimpleNamespace(
-            type="object:state-changed:focused", detail1=1, source=source,
+            type="object:state-changed:focused",
+            detail1=1,
+            source=source,
         )
         det._on_focus_event(event)
         assert det.check() is True
@@ -114,7 +121,9 @@ class TestLinuxATSPI:
 
         source = types.SimpleNamespace(get_state_set=lambda: _state_set(False))
         event = types.SimpleNamespace(
-            type="object:state-changed:focused", detail1=1, source=source,
+            type="object:state-changed:focused",
+            detail1=1,
+            source=source,
         )
         det._on_focus_event(event)
         assert det.check() is False
@@ -128,7 +137,9 @@ class TestLinuxATSPI:
 
         source = types.SimpleNamespace(get_state_set=lambda: _state_set(False))
         event = types.SimpleNamespace(
-            type="object:state-changed:focused", detail1=0, source=source,
+            type="object:state-changed:focused",
+            detail1=0,
+            source=source,
         )
         det._on_focus_event(event)
         assert det.check() is True  # unchanged
@@ -136,9 +147,12 @@ class TestLinuxATSPI:
     def test_event_without_source_is_safe(self, monkeypatch):
         _install_fake_gi(monkeypatch)
         det = pd._LinuxATSPIDetector()
-        det._on_focus_event(types.SimpleNamespace(
-            type="focus:", source=None,
-        ))
+        det._on_focus_event(
+            types.SimpleNamespace(
+                type="focus:",
+                source=None,
+            )
+        )
         # Shouldn't raise; flag remains False
         assert det.check() is False
 
@@ -147,11 +161,16 @@ class TestLinuxATSPI:
         det = pd._LinuxATSPIDetector()
 
         class _Bad:
-            def get_state_set(self): raise RuntimeError("boom")
+            def get_state_set(self):
+                raise RuntimeError("boom")
 
-        det._on_focus_event(types.SimpleNamespace(
-            type="focus:", detail1=1, source=_Bad(),
-        ))
+        det._on_focus_event(
+            types.SimpleNamespace(
+                type="focus:",
+                detail1=1,
+                source=_Bad(),
+            )
+        )
         assert det.check() is False  # no crash, no flip
 
 

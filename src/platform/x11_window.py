@@ -73,13 +73,13 @@ def _ensure_display() -> "int | None":
         xlib.XChangeProperty.restype = ctypes.c_int
         xlib.XChangeProperty.argtypes = [
             ctypes.c_void_p,  # display
-            ctypes.c_ulong,   # window (XID)
-            ctypes.c_ulong,   # property atom
-            ctypes.c_ulong,   # type atom
-            ctypes.c_int,     # format
-            ctypes.c_int,     # mode
+            ctypes.c_ulong,  # window (XID)
+            ctypes.c_ulong,  # property atom
+            ctypes.c_ulong,  # type atom
+            ctypes.c_int,  # format
+            ctypes.c_int,  # mode
             ctypes.c_void_p,  # data
-            ctypes.c_int,     # nelements
+            ctypes.c_int,  # nelements
         ]
         xlib.XFlush.restype = ctypes.c_int
         xlib.XFlush.argtypes = [ctypes.c_void_p]

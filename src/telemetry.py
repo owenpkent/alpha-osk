@@ -89,6 +89,7 @@ class TelemetryClient:
     @staticmethod
     def _default_state_path() -> Path:
         from .platform import get_config_dir
+
         return get_config_dir() / "telemetry.json"
 
     # --- state ---
@@ -204,8 +205,7 @@ class TelemetryClient:
             try:
                 status = self._submit_fn(url, body)
             except Exception as e:
-                _logger.info("telemetry submit attempt %d failed: %s",
-                             attempt + 1, e)
+                _logger.info("telemetry submit attempt %d failed: %s", attempt + 1, e)
                 if attempt < len(RETRY_BACKOFFS_SECONDS) - 1:
                     time.sleep(backoff)
                 continue
@@ -219,8 +219,7 @@ class TelemetryClient:
             # Permanent client errors (4xx other than 429) won't get
             # better with retry. Drop and wait for next week.
             if 400 <= status < 500 and status != 429:
-                _logger.info("telemetry rejected (status %d), dropping",
-                             status)
+                _logger.info("telemetry rejected (status %d), dropping", status)
                 return True
 
             # 5xx or 429: retry with backoff.
@@ -270,15 +269,15 @@ class TelemetryClient:
             return max(0.0, min(cap, v))
 
         return {
-            "anon_id":           self._anon_id,
-            "app_version":       self._app_version or "unknown",
-            "os":                self._os_name or "unknown",
-            "keystrokes":        _int("alltimeKeystrokes", _MAX_KEYSTROKES),
-            "words":             _int("alltimeWords", _MAX_WORDS),
-            "predictions":       _int("alltimePredictionHits", _MAX_WORDS),
-            "keystrokes_saved":  _int("alltimeKeystrokesSaved", _MAX_KEYSTROKES),
-            "minutes":           _num("alltimeMinutes", _MAX_MINUTES),
-            "sessions":          _int("alltimeSessions", _MAX_SESSIONS),
+            "anon_id": self._anon_id,
+            "app_version": self._app_version or "unknown",
+            "os": self._os_name or "unknown",
+            "keystrokes": _int("alltimeKeystrokes", _MAX_KEYSTROKES),
+            "words": _int("alltimeWords", _MAX_WORDS),
+            "predictions": _int("alltimePredictionHits", _MAX_WORDS),
+            "keystrokes_saved": _int("alltimeKeystrokesSaved", _MAX_KEYSTROKES),
+            "minutes": _num("alltimeMinutes", _MAX_MINUTES),
+            "sessions": _int("alltimeSessions", _MAX_SESSIONS),
             "prediction_offers": _int("alltimePredictionOffers", _MAX_WORDS),
         }
 

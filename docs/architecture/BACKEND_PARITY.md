@@ -5,7 +5,9 @@ platforms**. These are perpendicular axes, and the repo is organised around that
 
 - **Backend** (language/runtime): the Python backend (`src/`) and the in-progress
   C++/Qt6 rewrite (`cpp/`, on the `cpp-rewrite` branch). See
-  [`docs/build/CPP_WINDOWS.md`](../build/CPP_WINDOWS.md) for the rewrite's rationale.
+  [`docs/build/CPP_WINDOWS.md`](https://github.com/owenpkent/alpha-osk/blob/cpp-rewrite/docs/build/CPP_WINDOWS.md)
+  for the rewrite's rationale. That file lives on the `cpp-rewrite` branch only,
+  so the link is absolute: a relative one resolves to nothing on `main`.
 - **Platform** (thin sub-layer inside each backend): Windows / Linux / macOS,
   isolated to one synthesizer + one password-detector file per OS.
 - **Shared by every cell below**: `qml/`, `data/`, the `ngram_model.json` /
@@ -70,7 +72,8 @@ Python status columns reflect `main`; C++ columns reflect the `cpp-rewrite` bran
    They should be extracted to `main` so the Python backend gains them
    independently of the rewrite. See the branch-sync plan (below / `git log`
    commits `9fbf065`, `8942af7`, `31a7b96`, `91bfce5`).
-2. **Doc says done, header says stubbed.** `docs/build/CPP_WINDOWS.md` marks the
+2. **Doc says done, header says stubbed.** `docs/build/CPP_WINDOWS.md` (on the
+   `cpp-rewrite` branch) marks the
    C++ PPM / fuzzy / hybrid pillars "done", but the `cpp/prediction/HybridPredictor.h`
    header comment states only the n-gram pillar is live. The conformance harness
    ([`tests/conformance/`](../../tests/conformance/README.md)) is what settles this

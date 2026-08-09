@@ -77,20 +77,58 @@ _logger = logging.getLogger("MacOSKeySynthesizer")
 # key map below.  For plain text we stamp Unicode strings instead.
 
 _VK_LETTERS: Dict[str, int] = {
-    "a": 0x00, "s": 0x01, "d": 0x02, "f": 0x03, "h": 0x04, "g": 0x05,
-    "z": 0x06, "x": 0x07, "c": 0x08, "v": 0x09, "b": 0x0B, "q": 0x0C,
-    "w": 0x0D, "e": 0x0E, "r": 0x0F, "y": 0x10, "t": 0x11, "o": 0x1F,
-    "u": 0x20, "i": 0x22, "p": 0x23, "l": 0x25, "j": 0x26, "k": 0x28,
-    "n": 0x2D, "m": 0x2E,
+    "a": 0x00,
+    "s": 0x01,
+    "d": 0x02,
+    "f": 0x03,
+    "h": 0x04,
+    "g": 0x05,
+    "z": 0x06,
+    "x": 0x07,
+    "c": 0x08,
+    "v": 0x09,
+    "b": 0x0B,
+    "q": 0x0C,
+    "w": 0x0D,
+    "e": 0x0E,
+    "r": 0x0F,
+    "y": 0x10,
+    "t": 0x11,
+    "o": 0x1F,
+    "u": 0x20,
+    "i": 0x22,
+    "p": 0x23,
+    "l": 0x25,
+    "j": 0x26,
+    "k": 0x28,
+    "n": 0x2D,
+    "m": 0x2E,
 }
 _VK_DIGITS: Dict[str, int] = {
-    "1": 0x12, "2": 0x13, "3": 0x14, "4": 0x15, "6": 0x16, "5": 0x17,
-    "9": 0x19, "7": 0x1A, "8": 0x1C, "0": 0x1D,
+    "1": 0x12,
+    "2": 0x13,
+    "3": 0x14,
+    "4": 0x15,
+    "6": 0x16,
+    "5": 0x17,
+    "9": 0x19,
+    "7": 0x1A,
+    "8": 0x1C,
+    "0": 0x1D,
 }
 _VK_PUNCT: Dict[str, int] = {
-    "=": 0x18, "-": 0x1B, "]": 0x1E, "[": 0x21, "'": 0x27,
-    ";": 0x29, "\\": 0x2A, ",": 0x2B, "/": 0x2C, ".": 0x2F,
-    "`": 0x32, " ": 0x31,
+    "=": 0x18,
+    "-": 0x1B,
+    "]": 0x1E,
+    "[": 0x21,
+    "'": 0x27,
+    ";": 0x29,
+    "\\": 0x2A,
+    ",": 0x2B,
+    "/": 0x2C,
+    ".": 0x2F,
+    "`": 0x32,
+    " ": 0x31,
 }
 
 # Platform-neutral special-key names → kVK_*
@@ -112,11 +150,20 @@ _VK_SPECIAL: Dict[str, int] = {
     "End": 0x77,
     "Page_Up": 0x74,
     "Page_Down": 0x79,
-    "Delete": 0x75,        # forward delete
-    "Insert": 0x72,        # Help key on Apple keyboards; closest analogue
-    "F1": 0x7A, "F2": 0x78, "F3": 0x63, "F4": 0x76,
-    "F5": 0x60, "F6": 0x61, "F7": 0x62, "F8": 0x64,
-    "F9": 0x65, "F10": 0x6D, "F11": 0x67, "F12": 0x6F,
+    "Delete": 0x75,  # forward delete
+    "Insert": 0x72,  # Help key on Apple keyboards; closest analogue
+    "F1": 0x7A,
+    "F2": 0x78,
+    "F3": 0x63,
+    "F4": 0x76,
+    "F5": 0x60,
+    "F6": 0x61,
+    "F7": 0x62,
+    "F8": 0x64,
+    "F9": 0x65,
+    "F10": 0x6D,
+    "F11": 0x67,
+    "F12": 0x6F,
 }
 
 # Modifier name (caller-facing) → (keycode, flag-mask)
@@ -127,11 +174,11 @@ _KCG_FLAG_COMMAND = 0x00100000
 
 _MOD_INFO: Dict[str, Tuple[int, int]] = {
     "shift": (0x38, _KCG_FLAG_SHIFT),
-    "ctrl":  (0x3B, _KCG_FLAG_CONTROL),
-    "alt":   (0x3A, _KCG_FLAG_OPTION),
-    "win":   (0x37, _KCG_FLAG_COMMAND),     # OSK "win" → macOS Command
-    "cmd":   (0x37, _KCG_FLAG_COMMAND),     # accept the native name too
-    "super": (0x37, _KCG_FLAG_COMMAND),     # accept Linux-ish naming
+    "ctrl": (0x3B, _KCG_FLAG_CONTROL),
+    "alt": (0x3A, _KCG_FLAG_OPTION),
+    "win": (0x37, _KCG_FLAG_COMMAND),  # OSK "win" → macOS Command
+    "cmd": (0x37, _KCG_FLAG_COMMAND),  # accept the native name too
+    "super": (0x37, _KCG_FLAG_COMMAND),  # accept Linux-ish naming
 }
 
 # kCGHIDEventTap — events go in at the lowest tap, indistinguishable
@@ -200,6 +247,7 @@ class MacOSKeySynthesizer(KeySynthesizerBase):
         self._NSWorkspace = None
         try:
             from AppKit import NSWorkspace  # type: ignore[import-not-found]
+
             self._NSWorkspace = NSWorkspace
         except ImportError:
             pass
@@ -207,9 +255,9 @@ class MacOSKeySynthesizer(KeySynthesizerBase):
         self._seed_target_from_parent()
         self._available = True
         _logger.info(
-            "macOS key synthesizer ready (Quartz CGEvent, self pid=%d, "
-            "initial target_pid=%s)",
-            self._self_pid, self._target_pid,
+            "macOS key synthesizer ready (Quartz CGEvent, self pid=%d, initial target_pid=%s)",
+            self._self_pid,
+            self._target_pid,
         )
 
     # ------------------------------------------------------------------ #
@@ -296,7 +344,8 @@ class MacOSKeySynthesizer(KeySynthesizerBase):
                     name = "?"
                 _logger.info(
                     "Seeded target_pid from process tree: %d (%s)",
-                    pid, name,
+                    pid,
+                    name,
                 )
                 return
             pid = self._parent_pid_of(pid)
@@ -313,6 +362,7 @@ class MacOSKeySynthesizer(KeySynthesizerBase):
         once at synth init.
         """
         import subprocess
+
         try:
             out = subprocess.check_output(
                 ["ps", "-o", "ppid=", "-p", str(pid)],
@@ -320,8 +370,7 @@ class MacOSKeySynthesizer(KeySynthesizerBase):
                 timeout=1.0,
             )
             return int(out.strip())
-        except (subprocess.CalledProcessError, subprocess.TimeoutExpired,
-                ValueError, OSError):
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired, ValueError, OSError):
             return None
 
     # ------------------------------------------------------------------ #
@@ -367,7 +416,8 @@ class MacOSKeySynthesizer(KeySynthesizerBase):
                 return
             _logger.warning(
                 "No keycode for %r and modifiers %s — dropping",
-                key_name, modifiers,
+                key_name,
+                modifiers,
             )
             return
 
@@ -600,7 +650,8 @@ class MacOSKeySynthesizer(KeySynthesizerBase):
                     _logger.info(
                         "Target app updated → %s (pid=%d) — events will "
                         "now post to this app via CGEventPostToPid",
-                        name, pid,
+                        name,
+                        pid,
                     )
                     self._target_pid = pid
             except Exception as exc:
@@ -649,7 +700,9 @@ class MacOSKeySynthesizer(KeySynthesizerBase):
                 ident = f"{name} ({bid})"
             _logger.debug(
                 "POST %s → frontmost=%s, target_pid=%s",
-                send_label, ident, self._target_pid,
+                send_label,
+                ident,
+                self._target_pid,
             )
         except Exception as exc:
             _logger.debug("Frontmost probe failed: %s", exc)

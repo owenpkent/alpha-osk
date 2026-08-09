@@ -83,9 +83,11 @@ def _configure_log(log_dir: Path) -> None:
     try:
         log_dir.mkdir(parents=True, exist_ok=True)
         handler = logging.FileHandler(log_dir / "relauncher.log", encoding="utf-8")
-        handler.setFormatter(logging.Formatter(
-            "%(asctime)s %(levelname)s %(name)s: %(message)s",
-        ))
+        handler.setFormatter(
+            logging.Formatter(
+                "%(asctime)s %(levelname)s %(name)s: %(message)s",
+            )
+        )
         root = logging.getLogger()
         root.addHandler(handler)
         root.setLevel(logging.INFO)
@@ -109,10 +111,13 @@ def _process_alive(pid: int) -> bool:
     if sys.platform == "win32":
         try:
             import ctypes
+
             PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
             kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
             handle = kernel32.OpenProcess(
-                PROCESS_QUERY_LIMITED_INFORMATION, False, pid,
+                PROCESS_QUERY_LIMITED_INFORMATION,
+                False,
+                pid,
             )
             if not handle:
                 return False
@@ -145,7 +150,9 @@ def _wait_for_parent_exit(pid: int, timeout_s: float) -> bool:
 
 
 def _wait_for_new_exe(
-    target: Path, after_mtime: Optional[float], timeout_s: float,
+    target: Path,
+    after_mtime: Optional[float],
+    timeout_s: float,
 ) -> bool:
     """Block until ``target`` exists and looks like the freshly-written exe.
 
@@ -184,9 +191,8 @@ def _launch_new_osk(exe_path: Path) -> bool:
             # Detach so we can exit immediately. CREATE_NEW_PROCESS_GROUP
             # also prevents Ctrl+C in any future console attach from
             # bubbling into the new OSK.
-            flags = (
-                getattr(subprocess, "DETACHED_PROCESS", 0)
-                | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+            flags = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(
+                subprocess, "CREATE_NEW_PROCESS_GROUP", 0
             )
         subprocess.Popen(
             [str(exe_path)],
@@ -258,15 +264,19 @@ def run_relauncher(argv: list[str]) -> int:
     _configure_log(config_dir)
     _logger.info(
         "Relauncher starting — parent_pid=%d new_version=%s target=%s splash=%s",
-        args.parent_pid, args.new_version, args.target_exe, args.show_splash,
+        args.parent_pid,
+        args.new_version,
+        args.target_exe,
+        args.show_splash,
     )
 
     if args.show_splash and not _is_dev_target(args.target_exe):
         try:
             return _run_with_splash(args)
-        except Exception as exc:                              # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
             _logger.warning(
-                "Splash path raised (%s); falling back to headless", exc,
+                "Splash path raised (%s); falling back to headless",
+                exc,
             )
             # Fall through to the headless path. Better to relaunch
             # the OSK silently than to leave the user with nothing.
@@ -309,19 +319,16 @@ def _run_headless(args: argparse.Namespace) -> int:
     config_dir = Path(args.config_dir)
 
     if not _wait_for_parent_exit(args.parent_pid, _PARENT_EXIT_TIMEOUT_S):
-        _logger.error("Parent OSK still alive after %.0fs — giving up",
-                      _PARENT_EXIT_TIMEOUT_S)
+        _logger.error("Parent OSK still alive after %.0fs — giving up", _PARENT_EXIT_TIMEOUT_S)
         return 2
 
     parent_death_time = time.time()
-    _logger.info("Parent OSK exited; waiting %.0fs for installer file copy",
-                 _INSTALLER_GRACE_S)
+    _logger.info("Parent OSK exited; waiting %.0fs for installer file copy", _INSTALLER_GRACE_S)
     time.sleep(_INSTALLER_GRACE_S)
 
     target_exe = Path(args.target_exe)
     if not _wait_for_new_exe(target_exe, parent_death_time, _NEW_EXE_TIMEOUT_S):
-        _logger.error("New exe never appeared at %s within %.0fs",
-                      target_exe, _NEW_EXE_TIMEOUT_S)
+        _logger.error("New exe never appeared at %s within %.0fs", target_exe, _NEW_EXE_TIMEOUT_S)
         return 3
 
     _logger.info("New exe ready at %s — launching", target_exe)
@@ -374,7 +381,13 @@ def _run_with_splash(args: argparse.Namespace) -> int:
     app = existing_app if isinstance(existing_app, QApplication) else QApplication([])
 
     splash = _build_splash_widget(
-        QWidget, QFrame, QLabel, QProgressBar, QVBoxLayout, QFont, Qt,
+        QWidget,
+        QFrame,
+        QLabel,
+        QProgressBar,
+        QVBoxLayout,
+        QFont,
+        Qt,
     )
     # The close button hides the splash but lets the polling continue —
     # the user is dismissing the visual, not aborting the relaunch.
@@ -384,7 +397,7 @@ def _run_with_splash(args: argparse.Namespace) -> int:
     # already scheduled will quit the app shortly after.
     close_btn = splash.findChild(QWidget, "close")
     if close_btn is not None:
-        close_btn.mousePressEvent = lambda ev: splash.hide()    # type: ignore[assignment]
+        close_btn.mousePressEvent = lambda ev: splash.hide()  # type: ignore[assignment]
 
     splash.show()
     # Centre on the primary screen — frameless windows don't get a
@@ -442,8 +455,7 @@ def _run_with_splash(args: argparse.Namespace) -> int:
             QTimer.singleShot(int(_INSTALLER_GRACE_S * 1000), _start_new_exe_phase)
             return
         if time.monotonic() >= state.deadline:
-            _logger.error("Parent OSK still alive after %.0fs — giving up",
-                          _PARENT_EXIT_TIMEOUT_S)
+            _logger.error("Parent OSK still alive after %.0fs — giving up", _PARENT_EXIT_TIMEOUT_S)
             _finish(2)
             return
         QTimer.singleShot(int(_POLL_INTERVAL_S * 1000), _poll_parent)
@@ -457,10 +469,13 @@ def _run_with_splash(args: argparse.Namespace) -> int:
             _launch()
             return
         if time.monotonic() >= state.deadline:
-            _logger.error("New exe never appeared at %s within %.0fs",
-                          target_exe, _NEW_EXE_TIMEOUT_S)
-            _set_message("Update finished, but the keyboard didn't appear.\n"
-                         "Find Alpha-OSK in your Start Menu.")
+            _logger.error(
+                "New exe never appeared at %s within %.0fs", target_exe, _NEW_EXE_TIMEOUT_S
+            )
+            _set_message(
+                "Update finished, but the keyboard didn't appear.\n"
+                "Find Alpha-OSK in your Start Menu."
+            )
             _settle_progress(full=False)
             QTimer.singleShot(_FAILURE_DWELL_MS, lambda: _finish(3))
             return
@@ -470,8 +485,7 @@ def _run_with_splash(args: argparse.Namespace) -> int:
         _set_message("Launching the new keyboard…")
         if not _launch_new_osk(target_exe):
             _logger.error("Launch failed")
-            _set_message("Couldn't launch the new keyboard.\n"
-                         "Find Alpha-OSK in your Start Menu.")
+            _set_message("Couldn't launch the new keyboard.\nFind Alpha-OSK in your Start Menu.")
             _settle_progress(full=False)
             QTimer.singleShot(_FAILURE_DWELL_MS, lambda: _finish(4))
             return
@@ -498,10 +512,7 @@ def _build_splash_widget(QWidget, QFrame, QLabel, QProgressBar, QVBoxLayout, QFo
     win = QWidget()
     win.setWindowTitle("Updating Alpha-OSK")
     win.setWindowFlags(
-        Qt.FramelessWindowHint
-        | Qt.WindowStaysOnTopHint
-        | Qt.Tool
-        | Qt.WindowDoesNotAcceptFocus
+        Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool | Qt.WindowDoesNotAcceptFocus
     )
     win.setAttribute(Qt.WA_ShowWithoutActivating, True)
     # Slightly taller than the original 140 px to accommodate the
@@ -527,9 +538,7 @@ def _build_splash_widget(QWidget, QFrame, QLabel, QProgressBar, QVBoxLayout, QFo
     )
 
     frame = QFrame(win)
-    frame.setStyleSheet(
-        "QFrame { border: 1px solid #4a8eff; border-radius: 8px; }"
-    )
+    frame.setStyleSheet("QFrame { border: 1px solid #4a8eff; border-radius: 8px; }")
     frame.setGeometry(0, 0, 420, 170)
 
     # Close button — top-right corner. The user can dismiss the splash

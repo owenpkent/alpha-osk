@@ -14,9 +14,7 @@ from src.analytics import TypingAnalytics
 def analytics(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TypingAnalytics:
     """A fresh TypingAnalytics whose persisted stats live in tmp_path."""
     stats_file = tmp_path / "analytics.json"
-    monkeypatch.setattr(
-        TypingAnalytics, "_get_stats_path", staticmethod(lambda: stats_file)
-    )
+    monkeypatch.setattr(TypingAnalytics, "_get_stats_path", staticmethod(lambda: stats_file))
     return TypingAnalytics()
 
 
@@ -56,9 +54,7 @@ class TestTimeSaved:
         stats = analytics.get_session_stats()
         assert stats["timeSavedSeconds"] == 0.0
 
-    def test_uses_fallback_pace_when_no_keystrokes(
-        self, analytics: TypingAnalytics
-    ) -> None:
+    def test_uses_fallback_pace_when_no_keystrokes(self, analytics: TypingAnalytics) -> None:
         # A prediction selected before any keystrokes have been counted
         # has no observed pace to draw from; the fallback of 0.5 s/key
         # keeps the tile from rendering "0 s saved" for a fresh user.
@@ -80,10 +76,7 @@ class TestTimeSaved:
 
         for c in "abcdefghijklmnopqrst":
             analytics.record_keystroke(c)
-        monkeypatch.setattr(
-            analytics_mod.time, "time",
-            lambda: analytics._session_start + 10.0
-        )
+        monkeypatch.setattr(analytics_mod.time, "time", lambda: analytics._session_start + 10.0)
         analytics._keystrokes_saved = 10
         stats = analytics.get_session_stats()
         assert stats["timeSavedSeconds"] == pytest.approx(5.0)
@@ -104,13 +97,9 @@ class TestQualityScoreRemoved:
 class TestPersistenceRoundTrip:
     """top_pick_count must survive save/load."""
 
-    def test_top_pick_persisted(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_top_pick_persisted(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         stats_file = tmp_path / "analytics.json"
-        monkeypatch.setattr(
-            TypingAnalytics, "_get_stats_path", staticmethod(lambda: stats_file)
-        )
+        monkeypatch.setattr(TypingAnalytics, "_get_stats_path", staticmethod(lambda: stats_file))
         a = TypingAnalytics()
         a.record_prediction_selected("hello", rank=1, keystrokes_saved=3)
         a.record_prediction_selected("world", rank=2)
@@ -131,21 +120,23 @@ class TestPersistenceRoundTrip:
         # Older analytics.json files (pre-this-change) won't have the
         # field at all.  Load must not crash and must default to 0.
         stats_file = tmp_path / "analytics.json"
-        stats_file.write_text(json.dumps({
-            "keystrokes": 100,
-            "words": 20,
-            "predictions": 5,
-            "keystrokes_saved": 30,
-            "sessions": 3,
-            "minutes": 12.5,
-            "backspaces": 2,
-            "prediction_offers": 8,
-            "prediction_rank_sum": 9,
-            "prediction_rank_count": 5,
-        }))
-        monkeypatch.setattr(
-            TypingAnalytics, "_get_stats_path", staticmethod(lambda: stats_file)
+        stats_file.write_text(
+            json.dumps(
+                {
+                    "keystrokes": 100,
+                    "words": 20,
+                    "predictions": 5,
+                    "keystrokes_saved": 30,
+                    "sessions": 3,
+                    "minutes": 12.5,
+                    "backspaces": 2,
+                    "prediction_offers": 8,
+                    "prediction_rank_sum": 9,
+                    "prediction_rank_count": 5,
+                }
+            )
         )
+        monkeypatch.setattr(TypingAnalytics, "_get_stats_path", staticmethod(lambda: stats_file))
         a = TypingAnalytics()
         assert a._alltime_top_pick_count == 0
         assert a.get_session_stats()["alltimeTopPickRate"] == 0.0

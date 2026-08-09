@@ -208,7 +208,10 @@ class TestHybridMergeWeighting:
 
         # Force-feed both candidates as if fuzzy returned them in this order.
         merged = predictor._merge_predictions(
-            ngram=[], ppm=[], fuzzy=[("tha", 1.0), ("the", 1.0)], n=5,
+            ngram=[],
+            ppm=[],
+            fuzzy=[("tha", 1.0), ("the", 1.0)],
+            n=5,
         )
         # "the" should outrank "tha" because of the bigram bonus, even
         # though "tha" came first in the fuzzy list (positional weight
@@ -233,7 +236,10 @@ class TestPillCapitalization:
         predictor._ngram.unigrams["the"] = 100
         predictor._ngram.unigrams["of"] = 80
         merged = predictor._merge_predictions(
-            ngram=[("the", 1.0), ("of", 0.8)], ppm=[], fuzzy=[], n=5,
+            ngram=[("the", 1.0), ("of", 0.8)],
+            ppm=[],
+            fuzzy=[],
+            n=5,
         )
         assert "The" not in merged, f"empty context should stay lowercase: {merged}"
 
@@ -241,18 +247,25 @@ class TestPillCapitalization:
         predictor._ngram.unigrams["the"] = 100
         predictor._current_context = "Hello world. "
         merged = predictor._merge_predictions(
-            ngram=[("the", 1.0)], ppm=[], fuzzy=[], n=5,
+            ngram=[("the", 1.0)],
+            ppm=[],
+            fuzzy=[],
+            n=5,
         )
         assert "the" in merged, f"post-period should stay lowercase: {merged}"
         assert "The" not in merged
 
     def test_mid_word_completion_stays_lowercase(
-        self, predictor: HybridPredictor,
+        self,
+        predictor: HybridPredictor,
     ):
         predictor._ngram.unigrams["the"] = 100
         predictor._current_context = "the"
         merged = predictor._merge_predictions(
-            ngram=[("the", 1.0)], ppm=[], fuzzy=[], n=5,
+            ngram=[("the", 1.0)],
+            ppm=[],
+            fuzzy=[],
+            n=5,
         )
         assert "the" in merged, f"mid-word should stay lowercase: {merged}"
 
@@ -260,7 +273,10 @@ class TestPillCapitalization:
         """Tier 1 — the ``I`` family is the one exception kept."""
         predictor._ngram.unigrams["i"] = 100
         merged = predictor._merge_predictions(
-            ngram=[("i", 1.0)], ppm=[], fuzzy=[], n=5,
+            ngram=[("i", 1.0)],
+            ppm=[],
+            fuzzy=[],
+            n=5,
         )
         assert "I" in merged, f"'i' should still surface as 'I': {merged}"
 
@@ -284,14 +300,16 @@ class TestMergeStrategies:
         assert predictor.merge_strategy == "rank"
 
     def test_set_merge_strategy_accepts_known_values(
-        self, predictor: HybridPredictor,
+        self,
+        predictor: HybridPredictor,
     ):
         for strategy in ("rank", "rrf", "linear", "loglinear"):
             assert predictor.set_merge_strategy(strategy) is True
             assert predictor.merge_strategy == strategy
 
     def test_set_merge_strategy_rejects_unknown(
-        self, predictor: HybridPredictor,
+        self,
+        predictor: HybridPredictor,
     ):
         predictor.set_merge_strategy("rank")
         assert predictor.set_merge_strategy("bogus") is False
@@ -365,7 +383,8 @@ class TestMergeStrategies:
         assert merged.index("confident") < merged.index("unsure")
 
     def test_loglinear_floor_prevents_zero_collapse(
-        self, predictor: HybridPredictor,
+        self,
+        predictor: HybridPredictor,
     ):
         """A word present in only one source must still rank — the
         floor smoothing (1e-6) prevents log(0) from killing it.
@@ -385,7 +404,8 @@ class TestMergeStrategies:
         assert "lonely" in merged
 
     def test_loglinear_prefers_consensus_strict(
-        self, predictor: HybridPredictor,
+        self,
+        predictor: HybridPredictor,
     ):
         """Log-linear is multiplicative — a word that scores well in
         every source should beat a word that scores only in one,

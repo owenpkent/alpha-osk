@@ -75,9 +75,7 @@ _logger = logging.getLogger("Updater")
 #
 # Anything you change here weakens or relocates the trust anchor.  Treat
 # these constants the same way you'd treat a TLS pin.
-GITHUB_API_URL = (
-    "https://api.github.com/repos/okstudio1/alpha-osk-releases/releases/latest"
-)
+GITHUB_API_URL = "https://api.github.com/repos/okstudio1/alpha-osk-releases/releases/latest"
 # The repo above hosts only release binaries.  The application source
 # lives in a separate public repo (``owenpkent/alpha-osk``).  The split
 # was originally a private/public boundary (source private until
@@ -103,16 +101,18 @@ EXPECTED_SIGNER_CN = "OK Studio Inc."
 # the specific hostnames rather than allow ``*.githubusercontent.com``
 # so an attacker who finds a way to publish content under the wider
 # umbrella can't redirect us there.
-_ALLOWED_DOWNLOAD_HOSTS = frozenset({
-    "github.com",
-    "objects.githubusercontent.com",
-    "release-assets.githubusercontent.com",
-})
+_ALLOWED_DOWNLOAD_HOSTS = frozenset(
+    {
+        "github.com",
+        "objects.githubusercontent.com",
+        "release-assets.githubusercontent.com",
+    }
+)
 
 # --- Bounds & timeouts ------------------------------------------------------
 _HTTP_TIMEOUT_SECONDS = 15
-_MAX_API_RESPONSE_BYTES = 1 * 1024 * 1024            # 1 MB JSON cap
-_MAX_DOWNLOAD_BYTES = 500 * 1024 * 1024              # 500 MB installer cap
+_MAX_API_RESPONSE_BYTES = 1 * 1024 * 1024  # 1 MB JSON cap
+_MAX_DOWNLOAD_BYTES = 500 * 1024 * 1024  # 500 MB installer cap
 _MAX_NOTES_LENGTH = 4000
 _USER_AGENT = f"alpha-osk-updater/{CURRENT_VERSION}"
 
@@ -167,6 +167,7 @@ def is_newer(candidate: str, baseline: str) -> bool:
 #  URL validation
 # ---------------------------------------------------------------------------
 
+
 def _is_safe_download_url(url: str) -> bool:
     """Reject URLs that aren't HTTPS to a host we trust."""
     try:
@@ -203,6 +204,7 @@ def _sanitize_notes(raw: object) -> str:
 #  Check
 # ---------------------------------------------------------------------------
 
+
 def check_for_update(
     current_version: str = CURRENT_VERSION,
     *,
@@ -233,8 +235,9 @@ def check_for_update(
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             raw = resp.read(_MAX_API_RESPONSE_BYTES + 1)
         if len(raw) > _MAX_API_RESPONSE_BYTES:
-            _logger.warning("API response exceeds %d bytes; aborting check",
-                            _MAX_API_RESPONSE_BYTES)
+            _logger.warning(
+                "API response exceeds %d bytes; aborting check", _MAX_API_RESPONSE_BYTES
+            )
             return None
         data = json.loads(raw)
     except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, OSError) as e:
@@ -252,9 +255,7 @@ def check_for_update(
 
     # Find the signed installer asset.  We deliberately match a strict
     # name pattern to avoid being fooled by a sneakily-named asset.
-    expected_pattern = re.compile(
-        rf"^Alpha-OSK-Setup-{re.escape(candidate_version)}\.exe$"
-    )
+    expected_pattern = re.compile(rf"^Alpha-OSK-Setup-{re.escape(candidate_version)}\.exe$")
     for asset in data.get("assets", []) or []:
         if not isinstance(asset, dict):
             continue
@@ -318,7 +319,8 @@ def _download_with_cap(
             if total is not None and total > _MAX_DOWNLOAD_BYTES:
                 _logger.error(
                     "Refusing download — Content-Length %d > cap %d",
-                    total, _MAX_DOWNLOAD_BYTES,
+                    total,
+                    _MAX_DOWNLOAD_BYTES,
                 )
                 return False
 
@@ -376,7 +378,7 @@ def _verify_signature(exe_path: Path) -> bool:
         f"  $cn = ($s.SignerCertificate.Subject -split ',')[0]"
         f"        -replace '^CN=', '';"
         f"}}"
-        f"Write-Output (\"{{0}}|{{1}}|{{2}}\" -f "
+        f'Write-Output ("{{0}}|{{1}}|{{2}}" -f '
         f"  $s.Status, $s.SignerCertificate.Thumbprint, $cn)"
     )
 
@@ -416,13 +418,15 @@ def _verify_signature(exe_path: Path) -> bool:
     if thumbprint != EV_CERT_SHA1_THUMBPRINT.lower():
         _logger.error(
             "Signature thumbprint mismatch: got %s expected %s",
-            thumbprint, EV_CERT_SHA1_THUMBPRINT,
+            thumbprint,
+            EV_CERT_SHA1_THUMBPRINT,
         )
         return False
     if signer_cn != EXPECTED_SIGNER_CN:
         _logger.error(
             "Signer CN mismatch: got %r expected %r",
-            signer_cn, EXPECTED_SIGNER_CN,
+            signer_cn,
+            EXPECTED_SIGNER_CN,
         )
         return False
 
@@ -433,6 +437,7 @@ def _verify_signature(exe_path: Path) -> bool:
 # ---------------------------------------------------------------------------
 #  Install
 # ---------------------------------------------------------------------------
+
 
 def _make_private_tempdir() -> Path:
     """Create a tempdir only the current user can read/write."""
@@ -471,11 +476,11 @@ def _launch_installer(dest: Path) -> Tuple[bool, str]:
         SE_ERR_ACCESSDENIED = 5  # User cancelled the UAC dialog.
         shell32 = ctypes.windll.shell32  # type: ignore[attr-defined]
         ret = shell32.ShellExecuteW(
-            None,                # parent hwnd — not tied to a window
-            "runas",             # verb: trigger UAC elevation
-            str(dest),           # installer path
-            "/S",                # silent flag (NSIS)
-            None,                # working directory
+            None,  # parent hwnd — not tied to a window
+            "runas",  # verb: trigger UAC elevation
+            str(dest),  # installer path
+            "/S",  # silent flag (NSIS)
+            None,  # working directory
             SW_SHOWNORMAL,
         )
         # ShellExecuteW returns >32 on success.
@@ -536,11 +541,16 @@ def _spawn_relauncher(new_version: str) -> bool:
             cmd = [
                 str(target_exe),
                 "--update-relauncher",
-                "--parent-pid", str(os.getpid()),
-                "--new-version", new_version,
-                "--previous-version", current_version,
-                "--target-exe", str(target_exe),
-                "--config-dir", str(get_config_dir()),
+                "--parent-pid",
+                str(os.getpid()),
+                "--new-version",
+                new_version,
+                "--previous-version",
+                current_version,
+                "--target-exe",
+                str(target_exe),
+                "--config-dir",
+                str(get_config_dir()),
                 "--show-splash",
             ]
         else:
@@ -549,32 +559,40 @@ def _spawn_relauncher(new_version: str) -> bool:
             # poll, so the wait loop will time out harmlessly).
             target_exe = Path(sys.executable)
             cmd = [
-                sys.executable, "-m", "src.keyboard_app",
+                sys.executable,
+                "-m",
+                "src.keyboard_app",
                 "--update-relauncher",
-                "--parent-pid", str(os.getpid()),
-                "--new-version", new_version,
-                "--previous-version", current_version,
-                "--target-exe", str(target_exe),
-                "--config-dir", str(get_config_dir()),
+                "--parent-pid",
+                str(os.getpid()),
+                "--new-version",
+                new_version,
+                "--previous-version",
+                current_version,
+                "--target-exe",
+                str(target_exe),
+                "--config-dir",
+                str(get_config_dir()),
                 "--show-splash",
             ]
 
         flags = 0
         if sys.platform == "win32":
             # Detach: the helper survives our taskkill. No new console.
-            flags = (
-                getattr(subprocess, "DETACHED_PROCESS", 0)
-                | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+            flags = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(
+                subprocess, "CREATE_NEW_PROCESS_GROUP", 0
             )
         subprocess.Popen(
-            cmd, creationflags=flags, close_fds=True,
+            cmd,
+            creationflags=flags,
+            close_fds=True,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
         _logger.info("Spawned update relauncher (parent pid=%d)", os.getpid())
         return True
-    except Exception as exc:                                  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001
         _logger.warning("Failed to spawn update relauncher: %s", exc)
         return False
 
@@ -603,8 +621,10 @@ def download_and_install(
 
     try:
         ok = _download_with_cap(
-            info.download_url, dest,
-            timeout=timeout, progress=progress,
+            info.download_url,
+            dest,
+            timeout=timeout,
+            progress=progress,
         )
         if not ok:
             return False, "Download failed (see log)"
@@ -630,9 +650,10 @@ def download_and_install(
         if on_installer_launching is not None:
             try:
                 on_installer_launching(info.version)
-            except Exception as exc:                          # noqa: BLE001
+            except Exception as exc:  # noqa: BLE001
                 _logger.warning(
-                    "on_installer_launching callback raised: %s", exc,
+                    "on_installer_launching callback raised: %s",
+                    exc,
                 )
 
         # /S = NSIS silent install; the installer kills the running
@@ -644,7 +665,7 @@ def download_and_install(
         if not ok:
             return False, err
         return True, ""
-    except Exception as e:                                # noqa: BLE001
+    except Exception as e:  # noqa: BLE001
         _logger.error("Install failed: %s", e)
         return False, f"Install failed: {e}"
     # NB: we deliberately don't rmtree work_dir — the installer process

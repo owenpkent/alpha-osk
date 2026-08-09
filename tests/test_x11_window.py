@@ -31,10 +31,10 @@ def test_is_x11_true_only_for_linux_x11_with_display(monkeypatch, fresh_module):
 @pytest.mark.parametrize(
     "platform,session,display",
     [
-        ("win32", "x11", ":0"),       # Windows
-        ("darwin", "x11", ":0"),      # macOS
-        ("linux", "wayland", ":0"),   # Wayland session
-        ("linux", "x11", ""),         # no DISPLAY
+        ("win32", "x11", ":0"),  # Windows
+        ("darwin", "x11", ":0"),  # macOS
+        ("linux", "wayland", ":0"),  # Wayland session
+        ("linux", "x11", ""),  # no DISPLAY
     ],
 )
 def test_is_x11_false_off_x11(monkeypatch, fresh_module, platform, session, display):
@@ -52,7 +52,8 @@ def test_set_window_dock_noop_when_not_x11(monkeypatch, fresh_module):
     monkeypatch.setattr(fresh_module, "is_x11", lambda: False)
     # If it tried to open a display this would raise; it must not.
     monkeypatch.setattr(
-        fresh_module, "_ensure_display",
+        fresh_module,
+        "_ensure_display",
         lambda: (_ for _ in ()).throw(AssertionError("must not open display")),
     )
     assert fresh_module.set_window_dock(12345, True) is False

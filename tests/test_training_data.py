@@ -65,10 +65,7 @@ class TestTrainingCorpus:
     def test_corpus_has_enough_lines(self):
         path = DATA_DIR / "training_corpus.txt"
         with open(path) as f:
-            lines = [
-                line.strip() for line in f
-                if line.strip() and not line.startswith("#")
-            ]
+            lines = [line.strip() for line in f if line.strip() and not line.startswith("#")]
         # Should have substantial training data
         assert len(lines) >= 400, f"Only {len(lines)} lines — need at least 400"
 
@@ -93,8 +90,7 @@ class TestTrainingCorpus:
         path = DATA_DIR / "training_corpus.txt"
         text = path.read_text()
         lines = [
-            line.strip() for line in text.split("\n")
-            if line.strip() and not line.startswith("#")
+            line.strip() for line in text.split("\n") if line.strip() and not line.startswith("#")
         ]
         for line in lines:
             predictor.learn(line)
@@ -166,9 +162,7 @@ class TestCommonTrigrams:
                 if not line or line.startswith("#"):
                     continue
                 parts = line.split()
-                assert len(parts) >= 3, (
-                    f"Line {i} has fewer than 3 words: {line!r}"
-                )
+                assert len(parts) >= 3, f"Line {i} has fewer than 3 words: {line!r}"
 
     def test_missing_file_returns_false(self, tmp_path: Path):
         predictor = NgramPredictor()
@@ -189,10 +183,7 @@ class TestPredictionQuality:
         path = DATA_DIR / "training_corpus.txt"
         if path.exists():
             text = path.read_text()
-            lines = [
-                ln.strip() for ln in text.split("\n")
-                if ln.strip() and not ln.startswith("#")
-            ]
+            lines = [ln.strip() for ln in text.split("\n") if ln.strip() and not ln.startswith("#")]
             for line in lines:
                 predictor.learn(line)
         return predictor

@@ -21,11 +21,29 @@ import pytest
 LAYOUTS_DIR = Path(__file__).resolve().parent.parent / "data" / "layouts"
 
 # Special-key actions KeyboardBridge.pressSpecialKey knows how to dispatch.
-KNOWN_SPECIAL_ACTIONS = frozenset({
-    "backspace", "delete", "down", "end", "escape", "home", "insert", "left",
-    "pagedown", "pageup", "return", "right", "space", "tab", "up",
-    "numlock", "print", "pause", "scrolllock",
-})
+KNOWN_SPECIAL_ACTIONS = frozenset(
+    {
+        "backspace",
+        "delete",
+        "down",
+        "end",
+        "escape",
+        "home",
+        "insert",
+        "left",
+        "pagedown",
+        "pageup",
+        "return",
+        "right",
+        "space",
+        "tab",
+        "up",
+        "numlock",
+        "print",
+        "pause",
+        "scrolllock",
+    }
+)
 
 KNOWN_MODIFIER_ACTIONS = frozenset({"shift", "caps", "ctrl", "alt", "win"})
 
@@ -92,10 +110,7 @@ class TestEveryLayout:
         """
         data = json.loads(path.read_text(encoding="utf-8"))
         entry = [r for r in data["rows"] if r.get("layer", "base") == "base"]
-        actions = {
-            k.get("action") for r in entry for k in r["keys"]
-            if k.get("type") == "special"
-        }
+        actions = {k.get("action") for r in entry for k in r["keys"] if k.get("type") == "special"}
         assert "delete" in actions, f"{path.stem}: no Del key on the base layer"
 
     def test_modifiers_carry_a_state_key(self, path: Path) -> None:
@@ -201,8 +216,7 @@ class TestCompactLayout:
     def test_nav_column_is_identical_across_layers(self, compact: dict) -> None:
         """PgUp/PgDn/Home/End hold position when switching to ?123."""
         rows = {r["id"]: r for r in compact["rows"]}
-        for base_id, sym_id in (("base-1", "sym-1"), ("base-2", "sym-2"),
-                                ("base-3", "sym-3")):
+        for base_id, sym_id in (("base-1", "sym-1"), ("base-2", "sym-2"), ("base-3", "sym-3")):
             assert rows[base_id]["keys"][-1] == rows[sym_id]["keys"][-1], (
                 f"nav key differs between {base_id} and {sym_id}"
             )
@@ -210,14 +224,8 @@ class TestCompactLayout:
     def test_keys_owen_named_are_on_the_base_layer(self, compact: dict) -> None:
         """Arrows, Enter, Home/End, PgUp/PgDn and / — never behind a hop."""
         base_rows = [r for r in compact["rows"] if r["layer"] == "base"]
-        actions = {
-            k["action"] for r in base_rows for k in r["keys"]
-            if k.get("type") == "special"
-        }
-        chars = {
-            k["key"] for r in base_rows for k in r["keys"]
-            if k.get("type") == "char"
-        }
+        actions = {k["action"] for r in base_rows for k in r["keys"] if k.get("type") == "special"}
+        chars = {k["key"] for r in base_rows for k in r["keys"] if k.get("type") == "char"}
         assert {"left", "up", "down", "right"} <= actions, "arrows must be visible"
         assert "return" in actions, "Enter must be visible"
         assert {"home", "end"} <= actions
@@ -230,9 +238,7 @@ class TestCompactLayout:
         for row in compact["rows"]:
             for key in row["keys"]:
                 if key.get("action") in ("return", "backspace"):
-                    assert key["width"] == 2.0, (
-                        f"{key['action']} in {row['id']} is {key['width']}u"
-                    )
+                    assert key["width"] == 2.0, f"{key['action']} in {row['id']} is {key['width']}u"
 
     def test_esc_is_still_reachable_from_the_sym_layer(self, compact: dict) -> None:
         """Del took Esc's base-layer slot; Esc took Del's on ?123.
@@ -245,15 +251,16 @@ class TestCompactLayout:
         """
         sym_rows = [r for r in compact["rows"] if r["layer"] == "sym"]
         actions = {
-            k.get("action") for r in sym_rows for k in r["keys"]
-            if k.get("type") == "special"
+            k.get("action") for r in sym_rows for k in r["keys"] if k.get("type") == "special"
         }
         assert "escape" in actions
 
     def test_alphabet_is_complete_on_the_base_layer(self, compact: dict) -> None:
         base_rows = [r for r in compact["rows"] if r["layer"] == "base"]
         letters = {
-            k["key"] for r in base_rows for k in r["keys"]
+            k["key"]
+            for r in base_rows
+            for k in r["keys"]
             if k.get("type") == "char" and k["key"].isalpha()
         }
         assert letters == set("abcdefghijklmnopqrstuvwxyz")
@@ -261,14 +268,14 @@ class TestCompactLayout:
     def test_digits_are_complete_on_the_sym_layer(self, compact: dict) -> None:
         sym_rows = [r for r in compact["rows"] if r["layer"] == "sym"]
         digits = {
-            k["key"] for r in sym_rows for k in r["keys"]
+            k["key"]
+            for r in sym_rows
+            for k in r["keys"]
             if k.get("type") == "char" and k["key"].isdigit()
         }
         assert digits == set("0123456789")
 
-    def test_colon_has_a_dedicated_key_on_the_sym_layer(
-        self, compact: dict
-    ) -> None:
+    def test_colon_has_a_dedicated_key_on_the_sym_layer(self, compact: dict) -> None:
         """A shifted variant is invisible, so `;`→`:` read as "no colon".
 
         Row 2 of ?123 carries `;` with `shifted: ":"`, but the keycap says
@@ -277,32 +284,25 @@ class TestCompactLayout:
         right, so the colon gets one there.
         """
         sym_rows = [r for r in compact["rows"] if r["layer"] == "sym"]
-        chars = [
-            k for r in sym_rows for k in r["keys"] if k.get("type") == "char"
-        ]
+        chars = [k for r in sym_rows for k in r["keys"] if k.get("type") == "char"]
         assert ":" in {k["key"] for k in chars}
 
-    def test_caret_survives_the_colon_taking_its_slot(
-        self, compact: dict
-    ) -> None:
+    def test_caret_survives_the_colon_taking_its_slot(self, compact: dict) -> None:
         """`^` paid for the colon's 1u — a trade, not a deletion.
 
         It is the rarest of row 3's symbols in prose, and it stays
         reachable as the shifted variant of `6` on row 1.
         """
         sym_rows = [r for r in compact["rows"] if r["layer"] == "sym"]
-        chars = [
-            k for r in sym_rows for k in r["keys"] if k.get("type") == "char"
-        ]
+        chars = [k for r in sym_rows for k in r["keys"] if k.get("type") == "char"]
         assert "^" in {k.get("shifted") for k in chars}
 
-    def test_shifted_variants_cover_the_punctuation_owen_asked_for(
-        self, compact: dict
-    ) -> None:
+    def test_shifted_variants_cover_the_punctuation_owen_asked_for(self, compact: dict) -> None:
         """Right-click types `shifted`, so `/` must carry `?`."""
         shifted = {
             k["key"]: k.get("shifted")
-            for r in compact["rows"] for k in r["keys"]
+            for r in compact["rows"]
+            for k in r["keys"]
             if k.get("type") == "char"
         }
         assert shifted["/"] == "?"

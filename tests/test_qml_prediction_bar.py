@@ -32,9 +32,14 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 # contributor without the Qt system libs still gets the rest of the suite.
 # CI installs the libs (see .github/workflows/ci.yml) so these still run there.
 try:
+    # QQuickItem is imported for its side effect and never named below:
+    # importing QtQuick is what registers the QQuickItem* type converter,
+    # without which reading the window's `contentItem` raises
+    # "Can't find converter for 'QQuickItem*'".
     from PySide6.QtCore import QCoreApplication, QObject, QSettings, QUrl  # noqa: E402
     from PySide6.QtGui import QGuiApplication  # noqa: E402
     from PySide6.QtQml import QQmlApplicationEngine  # noqa: E402
+    from PySide6.QtQuick import QQuickItem  # noqa: E402,F401
 except ImportError as exc:  # pragma: no cover - environment-dependent
     pytest.skip(
         f"Qt GUI libraries unavailable ({exc}); install libegl1/libgl1 to run "
@@ -64,10 +69,7 @@ LONG_PREDICTIONS = [
 
 
 def _real_warnings(warnings: list[str]) -> list[str]:
-    return [
-        w for w in warnings
-        if not any(frag in w for frag in IGNORED_WARNING_FRAGMENTS)
-    ]
+    return [w for w in warnings if not any(frag in w for frag in IGNORED_WARNING_FRAGMENTS)]
 
 
 @pytest.fixture(scope="module")
@@ -97,15 +99,11 @@ def qml_root(qapp):
         bridge = KeyboardBridge()
 
     engine = QQmlApplicationEngine()
-    engine.warnings.connect(
-        lambda errs: warnings.extend(e.toString() for e in errs)
-    )
+    engine.warnings.connect(lambda errs: warnings.extend(e.toString() for e in errs))
     engine.rootContext().setContextProperty("keyboard", bridge)
     engine.load(QUrl.fromLocalFile(str(QML_MAIN)))
 
-    assert engine.rootObjects(), (
-        "qml/Main.qml failed to load:\n  " + "\n  ".join(warnings)
-    )
+    assert engine.rootObjects(), "qml/Main.qml failed to load:\n  " + "\n  ".join(warnings)
     root = engine.rootObjects()[0]
     try:
         yield root, warnings, bridge
@@ -119,10 +117,27 @@ def _child(root, name: str) -> QObject:
     return obj
 
 
+# A single processEvents() pass is not guaranteed to flush Qt Quick's
+# delegate creation for a Repeater, so a caller that asserted immediately
+# after one pass saw an empty pill row perhaps 40% of the time, at a
+# different window width each run. Pump until the pills materialise instead,
+# bounded so this cannot hang.
+#
+# This cannot hide a real regression. A genuine "the bar dropped everything"
+# bug exhausts the budget and still arrives at the caller's non-empty
+# assertion; the only thing the loop buys is time for work already queued.
+# The cost when zero pills are correct (empty predictions) is a handful of
+# cheap no-op passes.
+_PILL_PUMP_PASSES = 10
+
+
 def _show(root, predictions: list[str]):
-    """Push predictions and return (pill row, clear button)."""
+    """Push predictions, wait for the pills, return (pill row, clear button)."""
     root.setProperty("predictions", predictions)
-    QCoreApplication.processEvents()
+    for _ in range(_PILL_PUMP_PASSES):
+        QCoreApplication.processEvents()
+        if _pill_texts(root):
+            break
     return _child(root, "predictionRow"), _child(root, "clearContextButton")
 
 
@@ -136,6 +151,30 @@ def _fit(row) -> tuple[list[str], list[float]]:
     return list(fit["words"]), list(fit["widths"])
 
 
+def _pill_texts(root) -> list:
+    """Every pill label Text item, found through the VISUAL item tree.
+
+    `root.findChildren(QObject, ...)` does NOT work here and silently returns
+    an empty list: a Repeater's delegates are re-parented as *visual* children
+    of the Repeater's parent item, and their QObject parent is the delegate
+    model, not the item tree. Every truncation assertion in this file used to
+    go through findChildren, so all of them passed vacuously against zero
+    pills — which is how a real eliding regression shipped under a test named
+    "no pill is ever truncated". Walk `childItems()` instead, and assert
+    non-empty at the call site.
+    """
+    out = []
+
+    def walk(item):
+        for child in item.childItems():
+            if child.objectName() == "predictionPillText":
+                out.append(child)
+            walk(child)
+
+    walk(root.property("contentItem"))
+    return out
+
+
 def _truncated(root) -> list[str]:
     """Pill labels Qt actually had to elide — the ground truth for this bar.
 
@@ -143,11 +182,7 @@ def _truncated(root) -> list[str]:
     the same flag the hover ToolTip is gated on, so it cannot disagree with
     what the user sees.
     """
-    return [
-        t.property("text")
-        for t in root.findChildren(QObject, "predictionPillText")
-        if t.property("truncated")
-    ]
+    return [t.property("text") for t in _pill_texts(root) if t.property("truncated")]
 
 
 class TestClearButtonNeverCoversPills:
@@ -205,18 +240,79 @@ class TestNoPillIsEverTruncated:
 
     # The reported case: eight long candidates sharing a prefix.
     CROWDED = [
-        "documentation", "document", "documented", "documenting",
-        "documents", "documentary", "documentaries", "documentation's",
+        "documentation",
+        "document",
+        "documented",
+        "documenting",
+        "documents",
+        "documentary",
+        "documentaries",
+        "documentation's",
     ]
+
+    def test_the_pills_are_actually_findable(self, qml_root):
+        """Guards every other assertion in this class.
+
+        `_truncated` used to walk QObject children, where a Repeater's
+        delegates do not live, so it returned [] no matter what was on
+        screen and every no-elide assertion below passed against zero pills.
+        A real eliding regression shipped underneath them. If this fails,
+        distrust the rest of this class rather than the bar.
+        """
+        root, _, _ = qml_root
+        row, _ = _show(root, self.CROWDED)
+        pills = _pill_texts(root)
+        words, _ = _fit(row)
+
+        assert len(pills) == len(words) > 0
+        assert [p.property("text") for p in pills] == words
+
+    def test_every_pill_has_room_for_its_own_text(self, qml_root):
+        """The no-elide guarantee, asserted as the arithmetic behind it.
+
+        `Text.truncated` only reports a *failure* after the fact. This checks
+        the invariant that prevents it: the width computeFit hands each pill
+        must cover the text plus the inset the delegate reserves on both
+        sides. The two used to be derived from different fractions of
+        `predHorizontalPad` (0.45 reserved vs 0.56 consumed), so text-driven
+        pills were born ~4 px too narrow and only survived when leftover
+        slack happened to top them up.
+
+        Swept rather than spot-checked, and that is load-bearing. The failure
+        is a knife-edge: it only bites at the widths where the row packs
+        tightly enough that the leftover-slack water-fill cannot cover the
+        shortfall, so a handful of round numbers misses it entirely. With the
+        deficit present this sweep fails at 130 of the 260 configurations
+        below; at 940px non-compact (the obvious width to spot-check) it does
+        not fail at all.
+
+        Assert on `truncated`, never on `contentWidth <= width`: once a Text
+        elides, `contentWidth` measures the *shortened* string, so it fits by
+        construction and the comparison can never fail. That check looks like
+        arithmetic proof and is actually unfalsifiable.
+        """
+        root, _, _ = qml_root
+        failures = []
+        for compact in (False, True):
+            root.setProperty("compactView", compact)
+            root.setProperty("showNumberRow", compact)
+            for width in range(720, 1240, 4):
+                root.setProperty("width", width)
+                _show(root, self.CROWDED)
+                assert _pill_texts(root), f"no pills rendered at width {width}"
+                for label in _truncated(root):
+                    failures.append(f"compact={compact} w={width} {label!r}")
+        assert not failures, f"{len(failures)} pill(s) elided:\n  " + "\n  ".join(failures[:10])
 
     def test_the_reported_case_renders_whole_words(self, qml_root):
         root, _, _ = qml_root
         row, _ = _show(root, self.CROWDED)
 
+        assert _pill_texts(root), "no pills rendered — assertion would be vacuous"
         assert _truncated(root) == [], "a pill was elided"
         words, _ = _fit(row)
         assert words, "the bar dropped everything"
-        assert words == self.CROWDED[:len(words)], (
+        assert words == self.CROWDED[: len(words)], (
             "pills must be dropped from the tail — those are the lowest-ranked"
         )
 
@@ -226,6 +322,7 @@ class TestNoPillIsEverTruncated:
         row, _ = _show(root, ["the", "then", "there", "these"])
         words, _ = _fit(row)
         assert len(words) == 4
+        assert len(_pill_texts(root)) == 4
         assert _truncated(root) == []
 
     def test_survivors_still_clear_the_button(self, qml_root):
@@ -243,6 +340,7 @@ class TestNoPillIsEverTruncated:
 
         narrow_count = len(_fit(row)[0])
         assert narrow_count <= wide_count
+        assert _pill_texts(root), "no pills rendered"
         assert _truncated(root) == []
 
     def test_a_single_oversized_word_still_fits_the_bar(self, qml_root):
@@ -275,8 +373,7 @@ class TestNumberRowPanel:
         registry = root.property("charKeyRegistry")
         keys = {
             entry["kd"]["key"]
-            for entry in (registry.toVariant() if hasattr(registry, "toVariant")
-                          else registry)
+            for entry in (registry.toVariant() if hasattr(registry, "toVariant") else registry)
         }
         assert set("1234567890") <= keys, (
             "number-row digits missing from charKeyRegistry — taps on them "

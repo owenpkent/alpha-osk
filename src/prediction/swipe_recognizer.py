@@ -101,7 +101,8 @@ class SwipeRecognizer:
         self._key_size = self._estimate_key_size()
         _logger.info(
             "Layout set: %d keys, key_size≈%.3f",
-            len(self._layout), self._key_size,
+            len(self._layout),
+            self._key_size,
         )
 
     def decode(

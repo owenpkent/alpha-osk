@@ -215,10 +215,12 @@ class SnippetStore:
             self.load()
         if len(self._snippets) >= MAX_SNIPPETS:
             return False
-        self._snippets.append({
-            "label": _clean_label(label),
-            "value": _clean_value(value),
-        })
+        self._snippets.append(
+            {
+                "label": _clean_label(label),
+                "value": _clean_value(value),
+            }
+        )
         self.save()
         return True
 

@@ -81,7 +81,10 @@ class NgramPredictor:
         self.capitalization: Dict[str, str] = {}
         # Words that are ALWAYS capitalized regardless of position
         self._always_capitalize: Dict[str, str] = {
-            "i": "I", "i'm": "I'm", "i'll": "I'll", "i'd": "I'd",
+            "i": "I",
+            "i'm": "I'm",
+            "i'll": "I'll",
+            "i'd": "I'd",
             "i've": "I've",
         }
         # Words that are common English AND names — only capitalize at
@@ -89,26 +92,138 @@ class NgramPredictor:
         # or "there are Many reasons").  132 entries.
         self._ambiguous_names: set = {
             # Common words that are also first names
-            "art", "bar", "bell", "bill", "bird", "bob", "bud", "buddy",
-            "cam", "candy", "carol", "carry", "chase", "cliff", "con",
-            "dale", "dawn", "dean", "desire", "don", "dot", "drew",
-            "earl", "faith", "fan", "fern", "flora", "frank", "gay",
-            "gene", "glad", "glen", "grace", "grant", "guy", "happy",
-            "heath", "honor", "hope", "hunter", "iris", "ivy", "jack",
-            "jade", "jan", "jean", "jerry", "jimmy", "joe", "john",
-            "joy", "june", "junior", "kit", "lady", "lance", "lane",
-            "lee", "lib", "lily", "lucky", "man", "many", "mark",
-            "marine", "matt", "max", "may", "mercy", "mike", "min",
-            "miss", "nick", "norm", "olive", "pat", "pearl", "pen",
-            "penny", "pet", "peter", "princess", "queen", "ray", "reed",
-            "rob", "robin", "rocky", "rose", "row", "ruby", "sandy",
-            "see", "shell", "son", "song", "soon", "sue", "sun",
-            "terry", "thu", "tiny", "troy", "valentine", "van", "violet",
-            "wade", "ward", "will", "winter", "young",
+            "art",
+            "bar",
+            "bell",
+            "bill",
+            "bird",
+            "bob",
+            "bud",
+            "buddy",
+            "cam",
+            "candy",
+            "carol",
+            "carry",
+            "chase",
+            "cliff",
+            "con",
+            "dale",
+            "dawn",
+            "dean",
+            "desire",
+            "don",
+            "dot",
+            "drew",
+            "earl",
+            "faith",
+            "fan",
+            "fern",
+            "flora",
+            "frank",
+            "gay",
+            "gene",
+            "glad",
+            "glen",
+            "grace",
+            "grant",
+            "guy",
+            "happy",
+            "heath",
+            "honor",
+            "hope",
+            "hunter",
+            "iris",
+            "ivy",
+            "jack",
+            "jade",
+            "jan",
+            "jean",
+            "jerry",
+            "jimmy",
+            "joe",
+            "john",
+            "joy",
+            "june",
+            "junior",
+            "kit",
+            "lady",
+            "lance",
+            "lane",
+            "lee",
+            "lib",
+            "lily",
+            "lucky",
+            "man",
+            "many",
+            "mark",
+            "marine",
+            "matt",
+            "max",
+            "may",
+            "mercy",
+            "mike",
+            "min",
+            "miss",
+            "nick",
+            "norm",
+            "olive",
+            "pat",
+            "pearl",
+            "pen",
+            "penny",
+            "pet",
+            "peter",
+            "princess",
+            "queen",
+            "ray",
+            "reed",
+            "rob",
+            "robin",
+            "rocky",
+            "rose",
+            "row",
+            "ruby",
+            "sandy",
+            "see",
+            "shell",
+            "son",
+            "song",
+            "soon",
+            "sue",
+            "sun",
+            "terry",
+            "thu",
+            "tiny",
+            "troy",
+            "valentine",
+            "van",
+            "violet",
+            "wade",
+            "ward",
+            "will",
+            "winter",
+            "young",
             # Common words that overlap with other proper nouns
-            "alpha", "angel", "angeles", "angle", "brain", "delta",
-            "echo", "edge", "else", "era", "forest", "glory", "golden",
-            "loan", "long", "love", "manual", "moon", "nova", "numbers",
+            "alpha",
+            "angel",
+            "angeles",
+            "angle",
+            "brain",
+            "delta",
+            "echo",
+            "edge",
+            "else",
+            "era",
+            "forest",
+            "glory",
+            "golden",
+            "loan",
+            "long",
+            "love",
+            "manual",
+            "moon",
+            "nova",
+            "numbers",
             "season",
         }
         self._load_proper_nouns()
@@ -142,14 +257,84 @@ class NgramPredictor:
         # Fallback common words if wordlist not available
         if self.total_words == 0:
             self._common_words = [
-                "the", "be", "to", "of", "and", "a", "in", "that", "have", "I",
-                "it", "for", "not", "on", "with", "he", "as", "you", "do", "at",
-                "this", "but", "his", "by", "from", "they", "we", "say", "her", "she",
-                "or", "an", "will", "my", "one", "all", "would", "there", "their", "what",
-                "so", "up", "out", "if", "about", "who", "get", "which", "go", "me",
-                "is", "are", "was", "were", "been", "being", "am", "can", "could", "may",
-                "might", "must", "shall", "should", "will", "would", "need", "want", "like",
-                "hello", "hi", "thanks", "thank", "please", "yes", "no", "okay", "ok",
+                "the",
+                "be",
+                "to",
+                "of",
+                "and",
+                "a",
+                "in",
+                "that",
+                "have",
+                "I",
+                "it",
+                "for",
+                "not",
+                "on",
+                "with",
+                "he",
+                "as",
+                "you",
+                "do",
+                "at",
+                "this",
+                "but",
+                "his",
+                "by",
+                "from",
+                "they",
+                "we",
+                "say",
+                "her",
+                "she",
+                "or",
+                "an",
+                "will",
+                "my",
+                "one",
+                "all",
+                "would",
+                "there",
+                "their",
+                "what",
+                "so",
+                "up",
+                "out",
+                "if",
+                "about",
+                "who",
+                "get",
+                "which",
+                "go",
+                "me",
+                "is",
+                "are",
+                "was",
+                "were",
+                "been",
+                "being",
+                "am",
+                "can",
+                "could",
+                "may",
+                "might",
+                "must",
+                "shall",
+                "should",
+                "will",
+                "would",
+                "need",
+                "want",
+                "like",
+                "hello",
+                "hi",
+                "thanks",
+                "thank",
+                "please",
+                "yes",
+                "no",
+                "okay",
+                "ok",
             ]
             for word in self._common_words:
                 self.unigrams[word] = 100
@@ -201,7 +386,8 @@ class NgramPredictor:
 
             _logger.info(
                 "Google 10K wordlist loaded: %d words (%d filtered as fragments)",
-                kept, len(words) - kept,
+                kept,
+                len(words) - kept,
             )
         except Exception as e:
             _logger.warning("Failed to load Google 10K wordlist: %s", e)
@@ -228,7 +414,8 @@ class NgramPredictor:
                     kept += 1
                 _logger.info(
                     "Supplement wordlist loaded: %d words (%d filtered as fragments)",
-                    kept, len(supplement) - kept,
+                    kept,
+                    len(supplement) - kept,
                 )
             except Exception as e:
                 _logger.warning("Failed to load supplement wordlist: %s", e)
@@ -344,9 +531,7 @@ class NgramPredictor:
         """
         return [word for word, _ in self.predict_with_scores(context, n)]
 
-    def predict_with_scores(
-        self, context: str, n: int = 5
-    ) -> List[Tuple[str, float]]:
+    def predict_with_scores(self, context: str, n: int = 5) -> List[Tuple[str, float]]:
         """
         Predict next words with their interpolated probability scores.
 
@@ -479,9 +664,7 @@ class NgramPredictor:
         unigram probability (callers normalise per source before
         combining).
         """
-        sorted_words = sorted(
-            self.unigrams.items(), key=lambda x: -x[1]
-        )
+        sorted_words = sorted(self.unigrams.items(), key=lambda x: -x[1])
         return [(word, float(freq)) for word, freq in sorted_words[:n]]
 
     def _tokenize(self, text: str) -> List[str]:
@@ -498,14 +681,50 @@ class NgramPredictor:
     # the repetition gate path for unknown words that happen to have a
     # vowel, but the pure-fragment case (length ≤ 2, no vowel) is
     # shape-rejected outright.
-    _SHORT_WORD_WHITELIST = frozenset({
-        "a", "i",
-        "am", "an", "as", "at", "be", "by", "do", "go",
-        "he", "hi", "if", "in", "is", "it", "me", "my",
-        "no", "of", "oh", "ok", "on", "or", "so", "to",
-        "up", "us", "we", "ya", "ha", "ah", "eh", "mm",
-        "hm", "mr", "ms", "dr", "st", "pm",
-    })
+    _SHORT_WORD_WHITELIST = frozenset(
+        {
+            "a",
+            "i",
+            "am",
+            "an",
+            "as",
+            "at",
+            "be",
+            "by",
+            "do",
+            "go",
+            "he",
+            "hi",
+            "if",
+            "in",
+            "is",
+            "it",
+            "me",
+            "my",
+            "no",
+            "of",
+            "oh",
+            "ok",
+            "on",
+            "or",
+            "so",
+            "to",
+            "up",
+            "us",
+            "we",
+            "ya",
+            "ha",
+            "ah",
+            "eh",
+            "mm",
+            "hm",
+            "mr",
+            "ms",
+            "dr",
+            "st",
+            "pm",
+        }
+    )
 
     def _is_plausible_word(self, word: str) -> bool:
         """Reject obvious keyboard-slip fragments.
@@ -799,8 +1018,11 @@ class NgramPredictor:
             self._blacklist_type_count[word_lower] += 1
             if self._blacklist_type_count[word_lower] >= self._rehabilitate_threshold:
                 self.unblacklist_word(word_lower)
-                _logger.info("Auto-rehabilitated word: %s (typed %d times)",
-                             word_lower, self._rehabilitate_threshold)
+                _logger.info(
+                    "Auto-rehabilitated word: %s (typed %d times)",
+                    word_lower,
+                    self._rehabilitate_threshold,
+                )
                 return word_lower
         return None
 
@@ -964,7 +1186,7 @@ class NgramPredictor:
     # through normal typing stays well under these limits; values beyond
     # them suggest a corrupt or crafted file and are refused rather than
     # risking OOM at startup.
-    _MAX_MODEL_FILE_BYTES = 50 * 1024 * 1024     # 50 MB on disk
+    _MAX_MODEL_FILE_BYTES = 50 * 1024 * 1024  # 50 MB on disk
     _MAX_UNIGRAMS = 500_000
     _MAX_BIGRAMS_PREFIXES = 500_000
     _MAX_CAPITALIZATIONS = 100_000
@@ -976,7 +1198,9 @@ class NgramPredictor:
             if file_size > self._MAX_MODEL_FILE_BYTES:
                 _logger.warning(
                     "Model file %s too large (%d bytes > %d cap); skipping load.",
-                    path, file_size, self._MAX_MODEL_FILE_BYTES,
+                    path,
+                    file_size,
+                    self._MAX_MODEL_FILE_BYTES,
                 )
                 return
 
@@ -987,21 +1211,27 @@ class NgramPredictor:
             if len(unigrams) > self._MAX_UNIGRAMS:
                 _logger.warning(
                     "Model file %s has %d unigrams (> %d); skipping load.",
-                    path, len(unigrams), self._MAX_UNIGRAMS,
+                    path,
+                    len(unigrams),
+                    self._MAX_UNIGRAMS,
                 )
                 return
             bigrams = data.get("bigrams", {})
             if len(bigrams) > self._MAX_BIGRAMS_PREFIXES:
                 _logger.warning(
                     "Model file %s has %d bigram prefixes (> %d); skipping load.",
-                    path, len(bigrams), self._MAX_BIGRAMS_PREFIXES,
+                    path,
+                    len(bigrams),
+                    self._MAX_BIGRAMS_PREFIXES,
                 )
                 return
             caps = data.get("capitalization", {})
             if len(caps) > self._MAX_CAPITALIZATIONS:
                 _logger.warning(
                     "Model file %s has %d capitalizations (> %d); skipping load.",
-                    path, len(caps), self._MAX_CAPITALIZATIONS,
+                    path,
+                    len(caps),
+                    self._MAX_CAPITALIZATIONS,
                 )
                 return
 
@@ -1012,24 +1242,19 @@ class NgramPredictor:
             # letter of the alphabet plus ~370 two-letter abbreviations
             # at high frequencies. Drop them on load and the next save
             # writes the cleaned model back.
-            unigrams = {
-                w: c for w, c in unigrams.items()
-                if self._is_plausible_word(w)
-            }
+            unigrams = {w: c for w, c in unigrams.items() if self._is_plausible_word(w)}
             user_vocab_raw = data.get("user_vocab", {})
             user_vocab_clean = {
-                w: c for w, c in user_vocab_raw.items()
-                if self._is_plausible_word(w)
+                w: c for w, c in user_vocab_raw.items() if self._is_plausible_word(w)
             }
 
             self.unigrams = defaultdict(int, unigrams)
             self.bigrams = defaultdict(
-                lambda: defaultdict(int),
-                {k: defaultdict(int, v) for k, v in bigrams.items()}
+                lambda: defaultdict(int), {k: defaultdict(int, v) for k, v in bigrams.items()}
             )
             self.trigrams = defaultdict(
                 lambda: defaultdict(int),
-                {k: defaultdict(int, v) for k, v in data.get("trigrams", {}).items()}
+                {k: defaultdict(int, v) for k, v in data.get("trigrams", {}).items()},
             )
             self.user_vocab = defaultdict(int, user_vocab_clean)
             # Rebuild incremental running total from loaded counts.
@@ -1045,13 +1270,16 @@ class NgramPredictor:
             # first run rather than instantly expiring legacy entries.
             raw_last_seen = data.get("candidate_last_seen", {}) or {}
             self._candidate_last_seen = {
-                str(w): float(t) for w, t in raw_last_seen.items()
-                if w in self._candidate_counts
+                str(w): float(t) for w, t in raw_last_seen.items() if w in self._candidate_counts
             }
             # Merge saved capitalization with built-in proper nouns (user overrides win)
             self.capitalization.update(caps)
-            _logger.info("Model loaded from %s (%d blacklisted, %d capitalizations)",
-                         path, len(self.blacklist), len(self.capitalization))
+            _logger.info(
+                "Model loaded from %s (%d blacklisted, %d capitalizations)",
+                path,
+                len(self.blacklist),
+                len(self.capitalization),
+            )
         except Exception as e:
             _logger.warning("Failed to load model from %s: %s", path, e)
 
@@ -1162,9 +1390,7 @@ class NgramPredictor:
             True if loaded successfully
         """
         if trigrams_path is None:
-            trigrams_path = (
-                Path(__file__).parent.parent.parent / "data" / "common_trigrams.txt"
-            )
+            trigrams_path = Path(__file__).parent.parent.parent / "data" / "common_trigrams.txt"
 
         if not trigrams_path.exists():
             _logger.debug("Common trigrams file not found: %s", trigrams_path)

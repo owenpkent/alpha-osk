@@ -132,8 +132,7 @@ class LinuxKeySynthesizer(KeySynthesizerBase):
             _logger.info("Linux key synthesizer ready: %s", self._tool)
         else:
             _logger.warning(
-                "No key synthesis tool found. "
-                "Install xdotool (X11) or ydotool (Wayland)."
+                "No key synthesis tool found. Install xdotool (X11) or ydotool (Wayland)."
             )
 
     # ------------------------------------------------------------------ #
@@ -367,16 +366,12 @@ class LinuxKeySynthesizer(KeySynthesizerBase):
 
         if self._tool == "xdotool":
             chords = ["shift+Left"] * backspace_count
-            self._log_send(
-                f"xdotool key shift+Left×{backspace_count} + type '{text}'"
-            )
+            self._log_send(f"xdotool key shift+Left×{backspace_count} + type '{text}'")
             _run(["xdotool", "key", "--clearmodifiers", *chords])
             if text:
                 _run(["xdotool", "type", "--clearmodifiers", text])
         elif self._tool == "ydotool":
-            self._log_send(
-                f"ydotool shift+Left×{backspace_count} + type '{text}'"
-            )
+            self._log_send(f"ydotool shift+Left×{backspace_count} + type '{text}'")
             _run(["ydotool", "key", "--key-down", "shift"])
             for _ in range(backspace_count):
                 _run(["ydotool", "key", "Left"])

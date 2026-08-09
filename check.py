@@ -1,10 +1,11 @@
 """
 Pre-push sanity check.
 
-Runs the same three checks GitHub Actions runs in .github/workflows/ci.yml:
+Runs the same four checks GitHub Actions runs in .github/workflows/ci.yml:
     1. ruff check src/ tests/
-    2. mypy src/ --ignore-missing-imports
-    3. pytest
+    2. ruff format --check src/ tests/
+    3. mypy src/ --ignore-missing-imports
+    4. pytest
 
 Run before `git push` to catch lint / type / test failures locally
 instead of waiting for the CI red X.
@@ -99,12 +100,16 @@ def main() -> int:
             "--cov-fail-under=60",
         ]
     steps = [
-        ("ruff",   [py, "-m", "ruff", "check", "src/", "tests/"]),
-        ("mypy",   [py, "-m", "mypy", "src/", "--ignore-missing-imports"]),
+        ("ruff", [py, "-m", "ruff", "check", "src/", "tests/"]),
+        ("format", [py, "-m", "ruff", "format", "--check", "src/", "tests/"]),
+        ("mypy", [py, "-m", "mypy", "src/", "--ignore-missing-imports"]),
         ("pytest", pytest_cmd),
     ]
 
-    missing = [name for name, _ in steps if not _have_module(name)]
+    # Probe the module named in the command (cmd[2]), not the step label.
+    # They used to be assumed identical, which silently made "format" a
+    # requirement to have a `format` module installed.
+    missing = sorted({cmd[2] for _, cmd in steps if not _have_module(cmd[2])})
     if missing:
         print(_safe(
             f"{C.FAIL}Missing tools: {', '.join(missing)}.{C.END}\n"

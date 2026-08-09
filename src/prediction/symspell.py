@@ -51,16 +51,11 @@ def damerau_levenshtein(a: str, b: str, max_dist: int = 2) -> int:
         for j in range(1, lb + 1):
             cost = 0 if ai == b[j - 1] else 1
             curr[j] = min(
-                curr[j - 1] + 1,        # insertion
-                prev[j] + 1,            # deletion
-                prev[j - 1] + cost,     # substitution
+                curr[j - 1] + 1,  # insertion
+                prev[j] + 1,  # deletion
+                prev[j - 1] + cost,  # substitution
             )
-            if (
-                i > 1
-                and j > 1
-                and ai == b[j - 2]
-                and a[i - 2] == b[j - 1]
-            ):
+            if i > 1 and j > 1 and ai == b[j - 2] and a[i - 2] == b[j - 1]:
                 curr[j] = min(curr[j], prev2[j - 2] + cost)
             if curr[j] < min_in_row:
                 min_in_row = curr[j]
@@ -97,9 +92,7 @@ class SymSpell:
         if max_edit_distance < 0:
             raise ValueError("max_edit_distance must be non-negative")
         if prefix_length < max_edit_distance + 1:
-            raise ValueError(
-                "prefix_length must be at least max_edit_distance + 1"
-            )
+            raise ValueError("prefix_length must be at least max_edit_distance + 1")
 
         self.max_edit_distance = max_edit_distance
         self.prefix_length = prefix_length
@@ -139,7 +132,7 @@ class SymSpell:
                 if len(w) <= 1:
                     continue
                 for i in range(len(w)):
-                    variant = w[:i] + w[i + 1:]
+                    variant = w[:i] + w[i + 1 :]
                     if variant and variant not in result:
                         result.add(variant)
                         next_frontier.add(variant)
@@ -163,16 +156,10 @@ class SymSpell:
             return
         self._deletes.clear()
         for word in self._words:
-            indexed = (
-                word[:self.prefix_length]
-                if len(word) > self.prefix_length
-                else word
-            )
+            indexed = word[: self.prefix_length] if len(word) > self.prefix_length else word
             # The indexed prefix is itself a "zero-deletion variant".
             self._deletes[indexed].append(word)
-            for variant in self._deletion_variants(
-                indexed, self.max_edit_distance
-            ):
+            for variant in self._deletion_variants(indexed, self.max_edit_distance):
                 self._deletes[variant].append(word)
         self._built = True
         _logger.debug(
@@ -212,14 +199,10 @@ class SymSpell:
                 return [(input_word, self._words[input_word], 0)]
 
         indexed_input = (
-            input_word[:self.prefix_length]
-            if len(input_word) > self.prefix_length
-            else input_word
+            input_word[: self.prefix_length] if len(input_word) > self.prefix_length else input_word
         )
         input_variants: Set[str] = {indexed_input}
-        input_variants.update(
-            self._deletion_variants(indexed_input, max_edit_distance)
-        )
+        input_variants.update(self._deletion_variants(indexed_input, max_edit_distance))
 
         for variant in input_variants:
             sources = self._deletes.get(variant)
@@ -228,17 +211,12 @@ class SymSpell:
             for source in sources:
                 if source in candidates:
                     continue
-                dist = damerau_levenshtein(
-                    input_word, source, max_edit_distance
-                )
+                dist = damerau_levenshtein(input_word, source, max_edit_distance)
                 if dist <= max_edit_distance:
                     candidates[source] = dist
 
         return sorted(
-            (
-                (w, self._words[w], d)
-                for w, d in candidates.items()
-            ),
+            ((w, self._words[w], d) for w, d in candidates.items()),
             key=lambda x: (x[2], -x[1]),
         )
 

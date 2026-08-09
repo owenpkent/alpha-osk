@@ -20,7 +20,7 @@ welcome, especially from users of adaptive technology.
 - **Report bugs** using the bug report template.
 - **Request features** using the feature request template.
 - **Improve docs** — typos, clearer wording, missing context.
-- **Add tests** — the suite is large (270+) but coverage gaps exist.
+- **Add tests**: the suite is large (842) but coverage gaps exist.
 - **Code changes** — see "Development setup" below.
 
 If you are unsure whether a change is wanted, open an issue first to
@@ -46,17 +46,60 @@ python -m pytest tests/test_keyboard_bridge.py
 python -m pytest -k "fuzzy"
 ```
 
+Two suites are property-based (`tests/test_property_*.py`, using
+[Hypothesis](https://hypothesis.readthedocs.io/)): they cover the archive
+and vocabulary-pack import paths, where the property is "nothing outside
+the destination directory is ever touched", and the prediction-engine
+invariants that the rest of the code is allowed to assume. They run under a
+fixed profile declared in `tests/conftest.py` with the example database
+disabled, so they are deterministic — a run cannot pass locally and fail on
+CI because of a cached corpus. To iterate faster while developing:
+
+```bash
+python -m pytest tests/test_property_import_hardening.py \
+  -p no:randomly --hypothesis-profile=alpha-osk-fast
+```
+
+If one fails, the report prints the exact generated input that broke it.
+Reproduce it by pasting the `@reproduce_failure(...)` decorator Hypothesis
+suggests onto the test, or just add the shrunk case as a plain example
+test — a minimal counterexample usually deserves to be pinned permanently.
+
+Some QML tests (`tests/test_qml_*.py`) need Qt's GL/xkb system libraries.
+They skip themselves with a message naming the missing library if it is not
+present, rather than failing the run; on Debian/Ubuntu, `sudo apt-get
+install libegl1 libgl1 libxkbcommon0` is enough to make them run.
+
+If you write a headless QML test, know that both of these have already
+shipped a test that could not fail:
+
+- **`root.findChildren(QObject, name)` does not find a `Repeater`'s
+  delegates.** They are re-parented as *visual* children, so the call
+  returns an empty list and your assertions pass over nothing. Walk
+  `childItems()` from `root.contentItem` instead, and assert the result is
+  non-empty so a broken lookup fails loudly. See `_pill_texts` in
+  `tests/test_qml_prediction_bar.py`.
+- **Do not assert `contentWidth <= width` on an eliding `Text`.** Once it
+  elides, `contentWidth` measures the shortened string, so the comparison
+  is true by construction. Assert on `Text.truncated`.
+
+More generally: when a test guards against a rendering defect, check that
+it fails against the broken code before you trust it. Both bugs above were
+found only because someone re-ran the new test on the pre-fix tree.
+
 ### Pre-push check
 
 Before pushing, run the same gates CI runs:
 
 ```bash
-python check.py        # lint + type + tests, ~85s
+python check.py        # lint + format + type + tests, ~85s
 python check.py --full # adds coverage gate, ~3min
 ```
 
-This catches ruff / mypy / pytest failures locally instead of red Xs in
-CI.
+This catches ruff / ruff-format / mypy / pytest failures locally instead
+of red Xs in CI. Formatting is checked separately from linting because
+`ruff check` does not look at layout; fix a format failure by running
+`ruff format src/ tests/`, not by hand.
 
 ## Architecture orientation
 
@@ -78,8 +121,9 @@ Other useful docs in `docs/`:
 
 ## Coding conventions
 
-- **Python**: linted with `ruff`, typed with `mypy`. Run `ruff check src/`
-  and `mypy src/` before pushing.
+- **Python**: linted with `ruff`, formatted with `ruff format`, typed
+  with `mypy`. Run `python check.py` before pushing, which covers all
+  three (plus the tests).
 - **Comments**: write them only when the *why* is non-obvious. Don't
   describe what well-named code already does.
 - **No em dashes** in code, docs, commit messages, or PR descriptions.
@@ -99,7 +143,7 @@ Other useful docs in `docs/`:
 2. Make your change, with tests.
 3. Run `python check.py` locally.
 4. Push and open a PR using the template.
-5. CI runs ruff + mypy + pytest + OSV vulnerability scan. `main` is a
+5. CI runs ruff + ruff-format + mypy + pytest + OSV vulnerability scan. `main` is a
    protected branch: the merge button stays disabled until five required
    checks pass green: `Lint`, `Type Check`, `Test (ubuntu-latest)`,
    `Test (windows-latest)`, and `OSV Scanner (deps CVE check)`. A new CVE
