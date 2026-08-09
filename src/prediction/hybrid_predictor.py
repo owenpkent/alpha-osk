@@ -43,18 +43,18 @@ class HybridPredictor(QObject):
     """
 
     # Signals for QML integration
-    predictionsReady = Signal(list)      # Instant predictions
-    predictionsRefined = Signal(list)    # LLM-refined predictions
-    modelLoading = Signal(bool)          # True when LLM is loading
-    llmAvailableChanged = Signal(bool)   # LLM availability changed
+    predictionsReady = Signal(list)  # Instant predictions
+    predictionsRefined = Signal(list)  # LLM-refined predictions
+    modelLoading = Signal(bool)  # True when LLM is loading
+    llmAvailableChanged = Signal(bool)  # LLM availability changed
     autocorrectSuggested = Signal(str, str)  # (typed, correction)
-    packsChanged = Signal()              # Vocabulary packs enabled/disabled
+    packsChanged = Signal()  # Vocabulary packs enabled/disabled
 
     def __init__(
         self,
         model_dir: Optional[Path] = None,
         enable_llm: bool = True,
-        parent: Optional[QObject] = None
+        parent: Optional[QObject] = None,
     ):
         """
         Initialize the hybrid predictor.
@@ -69,6 +69,7 @@ class HybridPredictor(QObject):
         # Set up model directory (cross-platform: AppData on Windows, .config on Linux)
         if model_dir is None:
             from ..platform import get_model_dir
+
             model_dir = get_model_dir()
         self._model_dir = model_dir
         self._model_dir.mkdir(parents=True, exist_ok=True)
@@ -139,6 +140,7 @@ class HybridPredictor(QObject):
 
     def _load_llm_async(self) -> None:
         """Load the LLM in a background thread."""
+
         def loader():
             self.modelLoading.emit(True)
             try:
@@ -197,9 +199,7 @@ class HybridPredictor(QObject):
             _logger.debug("FUZZY preds: %s", [w for w, _ in fuzzy_preds[:5]])
 
         # Merge predictions with the active strategy
-        predictions = self._merge_predictions(
-            ngram_preds, ppm_preds, fuzzy_preds, n
-        )
+        predictions = self._merge_predictions(ngram_preds, ppm_preds, fuzzy_preds, n)
 
         _logger.debug("MERGED result: %s", predictions)
         return predictions
@@ -214,9 +214,34 @@ class HybridPredictor(QObject):
         if word_lower in self._ngram.unigrams:
             return True
         # Check if it's a common short word (pronouns, articles, etc.)
-        if word_lower in {"i", "a", "an", "am", "as", "at", "be", "by", "do",
-                          "go", "he", "if", "in", "is", "it", "me", "my", "no",
-                          "of", "on", "or", "so", "to", "up", "us", "we"}:
+        if word_lower in {
+            "i",
+            "a",
+            "an",
+            "am",
+            "as",
+            "at",
+            "be",
+            "by",
+            "do",
+            "go",
+            "he",
+            "if",
+            "in",
+            "is",
+            "it",
+            "me",
+            "my",
+            "no",
+            "of",
+            "on",
+            "or",
+            "so",
+            "to",
+            "up",
+            "us",
+            "we",
+        }:
             return True
         return False
 
@@ -235,7 +260,7 @@ class HybridPredictor(QObject):
         ngram: List[Tuple[str, float]],
         ppm: List[Tuple[str, float]],
         fuzzy: List[Tuple[str, float]],
-        n: int
+        n: int,
     ) -> List[str]:
         """Merge candidate lists from each predictor into a final ranking.
 
@@ -260,9 +285,7 @@ class HybridPredictor(QObject):
         elif strategy == "linear":
             scores = self._score_linear(ngram, ppm, fuzzy, is_next_word, sources)
         elif strategy == "loglinear":
-            scores = self._score_loglinear(
-                ngram, ppm, fuzzy, is_next_word, sources
-            )
+            scores = self._score_loglinear(ngram, ppm, fuzzy, is_next_word, sources)
         else:  # "rank" — default, byte-identical to pre-strategy behaviour
             scores = self._score_rank(ngram, ppm, fuzzy, is_next_word, sources)
 
@@ -284,9 +307,7 @@ class HybridPredictor(QObject):
         ranks purely by positional contribution, weighted per source.
         """
         scores: Dict[str, float] = {}
-        ngram_weight, ppm_weight, fuzzy_weight = self._source_weights(
-            is_next_word
-        )
+        ngram_weight, ppm_weight, fuzzy_weight = self._source_weights(is_next_word)
 
         for i, (word, _) in enumerate(ngram):
             if not self._candidate_passes(word, is_next_word):
@@ -305,9 +326,7 @@ class HybridPredictor(QObject):
             if not self._is_valid_word(word):
                 continue
             bonus = self._bigram_bonus(word, bigram_table)
-            scores[word] = (
-                scores.get(word, 0.0) + (fuzzy_weight / (i + 1)) * bonus
-            )
+            scores[word] = scores.get(word, 0.0) + (fuzzy_weight / (i + 1)) * bonus
             sources.setdefault(word, []).append("fz")
 
         return scores
@@ -332,24 +351,18 @@ class HybridPredictor(QObject):
         dominance within any one source.
         """
         scores: Dict[str, float] = {}
-        ngram_weight, ppm_weight, fuzzy_weight = self._source_weights(
-            is_next_word
-        )
+        ngram_weight, ppm_weight, fuzzy_weight = self._source_weights(is_next_word)
 
         for i, (word, _) in enumerate(ngram):
             if not self._candidate_passes(word, is_next_word):
                 continue
-            scores[word] = (
-                scores.get(word, 0.0) + ngram_weight / (k + i + 1)
-            )
+            scores[word] = scores.get(word, 0.0) + ngram_weight / (k + i + 1)
             sources.setdefault(word, []).append("ng")
 
         for i, (word, _) in enumerate(ppm):
             if not self._candidate_passes(word, is_next_word):
                 continue
-            scores[word] = (
-                scores.get(word, 0.0) + ppm_weight / (k + i + 1)
-            )
+            scores[word] = scores.get(word, 0.0) + ppm_weight / (k + i + 1)
             sources.setdefault(word, []).append("ppm")
 
         bigram_table = self._fuzzy_bigram_table()
@@ -357,10 +370,7 @@ class HybridPredictor(QObject):
             if not self._is_valid_word(word):
                 continue
             bonus = self._bigram_bonus(word, bigram_table)
-            scores[word] = (
-                scores.get(word, 0.0)
-                + (fuzzy_weight / (k + i + 1)) * bonus
-            )
+            scores[word] = scores.get(word, 0.0) + (fuzzy_weight / (k + i + 1)) * bonus
             sources.setdefault(word, []).append("fz")
 
         return scores
@@ -383,16 +393,12 @@ class HybridPredictor(QObject):
         awareness of the calibration risk between predictors that
         produce probabilities at different scales.
         """
-        ngram_weight, ppm_weight, fuzzy_weight = self._source_weights(
-            is_next_word
-        )
+        ngram_weight, ppm_weight, fuzzy_weight = self._source_weights(is_next_word)
         bigram_table = self._fuzzy_bigram_table()
 
         p_ngram = self._normalise_source(ngram, is_next_word)
         p_ppm = self._normalise_source(ppm, is_next_word)
-        p_fuzzy = self._normalise_source(
-            fuzzy, is_next_word, fuzzy_bigram_table=bigram_table
-        )
+        p_fuzzy = self._normalise_source(fuzzy, is_next_word, fuzzy_bigram_table=bigram_table)
 
         scores: Dict[str, float] = {}
         for word, p in p_ngram.items():
@@ -430,16 +436,12 @@ class HybridPredictor(QObject):
         avoid underflow) so dispreference and sort behave identically
         to the other strategies.
         """
-        ngram_weight, ppm_weight, fuzzy_weight = self._source_weights(
-            is_next_word
-        )
+        ngram_weight, ppm_weight, fuzzy_weight = self._source_weights(is_next_word)
         bigram_table = self._fuzzy_bigram_table()
 
         p_ngram = self._normalise_source(ngram, is_next_word)
         p_ppm = self._normalise_source(ppm, is_next_word)
-        p_fuzzy = self._normalise_source(
-            fuzzy, is_next_word, fuzzy_bigram_table=bigram_table
-        )
+        p_fuzzy = self._normalise_source(fuzzy, is_next_word, fuzzy_bigram_table=bigram_table)
 
         candidates = set(p_ngram) | set(p_ppm) | set(p_fuzzy)
         if not candidates:
@@ -555,9 +557,7 @@ class HybridPredictor(QObject):
         return self._ngram.bigrams.get(prev_word, {})
 
     @staticmethod
-    def _bigram_bonus(
-        word: str, bigram_table: Optional[Dict[str, int]]
-    ) -> float:
+    def _bigram_bonus(word: str, bigram_table: Optional[Dict[str, int]]) -> float:
         """Multiplicative bonus for fuzzy candidates with bigram support.
 
         ``1 + log1p(count) / 2`` when the previous word frequently
@@ -760,9 +760,8 @@ class HybridPredictor(QObject):
         try:
             text = corpus_path.read_text(encoding="utf-8", errors="ignore")
             # Filter out comments
-            lines = [line for line in text.split('\n')
-                     if line.strip() and not line.startswith('#')]
-            clean_text = '\n'.join(lines)
+            lines = [line for line in text.split("\n") if line.strip() and not line.startswith("#")]
+            clean_text = "\n".join(lines)
 
             # Train both n-gram and PPM
             self._ngram.load_corpus(clean_text)
@@ -846,7 +845,8 @@ class HybridPredictor(QObject):
         if strategy not in self._VALID_MERGE_STRATEGIES:
             _logger.warning(
                 "Unknown merge strategy %r; keeping %r",
-                strategy, self._merge_strategy,
+                strategy,
+                self._merge_strategy,
             )
             return False
         self._merge_strategy = strategy
@@ -1013,6 +1013,7 @@ class HybridPredictor(QObject):
             Pack ID on success, empty string on failure
         """
         from pathlib import Path
+
         pack_id = self._pack_manager.import_pack(Path(source_dir))
         if pack_id:
             self.packsChanged.emit()

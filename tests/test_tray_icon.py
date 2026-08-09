@@ -98,9 +98,7 @@ class TestDoubleClick:
         r(TRIGGER)
         assert toggles == ["toggle"]
 
-    def test_a_double_click_that_leads_with_doubleclick_still_toggles_once(
-        self, router
-    ) -> None:
+    def test_a_double_click_that_leads_with_doubleclick_still_toggles_once(self, router) -> None:
         """Don't assume Trigger always arrives first; other platforms differ."""
         r, toggles, clock = router
         r(DOUBLE_CLICK)
@@ -108,9 +106,7 @@ class TestDoubleClick:
         r(TRIGGER)
         assert toggles == ["toggle"]
 
-    def test_the_window_is_measured_from_the_last_toggle_not_the_last_event(
-        self, router
-    ) -> None:
+    def test_the_window_is_measured_from_the_last_toggle_not_the_last_event(self, router) -> None:
         """Suppressed activations must not push the debounce window forward.
 
         If the guard stamped its timestamp on *every* activation rather than

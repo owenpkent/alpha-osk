@@ -157,23 +157,36 @@ class TestInspect:
     def test_future_schema_rejected(self, tmp_path: Path) -> None:
         f = tmp_path / "future.zip"
         with zipfile.ZipFile(f, "w") as zf:
-            zf.writestr("manifest.json", json.dumps({
-                "schema_version": SCHEMA_VERSION + 99,
-                "app_version": "999.0.0",
-                "exported_at": "",
-                "files": [],
-                "pack_ids": [],
-            }))
+            zf.writestr(
+                "manifest.json",
+                json.dumps(
+                    {
+                        "schema_version": SCHEMA_VERSION + 99,
+                        "app_version": "999.0.0",
+                        "exported_at": "",
+                        "files": [],
+                        "pack_ids": [],
+                    }
+                ),
+            )
         with pytest.raises(DataExportError, match="newer schema"):
             inspect_export(f)
 
     def test_zip_slip_rejected(self, tmp_path: Path) -> None:
         f = tmp_path / "evil.zip"
         with zipfile.ZipFile(f, "w") as zf:
-            zf.writestr("manifest.json", json.dumps({
-                "schema_version": SCHEMA_VERSION,
-                "app_version": "1.0", "exported_at": "", "files": [], "pack_ids": [],
-            }))
+            zf.writestr(
+                "manifest.json",
+                json.dumps(
+                    {
+                        "schema_version": SCHEMA_VERSION,
+                        "app_version": "1.0",
+                        "exported_at": "",
+                        "files": [],
+                        "pack_ids": [],
+                    }
+                ),
+            )
             zf.writestr("../escape.json", "pwned")
         with pytest.raises(DataExportError, match=r"\.\."):
             inspect_export(f)
@@ -181,10 +194,18 @@ class TestInspect:
     def test_absolute_path_rejected(self, tmp_path: Path) -> None:
         f = tmp_path / "evil.zip"
         with zipfile.ZipFile(f, "w") as zf:
-            zf.writestr("manifest.json", json.dumps({
-                "schema_version": SCHEMA_VERSION,
-                "app_version": "1.0", "exported_at": "", "files": [], "pack_ids": [],
-            }))
+            zf.writestr(
+                "manifest.json",
+                json.dumps(
+                    {
+                        "schema_version": SCHEMA_VERSION,
+                        "app_version": "1.0",
+                        "exported_at": "",
+                        "files": [],
+                        "pack_ids": [],
+                    }
+                ),
+            )
             zf.writestr("/etc/passwd", "pwned")
         with pytest.raises(DataExportError, match="absolute"):
             inspect_export(f)
@@ -258,13 +279,18 @@ class TestImport:
         import's allow-list refuses to extract it."""
         f = tmp_path / "evil_but_well_formed.zip"
         with zipfile.ZipFile(f, "w") as zf:
-            zf.writestr("manifest.json", json.dumps({
-                "schema_version": SCHEMA_VERSION,
-                "app_version": "1.0",
-                "exported_at": "",
-                "files": ["telemetry.json"],
-                "pack_ids": [],
-            }))
+            zf.writestr(
+                "manifest.json",
+                json.dumps(
+                    {
+                        "schema_version": SCHEMA_VERSION,
+                        "app_version": "1.0",
+                        "exported_at": "",
+                        "files": ["telemetry.json"],
+                        "pack_ids": [],
+                    }
+                ),
+            )
             zf.writestr("telemetry.json", json.dumps({"anon_id": "leaked"}))
 
         dst = tmp_path / "dst"
@@ -277,13 +303,22 @@ class TestImport:
         gate. Patch the cap to a tiny value so we don't have to write
         gigabytes of test data."""
         from src import data_export
+
         monkeypatch.setattr(data_export, "_MAX_FILE_BYTES", 8)
         f = tmp_path / "huge.zip"
         with zipfile.ZipFile(f, "w") as zf:
-            zf.writestr("manifest.json", json.dumps({
-                "schema_version": SCHEMA_VERSION,
-                "app_version": "1.0", "exported_at": "", "files": [], "pack_ids": [],
-            }))
+            zf.writestr(
+                "manifest.json",
+                json.dumps(
+                    {
+                        "schema_version": SCHEMA_VERSION,
+                        "app_version": "1.0",
+                        "exported_at": "",
+                        "files": [],
+                        "pack_ids": [],
+                    }
+                ),
+            )
             zf.writestr("models/ngram_model.json", b"x" * 64)  # > patched cap
         with pytest.raises(DataExportError, match="per-file cap"):
             inspect_export(f)
@@ -292,5 +327,6 @@ class TestImport:
 class TestSuggestedName:
     def test_format(self) -> None:
         from datetime import datetime
+
         name = suggested_export_name(datetime(2026, 5, 19, 14, 30, 22))
         assert name == "Alpha-OSK-Export-2026-05-19-143022.zip"

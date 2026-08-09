@@ -34,24 +34,30 @@ class TestFactory:
 
     def test_factory_returns_synthesizer(self):
         from src.platform import create_key_synthesizer
+
         synth = create_key_synthesizer()
         assert isinstance(synth, KeySynthesizerBase)
 
     def test_factory_returns_correct_backend(self):
         from src.platform import create_key_synthesizer
+
         synth = create_key_synthesizer()
         if CURRENT_PLATFORM == "windows":
             from src.platform.windows import WindowsKeySynthesizer
+
             assert isinstance(synth, WindowsKeySynthesizer)
         elif CURRENT_PLATFORM == "linux":
             from src.platform.linux import LinuxKeySynthesizer
+
             assert isinstance(synth, LinuxKeySynthesizer)
         elif CURRENT_PLATFORM == "macos":
             from src.platform.macos import MacOSKeySynthesizer
+
             assert isinstance(synth, MacOSKeySynthesizer)
 
     def test_synthesizer_has_backend_name(self):
         from src.platform import create_key_synthesizer
+
         synth = create_key_synthesizer()
         name = synth.backend_name()
         assert isinstance(name, str)
@@ -59,6 +65,7 @@ class TestFactory:
 
     def test_synthesizer_reports_availability(self):
         from src.platform import create_key_synthesizer
+
         synth = create_key_synthesizer()
         # Just verify it returns bool, not that it's True/False
         assert isinstance(synth.is_available(), bool)
@@ -132,8 +139,12 @@ class TestLinuxReplaceText:
         synth.replace_text(3, "hello")
         # One `key` invocation carrying all 3 chords, plus one `type`.
         assert calls[0] == [
-            "xdotool", "key", "--clearmodifiers",
-            "shift+Left", "shift+Left", "shift+Left",
+            "xdotool",
+            "key",
+            "--clearmodifiers",
+            "shift+Left",
+            "shift+Left",
+            "shift+Left",
         ]
         assert calls[1] == ["xdotool", "type", "--clearmodifiers", "hello"]
         assert len(calls) == 2
@@ -147,10 +158,15 @@ class TestLinuxReplaceText:
     def test_xdotool_empty_text_still_selects(self, monkeypatch):
         synth, calls = self._make_synth("xdotool", monkeypatch)
         synth.replace_text(2, "")
-        assert calls == [[
-            "xdotool", "key", "--clearmodifiers",
-            "shift+Left", "shift+Left",
-        ]]
+        assert calls == [
+            [
+                "xdotool",
+                "key",
+                "--clearmodifiers",
+                "shift+Left",
+                "shift+Left",
+            ]
+        ]
 
     def test_ydotool_frames_shift_around_lefts(self, monkeypatch):
         synth, calls = self._make_synth("ydotool", monkeypatch)
@@ -319,44 +335,66 @@ class TestWindowsReplaceText:
 
     def test_terminal_uses_backspace_path(self):
         from src.platform.windows import VK_BACK
+
         synth, captured = self._make_synth("ConsoleWindowClass")
         synth.replace_text(3, "Ow")
-        assert captured == [[
-            ("vk", VK_BACK, True),  ("vk", VK_BACK, False),
-            ("vk", VK_BACK, True),  ("vk", VK_BACK, False),
-            ("vk", VK_BACK, True),  ("vk", VK_BACK, False),
-            ("uni", "O"), ("uni", "w"),
-        ]]
+        assert captured == [
+            [
+                ("vk", VK_BACK, True),
+                ("vk", VK_BACK, False),
+                ("vk", VK_BACK, True),
+                ("vk", VK_BACK, False),
+                ("vk", VK_BACK, True),
+                ("vk", VK_BACK, False),
+                ("uni", "O"),
+                ("uni", "w"),
+            ]
+        ]
 
     def test_windows_terminal_class_also_uses_backspace(self):
         from src.platform.windows import VK_BACK
+
         synth, captured = self._make_synth("CASCADIA_HOSTING_WINDOW_CLASS")
         synth.replace_text(1, "x")
-        assert captured == [[
-            ("vk", VK_BACK, True), ("vk", VK_BACK, False),
-            ("uni", "x"),
-        ]]
+        assert captured == [
+            [
+                ("vk", VK_BACK, True),
+                ("vk", VK_BACK, False),
+                ("uni", "x"),
+            ]
+        ]
 
     def test_mintty_class_also_uses_backspace(self):
         from src.platform.windows import VK_BACK
+
         synth, captured = self._make_synth("mintty")
         synth.replace_text(2, "")
-        assert captured == [[
-            ("vk", VK_BACK, True), ("vk", VK_BACK, False),
-            ("vk", VK_BACK, True), ("vk", VK_BACK, False),
-        ]]
+        assert captured == [
+            [
+                ("vk", VK_BACK, True),
+                ("vk", VK_BACK, False),
+                ("vk", VK_BACK, True),
+                ("vk", VK_BACK, False),
+            ]
+        ]
 
     def test_non_terminal_uses_shift_left_path(self):
         from src.platform.windows import VK_LEFT, VK_SHIFT
+
         synth, captured = self._make_synth("Chrome_WidgetWin_1")
         synth.replace_text(2, "hi")
-        assert captured == [[
-            ("vk", VK_SHIFT, True),
-            ("vk", VK_LEFT, True),  ("vk", VK_LEFT, False),
-            ("vk", VK_LEFT, True),  ("vk", VK_LEFT, False),
-            ("vk", VK_SHIFT, False),
-            ("uni", "h"), ("uni", "i"),
-        ]]
+        assert captured == [
+            [
+                ("vk", VK_SHIFT, True),
+                ("vk", VK_LEFT, True),
+                ("vk", VK_LEFT, False),
+                ("vk", VK_LEFT, True),
+                ("vk", VK_LEFT, False),
+                ("vk", VK_SHIFT, False),
+                ("uni", "h"),
+                ("uni", "i"),
+            ]
+        ]
 
     def test_held_shift_not_wrapped_in_selection(self):
         # Regression for right-click "lock": when Shift is already held
@@ -365,15 +403,21 @@ class TestWindowsReplaceText:
         # and a trailing Shift key-up would silently release the locked
         # Shift while the OSK still shows it held.
         from src.platform.windows import VK_LEFT, VK_SHIFT
+
         synth, captured = self._make_synth("Chrome_WidgetWin_1")
         synth._modifier_already_held = lambda mod: mod == "shift"
         synth.replace_text(2, "hi")
         # No Shift bookends; Left presses ride the standing hold.
-        assert captured == [[
-            ("vk", VK_LEFT, True),  ("vk", VK_LEFT, False),
-            ("vk", VK_LEFT, True),  ("vk", VK_LEFT, False),
-            ("uni", "h"), ("uni", "i"),
-        ]]
+        assert captured == [
+            [
+                ("vk", VK_LEFT, True),
+                ("vk", VK_LEFT, False),
+                ("vk", VK_LEFT, True),
+                ("vk", VK_LEFT, False),
+                ("uni", "h"),
+                ("uni", "i"),
+            ]
+        ]
         assert ("vk", VK_SHIFT, True) not in captured[0]
         assert ("vk", VK_SHIFT, False) not in captured[0]
 
@@ -384,6 +428,7 @@ class TestWindowsReplaceText:
 
     def test_zero_backspace_outside_terminal_skips_selection(self):
         from src.platform.windows import VK_SHIFT
+
         synth, captured = self._make_synth("Notepad")
         synth.replace_text(0, "abc")
         # No Shift bookends when there's nothing to select.
@@ -393,6 +438,7 @@ class TestWindowsReplaceText:
 
     def test_unknown_class_treated_as_non_terminal(self):
         from src.platform.windows import VK_SHIFT
+
         synth, captured = self._make_synth("")
         synth.replace_text(1, "x")
         # Empty class name (e.g. GetClassNameW failed) → safe default
@@ -430,35 +476,45 @@ class TestWindowsSendKeyPunctuationChord:
             # held in these chord tests, so report all keys up.
             def GetAsyncKeyState(self_inner, vk):
                 return 0
+
         synth._user32 = _StubUser32()
         return synth, captured
 
     def test_ctrl_minus_uses_vk_oem_minus(self):
         from src.platform.windows import VK_CONTROL
+
         # US-layout VkKeyScanW('-') = (low=VK_OEM_MINUS=0xBD, high=0)
         synth, captured = self._make_synth({"-": 0x00BD})
         synth.send_key("-", modifiers=["ctrl"])
         # Ctrl-down → VK_OEM_MINUS-down → VK_OEM_MINUS-up → Ctrl-up,
         # all virtual-key events (no Unicode injection).
-        assert captured == [[
-            ("vk", VK_CONTROL, True),
-            ("vk", 0xBD, True), ("vk", 0xBD, False),
-            ("vk", VK_CONTROL, False),
-        ]]
+        assert captured == [
+            [
+                ("vk", VK_CONTROL, True),
+                ("vk", 0xBD, True),
+                ("vk", 0xBD, False),
+                ("vk", VK_CONTROL, False),
+            ]
+        ]
 
     def test_ctrl_equals_uses_vk_oem_plus(self):
         from src.platform.windows import VK_CONTROL
+
         # US-layout VkKeyScanW('=') = (low=VK_OEM_PLUS=0xBB, high=0)
         synth, captured = self._make_synth({"=": 0x00BB})
         synth.send_key("=", modifiers=["ctrl"])
-        assert captured == [[
-            ("vk", VK_CONTROL, True),
-            ("vk", 0xBB, True), ("vk", 0xBB, False),
-            ("vk", VK_CONTROL, False),
-        ]]
+        assert captured == [
+            [
+                ("vk", VK_CONTROL, True),
+                ("vk", 0xBB, True),
+                ("vk", 0xBB, False),
+                ("vk", VK_CONTROL, False),
+            ]
+        ]
 
     def test_shift_required_char_prepends_shift(self):
         from src.platform.windows import VK_CONTROL, VK_SHIFT
+
         # US-layout VkKeyScanW('+') = (low=VK_OEM_PLUS=0xBB, high=1) —
         # '+' is Shift+'=' physically, so the synth must add a Shift
         # press around the chord.
@@ -466,26 +522,32 @@ class TestWindowsSendKeyPunctuationChord:
         synth.send_key("+", modifiers=["ctrl"])
         # Shift gets prepended, so order is Shift→Ctrl press, then key,
         # then Ctrl→Shift release.
-        assert captured == [[
-            ("vk", VK_SHIFT, True),
-            ("vk", VK_CONTROL, True),
-            ("vk", 0xBB, True), ("vk", 0xBB, False),
-            ("vk", VK_CONTROL, False),
-            ("vk", VK_SHIFT, False),
-        ]]
+        assert captured == [
+            [
+                ("vk", VK_SHIFT, True),
+                ("vk", VK_CONTROL, True),
+                ("vk", 0xBB, True),
+                ("vk", 0xBB, False),
+                ("vk", VK_CONTROL, False),
+                ("vk", VK_SHIFT, False),
+            ]
+        ]
 
     def test_unmappable_char_falls_back_to_unicode(self):
         from src.platform.windows import VK_CONTROL
+
         # VkKeyScanW returns -1 for chars not on the active layout.
         synth, captured = self._make_synth({})  # everything → -1
         synth.send_key("ñ", modifiers=["ctrl"])
         # Ctrl is still wrapped around the keystroke; the action key
         # falls through to the Unicode path.
-        assert captured == [[
-            ("vk", VK_CONTROL, True),
-            ("uni", "ñ"),
-            ("vk", VK_CONTROL, False),
-        ]]
+        assert captured == [
+            [
+                ("vk", VK_CONTROL, True),
+                ("uni", "ñ"),
+                ("vk", VK_CONTROL, False),
+            ]
+        ]
 
     def test_already_held_modifier_is_not_wrapped(self):
         # Regression for right-click "lock": when Ctrl is already held at
@@ -494,16 +556,18 @@ class TestWindowsSendKeyPunctuationChord:
         # Ctrl-up would silently release the lock, breaking a following
         # Ctrl+click / Alt+Tab even though the OSK still shows it held.
         from src.platform.windows import VK_CONTROL
+
         synth, captured = self._make_synth({"-": 0x00BD})
         # Report Ctrl physically held; everything else up.
-        synth._user32.GetAsyncKeyState = (
-            lambda vk: 0x8000 if vk == VK_CONTROL else 0
-        )
+        synth._user32.GetAsyncKeyState = lambda vk: 0x8000 if vk == VK_CONTROL else 0
         synth.send_key("-", modifiers=["ctrl"])
         # Only the action key — Ctrl is supplied by the standing hold.
-        assert captured == [[
-            ("vk", 0xBD, True), ("vk", 0xBD, False),
-        ]]
+        assert captured == [
+            [
+                ("vk", 0xBD, True),
+                ("vk", 0xBD, False),
+            ]
+        ]
 
 
 class TestWindowsScancodeDispatch:
@@ -539,16 +603,16 @@ class TestWindowsScancodeDispatch:
             "-": 0x00BD,  # VK_OEM_MINUS
             ".": 0x00BE,
             "@": 0x0232,  # Ctrl required (US-International for some chars; here
-                          # we use it just to drive the AltGr/Ctrl-required path)
+            # we use it just to drive the AltGr/Ctrl-required path)
         },
         # vk → scancode
         "VSC": {
-            0x10: 0x2A,   # VK_SHIFT → left shift scancode
-            0x41: 0x1E,   # A
-            0x5A: 0x2C,   # Z
-            0x31: 0x02,   # 1
-            0xBD: 0x0C,   # -
-            0xBE: 0x34,   # .
+            0x10: 0x2A,  # VK_SHIFT → left shift scancode
+            0x41: 0x1E,  # A
+            0x5A: 0x2C,  # Z
+            0x31: 0x02,  # 1
+            0xBD: 0x0C,  # -
+            0xBE: 0x34,  # .
         },
         # vk → MAPVK_VK_TO_CHAR result. Bit 31 set = dead key.
         "CHAR": {
@@ -587,9 +651,7 @@ class TestWindowsScancodeDispatch:
         # _make_scancode_event, which we replace with a marker for the
         # same reason.
         synth._make_unicode_events = lambda c: [("uni", c)]
-        synth._make_scancode_event = (
-            lambda scancode, key_down: ("sc", scancode, key_down)
-        )
+        synth._make_scancode_event = lambda scancode, key_down: ("sc", scancode, key_down)
         # _make_char_scancode_events also calls _make_key_event as a
         # safety-net branch. We don't expect it to fire under any
         # tested input, but stub it so an unexpected call surfaces
@@ -672,7 +734,7 @@ class TestWindowsScancodeDispatch:
         # Set bit 31 on the MAPVK_VK_TO_CHAR result for VK_OEM_7
         # (apostrophe), simulating US-International where ' is a dead key.
         synth, _ = self._make_synth(
-            vk_scan={"'": 0x00DE},      # VK_OEM_7, no shift
+            vk_scan={"'": 0x00DE},  # VK_OEM_7, no shift
             vsc={0xDE: 0x28},
             char_probe={0xDE: 0x80000027},  # 0x27 (apostrophe) + dead-key bit
         )
@@ -707,8 +769,8 @@ class TestWindowsScancodeDispatch:
         synth, _ = self._make_synth()
         events = synth._make_char_scancode_events("A")
         assert events == [
-            ("sc", 0x2A, True),   # left shift down
-            ("sc", 0x1E, True),   # A down
+            ("sc", 0x2A, True),  # left shift down
+            ("sc", 0x1E, True),  # A down
             ("sc", 0x1E, False),  # A up
             ("sc", 0x2A, False),  # left shift up
         ]
@@ -739,10 +801,14 @@ class TestWindowsScancodeDispatch:
         # Check the simpler "az" pair instead.
         captured.clear()
         synth.send_text("az")
-        assert captured == [[
-            ("sc", 0x1E, True), ("sc", 0x1E, False),
-            ("sc", 0x2C, True), ("sc", 0x2C, False),
-        ]]
+        assert captured == [
+            [
+                ("sc", 0x1E, True),
+                ("sc", 0x1E, False),
+                ("sc", 0x2C, True),
+                ("sc", 0x2C, False),
+            ]
+        ]
 
     def test_send_text_mixed_ascii_and_emoji(self):
         # ASCII goes scancode, emoji falls back to UNICODE within the
@@ -750,11 +816,15 @@ class TestWindowsScancodeDispatch:
         # text order so the target app sees the chars in sequence.
         synth, captured = self._make_synth()
         synth.send_text("a漢z")
-        assert captured == [[
-            ("sc", 0x1E, True), ("sc", 0x1E, False),
-            ("uni", "漢"),
-            ("sc", 0x2C, True), ("sc", 0x2C, False),
-        ]]
+        assert captured == [
+            [
+                ("sc", 0x1E, True),
+                ("sc", 0x1E, False),
+                ("uni", "漢"),
+                ("sc", 0x2C, True),
+                ("sc", 0x2C, False),
+            ]
+        ]
 
     def test_send_text_empty_string_no_inject(self):
         synth, captured = self._make_synth()
@@ -770,9 +840,13 @@ class TestWindowsScancodeDispatch:
             vk_scan={"a": -1, "b": -1, "c": -1},
         )
         synth.send_text("abc")
-        assert captured == [[
-            ("uni", "a"), ("uni", "b"), ("uni", "c"),
-        ]]
+        assert captured == [
+            [
+                ("uni", "a"),
+                ("uni", "b"),
+                ("uni", "c"),
+            ]
+        ]
 
 
 class TestWindowsChordScancodeMode:
@@ -803,22 +877,25 @@ class TestWindowsChordScancodeMode:
 
     def test_scancode_mode_for_normal_vk(self):
         from src.platform import windows as win_mod
+
         synth = self._make_synth({0x41: 0x1E})  # VK_A → scancode 0x1E
         ev = synth._make_vk_scancode_event(0x41, key_down=True)
         ki = ev._input.ki
-        assert ki.wVk == 0                       # scancode mode ignores wVk
+        assert ki.wVk == 0  # scancode mode ignores wVk
         assert ki.wScan == 0x1E
         assert ki.dwFlags & win_mod.KEYEVENTF_SCANCODE
         assert not (ki.dwFlags & win_mod.KEYEVENTF_KEYUP)
 
     def test_keyup_sets_keyup_flag(self):
         from src.platform import windows as win_mod
+
         synth = self._make_synth({0x41: 0x1E})
         ev = synth._make_vk_scancode_event(0x41, key_down=False)
         assert ev._input.ki.dwFlags & win_mod.KEYEVENTF_KEYUP
 
     def test_extended_key_sets_extended_flag(self):
         from src.platform import windows as win_mod
+
         # VK_LEFT is in _EXTENDED_KEYS → must carry the E0 prefix flag.
         synth = self._make_synth({win_mod.VK_LEFT: 0x4B})
         ev = synth._make_vk_scancode_event(win_mod.VK_LEFT, key_down=True)
@@ -831,8 +908,8 @@ class TestWindowsChordScancodeMode:
         # back to the wVk-mode builder rather than emit wScan=0 scancode mode.
         synth = self._make_synth({})  # everything → 0
         captured = {}
-        synth._make_key_event = (
-            lambda vk, key_down: captured.update(vk=vk, key_down=key_down) or "fallback"
+        synth._make_key_event = lambda vk, key_down: (
+            captured.update(vk=vk, key_down=key_down) or "fallback"
         )
         result = synth._make_vk_scancode_event(0x99, key_down=True)
         assert result == "fallback"
@@ -840,6 +917,7 @@ class TestWindowsChordScancodeMode:
 
     def test_hold_modifier_uses_scancode_mode(self):
         from src.platform import windows as win_mod
+
         synth = self._make_synth({win_mod.VK_CONTROL: 0x1D})
         captured: list = []
         synth._inject = lambda events: captured.append(list(events))
@@ -857,16 +935,19 @@ class TestPlatformInfo:
 
     def test_platform_info_returns_dict(self):
         from src.platform import get_platform_info
+
         info = get_platform_info()
         assert isinstance(info, dict)
 
     def test_platform_info_has_platform(self):
         from src.platform import get_platform_info
+
         info = get_platform_info()
         assert "platform" in info
         assert info["platform"] == CURRENT_PLATFORM
 
     def test_platform_info_has_python(self):
         from src.platform import get_platform_info
+
         info = get_platform_info()
         assert "python" in info

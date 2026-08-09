@@ -69,10 +69,7 @@ LONG_PREDICTIONS = [
 
 
 def _real_warnings(warnings: list[str]) -> list[str]:
-    return [
-        w for w in warnings
-        if not any(frag in w for frag in IGNORED_WARNING_FRAGMENTS)
-    ]
+    return [w for w in warnings if not any(frag in w for frag in IGNORED_WARNING_FRAGMENTS)]
 
 
 @pytest.fixture(scope="module")
@@ -102,15 +99,11 @@ def qml_root(qapp):
         bridge = KeyboardBridge()
 
     engine = QQmlApplicationEngine()
-    engine.warnings.connect(
-        lambda errs: warnings.extend(e.toString() for e in errs)
-    )
+    engine.warnings.connect(lambda errs: warnings.extend(e.toString() for e in errs))
     engine.rootContext().setContextProperty("keyboard", bridge)
     engine.load(QUrl.fromLocalFile(str(QML_MAIN)))
 
-    assert engine.rootObjects(), (
-        "qml/Main.qml failed to load:\n  " + "\n  ".join(warnings)
-    )
+    assert engine.rootObjects(), "qml/Main.qml failed to load:\n  " + "\n  ".join(warnings)
     root = engine.rootObjects()[0]
     try:
         yield root, warnings, bridge
@@ -230,8 +223,14 @@ class TestNoPillIsEverTruncated:
 
     # The reported case: eight long candidates sharing a prefix.
     CROWDED = [
-        "documentation", "document", "documented", "documenting",
-        "documents", "documentary", "documentaries", "documentation's",
+        "documentation",
+        "document",
+        "documented",
+        "documenting",
+        "documents",
+        "documentary",
+        "documentaries",
+        "documentation's",
     ]
 
     def test_the_pills_are_actually_findable(self, qml_root):
@@ -286,9 +285,7 @@ class TestNoPillIsEverTruncated:
                 assert _pill_texts(root), f"no pills rendered at width {width}"
                 for label in _truncated(root):
                     failures.append(f"compact={compact} w={width} {label!r}")
-        assert not failures, (
-            f"{len(failures)} pill(s) elided:\n  " + "\n  ".join(failures[:10])
-        )
+        assert not failures, f"{len(failures)} pill(s) elided:\n  " + "\n  ".join(failures[:10])
 
     def test_the_reported_case_renders_whole_words(self, qml_root):
         root, _, _ = qml_root
@@ -298,7 +295,7 @@ class TestNoPillIsEverTruncated:
         assert _truncated(root) == [], "a pill was elided"
         words, _ = _fit(row)
         assert words, "the bar dropped everything"
-        assert words == self.CROWDED[:len(words)], (
+        assert words == self.CROWDED[: len(words)], (
             "pills must be dropped from the tail — those are the lowest-ranked"
         )
 
@@ -359,8 +356,7 @@ class TestNumberRowPanel:
         registry = root.property("charKeyRegistry")
         keys = {
             entry["kd"]["key"]
-            for entry in (registry.toVariant() if hasattr(registry, "toVariant")
-                          else registry)
+            for entry in (registry.toVariant() if hasattr(registry, "toVariant") else registry)
         }
         assert set("1234567890") <= keys, (
             "number-row digits missing from charKeyRegistry — taps on them "

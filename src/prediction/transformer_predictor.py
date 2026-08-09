@@ -33,6 +33,7 @@ def _load_model():
 
         try:
             from transformers import pipeline
+
             _logger.info("Loading DistilGPT-2 model (this may take a moment)...")
             _pipeline = pipeline(
                 "text-generation",
@@ -199,10 +200,7 @@ class TransformerPredictor:
             return candidates[:n]
 
     def predict_async(
-        self,
-        context: str,
-        callback: Callable[[List[str]], None],
-        n: int = 5
+        self, context: str, callback: Callable[[List[str]], None], n: int = 5
     ) -> None:
         """
         Generate predictions asynchronously.
@@ -212,6 +210,7 @@ class TransformerPredictor:
             callback: Function to call with results
             n: Number of predictions
         """
+
         def worker():
             result = self.predict(context, n)
             callback(result)
@@ -220,11 +219,7 @@ class TransformerPredictor:
         thread.start()
 
     def rerank_async(
-        self,
-        context: str,
-        candidates: List[str],
-        callback: Callable[[List[str]], None],
-        n: int = 5
+        self, context: str, candidates: List[str], callback: Callable[[List[str]], None], n: int = 5
     ) -> None:
         """
         Re-rank candidates asynchronously.
@@ -235,6 +230,7 @@ class TransformerPredictor:
             callback: Function to call with results
             n: Number of top candidates to return
         """
+
         def worker():
             result = self.rerank(context, candidates, n)
             callback(result)

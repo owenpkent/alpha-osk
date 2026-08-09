@@ -35,12 +35,14 @@ class TestForegroundWindow:
 
     def test_wayland_returns_zero(self, bridge: KeyboardBridge, monkeypatch):
         import sys
+
         monkeypatch.setattr(sys, "platform", "linux")
         monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-0")
         assert bridge._get_foreground_window_id() == 0
 
     def test_x11_parses_xdotool_output(self, bridge: KeyboardBridge, monkeypatch):
         import sys
+
         monkeypatch.setattr(sys, "platform", "linux")
         monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
 
@@ -53,11 +55,13 @@ class TestForegroundWindow:
 
     def test_xdotool_missing_returns_zero(self, bridge: KeyboardBridge, monkeypatch):
         import sys
+
         monkeypatch.setattr(sys, "platform", "linux")
         monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
 
         def raise_fnf(*a, **kw):
             raise FileNotFoundError("xdotool not found")
+
         monkeypatch.setattr("subprocess.run", raise_fnf)
 
         assert bridge._get_foreground_window_id() == 0
@@ -87,8 +91,8 @@ class TestForegroundWindow:
         monkeypatch.setattr(bridge, "_get_foreground_window_id", lambda: 42)
         monkeypatch.setattr("src.keyboard_bridge.focused_element_token", lambda: None)
         bridge._check_foreground_window()
-        assert bridge._current_word == "hel"          # preserved
-        assert bridge._last_foreground_hwnd == 42     # but seeded
+        assert bridge._current_word == "hel"  # preserved
+        assert bridge._last_foreground_hwnd == 42  # but seeded
 
     def test_check_foreground_noop_when_unavailable(self, bridge: KeyboardBridge, monkeypatch):
         """If we can't read the focused window, leave state alone."""
@@ -97,7 +101,7 @@ class TestForegroundWindow:
         monkeypatch.setattr(bridge, "_get_foreground_window_id", lambda: 0)
         bridge._check_foreground_window()
         assert bridge._current_word == "hel"
-        assert bridge._last_foreground_hwnd == 100    # unchanged
+        assert bridge._last_foreground_hwnd == 100  # unchanged
 
     def test_focus_token_change_clears_same_window(self, bridge: KeyboardBridge, monkeypatch):
         """Same window, focus moved to a different control (e.g. another text
@@ -118,7 +122,7 @@ class TestForegroundWindow:
         assert bridge._sentence_buffer == ""
         assert bridge._predictions == []
         assert bridge._last_focus_token == "B"
-        assert bridge._last_foreground_hwnd == 100    # window never changed
+        assert bridge._last_foreground_hwnd == 100  # window never changed
 
     def test_focus_token_same_preserves_context(self, bridge: KeyboardBridge, monkeypatch):
         """Caret staying in the same control (same token) must not wipe."""
@@ -139,8 +143,8 @@ class TestForegroundWindow:
         monkeypatch.setattr(bridge, "_get_foreground_window_id", lambda: 100)
         monkeypatch.setattr("src.keyboard_bridge.focused_element_token", lambda: "A")
         bridge._check_foreground_window()
-        assert bridge._current_word == "hel"          # preserved
-        assert bridge._last_focus_token == "A"        # seeded
+        assert bridge._current_word == "hel"  # preserved
+        assert bridge._last_focus_token == "A"  # seeded
 
     def test_focus_token_unreadable_keeps_baseline(self, bridge: KeyboardBridge, monkeypatch):
         """A None token ('don't know') must not wipe or clobber the baseline."""
@@ -151,7 +155,7 @@ class TestForegroundWindow:
         monkeypatch.setattr("src.keyboard_bridge.focused_element_token", lambda: None)
         bridge._check_foreground_window()
         assert bridge._current_word == "hel"
-        assert bridge._last_focus_token == "A"        # unchanged
+        assert bridge._last_focus_token == "A"  # unchanged
 
 
 class TestModifierState:
@@ -179,11 +183,11 @@ class TestModifierState:
         assert not bridge._shift_active
 
     def test_caps_lock_off_does_not_touch_shift(self, bridge: KeyboardBridge):
-        bridge.toggleShift()                   # Shift on independently
-        bridge.toggleCapsLock()                # Caps on
-        bridge.toggleCapsLock()                # Caps off
+        bridge.toggleShift()  # Shift on independently
+        bridge.toggleCapsLock()  # Caps on
+        bridge.toggleCapsLock()  # Caps off
         assert not bridge._caps_lock_active
-        assert bridge._shift_active            # Shift state preserved
+        assert bridge._shift_active  # Shift state preserved
 
     def test_caps_lock_uppercases_letters(self, bridge: KeyboardBridge):
         bridge.toggleCapsLock()
@@ -302,8 +306,7 @@ class TestModifierState:
         # keys must keep Shift held across presses; the user taps Shift
         # again to release it.
         bridge.toggleShift()
-        for key in ("left", "right", "up", "down", "home", "end",
-                    "pageup", "pagedown"):
+        for key in ("left", "right", "up", "down", "home", "end", "pageup", "pagedown"):
             bridge.pressSpecialKey(key)
             assert bridge._shift_active, f"shift dropped after {key}"
 
@@ -520,6 +523,7 @@ class TestGameKeyHold:
         import sys
 
         from src import keyboard_bridge
+
         monkeypatch.setattr(sys, "platform", "linux")
         assert keyboard_bridge._window_is_game(12345) is False
 
@@ -527,6 +531,7 @@ class TestGameKeyHold:
         import sys
 
         from src import keyboard_bridge
+
         monkeypatch.setattr(sys, "platform", "linux")
         assert keyboard_bridge._window_is_borderless_fullscreen(12345) is False
 
@@ -536,6 +541,7 @@ class TestGameKeyHold:
         import sys
 
         from src import keyboard_bridge
+
         monkeypatch.setattr(sys, "platform", "win32")
         monkeypatch.setattr(keyboard_bridge, "_owning_exe_name", lambda h: "aoe2de_s.exe")
         assert keyboard_bridge._window_is_game(999) is True
@@ -546,6 +552,7 @@ class TestGameKeyHold:
         import sys
 
         from src import keyboard_bridge
+
         monkeypatch.setattr(sys, "platform", "win32")
         monkeypatch.setattr(keyboard_bridge, "_owning_exe_name", lambda h: "code.exe")
         called = {"heuristic": False}
@@ -563,6 +570,7 @@ class TestGameKeyHold:
         import sys
 
         from src import keyboard_bridge
+
         monkeypatch.setattr(sys, "platform", "win32")
         monkeypatch.setattr(keyboard_bridge, "_owning_exe_name", lambda h: "somegame.exe")
         monkeypatch.setattr(keyboard_bridge, "_window_is_borderless_fullscreen", lambda h: True)
@@ -645,7 +653,8 @@ class TestContextTracking:
         assert bridge._current_word == "wo"
 
     def test_hyphenated_prediction_click_uses_suffix_only_path(
-        self, bridge: KeyboardBridge,
+        self,
+        bridge: KeyboardBridge,
     ):
         """Regression for the user-reported bug: typing 'word1-wo' then
         clicking a prediction for 'world' must NOT send BackSpaces that
@@ -662,8 +671,7 @@ class TestContextTracking:
         # Suffix-only contract: send_text("rld "), no BackSpace, no
         # replace_text.
         backspace_calls = [
-            c for c in bridge._synth.send_key.call_args_list
-            if c.args and c.args[0] == "BackSpace"
+            c for c in bridge._synth.send_key.call_args_list if c.args and c.args[0] == "BackSpace"
         ]
         assert backspace_calls == [], (
             "BackSpace was sent — would have eaten 'word1-' off the screen"
@@ -685,7 +693,8 @@ class TestContextTracking:
         assert bridge._context_buffer.endswith("path/")
 
     def test_prefix_punctuation_does_not_pollute_current_word(
-        self, bridge: KeyboardBridge,
+        self,
+        bridge: KeyboardBridge,
     ):
         """Regression: typing '*hel' must leave _current_word = 'hel',
         not '*hel'.  Without the boundary, clicking a prediction for
@@ -700,15 +709,13 @@ class TestContextTracking:
             for c in "hel":
                 bridge.pressKey(c)
             assert bridge._current_word == "hel", (
-                f"{ch!r} should be a word boundary; _current_word was "
-                f"{bridge._current_word!r}"
+                f"{ch!r} should be a word boundary; _current_word was {bridge._current_word!r}"
             )
-            assert bridge._context_buffer.endswith(ch), (
-                f"{ch!r} should remain in context_buffer"
-            )
+            assert bridge._context_buffer.endswith(ch), f"{ch!r} should remain in context_buffer"
 
     def test_asterisk_prefix_prediction_click_keeps_asterisk(
-        self, bridge: KeyboardBridge,
+        self,
+        bridge: KeyboardBridge,
     ):
         """User-reported bug: typing '*hel' then clicking 'hello' must
         type ONLY 'lo ' as a suffix and leave the leading '*' alone.
@@ -722,17 +729,15 @@ class TestContextTracking:
         bridge._synth.reset_mock()
         bridge.pressPrediction("hello")
         backspace_calls = [
-            c for c in bridge._synth.send_key.call_args_list
-            if c.args and c.args[0] == "BackSpace"
+            c for c in bridge._synth.send_key.call_args_list if c.args and c.args[0] == "BackSpace"
         ]
-        assert backspace_calls == [], (
-            "BackSpace was sent — would have eaten the leading '*'"
-        )
+        assert backspace_calls == [], "BackSpace was sent — would have eaten the leading '*'"
         bridge._synth.replace_text.assert_not_called()
         bridge._synth.send_text.assert_any_call("lo ")
 
     def test_backspace_into_completed_word_rehydrates_current_word(
-        self, bridge: KeyboardBridge,
+        self,
+        bridge: KeyboardBridge,
     ):
         """Regression: backspacing past a trailing space pulls the
         partial word back into ``_current_word`` so prediction-clicks
@@ -764,7 +769,8 @@ class TestContextTracking:
         assert bridge._current_word == "backspac"
 
     def test_backspace_into_word_without_preceding_text(
-        self, bridge: KeyboardBridge,
+        self,
+        bridge: KeyboardBridge,
     ):
         """Edge case: only one word typed, backspaced past the trailing
         space.  Rehydrate must work when there is no whitespace earlier
@@ -778,7 +784,8 @@ class TestContextTracking:
         assert bridge._context_buffer == ""
 
     def test_backspace_at_word_boundary_does_not_rehydrate(
-        self, bridge: KeyboardBridge,
+        self,
+        bridge: KeyboardBridge,
     ):
         """The rehydrate hook must no-op when the new tail is already
         whitespace — the user is between words, not editing one."""
@@ -801,7 +808,8 @@ class TestContextTracking:
         assert bridge._current_word == "hi"
 
     def test_backspace_into_typo_retracts_candidate_count(
-        self, bridge: KeyboardBridge,
+        self,
+        bridge: KeyboardBridge,
     ):
         """Backspace-as-negative-signal: when a word the user just
         completed is rehydrated by backspacing past its trailing space,
@@ -824,7 +832,8 @@ class TestContextTracking:
         assert "zephyrish" not in ngram._candidate_counts
 
     def test_backspace_into_word_skips_unlearn_in_privacy_mode(
-        self, bridge: KeyboardBridge,
+        self,
+        bridge: KeyboardBridge,
     ):
         """Privacy mode suppresses learning AND unlearning. Symmetry
         matters: the original space-press never reached learn() in
@@ -917,7 +926,10 @@ class TestUpdateHandoffConsumption:
     """consumeUpdateHandoff drives the post-update toast on first launch."""
 
     def test_returns_empty_when_no_handoff_file(
-        self, bridge: KeyboardBridge, tmp_path, monkeypatch,
+        self,
+        bridge: KeyboardBridge,
+        tmp_path,
+        monkeypatch,
     ):
         monkeypatch.setattr("src.platform.get_config_dir", lambda: tmp_path)
         result = bridge.consumeUpdateHandoff()
@@ -926,25 +938,35 @@ class TestUpdateHandoffConsumption:
     def test_reads_and_returns_payload(self, bridge: KeyboardBridge, tmp_path, monkeypatch):
         import json as _json
         import time as _time
+
         monkeypatch.setattr("src.platform.get_config_dir", lambda: tmp_path)
-        (tmp_path / "update_handoff.json").write_text(_json.dumps({
-            "version": "1.0.16",
-            "previous_version": "1.0.15",
-            "completed_at": _time.time(),
-        }))
+        (tmp_path / "update_handoff.json").write_text(
+            _json.dumps(
+                {
+                    "version": "1.0.16",
+                    "previous_version": "1.0.15",
+                    "completed_at": _time.time(),
+                }
+            )
+        )
         result = bridge.consumeUpdateHandoff()
         assert result == {"version": "1.0.16", "previousVersion": "1.0.15"}
 
     def test_deletes_file_after_read(self, bridge: KeyboardBridge, tmp_path, monkeypatch):
         import json as _json
         import time as _time
+
         monkeypatch.setattr("src.platform.get_config_dir", lambda: tmp_path)
         path = tmp_path / "update_handoff.json"
-        path.write_text(_json.dumps({
-            "version": "1.0.16",
-            "previous_version": "1.0.15",
-            "completed_at": _time.time(),
-        }))
+        path.write_text(
+            _json.dumps(
+                {
+                    "version": "1.0.16",
+                    "previous_version": "1.0.15",
+                    "completed_at": _time.time(),
+                }
+            )
+        )
         bridge.consumeUpdateHandoff()
         # Single-use breadcrumb — the next launch must not re-toast.
         assert not path.exists()
@@ -953,13 +975,18 @@ class TestUpdateHandoffConsumption:
 
     def test_stale_handoff_is_discarded(self, bridge: KeyboardBridge, tmp_path, monkeypatch):
         import json as _json
+
         monkeypatch.setattr("src.platform.get_config_dir", lambda: tmp_path)
         # 10 minutes ago — older than the 5-min freshness window.
-        (tmp_path / "update_handoff.json").write_text(_json.dumps({
-            "version": "1.0.16",
-            "previous_version": "1.0.15",
-            "completed_at": time.time() - 600,
-        }))
+        (tmp_path / "update_handoff.json").write_text(
+            _json.dumps(
+                {
+                    "version": "1.0.16",
+                    "previous_version": "1.0.15",
+                    "completed_at": time.time() - 600,
+                }
+            )
+        )
         result = bridge.consumeUpdateHandoff()
         assert result == {}
         # File is also deleted so it doesn't sit around forever.
@@ -1074,7 +1101,8 @@ class TestCompatMode:
         assert bridge._compat_auto_active is False
 
     def test_press_prediction_uses_backspace_plus_word_in_compat_mode(
-        self, bridge: KeyboardBridge,
+        self,
+        bridge: KeyboardBridge,
     ):
         bridge.setCompatMode(True)
         for c in "hel":
@@ -1085,15 +1113,15 @@ class TestCompatMode:
         # prefix), then send_text("hello ").  No replace_text, no
         # suffix-only send_text.
         backspace_calls = [
-            c for c in bridge._synth.send_key.call_args_list
-            if c.args and c.args[0] == "BackSpace"
+            c for c in bridge._synth.send_key.call_args_list if c.args and c.args[0] == "BackSpace"
         ]
         assert len(backspace_calls) == 3
         bridge._synth.send_text.assert_any_call("hello ")
         bridge._synth.replace_text.assert_not_called()
 
     def test_press_prediction_keeps_suffix_only_when_compat_mode_off(
-        self, bridge: KeyboardBridge,
+        self,
+        bridge: KeyboardBridge,
     ):
         # Default (compat mode off) — must keep the existing suffix-only
         # path so chat composers (Slack/Teams/Discord) keep working.
@@ -1103,8 +1131,7 @@ class TestCompatMode:
         bridge.pressPrediction("hello")
         # No BackSpaces should have been sent — only the suffix.
         backspace_calls = [
-            c for c in bridge._synth.send_key.call_args_list
-            if c.args and c.args[0] == "BackSpace"
+            c for c in bridge._synth.send_key.call_args_list if c.args and c.args[0] == "BackSpace"
         ]
         assert backspace_calls == []
         bridge._synth.send_text.assert_any_call("lo ")
@@ -1142,7 +1169,8 @@ class TestPredictionCapitalizationLearning:
     have to redo it every time."""
 
     def test_capital_prefix_then_pill_click_teaches_casing(
-        self, bridge: KeyboardBridge,
+        self,
+        bridge: KeyboardBridge,
     ):
         # Right-click flow: pressKeyLiteral types the capital verbatim
         # (no shift state involved) — same _current_word state as a
@@ -1152,12 +1180,11 @@ class TestPredictionCapitalizationLearning:
         bridge.pressKey("w")
         bridge.pressKey("e")
         bridge.pressPrediction("Owen")
-        bridge._predictor.learn_capitalization.assert_called_with(
-            "Owen", allow_uppercase=True
-        )
+        bridge._predictor.learn_capitalization.assert_called_with("Owen", allow_uppercase=True)
 
     def test_lowercase_prefix_then_pill_click_does_not_teach_casing(
-        self, bridge: KeyboardBridge,
+        self,
+        bridge: KeyboardBridge,
     ):
         # Lowercase prefix → user did not signal capitalization intent.
         # The capital that may appear on the pill came from sentence-
@@ -1169,7 +1196,8 @@ class TestPredictionCapitalizationLearning:
         bridge._predictor.learn_capitalization.assert_not_called()
 
     def test_pill_click_with_no_typed_prefix_does_not_teach_casing(
-        self, bridge: KeyboardBridge,
+        self,
+        bridge: KeyboardBridge,
     ):
         # Next-word prediction (nothing typed) — no signal of intent.
         bridge._predictor.learn_capitalization = MagicMock(return_value=True)
@@ -1177,7 +1205,8 @@ class TestPredictionCapitalizationLearning:
         bridge._predictor.learn_capitalization.assert_not_called()
 
     def test_midword_capital_prefix_then_pill_click_teaches_casing(
-        self, bridge: KeyboardBridge,
+        self,
+        bridge: KeyboardBridge,
     ):
         # Mid-word right-click ("e" then right-click "B") is an even
         # stronger casing signal than a first-letter cap — there is no
@@ -1190,9 +1219,7 @@ class TestPredictionCapitalizationLearning:
         bridge.pressKey("e")
         bridge.pressKeyLiteral("B")
         bridge.pressPrediction("eBay")
-        bridge._predictor.learn_capitalization.assert_called_with(
-            "eBay", allow_uppercase=True
-        )
+        bridge._predictor.learn_capitalization.assert_called_with("eBay", allow_uppercase=True)
 
 
 class TestAllCapsLearningGate:
@@ -1202,7 +1229,8 @@ class TestAllCapsLearningGate:
     deliberately type all-caps IS a strong signal and should be learned."""
 
     def test_word_typed_all_caps_via_rightclick_learns_uppercase(
-        self, bridge: KeyboardBridge,
+        self,
+        bridge: KeyboardBridge,
     ):
         """User right-clicks each letter — Caps Lock is off the whole
         word.  At space, the all-caps form should be learned."""
@@ -1211,12 +1239,11 @@ class TestAllCapsLearningGate:
             bridge.pressKeyLiteral(ch)
         assert bridge._word_typed_under_caps_lock is False
         bridge.pressSpecialKey("space")
-        bridge._predictor.learn_capitalization.assert_called_with(
-            "HVAC", allow_uppercase=True
-        )
+        bridge._predictor.learn_capitalization.assert_called_with("HVAC", allow_uppercase=True)
 
     def test_word_typed_all_caps_under_caps_lock_does_not_learn_uppercase(
-        self, bridge: KeyboardBridge,
+        self,
+        bridge: KeyboardBridge,
     ):
         """User toggles Caps Lock on, types HELLO — that's incidental
         all-caps, not a deliberate signal.  The bridge must pass
@@ -1227,12 +1254,11 @@ class TestAllCapsLearningGate:
             bridge.pressKey(ch)
         assert bridge._word_typed_under_caps_lock is True
         bridge.pressSpecialKey("space")
-        bridge._predictor.learn_capitalization.assert_called_with(
-            "HELLO", allow_uppercase=False
-        )
+        bridge._predictor.learn_capitalization.assert_called_with("HELLO", allow_uppercase=False)
 
     def test_caps_lock_flag_resets_at_word_boundary(
-        self, bridge: KeyboardBridge,
+        self,
+        bridge: KeyboardBridge,
     ):
         """After space, the next word starts with a clean slate — caps
         lock used on the previous word does not taint the next one."""
@@ -1243,7 +1269,8 @@ class TestAllCapsLearningGate:
         assert bridge._word_typed_under_caps_lock is False
 
     def test_caps_lock_flag_resets_when_backspaced_to_empty(
-        self, bridge: KeyboardBridge,
+        self,
+        bridge: KeyboardBridge,
     ):
         """Backspacing all the way through the word resets the flag —
         the user is starting over."""
@@ -1406,8 +1433,8 @@ class TestEditModeIntercept:
         typed = self._collect(bridge.editKeyTyped)
         bridge.setEditMode(False)
         bridge.pressKey("a")
-        assert typed == []               # no signal
-        bridge._synth.send_text.assert_called()   # synth path taken
+        assert typed == []  # no signal
+        bridge._synth.send_text.assert_called()  # synth path taken
 
     def test_set_edit_mode_toggles_flag(self, bridge: KeyboardBridge):
         assert bridge._edit_mode_active is False
@@ -1526,8 +1553,7 @@ class TestPunctuationSpacing:
         bridge._synth.send_key.reset_mock()
         bridge.pressKey(".")
         backspace_calls = [
-            c for c in bridge._synth.send_key.call_args_list
-            if c[0][0] == "BackSpace"
+            c for c in bridge._synth.send_key.call_args_list if c[0][0] == "BackSpace"
         ]
         assert len(backspace_calls) == 0
 
@@ -1568,8 +1594,7 @@ class TestPunctuationSpacing:
         bridge.pressKey(",")
         # No BackSpace should have been sent — the comma comes right after letters
         backspace_calls = [
-            c for c in bridge._synth.send_key.call_args_list
-            if c[0][0] == "BackSpace"
+            c for c in bridge._synth.send_key.call_args_list if c[0][0] == "BackSpace"
         ]
         assert len(backspace_calls) == 0
 
@@ -1602,25 +1627,30 @@ class TestMatchCase:
 
     def test_all_uppercase_typed_returns_upper(self):
         from src.keyboard_bridge import KeyboardBridge
+
         assert KeyboardBridge._match_case("RECIEVE", "receive") == "RECEIVE"
 
     def test_title_case_typed_returns_title(self):
         from src.keyboard_bridge import KeyboardBridge
+
         assert KeyboardBridge._match_case("Recieve", "receive") == "Receive"
 
     def test_lowercase_typed_returns_replacement_as_is(self):
         from src.keyboard_bridge import KeyboardBridge
+
         # Replacement keeps its own casing (e.g. "iPhone" out of the
         # misspellings table) even if typed was all-lowercase.
         assert KeyboardBridge._match_case("iphone", "iPhone") == "iPhone"
 
     def test_mixed_case_typed_passes_through(self):
         from src.keyboard_bridge import KeyboardBridge
+
         # Not title, not all-upper → don't try to second-guess.
         assert KeyboardBridge._match_case("RecIEVE", "receive") == "receive"
 
     def test_empty_typed_returns_replacement(self):
         from src.keyboard_bridge import KeyboardBridge
+
         assert KeyboardBridge._match_case("", "x") == "x"
 
 
@@ -1687,26 +1717,31 @@ class TestEditPredictionSanitize:
 
     def test_strips_control_chars(self):
         from src.keyboard_bridge import KeyboardBridge
+
         assert KeyboardBridge._sanitize_edit("hello\x00world") == "helloworld"
         assert KeyboardBridge._sanitize_edit("foo\nbar") == "foobar"
         assert KeyboardBridge._sanitize_edit("a\x01b\x1fc") == "abc"
 
     def test_caps_length(self):
         from src.keyboard_bridge import KeyboardBridge
+
         long = "a" * 200
         assert len(KeyboardBridge._sanitize_edit(long)) == KeyboardBridge._MAX_EDIT_LEN
 
     def test_empty_after_strip_is_empty(self):
         from src.keyboard_bridge import KeyboardBridge
+
         assert KeyboardBridge._sanitize_edit("   ") == ""
         assert KeyboardBridge._sanitize_edit("\x00\x01\n") == ""
 
     def test_non_string_input(self):
         from src.keyboard_bridge import KeyboardBridge
+
         assert KeyboardBridge._sanitize_edit(None) == ""  # type: ignore[arg-type]
-        assert KeyboardBridge._sanitize_edit(42) == ""    # type: ignore[arg-type]
+        assert KeyboardBridge._sanitize_edit(42) == ""  # type: ignore[arg-type]
 
     def test_normal_input_preserved(self):
         from src.keyboard_bridge import KeyboardBridge
+
         assert KeyboardBridge._sanitize_edit("iPhone") == "iPhone"
         assert KeyboardBridge._sanitize_edit("  hello  ") == "hello"

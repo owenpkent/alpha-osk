@@ -7,12 +7,32 @@ from src.prediction.swipe_recognizer import SwipeRecognizer
 # A stylised QWERTY-ish letter grid.  Units are arbitrary — the
 # recogniser normalises internally.
 _QWERTY = {
-    "q": (0, 0), "w": (1, 0), "e": (2, 0), "r": (3, 0), "t": (4, 0),
-    "y": (5, 0), "u": (6, 0), "i": (7, 0), "o": (8, 0), "p": (9, 0),
-    "a": (0.3, 1), "s": (1.3, 1), "d": (2.3, 1), "f": (3.3, 1), "g": (4.3, 1),
-    "h": (5.3, 1), "j": (6.3, 1), "k": (7.3, 1), "l": (8.3, 1),
-    "z": (1.0, 2), "x": (2.0, 2), "c": (3.0, 2), "v": (4.0, 2),
-    "b": (5.0, 2), "n": (6.0, 2), "m": (7.0, 2),
+    "q": (0, 0),
+    "w": (1, 0),
+    "e": (2, 0),
+    "r": (3, 0),
+    "t": (4, 0),
+    "y": (5, 0),
+    "u": (6, 0),
+    "i": (7, 0),
+    "o": (8, 0),
+    "p": (9, 0),
+    "a": (0.3, 1),
+    "s": (1.3, 1),
+    "d": (2.3, 1),
+    "f": (3.3, 1),
+    "g": (4.3, 1),
+    "h": (5.3, 1),
+    "j": (6.3, 1),
+    "k": (7.3, 1),
+    "l": (8.3, 1),
+    "z": (1.0, 2),
+    "x": (2.0, 2),
+    "c": (3.0, 2),
+    "v": (4.0, 2),
+    "b": (5.0, 2),
+    "n": (6.0, 2),
+    "m": (7.0, 2),
 }
 
 
@@ -31,7 +51,6 @@ def _swipe_through(letters: str, points_per_segment: int = 6):
 
 
 class TestSwipeRecognizer:
-
     def test_decodes_exact_trace_to_matching_word(self):
         """A trace straight through 'h-e-l-l-o' centres should rank 'hello' high."""
         recog = SwipeRecognizer()

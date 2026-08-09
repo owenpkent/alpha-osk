@@ -30,15 +30,9 @@ def sample_pack_dir(tmp_path: Path) -> Path:
     (pack_dir / "pack.json").write_text(
         json.dumps({"name": "Test Pack", "description": "For testing", "version": 1})
     )
-    (pack_dir / "dictionary.txt").write_text(
-        "# Test dictionary\nalpha\nbeta\ngamma\ndelta\n"
-    )
-    (pack_dir / "bigrams.txt").write_text(
-        "# Test bigrams\nalpha beta\ngamma delta\n"
-    )
-    (pack_dir / "trigrams.txt").write_text(
-        "# Test trigrams\nalpha beta gamma\n"
-    )
+    (pack_dir / "dictionary.txt").write_text("# Test dictionary\nalpha\nbeta\ngamma\ndelta\n")
+    (pack_dir / "bigrams.txt").write_text("# Test bigrams\nalpha beta\ngamma delta\n")
+    (pack_dir / "trigrams.txt").write_text("# Test trigrams\nalpha beta gamma\n")
     return pack_dir
 
 

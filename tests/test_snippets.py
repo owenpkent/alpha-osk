@@ -1,4 +1,5 @@
 """Tests for the Snippets feature (src/snippets.py + bridge slots)."""
+
 import json
 import os
 import sys
@@ -19,6 +20,7 @@ from src.snippets import (  # noqa: E402
 # --------------------------------------------------------------------------
 #  SnippetStore — pure logic, no Qt
 # --------------------------------------------------------------------------
+
 
 @pytest.fixture
 def store(tmp_path):
@@ -148,8 +150,7 @@ def test_corrupt_file_falls_back_to_defaults(tmp_path):
 def test_oversize_file_rejected(tmp_path):
     path = tmp_path / "snippets.json"
     # Write a valid-but-huge file (> 1 MB cap).
-    payload = {"version": 1, "snippets": [{"label": "x", "value": "y" * 2000}
-                                          for _ in range(1000)]}
+    payload = {"version": 1, "snippets": [{"label": "x", "value": "y" * 2000} for _ in range(1000)]}
     path.write_text(json.dumps(payload), encoding="utf-8")
     assert path.stat().st_size > 1024 * 1024
     store = SnippetStore(path)
@@ -160,11 +161,14 @@ def test_oversize_file_rejected(tmp_path):
 
 def test_empty_entries_dropped_on_load(tmp_path):
     path = tmp_path / "snippets.json"
-    payload = {"version": 1, "snippets": [
-        {"label": "", "value": ""},
-        {"label": "Keep", "value": "kept"},
-        {"label": "", "value": ""},
-    ]}
+    payload = {
+        "version": 1,
+        "snippets": [
+            {"label": "", "value": ""},
+            {"label": "Keep", "value": "kept"},
+            {"label": "", "value": ""},
+        ],
+    }
     path.write_text(json.dumps(payload), encoding="utf-8")
     store = SnippetStore(path)
     store.load()
@@ -209,6 +213,7 @@ def test_get_all_returns_copies(store):
 #  Bridge slots — insertSnippet routing
 # --------------------------------------------------------------------------
 
+
 @pytest.fixture
 def bridge():
     # Construct the bridge with a mocked synthesizer, mirroring
@@ -216,6 +221,7 @@ def bridge():
     # QObject builds fine without an event loop, and these tests only
     # exercise plain slot calls.
     from src.keyboard_bridge import KeyboardBridge
+
     with patch("src.keyboard_bridge.create_key_synthesizer") as mock_synth:
         mock_synth.return_value = MagicMock()
         b = KeyboardBridge()

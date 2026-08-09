@@ -31,6 +31,7 @@ def _stats(**overrides: Any) -> Dict[str, Any]:
 
 class _FakeClock:
     """Manual clock so we can step time deterministically."""
+
     def __init__(self, t: float = 1_000_000.0) -> None:
         self.t = t
 
@@ -43,6 +44,7 @@ class _FakeClock:
 
 class _FakeSubmit:
     """Capture submit calls; return a configurable status."""
+
     def __init__(self, status: int = 204) -> None:
         self.status = status
         self.calls: List[Tuple[str, bytes]] = []
@@ -88,9 +90,7 @@ class TestConsentGate:
         c, _, _ = _client(state_file)
         assert c.anon_id is None
 
-    def test_disabled_does_not_submit_even_after_long_wait(
-        self, state_file: Path
-    ) -> None:
+    def test_disabled_does_not_submit_even_after_long_wait(self, state_file: Path) -> None:
         c, clock, submit = _client(state_file)
         clock.tick(SUBMIT_INTERVAL_SECONDS * 2)
         assert c.maybe_submit() is False
@@ -124,11 +124,15 @@ class TestEnableLifecycle:
         assert c.anon_id != first_id
 
     def test_load_existing_state(self, state_file: Path) -> None:
-        state_file.write_text(json.dumps({
-            "enabled": True,
-            "anon_id": "1234567890abcdef" * 2,
-            "last_submit_ts": 999.0,
-        }))
+        state_file.write_text(
+            json.dumps(
+                {
+                    "enabled": True,
+                    "anon_id": "1234567890abcdef" * 2,
+                    "last_submit_ts": 999.0,
+                }
+            )
+        )
         c, _, _ = _client(state_file)
         assert c.enabled is True
         assert c.anon_id == "1234567890abcdef" * 2
@@ -215,46 +219,42 @@ class TestPayload:
 
 
 class TestRetryAndFailure:
-    def test_5xx_retries(
-        self, state_file: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_5xx_retries(self, state_file: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         c, clock, submit = _client(state_file, status=503)
         # Don't actually sleep between retries -- the test would hang.
         import src.telemetry as telemetry_mod
+
         monkeypatch.setattr(telemetry_mod.time, "sleep", lambda _: None)
         c.enable()
         clock.tick(SUBMIT_INTERVAL_SECONDS + 1)
         c.maybe_submit()
         assert len(submit.calls) == 3  # 3 retries
 
-    def test_4xx_does_not_retry(
-        self, state_file: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_4xx_does_not_retry(self, state_file: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         c, clock, submit = _client(state_file, status=400)
         import src.telemetry as telemetry_mod
+
         monkeypatch.setattr(telemetry_mod.time, "sleep", lambda _: None)
         c.enable()
         clock.tick(SUBMIT_INTERVAL_SECONDS + 1)
         c.maybe_submit()
         assert len(submit.calls) == 1  # gave up after the 400
 
-    def test_429_does_retry(
-        self, state_file: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_429_does_retry(self, state_file: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         c, clock, submit = _client(state_file, status=429)
         import src.telemetry as telemetry_mod
+
         monkeypatch.setattr(telemetry_mod.time, "sleep", lambda _: None)
         c.enable()
         clock.tick(SUBMIT_INTERVAL_SECONDS + 1)
         c.maybe_submit()
         assert len(submit.calls) == 3  # 429 is treated as transient
 
-    def test_network_error_retries(
-        self, state_file: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_network_error_retries(self, state_file: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         c, clock, submit = _client(state_file)
         submit.raise_on_call = True
         import src.telemetry as telemetry_mod
+
         monkeypatch.setattr(telemetry_mod.time, "sleep", lambda _: None)
         c.enable()
         clock.tick(SUBMIT_INTERVAL_SECONDS + 1)
@@ -266,6 +266,7 @@ class TestRetryAndFailure:
     ) -> None:
         c, clock, submit = _client(state_file, status=500)
         import src.telemetry as telemetry_mod
+
         monkeypatch.setattr(telemetry_mod.time, "sleep", lambda _: None)
         c.enable()
         enable_ts = c._last_submit_ts

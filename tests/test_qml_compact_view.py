@@ -56,10 +56,7 @@ IGNORED_WARNING_FRAGMENTS = ("does not support customization",)
 
 
 def _real_warnings(warnings: list[str]) -> list[str]:
-    return [
-        w for w in warnings
-        if not any(frag in w for frag in IGNORED_WARNING_FRAGMENTS)
-    ]
+    return [w for w in warnings if not any(frag in w for frag in IGNORED_WARNING_FRAGMENTS)]
 
 
 @pytest.fixture(scope="module")
@@ -97,15 +94,11 @@ def qml_root(qapp):
         bridge = KeyboardBridge()
 
     engine = QQmlApplicationEngine()
-    engine.warnings.connect(
-        lambda errs: warnings.extend(e.toString() for e in errs)
-    )
+    engine.warnings.connect(lambda errs: warnings.extend(e.toString() for e in errs))
     engine.rootContext().setContextProperty("keyboard", bridge)
     engine.load(QUrl.fromLocalFile(str(QML_MAIN)))
 
-    assert engine.rootObjects(), (
-        "qml/Main.qml failed to load:\n  " + "\n  ".join(warnings)
-    )
+    assert engine.rootObjects(), "qml/Main.qml failed to load:\n  " + "\n  ".join(warnings)
     root = engine.rootObjects()[0]
     try:
         yield root, warnings, bridge
@@ -143,9 +136,7 @@ class TestMainQmlLoads:
 
 
 class TestCompactViewSwitching:
-    def test_enabling_compact_swaps_the_layout_and_resizes_units(
-        self, qml_root
-    ) -> None:
+    def test_enabling_compact_swaps_the_layout_and_resizes_units(self, qml_root) -> None:
         root, warnings, _ = qml_root
         root.setProperty("compactView", True)
         QCoreApplication.processEvents()
@@ -191,9 +182,7 @@ class TestCompactViewSwitching:
         for row in _rows(root):
             assert _row_units(row) == pytest.approx(13.0)
 
-    def test_returning_to_full_size_restores_the_base_layer(
-        self, qml_root
-    ) -> None:
+    def test_returning_to_full_size_restores_the_base_layer(self, qml_root) -> None:
         root, _, _ = qml_root
         root.setProperty("compactView", True)
         root.setProperty("activeLayer", "sym")
@@ -281,13 +270,14 @@ class TestNumberRowPanel:
         import json
 
         compact = json.loads(
-            (REPO_ROOT / "data" / "layouts" / "qwerty-compact.json").read_text(
-                encoding="utf-8"
-            )
+            (REPO_ROOT / "data" / "layouts" / "qwerty-compact.json").read_text(encoding="utf-8")
         )
         sym_chars = [
-            k for r in compact["rows"] if r["layer"] == "sym"
-            for k in r["keys"] if k.get("type") == "char"
+            k
+            for r in compact["rows"]
+            if r["layer"] == "sym"
+            for k in r["keys"]
+            if k.get("type") == "char"
         ]
         assert "`" in {k["key"] for k in sym_chars}
         assert "~" in {k.get("shifted") for k in sym_chars}
@@ -320,8 +310,7 @@ class TestNumberRowPanel:
         # registerCharKey only admits single-character char keys, so an Esc
         # that slipped through would show up as a multi-char entry.
         assert all(len(k) == 1 for k in keys), (
-            "non-character key leaked into the swipe registry: "
-            f"{[k for k in keys if len(k) != 1]}"
+            f"non-character key leaked into the swipe registry: {[k for k in keys if len(k) != 1]}"
         )
         assert "Esc" not in keys
         assert _real_warnings(warnings) == []

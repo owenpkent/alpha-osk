@@ -27,14 +27,42 @@ _logger = logging.getLogger("FuzzyRecognizer")
 # letter is recoverable by the spatial model. Digits within the row
 # (4-5-6, etc.) inherit nearness for free from the same distance metric.
 QWERTY_POSITIONS: Dict[str, Tuple[float, float]] = {
-    '1': (-1, 0),   '2': (-1, 1),   '3': (-1, 2),   '4': (-1, 3),   '5': (-1, 4),
-    '6': (-1, 5),   '7': (-1, 6),   '8': (-1, 7),   '9': (-1, 8),   '0': (-1, 9),
-    'q': (0, 0),    'w': (0, 1),    'e': (0, 2),    'r': (0, 3),    't': (0, 4),
-    'y': (0, 5),    'u': (0, 6),    'i': (0, 7),    'o': (0, 8),    'p': (0, 9),
-    'a': (1, 0.25), 's': (1, 1.25), 'd': (1, 2.25), 'f': (1, 3.25), 'g': (1, 4.25),
-    'h': (1, 5.25), 'j': (1, 6.25), 'k': (1, 7.25), 'l': (1, 8.25),
-    'z': (2, 0.75), 'x': (2, 1.75), 'c': (2, 2.75), 'v': (2, 3.75), 'b': (2, 4.75),
-    'n': (2, 5.75), 'm': (2, 6.75),
+    "1": (-1, 0),
+    "2": (-1, 1),
+    "3": (-1, 2),
+    "4": (-1, 3),
+    "5": (-1, 4),
+    "6": (-1, 5),
+    "7": (-1, 6),
+    "8": (-1, 7),
+    "9": (-1, 8),
+    "0": (-1, 9),
+    "q": (0, 0),
+    "w": (0, 1),
+    "e": (0, 2),
+    "r": (0, 3),
+    "t": (0, 4),
+    "y": (0, 5),
+    "u": (0, 6),
+    "i": (0, 7),
+    "o": (0, 8),
+    "p": (0, 9),
+    "a": (1, 0.25),
+    "s": (1, 1.25),
+    "d": (1, 2.25),
+    "f": (1, 3.25),
+    "g": (1, 4.25),
+    "h": (1, 5.25),
+    "j": (1, 6.25),
+    "k": (1, 7.25),
+    "l": (1, 8.25),
+    "z": (2, 0.75),
+    "x": (2, 1.75),
+    "c": (2, 2.75),
+    "v": (2, 3.75),
+    "b": (2, 4.75),
+    "n": (2, 5.75),
+    "m": (2, 6.75),
 }
 
 
@@ -106,7 +134,7 @@ class SpatialKeyModel:
         sigma = self.uncertainty_radius / 2  # ≈ 95 % within radius
         for key, distance in self._neighbors.get(clicked_key, [(clicked_key, 0.0)]):
             if distance <= self.uncertainty_radius:
-                probabilities[key] = math.exp(-distance ** 2 / (2 * sigma ** 2))
+                probabilities[key] = math.exp(-(distance**2) / (2 * sigma**2))
 
         total = sum(probabilities.values())
         if total > 0:
@@ -199,7 +227,7 @@ class FuzzyWordGenerator:
             if score > scored.get(word, 0.0):
                 scored[word] = score
 
-        return sorted(scored.items(), key=lambda x: -x[1])[:self.max_candidates]
+        return sorted(scored.items(), key=lambda x: -x[1])[: self.max_candidates]
 
     # Per-edit penalties.  Tuned so a single-edit dictionary hit on a
     # short word lands in the same score range as a perfect spatial
@@ -280,9 +308,7 @@ class FuzzyWordGenerator:
         lt, lc = len(typed), len(candidate)
         if lt == lc:
             # Same length — either substitution or transposition.
-            diff_positions = [
-                i for i in range(lt) if typed[i] != candidate[i]
-            ]
+            diff_positions = [i for i in range(lt) if typed[i] != candidate[i]]
             if (
                 len(diff_positions) == 2
                 and diff_positions[1] == diff_positions[0] + 1
@@ -318,7 +344,7 @@ class FuzzyWordGenerator:
                     if combined_prob >= min_prob:
                         new_sequences.append((prefix + possible_char, combined_prob))
             new_sequences.sort(key=lambda x: -x[1])
-            current = new_sequences[:self.max_candidates * 2]
+            current = new_sequences[: self.max_candidates * 2]
         return current
 
     def get_correction(

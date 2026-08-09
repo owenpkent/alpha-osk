@@ -82,9 +82,9 @@ _MODEL_FILES = {
 # Hard caps. A legitimate export grown through normal use sits well
 # under these; anything bigger suggests a corrupt / crafted file and
 # is refused rather than risking OOM or filesystem-fill on import.
-_MAX_ARCHIVE_BYTES = 200 * 1024 * 1024        # zip-on-disk cap
-_MAX_FILE_BYTES = 75 * 1024 * 1024            # per-entry uncompressed
-_MAX_TOTAL_UNCOMPRESSED = 500 * 1024 * 1024   # sum of uncompressed
+_MAX_ARCHIVE_BYTES = 200 * 1024 * 1024  # zip-on-disk cap
+_MAX_FILE_BYTES = 75 * 1024 * 1024  # per-entry uncompressed
+_MAX_TOTAL_UNCOMPRESSED = 500 * 1024 * 1024  # sum of uncompressed
 
 # Pack ids are already sanitised by PackManager.import_pack but we
 # re-check on export AND on import: defence against a hand-edited
@@ -102,6 +102,7 @@ class DataExportError(Exception):
 @dataclass
 class ExportSummary:
     """Lightweight description of an export archive's contents."""
+
     path: Path
     schema_version: int
     app_version: str
@@ -114,6 +115,7 @@ class ExportSummary:
 def _read_app_version() -> str:
     try:
         from . import __version__ as v_mod
+
         return str(getattr(v_mod, "__version__", "unknown"))
     except Exception:
         return "unknown"
@@ -202,7 +204,9 @@ def export_user_data(config_dir: Path, dest: Path) -> ExportSummary:
 
     _logger.info(
         "Exported %d files (%d packs) to %s",
-        len(files_included), len(pack_ids), dest,
+        len(files_included),
+        len(pack_ids),
+        dest,
     )
     return ExportSummary(
         path=dest,
@@ -233,8 +237,7 @@ def _validate_archive_entry(entry: zipfile.ZipInfo) -> None:
         raise DataExportError(f"Refusing archive entry with .. component: {name!r}")
     if entry.file_size > _MAX_FILE_BYTES:
         raise DataExportError(
-            f"Archive entry {name!r} exceeds per-file cap "
-            f"({entry.file_size} > {_MAX_FILE_BYTES})"
+            f"Archive entry {name!r} exceeds per-file cap ({entry.file_size} > {_MAX_FILE_BYTES})"
         )
 
 
@@ -413,6 +416,8 @@ def import_user_data(src: Path, config_dir: Path) -> ExportSummary:
 
     _logger.info(
         "Imported %d files (%d packs) from %s",
-        len(summary.files), len(summary.pack_ids), src,
+        len(summary.files),
+        len(summary.pack_ids),
+        src,
     )
     return summary

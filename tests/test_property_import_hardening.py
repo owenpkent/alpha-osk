@@ -56,15 +56,41 @@ from src.prediction.vocabulary_pack import _VALID_PACK_ID, PackManager
 # outside it (a name of pure junk is rejected by the first check and never
 # exercises the later ones).
 _SEGMENTS = [
-    "..", ".", "models", "packs", "analytics.json", "snippets.json",
-    "ngram_model.json", "ppm_model.json", "dictionary.txt", "bigrams.txt",
-    "trigrams.txt", "pack.json", "manifest.json",
+    "..",
+    ".",
+    "models",
+    "packs",
+    "analytics.json",
+    "snippets.json",
+    "ngram_model.json",
+    "ppm_model.json",
+    "dictionary.txt",
+    "bigrams.txt",
+    "trigrams.txt",
+    "pack.json",
+    "manifest.json",
     # Things the extractor must never write.
-    "telemetry.json", "boot.ini", "id_rsa", ".ssh", "etc", "passwd",
-    "Windows", "System32", "AppData", "Roaming",
+    "telemetry.json",
+    "boot.ini",
+    "id_rsa",
+    ".ssh",
+    "etc",
+    "passwd",
+    "Windows",
+    "System32",
+    "AppData",
+    "Roaming",
     # Pack ids: valid, and invalid in the ways the regex cares about.
-    "medical", "my_pack", "a" * 64, "a" * 65, "BAD-ID", "pack id", "",
-    "..%2f", "....", "~",
+    "medical",
+    "my_pack",
+    "a" * 64,
+    "a" * 65,
+    "BAD-ID",
+    "pack id",
+    "",
+    "..%2f",
+    "....",
+    "~",
 ]
 
 _PREFIXES = ["", "/", "\\", "C:", "C:\\", "//", "./"]
@@ -105,8 +131,16 @@ def _mutated_allowed(draw: st.DrawFn) -> str:
     name = draw(allowed_names)
     mutation = draw(
         st.sampled_from(
-            ["prefix_parent", "prefix_abs", "prefix_drive", "backslash",
-             "embed_parent", "embed_dot", "trailing_slash", "double_slash"]
+            [
+                "prefix_parent",
+                "prefix_abs",
+                "prefix_drive",
+                "backslash",
+                "embed_parent",
+                "embed_dot",
+                "trailing_slash",
+                "double_slash",
+            ]
         )
     )
     if mutation == "prefix_parent":
@@ -145,6 +179,7 @@ file_contents = st.binary(min_size=0, max_size=512)
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _snapshot(root: Path) -> Dict[str, Optional[bytes]]:
     """Map every path under *root* to its bytes (None for directories)."""
@@ -189,6 +224,7 @@ def _build_archive(
 # data_export: the allow-list
 # ---------------------------------------------------------------------------
 
+
 class TestAllowListContainsExtraction:
     """`_allowed_archive_member` is the last line before bytes hit disk."""
 
@@ -209,14 +245,11 @@ class TestAllowListContainsExtraction:
 
         assert resolved != config_dir
         assert config_dir in resolved.parents, (
-            f"allow-list admitted {name!r}, which resolves to {resolved} "
-            f"outside {config_dir}"
+            f"allow-list admitted {name!r}, which resolves to {resolved} outside {config_dir}"
         )
 
     @given(name=archive_names)
-    def test_allowed_names_are_relative_and_separator_clean(
-        self, name: str
-    ) -> None:
+    def test_allowed_names_are_relative_and_separator_clean(self, name: str) -> None:
         """No absolute path, drive prefix or backslash survives the filter."""
         if not _allowed_archive_member(name):
             return
@@ -283,9 +316,7 @@ class TestEntryValidation:
             _validate_archive_entry(entry)
 
     @given(name=archive_names, size=st.integers(min_value=0, max_value=1024))
-    def test_rejection_is_always_a_dataexporterror(
-        self, name: str, size: int
-    ) -> None:
+    def test_rejection_is_always_a_dataexporterror(self, name: str, size: int) -> None:
         """The bridge turns DataExportError into a user-facing string, so an
         escaping ValueError/OSError would surface as a crash instead."""
         entry = zipfile.ZipInfo(name)
@@ -300,13 +331,9 @@ class TestEntryValidation:
 # data_export: end-to-end import
 # ---------------------------------------------------------------------------
 
-class TestImportTouchesNothingOutside:
 
-    @given(
-        members=st.lists(
-            st.tuples(archive_names, file_contents), min_size=1, max_size=6
-        )
-    )
+class TestImportTouchesNothingOutside:
+    @given(members=st.lists(st.tuples(archive_names, file_contents), min_size=1, max_size=6))
     def test_no_write_ever_lands_outside_the_config_dir(
         self, members: List[Tuple[str, bytes]]
     ) -> None:
@@ -347,12 +374,13 @@ class TestImportTouchesNothingOutside:
                 pass
 
             assert _snapshot(canary_dir) == outside_before, (
-                "import wrote outside config_dir with members "
-                f"{[n for n, _ in unique]}"
+                f"import wrote outside config_dir with members {[n for n, _ in unique]}"
             )
             # Nothing new at the sandbox top level either.
             assert sorted(p.name for p in sandbox.iterdir()) == [
-                "canary", "config", "payload.zip",
+                "canary",
+                "config",
+                "payload.zip",
             ]
 
     @given(members=st.lists(st.tuples(archive_names, file_contents), max_size=6))
@@ -387,7 +415,6 @@ class TestImportTouchesNothingOutside:
 
 
 class TestSchemaAndRoundTrip:
-
     @given(schema=st.integers(min_value=SCHEMA_VERSION + 1, max_value=2**31))
     def test_future_schema_is_always_refused(self, schema: int) -> None:
         """Half-applying an archive from a newer build is worse than
@@ -409,9 +436,7 @@ class TestSchemaAndRoundTrip:
                 inspect_export(archive)
 
     @given(payload=st.binary(max_size=4096))
-    def test_inspect_never_raises_anything_but_dataexporterror(
-        self, payload: bytes
-    ) -> None:
+    def test_inspect_never_raises_anything_but_dataexporterror(self, payload: bytes) -> None:
         """Arbitrary bytes named .zip: a truncated download, a text file the
         user renamed, a corrupt transfer. All must come back as the typed
         error the bridge knows how to display."""
@@ -499,8 +524,8 @@ class TestSchemaAndRoundTrip:
 # vocabulary_pack: PackManager.import_pack
 # ---------------------------------------------------------------------------
 
-class TestPackImportStaysInsideUserPacksDir:
 
+class TestPackImportStaysInsideUserPacksDir:
     @staticmethod
     def _sandbox(tmp: str) -> Tuple[PackManager, Path, Path]:
         sandbox = Path(tmp)
@@ -514,9 +539,7 @@ class TestPackImportStaysInsideUserPacksDir:
         return PackManager(packs_dir=builtin, user_packs_dir=user), user, sandbox
 
     @given(name=folder_names)
-    def test_accepted_id_is_always_sanitised_and_contained(
-        self, name: str
-    ) -> None:
+    def test_accepted_id_is_always_sanitised_and_contained(self, name: str) -> None:
         """Whatever the source folder is called, an accepted import lands at
         a directory whose name matches the id regex and which sits strictly
         under user_packs_dir."""
@@ -538,9 +561,7 @@ class TestPackImportStaysInsideUserPacksDir:
             assert user_dir.resolve() in dest.parents
 
     @given(name=folder_names, traversal=st.sampled_from(["", "/..", "/.", "/../.."]))
-    def test_nothing_outside_user_packs_dir_is_touched(
-        self, name: str, traversal: str
-    ) -> None:
+    def test_nothing_outside_user_packs_dir_is_touched(self, name: str, traversal: str) -> None:
         """import_pack calls rmtree and copytree. A source path whose `.name`
         is `..` used to be enough to aim rmtree at user_packs_dir's parent,
         which is where the canary lives."""
@@ -586,9 +607,9 @@ class TestPackImportStaysInsideUserPacksDir:
 
             for path in (user_dir / pack_id).rglob("*"):
                 if path.is_file():
-                    assert "PRIVATE KEY MATERIAL" not in path.read_text(
-                        errors="ignore"
-                    ), f"{path} dereferenced a symlink out of the pack"
+                    assert "PRIVATE KEY MATERIAL" not in path.read_text(errors="ignore"), (
+                        f"{path} dereferenced a symlink out of the pack"
+                    )
 
     @given(name=folder_names)
     def test_missing_dictionary_is_always_rejected(self, name: str) -> None:
@@ -605,11 +626,8 @@ class TestPackImportStaysInsideUserPacksDir:
 
 
 class TestPackImportIsIdempotent:
-
     @given(pack_id=valid_pack_ids, rounds=st.integers(min_value=2, max_value=4))
-    def test_reimporting_the_same_pack_converges(
-        self, pack_id: str, rounds: int
-    ) -> None:
+    def test_reimporting_the_same_pack_converges(self, pack_id: str, rounds: int) -> None:
         """Re-import rmtree's the old copy first. Repeating it must leave
         exactly one pack directory, not stack duplicates or half-delete."""
         with tempfile.TemporaryDirectory() as tmp:
@@ -630,8 +648,6 @@ class TestPackImportIsIdempotent:
             if results[0] is None:
                 return
             assert sorted(p.name for p in user.iterdir()) == [results[0]]
-            assert (user / results[0] / "dictionary.txt").read_text() == (
-                "alpha\nbeta\n"
-            )
+            assert (user / results[0] / "dictionary.txt").read_text() == ("alpha\nbeta\n")
 
             shutil.rmtree(source.parent)

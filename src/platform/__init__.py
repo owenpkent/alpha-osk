@@ -86,20 +86,22 @@ def create_key_synthesizer() -> "KeySynthesizerBase":
     """
     if CURRENT_PLATFORM == "linux":
         from .linux import LinuxKeySynthesizer
+
         _logger.info("Creating Linux key synthesizer")
         return LinuxKeySynthesizer()
     elif CURRENT_PLATFORM == "windows":
         from .windows import WindowsKeySynthesizer
+
         _logger.info("Creating Windows key synthesizer")
         return WindowsKeySynthesizer()
     elif CURRENT_PLATFORM == "macos":
         from .macos import MacOSKeySynthesizer
+
         _logger.info("Creating macOS key synthesizer")
         return MacOSKeySynthesizer()
     else:
         raise RuntimeError(
-            f"Unsupported platform: {sys.platform}. "
-            "Alpha-OSK supports Linux, Windows, and macOS."
+            f"Unsupported platform: {sys.platform}. Alpha-OSK supports Linux, Windows, and macOS."
         )
 
 
@@ -121,10 +123,10 @@ def get_platform_info() -> dict:
 
     if CURRENT_PLATFORM == "linux":
         import os
-        info["display_server"] = (
-            "wayland" if os.environ.get("WAYLAND_DISPLAY") else "x11"
-        )
+
+        info["display_server"] = "wayland" if os.environ.get("WAYLAND_DISPLAY") else "x11"
         import shutil
+
         info["xdotool"] = shutil.which("xdotool") is not None
         info["ydotool"] = shutil.which("ydotool") is not None
     elif CURRENT_PLATFORM == "windows":
@@ -154,6 +156,7 @@ def get_config_dir() -> Path:
 
     if CURRENT_PLATFORM == "windows":
         import os
+
         base = Path(os.environ.get("APPDATA", Path.home() / "AppData" / "Roaming"))
         config_dir = base / "alpha-osk"
     elif CURRENT_PLATFORM == "macos":

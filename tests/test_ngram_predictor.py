@@ -270,8 +270,7 @@ class TestCapitalization:
         lowercase. Pills now mirror the typed prefix's casing only;
         the only exception is the ``I`` family (Tier 1)."""
         predictor = NgramPredictor()
-        for word in ("monday", "paris", "iphone", "nasa", "ibm",
-                     "will", "jack", "may", "hello"):
+        for word in ("monday", "paris", "iphone", "nasa", "ibm", "will", "jack", "may", "hello"):
             assert predictor.get_capitalized(word, sentence_start=False) == word
             assert predictor.get_capitalized(word, sentence_start=True) == word
 
@@ -345,9 +344,7 @@ class TestPersonalVocabRanking:
         for _ in range(50):
             predictor.learn("claude")
         results = predictor.predict("cl", n=10)
-        assert "claude" in results[:3], (
-            f"'claude' should be top-3 after 50 uses; got {results}"
-        )
+        assert "claude" in results[:3], f"'claude' should be top-3 after 50 uses; got {results}"
 
     def test_zero_personal_vocab_falls_back_to_base(self):
         """With no personal typing, ranking comes from the base dictionary."""
@@ -400,6 +397,7 @@ class TestLoadBounds:
     def test_load_rejects_too_many_unigrams(self, tmp_path):
         """A legitimately-small file with millions of unigrams is refused."""
         import json
+
         p = tmp_path / "many.json"
         huge = {"unigrams": {f"w{i}": 1 for i in range(NgramPredictor._MAX_UNIGRAMS + 100)}}
         p.write_text(json.dumps(huge))
@@ -577,6 +575,7 @@ class TestLearnFromPillClick:
     def test_clicks_update_last_seen(self):
         p = NgramPredictor()
         import time
+
         p.learn_from_pill_click("zephyrish")
         t1 = p._candidate_last_seen["zephyrish"]
         time.sleep(0.01)
@@ -642,9 +641,7 @@ class TestBaseWordlistFiltering:
         # State codes / abbreviations that the Google list includes but
         # aren't in the short-word whitelist.
         for frag in ("tx", "ca", "ny", "kb", "pp", "th", "re"):
-            assert frag not in p.unigrams, (
-                f"fragment {frag!r} should be filtered from base dict"
-            )
+            assert frag not in p.unigrams, f"fragment {frag!r} should be filtered from base dict"
 
     def test_real_short_words_still_loaded(self):
         p = NgramPredictor()
@@ -657,17 +654,26 @@ class TestBaseWordlistFiltering:
         Loading it should silently strip the junk so existing users
         don't have to manually clear data."""
         import json
+
         path = tmp_path / "old_model.json"
-        path.write_text(json.dumps({
-            "unigrams": {
-                "hello": 100, "world": 100,  # real
-                "c": 9000, "x": 9000,        # single-letter junk
-                "tx": 5000, "kb": 5000,      # 2-letter junk
-            },
-            "user_vocab": {"hello": 5, "qq": 3},  # qq is junk
-            "bigrams": {}, "trigrams": {},
-            "total_words": 100,
-        }))
+        path.write_text(
+            json.dumps(
+                {
+                    "unigrams": {
+                        "hello": 100,
+                        "world": 100,  # real
+                        "c": 9000,
+                        "x": 9000,  # single-letter junk
+                        "tx": 5000,
+                        "kb": 5000,  # 2-letter junk
+                    },
+                    "user_vocab": {"hello": 5, "qq": 3},  # qq is junk
+                    "bigrams": {},
+                    "trigrams": {},
+                    "total_words": 100,
+                }
+            )
+        )
         p = NgramPredictor()
         p.load(path)
         assert "hello" in p.unigrams
@@ -716,15 +722,21 @@ class TestBaseWordlistFiltering:
         load — the sweep backfills the timestamp on first run rather
         than instantly expiring legacy candidates."""
         import json
+
         path = tmp_path / "old_model.json"
-        path.write_text(json.dumps({
-            "unigrams": {"hello": 100},
-            "bigrams": {}, "trigrams": {},
-            "user_vocab": {},
-            "total_words": 100,
-            "candidate_counts": {"zephyrish": 1},
-            # No candidate_last_seen key.
-        }))
+        path.write_text(
+            json.dumps(
+                {
+                    "unigrams": {"hello": 100},
+                    "bigrams": {},
+                    "trigrams": {},
+                    "user_vocab": {},
+                    "total_words": 100,
+                    "candidate_counts": {"zephyrish": 1},
+                    # No candidate_last_seen key.
+                }
+            )
+        )
         p = NgramPredictor()
         p.load(path)
         assert p._candidate_counts.get("zephyrish") == 1

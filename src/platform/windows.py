@@ -101,7 +101,7 @@ KEYEVENTF_UNICODE = 0x0004
 KEYEVENTF_SCANCODE = 0x0008
 
 # MapVirtualKey translation modes (winuser.h)
-MAPVK_VK_TO_VSC = 0   # VK → scancode using the active layout
+MAPVK_VK_TO_VSC = 0  # VK → scancode using the active layout
 MAPVK_VK_TO_CHAR = 2  # VK → unshifted char; bit 31 set indicates a dead key
 
 # Virtual-Key Codes (subset used by Alpha-OSK)
@@ -111,23 +111,23 @@ VK_TAB = 0x09
 VK_RETURN = 0x0D
 VK_SHIFT = 0x10
 VK_CONTROL = 0x11
-VK_MENU = 0x12          # Alt
+VK_MENU = 0x12  # Alt
 VK_PAUSE = 0x13
-VK_CAPITAL = 0x14       # Caps Lock
+VK_CAPITAL = 0x14  # Caps Lock
 VK_ESCAPE = 0x1B
 VK_SPACE = 0x20
-VK_PRIOR = 0x21         # Page Up
-VK_NEXT = 0x22          # Page Down
+VK_PRIOR = 0x21  # Page Up
+VK_NEXT = 0x22  # Page Down
 VK_END = 0x23
 VK_HOME = 0x24
 VK_LEFT = 0x25
 VK_UP = 0x26
 VK_RIGHT = 0x27
 VK_DOWN = 0x28
-VK_SNAPSHOT = 0x2C      # Print Screen
+VK_SNAPSHOT = 0x2C  # Print Screen
 VK_INSERT = 0x2D
 VK_DELETE = 0x2E
-VK_LWIN = 0x5B          # Left Windows key
+VK_LWIN = 0x5B  # Left Windows key
 VK_NUMPAD0 = 0x60
 VK_NUMPAD1 = 0x61
 VK_NUMPAD2 = 0x62
@@ -156,7 +156,7 @@ VK_F10 = 0x79
 VK_F11 = 0x7A
 VK_F12 = 0x7B
 VK_NUMLOCK = 0x90
-VK_SCROLL = 0x91        # Scroll Lock
+VK_SCROLL = 0x91  # Scroll Lock
 
 
 # ====================================================================== #
@@ -190,6 +190,7 @@ class KEYBDINPUT(ctypes.Structure):
                      us to allocate Python objects whose addresses
                      could be reaped before SendInput consumed them.
     """
+
     _fields_ = [
         ("wVk", wintypes.WORD),
         ("wScan", wintypes.WORD),
@@ -212,6 +213,7 @@ class _INPUT_UNION(ctypes.Union):
     The _padding field forces the union to 28 bytes so the full INPUT
     struct rounds to 40 bytes on 64-bit, matching what Windows expects.
     """
+
     _fields_ = [
         ("ki", KEYBDINPUT),
         ("_padding", ctypes.c_byte * 28),  # sizeof(MOUSEINPUT) on 64-bit
@@ -224,6 +226,7 @@ class INPUT(ctypes.Structure):
 
     See: https://learn.microsoft.com/en-us/windows/win32/api/winuser/ns-winuser-input
     """
+
     _fields_ = [
         ("type", wintypes.DWORD),
         ("_input", _INPUT_UNION),
@@ -246,7 +249,6 @@ _KEY_MAP: Dict[str, int] = {
     "space": VK_SPACE,
     "Delete": VK_DELETE,
     "Insert": VK_INSERT,
-
     # Navigation
     "Left": VK_LEFT,
     "Right": VK_RIGHT,
@@ -256,19 +258,25 @@ _KEY_MAP: Dict[str, int] = {
     "End": VK_END,
     "Page_Up": VK_PRIOR,
     "Page_Down": VK_NEXT,
-
     # Function keys
-    "F1": VK_F1, "F2": VK_F2, "F3": VK_F3, "F4": VK_F4,
-    "F5": VK_F5, "F6": VK_F6, "F7": VK_F7, "F8": VK_F8,
-    "F9": VK_F9, "F10": VK_F10, "F11": VK_F11, "F12": VK_F12,
-
+    "F1": VK_F1,
+    "F2": VK_F2,
+    "F3": VK_F3,
+    "F4": VK_F4,
+    "F5": VK_F5,
+    "F6": VK_F6,
+    "F7": VK_F7,
+    "F8": VK_F8,
+    "F9": VK_F9,
+    "F10": VK_F10,
+    "F11": VK_F11,
+    "F12": VK_F12,
     # Lock / misc keys
     "Num_Lock": VK_NUMLOCK,
     "Scroll_Lock": VK_SCROLL,
     "Pause": VK_PAUSE,
     "Print": VK_SNAPSHOT,
     "Caps_Lock": VK_CAPITAL,
-
     # Modifiers (used when building combos)
     "ctrl": VK_CONTROL,
     "alt": VK_MENU,
@@ -281,9 +289,18 @@ _KEY_MAP: Dict[str, int] = {
 # These are keys whose scan codes are preceded by 0xE0 in the keyboard
 # scan code table.
 _EXTENDED_KEYS = {
-    VK_INSERT, VK_DELETE, VK_HOME, VK_END, VK_PRIOR, VK_NEXT,
-    VK_LEFT, VK_RIGHT, VK_UP, VK_DOWN,
-    VK_SNAPSHOT, VK_LWIN,
+    VK_INSERT,
+    VK_DELETE,
+    VK_HOME,
+    VK_END,
+    VK_PRIOR,
+    VK_NEXT,
+    VK_LEFT,
+    VK_RIGHT,
+    VK_UP,
+    VK_DOWN,
+    VK_SNAPSHOT,
+    VK_LWIN,
     VK_NUMLOCK,  # Numlock is extended in the enhanced keyboard
 }
 
@@ -291,6 +308,7 @@ _EXTENDED_KEYS = {
 # ====================================================================== #
 #  WindowsKeySynthesizer
 # ====================================================================== #
+
 
 class WindowsKeySynthesizer(KeySynthesizerBase):
     """
@@ -314,9 +332,9 @@ class WindowsKeySynthesizer(KeySynthesizerBase):
         self._user32 = ctypes.WinDLL("user32", use_last_error=True)
         self._send_input = self._user32.SendInput
         self._send_input.argtypes = [
-            wintypes.UINT,                      # nInputs
-            ctypes.POINTER(INPUT),              # pInputs
-            ctypes.c_int,                       # cbSize
+            wintypes.UINT,  # nInputs
+            ctypes.POINTER(INPUT),  # pInputs
+            ctypes.c_int,  # cbSize
         ]
         self._send_input.restype = wintypes.UINT
 
@@ -325,7 +343,9 @@ class WindowsKeySynthesizer(KeySynthesizerBase):
         self._user32.GetForegroundWindow.argtypes = []
         self._user32.GetForegroundWindow.restype = wintypes.HWND
         self._user32.GetClassNameW.argtypes = [
-            wintypes.HWND, wintypes.LPWSTR, ctypes.c_int,
+            wintypes.HWND,
+            wintypes.LPWSTR,
+            ctypes.c_int,
         ]
         self._user32.GetClassNameW.restype = ctypes.c_int
 
@@ -368,9 +388,7 @@ class WindowsKeySynthesizer(KeySynthesizerBase):
         # Check UIAccess status
         self._has_ui_access = self._check_ui_access()
         if self._has_ui_access:
-            _logger.info(
-                "Windows key synthesizer ready (SendInput + UIAccess)"
-            )
+            _logger.info("Windows key synthesizer ready (SendInput + UIAccess)")
         else:
             _logger.info(
                 "Windows key synthesizer ready (SendInput — no UIAccess). "
@@ -511,10 +529,7 @@ class WindowsKeySynthesizer(KeySynthesizerBase):
                 events.append(self._make_vk_scancode_event(mod_vk, key_down=False))
 
         self._inject(events)
-        self._log_send(
-            f"key={key_name}"
-            + (f" mods={modifiers}" if modifiers else "")
-        )
+        self._log_send(f"key={key_name}" + (f" mods={modifiers}" if modifiers else ""))
 
     def send_text(self, text: str) -> None:
         """Type a string via scancode injection where possible, falling
@@ -578,6 +593,7 @@ class WindowsKeySynthesizer(KeySynthesizerBase):
         correctly.  (BackSpace would break Slack et al., but those
         aren't terminals.)
         """
+
         # The typed-replacement portion uses the same scancode-first
         # dispatch as send_text so prediction-pill insertion in
         # Blender / VirtualBox / DirectInput apps produces real
@@ -601,9 +617,7 @@ class WindowsKeySynthesizer(KeySynthesizerBase):
             events.extend(_typed_events_for(text))
             if events:
                 self._inject(events)
-            self._log_send(
-                f"replace (terminal) backspace={backspace_count} text='{text}'"
-            )
+            self._log_send(f"replace (terminal) backspace={backspace_count} text='{text}'")
             return
 
         events = []
@@ -628,18 +642,18 @@ class WindowsKeySynthesizer(KeySynthesizerBase):
         events.extend(_typed_events_for(text))
 
         self._inject(events)
-        self._log_send(
-            f"replace select={backspace_count} text='{text}'"
-        )
+        self._log_send(f"replace select={backspace_count} text='{text}'")
 
     # Window classes where Shift+Left moves the cursor without
     # selecting, breaking the default replace_text path.  Add new
     # entries here as terminal emulators are encountered.
-    _TERMINAL_WINDOW_CLASSES = frozenset({
-        "ConsoleWindowClass",             # cmd.exe / powershell / conhost
-        "CASCADIA_HOSTING_WINDOW_CLASS",  # Windows Terminal
-        "mintty",                         # Git Bash / Cygwin / MSYS2
-    })
+    _TERMINAL_WINDOW_CLASSES = frozenset(
+        {
+            "ConsoleWindowClass",  # cmd.exe / powershell / conhost
+            "CASCADIA_HOSTING_WINDOW_CLASS",  # Windows Terminal
+            "mintty",  # Git Bash / Cygwin / MSYS2
+        }
+    )
 
     def _foreground_is_terminal(self) -> bool:
         """True iff the current foreground window is a known terminal."""
@@ -862,7 +876,8 @@ class WindowsKeySynthesizer(KeySynthesizerBase):
         return inp
 
     def _resolve_char_scancode(
-        self, char: str,
+        self,
+        char: str,
     ) -> Optional[Tuple[int, int, bool]]:
         """Resolve a character to ``(vk, scancode, needs_shift)`` for
         scancode-mode injection, or ``None`` to signal the caller to
@@ -1012,7 +1027,8 @@ class WindowsKeySynthesizer(KeySynthesizerBase):
         if wrap_with_shift:
             try:
                 shift_sc = self._user32.MapVirtualKeyW(
-                    VK_SHIFT, MAPVK_VK_TO_VSC,
+                    VK_SHIFT,
+                    MAPVK_VK_TO_VSC,
                 )
             except (OSError, ValueError):
                 shift_sc = 0
@@ -1028,7 +1044,8 @@ class WindowsKeySynthesizer(KeySynthesizerBase):
         if wrap_with_shift:
             try:
                 shift_sc = self._user32.MapVirtualKeyW(
-                    VK_SHIFT, MAPVK_VK_TO_VSC,
+                    VK_SHIFT,
+                    MAPVK_VK_TO_VSC,
                 )
             except (OSError, ValueError):
                 shift_sc = 0
@@ -1090,10 +1107,7 @@ class WindowsKeySynthesizer(KeySynthesizerBase):
                 inp.type = INPUT_KEYBOARD
                 inp._input.ki.wVk = 0
                 inp._input.ki.wScan = code_point
-                inp._input.ki.dwFlags = (
-                    KEYEVENTF_UNICODE
-                    | (KEYEVENTF_KEYUP if key_up else 0)
-                )
+                inp._input.ki.dwFlags = KEYEVENTF_UNICODE | (KEYEVENTF_KEYUP if key_up else 0)
                 inp._input.ki.time = 0
                 inp._input.ki.dwExtraInfo = 0
                 events.append(inp)
@@ -1107,10 +1121,7 @@ class WindowsKeySynthesizer(KeySynthesizerBase):
                     inp.type = INPUT_KEYBOARD
                     inp._input.ki.wVk = 0
                     inp._input.ki.wScan = surrogate
-                    inp._input.ki.dwFlags = (
-                        KEYEVENTF_UNICODE
-                        | (KEYEVENTF_KEYUP if key_up else 0)
-                    )
+                    inp._input.ki.dwFlags = KEYEVENTF_UNICODE | (KEYEVENTF_KEYUP if key_up else 0)
                     inp._input.ki.time = 0
                     inp._input.ki.dwExtraInfo = 0
                     events.append(inp)
@@ -1178,7 +1189,9 @@ class WindowsKeySynthesizer(KeySynthesizerBase):
                 "SendInput injected %d/%d events (error=%d). "
                 "This may indicate insufficient privileges — consider "
                 "UIAccess or running as admin.",
-                sent, n, error,
+                sent,
+                n,
+                error,
             )
 
     @staticmethod
@@ -1259,10 +1272,10 @@ def create_shortcut(
     try:
         # Escape for PowerShell double-quoted strings
         def _ps_escape(s: str) -> str:
-            return s.replace('`', '``').replace('"', '""').replace('$', '`$')
+            return s.replace("`", "``").replace('"', '""').replace("$", "`$")
 
         ps_script = (
-            f'$ws = New-Object -ComObject WScript.Shell; '
+            f"$ws = New-Object -ComObject WScript.Shell; "
             f'$sc = $ws.CreateShortcut("{_ps_escape(shortcut_path)}"); '
             f'$sc.TargetPath = "{_ps_escape(target_path)}"; '
         )
@@ -1270,12 +1283,15 @@ def create_shortcut(
             ps_script += f'$sc.Description = "{_ps_escape(description)}"; '
         if icon_path:
             ps_script += f'$sc.IconLocation = "{_ps_escape(icon_path)}"; '
-        ps_script += '$sc.Save()'
+        ps_script += "$sc.Save()"
 
         import subprocess
+
         result = subprocess.run(
             ["powershell", "-NoProfile", "-Command", ps_script],
-            capture_output=True, text=True, timeout=10,
+            capture_output=True,
+            text=True,
+            timeout=10,
             # Suppress the PowerShell console window during shortcut
             # creation; otherwise a cmd window flashes (and on GUI-only
             # hosts can stick around) every time we touch the Start Menu.
@@ -1308,9 +1324,14 @@ def add_to_startup(exe_path: str, app_name: str = "Alpha-OSK") -> bool:
         True if the startup shortcut was created.
     """
     import os
+
     startup_dir = os.path.join(
         os.environ.get("APPDATA", ""),
-        "Microsoft", "Windows", "Start Menu", "Programs", "Startup",
+        "Microsoft",
+        "Windows",
+        "Start Menu",
+        "Programs",
+        "Startup",
     )
     shortcut = os.path.join(startup_dir, f"{app_name}.lnk")
     return create_shortcut(shortcut, exe_path, description=app_name)
@@ -1327,9 +1348,14 @@ def remove_from_startup(app_name: str = "Alpha-OSK") -> bool:
         True if the shortcut was removed (or didn't exist).
     """
     import os
+
     startup_dir = os.path.join(
         os.environ.get("APPDATA", ""),
-        "Microsoft", "Windows", "Start Menu", "Programs", "Startup",
+        "Microsoft",
+        "Windows",
+        "Start Menu",
+        "Programs",
+        "Startup",
     )
     shortcut = os.path.join(startup_dir, f"{app_name}.lnk")
     try:
@@ -1361,9 +1387,14 @@ def create_start_menu_shortcut(
         True if the shortcut was created.
     """
     import os
+
     menu_dir = os.path.join(
         os.environ.get("APPDATA", ""),
-        "Microsoft", "Windows", "Start Menu", "Programs", app_name,
+        "Microsoft",
+        "Windows",
+        "Start Menu",
+        "Programs",
+        app_name,
     )
     os.makedirs(menu_dir, exist_ok=True)
     shortcut = os.path.join(menu_dir, f"{app_name}.lnk")
@@ -1385,6 +1416,7 @@ def create_desktop_shortcut(
         True if the shortcut was created.
     """
     import os
+
     desktop = os.path.join(os.environ.get("USERPROFILE", ""), "Desktop")
     shortcut = os.path.join(desktop, f"{app_name}.lnk")
     return create_shortcut(shortcut, exe_path, description=app_name)

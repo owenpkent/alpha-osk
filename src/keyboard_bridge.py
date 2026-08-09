@@ -25,6 +25,7 @@ from PySide6.QtCore import Property, QObject, QTimer, QUrl, Signal, Slot
 # Audio feedback — optional, gracefully degrades if QtMultimedia unavailable
 try:
     from PySide6.QtMultimedia import QSoundEffect
+
     _HAS_AUDIO = True
 except ImportError:
     _HAS_AUDIO = False
@@ -63,85 +64,89 @@ _PRE_INSTALL_TOAST_DWELL_S = 1.8
 # means the manual toggle is still available.  Chrome Remote Desktop's
 # host-viewer window class isn't here because it'd need to be
 # differentiated from regular Chrome browser windows.
-_COMPAT_WINDOW_CLASSES = frozenset({
-    # Microsoft Remote Desktop Connection
-    "TscShellContainerClass",
-    "RDPViewer",
-    "UIMainClass",
-    # TeamViewer
-    "TV_TitleBar",
-    "TV_Client",
-    "TV_FullScreen",
-    "#32770TVMainForm",
-    # AnyDesk
-    "AnyDeskMainWindow",
-    "AnyDeskMainView",
-    # VNC variants
-    "TightVNCClassName",
-    "VNCMDI_Window",
-    "VNCviewer",
-    "RealVNCClass",
-    "UltraVNCClass",
-    "TVNVncCtrl",
-    # RustDesk
-    "RustDesk",
-    # Parsec
-    "ParsecHostWindow",
-    # Splashtop
-    "SplashtopRemoteDesktopClass",
-})
+_COMPAT_WINDOW_CLASSES = frozenset(
+    {
+        # Microsoft Remote Desktop Connection
+        "TscShellContainerClass",
+        "RDPViewer",
+        "UIMainClass",
+        # TeamViewer
+        "TV_TitleBar",
+        "TV_Client",
+        "TV_FullScreen",
+        "#32770TVMainForm",
+        # AnyDesk
+        "AnyDeskMainWindow",
+        "AnyDeskMainView",
+        # VNC variants
+        "TightVNCClassName",
+        "VNCMDI_Window",
+        "VNCviewer",
+        "RealVNCClass",
+        "UltraVNCClass",
+        "TVNVncCtrl",
+        # RustDesk
+        "RustDesk",
+        # Parsec
+        "ParsecHostWindow",
+        # Splashtop
+        "SplashtopRemoteDesktopClass",
+    }
+)
 
-_COMPAT_PROCESS_NAMES = frozenset({
-    "teamviewer.exe",
-    "tv_w32.exe",
-    "tv_x64.exe",
-    "mstsc.exe",
-    "msrdc.exe",
-    "anydesk.exe",
-    "vncviewer.exe",
-    "tvnviewer.exe",
-    "uvnc.exe",
-    "winvnc.exe",
-    "rustdesk.exe",
-    "splashtop.exe",
-    "stp.exe",
-    "logmein.exe",
-    "parsecd.exe",
-    "moonlight.exe",
-    # IDEs that intercept keystrokes for autocomplete / snippets /
-    # multi-caret in ways that break the suffix-only insertion path's
-    # "the typed prefix is on screen, just append the rest"
-    # assumption — same compat lever as remote-desktop tools.
-    # Match on exe basename: window classes (Chrome_WidgetWin_1 for
-    # Electron, SunAwtFrame for JetBrains) are shared with too many
-    # unrelated apps to be safe.
-    #
-    # VS Code + Monaco-engine forks (Cursor, Windsurf, Codium, etc.):
-    "code.exe",
-    "code - insiders.exe",
-    "cursor.exe",
-    "windsurf.exe",
-    "codium.exe",
-    "code-oss.exe",
-    "positron.exe",
-    "trae.exe",
-    # JetBrains IntelliJ Platform IDEs.  64-bit launchers only —
-    # JetBrains dropped 32-bit `*.exe` launchers in 2019.  Android
-    # Studio also ships `studio.exe` as a wrapper, included for
-    # safety.
-    "idea64.exe",
-    "pycharm64.exe",
-    "webstorm64.exe",
-    "phpstorm64.exe",
-    "clion64.exe",
-    "goland64.exe",
-    "rider64.exe",
-    "rubymine64.exe",
-    "datagrip64.exe",
-    "dataspell64.exe",
-    "studio64.exe",
-    "studio.exe",
-})
+_COMPAT_PROCESS_NAMES = frozenset(
+    {
+        "teamviewer.exe",
+        "tv_w32.exe",
+        "tv_x64.exe",
+        "mstsc.exe",
+        "msrdc.exe",
+        "anydesk.exe",
+        "vncviewer.exe",
+        "tvnviewer.exe",
+        "uvnc.exe",
+        "winvnc.exe",
+        "rustdesk.exe",
+        "splashtop.exe",
+        "stp.exe",
+        "logmein.exe",
+        "parsecd.exe",
+        "moonlight.exe",
+        # IDEs that intercept keystrokes for autocomplete / snippets /
+        # multi-caret in ways that break the suffix-only insertion path's
+        # "the typed prefix is on screen, just append the rest"
+        # assumption — same compat lever as remote-desktop tools.
+        # Match on exe basename: window classes (Chrome_WidgetWin_1 for
+        # Electron, SunAwtFrame for JetBrains) are shared with too many
+        # unrelated apps to be safe.
+        #
+        # VS Code + Monaco-engine forks (Cursor, Windsurf, Codium, etc.):
+        "code.exe",
+        "code - insiders.exe",
+        "cursor.exe",
+        "windsurf.exe",
+        "codium.exe",
+        "code-oss.exe",
+        "positron.exe",
+        "trae.exe",
+        # JetBrains IntelliJ Platform IDEs.  64-bit launchers only —
+        # JetBrains dropped 32-bit `*.exe` launchers in 2019.  Android
+        # Studio also ships `studio.exe` as a wrapper, included for
+        # safety.
+        "idea64.exe",
+        "pycharm64.exe",
+        "webstorm64.exe",
+        "phpstorm64.exe",
+        "clion64.exe",
+        "goland64.exe",
+        "rider64.exe",
+        "rubymine64.exe",
+        "datagrip64.exe",
+        "dataspell64.exe",
+        "studio64.exe",
+        "studio.exe",
+    }
+)
 
 
 def _window_needs_compat_mode(hwnd: int) -> bool:
@@ -170,13 +175,15 @@ def _window_needs_compat_mode(hwnd: int) -> bool:
     apps cannot spuriously trigger compat mode.
     """
     import sys
+
     if sys.platform != "win32" or not hwnd:
         return False
     try:
         import ctypes
         from ctypes import wintypes
-        user32 = ctypes.windll.user32          # type: ignore[attr-defined]
-        kernel32 = ctypes.windll.kernel32      # type: ignore[attr-defined]
+
+        user32 = ctypes.windll.user32  # type: ignore[attr-defined]
+        kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
         cls_buf = ctypes.create_unicode_buffer(256)
         if user32.GetClassNameW(hwnd, cls_buf, 256) > 0:
             if cls_buf.value in _COMPAT_WINDOW_CLASSES:
@@ -188,7 +195,9 @@ def _window_needs_compat_mode(hwnd: int) -> bool:
             return False
         PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
         handle = kernel32.OpenProcess(
-            PROCESS_QUERY_LIMITED_INFORMATION, False, pid.value,
+            PROCESS_QUERY_LIMITED_INFORMATION,
+            False,
+            pid.value,
         )
         if not handle:
             return False
@@ -196,7 +205,10 @@ def _window_needs_compat_mode(hwnd: int) -> bool:
             exe_buf = ctypes.create_unicode_buffer(512)
             size = wintypes.DWORD(512)
             if kernel32.QueryFullProcessImageNameW(
-                handle, 0, exe_buf, ctypes.byref(size),
+                handle,
+                0,
+                exe_buf,
+                ctypes.byref(size),
             ):
                 exe_name = Path(exe_buf.value).name.lower()
                 if exe_name in _COMPAT_PROCESS_NAMES:
@@ -217,17 +229,19 @@ def _window_needs_compat_mode(hwnd: int) -> bool:
 # keystroke do nothing. Holding the key down for ~one frame fixes it. Matched
 # by exe basename (lowercased), exactly like _COMPAT_PROCESS_NAMES; extend this
 # set as reports of other unresponsive games come in.
-_GAME_PROCESS_NAMES = frozenset({
-    # Age of Empires family
-    "aoe2de_s.exe",     # Age of Empires II: Definitive Edition
-    "aoe3de_s.exe",     # Age of Empires III: Definitive Edition
-    "aoede_s.exe",      # Age of Empires: Definitive Edition
-    "reliccardinal.exe",  # Age of Empires IV
-    "age2_x1.exe",      # Age of Empires II: The Conquerors (classic)
-    "age2_x2.exe",      # AoE II HD: Forgotten Empires
-    "aoe2hd.exe",       # Age of Empires II: HD Edition
-    "empires2.exe",     # Age of Empires II (original)
-})
+_GAME_PROCESS_NAMES = frozenset(
+    {
+        # Age of Empires family
+        "aoe2de_s.exe",  # Age of Empires II: Definitive Edition
+        "aoe3de_s.exe",  # Age of Empires III: Definitive Edition
+        "aoede_s.exe",  # Age of Empires: Definitive Edition
+        "reliccardinal.exe",  # Age of Empires IV
+        "age2_x1.exe",  # Age of Empires II: The Conquerors (classic)
+        "age2_x2.exe",  # AoE II HD: Forgotten Empires
+        "aoe2hd.exe",  # Age of Empires II: HD Edition
+        "empires2.exe",  # Age of Empires II (original)
+    }
+)
 
 
 def _owning_exe_name(hwnd: int) -> Optional[str]:
@@ -237,20 +251,24 @@ def _owning_exe_name(hwnd: int) -> Optional[str]:
     ``_window_needs_compat_mode`` uses for its exe lookup.
     """
     import sys
+
     if sys.platform != "win32" or not hwnd:
         return None
     try:
         import ctypes
         from ctypes import wintypes
-        user32 = ctypes.windll.user32          # type: ignore[attr-defined]
-        kernel32 = ctypes.windll.kernel32      # type: ignore[attr-defined]
+
+        user32 = ctypes.windll.user32  # type: ignore[attr-defined]
+        kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
         pid = wintypes.DWORD(0)
         user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
         if not pid.value:
             return None
         PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
         handle = kernel32.OpenProcess(
-            PROCESS_QUERY_LIMITED_INFORMATION, False, pid.value,
+            PROCESS_QUERY_LIMITED_INFORMATION,
+            False,
+            pid.value,
         )
         if not handle:
             return None
@@ -258,7 +276,10 @@ def _owning_exe_name(hwnd: int) -> Optional[str]:
             exe_buf = ctypes.create_unicode_buffer(512)
             size = wintypes.DWORD(512)
             if kernel32.QueryFullProcessImageNameW(
-                handle, 0, exe_buf, ctypes.byref(size),
+                handle,
+                0,
+                exe_buf,
+                ctypes.byref(size),
             ):
                 return Path(exe_buf.value).name.lower()
         finally:
@@ -285,6 +306,7 @@ def _window_is_borderless_fullscreen(hwnd: int) -> bool:
     Returns False on non-Windows or any failure (fail-safe).
     """
     import sys
+
     if sys.platform != "win32" or not hwnd:
         return False
     try:
@@ -293,14 +315,18 @@ def _window_is_borderless_fullscreen(hwnd: int) -> bool:
 
         class RECT(ctypes.Structure):
             _fields_ = [
-                ("left", wintypes.LONG), ("top", wintypes.LONG),
-                ("right", wintypes.LONG), ("bottom", wintypes.LONG),
+                ("left", wintypes.LONG),
+                ("top", wintypes.LONG),
+                ("right", wintypes.LONG),
+                ("bottom", wintypes.LONG),
             ]
 
         class MONITORINFO(ctypes.Structure):
             _fields_ = [
-                ("cbSize", wintypes.DWORD), ("rcMonitor", RECT),
-                ("rcWork", RECT), ("dwFlags", wintypes.DWORD),
+                ("cbSize", wintypes.DWORD),
+                ("rcMonitor", RECT),
+                ("rcWork", RECT),
+                ("dwFlags", wintypes.DWORD),
             ]
 
         # Local WinDLL instance so setting argtypes/restype (needed to keep the
@@ -330,8 +356,10 @@ def _window_is_borderless_fullscreen(hwnd: int) -> bool:
             return False
         m = mi.rcMonitor
         covers = (
-            rect.left <= m.left and rect.top <= m.top
-            and rect.right >= m.right and rect.bottom >= m.bottom
+            rect.left <= m.left
+            and rect.top <= m.top
+            and rect.right >= m.right
+            and rect.bottom >= m.bottom
         )
         if not covers:
             return False
@@ -358,6 +386,7 @@ def _window_is_game(hwnd: int) -> bool:
     Returns False on non-Windows or any failure (fail-safe).
     """
     import sys
+
     if sys.platform != "win32" or not hwnd:
         return False
     exe = _owning_exe_name(hwnd)
@@ -380,9 +409,18 @@ _GAME_KEY_HOLD_SECONDS = 0.05
 # these should KEEP Shift/Ctrl held (extend selection / word-jump across
 # multiple presses) instead of auto-releasing after the first press. See
 # the auto-release block in pressSpecialKey for the full rationale.
-_NAV_KEYS = frozenset({
-    "left", "right", "up", "down", "home", "end", "pageup", "pagedown",
-})
+_NAV_KEYS = frozenset(
+    {
+        "left",
+        "right",
+        "up",
+        "down",
+        "home",
+        "end",
+        "pageup",
+        "pagedown",
+    }
+)
 
 _logger = logging.getLogger("KeyboardBridge")
 
@@ -420,13 +458,13 @@ class KeyboardBridge(QObject):
     currentLayerChanged = Signal(str)
 
     # Prediction signals
-    predictionsChanged = Signal(list)     # Instant predictions
-    predictionsRefined = Signal(list)     # LLM-refined predictions
-    predictionLoading = Signal(bool)      # LLM loading state
-    llmEnabledChanged = Signal(bool)      # LLM enabled state
-    llmAvailableChanged = Signal(bool)    # LLM available state
+    predictionsChanged = Signal(list)  # Instant predictions
+    predictionsRefined = Signal(list)  # LLM-refined predictions
+    predictionLoading = Signal(bool)  # LLM loading state
+    llmEnabledChanged = Signal(bool)  # LLM enabled state
+    llmAvailableChanged = Signal(bool)  # LLM available state
     predictionCountChanged = Signal(int)  # Prediction count changed
-    predictionStatsChanged = Signal()     # Stats updated
+    predictionStatsChanged = Signal()  # Stats updated
 
     # Audio signals
     audioEnabledChanged = Signal(bool)
@@ -480,8 +518,8 @@ class KeyboardBridge(QObject):
     # the keyboard). QML calls setEditMode(True) when the popup opens,
     # we short-circuit pressKey/pressSpecialKey to emit these signals
     # instead, and QML mutates the TextField directly.
-    editKeyTyped = Signal(str)          # char to insert at cursor
-    editSpecialPressed = Signal(str)    # special key name (backspace, left, etc.)
+    editKeyTyped = Signal(str)  # char to insert at cursor
+    editSpecialPressed = Signal(str)  # special key name (backspace, left, etc.)
 
     # Emitted after the snippet list changes (add / edit / delete /
     # move) so the Snippets popup re-queries getSnippets() and rebuilds
@@ -672,7 +710,7 @@ class KeyboardBridge(QObject):
 
         # Privacy mode — suppresses prediction and learning
         self._privacy_mode = False
-        self._privacy_mode_manual = False   # User toggled manually
+        self._privacy_mode_manual = False  # User toggled manually
         self._password_detect_enabled = True
         # Last synchronous is_password_field() call, to rate-limit the
         # sync check fired on every keystroke (COM calls are cheap but
@@ -818,11 +856,7 @@ class KeyboardBridge(QObject):
             self.editKeyTyped.emit(char)
             # Auto-release shift after one keypress (caps lock persists;
             # a right-click-locked Shift also stays held).
-            if (
-                self._shift_active
-                and not self._caps_lock_active
-                and not self._shift_locked
-            ):
+            if self._shift_active and not self._caps_lock_active and not self._shift_locked:
                 self._shift_active = False
                 self._synth.release_modifier("shift")
                 self._update_layer()
@@ -849,10 +883,12 @@ class KeyboardBridge(QObject):
         # backspace flicker after their own keystroke is surprising and
         # in some apps (rich-text editors, web fields) has side effects
         # like clobbering selection state or undo history.
-        if (char in self._NO_SPACE_BEFORE
-                and self._auto_space_pending
-                and self._context_buffer.endswith(" ")
-                and not self._current_word):
+        if (
+            char in self._NO_SPACE_BEFORE
+            and self._auto_space_pending
+            and self._context_buffer.endswith(" ")
+            and not self._current_word
+        ):
             self._send_key("BackSpace")
             self._context_buffer = self._context_buffer[:-1]
             _logger.info("Removed auto-space before '%s'", char)
@@ -872,11 +908,7 @@ class KeyboardBridge(QObject):
             # Auto-release each modifier after one keypress unless it's
             # right-click-locked (held down until the user releases it) —
             # locked lets Ctrl+C, Ctrl+V, ... fire without re-tapping.
-            if (
-                self._shift_active
-                and not self._caps_lock_active
-                and not self._shift_locked
-            ):
+            if self._shift_active and not self._caps_lock_active and not self._shift_locked:
                 self._shift_active = False
                 self._synth.release_modifier("shift")
                 self._update_layer()
@@ -923,7 +955,7 @@ class KeyboardBridge(QObject):
                     new_words = self._predictor.learn(sentence.strip())
                     if new_words:
                         for nw in new_words:
-                            self._add_debug_log(f"NEW WORD learned: \"{nw}\"")
+                            self._add_debug_log(f'NEW WORD learned: "{nw}"')
                             _logger.info("New word learned: %s", nw)
                 self._sentence_buffer = ""
                 self._current_word = ""
@@ -974,9 +1006,26 @@ class KeyboardBridge(QObject):
             # deliberately: apostrophe (contractions like "don't" are
             # single tokens) and underscore (snake_case identifiers).
             elif char in (
-                "-", "/", "\\", "(", "[", "{", "<",
-                "*", "@", "#", "$", "%", "&", "+", "=",
-                "~", "^", "|", '"', "`",
+                "-",
+                "/",
+                "\\",
+                "(",
+                "[",
+                "{",
+                "<",
+                "*",
+                "@",
+                "#",
+                "$",
+                "%",
+                "&",
+                "+",
+                "=",
+                "~",
+                "^",
+                "|",
+                '"',
+                "`",
             ):
                 word_before = self._current_word[:-1]
                 if word_before:
@@ -998,11 +1047,7 @@ class KeyboardBridge(QObject):
 
         # Auto-release shift after one keypress (not caps lock, not a
         # right-click-locked hold)
-        if (
-            self._shift_active
-            and not self._caps_lock_active
-            and not self._shift_locked
-        ):
+        if self._shift_active and not self._caps_lock_active and not self._shift_locked:
             self._shift_active = False
             self._synth.release_modifier("shift")
             self._update_layer()
@@ -1057,9 +1102,18 @@ class KeyboardBridge(QObject):
             "pagedown": "Page_Down",
             "insert": "Insert",
             # Function keys
-            "f1": "F1", "f2": "F2", "f3": "F3", "f4": "F4",
-            "f5": "F5", "f6": "F6", "f7": "F7", "f8": "F8",
-            "f9": "F9", "f10": "F10", "f11": "F11", "f12": "F12",
+            "f1": "F1",
+            "f2": "F2",
+            "f3": "F3",
+            "f4": "F4",
+            "f5": "F5",
+            "f6": "F6",
+            "f7": "F7",
+            "f8": "F8",
+            "f9": "F9",
+            "f10": "F10",
+            "f11": "F11",
+            "f12": "F12",
             # Other special keys
             "print": "Print",
             "scrolllock": "Scroll_Lock",
@@ -1082,7 +1136,8 @@ class KeyboardBridge(QObject):
             and self._autocorrect_enabled
         ):
             correction = self._predictor.check_autocorrect(
-                self._current_word, self._context_buffer,
+                self._current_word,
+                self._context_buffer,
             )
             if correction and correction.lower() != self._current_word.lower():
                 cased = self._match_case(self._current_word, correction)
@@ -1096,13 +1151,14 @@ class KeyboardBridge(QObject):
                     self._send_text(cased + " ")
                 else:
                     self._synth.replace_text(
-                        len(self._current_word), cased + " ",
+                        len(self._current_word),
+                        cased + " ",
                     )
-                self._add_debug_log(
-                    f"Autocorrected: {self._current_word!r} → {cased!r}"
-                )
+                self._add_debug_log(f"Autocorrected: {self._current_word!r} → {cased!r}")
                 _logger.info(
-                    "Autocorrected: %r → %r", self._current_word, cased,
+                    "Autocorrected: %r → %r",
+                    self._current_word,
+                    cased,
                 )
                 self._current_word = cased
                 autocorrected = True
@@ -1118,7 +1174,7 @@ class KeyboardBridge(QObject):
         elif key_name == "space":
             # Word completed - learn it and add to sentence
             if self._current_word:
-                self._add_debug_log(f"Word completed: \"{self._current_word}\"")
+                self._add_debug_log(f'Word completed: "{self._current_word}"')
                 # Auto-rehabilitate blacklisted words typed repeatedly
                 rehabilitated = self._predictor.record_typed_word(self._current_word)
                 if rehabilitated:
@@ -1135,7 +1191,7 @@ class KeyboardBridge(QObject):
                 if self._predictor.learn_capitalization(
                     self._current_word, allow_uppercase=allow_uppercase
                 ):
-                    self._add_debug_log(f"Learned capitalization: \"{self._current_word}\"")
+                    self._add_debug_log(f'Learned capitalization: "{self._current_word}"')
                     _logger.info("Learned capitalization: %s", self._current_word)
                 self._sentence_buffer += self._current_word + " "
                 self._context_buffer += self._current_word + " "
@@ -1143,7 +1199,7 @@ class KeyboardBridge(QObject):
                 new_words = self._predictor.learn(self._sentence_buffer.strip())
                 if new_words:
                     for nw in new_words:
-                        self._add_debug_log(f"NEW WORD learned: \"{nw}\"")
+                        self._add_debug_log(f'NEW WORD learned: "{nw}"')
                         _logger.info("New word learned: %s", nw)
                 # Keep context buffer bounded
                 if len(self._context_buffer) > 200:
@@ -1181,14 +1237,14 @@ class KeyboardBridge(QObject):
         elif key_name == "return":
             # Sentence boundary - learn full sentence, then reset sentence buffer
             if self._current_word:
-                self._add_debug_log(f"Word completed: \"{self._current_word}\"")
+                self._add_debug_log(f'Word completed: "{self._current_word}"')
                 self._analytics.record_word_completed(self._current_word)
                 self._sentence_buffer += self._current_word
             if self._sentence_buffer.strip():
                 new_words = self._predictor.learn(self._sentence_buffer.strip())
                 if new_words:
                     for nw in new_words:
-                        self._add_debug_log(f"NEW WORD learned: \"{nw}\"")
+                        self._add_debug_log(f'NEW WORD learned: "{nw}"')
                         _logger.info("New word learned: %s", nw)
             self._sentence_buffer = ""
             # Preserve context across lines (don't wipe)
@@ -1233,11 +1289,7 @@ class KeyboardBridge(QObject):
             self._synth.release_modifier("shift")
             self._update_layer()
             self.shiftActiveChanged.emit(self._shift_active)
-        if (
-            self._ctrl_active
-            and not keep_selection_modifiers
-            and not self._ctrl_locked
-        ):
+        if self._ctrl_active and not keep_selection_modifiers and not self._ctrl_locked:
             self._synth.release_modifier("ctrl")
             self._ctrl_active = False
             self.ctrlActiveChanged.emit(self._ctrl_active)
@@ -1430,7 +1482,10 @@ class KeyboardBridge(QObject):
         """Called when user taps a prediction suggestion."""
         _logger.info(
             "Prediction selected: '%s' | _current_word='%s' (len=%d) | select=%d",
-            word, self._current_word, len(self._current_word), len(self._current_word),
+            word,
+            self._current_word,
+            len(self._current_word),
+            len(self._current_word),
         )
 
         # Track prediction usage — keystrokes saved = characters user didn't type + space
@@ -1464,7 +1519,7 @@ class KeyboardBridge(QObject):
             self._send_text(word + " ")
         elif word.startswith(self._current_word) and self._current_word:
             # Prediction extends what was typed (same case) — type the rest
-            suffix = word[len(self._current_word):] + " "
+            suffix = word[len(self._current_word) :] + " "
             self._send_text(suffix)
         elif not self._current_word:
             # Next-word prediction (nothing typed) — type the full word
@@ -1516,8 +1571,11 @@ class KeyboardBridge(QObject):
         # Get next-word predictions immediately
         # Context should end with space to signal "predict next word, not complete current"
         context_for_prediction = self._context_buffer
-        _logger.info("Context for next-word prediction: '%s' (ends_with_space=%s)",
-                     context_for_prediction, context_for_prediction.endswith(" "))
+        _logger.info(
+            "Context for next-word prediction: '%s' (ends_with_space=%s)",
+            context_for_prediction,
+            context_for_prediction.endswith(" "),
+        )
 
         next_preds = self._predictor.predict(context_for_prediction, n=self._prediction_count)
         _logger.info("Next-word predictions: %s", next_preds)
@@ -1760,10 +1818,8 @@ class KeyboardBridge(QObject):
             self._context_buffer.rfind("\n"),
             self._context_buffer.rfind("\t"),
         )
-        self._current_word = self._context_buffer[last_ws + 1:]
-        self._context_buffer = (
-            self._context_buffer[:last_ws + 1] if last_ws >= 0 else ""
-        )
+        self._current_word = self._context_buffer[last_ws + 1 :]
+        self._context_buffer = self._context_buffer[: last_ws + 1] if last_ws >= 0 else ""
         if self._current_word and not self._privacy_mode:
             self._predictor.unlearn_word(self._current_word)
 
@@ -1856,6 +1912,7 @@ class KeyboardBridge(QObject):
         lands next to the data it's exporting.
         """
         from .platform import get_config_dir
+
         exports = get_config_dir() / "exports"
         exports.mkdir(parents=True, exist_ok=True)
         return str(exports)
@@ -1864,6 +1921,7 @@ class KeyboardBridge(QObject):
     def getSuggestedExportName(self) -> str:
         """Default filename including a timestamp."""
         from . import data_export
+
         return data_export.suggested_export_name()
 
     @Slot(result=str)
@@ -1883,6 +1941,7 @@ class KeyboardBridge(QObject):
             from PySide6.QtWidgets import QFileDialog
 
             from . import data_export
+
             default_dir = self.getDefaultExportDir()
             suggested = data_export.suggested_export_name()
             initial = str(Path(default_dir) / suggested)
@@ -1903,6 +1962,7 @@ class KeyboardBridge(QObject):
         directory. Returns the chosen path or empty string on cancel."""
         try:
             from PySide6.QtWidgets import QFileDialog
+
             default_dir = self.getDefaultExportDir()
             path, _ = QFileDialog.getOpenFileName(
                 None,
@@ -1927,6 +1987,7 @@ class KeyboardBridge(QObject):
         reflects the running session and not a stale on-disk copy.
         """
         from . import data_export
+
         try:
             self._predictor.save()
             try:
@@ -1934,6 +1995,7 @@ class KeyboardBridge(QObject):
             except Exception as exc:  # pragma: no cover — analytics is best-effort
                 _logger.warning("Analytics save before export failed: %s", exc)
             from .platform import get_config_dir
+
             summary = data_export.export_user_data(get_config_dir(), Path(dest_path))
             self._add_debug_log(
                 f"Exported {len(summary.files)} files ({len(summary.pack_ids)} packs) "
@@ -1960,6 +2022,7 @@ class KeyboardBridge(QObject):
         with X" confirmation summary before the user commits.
         """
         from . import data_export
+
         try:
             summary = data_export.inspect_export(Path(src_path))
             return {
@@ -1987,8 +2050,10 @@ class KeyboardBridge(QObject):
         Returns empty string on success, error message on failure.
         """
         from . import data_export
+
         try:
             from .platform import get_config_dir
+
             data_export.import_user_data(Path(src_path), get_config_dir())
             self._predictor.reload_from_disk()
             try:
@@ -2051,7 +2116,7 @@ class KeyboardBridge(QObject):
         def _worker() -> None:
             try:
                 info = check_for_update()
-            except Exception as e:                       # noqa: BLE001
+            except Exception as e:  # noqa: BLE001
                 _logger.warning("Update check raised: %s", e)
                 info = None
             finally:
@@ -2066,8 +2131,7 @@ class KeyboardBridge(QObject):
             self._update_info = info
             self.updateAvailable.emit(info.version, info.asset_name, info.notes)
 
-        threading.Thread(target=_worker, name="alpha-osk-update-check",
-                         daemon=True).start()
+        threading.Thread(target=_worker, name="alpha-osk-update-check", daemon=True).start()
 
     @Slot()
     def installUpdate(self) -> None:
@@ -2108,13 +2172,11 @@ class KeyboardBridge(QObject):
             EMIT_EVERY = 256 * 1024
 
             def _on_progress(written: int, total: Optional[int]) -> None:
-                if (
-                    written - last_emit[0] >= EMIT_EVERY
-                    or (total is not None and written >= total)
-                ):
+                if written - last_emit[0] >= EMIT_EVERY or (total is not None and written >= total):
                     last_emit[0] = written
                     self.updateDownloadProgress.emit(
-                        written, total if total is not None else -1,
+                        written,
+                        total if total is not None else -1,
                     )
 
             try:
@@ -2123,7 +2185,7 @@ class KeyboardBridge(QObject):
                     progress=_on_progress,
                     on_installer_launching=_on_installer_launching,
                 )
-            except Exception as e:                       # noqa: BLE001
+            except Exception as e:  # noqa: BLE001
                 _logger.error("Install raised: %s", e)
                 self.updateInstallFailed.emit(str(e))
                 return
@@ -2133,8 +2195,9 @@ class KeyboardBridge(QObject):
                 # actually tells the user something useful.
                 self.updateInstallFailed.emit(err or "Update failed")
 
-        threading.Thread(target=_worker, args=(info,),
-                         name="alpha-osk-update-install", daemon=True).start()
+        threading.Thread(
+            target=_worker, args=(info,), name="alpha-osk-update-install", daemon=True
+        ).start()
 
     @Slot()
     def dismissUpdate(self) -> None:
@@ -2263,6 +2326,7 @@ class KeyboardBridge(QObject):
         # things down cleanly without leaking COM apartments.
         try:
             from .platform import password_detect
+
             password_detect.shutdown()
         except Exception:
             # Shutdown path: COM teardown failures must not crash the
@@ -2378,7 +2442,8 @@ class KeyboardBridge(QObject):
             self._update_compat_auto(self._last_foreground_hwnd)
         _logger.info(
             "Compat mode (auto-detect): %s (currently active=%s)",
-            enabled, self._compat_auto_active,
+            enabled,
+            self._compat_auto_active,
         )
 
     def _in_compat_mode(self) -> bool:
@@ -2386,9 +2451,7 @@ class KeyboardBridge(QObject):
 
         Effective state: ``manual OR (auto_enabled AND auto_active)``.
         """
-        return self._compat_manual or (
-            self._compat_auto_enabled and self._compat_auto_active
-        )
+        return self._compat_manual or (self._compat_auto_enabled and self._compat_auto_active)
 
     def _update_compat_auto(self, hwnd: int) -> None:
         """Inspect ``hwnd`` and update ``_compat_auto_active``.
@@ -2406,7 +2469,9 @@ class KeyboardBridge(QObject):
         if new_active != self._compat_auto_active:
             self._compat_auto_active = new_active
             _logger.debug(
-                "Compat auto-active: %s (hwnd=%s)", new_active, hwnd,
+                "Compat auto-active: %s (hwnd=%s)",
+                new_active,
+                hwnd,
             )
 
     def _update_game_auto(self, hwnd: int) -> None:
@@ -2424,7 +2489,9 @@ class KeyboardBridge(QObject):
         if new_active != self._game_auto_active:
             self._game_auto_active = new_active
             _logger.debug(
-                "Game key-hold auto-active: %s (hwnd=%s)", new_active, hwnd,
+                "Game key-hold auto-active: %s (hwnd=%s)",
+                new_active,
+                hwnd,
             )
 
     def _in_game_mode(self) -> bool:
@@ -2454,10 +2521,7 @@ class KeyboardBridge(QObject):
         hwnd = self._get_foreground_window_id()
         if hwnd == 0:
             return  # detection unavailable on this platform
-        window_switched = (
-            hwnd != self._last_foreground_hwnd
-            and self._last_foreground_hwnd != 0
-        )
+        window_switched = hwnd != self._last_foreground_hwnd and self._last_foreground_hwnd != 0
         if window_switched:
             # Foreground window changed — user switched apps
             self._reset_typing_context()
@@ -2470,9 +2534,11 @@ class KeyboardBridge(QObject):
         # transient UIA hiccup never wipes context.
         token = focused_element_token()
         if token is not None:
-            if (not window_switched
-                    and self._last_focus_token is not None
-                    and token != self._last_focus_token):
+            if (
+                not window_switched
+                and self._last_focus_token is not None
+                and token != self._last_focus_token
+            ):
                 self._reset_typing_context()
                 _logger.debug("Focused element changed — predictions cleared")
             self._last_focus_token = token
@@ -2524,20 +2590,26 @@ class KeyboardBridge(QObject):
         in logs without spamming at the 4 Hz poll cadence.
         """
         import sys
+
         try:
             if sys.platform == "win32":
                 import ctypes
+
                 return int(
                     ctypes.windll.user32.GetForegroundWindow()  # type: ignore[attr-defined]
                 )
             if sys.platform.startswith("linux"):
                 import os
                 import subprocess
+
                 if os.environ.get("WAYLAND_DISPLAY"):
                     return 0
                 result = subprocess.run(
                     ["xdotool", "getactivewindow"],
-                    capture_output=True, text=True, timeout=0.5, check=False,
+                    capture_output=True,
+                    text=True,
+                    timeout=0.5,
+                    check=False,
                 )
                 out = result.stdout.strip()
                 return int(out) if result.returncode == 0 and out else 0
@@ -2560,8 +2632,7 @@ class KeyboardBridge(QObject):
             key = type(exc).__name__
             if key not in seen:
                 seen.add(key)
-                _logger.warning("Foreground-window detection failed (%s): %s",
-                                key, exc)
+                _logger.warning("Foreground-window detection failed (%s): %s", key, exc)
             return 0
         return 0
 
@@ -2576,6 +2647,7 @@ class KeyboardBridge(QObject):
         under rapid repeats.
         """
         import time
+
         now = time.monotonic()
         if now - self._last_sync_password_check < 0.05:
             return
@@ -2677,6 +2749,7 @@ class KeyboardBridge(QObject):
     def importTextFile(self, file_path: str) -> bool:
         """Import a text file to train the prediction model."""
         from pathlib import Path
+
         path = Path(file_path)
         if not path.exists():
             self._add_debug_log(f"File not found: {file_path}")
@@ -2697,6 +2770,7 @@ class KeyboardBridge(QObject):
     def importFolder(self, folder_path: str) -> int:
         """Import all text files from a folder."""
         from pathlib import Path
+
         path = Path(folder_path)
         if not path.is_dir():
             self._add_debug_log(f"Folder not found: {folder_path}")
@@ -2735,6 +2809,7 @@ class KeyboardBridge(QObject):
         if not self._debug_mode:
             return
         from datetime import datetime
+
         timestamp = datetime.now().strftime("%H:%M:%S")
         entry = f"[{timestamp}] {message}"
         self._debug_log.append(entry)
@@ -2937,6 +3012,7 @@ class KeyboardBridge(QObject):
             # native Python dict before iterating.
             try:
                 from PySide6.QtQml import QJSValue
+
                 if isinstance(key_centers, QJSValue):
                     key_centers = key_centers.toVariant()
             except ImportError:
@@ -2974,6 +3050,7 @@ class KeyboardBridge(QObject):
         # Python before iterating.
         try:
             from PySide6.QtQml import QJSValue
+
             if isinstance(points, QJSValue):
                 points = points.toVariant()
         except ImportError:
@@ -3007,9 +3084,7 @@ class KeyboardBridge(QObject):
         # CLAUDE.md "Auto-Capitalization & Proper Nouns" for the why).
         trimmed = self._context_buffer.rstrip()
         sentence_start = bool(trimmed) and trimmed.endswith((".", "!", "?"))
-        capitalised = [
-            self._predictor.get_capitalized(w, sentence_start) for w in results
-        ]
+        capitalised = [self._predictor.get_capitalized(w, sentence_start) for w in results]
 
         display = self._display_cased(capitalised)
         top = display[0]
@@ -3071,10 +3146,7 @@ class KeyboardBridge(QObject):
     @Slot(result=list)
     def getAvailableLayouts(self) -> list:
         """Return list of {id, name} dicts for available layouts."""
-        return [
-            {"id": lid, "name": data.get("name", lid)}
-            for lid, data in self._layouts.items()
-        ]
+        return [{"id": lid, "name": data.get("name", lid)} for lid, data in self._layouts.items()]
 
     @Slot(result=str)
     def getCurrentLayout(self) -> str:
@@ -3190,7 +3262,8 @@ class KeyboardBridge(QObject):
 
         successors = sorted(
             ngram.bigrams.get(key, {}).items(),
-            key=lambda kv: kv[1], reverse=True,
+            key=lambda kv: kv[1],
+            reverse=True,
         )[:8]
 
         predecessors: list[tuple[str, int]] = []
@@ -3224,12 +3297,8 @@ class KeyboardBridge(QObject):
             "word": key,
             "count": int(ngram.unigrams.get(key, 0)),
             "userCount": int(ngram.user_vocab.get(key, 0)),
-            "successors": [
-                {"word": w, "count": int(c)} for w, c in successors
-            ],
-            "predecessors": [
-                {"word": w, "count": int(c)} for w, c in predecessors
-            ],
+            "successors": [{"word": w, "count": int(c)} for w, c in successors],
+            "predecessors": [{"word": w, "count": int(c)} for w, c in predecessors],
             "trigrams": [
                 {"phrase": phrase, "position": pos, "count": int(c)}
                 for phrase, pos, c in trigram_windows
@@ -3248,7 +3317,7 @@ class KeyboardBridge(QObject):
         return self._predictor.llm_available
 
     def _get_prediction_count(self) -> int:
-        return getattr(self, '_prediction_count', 5)
+        return getattr(self, "_prediction_count", 5)
 
     predictions = Property(list, _get_predictions, notify=predictionsChanged)
     llmEnabled = Property(bool, _get_llm_enabled, notify=llmEnabledChanged)

@@ -55,9 +55,18 @@ _UNKNOWN = ["zorvax", "blenty", "gorpal", "trisken", "vaulty", "morden"]
 words = st.sampled_from(_KNOWN + _UNKNOWN)
 
 _MUTATIONS = [
-    "learn", "learn_word", "learn_from_pill_click", "mark_good", "unprefer",
-    "unlearn_word", "record_typed_word", "blacklist_word", "unblacklist_word",
-    "mark_bad", "remove_dispreference", "decay",
+    "learn",
+    "learn_word",
+    "learn_from_pill_click",
+    "mark_good",
+    "unprefer",
+    "unlearn_word",
+    "record_typed_word",
+    "blacklist_word",
+    "unblacklist_word",
+    "mark_bad",
+    "remove_dispreference",
+    "decay",
 ]
 
 operations = st.lists(
@@ -89,6 +98,7 @@ def _apply(predictor: NgramPredictor, op: str, word: str) -> None:
 # NgramPredictor._user_total
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture(scope="module")
 def predictor() -> NgramPredictor:
     """One real predictor, base dictionary and all.
@@ -101,7 +111,6 @@ def predictor() -> NgramPredictor:
 
 
 class TestUserTotalStaysInStepWithUserVocab:
-
     @given(ops=operations)
     def test_invariant_holds_after_every_single_operation(
         self, predictor: NgramPredictor, ops: List[Tuple[str, str]]
@@ -131,9 +140,7 @@ class TestUserTotalStaysInStepWithUserVocab:
             assert all(c >= 0 for c in predictor.unigrams.values())
 
     @given(word=words, boosts=st.integers(min_value=1, max_value=5))
-    def test_boost_then_rollback_returns_to_the_organic_count(
-        self, word: str, boosts: int
-    ) -> None:
+    def test_boost_then_rollback_returns_to_the_organic_count(self, word: str, boosts: int) -> None:
         """`unprefer` must remove exactly what `mark_good` added, leaving any
         organically learned count behind. A fresh predictor per example: this
         is about an exact delta, so a shared accumulating one would hide an
@@ -152,9 +159,7 @@ class TestUserTotalStaysInStepWithUserVocab:
         assert p._user_total == sum(p.user_vocab.values())
 
     @given(ops=operations)
-    def test_clear_user_data_resets_to_a_consistent_state(
-        self, ops: List[Tuple[str, str]]
-    ) -> None:
+    def test_clear_user_data_resets_to_a_consistent_state(self, ops: List[Tuple[str, str]]) -> None:
         p = NgramPredictor()
         for op, word in ops:
             _apply(p, op, word)
@@ -167,7 +172,6 @@ class TestUserTotalStaysInStepWithUserVocab:
 
 
 class TestModelRoundTrip:
-
     @given(ops=operations)
     @settings(max_examples=40, suppress_health_check=[HealthCheck.too_slow])
     def test_save_load_preserves_the_invariant_and_the_counts(
@@ -223,7 +227,6 @@ radii = st.floats(min_value=0.1, max_value=6.0, allow_nan=False, allow_infinity=
 
 
 class TestSpatialDistributionIsNormalised:
-
     @given(key=mapped_keys, radius=radii)
     def test_probabilities_sum_to_one(self, key: str, radius: float) -> None:
         """Fuzzy scores are multiplied into log1p(frequency) downstream, so
@@ -236,9 +239,7 @@ class TestSpatialDistributionIsNormalised:
         assert sum(probs.values()) == pytest.approx(1.0)
 
     @given(key=mapped_keys, radius=radii)
-    def test_every_probability_is_a_probability(
-        self, key: str, radius: float
-    ) -> None:
+    def test_every_probability_is_a_probability(self, key: str, radius: float) -> None:
         model = SpatialKeyModel(uncertainty_radius=radius)
         for value in model.get_key_probabilities(key).values():
             assert 0.0 < value <= 1.0
@@ -262,9 +263,7 @@ class TestSpatialDistributionIsNormalised:
         """`get_nearby_keys` and `get_key_probabilities` must not disagree;
         the beam search walks one and scores with the other."""
         model = SpatialKeyModel(uncertainty_radius=radius)
-        assert set(model.get_nearby_keys(key)) == set(
-            model.get_key_probabilities(key)
-        )
+        assert set(model.get_nearby_keys(key)) == set(model.get_key_probabilities(key))
 
     @given(
         key=mapped_keys,
@@ -300,7 +299,6 @@ class TestSpatialDistributionIsNormalised:
 
 
 class TestFuzzyGeneratorRobustness:
-
     @given(
         typed=st.text(alphabet="abcdefghijklmnopqrstuvwxyz'", max_size=12),
         max_candidates=st.integers(min_value=1, max_value=10),
@@ -318,9 +316,7 @@ class TestFuzzyGeneratorRobustness:
         """Whatever the user smears across the keyboard, the bar gets a
         bounded, descending list. The cap is what stops a 2-char prefix
         expanding into thousands of beam-search candidates mid-keystroke."""
-        gen = FuzzyWordGenerator(
-            dictionary=small_dictionary, max_candidates=max_candidates
-        )
+        gen = FuzzyWordGenerator(dictionary=small_dictionary, max_candidates=max_candidates)
         results = gen.generate_candidates(typed)
 
         assert len(results) <= max_candidates
@@ -333,9 +329,7 @@ class TestFuzzyGeneratorRobustness:
         max_examples=60,
         suppress_health_check=[HealthCheck.function_scoped_fixture],
     )
-    def test_arbitrary_input_never_raises(
-        self, small_dictionary: dict, typed: str
-    ) -> None:
+    def test_arbitrary_input_never_raises(self, small_dictionary: dict, typed: str) -> None:
         """Runs on every keystroke. Unicode from a pasted string, an
         apostrophe, an empty prefix: none of it may reach the user as a
         traceback instead of a prediction."""
@@ -390,7 +384,6 @@ def _typed(bridge) -> str:
 
 
 class TestContextBufferAccounting:
-
     @given(ops=st.lists(key_ops, min_size=1, max_size=40))
     @settings(max_examples=40, suppress_health_check=[HealthCheck.too_slow])
     def test_each_keystroke_moves_the_buffers_by_exactly_one_character(
@@ -491,9 +484,7 @@ class TestContextBufferAccounting:
 
     @given(ops=st.lists(key_ops, min_size=1, max_size=60))
     @settings(max_examples=25, suppress_health_check=[HealthCheck.too_slow])
-    def test_context_buffer_stays_bounded(
-        self, buffer_bridge, ops: List[Tuple[str, str]]
-    ) -> None:
+    def test_context_buffer_stays_bounded(self, buffer_bridge, ops: List[Tuple[str, str]]) -> None:
         """It is trimmed to the last 200 chars so a long session doesn't
         grow an unbounded string that every keystroke re-scans."""
         _reset(buffer_bridge)

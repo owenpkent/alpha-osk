@@ -197,8 +197,7 @@ class PackManager:
     n-gram model.
     """
 
-    def __init__(self, packs_dir: Optional[Path] = None,
-                 user_packs_dir: Optional[Path] = None):
+    def __init__(self, packs_dir: Optional[Path] = None, user_packs_dir: Optional[Path] = None):
         """
         Initialize the pack manager.
 
@@ -213,6 +212,7 @@ class PackManager:
 
         if user_packs_dir is None:
             from ..platform import get_config_dir
+
             user_packs_dir = get_config_dir() / "packs"
             user_packs_dir.mkdir(parents=True, exist_ok=True)
 
@@ -316,23 +316,17 @@ class PackManager:
 
             # Inject unigrams
             for word in pack.words:
-                predictor.unigrams[word] = max(
-                    predictor.unigrams.get(word, 0), PACK_UNIGRAM_WEIGHT
-                )
+                predictor.unigrams[word] = max(predictor.unigrams.get(word, 0), PACK_UNIGRAM_WEIGHT)
 
             # Inject bigrams
             for w1, targets in pack.bigrams.items():
                 for w2, weight in targets.items():
-                    predictor.bigrams[w1][w2] = max(
-                        predictor.bigrams[w1].get(w2, 0), weight
-                    )
+                    predictor.bigrams[w1][w2] = max(predictor.bigrams[w1].get(w2, 0), weight)
 
             # Inject trigrams
             for key, targets in pack.trigrams.items():
                 for w3, weight in targets.items():
-                    predictor.trigrams[key][w3] = max(
-                        predictor.trigrams[key].get(w3, 0), weight
-                    )
+                    predictor.trigrams[key][w3] = max(predictor.trigrams[key].get(w3, 0), weight)
 
     def import_pack(self, source_dir: Path) -> Optional[str]:
         """
@@ -369,7 +363,8 @@ class PackManager:
         if not pack_id or not _VALID_PACK_ID.match(pack_id):
             _logger.error(
                 "Rejected pack import: invalid pack id %r derived from %s",
-                pack_id, source_dir,
+                pack_id,
+                source_dir,
             )
             return None
 
@@ -380,7 +375,8 @@ class PackManager:
         except ValueError:
             _logger.error(
                 "Rejected pack import: resolved destination %s escapes %s",
-                dest_dir, user_packs_root,
+                dest_dir,
+                user_packs_root,
             )
             return None
 

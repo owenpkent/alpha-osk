@@ -184,6 +184,7 @@ def _create_detector() -> _Detector:
 #  Null detector (unsupported platforms)
 # ====================================================================== #
 
+
 class _NullDetector:
     def check(self) -> bool:
         return False
@@ -192,6 +193,7 @@ class _NullDetector:
 # ====================================================================== #
 #  Linux — AT-SPI 2 via PyGObject
 # ====================================================================== #
+
 
 class _LinuxATSPIDetector:
     """Detect password fields via AT-SPI 2 focus events.
@@ -220,6 +222,7 @@ class _LinuxATSPIDetector:
 
         try:
             import gi
+
             gi.require_version("Atspi", "2.0")
             from gi.repository import Atspi  # type: ignore[import-not-found]
         except Exception as exc:
@@ -258,9 +261,7 @@ class _LinuxATSPIDetector:
                 _logger.debug("AT-SPI listener thread died: %s", exc)
 
         try:
-            t = threading.Thread(
-                target=run, name="atspi-focus", daemon=True
-            )
+            t = threading.Thread(target=run, name="atspi-focus", daemon=True)
             t.start()
             return True
         except Exception as exc:
@@ -288,9 +289,7 @@ class _LinuxATSPIDetector:
             if source is None:
                 return
             state_set = source.get_state_set()
-            self._is_password = bool(
-                state_set.contains(self._Atspi.StateType.PASSWORD_TEXT)
-            )
+            self._is_password = bool(state_set.contains(self._Atspi.StateType.PASSWORD_TEXT))
         except Exception:
             # Any per-event failure shouldn't kill the listener.
             pass
@@ -302,6 +301,7 @@ class _LinuxATSPIDetector:
 # ====================================================================== #
 #  macOS — AXUIElement focus walk via pyobjc
 # ====================================================================== #
+
 
 class _MacOSAXDetector:
     """Detect password fields by walking the focused app's AX tree.
@@ -400,7 +400,9 @@ class _MacOSAXDetector:
                 return False
             AX = self._AX
             err, focused = AX.AXUIElementCopyAttributeValue(
-                app_elem, AX.kAXFocusedUIElementAttribute, None,
+                app_elem,
+                AX.kAXFocusedUIElementAttribute,
+                None,
             )
             if err != 0 or focused is None:
                 return False
@@ -409,12 +411,16 @@ class _MacOSAXDetector:
             # report ``AXSecureTextField`` as the role directly with no
             # subrole.  Either match means "treat as password field".
             err_s, subrole = AX.AXUIElementCopyAttributeValue(
-                focused, AX.kAXSubroleAttribute, None,
+                focused,
+                AX.kAXSubroleAttribute,
+                None,
             )
             if err_s == 0 and subrole == "AXSecureTextField":
                 return True
             err_r, role = AX.AXUIElementCopyAttributeValue(
-                focused, AX.kAXRoleAttribute, None,
+                focused,
+                AX.kAXRoleAttribute,
+                None,
             )
             if err_r == 0 and role == "AXSecureTextField":
                 return True
@@ -445,12 +451,16 @@ if sys.platform == "win32":
 
     # CUIAutomation {ff48dba4-60ef-4201-aa87-54103eef594e}
     _CLSID_CUIAutomation = _GUID(
-        0xFF48DBA4, 0x60EF, 0x4201,
+        0xFF48DBA4,
+        0x60EF,
+        0x4201,
         (ctypes.c_ubyte * 8)(0xAA, 0x87, 0x54, 0x10, 0x3E, 0xEF, 0x59, 0x4E),
     )
     # IUIAutomation {30cbe57d-d9d0-452a-ab13-7ac5ac4825ee}
     _IID_IUIAutomation = _GUID(
-        0x30CBE57D, 0xD9D0, 0x452A,
+        0x30CBE57D,
+        0xD9D0,
+        0x452A,
         (ctypes.c_ubyte * 8)(0xAB, 0x13, 0x7A, 0xC5, 0xAC, 0x48, 0x25, 0xEE),
     )
 
@@ -459,6 +469,7 @@ if sys.platform == "win32":
 
     class _VARIANT(ctypes.Structure):
         """Minimal COM VARIANT (24 bytes on 64-bit)."""
+
         _fields_ = [
             ("vt", ctypes.c_ushort),
             ("wReserved1", ctypes.c_ushort),
@@ -468,8 +479,7 @@ if sys.platform == "win32":
             ("_pad", ctypes.c_longlong),
         ]
 
-    def _vtable_func(obj: ctypes.c_void_p, index: int, restype: type,
-                     *argtypes: type) -> Any:
+    def _vtable_func(obj: ctypes.c_void_p, index: int, restype: type, *argtypes: type) -> Any:
         """Get a function pointer from a COM object's vtable."""
         vtable = ctypes.cast(obj, ctypes.POINTER(ctypes.c_void_p))[0]
         fptr = ctypes.cast(vtable, ctypes.POINTER(ctypes.c_void_p))[index]
@@ -492,14 +502,22 @@ if sys.platform == "win32":
     # pointers correctly on 64-bit.
     _oleaut32 = ctypes.windll.oleaut32
     _oleaut32.SafeArrayGetLBound.argtypes = [
-        ctypes.c_void_p, ctypes.c_uint, ctypes.POINTER(ctypes.c_long)]
+        ctypes.c_void_p,
+        ctypes.c_uint,
+        ctypes.POINTER(ctypes.c_long),
+    ]
     _oleaut32.SafeArrayGetLBound.restype = ctypes.c_long
     _oleaut32.SafeArrayGetUBound.argtypes = [
-        ctypes.c_void_p, ctypes.c_uint, ctypes.POINTER(ctypes.c_long)]
+        ctypes.c_void_p,
+        ctypes.c_uint,
+        ctypes.POINTER(ctypes.c_long),
+    ]
     _oleaut32.SafeArrayGetUBound.restype = ctypes.c_long
     _oleaut32.SafeArrayGetElement.argtypes = [
-        ctypes.c_void_p, ctypes.POINTER(ctypes.c_long),
-        ctypes.POINTER(ctypes.c_long)]
+        ctypes.c_void_p,
+        ctypes.POINTER(ctypes.c_long),
+        ctypes.POINTER(ctypes.c_long),
+    ]
     _oleaut32.SafeArrayGetElement.restype = ctypes.c_long
     _oleaut32.SafeArrayDestroy.argtypes = [ctypes.c_void_p]
     _oleaut32.SafeArrayDestroy.restype = ctypes.c_long
@@ -521,8 +539,7 @@ if sys.platform == "win32":
         val = ctypes.c_long()
         for i in range(lb.value, ub.value + 1):
             idx.value = i
-            if _oleaut32.SafeArrayGetElement(
-                    psa, ctypes.byref(idx), ctypes.byref(val)) != 0:
+            if _oleaut32.SafeArrayGetElement(psa, ctypes.byref(idx), ctypes.byref(val)) != 0:
                 return None
             parts.append(str(val.value))
         return ",".join(parts) if parts else None
@@ -548,7 +565,9 @@ if sys.platform == "win32":
                     return
 
                 hr = ole32.CoCreateInstance(
-                    ctypes.byref(_CLSID_CUIAutomation), None, 1,  # CLSCTX_INPROC_SERVER
+                    ctypes.byref(_CLSID_CUIAutomation),
+                    None,
+                    1,  # CLSCTX_INPROC_SERVER
                     ctypes.byref(_IID_IUIAutomation),
                     ctypes.byref(self._automation),
                 )
@@ -593,8 +612,10 @@ if sys.platform == "win32":
             try:
                 # IUIAutomation::GetFocusedElement — vtable index 8
                 get_focused = _vtable_func(
-                    self._automation, 8,
-                    ctypes.c_long, ctypes.POINTER(ctypes.c_void_p),
+                    self._automation,
+                    8,
+                    ctypes.c_long,
+                    ctypes.POINTER(ctypes.c_void_p),
                 )
                 hr = get_focused(self._automation, ctypes.byref(element))
                 if hr != 0 or not element:
@@ -603,8 +624,11 @@ if sys.platform == "win32":
                 # IUIAutomationElement::GetCurrentPropertyValue — vtable index 10
                 variant = _VARIANT()
                 get_prop = _vtable_func(
-                    element, 10,
-                    ctypes.c_long, ctypes.c_int, ctypes.POINTER(_VARIANT),
+                    element,
+                    10,
+                    ctypes.c_long,
+                    ctypes.c_int,
+                    ctypes.POINTER(_VARIANT),
                 )
                 hr = get_prop(element, _UIA_IsPasswordPropertyId, ctypes.byref(variant))
                 if hr != 0:
@@ -634,8 +658,10 @@ if sys.platform == "win32":
             try:
                 # IUIAutomation::GetFocusedElement — vtable index 8
                 get_focused = _vtable_func(
-                    self._automation, 8,
-                    ctypes.c_long, ctypes.POINTER(ctypes.c_void_p),
+                    self._automation,
+                    8,
+                    ctypes.c_long,
+                    ctypes.POINTER(ctypes.c_void_p),
                 )
                 hr = get_focused(self._automation, ctypes.byref(element))
                 if hr != 0 or not element:
@@ -645,8 +671,10 @@ if sys.platform == "win32":
                 # Hands back a freshly-allocated SAFEARRAY we must destroy.
                 psa = ctypes.c_void_p()
                 get_rid = _vtable_func(
-                    element, 4,
-                    ctypes.c_long, ctypes.POINTER(ctypes.c_void_p),
+                    element,
+                    4,
+                    ctypes.c_long,
+                    ctypes.POINTER(ctypes.c_void_p),
                 )
                 hr = get_rid(element, ctypes.byref(psa))
                 if hr != 0 or not psa:
@@ -706,9 +734,7 @@ if sys.platform == "win32":
                     return False
 
                 # EM_GETPASSWORDCHAR returns the mask char (e.g. '*') or 0
-                result: int = self._user32.SendMessageW(
-                    focused, _EM_GETPASSWORDCHAR, 0, 0
-                )
+                result: int = self._user32.SendMessageW(focused, _EM_GETPASSWORDCHAR, 0, 0)
                 return result != 0
 
             except Exception:

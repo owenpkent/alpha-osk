@@ -84,9 +84,7 @@ class TestDownloadUrlWhitelist:
         # Both historical and current CDN hostnames are accepted —
         # GitHub redirects release-asset downloads to the latter today
         # but older URLs / mirrors still use the former.
-        assert _is_safe_download_url(
-            "https://objects.githubusercontent.com/foo/bar.exe"
-        )
+        assert _is_safe_download_url("https://objects.githubusercontent.com/foo/bar.exe")
         assert _is_safe_download_url(
             "https://release-assets.githubusercontent.com/github-production-release-asset/foo?sig=abc"
         )
@@ -97,12 +95,8 @@ class TestDownloadUrlWhitelist:
     def test_subdomain_attack_rejected(self):
         # An attacker registers github.com.evil.example to fool a naive
         # endswith check.  Hostname comparison is exact.
-        assert not _is_safe_download_url(
-            "https://github.com.evil.example/setup.exe"
-        )
-        assert not _is_safe_download_url(
-            "https://evil-github.com/setup.exe"
-        )
+        assert not _is_safe_download_url("https://github.com.evil.example/setup.exe")
+        assert not _is_safe_download_url("https://evil-github.com/setup.exe")
 
     def test_http_rejected(self):
         # No plaintext, even to GitHub.
@@ -111,9 +105,7 @@ class TestDownloadUrlWhitelist:
         )
 
     def test_other_schemes_rejected(self):
-        assert not _is_safe_download_url(
-            "file:///C:/Windows/System32/calc.exe"
-        )
+        assert not _is_safe_download_url("file:///C:/Windows/System32/calc.exe")
         assert not _is_safe_download_url("ftp://github.com/setup.exe")
 
     def test_garbage_url_rejected(self):
@@ -144,15 +136,17 @@ class TestNotesSanitisation:
 #  check_for_update
 # ---------------------------------------------------------------------------
 
-def _api_response(tag: str, asset_name: str, asset_url: str,
-                  notes: str = "release notes") -> bytes:
-    return json.dumps({
-        "tag_name": tag,
-        "body": notes,
-        "assets": [
-            {"name": asset_name, "browser_download_url": asset_url},
-        ],
-    }).encode()
+
+def _api_response(tag: str, asset_name: str, asset_url: str, notes: str = "release notes") -> bytes:
+    return json.dumps(
+        {
+            "tag_name": tag,
+            "body": notes,
+            "assets": [
+                {"name": asset_name, "browser_download_url": asset_url},
+            ],
+        }
+    ).encode()
 
 
 @pytest.fixture
@@ -171,61 +165,74 @@ def _stub_response(body: bytes, headers: dict | None = None):
 
 class TestCheckForUpdate:
     def test_returns_info_for_genuine_newer_release(self, mock_urlopen):
-        mock_urlopen.return_value = _stub_response(_api_response(
-            tag="v1.0.3",
-            asset_name="Alpha-OSK-Setup-1.0.3.exe",
-            asset_url="https://github.com/okstudio1/alpha-osk-releases/releases/download/v1.0.3/Alpha-OSK-Setup-1.0.3.exe",
-        ))
+        mock_urlopen.return_value = _stub_response(
+            _api_response(
+                tag="v1.0.3",
+                asset_name="Alpha-OSK-Setup-1.0.3.exe",
+                asset_url="https://github.com/okstudio1/alpha-osk-releases/releases/download/v1.0.3/Alpha-OSK-Setup-1.0.3.exe",
+            )
+        )
         info = check_for_update(current_version="1.0.2")
         assert info is not None
         assert info.version == "1.0.3"
         assert info.asset_name == "Alpha-OSK-Setup-1.0.3.exe"
 
     def test_returns_none_when_already_latest(self, mock_urlopen):
-        mock_urlopen.return_value = _stub_response(_api_response(
-            tag="v1.0.2",
-            asset_name="Alpha-OSK-Setup-1.0.2.exe",
-            asset_url="https://github.com/okstudio1/alpha-osk-releases/releases/download/v1.0.2/Alpha-OSK-Setup-1.0.2.exe",
-        ))
+        mock_urlopen.return_value = _stub_response(
+            _api_response(
+                tag="v1.0.2",
+                asset_name="Alpha-OSK-Setup-1.0.2.exe",
+                asset_url="https://github.com/okstudio1/alpha-osk-releases/releases/download/v1.0.2/Alpha-OSK-Setup-1.0.2.exe",
+            )
+        )
         assert check_for_update(current_version="1.0.2") is None
 
     def test_returns_none_on_downgrade_attempt(self, mock_urlopen):
         # Server claims latest is older than us.  Do not "update" backwards.
-        mock_urlopen.return_value = _stub_response(_api_response(
-            tag="v1.0.0",
-            asset_name="Alpha-OSK-Setup-1.0.0.exe",
-            asset_url="https://github.com/okstudio1/alpha-osk-releases/releases/download/v1.0.0/Alpha-OSK-Setup-1.0.0.exe",
-        ))
+        mock_urlopen.return_value = _stub_response(
+            _api_response(
+                tag="v1.0.0",
+                asset_name="Alpha-OSK-Setup-1.0.0.exe",
+                asset_url="https://github.com/okstudio1/alpha-osk-releases/releases/download/v1.0.0/Alpha-OSK-Setup-1.0.0.exe",
+            )
+        )
         assert check_for_update(current_version="1.0.2") is None
 
     def test_rejects_off_host_asset(self, mock_urlopen):
         # Newer version, but the download URL points off-whitelist.
-        mock_urlopen.return_value = _stub_response(_api_response(
-            tag="v1.0.3",
-            asset_name="Alpha-OSK-Setup-1.0.3.exe",
-            asset_url="https://evil.example.com/Alpha-OSK-Setup-1.0.3.exe",
-        ))
+        mock_urlopen.return_value = _stub_response(
+            _api_response(
+                tag="v1.0.3",
+                asset_name="Alpha-OSK-Setup-1.0.3.exe",
+                asset_url="https://evil.example.com/Alpha-OSK-Setup-1.0.3.exe",
+            )
+        )
         assert check_for_update(current_version="1.0.2") is None
 
     def test_rejects_misnamed_asset(self, mock_urlopen):
         # Right tag, wrong filename — could be a sneaky asset upload.
-        mock_urlopen.return_value = _stub_response(_api_response(
-            tag="v1.0.3",
-            asset_name="totally-legit.exe",
-            asset_url="https://github.com/okstudio1/alpha-osk-releases/releases/download/v1.0.3/totally-legit.exe",
-        ))
+        mock_urlopen.return_value = _stub_response(
+            _api_response(
+                tag="v1.0.3",
+                asset_name="totally-legit.exe",
+                asset_url="https://github.com/okstudio1/alpha-osk-releases/releases/download/v1.0.3/totally-legit.exe",
+            )
+        )
         assert check_for_update(current_version="1.0.2") is None
 
     def test_rejects_pre_release_tag(self, mock_urlopen):
-        mock_urlopen.return_value = _stub_response(_api_response(
-            tag="v1.0.3-evil",
-            asset_name="Alpha-OSK-Setup-1.0.3.exe",
-            asset_url="https://github.com/okstudio1/alpha-osk-releases/releases/download/v1.0.3/Alpha-OSK-Setup-1.0.3.exe",
-        ))
+        mock_urlopen.return_value = _stub_response(
+            _api_response(
+                tag="v1.0.3-evil",
+                asset_name="Alpha-OSK-Setup-1.0.3.exe",
+                asset_url="https://github.com/okstudio1/alpha-osk-releases/releases/download/v1.0.3/Alpha-OSK-Setup-1.0.3.exe",
+            )
+        )
         assert check_for_update(current_version="1.0.2") is None
 
     def test_network_error_returns_none(self, mock_urlopen):
         import urllib.error
+
         mock_urlopen.side_effect = urllib.error.URLError("nope")
         assert check_for_update(current_version="1.0.2") is None
 
@@ -236,7 +243,7 @@ class TestCheckForUpdate:
     def test_oversized_response_refused(self, mock_urlopen):
         # API responses larger than 1 MB are dropped — defensive cap so
         # a poisoned response can't burn memory parsing JSON.
-        big = b"{" + (b"\"x\":\"y\"," * 200_000) + b"\"end\":1}"
+        big = b"{" + (b'"x":"y",' * 200_000) + b'"end":1}'
         assert len(big) > updater._MAX_API_RESPONSE_BYTES
         mock_urlopen.return_value = _stub_response(big)
         assert check_for_update(current_version="1.0.2") is None
@@ -268,6 +275,7 @@ class TestCheckForUpdate:
 #  Signature verification
 # ---------------------------------------------------------------------------
 
+
 class TestSignatureVerification:
     """The Authenticode pin is the last line of defence — pin both
     Status==Valid AND the exact thumbprint AND the publisher CN."""
@@ -284,42 +292,43 @@ class TestSignatureVerification:
     def _patch_run(self, monkeypatch, stdout: str, returncode: int = 0):
         def _fake_run(*args, **kwargs):
             return mock.Mock(stdout=stdout, stderr="", returncode=returncode)
+
         monkeypatch.setattr(updater.subprocess, "run", _fake_run)
 
     def test_accepts_valid_pinned_signature(self, monkeypatch, fake_exe):
         monkeypatch.setattr(updater.sys, "platform", "win32")
-        self._patch_run(monkeypatch, self._ps_output(
-            "Valid", EV_CERT_SHA1_THUMBPRINT.upper(), "OK Studio Inc."
-        ))
+        self._patch_run(
+            monkeypatch, self._ps_output("Valid", EV_CERT_SHA1_THUMBPRINT.upper(), "OK Studio Inc.")
+        )
         assert updater._verify_signature(fake_exe) is True
 
     def test_rejects_wrong_thumbprint(self, monkeypatch, fake_exe):
         monkeypatch.setattr(updater.sys, "platform", "win32")
-        self._patch_run(monkeypatch, self._ps_output(
-            "Valid", "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
-            "OK Studio Inc.",
-        ))
+        self._patch_run(
+            monkeypatch,
+            self._ps_output(
+                "Valid",
+                "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+                "OK Studio Inc.",
+            ),
+        )
         assert updater._verify_signature(fake_exe) is False
 
     def test_rejects_wrong_signer_cn(self, monkeypatch, fake_exe):
         monkeypatch.setattr(updater.sys, "platform", "win32")
-        self._patch_run(monkeypatch, self._ps_output(
-            "Valid", EV_CERT_SHA1_THUMBPRINT, "Evil Inc."
-        ))
+        self._patch_run(monkeypatch, self._ps_output("Valid", EV_CERT_SHA1_THUMBPRINT, "Evil Inc."))
         assert updater._verify_signature(fake_exe) is False
 
     def test_rejects_invalid_status(self, monkeypatch, fake_exe):
         monkeypatch.setattr(updater.sys, "platform", "win32")
-        self._patch_run(monkeypatch, self._ps_output(
-            "HashMismatch", EV_CERT_SHA1_THUMBPRINT, "OK Studio Inc."
-        ))
+        self._patch_run(
+            monkeypatch, self._ps_output("HashMismatch", EV_CERT_SHA1_THUMBPRINT, "OK Studio Inc.")
+        )
         assert updater._verify_signature(fake_exe) is False
 
     def test_rejects_unsigned(self, monkeypatch, fake_exe):
         monkeypatch.setattr(updater.sys, "platform", "win32")
-        self._patch_run(monkeypatch, self._ps_output(
-            "NotSigned", "", ""
-        ))
+        self._patch_run(monkeypatch, self._ps_output("NotSigned", "", ""))
         assert updater._verify_signature(fake_exe) is False
 
     def test_rejects_powershell_failure(self, monkeypatch, fake_exe):
@@ -342,6 +351,7 @@ class TestSignatureVerification:
 #  download_and_install
 # ---------------------------------------------------------------------------
 
+
 class TestDownloadAndInstall:
     def test_aborts_when_signature_check_fails(self, monkeypatch, tmp_path):
         # Stand up a successful download but a failing signature — the
@@ -353,13 +363,15 @@ class TestDownloadAndInstall:
             notes="",
         )
         monkeypatch.setattr(
-            updater, "_download_with_cap",
+            updater,
+            "_download_with_cap",
             lambda *a, **kw: True,
         )
         monkeypatch.setattr(updater, "_verify_signature", lambda p: False)
         popen_calls = []
         monkeypatch.setattr(
-            updater.subprocess, "Popen",
+            updater.subprocess,
+            "Popen",
             lambda *a, **kw: popen_calls.append((a, kw)),
         )
 
@@ -376,7 +388,8 @@ class TestDownloadAndInstall:
             notes="",
         )
         monkeypatch.setattr(
-            updater, "_download_with_cap",
+            updater,
+            "_download_with_cap",
             lambda *a, **kw: True,
         )
         monkeypatch.setattr(updater, "_verify_signature", lambda p: True)
@@ -406,7 +419,8 @@ class TestDownloadAndInstall:
         monkeypatch.setattr(updater, "_verify_signature", lambda p: True)
         # Simulate the user declining the UAC prompt.
         monkeypatch.setattr(
-            updater, "_launch_installer",
+            updater,
+            "_launch_installer",
             lambda dest: (False, "Update cancelled at UAC prompt"),
         )
 
@@ -422,12 +436,14 @@ class TestDownloadAndInstall:
             notes="",
         )
         monkeypatch.setattr(
-            updater, "_download_with_cap",
+            updater,
+            "_download_with_cap",
             lambda *a, **kw: False,
         )
         verify_calls = []
         monkeypatch.setattr(
-            updater, "_verify_signature",
+            updater,
+            "_verify_signature",
             lambda p: verify_calls.append(p) or True,
         )
         ok, err = updater.download_and_install(info)
@@ -457,13 +473,15 @@ class TestInstallerLaunchingCallback:
         monkeypatch.setattr(updater, "_launch_installer", lambda dest: (True, ""))
 
     def test_callback_fires_with_version_before_installer_launch(
-        self, monkeypatch,
+        self,
+        monkeypatch,
     ):
         self._stub_happy_path(monkeypatch)
         events: list[tuple[str, object]] = []
 
         monkeypatch.setattr(
-            updater, "_launch_installer",
+            updater,
+            "_launch_installer",
             lambda dest: events.append(("launch", dest)) or (True, ""),
         )
 
@@ -471,7 +489,8 @@ class TestInstallerLaunchingCallback:
             events.append(("callback", version))
 
         ok, err = updater.download_and_install(
-            self._info(), on_installer_launching=cb,
+            self._info(),
+            on_installer_launching=cb,
         )
         assert ok is True
         # Callback must run BEFORE the installer launches — otherwise
@@ -506,7 +525,8 @@ class TestInstallerLaunchingCallback:
             raise RuntimeError("UI signal exploded")
 
         ok, err = updater.download_and_install(
-            self._info(), on_installer_launching=bad_cb,
+            self._info(),
+            on_installer_launching=bad_cb,
         )
         assert ok is True
         assert err == ""

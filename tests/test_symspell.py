@@ -199,6 +199,7 @@ class TestFuzzyRecognizerIntegration:
 
     def _make_generator(self, words):
         from src.prediction.fuzzy_recognizer import FuzzyWordGenerator
+
         gen = FuzzyWordGenerator(dictionary={w: 100 for w in words})
         return gen
 

@@ -48,9 +48,7 @@ def _handle(predictor: HybridPredictor, req: dict) -> dict:
         n = int(req.get("n", 5))
         out["result"] = list(predictor.predict(req.get("context", ""), n))
     elif mode == "autocorrect":
-        corrected = predictor.check_autocorrect(
-            req.get("typed_word", ""), req.get("context", "")
-        )
+        corrected = predictor.check_autocorrect(req.get("typed_word", ""), req.get("context", ""))
         out["corrected"] = corrected
     else:
         out["error"] = f"unknown mode: {mode!r}"

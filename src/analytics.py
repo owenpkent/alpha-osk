@@ -78,6 +78,7 @@ class TypingAnalytics(QObject):
     def _get_stats_path() -> Path:
         """Get the path for persisted analytics."""
         from .platform import get_config_dir
+
         return get_config_dir() / "analytics.json"
 
     def reload_from_disk(self) -> None:
@@ -132,8 +133,11 @@ class TypingAnalytics(QObject):
                 self._alltime_key_freq = Counter(
                     {k: int(v) for k, v in kf.items() if isinstance(v, (int, float))}
                 )
-            _logger.info("Loaded all-time analytics: %d words, %d keystrokes saved",
-                         self._alltime_words, self._alltime_keystrokes_saved)
+            _logger.info(
+                "Loaded all-time analytics: %d words, %d keystrokes saved",
+                self._alltime_words,
+                self._alltime_keystrokes_saved,
+            )
         except (json.JSONDecodeError, OSError) as e:
             _logger.warning("Failed to load analytics: %s", e)
 
@@ -162,9 +166,7 @@ class TypingAnalytics(QObject):
             "minutes": self._alltime_minutes + (time.time() - self._session_start) / 60,
             "backspaces": self._alltime_backspaces + self._backspace_count,
             "prediction_offers": self._alltime_prediction_offers + self._prediction_offers,
-            "prediction_rank_sum": (
-                self._alltime_prediction_rank_sum + self._prediction_rank_sum
-            ),
+            "prediction_rank_sum": (self._alltime_prediction_rank_sum + self._prediction_rank_sum),
             "prediction_rank_count": (
                 self._alltime_prediction_rank_count + self._prediction_rank_count
             ),
@@ -190,8 +192,7 @@ class TypingAnalytics(QObject):
             self._word_count += 1
             self._word_freq[word.lower()] += 1
 
-    def record_prediction_selected(self, word: str, rank: int,
-                                   keystrokes_saved: int = 0) -> None:
+    def record_prediction_selected(self, word: str, rank: int, keystrokes_saved: int = 0) -> None:
         """Record when user selects a prediction.
 
         Args:
@@ -235,9 +236,7 @@ class TypingAnalytics(QObject):
         top_words: List[Tuple[str, int]] = self._word_freq.most_common(5)
 
         total_typed = self._keystroke_count + self._keystrokes_saved
-        savings_pct = (
-            round(self._keystrokes_saved / max(1, total_typed) * 100, 1)
-        )
+        savings_pct = round(self._keystrokes_saved / max(1, total_typed) * 100, 1)
 
         # Lifetime aggregates — current session + persisted history.
         alltime_keystrokes = self._alltime_keystrokes + self._keystroke_count
@@ -263,9 +262,7 @@ class TypingAnalytics(QObject):
         session_top_pick_rate = round(
             self._top_pick_count / max(1, self._prediction_rank_count) * 100, 1
         )
-        alltime_top_pick_rate = round(
-            alltime_top_picks / max(1, alltime_rank_count) * 100, 1
-        )
+        alltime_top_pick_rate = round(alltime_top_picks / max(1, alltime_rank_count) * 100, 1)
 
         # Acceptance rate: when a prediction was OFFERED to the user,
         # how often did they click one.  Distinct from
@@ -276,9 +273,7 @@ class TypingAnalytics(QObject):
         session_acceptance_rate = round(
             self._prediction_hits / max(1, self._prediction_offers) * 100, 1
         )
-        alltime_acceptance_rate = round(
-            alltime_predictions / max(1, alltime_offers) * 100, 1
-        )
+        alltime_acceptance_rate = round(alltime_predictions / max(1, alltime_offers) * 100, 1)
 
         # Time saved: keystrokes saved * the user's own seconds per
         # keystroke.  Using their own pace makes the number honest --
@@ -286,12 +281,10 @@ class TypingAnalytics(QObject):
         # avoided keystroke than a fast one.  Falls back to 0.5 s/key
         # when there's no usage history yet (new install).
         session_pace = (
-            (elapsed_min * 60.0) / self._keystroke_count
-            if self._keystroke_count > 0 else 0.5
+            (elapsed_min * 60.0) / self._keystroke_count if self._keystroke_count > 0 else 0.5
         )
         alltime_pace = (
-            (alltime_minutes * 60.0) / alltime_keystrokes
-            if alltime_keystrokes > 0 else 0.5
+            (alltime_minutes * 60.0) / alltime_keystrokes if alltime_keystrokes > 0 else 0.5
         )
         session_time_saved = self._keystrokes_saved * session_pace
         alltime_time_saved = alltime_saved * alltime_pace
@@ -305,20 +298,15 @@ class TypingAnalytics(QObject):
             "totalBackspaces": self._backspace_count,
             "keystrokesSaved": self._keystrokes_saved,
             "savingsPercent": savings_pct,
-            "predictionHitRate": round(
-                self._prediction_hits / max(1, self._word_count) * 100, 1
-            ),
+            "predictionHitRate": round(self._prediction_hits / max(1, self._word_count) * 100, 1),
             "predictionHits": self._prediction_hits,
-            "backspaceRate": round(
-                self._backspace_count / max(1, self._keystroke_count) * 100, 1
-            ),
+            "backspaceRate": round(self._backspace_count / max(1, self._keystroke_count) * 100, 1),
             "topWords": [{"word": w, "count": c} for w, c in top_words],
             "wpmSamples": self._wpm_samples,
             "topPickRate": session_top_pick_rate,
             "acceptanceRate": session_acceptance_rate,
             "timeSavedSeconds": round(session_time_saved, 1),
             "predictionOffers": self._prediction_offers,
-
             # Lifetime (= persisted history + current session)
             "alltimeWords": alltime_words,
             "alltimeKeystrokes": alltime_keystrokes,
@@ -327,20 +315,13 @@ class TypingAnalytics(QObject):
             "alltimeSessions": self._alltime_sessions,
             "alltimeMinutes": round(alltime_minutes, 1),
             "alltimeWpm": round(alltime_words / max(0.1, alltime_minutes), 1),
-            "alltimeSavingsPercent": round(
-                alltime_saved / max(1, alltime_total_typed) * 100, 1
-            ),
-            "alltimePredictionHitRate": round(
-                alltime_predictions / max(1, alltime_words) * 100, 1
-            ),
+            "alltimeSavingsPercent": round(alltime_saved / max(1, alltime_total_typed) * 100, 1),
+            "alltimePredictionHitRate": round(alltime_predictions / max(1, alltime_words) * 100, 1),
             "alltimeBackspaces": alltime_backspaces,
-            "alltimeBackspaceRate": round(
-                alltime_backspaces / max(1, alltime_keystrokes) * 100, 1
-            ),
+            "alltimeBackspaceRate": round(alltime_backspaces / max(1, alltime_keystrokes) * 100, 1),
             "alltimePredictionOffers": alltime_offers,
             "alltimeTopWords": [{"word": w, "count": c} for w, c in alltime_top_words],
             "alltimeTopPickRate": alltime_top_pick_rate,
             "alltimeAcceptanceRate": alltime_acceptance_rate,
             "alltimeTimeSavedSeconds": round(alltime_time_saved, 1),
         }
-
