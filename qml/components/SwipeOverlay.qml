@@ -67,9 +67,16 @@ Item {
     // Recorded points for the current gesture, in overlay-local coords.
     property var _points: []
     property bool _isSwipe: false
-    // The special key currently held by this gesture, if any. While it is
-    // set the gesture is a key hold and can never promote to a swipe.
+    // The special key currently held by this gesture, if any.
     property var _heldKey: null
+    // True for the whole of a gesture that began on a special key, and NOT
+    // cleared when the pointer drags off that key. `_heldKey` alone is not
+    // enough: dragging off releases the key and nulls it, and without this
+    // flag the rest of the gesture would fall back into the ordinary
+    // press-drag-release logic, so sliding off Backspace onto "g" and
+    // releasing would type a "g", and sliding far enough would be decoded as
+    // a swipe that began on Backspace. Dragging off must abort, fully.
+    property bool _gestureIsHold: false
 
     signal swipeStarted()
     signal swipeEnded()
@@ -116,20 +123,29 @@ Item {
             // possible swipe start, so activate it now rather than deferring
             // to release. That is what gives Backspace and the arrows their
             // auto-repeat back.
+            swipeRoot._gestureIsHold = false
             var hit = swipeRoot._findKeyAt(mouse.x, mouse.y, swipeRoot.tapRegistry)
             if (hit && hit.item && !swipeRoot._isSwipeStart(mouse.x, mouse.y)
                 && hit.item.externalPress) {
                 var local = hit.item.mapFromItem(swipeRoot, mouse.x, mouse.y)
+                // Claim the gesture even if the debounce swallowed this
+                // particular press: it began on a special key either way, and
+                // letting it fall through to the swipe/tap logic is what would
+                // type a stray character.
+                swipeRoot._gestureIsHold = true
                 if (hit.item.externalPress(local.x, local.y))
                     swipeRoot._heldKey = hit.item
             }
         }
 
         onPositionChanged: function(mouse) {
-            // A held special key follows the same rule its own MouseArea
-            // uses: dragging off the key aborts the press and stops repeat.
-            if (swipeRoot._heldKey) {
-                if (!swipeRoot._isOver(swipeRoot._heldKey, mouse.x, mouse.y))
+            // A gesture that began on a special key stays a key hold for its
+            // whole life, even after the pointer leaves the key. Dragging off
+            // aborts, the same escape hatch KeyButton gives you without the
+            // overlay: press the wrong key, slide away, nothing happens.
+            if (swipeRoot._gestureIsHold) {
+                if (swipeRoot._heldKey
+                    && !swipeRoot._isOver(swipeRoot._heldKey, mouse.x, mouse.y))
                     swipeRoot._releaseHeld()
                 return
             }
@@ -152,7 +168,11 @@ Item {
         }
 
         onReleased: function(mouse) {
-            if (swipeRoot._heldKey) {
+            if (swipeRoot._gestureIsHold) {
+                // Either the key is still held (release it, normal case) or
+                // the pointer already dragged off it (already released, and
+                // this branch is what stops the release being re-read as a
+                // tap on whatever now sits under the cursor).
                 swipeRoot._releaseHeld()
             } else if (swipeRoot._isSwipe) {
                 if (swipeRoot.keyboardBridge) {
@@ -169,6 +189,7 @@ Item {
                     hit.item.keyPressed()
                 }
             }
+            swipeRoot._gestureIsHold = false
             swipeRoot._isSwipe = false
             swipeRoot._points = []
             trail.pts = []
@@ -177,6 +198,7 @@ Item {
 
         onCanceled: {
             swipeRoot._releaseHeld()
+            swipeRoot._gestureIsHold = false
             swipeRoot._isSwipe = false
             swipeRoot._points = []
             trail.pts = []

@@ -348,7 +348,15 @@ class TestSwipingStillWorks:
 
     def test_dragging_off_a_held_special_aborts_it(self, swipe_root) -> None:
         """Same escape hatch a KeyButton gives you without the overlay:
-        press the wrong key, slide off, nothing more happens."""
+        press the wrong key, slide off, nothing more happens.
+
+        "Nothing" has to mean nothing at all, which is the part that is easy
+        to get wrong. Dragging off releases the held key, and if that were the
+        only state the gesture carried, the rest of it would fall back into
+        the ordinary press-drag-release logic: the release would then be read
+        as a *tap* on whatever now sits under the cursor, so sliding off
+        Backspace onto "g" would type a "g".
+        """
         root, _, synth = swipe_root
         key = _find_key(root, type="special", action="backspace")
         far = _find_key(root, type="char", key="g")
@@ -369,8 +377,45 @@ class TestSwipingStillWorks:
         assert _sent_keys(synth).count("BackSpace") == before, (
             "a held special key kept repeating after the pointer left it"
         )
+
         QTest.mouseRelease(root, Qt.LeftButton, Qt.NoModifier, away)
         QCoreApplication.processEvents()
+
+        assert not synth.send_text.called, (
+            f"releasing over 'g' after sliding off Backspace typed "
+            f"{synth.send_text.call_args_list}: the abort fell through to the "
+            "tap path"
+        )
+        assert _sent_keys(synth).count("BackSpace") == before, (
+            "the release re-fired the key the gesture had already abandoned"
+        )
+
+    def test_dragging_far_off_a_special_is_not_decoded_as_a_swipe(self, swipe_root) -> None:
+        """A gesture that began on a special key must never reach the
+        recogniser, however far it travels. Only character keys are swipe
+        starts, so a "swipe" beginning on Backspace can only decode noise."""
+        root, _, synth = swipe_root
+        key = _find_key(root, type="special", action="backspace")
+        far = _find_key(root, type="char", key="q")
+        p0 = key.mapToScene(key.boundingRect().center()).toPoint()
+        p1 = far.mapToScene(far.boundingRect().center()).toPoint()
+        synth.reset_mock()
+
+        QTest.mousePress(root, Qt.LeftButton, Qt.NoModifier, p0)
+        for i in range(1, 13):
+            QTest.mouseMove(root, _lerp(p0, p1, i / 12))
+        QCoreApplication.processEvents()
+
+        overlay = root.findChild(QQuickItem, "swipeOverlay")
+        assert overlay.property("_isSwipe") is False, (
+            "a drag that began on Backspace promoted to a swipe"
+        )
+
+        QTest.mouseRelease(root, Qt.LeftButton, Qt.NoModifier, p1)
+        QCoreApplication.processEvents()
+        assert not synth.send_text.called, (
+            f"a gesture starting on Backspace produced text: {synth.send_text.call_args_list}"
+        )
 
 
 class TestHiddenPanelsDoNotClaimPresses:
