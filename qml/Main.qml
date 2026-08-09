@@ -1385,6 +1385,39 @@ Window {
                         font.family: "Ubuntu, Noto Sans, sans-serif"
                     }
 
+                    // What a pill must be at least as wide as to render `word`
+                    // whole.
+                    //
+                    // It has to be FontMetrics rather than a real Text: the
+                    // only way to ask a Text is to assign its `text` and read
+                    // back `implicitWidth`, and doing that inside this binding
+                    // makes `fit` depend on a property `fit` itself writes,
+                    // which the engine reports as a binding loop. FontMetrics
+                    // answers through method calls, which create no such
+                    // dependency.
+                    //
+                    // Take the larger of the two metrics. `advanceWidth` sums
+                    // per-glyph advances; `boundingRect` covers the ink,
+                    // including side bearings that stick out past the advance.
+                    // They are identical under Windows' font rendering, which
+                    // is why measuring by advance alone looked correct here,
+                    // and they diverge under freetype, where "document" elided
+                    // inside a pill this function had called wide enough. Ceil
+                    // on top, because Text elides on a sub-pixel overflow and
+                    // the width handed back is a float.
+                    //
+                    // NOTE this cannot be verified on a machine without the
+                    // real fonts installed: under the offscreen platform
+                    // plugin Qt falls back to a fixed-width placeholder where
+                    // every glyph is exactly `pixelSize` wide and both metrics
+                    // agree by construction, so the no-elide sweep in
+                    // tests/test_qml_prediction_bar.py is near-vacuous locally
+                    // and only means something on CI's Linux runner.
+                    function measure(word) {
+                        return Math.ceil(Math.max(predMetrics.advanceWidth(word),
+                                                  predMetrics.boundingRect(word).width))
+                    }
+
                     // Fit whole words, never a truncated one. `fit` is
                     // { words, widths }: the prefix of the ranked predictions
                     // that physically fits, plus each one's pixel width. The
@@ -1436,9 +1469,7 @@ Window {
 
                         var text = []
                         for (var i = 0; i < n; i++)
-                            // Ceil: Text elides on a sub-pixel overflow too, and
-                            // the delegate's width is the float we hand back.
-                            text.push(Math.ceil(predMetrics.advanceWidth(preds[i])))
+                            text.push(predRow.measure(preds[i]))
 
                         // Narrowest a pill may be and still show its whole word.
                         function tight(idx) { return Math.max(minNat, text[idx] + minPad) }

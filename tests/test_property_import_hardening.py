@@ -214,7 +214,14 @@ def _build_archive(
         zf.writestr("manifest.json", json.dumps(manifest))
         for name, payload in members:
             stored = zipfile.ZipInfo(name).filename
-            if stored in seen:
+            # An empty member name cannot be stored at all: `writestr` indexes
+            # the last character of the filename and raises IndexError on
+            # Python <= 3.11. That is a limitation of the archive *writer*, not
+            # something the importer could ever be handed, so skip it here
+            # rather than narrowing the strategy. The empty name is still
+            # generated and still exercised directly against the allow-list in
+            # TestAllowListContainsExtraction, which is where it belongs.
+            if not stored or stored in seen:
                 continue
             seen.add(stored)
             zf.writestr(name, payload)
