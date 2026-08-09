@@ -462,3 +462,126 @@ def _lerp(p0, p1, t: float):
         round(p0.x() + (p1.x() - p0.x()) * t),
         round(p0.y() + (p1.y() - p0.y()) * t),
     )
+
+
+class TestSwipeOffPathIsUnaffected:
+    """The press lifecycle was extracted out of KeyButton's MouseArea into
+    `_acceptPress` / `_pressVisual` / `_activate` / `_endPress` so the overlay
+    could drive a key remotely. That refactor sits under **every** key in the
+    app, and every other test in this file has swipe ON, so the ordinary path
+    a user takes with swipe off (the default) would otherwise be exercised by
+    nothing at all.
+
+    These press keys with the overlay disabled, so the events reach
+    `KeyButton`'s own MouseArea rather than the overlay.
+    """
+
+    @pytest.fixture
+    def plain_root(self, swipe_root):
+        root, warnings, synth = swipe_root
+        root.setProperty("swipeEnabled", False)
+        QCoreApplication.processEvents()
+        overlay = root.findChild(QQuickItem, "swipeOverlay")
+        # The overlay hides itself when disabled, which is what stops it hit
+        # testing. Assert it, so these cannot silently keep testing the
+        # overlay path and report a pass that means nothing.
+        assert overlay.property("enabled") is False
+        assert not overlay.isVisible(), (
+            "disabled overlay is still visible, so it still takes presses"
+        )
+        return root, warnings, synth
+
+    @pytest.mark.parametrize("action", ["backspace", "delete", "tab", "return"])
+    def test_special_key_still_types_with_swipe_off(self, plain_root, action: str) -> None:
+        root, warnings, synth = plain_root
+        key = _find_key(root, type="special", action=action)
+        synth.reset_mock()
+
+        _tap(root, key)
+
+        assert KEYSYMS[action] in _sent_keys(synth), (
+            f"tapping {action!r} with swipe OFF sent {_sent_keys(synth)!r}"
+        )
+        assert _real_warnings(warnings) == []
+
+    def test_character_key_still_types_with_swipe_off(self, plain_root) -> None:
+        root, _, synth = plain_root
+        key = _find_key(root, type="char", key="a")
+        synth.reset_mock()
+
+        _tap(root, key)
+
+        assert synth.send_text.called or "a" in _sent_keys(synth), (
+            f"tapping 'a' with swipe OFF sent nothing: "
+            f"send_text={synth.send_text.call_args_list} "
+            f"send_key={synth.send_key.call_args_list}"
+        )
+
+    def test_hold_to_repeat_still_works_with_swipe_off(self, plain_root) -> None:
+        """The case the refactor most plausibly breaks: `_activate` arms the
+        repeat timer, and it is now called from two places."""
+        root, _, synth = plain_root
+        key = _find_key(root, type="special", action="backspace")
+        point = key.mapToScene(key.boundingRect().center()).toPoint()
+        root.setProperty("repeatDelay", 60)
+        root.setProperty("repeatInterval", 20)
+        QCoreApplication.processEvents()
+        synth.reset_mock()
+
+        QTest.mousePress(root, Qt.LeftButton, Qt.NoModifier, point)
+        QTest.qWait(400)
+        held = _sent_keys(synth).count("BackSpace")
+        QTest.mouseRelease(root, Qt.LeftButton, Qt.NoModifier, point)
+        QCoreApplication.processEvents()
+
+        assert held > 1, f"holding Backspace with swipe OFF produced {held} keystroke(s)"
+
+        after = _sent_keys(synth).count("BackSpace")
+        QTest.qWait(120)
+        assert _sent_keys(synth).count("BackSpace") == after, (
+            "Backspace kept repeating after release with swipe OFF"
+        )
+
+    def test_character_keys_never_repeat_with_swipe_off(self, plain_root) -> None:
+        root, _, synth = plain_root
+        key = _find_key(root, type="char", key="a")
+        point = key.mapToScene(key.boundingRect().center()).toPoint()
+        root.setProperty("repeatDelay", 60)
+        root.setProperty("repeatInterval", 20)
+        QCoreApplication.processEvents()
+        synth.reset_mock()
+
+        QTest.mousePress(root, Qt.LeftButton, Qt.NoModifier, point)
+        QTest.qWait(400)
+        QTest.mouseRelease(root, Qt.LeftButton, Qt.NoModifier, point)
+        QCoreApplication.processEvents()
+
+        assert synth.send_text.call_count <= 1, (
+            f"a held character key repeated with swipe OFF: {synth.send_text.call_args_list}"
+        )
+
+    def test_right_click_types_the_shifted_variant_with_swipe_off(self, plain_root) -> None:
+        """`_acceptPress` / `_pressVisual` are shared with the right-button
+        branch, which returns before `_activate`. A refactor that dropped that
+        early return would make right-click also type the unshifted key."""
+        root, _, synth = plain_root
+        key = _find_key(root, type="char", key="1")
+        point = key.mapToScene(key.boundingRect().center()).toPoint()
+        synth.reset_mock()
+
+        QTest.mousePress(root, Qt.RightButton, Qt.NoModifier, point)
+        QCoreApplication.processEvents()
+        QTest.mouseRelease(root, Qt.RightButton, Qt.NoModifier, point)
+        QCoreApplication.processEvents()
+
+        typed = [c.args[0] for c in synth.send_text.call_args_list if c.args]
+        # "!" is punctuation, so auto-space-after-punctuation (on by default)
+        # appends a space of its own. Assert on the character that was typed,
+        # not on the whole call list, or this fails on an unrelated setting.
+        assert typed and typed[0] == "!", (
+            f"right-clicking '1' typed {typed!r}, expected it to start with '!'"
+        )
+        assert "1" not in typed, (
+            f"right-click also typed the unshifted key: {typed!r}. The right-button "
+            "branch must return before _activate()"
+        )
