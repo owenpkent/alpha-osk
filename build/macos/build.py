@@ -26,7 +26,7 @@ Usage
 
 Prerequisites
 -------------
-- Python 3.9+ with ``pyinstaller`` installed.
+- Python 3.10+ with ``pyinstaller`` installed.
 - For ``--dmg``: ``hdiutil`` (preinstalled on every macOS).
 - Code signing & notarization are NOT handled here yet; an unsigned
   ``.app`` opens via right-click → Open.  Wire in

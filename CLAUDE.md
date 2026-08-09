@@ -18,7 +18,7 @@ Alpha-OSK is an AI-assisted, mouse-driven on-screen keyboard for Windows and Lin
 
 ## Stack & layout
 
-- Python 3.9+ backend (CI runs 3.11), PySide6 (Qt6) + QML UI. No LLM/GPU. Key synthesis: ctypes SendInput scancode mode (Windows), `xdotool`/`ydotool` subprocess (Linux, NOT bundled), Quartz CGEvent (macOS, WIP).
+- Python 3.10+ backend (CI runs 3.11, mypy targets 3.10), PySide6 (Qt6) + QML UI. No LLM/GPU. Key synthesis: ctypes SendInput scancode mode (Windows), `xdotool`/`ydotool` subprocess (Linux, NOT bundled), Quartz CGEvent (macOS, WIP).
 - `src/keyboard_bridge.py` (central QML<->Python bridge: keys, modifiers, context, predictions), `src/keyboard_app.py` (launcher, window flags, auto-save on exit), `src/platform/` (OS abstraction + password detect), `src/prediction/` (hybrid engine), `qml/Main.qml` + `qml/components/`, `data/` (dictionaries/layouts/packs), `build/{windows,linux,macos}/`, `tests/` (pytest), `backend/cf-worker/` (Cloudflare telemetry worker).
 
 ## Build, run, test
