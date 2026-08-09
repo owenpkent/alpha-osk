@@ -170,6 +170,59 @@ def _sent_keys(synth) -> list[str]:
     return [call.args[0] for call in synth.send_key.call_args_list if call.args]
 
 
+def _typed(synth) -> list[str]:
+    """Everything handed to the synthesizer, whichever call it went through.
+
+    A character can legitimately reach the OS by two different paths, and
+    which one the bridge picks is not this file's business. `send_text` is
+    the normal route; `send_key` with a `hold_seconds` is the game-compat
+    route, taken when the foreground window looks like a game.
+
+    That distinction is environment-dependent *here*, which is the trap: the
+    borderless-fullscreen heuristic asks whether the window covers its
+    monitor and has no title bar, and an OSK shown under the offscreen
+    platform plugin is frameless and fills the virtual screen, so these
+    tests can classify themselves as a game depending on the runner. A test
+    that watched only `send_text` therefore passed or failed on the geometry
+    of the machine, not on the behaviour under test.
+    """
+    out = [c.args[0] for c in synth.send_text.call_args_list if c.args]
+    out += _sent_keys(synth)
+    return out
+
+
+# KeyButton ramps a held key in two stages: a warm-up tick at `repeatDelay`,
+# then the first actual repeat one `warmUpGrace` later. `warmUpGrace` is a
+# fixed 300 ms on KeyButton that root.repeatDelay / repeatInterval do not
+# scale, so the first repeat lands no earlier than repeatDelay + 300 ms
+# however low the test turns the other two.
+#
+# That makes a fixed wait budget the wrong tool in both directions. Waiting
+# 400 ms for a repeat left a 40 ms margin and failed on a loaded Windows
+# runner; waiting 400 ms to prove a key does NOT repeat is worse, because it
+# can pass without the ramp ever having had time to fire, which is a test
+# that cannot fail.
+_REPEAT_FLOOR_MS = 360  # repeatDelay(60) + warmUpGrace(300) in these tests
+_REPEAT_SETTLE_MS = 900  # comfortably past the floor, for negative assertions
+
+
+def _wait_for_repeats(synth, keysym: str, minimum: int = 2, timeout_ms: int = 4000) -> int:
+    """Hold-wait until *keysym* has been sent *minimum* times, bounded.
+
+    Polls rather than sleeping a fixed budget, so a slow runner costs time
+    instead of a false failure. Returns the count actually observed, so the
+    caller still asserts and a genuinely dead repeat still fails.
+    """
+    waited = 0
+    step = 50
+    while waited < timeout_ms:
+        QTest.qWait(step)
+        waited += step
+        if _sent_keys(synth).count(keysym) >= minimum:
+            break
+    return _sent_keys(synth).count(keysym)
+
+
 class TestOverlayIsActuallyInTheWay:
     """If the overlay were not intercepting, every test below would pass
     trivially against the old code, since the KeyButtons would just handle
@@ -222,10 +275,7 @@ class TestSpecialKeysAreNotDeadTaps:
 
         _tap(root, key)
 
-        assert synth.send_text.called or "a" in _sent_keys(synth), (
-            f"tapping 'a' sent nothing: send_text={synth.send_text.call_args_list} "
-            f"send_key={synth.send_key.call_args_list}"
-        )
+        assert "a" in _typed(synth), f"tapping 'a' sent nothing: {_typed(synth)!r}"
 
     def test_modifier_key_toggles(self, swipe_root) -> None:
         """Modifiers route through toggleShift, not pressSpecialKey, so this
@@ -276,8 +326,7 @@ class TestHoldToRepeat:
         synth.reset_mock()
 
         QTest.mousePress(root, Qt.LeftButton, Qt.NoModifier, point)
-        QTest.qWait(400)
-        held = _sent_keys(synth).count("BackSpace")
+        held = _wait_for_repeats(synth, "BackSpace")
         QTest.mouseRelease(root, Qt.LeftButton, Qt.NoModifier, point)
         QCoreApplication.processEvents()
 
@@ -303,13 +352,11 @@ class TestHoldToRepeat:
         synth.reset_mock()
 
         QTest.mousePress(root, Qt.LeftButton, Qt.NoModifier, point)
-        QTest.qWait(400)
+        QTest.qWait(_REPEAT_SETTLE_MS)
         QTest.mouseRelease(root, Qt.LeftButton, Qt.NoModifier, point)
         QCoreApplication.processEvents()
 
-        assert synth.send_text.call_count <= 1, (
-            f"a held character key repeated: {synth.send_text.call_args_list}"
-        )
+        assert _typed(synth).count("a") <= 1, f"a held character key repeated: {_typed(synth)!r}"
 
 
 class TestSwipingStillWorks:
@@ -327,8 +374,8 @@ class TestSwipingStillWorks:
         QCoreApplication.processEvents()
         # Nothing may be typed on press: for a character key the gesture is
         # genuinely ambiguous until it ends.
-        assert not synth.send_text.called, (
-            "pressing a letter typed immediately, so it can never become a swipe"
+        assert not _typed(synth), (
+            f"pressing a letter typed {_typed(synth)!r} immediately, so it can never become a swipe"
         )
 
         steps = 12
@@ -372,7 +419,7 @@ class TestSwipingStillWorks:
         before = _sent_keys(synth).count("BackSpace")
 
         QTest.mouseMove(root, away)
-        QTest.qWait(300)
+        QTest.qWait(_REPEAT_SETTLE_MS)
 
         assert _sent_keys(synth).count("BackSpace") == before, (
             "a held special key kept repeating after the pointer left it"
@@ -381,10 +428,9 @@ class TestSwipingStillWorks:
         QTest.mouseRelease(root, Qt.LeftButton, Qt.NoModifier, away)
         QCoreApplication.processEvents()
 
-        assert not synth.send_text.called, (
-            f"releasing over 'g' after sliding off Backspace typed "
-            f"{synth.send_text.call_args_list}: the abort fell through to the "
-            "tap path"
+        assert "g" not in _typed(synth), (
+            f"releasing over 'g' after sliding off Backspace typed {_typed(synth)!r}: "
+            "the abort fell through to the tap path"
         )
         assert _sent_keys(synth).count("BackSpace") == before, (
             "the release re-fired the key the gesture had already abandoned"
@@ -413,6 +459,9 @@ class TestSwipingStillWorks:
 
         QTest.mouseRelease(root, Qt.LeftButton, Qt.NoModifier, p1)
         QCoreApplication.processEvents()
+        # send_text specifically: a decoded swipe inserts its word through
+        # that call, and the Backspace press itself legitimately shows up in
+        # send_key, so _typed() would be non-empty either way.
         assert not synth.send_text.called, (
             f"a gesture starting on Backspace produced text: {synth.send_text.call_args_list}"
         )
@@ -445,12 +494,15 @@ class TestHiddenPanelsDoNotClaimPresses:
             key = _find_key(root, type="special", action=action)
             synth.reset_mock()
             _tap(root, key)
-            sent = _sent_keys(synth)
-            assert sent == [KEYSYMS[action]], (
-                f"tapping {action!r} produced {sent!r}: a hidden key claimed the press"
+            typed = _typed(synth)
+            assert typed == [KEYSYMS[action]], (
+                f"tapping {action!r} produced {typed!r}: a hidden key claimed the press"
             )
-            assert not synth.send_text.called, (
-                f"tapping {action!r} typed text, so a hidden digit took the press"
+            # Checked through _typed, not send_text: under the game-compat
+            # path a digit reaches the OS via send_key, so watching send_text
+            # alone would let exactly the failure this test exists for pass.
+            assert not [c for c in typed if c in "1234567890"], (
+                f"tapping {action!r} also typed a digit: {typed!r}"
             )
 
 
@@ -511,11 +563,7 @@ class TestSwipeOffPathIsUnaffected:
 
         _tap(root, key)
 
-        assert synth.send_text.called or "a" in _sent_keys(synth), (
-            f"tapping 'a' with swipe OFF sent nothing: "
-            f"send_text={synth.send_text.call_args_list} "
-            f"send_key={synth.send_key.call_args_list}"
-        )
+        assert "a" in _typed(synth), f"tapping 'a' with swipe OFF sent nothing: {_typed(synth)!r}"
 
     def test_hold_to_repeat_still_works_with_swipe_off(self, plain_root) -> None:
         """The case the refactor most plausibly breaks: `_activate` arms the
@@ -529,8 +577,7 @@ class TestSwipeOffPathIsUnaffected:
         synth.reset_mock()
 
         QTest.mousePress(root, Qt.LeftButton, Qt.NoModifier, point)
-        QTest.qWait(400)
-        held = _sent_keys(synth).count("BackSpace")
+        held = _wait_for_repeats(synth, "BackSpace")
         QTest.mouseRelease(root, Qt.LeftButton, Qt.NoModifier, point)
         QCoreApplication.processEvents()
 
@@ -552,12 +599,12 @@ class TestSwipeOffPathIsUnaffected:
         synth.reset_mock()
 
         QTest.mousePress(root, Qt.LeftButton, Qt.NoModifier, point)
-        QTest.qWait(400)
+        QTest.qWait(_REPEAT_SETTLE_MS)
         QTest.mouseRelease(root, Qt.LeftButton, Qt.NoModifier, point)
         QCoreApplication.processEvents()
 
-        assert synth.send_text.call_count <= 1, (
-            f"a held character key repeated with swipe OFF: {synth.send_text.call_args_list}"
+        assert _typed(synth).count("a") <= 1, (
+            f"a held character key repeated with swipe OFF: {_typed(synth)!r}"
         )
 
     def test_right_click_types_the_shifted_variant_with_swipe_off(self, plain_root) -> None:
@@ -574,13 +621,14 @@ class TestSwipeOffPathIsUnaffected:
         QTest.mouseRelease(root, Qt.RightButton, Qt.NoModifier, point)
         QCoreApplication.processEvents()
 
-        typed = [c.args[0] for c in synth.send_text.call_args_list if c.args]
-        # "!" is punctuation, so auto-space-after-punctuation (on by default)
-        # appends a space of its own. Assert on the character that was typed,
-        # not on the whole call list, or this fails on an unrelated setting.
-        assert typed and typed[0] == "!", (
-            f"right-clicking '1' typed {typed!r}, expected it to start with '!'"
-        )
+        typed = _typed(synth)
+        # Membership, not position. Two things make ordering meaningless
+        # here: "!" is punctuation, so auto-space-after-punctuation (on by
+        # default) appends a space of its own, and `_typed` concatenates two
+        # separate call channels rather than interleaving them chronologically.
+        # The property that actually matters is which characters reached the
+        # synthesizer at all.
+        assert "!" in typed, f"right-clicking '1' typed {typed!r}, expected '!' among them"
         assert "1" not in typed, (
             f"right-click also typed the unshifted key: {typed!r}. The right-button "
             "branch must return before _activate()"
