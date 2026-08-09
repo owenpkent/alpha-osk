@@ -33,6 +33,12 @@ try:
     from PySide6.QtCore import QCoreApplication, QSettings, QUrl  # noqa: E402
     from PySide6.QtGui import QGuiApplication  # noqa: E402
     from PySide6.QtQml import QQmlApplicationEngine  # noqa: E402
+
+    # Imported for the side effect: without QQuickItem somewhere in the
+    # module, reading `root.contentItem` raises "Can't find converter for
+    # 'QQuickItem*'". Walking the visual tree is the only way to reach a
+    # Repeater's delegates (see _rendered_rows).
+    from PySide6.QtQuick import QQuickItem  # noqa: E402,F401
 except ImportError as exc:  # pragma: no cover - environment-dependent
     pytest.skip(
         f"Qt GUI libraries unavailable ({exc}); install libegl1/libgl1 to run "
@@ -324,4 +330,174 @@ class TestNumberRowPanel:
             f"{[k for k in keys if len(k) != 1]}"
         )
         assert "Esc" not in keys
+        assert _real_warnings(warnings) == []
+
+
+class TestEveryRowFitsTheContentArea:
+    """No keyboard row may render wider than the space the sizer reserved.
+
+    `keyW` is solved from `(width - layoutFixedPixels) / totalKeyUnits`, so
+    the two halves of `_widestRow` have to describe the *same* worst case: a
+    row costs `units * keyW + gaps * keySpacing`, and the row with the most
+    units is not necessarily the row with the most gaps.  In every compact
+    layout they are provably different rows, because the format pins every
+    row to the same 13.0u while the letter row carries an extra key.  Taking
+    `gaps` from whichever row won the units comparison under-reserved one
+    keySpacing and pushed the widest row past the margin.
+
+    Swept rather than spot-checked: the overflow is a fixed few pixels, so it
+    hides completely at any width where the rows happen to sit well inside
+    the frame, and only the widest row in the densest configuration shows it.
+
+    The exact-arithmetic version of this property is
+    `test_fixed_pixels_reserves_gaps_for_the_row_with_the_most_keys` below;
+    prefer that one when diagnosing, since it carries no float slop.
+    """
+
+    # Both view modes, both compact layers, panels off (panels take units
+    # away from the main block, which masks the deficit).
+    WIDTHS = (940, 1000, 1100, 1240)
+
+    # `Row` reports an implicit width one pixel above the arithmetic sum of
+    # its children: `units * keyW` lands a few ulps above the integer it
+    # should be (keyW is a division that rarely terminates in binary) and the
+    # positioner ceils.  It is a constant 1 px in *both* view modes and at
+    # every width below, including on the full-size layouts this feature never
+    # touched, so it is Qt rounding rather than anything the sizer controls.
+    # Allowed for, not asserted against: the regression this test exists for
+    # is keySpacing-sized (2-3 px), so 1 px of slack still catches it.
+    POSITIONER_SLOP_PX = 1
+
+    @staticmethod
+    def _rendered_rows(root) -> list:
+        """Every laid-out keyboard row, via the VISUAL tree.
+
+        `findChildren` cannot see a Repeater's delegates: they are re-parented
+        as visual children, so their QObject parent is the delegate model.
+        The rows are the items carrying a `rowData` property.
+        """
+        found: list = []
+
+        def walk(item) -> None:
+            for child in item.childItems():
+                if child.property("rowData") is not None:
+                    found.append(child)
+                walk(child)
+
+        walk(root.property("contentItem"))
+        return found
+
+    def _assert_rows_fit(self, root, warnings, label: str) -> None:
+        for width in self.WIDTHS:
+            root.setProperty("width", width)
+            QCoreApplication.processEvents()
+
+            rows = self._rendered_rows(root)
+            # Non-vacuity: an empty list would satisfy every assertion below.
+            assert rows, f"no rows rendered at width {width} ({label})"
+
+            # 8 px margin on each side is the content area the rows are
+            # centred in; layoutFixedPixels reserves exactly that 16 px.
+            available = width - 16
+            for row in rows:
+                keys = len(row.property("rowData")["keys"])
+                assert row.width() <= available + self.POSITIONER_SLOP_PX, (
+                    f"{label}: a {keys}-key row rendered "
+                    f"{row.width() - available:.0f} px past the content area "
+                    f"at window width {width} "
+                    f"(row {row.width():.0f} px vs {available} px available)"
+                )
+        assert _real_warnings(warnings) == []
+
+    def test_full_size_rows_fit(self, qml_root) -> None:
+        root, warnings, _ = qml_root
+        root.setProperty("showNavigation", False)
+        root.setProperty("showNumpad", False)
+        QCoreApplication.processEvents()
+        self._assert_rows_fit(root, warnings, "full-size")
+
+    def test_compact_base_layer_rows_fit(self, qml_root) -> None:
+        root, warnings, _ = qml_root
+        root.setProperty("showNavigation", False)
+        root.setProperty("showNumpad", False)
+        root.setProperty("compactView", True)
+        QCoreApplication.processEvents()
+        assert root.property("activeLayer") == "base"
+        self._assert_rows_fit(root, warnings, "compact base layer")
+
+    def test_compact_sym_layer_rows_fit(self, qml_root) -> None:
+        root, warnings, _ = qml_root
+        root.setProperty("showNavigation", False)
+        root.setProperty("showNumpad", False)
+        root.setProperty("compactView", True)
+        root.setProperty("activeLayer", "sym")
+        QCoreApplication.processEvents()
+        self._assert_rows_fit(root, warnings, "compact ?123 layer")
+
+    def test_switching_layer_does_not_resize_the_keys(self, qml_root) -> None:
+        """?123 must not change key width.
+
+        Both halves of `_widestRow` are maxed across the *visible* rows, so a
+        layer whose widest row differs in units or in key count would re-solve
+        keyW and make every key jump on the hop.  The layout format already
+        pins units per row; this pins the pixel consequence, which is the part
+        a user would actually see.
+        """
+        root, warnings, _ = qml_root
+        root.setProperty("compactView", True)
+        QCoreApplication.processEvents()
+        base_key_w = root.property("keyW")
+        base_fixed = root.property("layoutFixedPixels")
+
+        root.setProperty("activeLayer", "sym")
+        QCoreApplication.processEvents()
+
+        assert root.property("keyW") == pytest.approx(base_key_w)
+        assert root.property("layoutFixedPixels") == pytest.approx(base_fixed)
+        assert _real_warnings(warnings) == []
+
+    @pytest.mark.parametrize(
+        ("compact", "layer"),
+        [(False, "base"), (True, "base"), (True, "sym")],
+    )
+    def test_fixed_pixels_reserves_gaps_for_the_row_with_the_most_keys(
+        self, qml_root, compact: bool, layer: str
+    ) -> None:
+        """The same property as the sweep above, in exact integers.
+
+        `layoutFixedPixels` must reserve a gap for every inter-key space in
+        the row that has the most keys, which, when several rows tie on
+        units, is not the row that won the units comparison.  Stated on the
+        reserved pixels rather than on rendered widths so it carries no
+        positioner rounding: this is the assertion that actually fails the
+        moment `_widestRow` reads `gaps` off the wrong row.
+        """
+        root, warnings, _ = qml_root
+        root.setProperty("showNavigation", False)
+        root.setProperty("showNumpad", False)
+        root.setProperty("compactView", compact)
+        root.setProperty("activeLayer", layer)
+        QCoreApplication.processEvents()
+
+        rows = _rows(root)
+        assert rows, "no visible rows to measure"
+        most_keys = max(len(r["keys"]) for r in rows)
+        widest_units = max(_row_units(r) for r in rows)
+
+        # Sanity: the tie this guards against must actually be present in the
+        # compact layouts, or the test would pass for the wrong reason.
+        if compact:
+            tied = [r for r in rows if _row_units(r) == pytest.approx(widest_units)]
+            assert len(tied) > 1, "compact rows are meant to tie on units"
+            assert len({len(r["keys"]) for r in tied}) > 1, (
+                "tied rows all have the same key count, so this layout cannot "
+                "exercise the units-vs-gaps split"
+            )
+
+        expected = 16 + (most_keys - 1) * root.property("keySpacing")
+        assert root.property("layoutFixedPixels") == pytest.approx(expected), (
+            f"reserved {root.property('layoutFixedPixels')} px for gaps but the "
+            f"widest row has {most_keys} keys ({most_keys - 1} gaps)"
+        )
+        assert root.property("totalKeyUnits") == pytest.approx(widest_units)
         assert _real_warnings(warnings) == []
