@@ -23,7 +23,16 @@ select = ["E", "F", "W", "I"]
 "tests/test_keyboard_bridge.py" = ["E402"]
 
 [tool.mypy]
-python_version = "3.9"
+# The project's minimum supported Python, and it has to be a version mypy
+# will actually accept: mypy dropped 3.9 as a target, so `python_version =
+# "3.9"` was rejected at startup with a warning and mypy silently fell back
+# to its own default. The declared floor was therefore enforced by nothing,
+# and no gate would have caught 3.10-or-newer syntax reaching src/. CI runs
+# 3.11, so 3.10 is type-checked but not executed; anything a type checker
+# cannot see (a stdlib function that changed behaviour, say) is still only
+# proven on 3.11. Keep this in step with the floor asserted by
+# run.py::check_python_version and build/*/build.py.
+python_version = "3.10"
 warn_return_any = true
 warn_unused_configs = true
 ignore_missing_imports = true
@@ -35,8 +44,8 @@ ignore_errors = true
 # Optional transitive deps that may be installed locally (e.g. via the
 # commented-out transformers extra in requirements.txt) but never on
 # CI.  `follow_imports = "skip"` bypasses parsing of these libraries so
-# their py3.10-syntax features (huggingface_hub uses `match`) don't
-# crash mypy when our project targets py3.9.  CI behaviour is
+# their newer-syntax features don't crash mypy when parsed against our
+# target version.  CI behaviour is
 # unchanged — these modules aren't installed there, so the override is
 # a no-op.
 [[tool.mypy.overrides]]

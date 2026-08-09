@@ -45,9 +45,9 @@ IS_MACOS = sys.platform == "darwin"
 
 
 def check_python_version():
-    """Check if Python version is compatible (3.9+)."""
-    if sys.version_info < (3, 9):
-        print("ERROR: Python 3.9 or higher is required")
+    """Check if Python version is compatible (3.10+)."""
+    if sys.version_info < (3, 10):
+        print("ERROR: Python 3.10 or higher is required")
         print(f"Current version: {sys.version}")
         return False
     return True
