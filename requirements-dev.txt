@@ -13,8 +13,12 @@ pytest-mock>=3.12.0
 # cannot pass locally and fail on CI from a stale corpus.
 hypothesis>=6.100.0
 
-# Linting & formatting
-ruff>=0.4.0
+# Linting & formatting.  Pinned exactly, not floored: `ruff format --check`
+# is a CI gate, and the formatter's output changes between releases, so a
+# floating install would turn the Lint job red on a tree nobody edited and
+# make `python check.py` disagree with CI depending on when you last
+# upgraded.  Keep this in step with the pin in .github/workflows/ci.yml.
+ruff==0.16.2
 
 # Type checking
 mypy>=1.9.0

@@ -3,8 +3,12 @@ name: CI
 on:
   push:
     branches: [main]
+  # Deliberately unfiltered by base branch. `branches: [main]` here means a
+  # PR stacked on another feature branch runs NO checks at all, and GitHub
+  # still shows it a green row from whatever other apps are installed, so it
+  # reads as reviewed. PR #14 sat that way: 65 files, every module under
+  # src/, zero lint / type / test signal.
   pull_request:
-    branches: [main]
 
 permissions:
   contents: read
@@ -22,7 +26,11 @@ jobs:
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: "3.11"
-      - run: pip install ruff
+      # Pinned, and kept in step with requirements-dev.txt. `ruff check` is
+      # stable enough across releases to float; `ruff format` is not, and it
+      # gates below. On a floating install a new ruff release turns this job
+      # red on a tree nobody touched.
+      - run: pip install ruff==0.16.2
       - run: ruff check src/ tests/
       # Formatting is a separate gate from linting: `ruff check` does not
       # look at layout, so without this the tree drifts from ruff-format's
