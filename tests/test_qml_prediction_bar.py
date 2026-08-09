@@ -117,26 +117,53 @@ def _child(root, name: str) -> QObject:
     return obj
 
 
-# A single processEvents() pass is not guaranteed to flush Qt Quick's
-# delegate creation for a Repeater, so a caller that asserted immediately
-# after one pass saw an empty pill row perhaps 40% of the time, at a
-# different window width each run. Pump until the pills materialise instead,
-# bounded so this cannot hang.
+# Bound on the wait in _show. Pump until the pills exist rather than
+# asserting after a single pass, which saw an empty pill row perhaps 40% of
+# the time at a different window width each run (issue #16).
 #
-# This cannot hide a real regression. A genuine "the bar dropped everything"
-# bug exhausts the budget and still arrives at the caller's non-empty
-# assertion; the only thing the loop buys is time for work already queued.
-# The cost when zero pills are correct (empty predictions) is a handful of
-# cheap no-op passes.
+# Issue #16 attributed that to Repeater delegate incubation not being flushed
+# by one processEvents(). That is not the mechanism, and the distinction
+# matters because it is what makes the loop below correct rather than
+# superstition: `root.predictions` is not a binding, Main.qml assigns it
+# imperatively from the bridge, and `onActiveChanged` calls
+# `clearPredictions()` on deactivation. Waiting longer gave that path *more*
+# chances to fire, so waiting harder made it worse, not better. Re-asserting
+# the predictions each pass is what actually fixes it.
 _PILL_PUMP_PASSES = 10
 
 
 def _show(root, predictions: list[str]):
-    """Push predictions, wait for the pills, return (pill row, clear button)."""
-    root.setProperty("predictions", predictions)
+    """Push predictions, wait for the pills, return (pill row, clear button).
+
+    Two details are load-bearing here, and they fix two different failures
+    that both presented as "the pill sweep is flaky".
+
+    `_pill_texts` returns PySide wrappers for QML-owned QQuickItems. The
+    Repeater destroys and recreates its delegates whenever the model changes,
+    so a wrapper that outlives an event-loop turn can be pointing at freed
+    memory, and the next `processEvents()` walks straight into it. The first
+    version of this loop held the returned list across the next pass and
+    Linux CI died with SIGSEGV inside `processEvents` (exit 139, which takes
+    the whole run down rather than failing one test). Counting drops every
+    wrapper before the next wait.
+
+    This still cannot hide a real regression: a genuine "the bar dropped
+    everything" bug exhausts the budget and arrives at the caller's non-empty
+    assertion anyway. The loop only buys time for work already queued.
+    """
     for _ in range(_PILL_PUMP_PASSES):
+        # Re-asserted every pass, not set once before the loop. `predictions`
+        # is not a binding: Main.qml's Connections block assigns it
+        # imperatively from the bridge, and `onActiveChanged` calls
+        # `clearPredictions()` whenever the window loses activation. So an
+        # activation change landing mid-wait makes the bridge push an empty
+        # list over whatever the test asked for, and every pill disappears.
+        # Pushing the wanted state each pass makes the test say what it means
+        # ("show these") instead of depending on the window never being
+        # deactivated by the environment.
+        root.setProperty("predictions", predictions)
         QCoreApplication.processEvents()
-        if _pill_texts(root):
+        if _pill_count(root):
             break
     return _child(root, "predictionRow"), _child(root, "clearContextButton")
 
@@ -162,6 +189,12 @@ def _pill_texts(root) -> list:
     pills — which is how a real eliding regression shipped under a test named
     "no pill is ever truncated". Walk `childItems()` instead, and assert
     non-empty at the call site.
+
+    **Never hold the result across an event-loop turn.** These are PySide
+    wrappers for items QML owns, and the Repeater frees its delegates on every
+    model change, so a retained wrapper can outlive the object it points at.
+    Doing that inside a wait loop segfaulted Linux CI. Use `_pill_count` if
+    all you need is "are there any yet".
     """
     out = []
 
@@ -173,6 +206,16 @@ def _pill_texts(root) -> list:
 
     walk(root.property("contentItem"))
     return out
+
+
+def _pill_count(root) -> int:
+    """How many pill labels exist right now, holding on to none of them.
+
+    The readiness probe for `_show`'s wait loop. Returning an int rather than
+    the items is the whole point: every wrapper is dropped before the caller
+    waits again. See the warning on `_pill_texts`.
+    """
+    return len(_pill_texts(root))
 
 
 def _truncated(root) -> list[str]:
