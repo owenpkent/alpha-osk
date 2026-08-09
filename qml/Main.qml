@@ -582,6 +582,18 @@ Window {
     // row: Esc + ` + 10 digits + - + = + 1.5u Backspace), while the compact
     // view resolves to 13.0u / 12 gaps.  The fallback keeps the pre-load
     // frame identical to what the full-size layout will produce.
+    //
+    // Units and gaps are maxed INDEPENDENTLY, and that is load-bearing.  A
+    // row's pixel width is `units * keyW + gaps * keySpacing`, so the row
+    // that needs the most units and the row that needs the most gaps are not
+    // necessarily the same row, and in a compact layout they never are,
+    // because every row is deliberately the same 13.0u while the letter row
+    // carries one more key than its neighbours.  Reading `gaps` off whichever
+    // row happened to win the units comparison under-reserved exactly one
+    // keySpacing, so the widest row rendered 2-3 px past the content area and
+    // ate into the 8 px margin (worst at minimumWidth, which is computed from
+    // the same number).  Guarded by
+    // tests/test_qml_compact_view.py::TestEveryRowFitsTheContentArea.
     property var _widestRow: {
         var bestUnits = 0, bestGaps = 0
         var rows = root.visibleRows
@@ -590,7 +602,8 @@ Window {
             if (!keys || !keys.length) continue
             var u = 0
             for (var j = 0; j < keys.length; j++) u += (keys[j].width || 1.0)
-            if (u > bestUnits) { bestUnits = u; bestGaps = keys.length - 1 }
+            if (u > bestUnits) bestUnits = u
+            if (keys.length - 1 > bestGaps) bestGaps = keys.length - 1
         }
         return bestUnits > 0 ? { units: bestUnits, gaps: bestGaps }
                              : { units: 15.5, gaps: 14 }
