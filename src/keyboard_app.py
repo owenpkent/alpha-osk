@@ -116,9 +116,7 @@ def _surface_existing_alpha_osk() -> None:
 
         user32 = ctypes.windll.user32
 
-        EnumWindowsProc = ctypes.WINFUNCTYPE(
-            ctypes.c_bool, wintypes.HWND, wintypes.LPARAM
-        )
+        EnumWindowsProc = ctypes.WINFUNCTYPE(ctypes.c_bool, wintypes.HWND, wintypes.LPARAM)
         user32.EnumWindows.argtypes = [EnumWindowsProc, wintypes.LPARAM]
         user32.EnumWindows.restype = ctypes.c_bool
         user32.GetWindowTextW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
@@ -368,7 +366,12 @@ def _apply_windows_extended_styles(root) -> None:
         SWP_NOACTIVATE = 0x0010
         SWP_FRAMECHANGED = 0x0020
         ok = user32.SetWindowPos(
-            hwnd, 0, 0, 0, 0, 0,
+            hwnd,
+            0,
+            0,
+            0,
+            0,
+            0,
             SWP_NOSIZE | SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED,
         )
         if not ok:
@@ -377,10 +380,7 @@ def _apply_windows_extended_styles(root) -> None:
                 kernel32.GetLastError(),
             )
 
-        _logger.info(
-            "Applied Windows extended styles: "
-            "WS_EX_NOACTIVATE | WS_EX_TOPMOST"
-        )
+        _logger.info("Applied Windows extended styles: WS_EX_NOACTIVATE | WS_EX_TOPMOST")
     except Exception as e:
         _logger.warning("Failed to apply Windows extended styles: %s", e)
 
@@ -453,8 +453,7 @@ def _apply_macos_activation_policy() -> None:
         )
     except Exception as exc:
         _logger.warning(
-            "Failed to set Accessory activation policy: %s — OSK may "
-            "steal focus when clicked",
+            "Failed to set Accessory activation policy: %s — OSK may steal focus when clicked",
             exc,
         )
 
@@ -512,8 +511,7 @@ def _apply_macos_window_flags(root) -> None:
         ns_window = ns_view.window()
         if ns_window is None:
             _logger.warning(
-                "Could not obtain NSWindow from QML root — macOS window "
-                "flags not applied"
+                "Could not obtain NSWindow from QML root — macOS window flags not applied"
             )
             return
 
@@ -530,7 +528,8 @@ def _apply_macos_window_flags(root) -> None:
         is_panel = bool(ns_window.isKindOfClass_(NSPanel))
         _logger.debug(
             "QML root NSWindow class=%s is_panel=%s",
-            cls_name, is_panel,
+            cls_name,
+            is_panel,
         )
 
         ns_window.setLevel_(NSFloatingWindowLevel)
@@ -560,7 +559,8 @@ def _apply_macos_window_flags(root) -> None:
                 pass
             _logger.debug(
                 "NSPanel styleMask: %#x → %#x (added NonactivatingPanel)",
-                current_mask, new_mask,
+                current_mask,
+                new_mask,
             )
 
         _logger.info(
@@ -648,7 +648,8 @@ def _migrate_legacy_compat_settings() -> None:
             settings.remove(legacy_manual_key)
             _logger.info(
                 "Migrated %s=%s → savedCompatMode",
-                legacy_manual_key, legacy_manual,
+                legacy_manual_key,
+                legacy_manual,
             )
         if settings.contains(legacy_auto_key):
             legacy_auto = settings.value(legacy_auto_key, True, type=bool)
@@ -656,7 +657,8 @@ def _migrate_legacy_compat_settings() -> None:
             settings.remove(legacy_auto_key)
             _logger.info(
                 "Migrated %s=%s → savedCompatAutoDetect",
-                legacy_auto_key, legacy_auto,
+                legacy_auto_key,
+                legacy_auto,
             )
         settings.setValue("compatSettingsMigrated", True)
     finally:
@@ -685,7 +687,10 @@ def _configure_logging() -> Path | None:
     try:
         log_path = get_config_dir() / "alpha-osk.log"
         file_handler = logging.handlers.RotatingFileHandler(
-            log_path, maxBytes=2 * 1024 * 1024, backupCount=3, encoding="utf-8",
+            log_path,
+            maxBytes=2 * 1024 * 1024,
+            backupCount=3,
+            encoding="utf-8",
         )
         file_handler.setFormatter(logging.Formatter(fmt))
         root.addHandler(file_handler)
@@ -726,9 +731,7 @@ def _set_windows_app_user_model_id() -> None:
     try:
         import ctypes
 
-        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
-            APP_USER_MODEL_ID
-        )
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(APP_USER_MODEL_ID)
     except Exception as exc:  # pragma: no cover - platform/runtime dependent
         _logger.debug("SetCurrentProcessExplicitAppUserModelID failed: %s", exc)
 
@@ -799,6 +802,7 @@ def main() -> int:
     # for the polling logic and rationale.
     if "--update-relauncher" in sys.argv:
         from src._update_relauncher import run_relauncher
+
         return run_relauncher(sys.argv)
 
     log_path = _configure_logging()
@@ -872,8 +876,7 @@ def main() -> int:
     if not bridge.synthAvailable:
         if CURRENT_PLATFORM == "linux":
             _logger.warning(
-                "No key synthesis tool found. "
-                "Install xdotool: sudo apt install xdotool"
+                "No key synthesis tool found. Install xdotool: sudo apt install xdotool"
             )
         elif CURRENT_PLATFORM == "macos":
             _logger.warning(
@@ -884,8 +887,7 @@ def main() -> int:
             )
         else:
             _logger.warning(
-                "Key synthesis not available. "
-                "Keystrokes will not be sent to other applications."
+                "Key synthesis not available. Keystrokes will not be sent to other applications."
             )
 
     # Set up QML engine
@@ -898,6 +900,7 @@ def main() -> int:
     def _on_qml_warnings(warnings: list) -> None:
         for w in warnings:
             _logger.warning("QML: %s", w.toString())
+
     engine.warnings.connect(_on_qml_warnings)
 
     # Expose bridge to QML
