@@ -24,6 +24,14 @@ jobs:
           python-version: "3.11"
       - run: pip install ruff
       - run: ruff check src/ tests/
+      # Formatting is a separate gate from linting: `ruff check` does not
+      # look at layout, so without this the tree drifts from ruff-format's
+      # output unnoticed (it had, in 46 of 57 files, despite the
+      # ruff-format hook in .pre-commit-config.yaml, which only runs for
+      # contributors who have actually run `pre-commit install`).
+      # Reproduce locally with `python check.py`; fix with
+      # `ruff format src/ tests/`.
+      - run: ruff format --check src/ tests/
 
   typecheck:
     name: Type Check

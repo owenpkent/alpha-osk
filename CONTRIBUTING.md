@@ -92,12 +92,14 @@ found only because someone re-ran the new test on the pre-fix tree.
 Before pushing, run the same gates CI runs:
 
 ```bash
-python check.py        # lint + type + tests, ~85s
+python check.py        # lint + format + type + tests, ~85s
 python check.py --full # adds coverage gate, ~3min
 ```
 
-This catches ruff / mypy / pytest failures locally instead of red Xs in
-CI.
+This catches ruff / ruff-format / mypy / pytest failures locally instead
+of red Xs in CI. Formatting is checked separately from linting because
+`ruff check` does not look at layout; fix a format failure by running
+`ruff format src/ tests/`, not by hand.
 
 ## Architecture orientation
 
@@ -119,8 +121,9 @@ Other useful docs in `docs/`:
 
 ## Coding conventions
 
-- **Python**: linted with `ruff`, typed with `mypy`. Run `ruff check src/`
-  and `mypy src/` before pushing.
+- **Python**: linted with `ruff`, formatted with `ruff format`, typed
+  with `mypy`. Run `python check.py` before pushing, which covers all
+  three (plus the tests).
 - **Comments**: write them only when the *why* is non-obvious. Don't
   describe what well-named code already does.
 - **No em dashes** in code, docs, commit messages, or PR descriptions.
@@ -140,7 +143,7 @@ Other useful docs in `docs/`:
 2. Make your change, with tests.
 3. Run `python check.py` locally.
 4. Push and open a PR using the template.
-5. CI runs ruff + mypy + pytest + OSV vulnerability scan. `main` is a
+5. CI runs ruff + ruff-format + mypy + pytest + OSV vulnerability scan. `main` is a
    protected branch: the merge button stays disabled until five required
    checks pass green: `Lint`, `Type Check`, `Test (ubuntu-latest)`,
    `Test (windows-latest)`, and `OSV Scanner (deps CVE check)`. A new CVE

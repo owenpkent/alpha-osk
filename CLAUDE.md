@@ -25,7 +25,7 @@ Alpha-OSK is an AI-assisted, mouse-driven on-screen keyboard for Windows and Lin
 
 - Run: `python run.py` (creates venv, installs deps, launches the keyboard).
 - Test: `python -m pytest` (also `-k fuzzy`, or a single file like `tests/test_keyboard_bridge.py`).
-- Pre-push gate, same three checks as CI: `python check.py` (fast, ~85s); `python check.py --full` adds the `--cov-fail-under=60` coverage gate (~3min, full CI parity). CI additionally runs `osv-scanner` over the lockfiles.
+- Pre-push gate, same four checks as CI (`ruff check`, `ruff format --check`, `mypy`, `pytest`): `python check.py` (fast, ~85s); `python check.py --full` adds the `--cov-fail-under=60` coverage gate (~3min, full CI parity). CI additionally runs `osv-scanner` over the lockfiles. Formatting is gated separately from linting because `ruff check` ignores layout; fix a format failure with `ruff format src/ tests/`.
 
 ## Conventions
 
@@ -409,11 +409,18 @@ on the predicate instead of discarding.
 
 ### Pre-push check
 
-Run `python check.py` before `git push` to catch lint / type / test
-failures locally instead of waiting for CI's red X (the same three
+Run `python check.py` before `git push` to catch lint / format / type /
+test failures locally instead of waiting for CI's red X (the same four
 gates GitHub Actions runs).  Default mode skips coverage tracking
 (~85 s); add `--full` to include the `--cov-fail-under=60` gate
 (~3 min, matches CI exactly).
+
+The `format` step is `ruff format --check src/ tests/`, and it is a
+separate gate from `ruff` because `ruff check` does not look at layout.
+Fix a failure with `ruff format src/ tests/` rather than by hand.  The
+`ruff-format` hook in `.pre-commit-config.yaml` only helps contributors
+who ran `pre-commit install`, which is why the tree had drifted in 46 of
+57 files before the gate existed.
 
 ## Word Suppression and Boosting
 
