@@ -60,8 +60,8 @@ How it works on Linux:
    `import gi` and initialise AT-SPI 2. If either step fails (package
    missing, at-spi-2-core daemon not running, no D-Bus session), the
    detector reports `available=False` and we fall back to the null
-   detector — the manual "Learning" / "Paused" toggle in the title
-   bar still works.
+   detector; the manual "Learning" switch in the title bar
+   still works.
 2. On success, a daemon thread owns a dedicated GLib main loop that
    listens for `object:state-changed:focused` (and the legacy `focus:`
    event for older toolkits). Each arrival event reads the source

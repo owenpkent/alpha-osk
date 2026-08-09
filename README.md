@@ -95,8 +95,8 @@ After the keyboard window appears:
 2. **Click letters on the keyboard.** They appear in the focused app exactly as a physical keypress would. Try typing a sentence.
 3. **Watch the pills above the keys.** After a few characters, prediction pills appear. Click any pill to insert the rest of that word plus a space. The longer you use the keyboard, the better the predictions get.
 4. **Move the window.** Drag the dark title bar at the top to reposition. Drag either left or right edge to resize the width; height auto-fits content.
-5. **Open settings.** The ⚙ icon in the top-right opens a drill-down menu. Change theme, switch layout (QWERTY / Dvorak / Colemak), toggle the function row, navigation cluster, or numpad, adjust opacity, and more.
-6. **Pause learning.** The **Learning / Paused** button in the title bar toggles whether the keyboard updates its model from what you type. Password fields auto-pause learning automatically.
+5. **Open settings.** The ⚙ icon in the top-right opens a drill-down menu. Change theme, switch layout (QWERTY / Dvorak / Colemak), turn Compact View on for a denser keyboard, toggle the number row, function row, navigation cluster, or numpad, adjust opacity, and more.
+6. **Pause learning.** The **Learning** switch in the title bar toggles whether the keyboard updates its model from what you type. Password fields auto-pause learning automatically.
 
 That covers ~90% of day-to-day use. The rest of this README and the [white paper](docs/WHITEPAPER.md) cover the depth.
 
@@ -112,7 +112,7 @@ That covers ~90% of day-to-day use. The rest of this README and the [white paper
 <tr>
 <td width="50%" align="center">
 <img src="assets/screenshots/settings-appearance.png" alt="Appearance settings: panel toggles, layout picker, theme picker, opacity slider" width="100%" />
-<br /><em>Appearance: toggle the function row, navigation, and numpad panels; pick QWERTY / Dvorak / Colemak; pick a theme; adjust opacity.</em>
+<br /><em>Appearance: toggle the number row, function row, navigation, and numpad panels plus Compact View; pick QWERTY / Dvorak / Colemak; pick a theme; adjust opacity.</em>
 </td>
 <td width="50%" align="center">
 <img src="assets/screenshots/settings-data-privacy.png" alt="Data and Privacy settings: data backup export and import, telemetry opt-in, auto-update toggle" width="100%" />
@@ -148,7 +148,7 @@ Drag the dark title bar at the top. The window stays above other apps but doesn'
 Drag either the left or right edge. Width is the only knob; height auto-fits the keyboard content (no vertical resize handle, because slow-motion edge resizes lose precision).
 
 **How do I pause learning?**
-Click the **Learning / Paused** button in the title bar. While paused, keystrokes still reach the OS but never enter the prediction model. Password fields pause learning automatically (Windows UI Automation on Windows, AT-SPI on Linux).
+Flip the **Learning** switch in the title bar off. Keystrokes still reach the OS but never enter the prediction model, and the suggestion bar reads "Learning paused" so the state is never ambiguous. Password fields pause learning automatically (Windows UI Automation on Windows, AT-SPI on Linux).
 
 **How do I change the theme?**
 Settings ⚙ → Appearance → Theme. Nine choices including Blackboard for high contrast. Theme also affects prediction pills, the navigation panel, and the numpad so the whole surface stays coherent.
@@ -285,7 +285,7 @@ For security issues, follow [`SECURITY.md`](SECURITY.md). Do not file public iss
 ## Privacy
 
 - Learning is on-device only. Your typing never leaves your computer unless you opt into telemetry.
-- Password fields are auto-detected (Windows UI Automation, Linux AT-SPI) and pause learning automatically. There's also a manual Learning / Paused toggle in the title bar.
+- Password fields are auto-detected (Windows UI Automation, Linux AT-SPI) and pause learning automatically. There's also a manual **Learning** switch in the title bar.
 - Telemetry is opt-in and off by default. The client and the consent toggle are in the build, but the submission endpoint isn't deployed yet, so opting in is currently a no-op. When the endpoint goes live, opting in would send nine integer counters per week and never any content. See [`docs/PRIVACY.md`](docs/PRIVACY.md) and [`docs/architecture/TELEMETRY.md`](docs/architecture/TELEMETRY.md).
 - Data export bundles your model, lifetime stats, and imported vocabulary packs into a single `.zip` you control. The telemetry contributor ID is **excluded** from exports so contributions stay unlinkable across machines.
 - Auto-update fetches release metadata from GitHub. Installers are verified against an EV-signed certificate before launching.

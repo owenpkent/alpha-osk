@@ -5,35 +5,56 @@ Item {
     id: toggle
     
     property string text: ""
+    // Optional second line under the label, for settings whose effect isn't
+    // obvious from the name alone.  Empty by default, so every existing
+    // toggle keeps the original single-line 28 px height.
+    property string description: ""
     property bool checked: false
-    
+
     signal toggled(bool checked)
-    
-    implicitHeight: 28
-    
+
+    implicitHeight: Math.max(28, labelCol.implicitHeight + 10)
+
     Rectangle {
         anchors.fill: parent
         radius: 4
         color: toggleArea.containsMouse ? "#333333" : "transparent"
-        
+
         RowLayout {
             anchors.fill: parent
             anchors.leftMargin: 4
             anchors.rightMargin: 4
             spacing: 8
-            
-            Text {
-                text: toggle.text
-                color: "#c0c0c0"
-                font.pixelSize: 12
+
+            ColumnLayout {
+                id: labelCol
                 Layout.fillWidth: true
-                elide: Text.ElideRight
+                Layout.alignment: Qt.AlignVCenter
+                spacing: 1
+
+                Text {
+                    text: toggle.text
+                    color: "#c0c0c0"
+                    font.pixelSize: 12
+                    Layout.fillWidth: true
+                    elide: Text.ElideRight
+                }
+
+                Text {
+                    visible: toggle.description !== ""
+                    text: toggle.description
+                    color: "#8a8a8a"
+                    font.pixelSize: 10
+                    Layout.fillWidth: true
+                    wrapMode: Text.WordWrap
+                }
             }
-            
+
             Rectangle {
                 Layout.preferredWidth: 36
                 Layout.minimumWidth: 36
                 Layout.preferredHeight: 18
+                Layout.alignment: Qt.AlignVCenter
                 width: 36
                 height: 18
                 radius: 9

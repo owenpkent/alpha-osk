@@ -56,6 +56,23 @@ jobs:
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: ${{ matrix.python-version }}
+      # PySide6 ships its own Qt, but Qt still dlopens the host's GL/EGL and
+      # xkb libraries, which the runner image does not carry. Without these
+      # `from PySide6.QtGui import ...` raises ImportError: libEGL.so.1 at
+      # *collection* time, which aborts the entire pytest run rather than
+      # failing one module. The headless QML tests are the only guard against
+      # a QML binding error shipping as a blank keyboard, so install the libs
+      # and let them run rather than skipping them on CI.
+      - name: Install Qt runtime libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libegl1 libgl1 libglx-mesa0 libxkbcommon0 libxkbcommon-x11-0 \
+            libdbus-1-3 libfontconfig1 libfreetype6 libxrender1 \
+            libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 \
+            libxcb-randr0 libxcb-render-util0 libxcb-shape0 libxcb-xinerama0 \
+            libxcb-xkb1
       - name: Install dependencies
         run: pip install -r requirements-dev.txt
       - name: Run tests

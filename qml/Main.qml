@@ -27,6 +27,15 @@ Window {
         property bool savedSuggestionsEnabled: true
         property real savedWindowOpacity: 1.0
         property string savedLayout: "qwerty"
+        // Compact view — a denser 13×4 grid with a ?123 layer, for small
+        // screens.  Orthogonal to savedLayout (which letter arrangement);
+        // see the Compact view block near `currentLayout` for how the two
+        // resolve into one layout id.
+        property bool savedCompactView: false
+        // Standalone ` 1..0 - = row above the keyboard.  Exists for the
+        // compact view, whose digits are behind the ?123 hop; the full-size
+        // layouts already carry a number row of their own.
+        property bool savedNumberRow: false
         property bool savedAudioEnabled: false
         property bool savedAutoSpaceAfterPunctuation: true
         property bool savedAutoCapitalizeAfterPunctuation: false
@@ -255,12 +264,12 @@ Window {
         root.autoCheckUpdates = appSettings.savedAutoCheckUpdates
         if (root.autoCheckUpdates) updateCheckTimer.start()
 
-        // Load saved keyboard layout
-        if (keyboard && appSettings.savedLayout !== "qwerty") {
-            keyboard.setLayout(appSettings.savedLayout)
-            root.currentLayout = appSettings.savedLayout
-        }
-        root.layoutRows = keyboard ? keyboard.getLayoutRows() : []
+        // Load saved keyboard layout.  applyLayout() resolves the letter
+        // arrangement + the compact-view toggle into a single layout id, so
+        // both preferences are honoured on a cold start.
+        root.currentLayout = appSettings.savedLayout
+        if (keyboard) applyLayout()
+        else root.layoutRows = []
 
         // Compute the panel-state-aware default width ONLY on a
         // fresh install (no persisted width). Otherwise the
@@ -319,6 +328,21 @@ Window {
         appSettings.savedShowNumpad = showNumpad
     }
 
+    // Switching view density re-resolves the layout, then resizes the window
+    // so the *key size* is preserved rather than the window width — giving
+    // the screen back is the entire point of compact view, so keeping the
+    // window the same size and just growing the keys would miss it.
+    onCompactViewChanged: {
+        appSettings.savedCompactView = compactView
+        if (!_loaded || !keyboard) return
+        var keyWBefore = root.keyW
+        applyLayout()
+        Qt.callLater(function() {
+            var target = Math.round(keyWBefore * root.totalKeyUnits + root.layoutFixedPixels)
+            root.width = Math.max(root.minimumWidth, target)
+        })
+    }
+
     // Clear suggestions when the window loses activation (user clicked away)
     onActiveChanged: {
         if (!active && keyboard) keyboard.clearPredictions()
@@ -358,6 +382,14 @@ Window {
     // is firing.  Exposed in Settings → Smart Typing → Input.
     property int repeatDelay: appSettings.savedRepeatDelay
     property int repeatInterval: appSettings.savedRepeatInterval
+
+    // Special actions a layout key may auto-repeat on hold.  Deletion and
+    // caret motion are the only ones where "hold to do it again" is what a
+    // user means; Enter / Tab / Esc firing twenty times would be hostile.
+    readonly property var repeatableActions: [
+        "backspace", "delete", "left", "right", "up", "down",
+        "pageup", "pagedown"
+    ]
 
     // Compatibility mode — see savedCompatMode comment and
     // KeyboardBridge.setCompatMode for the full rationale.
@@ -475,7 +507,49 @@ Window {
     property var layoutRows: keyboard ? keyboard.getLayoutRows() : []
     property string currentLayout: appSettings.savedLayout
 
+    // ===== Compact view =====
+    // A *view* preference, orthogonal to which letter arrangement is picked:
+    // `currentLayout` stays "qwerty"/"dvorak"/"colemak" and the compact
+    // variant is derived from it ("qwerty" + "-compact").  Layouts with no
+    // compact variant fall back to full size, so the toggle is always safe.
+    property bool compactView: appSettings.savedCompactView
+    property var availableLayouts: keyboard ? keyboard.getAvailableLayouts() : []
+
+    function hasLayout(id) {
+        for (var i = 0; i < availableLayouts.length; i++)
+            if (availableLayouts[i].id === id) return true
+        return false
+    }
+
+    // Resolve the layout id the bridge should actually be on, given the
+    // letter arrangement + the compact toggle.
+    function resolveLayoutId(base, compact) {
+        var variant = base + "-compact"
+        return (compact && hasLayout(variant)) ? variant : base
+    }
+
+    function applyLayout() {
+        if (!keyboard) return
+        keyboard.setLayout(resolveLayoutId(root.currentLayout, root.compactView))
+        root.layoutRows = keyboard.getLayoutRows()
+        root.activeLayer = "base"
+    }
+
+    // A layout may split its rows across named layers — the compact view has
+    // a "base" layer and a "sym" (?123) layer.  Rows with no `layer` field
+    // always render, so the full-size layouts are untouched by this.
+    property string activeLayer: "base"
+    property var visibleRows: {
+        var out = []
+        for (var i = 0; i < layoutRows.length; i++) {
+            var r = layoutRows[i]
+            if (!r.layer || r.layer === root.activeLayer) out.push(r)
+        }
+        return out
+    }
+
     // Layout toggles (modular panels)
+    property bool showNumberRow: appSettings.savedNumberRow
     property bool showFunctionRow: false
     property bool showNavigation: false
     property bool showNumpad: false
@@ -501,19 +575,51 @@ Window {
     // All visible panels share the window width proportionally, avoiding static estimates.
     property real keySpacing: Math.max(1, Math.floor(root.width * 0.0025))
 
-    // Total key-width units across all visible sections:
-    // Widest row is the number row (15 keys): Esc(1) + `(1) + 10 nums + -(1) + =(1) + Backspace(1.5) = 15.5 units
+    // The widest visible row drives sizing — every narrower row is centred
+    // against it.  Derived from the layout data rather than hardcoded so a
+    // layout with a different column count sizes itself correctly: the
+    // full-size layouts resolve to the historical 15.5u / 14 gaps (number
+    // row: Esc + ` + 10 digits + - + = + 1.5u Backspace), while the compact
+    // view resolves to 13.0u / 12 gaps.  The fallback keeps the pre-load
+    // frame identical to what the full-size layout will produce.
+    //
+    // Units and gaps are maxed INDEPENDENTLY, and that is load-bearing.  A
+    // row's pixel width is `units * keyW + gaps * keySpacing`, so the row
+    // that needs the most units and the row that needs the most gaps are not
+    // necessarily the same row, and in a compact layout they never are,
+    // because every row is deliberately the same 13.0u while the letter row
+    // carries one more key than its neighbours.  Reading `gaps` off whichever
+    // row happened to win the units comparison under-reserved exactly one
+    // keySpacing, so the widest row rendered 2-3 px past the content area and
+    // ate into the 8 px margin (worst at minimumWidth, which is computed from
+    // the same number).  Guarded by
+    // tests/test_qml_compact_view.py::TestEveryRowFitsTheContentArea.
+    property var _widestRow: {
+        var bestUnits = 0, bestGaps = 0
+        var rows = root.visibleRows
+        for (var i = 0; i < rows.length; i++) {
+            var keys = rows[i].keys
+            if (!keys || !keys.length) continue
+            var u = 0
+            for (var j = 0; j < keys.length; j++) u += (keys[j].width || 1.0)
+            if (u > bestUnits) bestUnits = u
+            if (keys.length - 1 > bestGaps) bestGaps = keys.length - 1
+        }
+        return bestUnits > 0 ? { units: bestUnits, gaps: bestGaps }
+                             : { units: 15.5, gaps: 14 }
+    }
+
     // Nav panel: 3 keys × 1.0 = 3.0 units;  Numpad: 4 keys × 1.0 = 4.0 units
     // (The 0.9× multiplier on nav/numpad keys was bumped to 1.0× so
     // labels like "PrtSc"/"PgDn" don't clip — keep this in sync with
     // the keyW bindings on the panels themselves below.)
-    property real totalKeyUnits: 15.5
+    property real totalKeyUnits: _widestRow.units
         + (showNavigation ? 3.0 : 0)
         + (showNumpad ? 4.0 : 0)
 
-    // Fixed-pixel overhead: margins(8×2=16) + number-row gaps(15 keys → 14×keySpacing)
+    // Fixed-pixel overhead: margins(8×2=16) + widest-row gaps(N-1 × keySpacing)
     // + per-panel: separator(1) + 2 inner grid gaps + 2×RowLayout spacing(6)
-    property real layoutFixedPixels: 16 + 14 * keySpacing
+    property real layoutFixedPixels: 16 + _widestRow.gaps * keySpacing
         + (showNavigation ? 1 + 2 * keySpacing + 12 : 0)
         + (showNumpad ? 1 + 3 * keySpacing + 12 : 0)
 
@@ -598,7 +704,13 @@ Window {
         function onPredictionLoading(loading) { root.predictionsLoading = loading }
         
         // Layout updates
-        function onLayoutDataChanged(rows) { root.layoutRows = rows }
+        // Always land on the base layer after a layout swap — leaving the
+        // user on a ?123 layer that the new layout may not even define
+        // would render an empty keyboard.
+        function onLayoutDataChanged(rows) {
+            root.layoutRows = rows
+            root.activeLayer = "base"
+        }
 
         // Debug updates
         function onDebugLogChanged(log) { root.debugLog = log }
@@ -697,7 +809,7 @@ Window {
             MouseArea {
                 id: dragArea
                 anchors.fill: parent
-                anchors.rightMargin: 298  // Leave space for buttons (privacy "Learning"/"Paused" text, Snippets, Tuck, etc.)
+                anchors.rightMargin: 332  // Leave space for buttons (Learning switch, Snippets, Tuck, etc.)
                 cursorShape: Qt.SizeAllCursor
                 
                 property real startMouseX
@@ -922,22 +1034,29 @@ Window {
                     }
                 }
 
-                // Privacy mode toggle (learning on/off).  Used to be
-                // a play/pause icon, but a media-player metaphor
-                // doesn't read as "is the keyboard learning from me"
-                // — users misread it as "is something playing".
-                // Now a fixed-width text label that just shows the
-                // current state.  The hover tooltip says what
-                // clicking will do, so the label-vs-action ambiguity
-                // is resolved before the click.
+                // Privacy mode toggle (learning on/off).  History: a
+                // play/pause icon first (misread as "is something
+                // playing"), then a plain text label that swapped
+                // between "Learning" and "Paused".  The label alone
+                // still had to be *read* to know the state, and it was
+                // ambiguous about whether it named the state or the
+                // action a click would take.
+                //
+                // Now an actual switch: the label is static ("Learning",
+                // the thing being toggled) and the track carries the
+                // state: knob right + accent track = on, knob left +
+                // red track = paused.  Shape says on/off at a glance,
+                // which is what the two earlier attempts were missing.
+                // The prediction bar independently spells out "Learning
+                // paused" while it's off, so nothing depends on
+                // decoding the switch.
                 Rectangle {
-                    // Width sized for the longer label "Learning"
-                    // (8 chars at 11 px DemiBold) so toggling between
-                    // "Learning" and "Pause" doesn't reflow the title
-                    // bar's button row.  If you change the labels to
-                    // longer words, bump both this width and the
-                    // dragArea.rightMargin further up.
-                    width: 62
+                    id: privacyToggle
+                    // Sized for track + gap + "Learning" at 11 px
+                    // DemiBold.  The label is static so this never
+                    // reflows; if you change it, bump this width AND
+                    // dragArea.rightMargin further up together.
+                    width: 96
                     height: 24
                     radius: 4
                     color: root.privacyMode ? "#4a2a2a" : privacyBtn.containsMouse ? "#444" : "transparent"
@@ -946,16 +1065,48 @@ Window {
 
                     ToolTip.visible: privacyBtn.containsMouse
                     ToolTip.text: root.privacyMode
-                                  ? qsTr("Resume learning from typing")
-                                  : qsTr("Pause learning from typing")
+                                  ? qsTr("Learning is off. Click to resume learning from your typing")
+                                  : qsTr("Learning is on. Click to pause learning from your typing")
                     ToolTip.delay: 400
 
-                    Text {
+                    Row {
                         anchors.centerIn: parent
-                        text: root.privacyMode ? qsTr("Paused") : qsTr("Learning")
-                        color: root.privacyMode ? "#ff6b6b" : "#bbb"
-                        font.pixelSize: 11
-                        font.weight: Font.DemiBold
+                        spacing: 6
+
+                        // Switch track
+                        Rectangle {
+                            id: privacyTrack
+                            width: 28
+                            height: 15
+                            radius: height / 2
+                            anchors.verticalCenter: parent.verticalCenter
+                            color: root.privacyMode ? "#5c2b2b" : root.themeAccent
+                            border.color: root.privacyMode ? "#ff6b6b" : Qt.lighter(root.themeAccent, 1.4)
+                            border.width: 1
+
+                            Behavior on color { ColorAnimation { duration: 120 } }
+
+                            // Knob
+                            Rectangle {
+                                width: 11
+                                height: 11
+                                radius: height / 2
+                                y: 2
+                                x: root.privacyMode ? 2 : privacyTrack.width - width - 2
+                                color: root.privacyMode ? "#ff6b6b" : "#ffffff"
+
+                                Behavior on x { NumberAnimation { duration: 120; easing.type: Easing.OutCubic } }
+                                Behavior on color { ColorAnimation { duration: 120 } }
+                            }
+                        }
+
+                        Text {
+                            anchors.verticalCenter: parent.verticalCenter
+                            text: qsTr("Learning")
+                            color: root.privacyMode ? "#ff6b6b" : "#bbb"
+                            font.pixelSize: 11
+                            font.weight: Font.DemiBold
+                        }
                     }
 
                     MouseArea {
@@ -1156,10 +1307,15 @@ Window {
                 property real predFontSize: Math.max(14, root.keyH * 0.36)
                 property real predHorizontalPad: Math.max(24, root.keyW * 0.58)
                 property real predMinWidth: Math.max(48, root.keyW * 1.25)
-                // Right-edge zone reserved for the clear-context button so the
-                // centered pill row never slides under it. Subtracted from both
-                // sides of the pill row's available width to keep pills centered.
-                property real clearCtxReserve: predPillHeight + 16
+                // Right-edge zone owned by the clear-context button (its own
+                // width + the 8 px right margin + an 8 px gap).  The pill row
+                // is both *sized* and *centred* inside the space left over, so
+                // a pill can never slide under the button, which used to
+                // happen with four long words, hiding the last one behind the
+                // ⟲.  Reserved on the right only: taking the same bite out of
+                // the left as well would centre the row in the window but cost
+                // twice the width, and long words would start eliding sooner.
+                property real clearCtxReserve: root.suggestionsEnabled ? predPillHeight + 16 : 0
                 Layout.preferredHeight: root.suggestionsEnabled ? predPillHeight + 4 : 0
                 Layout.bottomMargin: root.suggestionsEnabled ? 4 : 0
                 clip: true
@@ -1192,7 +1348,15 @@ Window {
 
                 Row {
                     id: predRow
-                    anchors.centerIn: parent
+                    // Named so tests/test_qml_prediction_bar.py can assert the
+                    // row never overlaps clearContextButton.
+                    objectName: "predictionRow"
+                    anchors.verticalCenter: parent.verticalCenter
+                    // Centred in the bar minus the clear-button zone, floored
+                    // at the 8 px left margin.  Not anchors.centerIn: that
+                    // centres on the full bar and pushes the right-hand pill
+                    // under the ⟲ button.
+                    x: Math.max(8, (predBar.width - predBar.clearCtxReserve - width) / 2)
                     spacing: 8
                     visible: root.suggestionsEnabled && !root.privacyMode
 
@@ -1207,46 +1371,103 @@ Window {
                         font.family: "Ubuntu, Noto Sans, sans-serif"
                     }
 
-                    // Max-min fair pill widths. Every pill first claims its
-                    // natural width (text + padding); when the words don't all
-                    // fit on the row, the short pills keep their natural size
-                    // and the leftover space flows to the long ones. This is
-                    // what stops a long word from being elided to "..." while
-                    // "I"/"the" sit in half-empty pills next to it. The binding
-                    // reads predictions, window width and pill geometry so it
-                    // re-evaluates whenever any of them change.
-                    property var pillWidthList: predRow.computePillWidths(
+                    // Fit whole words, never a truncated one. `fit` is
+                    // { words, widths }: the prefix of the ranked predictions
+                    // that physically fits, plus each one's pixel width. The
+                    // binding reads predictions, window width and pill geometry
+                    // so it re-evaluates whenever any of them change.
+                    property var fit: predRow.computeFit(
                         root.predictions, root.width, predBar.predFontSize,
                         predBar.predHorizontalPad, predBar.predMinWidth,
-                        predBar.predPillHeight, predRow.spacing)
+                        predBar.predPillHeight, predRow.spacing,
+                        predBar.clearCtxReserve)
 
-                    function computePillWidths(preds, totalWidth, fontSize, hPad, minNat, pillH, spacing) {
+                    // Kept as the name the width tests read.
+                    readonly property var pillWidthList: predRow.fit.widths
+
+                    // Three rules, in priority order:
+                    //
+                    //  1. No pill is ever elided.  Eight long candidates in a
+                    //     940 px window rendered as eight identical "docu…"
+                    //     pills, strictly worse than five readable ones, since
+                    //     you cannot pick a suggestion you cannot read.  So the
+                    //     row compresses padding first, then *drops* pills from
+                    //     the tail (the lowest-ranked ones) until the survivors
+                    //     fit at full text width.
+                    //  2. Leftover space is handed back as padding max-min
+                    //     fair, so a short word can't hog room a long one
+                    //     needs. This is the property that stops "I"/"the" in
+                    //     half-empty pills beside a clipped long word.
+                    //  3. `reserve` keeps the row clear of the ⟲ button.
+                    //     Without it the row is sized to the whole window and
+                    //     the right-hand pill renders underneath it.
+                    //
+                    // Only one case can still elide: a single word too long for
+                    // the whole bar, where there is nothing left to drop. The
+                    // hover ToolTip covers it.
+                    function computeFit(preds, totalWidth, fontSize, hPad, minNat, pillH, spacing, reserve) {
+                        var out = { words: [], widths: [] }
                         var n = preds.length
                         if (n <= 0)
-                            return []
-                        var nat = []
+                            return out
+
+                        var avail = totalWidth - 32 - reserve
+                        // Padding compresses to this before any pill is
+                        // dropped; below it the text crowds the pill border.
+                        var minPad = Math.max(14, hPad * 0.45)
+
+                        var text = []
                         for (var i = 0; i < n; i++)
-                            nat.push(Math.max(minNat, predMetrics.advanceWidth(preds[i]) + hPad))
-                        var avail = totalWidth - 32 - (n - 1) * spacing
-                        var floor = pillH * 1.4
-                        var widths = new Array(n)
-                        var settled = new Array(n)
-                        var remaining = avail
-                        var unsettled = n
-                        // Water-fill: pills that fit under the current fair
-                        // share settle at their natural width and release the
-                        // slack, raising the share for the rest. Repeats until
-                        // no more pills can settle (≤ n passes).
-                        for (var pass = 0; pass < n; pass++) {
-                            if (unsettled <= 0)
+                            text.push(predMetrics.advanceWidth(preds[i]))
+
+                        // Narrowest a pill may be and still show its whole word.
+                        function tight(idx) { return Math.max(minNat, text[idx] + minPad) }
+
+                        var count = n
+                        while (count > 1) {
+                            var need = (count - 1) * spacing
+                            for (var j = 0; j < count; j++)
+                                need += tight(j)
+                            if (need <= avail)
                                 break
-                            var share = remaining / unsettled
+                            count--
+                        }
+
+                        var widths = []
+                        for (var k = 0; k < count; k++)
+                            widths.push(tight(k))
+                        out.words = preds.slice(0, count)
+                        out.widths = widths
+
+                        var slack = avail - (count - 1) * spacing
+                        for (var s = 0; s < count; s++)
+                            slack -= widths[s]
+
+                        if (slack <= 0) {
+                            // One word wider than the entire bar: clamp it so
+                            // it can't slide under the ⟲, and let it elide.
+                            if (count === 1)
+                                widths[0] = Math.max(pillH * 1.4, avail)
+                            return out
+                        }
+
+                        // Water-fill the slack back as padding: a pill that
+                        // wants less than the current fair share settles at
+                        // what it wants and releases the rest, raising the
+                        // share for everyone else (≤ count passes).
+                        var want = []
+                        for (var w = 0; w < count; w++)
+                            want.push(Math.max(0, Math.max(minNat, text[w] + hPad) - widths[w]))
+                        var settled = new Array(count)
+                        var unsettled = count
+                        for (var pass = 0; pass < count && unsettled > 0; pass++) {
+                            var share = slack / unsettled
                             var changed = false
-                            for (var j = 0; j < n; j++) {
-                                if (!settled[j] && nat[j] <= share) {
-                                    widths[j] = nat[j]
-                                    settled[j] = true
-                                    remaining -= nat[j]
+                            for (var m = 0; m < count; m++) {
+                                if (!settled[m] && want[m] <= share) {
+                                    widths[m] += want[m]
+                                    slack -= want[m]
+                                    settled[m] = true
                                     unsettled--
                                     changed = true
                                 }
@@ -1254,23 +1475,21 @@ Window {
                             if (!changed)
                                 break
                         }
-                        // Whatever is left over wants more than its fair share
-                        // (several long words competing); split the remainder
-                        // evenly, floored so a pill can't collapse to nothing.
+                        // Still-hungry pills split what's left evenly.
                         if (unsettled > 0) {
-                            var share2 = remaining / unsettled
-                            for (var k = 0; k < n; k++)
-                                if (!settled[k])
-                                    widths[k] = Math.max(floor, share2)
+                            var even = slack / unsettled
+                            for (var q = 0; q < count; q++)
+                                if (!settled[q])
+                                    widths[q] += even
                         }
-                        return widths
+                        return out
                     }
 
                     Repeater {
-                        model: root.suggestionsEnabled && !root.privacyMode && root.predictions.length > 0 ? root.predictions : []
+                        model: root.suggestionsEnabled && !root.privacyMode ? predRow.fit.words : []
                         delegate: Rectangle {
-                            width: index < predRow.pillWidthList.length
-                                   ? predRow.pillWidthList[index]
+                            width: index < predRow.fit.widths.length
+                                   ? predRow.fit.widths[index]
                                    : predBar.predMinWidth
                             height: predBar.predPillHeight
                             radius: Math.max(4, predBar.predPillHeight * 0.22)
@@ -1291,6 +1510,9 @@ Window {
 
                             Text {
                                 id: predText
+                                // Tests assert none of these ever report
+                                // `truncated`. See test_qml_prediction_bar.py.
+                                objectName: "predictionPillText"
                                 anchors.verticalCenter: parent.verticalCenter
                                 anchors.left: parent.left
                                 anchors.right: parent.right
@@ -1347,6 +1569,7 @@ Window {
                 // off (the bar collapses to zero height anyway).
                 Rectangle {
                     id: clearCtxPill
+                    objectName: "clearContextButton"
                     visible: root.suggestionsEnabled
                     anchors.right: parent.right
                     anchors.rightMargin: 8
@@ -1400,6 +1623,31 @@ Window {
                     Layout.fillWidth: true
                     spacing: 2
 
+                    // ===== Number Row (` 1-0 - =) =====
+                    // Above the function row so the digits sit adjacent to
+                    // the letters, the way they do on a physical keyboard.
+                    // Full key height: unlike F-keys these are typed
+                    // constantly, so they get a full-size target.
+                    Comp.NumberRow {
+                        visible: root.showNumberRow
+                        Layout.alignment: Qt.AlignHCenter
+                        keyW: root.keyW
+                        keyH: root.keyH
+                        keySpacing: root.keySpacing
+                        keyColor: Qt.darker(root.themeKeyColor, 1.3)
+                        keyPressedColor: root.themeKeyPressed
+                        keyTextColor: root.themeTextColor
+                        accentColor: root.themeAccent
+                        borderColor: root.themeBorder
+                        shiftOn: root.shiftOn
+                        rightClickShift: root.rightClickShift
+                        keyPreviewEnabled: root.keyPreviewEnabled
+                        registerFn: root.registerCharKey
+                        unregisterFn: root.unregisterCharKey
+                        previewFn: root.showKeyPreview
+                        hidePreviewFn: root.hideKeyPreview
+                    }
+
                     // ===== Function Row (F1-F12) =====
                     Comp.FunctionRow {
                         visible: root.showFunctionRow
@@ -1416,7 +1664,7 @@ Window {
 
                     // ===== Data-Driven Keyboard Rows =====
                 Repeater {
-                    model: root.layoutRows
+                    model: root.visibleRows
 
                     Row {
                         Layout.alignment: Qt.AlignHCenter
@@ -1484,10 +1732,15 @@ Window {
                                 accentColor: root.themeAccent
                                 borderColor: root.themeBorder
 
-                                // Main keyboard's only repeat-worthy key is
-                                // backspace.  Character keys must not repeat
-                                // (see KeyButton.qml for the rationale).
-                                enableRepeat: kd.type === "special" && kd.action === "backspace"
+                                // Repeat-worthy specials only.  Character keys
+                                // must never repeat (see KeyButton.qml for the
+                                // rationale).  Same set the Navigation panel
+                                // repeats: the compact layouts put Del and
+                                // the arrows in the main grid, so holding them
+                                // has to behave the same there as it does in
+                                // the side panel.
+                                enableRepeat: kd.type === "special"
+                                              && root.repeatableActions.indexOf(kd.action) !== -1
                                 repeatDelay: root.repeatDelay
                                 repeatInterval: root.repeatInterval
 
@@ -1508,6 +1761,14 @@ Window {
                                             case "alt": keyboard.toggleAlt(); break
                                             case "win": keyboard.toggleWin(); break
                                         }
+                                    } else if (kd.type === "layer") {
+                                        // Layer switch (?123 / ABC) — purely a
+                                        // QML-side view change.  Deliberately
+                                        // does NOT go through keyboard.setLayout:
+                                        // that would persist as the user's
+                                        // layout preference and report the
+                                        // symbol layer from getCurrentLayout().
+                                        root.activeLayer = kd.target || "base"
                                     } else {
                                         keyboard.pressSpecialKey(kd.action)
                                     }
@@ -2880,12 +3141,14 @@ Window {
             anchors.fill: parent
 
             showFunctionRow: root.showFunctionRow
+            showNumberRow: root.showNumberRow
             showNavigation: root.showNavigation
             showNumpad: root.showNumpad
             currentTheme: root.currentTheme
             themeData: root.themeData
             windowOpacity: root.windowOpacity
             currentLayout: root.currentLayout
+            compactView: root.compactView
             audioEnabled: root.audioEnabled
             suggestionsEnabled: root.suggestionsEnabled
             predictionCount: keyboard ? keyboard.predictionCount : 8
@@ -2911,6 +3174,9 @@ Window {
                 if (setting === "functionRow") {
                     root.showFunctionRow = value
                     appSettings.savedShowFunctionRow = value
+                } else if (setting === "numberRow") {
+                    root.showNumberRow = value
+                    appSettings.savedNumberRow = value
                 } else if (setting === "navigation") {
                     root.showNavigation = value
                 } else if (setting === "numpad") {
@@ -2922,9 +3188,11 @@ Window {
                     root.windowOpacity = value
                     appSettings.savedWindowOpacity = value
                 } else if (setting === "layout") {
-                    if (keyboard) keyboard.setLayout(value)
                     root.currentLayout = value
                     appSettings.savedLayout = value
+                    root.applyLayout()
+                } else if (setting === "compactView") {
+                    root.compactView = value
                 } else if (setting === "audio") {
                     if (keyboard) keyboard.setAudioEnabled(value)
                     root.audioEnabled = value

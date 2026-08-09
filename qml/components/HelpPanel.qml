@@ -139,7 +139,7 @@ Item {
                             Layout.fillWidth: true
                             spacing: 6
 
-                            HelpText { text: "<b>Learning / Paused</b> · Privacy mode. When it reads <b>Paused</b>, the keyboard still types but won't learn from what you type or show predictions. Auto-flips to Paused when a password field has focus (Windows + Linux with AT-SPI)." }
+                            HelpText { text: "<b>Learning</b> · Privacy mode switch. Switch it off and the keyboard still types but won't learn from what you type or show predictions · the suggestion bar reads <b>Learning paused</b> while it's off. Auto-switches off when a password field has focus (Windows + Linux with AT-SPI)." }
                             HelpText { text: "<b>↻</b> · Clear the prediction context. Useful when you switch tabs inside one app and pills still reflect the last sentence." }
                             HelpText { text: "<b>⚙</b> · Settings." }
                             HelpText { text: "<b>↓</b> · Appears only when an update is pending. Click to install. The keyboard restarts itself after the new version is in place." }
@@ -181,7 +181,8 @@ Item {
                             HelpText { text: "<b>Caps Lock and Shift are independent.</b> Toggling Caps does not also flip Shift. Caps uppercases letters; Shift also picks shifted glyphs (<code>!</code> on <code>1</code>)." }
                             HelpText { text: "<b>Right-click a character key</b> to type its shifted variant once without flipping sticky Shift. Letters become uppercase, symbols use their shifted glyph (<code>1</code> → <code>!</code>, <code>,</code> → <code>&lt;</code>). Toggle in <b>Settings → Smart Typing → Input</b>." }
                             HelpText { text: "<b>Hold to repeat</b> on Backspace, Delete, arrow keys, and Page Up / Page Down. Character keys do not repeat · a slow click won't accidentally produce two letters." }
-                            HelpText { text: "<b>Optional panels</b> · enable Function Row (F1–F12), Navigation keys, or Numpad in <b>Settings → Appearance → Panels</b>." }
+                            HelpText { text: "<b>Optional panels</b> · enable the Number Row (<code>`</code> 1–0 <code>-</code> <code>=</code>), Function Row (F1–F12), Navigation keys, or Numpad in <b>Settings → Appearance → Panels</b>." }
+                            HelpText { text: "<b>Compact View</b> · a denser 13×4 grid for small screens, in the same Panels section. Digits and symbols move behind a <b>?123</b> key; arrows, Enter, Home/End and Page Up/Down stay visible. Turn on the Number Row alongside it if you want the digits back without the hop." }
                             HelpText { text: "<b>Layouts</b> · QWERTY, Dvorak, Colemak in <b>Settings → Appearance → Keyboard Layout</b>." }
                             HelpText { text: "<b>9 themes</b> in <b>Settings → Appearance → Theme</b> · Dark, Light, Ocean, Forest, Amethyst, Vaporwave, Blackboard, Typewriter, Spaceship." }
                         }

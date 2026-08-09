@@ -180,10 +180,15 @@ The keyboard has toggleable sections (via Settings ⚙ button):
 
 | Panel | Keys | Default |
 |-------|------|---------|
+| Number Row | `` ` `` 1-0 `-` `=` (13 x 1u, flush with the compact grid) | Off |
 | Function Row | Esc, F1-F12, PrtSc, ScrLk, Pause | Off |
 | Navigation | Ins, Del, Home, End, PgUp, PgDn, Arrows | Off |
 | Numpad | Full number pad with NumLock | Off |
-| Compact Mode | Smaller key sizes | Off |
+| Compact View | Denser 13x4 grid, digits/symbols behind a `?123` layer | Off |
+
+> This file is a stale snapshot in places (the six accessibility profiles it
+> lists below were removed in favour of a single tuned default). `CLAUDE.md` is
+> the authoritative onboarding doc; prefer it when the two disagree.
 
 ---
 

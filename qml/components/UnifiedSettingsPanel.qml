@@ -9,12 +9,25 @@ Item {
 
     // Layout properties
     property bool showFunctionRow: false
+    property bool showNumberRow: false
     property bool showNavigation: false
     property bool showNumpad: false
     property string currentTheme: "dark"
     property var themeData: ({})
     property real windowOpacity: 1.0
     property string currentLayout: "qwerty"
+    property bool compactView: false
+
+    // Compact variants are selected by the "Compact view" toggle, not picked
+    // directly — surfacing them here would let the user choose a letter
+    // arrangement and a density from the same control and get a contradiction.
+    property var pickableLayouts: {
+        var all = keyboard ? keyboard.getAvailableLayouts() : []
+        var out = []
+        for (var i = 0; i < all.length; i++)
+            if (all[i].id.indexOf("-compact") === -1) out.push(all[i])
+        return out
+    }
     property bool audioEnabled: false
 
     // Suggestions
@@ -351,6 +364,17 @@ Item {
 
                                 SettingsToggle {
                                     Layout.fillWidth: true
+                                    text: "Number Row"
+                                    description: "Adds ` 1-0 - = above the keyboard. "
+                                               + "For Compact View, where the digits sit "
+                                               + "behind ?123; the full-size layouts "
+                                               + "already have one."
+                                    checked: unifiedSettings.showNumberRow
+                                    onToggled: function(c) { unifiedSettings.settingChanged("numberRow", c) }
+                                }
+
+                                SettingsToggle {
+                                    Layout.fillWidth: true
                                     text: "Function Keys (F1–F12)"
                                     checked: unifiedSettings.showFunctionRow
                                     onToggled: function(c) { unifiedSettings.settingChanged("functionRow", c) }
@@ -369,6 +393,16 @@ Item {
                                     checked: unifiedSettings.showNumpad
                                     onToggled: function(c) { unifiedSettings.settingChanged("numpad", c) }
                                 }
+
+                                SettingsToggle {
+                                    Layout.fillWidth: true
+                                    text: "Compact View"
+                                    description: "Denser 13×4 grid for small screens. "
+                                               + "Digits and symbols move to a ?123 layer; "
+                                               + "arrows, Home/End and PgUp/PgDn stay visible."
+                                    checked: unifiedSettings.compactView
+                                    onToggled: function(c) { unifiedSettings.settingChanged("compactView", c) }
+                                }
                             }
                         }
 
@@ -381,7 +415,7 @@ Item {
                                 spacing: 6
 
                                 Repeater {
-                                    model: keyboard ? keyboard.getAvailableLayouts() : []
+                                    model: unifiedSettings.pickableLayouts
 
                                     Rectangle {
                                         width: 72
