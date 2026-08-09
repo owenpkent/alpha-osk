@@ -34,7 +34,7 @@ Usage
 
 Prerequisites
 -------------
-- Python 3.9+ with ``pyinstaller`` installed (``pip install pyinstaller``).
+- Python 3.10+ with ``pyinstaller`` installed (``pip install pyinstaller``).
 - For ``--appimage``: ``appimagetool`` on PATH, or pass
   ``--fetch-appimagetool`` and the script will download the upstream
   x86_64 build into ``~/.cache/alpha-osk-build/``.

@@ -27,7 +27,7 @@ Usage::
 
 Prerequisites
 -------------
-- Python 3.9+ with ``pyinstaller`` installed (``pip install pyinstaller``).
+- Python 3.10+ with ``pyinstaller`` installed (``pip install pyinstaller``).
 - NSIS 3.x installed and ``makensis.exe`` on PATH or in default location.
 - Windows SDK with ``signtool.exe`` (for signing).
 - SafeNet eToken plugged in (for EV signing).
@@ -121,12 +121,12 @@ def info(msg: str) -> None:
 # ---------------------------------------------------------------------------
 
 def check_python() -> bool:
-    """Verify Python 3.9+."""
+    """Verify Python 3.10+."""
     step("Checking Python version...")
-    if sys.version_info >= (3, 9):
+    if sys.version_info >= (3, 10):
         success(f"Python {sys.version.split()[0]}")
         return True
-    error(f"Python 3.9+ required, found {sys.version}")
+    error(f"Python 3.10+ required, found {sys.version}")
     return False
 
 

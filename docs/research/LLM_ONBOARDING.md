@@ -83,7 +83,7 @@ alpha-osk/
 
 ## Tech Stack
 
-- **Language:** Python 3.9+
+- **Language:** Python 3.10+
 - **UI Framework:** PySide6 + QML6 (Qt Quick)
 - **Key Synthesis:**
   - **Linux:** xdotool (X11) / ydotool (Wayland) via subprocess

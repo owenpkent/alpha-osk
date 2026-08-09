@@ -26,7 +26,7 @@ Complete guide to running, building, and deploying Alpha-OSK on Windows.
 
 ### Prerequisites
 
-- **Python 3.9+** (download from [python.org](https://www.python.org/downloads/))
+- **Python 3.10+** (download from [python.org](https://www.python.org/downloads/))
 - **No additional system dependencies** — unlike Linux, Windows key synthesis
   uses the built-in `SendInput` API via Python's `ctypes`.
 
