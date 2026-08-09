@@ -256,9 +256,13 @@ Drag the mouse across letters to type a whole word in one gesture, like Gboard. 
 | `src/prediction/swipe_recognizer.py` | `SwipeRecognizer` - simplified SHARK^2 shape matching + frequency prior |
 | `src/keyboard_bridge.py` | `setSwipeEnabled`, `setSwipeLayout`, `processSwipe` slots |
 | `qml/components/SwipeOverlay.qml` | Mouse interceptor + path canvas, hidden when off |
-| `qml/Main.qml` | `charKeyRegistry`, `pushSwipeLayout()` (overlay-local key centres) |
+| `qml/Main.qml` | `charKeyRegistry` + `tappableKeyRegistry`, `pushSwipeLayout()` (overlay-local key centres) |
 
-When the toggle is on, a transparent overlay covers the keyboard rows and intercepts all gestures. Press -> drag past 60 px -> swipe; press -> release on a key -> tap fall-through (the overlay hit-tests the registry and forwards to the underlying `KeyButton.keyPressed`). The recogniser pre-filters by start/end key, then scores remaining candidates with `log(freq+1) - 8 * mean_normalized_distance`. Top result is typed via `send_text` + space; alternates appear in the prediction bar so the user can repick.
+When the toggle is on, a transparent overlay covers the keyboard rows and intercepts all gestures. Press -> drag past 60 px -> swipe; press -> release on a key -> tap fall-through. The recogniser pre-filters by start/end key, then scores remaining candidates with `log(freq+1) - 8 * mean_normalized_distance`. Top result is typed via `send_text` + space; alternates appear in the prediction bar so the user can repick.
+
+**Two registries, and the split is load-bearing.** `registerCharKey` fills both: `charKeyRegistry` (single-character keys only) is the recogniser's key-centre map, and `tappableKeyRegistry` (every key under the overlay) is hit testing. One list served both until swipe typing was found to make Backspace, Delete, Tab, Enter, the arrows, the modifiers, `?123` and the Number Row's Esc **dead taps** (issue #15): the overlay took every press, then resolved it against a list that structurally could not contain them. Widening the char filter fixes the taps and corrupts swipe decoding, so **never** do that; give each consumer its own list. Hit testing also skips `visible: false` items, because a KeyButton in a hidden panel still registers and carries stale geometry.
+
+**Specials activate on press and hold; characters activate on release.** A gesture starting on a non-character key can never be a swipe, so activating immediately is safe and is what keeps **auto-repeat** working (holding Backspace to delete a word). Characters must wait for release because until the gesture ends it is genuinely ambiguous. The overlay drives keys through `KeyButton.externalPress()` / `externalRelease()`, which share the debounce / visual / activation / repeat code with the button's own MouseArea, so a key behaves identically whether or not swipe is on. Guarded by `tests/test_qml_swipe_overlay.py`.
 
 ## Sticky Modifiers (Shift, Ctrl, Alt, Win)
 
@@ -588,12 +592,12 @@ Load-bearing facts:
   of `6` on row 1.
 - **Digits come back via a panel, not a fifth row.** *Settings → Appearance →
   Panels → Number Row* renders `qml/components/NumberRow.qml` (13 x 1u, flush
-  with the compact grid) above the keyboard. Its 12 char keys must register
-  through `registerFn` or the swipe overlay swallows every tap on them. Its
-  leading key is **Esc, not `` ` ``** (backtick lives on `?123` row 2), and Esc
-  deliberately does *not* register: a phantom "Esc" centre would corrupt every
-  swipe shape match. That makes it a dead tap while swipe is on, exactly like
-  Backspace/Tab/Enter already are under the overlay.
+  with the compact grid) above the keyboard. Every key must register through
+  `registerFn` or the swipe overlay swallows every tap on it. Its leading key
+  is **Esc, not `` ` ``** (backtick lives on `?123` row 2), and Esc registers
+  as a `special`, not a `char`: that keeps it hit-testable while keeping a
+  phantom "Esc" centre out of the swipe shape match. See the two-registry
+  note under *Swipe / Glide Typing*.
 - QML-only behaviour can't be covered by the Python suite, so
   `tests/test_qml_compact_view.py` and `tests/test_qml_prediction_bar.py` load
   the real `Main.qml` headlessly (`QT_QPA_PLATFORM=offscreen`) and fail on QML

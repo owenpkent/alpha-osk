@@ -162,6 +162,83 @@ Item {
         }
     }
 
+    // ===== Press lifecycle =====
+    //
+    // Split out of the MouseArea because this key has TWO possible input
+    // sources.  Normally its own MouseArea drives it.  But when swipe typing
+    // is on, SwipeOverlay covers the whole keyboard block with
+    // `preventStealing: true` and takes every press before a KeyButton can
+    // see it, so the overlay has to drive the key remotely instead (see
+    // `externalPress` / `externalRelease` below).  Both sources run these
+    // same functions: a key that behaved differently depending on whether
+    // swipe happened to be enabled is exactly the bug this structure exists
+    // to prevent.
+
+    // Debounce: drop any second press within debounceMs of the previous
+    // accepted one.  Catches hardware bounce and accidental double-clicks
+    // without affecting deliberate typing (150 ms is well under a human's
+    // repeat cadence).
+    function _acceptPress() {
+        var now = Date.now()
+        if (now - keyRoot._lastAcceptedPress < keyRoot.debounceMs)
+            return false
+        keyRoot._lastAcceptedPress = now
+        return true
+    }
+
+    // Visual press is driven explicitly so a missed release can't strand the
+    // key looking pressed-down (see the _visualPressed comment up top).
+    function _pressVisual(localX, localY) {
+        keyRoot._visualPressed = true
+        pressSafetyTimer.restart()
+        ripple.centerX = localX - keyBackground.anchors.margins
+        ripple.centerY = localY - keyBackground.anchors.margins
+        rippleAnim.stop()
+        ripple.width = 0
+        ripple.opacity = 0
+        rippleAnim.start()
+    }
+
+    // Type once, then arm auto-repeat if this key opted in.  Character keys
+    // never do (see the enableRepeat comment up top); Backspace, Delete and
+    // the arrows do.
+    function _activate() {
+        keyRoot.keyPressed()
+        if (keyRoot.enableRepeat) {
+            repeatTimer.interval = keyRoot.repeatDelay
+            repeatTimer.repeat = false
+            repeatTimer.start()
+        }
+    }
+
+    function _endPress() {
+        keyRoot._visualPressed = false
+        keyRoot.keyReleased()
+        pressSafetyTimer.stop()
+        repeatTimer.stop()
+        repeatTimer.interval = keyRoot.repeatDelay
+        repeatTimer.repeat = false
+        repeatTimer.phase = 0
+    }
+
+    // Drive a full press from outside this item, in item-local coordinates.
+    // Returns false if the debounce swallowed it, so the caller knows not to
+    // pair it with a release.  This is a real press, not a synthesised tap:
+    // holding Backspace under the swipe overlay has to repeat exactly the way
+    // holding it without the overlay does.
+    function externalPress(localX, localY) {
+        if (!keyRoot._acceptPress())
+            return false
+        keyRoot._pressVisual(localX, localY)
+        keyRoot._activate()
+        return true
+    }
+
+    function externalRelease() {
+        if (keyRoot._visualPressed)
+            keyRoot._endPress()
+    }
+
     Rectangle {
         id: keyBackground
         anchors.fill: parent
@@ -288,67 +365,25 @@ Item {
         acceptedButtons: Qt.LeftButton | Qt.RightButton
 
         onPressed: function(mouse) {
-            // Debounce: drop any second press within debounceMs of the
-            // previous accepted one.  Catches hardware bounce and
-            // accidental double-clicks without affecting deliberate
-            // typing (150 ms is well under a human's repeat cadence).
-            var now = Date.now()
-            if (now - keyRoot._lastAcceptedPress < keyRoot.debounceMs) {
+            if (!keyRoot._acceptPress()) {
                 mouse.accepted = true
                 return
             }
-            keyRoot._lastAcceptedPress = now
-
-            // Visual press is driven explicitly so a missed release
-            // can't strand the key looking pressed-down (see the
-            // _visualPressed comment up top).
-            keyRoot._visualPressed = true
-            pressSafetyTimer.restart()
-
-            // Trigger ripple from press point
-            ripple.centerX = mouse.x - keyBackground.anchors.margins
-            ripple.centerY = mouse.y - keyBackground.anchors.margins
-            rippleAnim.stop()
-            ripple.width = 0
-            ripple.opacity = 0
-            rippleAnim.start()
+            keyRoot._pressVisual(mouse.x, mouse.y)
 
             if (mouse.button === Qt.RightButton) {
-                // Right-click is a one-shot — never auto-repeats, and
+                // Right-click is a one-shot: never auto-repeats, and
                 // the caller decides what (if anything) to type.
                 keyRoot.keyRightPressed()
                 return
             }
 
-            keyRoot.keyPressed()
-            // Enable repeat based on enableRepeat property (not isSpecial)
-            // Backspace, Delete, Arrow keys should repeat
-            if (keyRoot.enableRepeat) {
-                repeatTimer.interval = keyRoot.repeatDelay
-                repeatTimer.repeat = false
-                repeatTimer.start()
-            }
+            keyRoot._activate()
         }
 
-        onReleased: {
-            keyRoot._visualPressed = false
-            keyRoot.keyReleased()
-            pressSafetyTimer.stop()
-            repeatTimer.stop()
-            repeatTimer.interval = keyRoot.repeatDelay
-            repeatTimer.repeat = false
-            repeatTimer.phase = 0
-        }
+        onReleased: keyRoot._endPress()
 
-        onCanceled: {
-            keyRoot._visualPressed = false
-            keyRoot.keyReleased()
-            pressSafetyTimer.stop()
-            repeatTimer.stop()
-            repeatTimer.interval = keyRoot.repeatDelay
-            repeatTimer.repeat = false
-            repeatTimer.phase = 0
-        }
+        onCanceled: keyRoot._endPress()
 
         // Cursor leaving the key clears the visual press AND stops
         // repeat — covers two cases: (1) the user dragged off to abort

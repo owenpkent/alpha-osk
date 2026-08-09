@@ -82,15 +82,16 @@ Item {
                 id: numKey
                 property var kd: modelData
 
-                // Only the char keys go into the registry: it feeds the swipe
-                // recogniser's key-centre map, and an "Esc" centre would be a
-                // phantom letter in every shape match. The cost is that Esc is
-                // a dead tap while swipe typing is on, which is exactly how
-                // every other special key (Backspace, Enter, Tab) already
-                // behaves under the overlay - see the note in Main.qml's
-                // registerCharKey.
-                Component.onCompleted: if (numRow.registerFn && !kd.special)
-                    numRow.registerFn(numKey, { type: "char", key: kd.key })
+                // Every key registers, Esc included, so the swipe overlay can
+                // hit-test it. Esc registers as a *special*, which is what
+                // keeps it out of the recogniser's key-centre map: an "Esc"
+                // centre would be a phantom letter in every shape match. See
+                // the two-registry note in Main.qml's registerCharKey, which
+                // is where the type filter lives.
+                Component.onCompleted: if (numRow.registerFn)
+                    numRow.registerFn(numKey, kd.special
+                        ? { type: "special", action: kd.special }
+                        : { type: "char", key: kd.key })
                 Component.onDestruction: if (numRow.unregisterFn)
                     numRow.unregisterFn(numKey)
 

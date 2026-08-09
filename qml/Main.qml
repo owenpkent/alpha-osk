@@ -411,18 +411,42 @@ Window {
     // preview bubble above the key showing the character that was typed.
     property bool keyPreviewEnabled: appSettings.savedKeyPreview
 
-    // Char-key registry — populated by each KeyButton on creation; consumed
-    // by SwipeOverlay for hit testing and by buildSwipeLayout() for the
-    // recogniser's key-centre map.
+    // Two registries, both populated by each KeyButton on creation. They are
+    // deliberately NOT the same list, and the split is load-bearing:
+    //
+    //  • charKeyRegistry: single character keys only. Feeds
+    //    pushSwipeLayout(), i.e. the recogniser's key-centre map. A
+    //    "backspace" centre in there is a phantom letter in every shape
+    //    match, so this filter must stay exactly as strict as it is.
+    //  • tappableKeyRegistry: EVERY key under the swipe overlay. Feeds the
+    //    overlay's hit testing only.
+    //
+    // One list served both consumers until swipe typing was found to make
+    // Backspace, Enter, Tab, the arrows, the modifiers, ?123 and the Number
+    // Row's Esc dead taps: the overlay takes every press in its rectangle,
+    // then resolved it against a char-only list that could not contain them.
+    // Widening the char filter would have fixed the taps and corrupted swipe
+    // decoding; giving each consumer its own list fixes one without touching
+    // the other.
     property var charKeyRegistry: []
+    property var tappableKeyRegistry: []
 
     function registerCharKey(item, kd) {
+        // Registered first and unconditionally: the overlay must be able to
+        // hit-test every key it covers, whatever its type.
+        tappableKeyRegistry.push({ item: item, kd: kd })
         if (!kd || kd.type !== "char" || !kd.key || kd.key.length !== 1) return
         charKeyRegistry.push({ item: item, kd: kd })
         swipeLayoutPushTimer.restart()
     }
 
     function unregisterCharKey(item) {
+        for (var t = 0; t < tappableKeyRegistry.length; t++) {
+            if (tappableKeyRegistry[t].item === item) {
+                tappableKeyRegistry.splice(t, 1)
+                break
+            }
+        }
         for (var i = 0; i < charKeyRegistry.length; i++) {
             if (charKeyRegistry[i].item === item) {
                 charKeyRegistry.splice(i, 1)
@@ -474,6 +498,17 @@ Window {
         for (var i = 0; i < charKeyRegistry.length; i++) {
             var entry = charKeyRegistry[i]
             if (!entry.item || !entry.kd || !entry.kd.key) continue
+            // Skip keys that are not on screen. A KeyButton inside a hidden
+            // panel is still constructed and still registers, so with the
+            // Number Row switched off its keys contribute centres computed
+            // from stale geometry, and this map is keyed by character, so a
+            // hidden key silently overwrites the visible one of the same
+            // name. Inert today only because the Number Row holds nothing but
+            // digits and Esc, and SwipeRecognizer.set_layout drops every
+            // non-alphabetic key: the corruption cannot reach decoding until
+            // some future panel carries a letter. Cheap to be correct now
+            // rather than to debug then.
+            if (!entry.item.visible) continue
             var p = overlay.mapFromItem(entry.item,
                                         entry.item.width / 2,
                                         entry.item.height / 2)
@@ -1901,6 +1936,10 @@ Window {
         // position/size through coordinate bindings instead.
         Comp.SwipeOverlay {
             id: swipeOverlay
+            // Lets tests/test_qml_swipe_overlay.py assert the overlay really
+            // is in the way, so a tap test cannot pass by the overlay simply
+            // not being there.
+            objectName: "swipeOverlay"
             x: mainLayout.x + mainKeyboard.x
             y: mainLayout.y + mainKeyboard.y
             width: mainKeyboard.width
@@ -1908,7 +1947,11 @@ Window {
             z: 50
             enabled: root.swipeEnabled
             keyboardBridge: keyboard
+            // Two lists on purpose: keyRegistry is the recogniser's
+            // key-centre map (characters only), tapRegistry is hit testing
+            // (everything). See registerCharKey.
             keyRegistry: root.charKeyRegistry
+            tapRegistry: root.tappableKeyRegistry
         }
 
         // Custom styled context menu for prediction pills
