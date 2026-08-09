@@ -117,10 +117,27 @@ def _child(root, name: str) -> QObject:
     return obj
 
 
+# A single processEvents() pass is not guaranteed to flush Qt Quick's
+# delegate creation for a Repeater, so a caller that asserted immediately
+# after one pass saw an empty pill row perhaps 40% of the time, at a
+# different window width each run. Pump until the pills materialise instead,
+# bounded so this cannot hang.
+#
+# This cannot hide a real regression. A genuine "the bar dropped everything"
+# bug exhausts the budget and still arrives at the caller's non-empty
+# assertion; the only thing the loop buys is time for work already queued.
+# The cost when zero pills are correct (empty predictions) is a handful of
+# cheap no-op passes.
+_PILL_PUMP_PASSES = 10
+
+
 def _show(root, predictions: list[str]):
-    """Push predictions and return (pill row, clear button)."""
+    """Push predictions, wait for the pills, return (pill row, clear button)."""
     root.setProperty("predictions", predictions)
-    QCoreApplication.processEvents()
+    for _ in range(_PILL_PUMP_PASSES):
+        QCoreApplication.processEvents()
+        if _pill_texts(root):
+            break
     return _child(root, "predictionRow"), _child(root, "clearContextButton")
 
 

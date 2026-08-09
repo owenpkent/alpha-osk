@@ -112,6 +112,24 @@ def qml_root(qapp):
         del engine
 
 
+# One processEvents() pass does not reliably flush Qt Quick's delegate
+# creation for a Repeater, and anything that re-resolves the layout (toggling
+# compactView, switching layer) tears the rows down and rebuilds them. A
+# caller that measured immediately after a single pass would intermittently
+# see zero rows. Pump until the delegates exist, bounded so it cannot hang.
+# Same reasoning, and the same "cannot mask a regression" argument, as
+# _show() in test_qml_prediction_bar.py: a real breakage exhausts the budget
+# and still fails the caller's non-empty assertion.
+_LAYOUT_PUMP_PASSES = 10
+
+
+def _pump_until(predicate) -> None:
+    for _ in range(_LAYOUT_PUMP_PASSES):
+        QCoreApplication.processEvents()
+        if predicate():
+            return
+
+
 def _row_units(row: dict) -> float:
     return sum(float(k.get("width", 1.0)) for k in row["keys"])
 
@@ -379,7 +397,7 @@ class TestEveryRowFitsTheContentArea:
     def _assert_rows_fit(self, root, warnings, label: str) -> None:
         for width in self.WIDTHS:
             root.setProperty("width", width)
-            QCoreApplication.processEvents()
+            _pump_until(lambda: self._rendered_rows(root))
 
             rows = self._rendered_rows(root)
             # Non-vacuity: an empty list would satisfy every assertion below.
