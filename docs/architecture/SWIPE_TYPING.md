@@ -40,28 +40,62 @@ The bridge uses `HybridPredictor.get_unigram_freqs()` /
 See `HYBRID_MERGING.md` → "Public API for External Callers".
 
 Tap fall-through is what lets a single key still work normally even when
-swipe mode is on — short gestures hit the key under the release point.
+swipe mode is on. The overlay's MouseArea fills the whole main-keyboard block
+and takes every press (`preventStealing: true`), so it has to resolve the key
+itself and drive it.
 
-**It only covers character keys.** The overlay's MouseArea fills the whole
-main-keyboard block and takes every press (`preventStealing: true`), and the
-release handler dispatches solely through `keyRegistry`. That registry is
-populated by `Main.qml`'s `registerCharKey`, which early-returns unless
-`kd.type === "char"` and the key is a single character — because the same
-list feeds `pushSwipeLayout()`, and a "Backspace" entry would put a phantom
-key centre into every shape match.
+### Two registries
 
-The consequence is that **while swipe typing is on, every special key inside
-the overlay's rectangle is a dead tap**: Backspace, Tab, Enter, Del, the
-arrows, and the Esc on the Number Row panel. Modifiers and the keys outside
-the block (title bar, prediction pills, nav/numpad panels) are unaffected.
-Swipe is off by default, which is why this has gone unreported.
+`Main.qml`'s `registerCharKey` populates **two** lists from the same call:
 
-Fixing it means separating the two jobs the registry currently does: keep
-`charKeyRegistry` as the swipe key-centre map, and add a parallel hit-test
-list that carries every tappable key with enough type information for the
-release handler to route a special through `pressSpecialKey` instead of
-`keyPressed`. Do not "fix" it by admitting specials into `charKeyRegistry`,
-which would corrupt the recogniser.
+| List | Contents | Consumer |
+|------|----------|----------|
+| `charKeyRegistry` | single-character `char` keys only | `pushSwipeLayout()`, i.e. the recogniser's key-centre map |
+| `tappableKeyRegistry` | every key under the overlay | the overlay's hit testing |
+
+They are separate because the two consumers want different things. A
+`backspace` entry in the key-centre map is a phantom letter in every shape
+match, so that filter must stay exactly as strict as it is. But hit testing
+needs the opposite: it must see every key it covers.
+
+**This used to be one list, and it was a real bug** (issue #15). The tap
+fall-through resolved through the char-only list, so Backspace, Delete, Tab,
+Enter, the arrows, the modifiers, the `?123` layer key and the Number Row's
+Esc all hit-tested against a list that structurally could not contain them,
+and were silently swallowed. Enabling swipe typing took away the one key an
+imprecise typist needs most, with nothing on screen to say why. **Do not
+"fix" a future variant of this by admitting specials into `charKeyRegistry`;
+split the consumers instead.**
+
+Hit testing also skips items whose `visible` is false. A `KeyButton` inside a
+hidden panel is still constructed and still registers, so the Number Row's
+keys sit in the registry with stale geometry whenever that panel is off.
+
+### Specials press, characters tap
+
+The two key classes activate at different moments, on purpose:
+
+- **Character keys activate on release.** Until the gesture ends it is
+  genuinely ambiguous whether it is a tap or the start of a swipe, so nothing
+  may be typed on press.
+- **Special keys activate on press, and stay held.** A gesture starting on a
+  non-character key can never become a legitimate swipe, since the recogniser
+  pre-filters candidates by start key and only characters are ever swipe
+  starts. Activating on press is what preserves **auto-repeat**: holding
+  Backspace to delete a word is most of what Backspace is for on a
+  mouse-driven OSK, and a release-time tap cannot express it. Dragging off a
+  held key aborts it, matching what `KeyButton` does on its own.
+
+The overlay drives the key through `KeyButton.externalPress()` /
+`externalRelease()`, which run the same debounce, press visual, ripple,
+activation and repeat-timer code the button's own MouseArea runs. A key must
+not behave differently depending on whether swipe typing happens to be on.
+
+Covered by `tests/test_qml_swipe_overlay.py`, which taps real keys through
+the real overlay and asserts the keystroke reached the synthesizer. Note the
+two traps recorded there: `findChildren` cannot see a Repeater's delegates,
+and a test that only checks "no exception was raised" passes against a dead
+tap, because a dead tap is silent.
 
 ## Algorithm — Simplified SHARK² / Shape Writer
 
@@ -143,12 +177,9 @@ to do if you want to revive sentence-start or proper-noun cap.
 - **Visual hit-testing of taps walks the registry linearly.**  Fine for
   the ~50 char keys in the standard layout; if layouts grow large,
   switch to a spatial index (grid bucket).
-- **Special keys under the overlay are dead taps while swipe is on.**
-  Backspace, Tab, Enter, Del and the arrows are not in `charKeyRegistry`,
-  so the tap fall-through cannot dispatch them.  See "How a Gesture Flows"
-  above for why they are excluded and what the fix looks like.  This is the
-  most user-visible gap in the feature: a user who enables swipe loses
-  Backspace, which is the one key an imprecise typist needs most.
+- **Only one gesture at a time.**  The overlay tracks a single held key and
+  a single point list, so it has no notion of a second simultaneous touch.
+  Fine for a mouse; would need rethinking for a touchscreen.
 
 ## References
 
