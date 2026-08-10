@@ -1,5 +1,4 @@
 import QtQuick 2.15
-import QtQuick.Layouts 1.15
 
 Item {
     id: navPanel
@@ -12,7 +11,7 @@ Item {
     property color keyTextColor: "#e0e0e0"
     property color accentColor: "#4a9eff"
     property color borderColor: "#505050"
-    // Hold-to-repeat timing — driven by user-tunable values in Main.qml.
+    // Hold-to-repeat timing, driven by user-tunable values in Main.qml.
     // Defaults match KeyButton.qml's hardcoded values for safety if a
     // caller doesn't pass them through.
     property int repeatDelay: 500
@@ -21,12 +20,18 @@ Item {
     implicitWidth: navGrid.implicitWidth
     implicitHeight: navGrid.implicitHeight
 
-    GridLayout {
+    // A plain Grid, NOT a GridLayout. See the "plain Row, NOT a RowLayout"
+    // note in NumberRow.qml: QtQuick.Layouts rounds every child up to a whole
+    // pixel, and Main.qml reserves an exact float unit budget for this panel
+    // when it derives the window's minimum width, so three columns rounding
+    // up costs three pixels the window was never given. Grid honours
+    // KeyButton's float width/height directly.
+    Grid {
         id: navGrid
         columns: 3
         rowSpacing: navPanel.keySpacing
         columnSpacing: navPanel.keySpacing
-        // Force uniform columns by setting all children to the same preferred size
+
         property real cellW: navPanel.keyW
         property real cellH: navPanel.keyH
 
@@ -34,7 +39,6 @@ Item {
         KeyButton {
             keyText: "print"; displayText: "PrtSc"
             keyWidth: navGrid.cellW; keyHeight: navGrid.cellH
-            Layout.preferredWidth: navGrid.cellW; Layout.preferredHeight: navGrid.cellH
             fontSize: 12; isSpecial: true; keyColor: navPanel.keyColor
             keyPressedColor: navPanel.keyPressedColor
             keyTextColor: navPanel.keyTextColor
@@ -45,7 +49,6 @@ Item {
         KeyButton {
             keyText: "scrolllock"; displayText: "ScrLk"
             keyWidth: navGrid.cellW; keyHeight: navGrid.cellH
-            Layout.preferredWidth: navGrid.cellW; Layout.preferredHeight: navGrid.cellH
             fontSize: 12; isSpecial: true; keyColor: navPanel.keyColor
             keyPressedColor: navPanel.keyPressedColor
             keyTextColor: navPanel.keyTextColor
@@ -56,7 +59,6 @@ Item {
         KeyButton {
             keyText: "pause"; displayText: "Pause"
             keyWidth: navGrid.cellW; keyHeight: navGrid.cellH
-            Layout.preferredWidth: navGrid.cellW; Layout.preferredHeight: navGrid.cellH
             fontSize: 12; isSpecial: true; keyColor: navPanel.keyColor
             keyPressedColor: navPanel.keyPressedColor
             keyTextColor: navPanel.keyTextColor
@@ -69,7 +71,6 @@ Item {
         KeyButton {
             keyText: "insert"; displayText: "Ins"
             keyWidth: navGrid.cellW; keyHeight: navGrid.cellH
-            Layout.preferredWidth: navGrid.cellW; Layout.preferredHeight: navGrid.cellH
             fontSize: 12; isSpecial: true; keyColor: navPanel.keyColor
             keyPressedColor: navPanel.keyPressedColor
             keyTextColor: navPanel.keyTextColor
@@ -80,7 +81,6 @@ Item {
         KeyButton {
             keyText: "home"; displayText: "Home"
             keyWidth: navGrid.cellW; keyHeight: navGrid.cellH
-            Layout.preferredWidth: navGrid.cellW; Layout.preferredHeight: navGrid.cellH
             fontSize: 12; isSpecial: true; keyColor: navPanel.keyColor
             keyPressedColor: navPanel.keyPressedColor
             keyTextColor: navPanel.keyTextColor
@@ -91,7 +91,6 @@ Item {
         KeyButton {
             keyText: "pageup"; displayText: "PgUp"
             keyWidth: navGrid.cellW; keyHeight: navGrid.cellH
-            Layout.preferredWidth: navGrid.cellW; Layout.preferredHeight: navGrid.cellH
             fontSize: 12; isSpecial: true; keyColor: navPanel.keyColor
             keyPressedColor: navPanel.keyPressedColor
             keyTextColor: navPanel.keyTextColor
@@ -105,7 +104,6 @@ Item {
         KeyButton {
             keyText: "delete"; displayText: "Del"
             keyWidth: navGrid.cellW; keyHeight: navGrid.cellH
-            Layout.preferredWidth: navGrid.cellW; Layout.preferredHeight: navGrid.cellH
             fontSize: 12; isSpecial: true; keyColor: navPanel.keyColor
             keyPressedColor: navPanel.keyPressedColor
             keyTextColor: navPanel.keyTextColor
@@ -117,7 +115,6 @@ Item {
         KeyButton {
             keyText: "end"; displayText: "End"
             keyWidth: navGrid.cellW; keyHeight: navGrid.cellH
-            Layout.preferredWidth: navGrid.cellW; Layout.preferredHeight: navGrid.cellH
             fontSize: 12; isSpecial: true; keyColor: navPanel.keyColor
             keyPressedColor: navPanel.keyPressedColor
             keyTextColor: navPanel.keyTextColor
@@ -128,7 +125,6 @@ Item {
         KeyButton {
             keyText: "pagedown"; displayText: "PgDn"
             keyWidth: navGrid.cellW; keyHeight: navGrid.cellH
-            Layout.preferredWidth: navGrid.cellW; Layout.preferredHeight: navGrid.cellH
             fontSize: 12; isSpecial: true; keyColor: navPanel.keyColor
             keyPressedColor: navPanel.keyPressedColor
             keyTextColor: navPanel.keyTextColor
@@ -140,13 +136,11 @@ Item {
 
         // Row 4: [spacer], Up, [spacer]
         Item {
-            Layout.preferredWidth: navGrid.cellW; Layout.preferredHeight: navGrid.cellH
-            implicitWidth: navGrid.cellW; implicitHeight: navGrid.cellH
+            width: navGrid.cellW; height: navGrid.cellH
         }
         KeyButton {
-            keyText: "up"; displayText: "\u2191"
+            keyText: "up"; displayText: "↑"
             keyWidth: navGrid.cellW; keyHeight: navGrid.cellH
-            Layout.preferredWidth: navGrid.cellW; Layout.preferredHeight: navGrid.cellH
             fontSize: 16; isSpecial: true; keyColor: navPanel.keyColor
             keyPressedColor: navPanel.keyPressedColor
             keyTextColor: navPanel.keyTextColor
@@ -156,15 +150,13 @@ Item {
             onKeyPressed: keyboard.pressSpecialKey("up")
         }
         Item {
-            Layout.preferredWidth: navGrid.cellW; Layout.preferredHeight: navGrid.cellH
-            implicitWidth: navGrid.cellW; implicitHeight: navGrid.cellH
+            width: navGrid.cellW; height: navGrid.cellH
         }
 
         // Row 5: Left, Down, Right
         KeyButton {
-            keyText: "left"; displayText: "\u2190"
+            keyText: "left"; displayText: "←"
             keyWidth: navGrid.cellW; keyHeight: navGrid.cellH
-            Layout.preferredWidth: navGrid.cellW; Layout.preferredHeight: navGrid.cellH
             fontSize: 16; isSpecial: true; keyColor: navPanel.keyColor
             keyPressedColor: navPanel.keyPressedColor
             keyTextColor: navPanel.keyTextColor
@@ -174,9 +166,8 @@ Item {
             onKeyPressed: keyboard.pressSpecialKey("left")
         }
         KeyButton {
-            keyText: "down"; displayText: "\u2193"
+            keyText: "down"; displayText: "↓"
             keyWidth: navGrid.cellW; keyHeight: navGrid.cellH
-            Layout.preferredWidth: navGrid.cellW; Layout.preferredHeight: navGrid.cellH
             fontSize: 16; isSpecial: true; keyColor: navPanel.keyColor
             keyPressedColor: navPanel.keyPressedColor
             keyTextColor: navPanel.keyTextColor
@@ -186,9 +177,8 @@ Item {
             onKeyPressed: keyboard.pressSpecialKey("down")
         }
         KeyButton {
-            keyText: "right"; displayText: "\u2192"
+            keyText: "right"; displayText: "→"
             keyWidth: navGrid.cellW; keyHeight: navGrid.cellH
-            Layout.preferredWidth: navGrid.cellW; Layout.preferredHeight: navGrid.cellH
             fontSize: 16; isSpecial: true; keyColor: navPanel.keyColor
             keyPressedColor: navPanel.keyPressedColor
             keyTextColor: navPanel.keyTextColor

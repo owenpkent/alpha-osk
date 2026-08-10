@@ -580,6 +580,9 @@ Load-bearing facts:
   bool into `<layout>-compact`. A layout with no compact variant falls back to
   full size, so the toggle is always safe. Adding compact Dvorak = drop
   `data/layouts/dvorak-compact.json` in place, no code change.
+- **The nav column reads Home / PgUp / PgDn / End top to bottom** (a scroll
+  ladder: top, page up, page down, bottom). Owen asked for Home above PgUp.
+  Pinned by `test_layouts.py::TestCompactLayout::test_nav_column_reads_top_to_bottom`.
 - **Del sits on the base layer, Esc on `?123`.** A 13u row has no spare unit, so
   the two traded places; Esc was the only base-layer key not in the protected
   "never behind a hop" set. Don't swap them back without reading the rationale
@@ -597,12 +600,21 @@ Load-bearing facts:
   used to reach has a key of its own, so the overlap is *structurally
   impossible* rather than merely absent. `sym2` holds what `?123` lacks:
   `~ ^ * _ + { } | < >`, then maths (`° × ÷ ± ≈ ≠ ≤ ≥`), then currency and
-  legal (`€ £ ¥ ¢ § ¶ © ® ™`), plus `•`. All three layers are 13.0u with
-  matching key counts (12/13/12/11), so hopping pages never resizes a key.
+  legal (`€ £ ¥ ¢ § • © ® ™` - the bullet sits in the pilcrow's slot; it was
+  briefly on the bottom row, where it displaced the period every other layer
+  has there). All three layers are 13.0u with matching key counts
+  (12/13/12/11), so hopping pages never resizes a key. **The bottom row and
+  the right-hand nav column are byte-identical on every layer**, and the tests
+  that guard that derive the layer list from the file rather than naming
+  base/sym: written against a hardcoded pair they were blind to `sym2`, which
+  is how the bullet shipped green.
   **The `shifted` fields stay on the symbol keys** even though no Shift key can
   reach them: right-click still types the shifted variant, and that is a
   bonus rather than a duplicate, because right-click output is never
-  displayed. **`Main.qml`'s layer branch drops a held Shift on every switch**
+  displayed. **`Main.qml`'s layer branch calls the idempotent
+  `keyboard.releaseShift()` on every switch** (never
+  `if (shiftOn) toggleShift()` - `root.shiftOn` is a mirror kept alive by
+  signal delivery, not a live binding, so a flip could turn Shift *on* here)
   and that is load-bearing: the modifier is held at the OS level, so a Shift
   carried in from the letters page would make `1` emit `!` while the keycap
   still read `1`, and the pages have no Shift key to clear it from. Caps is
@@ -616,15 +628,33 @@ Load-bearing facts:
   (`"style": "accent"` in the layout JSON, resolved by `root.accentKeyColor` in
   `Main.qml`). The compact grid is uniform, so unlike the full-size layouts
   there are no size cues to tell the editing keys apart from the letters, and
-  they have to be findable by colour. The fill is a **35% wash of the accent
-  over the theme's key colour, not the raw accent**: three themes have a pale
-  accent (Blackboard `#ffffaa`, Spaceship `#00ff9f`) and Typewriter is a light
-  theme with near-black text, so a saturated fill would destroy the label
-  contrast. Same reason Enter is a muted `#2a5a2a`. Full-size layouts are
-  deliberately untouched, and `tests/test_layouts.py::TestCompactEditingKeysAreAccented`
-  pins both halves of that.
-- **The Number Row and Function Row panels must use a plain `Row`, never a
-  `RowLayout`.** `QtQuick.Layouts` rounds every child up to a whole pixel, so
+  they have to be findable by colour. The fill is a **wash of the accent over
+  the theme's key colour, not the raw accent**: three themes have a pale accent
+  (Blackboard `#ffffaa`, Spaceship `#00ff9f`) and Typewriter is a light theme
+  with near-black text, so a saturated fill would destroy the label contrast.
+  Same reason Enter is a muted `#2a5a2a`. **The wash strength is derived, not
+  fixed**: a flat 35% was measured against all nine themes and dropped the
+  label below WCAG AA on five of them (Blackboard 6.19:1 -> 2.66:1, Vaporwave
+  6.17 -> 2.97, Forest 7.53 -> 3.33, Spaceship 10.37 -> 3.85, Ocean 6.96 ->
+  4.44), which is the worst place to lose contrast because these are the keys
+  the style exists to make findable, and Forest could not be rescued by
+  swapping the label to black or white either (best case 4.37). So
+  `root.accentWashFor()` walks the alpha down from 0.35 until the theme's own
+  `textColor` clears 4.5:1. **Don't reintroduce a constant here.** Accent keys
+  also take an accent-coloured border, which carries the cue on the themes
+  where the wash has to back off to 0.12-0.21; a border sits beside the label
+  rather than behind it, so it costs no contrast. Full-size layouts are
+  deliberately untouched. Pinned by
+  `tests/test_layouts.py::TestCompactEditingKeysAreAccented` (which keys) and
+  `tests/test_qml_compact_view.py::TestAccentKeysStayReadable` (the contrast
+  floor, plus the inverse test that the wash is still visible, so "stop
+  tinting" cannot pass as a fix).
+- **No panel that has to line up with the keyboard grid may use
+  `QtQuick.Layouts`.** Number Row and Function Row are plain `Row`s,
+  Navigation is a plain `Grid`, Numpad is a `Column` of `Row`s. `Main.qml`
+  reserves an exact float unit budget for each panel when it derives
+  `minimumWidth`, so a rounding positioner costs pixels the window was never
+  given. `QtQuick.Layouts` rounds every child up to a whole pixel, so
   13 keys of 69.23 px each became 13 of 70 and the panel rendered 10 px wider
   than the keyboard grid it is supposed to sit flush with, overhanging the
   window and clipping its last key. The keyboard rows are plain `Row`
@@ -801,7 +831,7 @@ easiest to reintroduce:
 - **Window flags / focus**: the keyboard must never steal focus. `WS_EX_NOACTIVATE` is set via Win32 API on Windows (`_apply_window_flags()` in `keyboard_app.py`); `WindowDoesNotAcceptFocus` elsewhere.
 - **Sticky modifier auto-release lives in two parallel blocks — keep them in sync.** `_press_char` and `pressSpecialKey` each end with their own Shift/Ctrl/Alt/Win release sequence (state flip + `release_modifier()` + change-signal emit, plus `_update_layer()` for Shift). New keystroke paths that branch off (autocorrect retype, pill insertion, edit-mode, macros) must mirror it. **Two exceptions, both of which skip the release:** (1) `pressSpecialKey` keeps Shift/Ctrl held on `_NAV_KEYS` (arrows/home/end/pageup/pagedown) so Shift+arrow selection and Ctrl+arrow word-jump persist across presses; Alt/Win still release. (2) a **right-click-locked** modifier (`_*_locked`, see *Sticky Modifiers → Right-Click to Lock*) is skipped in every release block. There are actually **four** guarded blocks, not two — also the edit-mode intercept and the Ctrl/Alt/Win chord branch in `_press_char`. A new keystroke path must add the `and not self._*_locked` guard or a held modifier will silently drop.
 - **Prediction insertion is suffix-only** (type just the unseen tail), falling back to `replace_text()` only on a prefix mismatch (casing). Compatibility Mode (`_in_compat_mode()`) rewires this to BackSpace + retype for remote-desktop clients and IDEs where suffix-only is unsafe.
-- **`_context_buffer` / `_current_word` mirror the on-screen text.** Backspace must trim the buffer and rehydrate a mid-word tail back into `_current_word`; prefix punctuation must be in the word-boundary set or pill clicks eat it.
+- **`_context_buffer` / `_current_word` mirror the on-screen text.** Backspace must trim the buffer and rehydrate a mid-word tail back into `_current_word`; prefix punctuation must be treated as a word boundary or pill clicks eat it. That check is an **allow-list of word characters** (alphanumeric plus `'` and `_`), not a list of separators: as a separator list it failed open when the second symbol page added 18 glyphs, none of which were on it, so `cost€` became the prediction prefix and the learned token. Don't convert it back.
 - **Windows uses scancode mode** for both `send_text` (ASCII) and chords/`hold_modifier` (UNICODE/`wVk`-mode only as a fallback) - required for Blender/VirtualBox/games and for Ctrl+V over TeamViewer/RDP.
 - **Games need a held key, not a zero-gap tap.** Games read the keyboard by *polling* state once per render frame (DirectInput / Raw Input / `GetAsyncKeyState`), so a key-down+key-up injected in one `SendInput` batch can land entirely between two polls and be missed: the keystroke does nothing in-game even though it works everywhere else. Auto game-compat fixes this: when `_window_is_game(hwnd)` is true, `_game_auto_active` flips on (set in the same 250 ms foreground poll as compat auto-detect) and single keys are sent with `hold_seconds = _GAME_KEY_HOLD_SECONDS` (50 ms). `WindowsKeySynthesizer.send_key` then splits the injection into a down-batch, a real `time.sleep`, and an up-batch (modifiers wrap the held key). Non-game keystrokes keep the zero-latency atomic path. `_window_is_game` uses two signals (`keyboard_bridge.py`): (1) the owning-process exe is in `_GAME_PROCESS_NAMES` (seeded with Age of Empires; extend like `_COMPAT_PROCESS_NAMES`), which catches games even in windowed mode; (2) a **borderless-fullscreen heuristic** (`_window_is_borderless_fullscreen`: window rect covers the whole monitor *and* the window has no `WS_CAPTION`) as a zero-config catch-all for unlisted games. The heuristic is deliberately skipped for exes in `_COMPAT_PROCESS_NAMES` (IDEs / remote-desktop clients), which are sometimes run fullscreen and must not get the typing-lag hold. Requiring "no caption" excludes normal maximized windows (which keep their title bar); the remaining false positives (fullscreen video players, slideshows) are harmless because a 50 ms hold doesn't hurt there. This is unrelated to UIAccess: a signed Program-Files install still hit it because the keystrokes *reach* the game, they're just too brief to be polled.
 - **`pressKey` lowercases its input** - use `pressKeyLiteral` when QML already resolved the final character (right-click shifted variant, etc.).

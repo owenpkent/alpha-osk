@@ -1,5 +1,4 @@
 import QtQuick 2.15
-import QtQuick.Layouts 1.15
 
 // Standalone number row: Esc 1 2 3 4 5 6 7 8 9 0 - =
 //
@@ -76,13 +75,18 @@ Item {
     implicitWidth: numLayout.implicitWidth
     implicitHeight: numLayout.implicitHeight
 
-    // A plain Row, NOT a RowLayout, and that is load-bearing. QtQuick.Layouts
-    // rounds every child up to a whole pixel, so 13 keys of 69.23 px each
-    // became 13 of 70 and the row rendered 10 px wider than the keyboard grid
-    // it is supposed to sit flush with, overhanging the window and clipping
-    // its last key. The main keyboard rows are plain Rows for the same
-    // reason: keyW is a float derived from the window width and every row
-    // must consume it identically.
+    // A plain Row, NOT a RowLayout, and that is load-bearing. This is the
+    // canonical copy of the rationale; the other panels point here.
+    //
+    // QtQuick.Layouts rounds every child up to a whole pixel, so 13 keys of
+    // 69.23 px each became 13 of 70 and the row rendered 10 px wider than the
+    // keyboard grid it is supposed to sit flush with, overhanging the window
+    // and clipping its last key. The main keyboard rows are plain Rows for
+    // the same reason: keyW is a float derived from the window width, and
+    // every panel that has to line up with the keys underneath it must
+    // consume that float identically. Applies to NavigationPanel (Grid) and
+    // NumpadPanel (Column of Rows) as well, which reserve their own unit
+    // budget in Main.qml's minimumWidth.
     Row {
         id: numLayout
         spacing: numRow.keySpacing

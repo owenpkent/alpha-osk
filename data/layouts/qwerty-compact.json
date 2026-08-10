@@ -68,8 +68,8 @@
         },
         {
           "type": "special",
-          "action": "pageup",
-          "display": "PgUp",
+          "action": "home",
+          "display": "Home",
           "width": 1.0,
           "fontSize": 11,
           "style": "special"
@@ -151,8 +151,8 @@
         },
         {
           "type": "special",
-          "action": "pagedown",
-          "display": "PgDn",
+          "action": "pageup",
+          "display": "PgUp",
           "width": 1.0,
           "fontSize": 11,
           "style": "special"
@@ -233,8 +233,8 @@
         },
         {
           "type": "special",
-          "action": "home",
-          "display": "Home",
+          "action": "pagedown",
+          "display": "PgDn",
           "width": 1.0,
           "fontSize": 11,
           "style": "special"
@@ -431,8 +431,8 @@
         },
         {
           "type": "special",
-          "action": "pageup",
-          "display": "PgUp",
+          "action": "home",
+          "display": "Home",
           "width": 1.0,
           "fontSize": 11,
           "style": "special"
@@ -542,8 +542,8 @@
         },
         {
           "type": "special",
-          "action": "pagedown",
-          "display": "PgDn",
+          "action": "pageup",
+          "display": "PgUp",
           "width": 1.0,
           "fontSize": 11,
           "style": "special"
@@ -636,8 +636,8 @@
         },
         {
           "type": "special",
-          "action": "home",
-          "display": "Home",
+          "action": "pagedown",
+          "display": "PgDn",
           "width": 1.0,
           "fontSize": 11,
           "style": "special"
@@ -824,8 +824,8 @@
         },
         {
           "type": "special",
-          "action": "pageup",
-          "display": "PgUp",
+          "action": "home",
+          "display": "Home",
           "width": 1.0,
           "fontSize": 11,
           "style": "special"
@@ -927,8 +927,8 @@
         },
         {
           "type": "special",
-          "action": "pagedown",
-          "display": "PgDn",
+          "action": "pageup",
+          "display": "PgUp",
           "width": 1.0,
           "fontSize": 11,
           "style": "special"
@@ -985,7 +985,7 @@
         },
         {
           "type": "char",
-          "key": "¶",
+          "key": "•",
           "width": 1.0,
           "fontSize": 14,
           "style": "secondary"
@@ -1021,8 +1021,8 @@
         },
         {
           "type": "special",
-          "action": "home",
-          "display": "Home",
+          "action": "pagedown",
+          "display": "PgDn",
           "width": 1.0,
           "fontSize": 11,
           "style": "special"
@@ -1077,7 +1077,8 @@
         },
         {
           "type": "char",
-          "key": "•",
+          "key": ".",
+          "shifted": ">",
           "width": 1.0,
           "fontSize": 14,
           "style": "secondary"

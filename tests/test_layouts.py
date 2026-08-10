@@ -209,24 +209,50 @@ class TestCompactLayout:
         for name, rows in layers.items():
             assert len(rows) == 4, f"{name} has {len(rows)} rows, expected 4"
 
+    @staticmethod
+    def _other_layers(compact: dict) -> set[str]:
+        return {r["layer"] for r in compact["rows"]} - {"base"}
+
     def test_bottom_row_identical_across_layers(self, compact: dict) -> None:
-        """Space, modifiers and the arrows must not move on a layer switch."""
+        """Space, modifiers, the period and the arrows must not move on a
+        layer switch.
+
+        Derived from the layer list rather than a hardcoded base/sym pair:
+        the second symbol page was added while this test named only those
+        two, so it shipped with a bullet where every other layer has a
+        period and the suite stayed green. Any layer added later is covered
+        without touching this test.
+        """
         rows = {r["id"]: r for r in compact["rows"]}
         base = [dict(k) for k in rows["base-4"]["keys"]]
-        sym = [dict(k) for k in rows["sym-4"]["keys"]]
         # The layer key itself necessarily differs (?123 vs ABC).
-        for keys in (base, sym):
-            keys[0].pop("target")
-            keys[0].pop("display")
-        assert base == sym
+        base[0].pop("target")
+        base[0].pop("display")
+        for layer in sorted(self._other_layers(compact)):
+            other = [dict(k) for k in rows[f"{layer}-4"]["keys"]]
+            other[0].pop("target")
+            other[0].pop("display")
+            assert other == base, f"bottom row of {layer} differs from base"
 
     def test_nav_column_is_identical_across_layers(self, compact: dict) -> None:
-        """PgUp/PgDn/Home/End hold position when switching to ?123."""
+        """Home/PgUp/PgDn/End hold position on every layer, not just ?123."""
         rows = {r["id"]: r for r in compact["rows"]}
-        for base_id, sym_id in (("base-1", "sym-1"), ("base-2", "sym-2"), ("base-3", "sym-3")):
-            assert rows[base_id]["keys"][-1] == rows[sym_id]["keys"][-1], (
-                f"nav key differs between {base_id} and {sym_id}"
-            )
+        for layer in sorted(self._other_layers(compact)):
+            for n in (1, 2, 3, 4):
+                assert rows[f"base-{n}"]["keys"][-1] == rows[f"{layer}-{n}"]["keys"][-1], (
+                    f"nav key differs between base-{n} and {layer}-{n}"
+                )
+
+    def test_nav_column_reads_top_to_bottom(self, compact: dict) -> None:
+        """Home above PgUp above PgDn above End.
+
+        The column is a vertical scroll ladder: jump to the top, page up,
+        page down, jump to the bottom. The order is muscle memory, so pin it
+        rather than leaving it to whoever next edits the row.
+        """
+        rows = {r["id"]: r for r in compact["rows"]}
+        column = [rows[f"base-{n}"]["keys"][-1]["action"] for n in (1, 2, 3, 4)]
+        assert column == ["home", "pageup", "pagedown", "end"]
 
     def test_keys_owen_named_are_on_the_base_layer(self, compact: dict) -> None:
         """Arrows, Enter, Home/End, PgUp/PgDn and / — never behind a hop."""
@@ -371,6 +397,13 @@ class TestNoDuplicateGlyphsWithinALayer:
     that reintroduces an overlap fails here rather than on a user's screen.
     """
 
+    # A row with no `layer` field always renders, which is how the full-size
+    # layouts are built. Both helpers must therefore default it to "base", not
+    # skip it: filtering on `if r.get("layer")` returned the empty set for
+    # qwerty / dvorak / colemak, so two of the tests below iterated nothing and
+    # passed without asserting anything, while the parametrize ids advertised
+    # coverage of all four layouts.
+
     @staticmethod
     def _layer_glyphs(path: Path, layer: str) -> list[str]:
         """Every glyph a user can *see* on *layer*, in key order."""
@@ -378,7 +411,7 @@ class TestNoDuplicateGlyphsWithinALayer:
         return [
             key["key"]
             for row in data["rows"]
-            if row.get("layer") == layer
+            if row.get("layer", "base") == layer
             for key in row["keys"]
             if key.get("type") == "char" and key.get("key")
         ]
@@ -386,7 +419,7 @@ class TestNoDuplicateGlyphsWithinALayer:
     @staticmethod
     def _layers(path: Path) -> set[str]:
         data = json.loads(path.read_text(encoding="utf-8"))
-        return {r["layer"] for r in data["rows"] if r.get("layer")}
+        return {r.get("layer", "base") for r in data["rows"]}
 
     def test_no_glyph_appears_twice_on_one_layer(self, path: Path) -> None:
         for layer in self._layers(path):

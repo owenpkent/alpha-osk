@@ -230,6 +230,42 @@ class TestModifierState:
         bridge.pressKey("a")
         bridge._synth.release_modifier.assert_called_with("shift")
 
+    def test_release_shift_is_idempotent(self, bridge: KeyboardBridge):
+        """The compact layer switch asks for a state, not a flip.
+
+        It used to call `if (root.shiftOn) keyboard.toggleShift()`, which
+        made the correctness of a *release* depend on QML's mirror of the
+        bridge agreeing with the bridge. `root.shiftOn` starts as a binding
+        but is imperatively reassigned by the shiftActiveChanged handler,
+        which breaks the binding permanently, so from then on it is only as
+        accurate as signal delivery. One missed emit and the toggle would
+        turn Shift *on*, on a symbol page that has no Shift key to clear it
+        and where the OS-held modifier makes "1" emit "!" under a keycap
+        still reading "1". Calling releaseShift twice must be as safe as
+        calling it once.
+        """
+        bridge.toggleShift()
+        assert bridge._shift_active is True
+
+        bridge.releaseShift()
+        assert bridge._shift_active is False
+        bridge._synth.release_modifier.assert_called_with("shift")
+
+        bridge._synth.reset_mock()
+        bridge.releaseShift()
+        assert bridge._shift_active is False, "releaseShift must never turn Shift on"
+        bridge._synth.hold_modifier.assert_not_called()
+
+    def test_release_shift_clears_a_right_click_lock(self, bridge: KeyboardBridge):
+        """A locked Shift mismatches the keycaps as loudly as a sticky one."""
+        bridge.lockModifier("shift")
+        assert bridge._shift_locked is True
+
+        bridge.releaseShift()
+        assert bridge._shift_active is False
+        assert bridge._shift_locked is False
+        bridge._synth.release_modifier.assert_called_with("shift")
+
     def test_caps_lock_persists_after_key(self, bridge: KeyboardBridge):
         bridge.toggleCapsLock()
         bridge.pressKey("a")
@@ -712,6 +748,50 @@ class TestContextTracking:
                 f"{ch!r} should be a word boundary; _current_word was {bridge._current_word!r}"
             )
             assert bridge._context_buffer.endswith(ch), f"{ch!r} should remain in context_buffer"
+
+    def test_every_glyph_a_layout_can_type_is_a_word_boundary(
+        self,
+        bridge: KeyboardBridge,
+    ):
+        """Stated over the layout files, not over a hand-written list.
+
+        The boundary check used to be a literal tuple of separators, so it
+        failed open: the second symbol page added 18 glyphs (maths, currency,
+        legal marks, the bullet) and every one of them was appended to
+        _current_word instead, making "cost€" the prediction prefix and the
+        learned token. Deriving the case list from data/layouts means the next
+        page of glyphs is covered without anyone remembering to come back
+        here.
+        """
+        import json
+        from pathlib import Path
+
+        glyphs = set()
+        for path in Path("data/layouts").glob("*.json"):
+            data = json.loads(path.read_text(encoding="utf-8"))
+            for row in data["rows"]:
+                for key in row["keys"]:
+                    if key.get("type") == "char" and key.get("key"):
+                        glyphs.add(key["key"])
+                    if key.get("shifted"):
+                        glyphs.add(key["shifted"])
+        # Word characters, deliberately: letters and digits are word content,
+        # the apostrophe keeps contractions whole, the underscore keeps
+        # snake_case identifiers whole.
+        separators = sorted(g for g in glyphs if not (g.isalnum() or g in ("'", "_")))
+        assert len(separators) > 30, "layout scrape found suspiciously few glyphs"
+
+        for ch in separators:
+            bridge._current_word = ""
+            bridge._context_buffer = ""
+            bridge._sentence_buffer = ""
+            bridge.pressKeyLiteral(ch)
+            for c in "hel":
+                bridge.pressKeyLiteral(c)
+            assert bridge._current_word == "hel", (
+                f"{ch!r} is typeable from a shipped layout but is not a word "
+                f"boundary; _current_word was {bridge._current_word!r}"
+            )
 
     def test_asterisk_prefix_prediction_click_keeps_asterisk(
         self,

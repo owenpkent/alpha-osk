@@ -1,5 +1,4 @@
 import QtQuick 2.15
-import QtQuick.Layouts 1.15
 
 Item {
     id: fnRow
@@ -16,13 +15,9 @@ Item {
     implicitWidth: fnLayout.implicitWidth
     implicitHeight: fnLayout.implicitHeight
 
-    // A plain Row, NOT a RowLayout, and that is load-bearing. QtQuick.Layouts
-    // rounds every child up to a whole pixel, so 13 keys of 69.23 px each
-    // became 13 of 70 and the row rendered 10 px wider than the keyboard grid
-    // it is supposed to sit flush with, overhanging the window and clipping
-    // its last key. The main keyboard rows are plain Rows for the same
-    // reason: keyW is a float derived from the window width and every row
-    // must consume it identically.
+    // A plain Row, NOT a RowLayout: QtQuick.Layouts rounds every child up to
+    // a whole pixel, which pushes the panel wider than the keyboard grid it
+    // has to sit flush with. Full rationale in NumberRow.qml.
     Row {
         id: fnLayout
         spacing: fnRow.keySpacing
