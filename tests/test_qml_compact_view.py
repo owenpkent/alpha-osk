@@ -120,13 +120,25 @@ def qml_root(qapp):
 # Same reasoning, and the same "cannot mask a regression" argument, as
 # _show() in test_qml_prediction_bar.py: a real breakage exhausts the budget
 # and still fails the caller's non-empty assertion.
+#
+# Two details are load-bearing, and the second one segfaulted Linux CI in the
+# prediction-bar version of this loop:
+#
+#  * The predicate must return a COUNT (or a bool), never the items. Those
+#    are PySide wrappers for QML-owned QQuickItems, and a Repeater frees its
+#    delegates on every model change, so a wrapper retained across a wait can
+#    point at freed memory. Holding one killed the whole CI run with SIGSEGV.
 _LAYOUT_PUMP_PASSES = 10
 
 
-def _pump_until(predicate) -> None:
+def _pump_until(count_fn) -> None:
+    """Wait until *count_fn* reports a non-zero count, bounded.
+
+    `count_fn` must not return QQuickItems. See the note above.
+    """
     for _ in range(_LAYOUT_PUMP_PASSES):
         QCoreApplication.processEvents()
-        if predicate():
+        if count_fn():
             return
 
 
@@ -397,7 +409,8 @@ class TestEveryRowFitsTheContentArea:
     def _assert_rows_fit(self, root, warnings, label: str) -> None:
         for width in self.WIDTHS:
             root.setProperty("width", width)
-            _pump_until(lambda: self._rendered_rows(root))
+            # len(), not the list: never retain QML-owned items across a wait.
+            _pump_until(lambda: len(self._rendered_rows(root)))
 
             rows = self._rendered_rows(root)
             # Non-vacuity: an empty list would satisfy every assertion below.
