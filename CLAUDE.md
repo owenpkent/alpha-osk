@@ -588,8 +588,30 @@ Load-bearing facts:
   panel is optional and `?123` has to stay the fallback when it's hidden.
 - **`:` has its own key on `?123` row 3**, in the slot `^` used to hold. Row 2
   already carried `;`→`:`, but a shifted variant is invisible (the keycap reads
-  `;`), so the layer read as having no colon. `^` is still the shifted variant
-  of `6` on row 1.
+  `;`), so the layer read as having no colon.
+- **The symbol pages carry no Shift key; Shift's slot switches to a second
+  page (`=\<`), the phone convention.** Shift on `?123` used to re-render row 1
+  as `! @ # $ % ^ & * ( )` while row 3 already showed `! @ # $ % : & ( )`
+  permanently: nine keys on screen saying the same thing as another key on
+  screen. Making the shift-position key a page switch means every glyph Shift
+  used to reach has a key of its own, so the overlap is *structurally
+  impossible* rather than merely absent. `sym2` holds what `?123` lacks:
+  `~ ^ * _ + { } | < >`, then maths (`° × ÷ ± ≈ ≠ ≤ ≥`), then currency and
+  legal (`€ £ ¥ ¢ § ¶ © ® ™`), plus `•`. All three layers are 13.0u with
+  matching key counts (12/13/12/11), so hopping pages never resizes a key.
+  **The `shifted` fields stay on the symbol keys** even though no Shift key can
+  reach them: right-click still types the shifted variant, and that is a
+  bonus rather than a duplicate, because right-click output is never
+  displayed. **`Main.qml`'s layer branch drops a held Shift on every switch**
+  and that is load-bearing: the modifier is held at the OS level, so a Shift
+  carried in from the letters page would make `1` emit `!` while the keycap
+  still read `1`, and the pages have no Shift key to clear it from. Caps is
+  left alone (it only affects letters). Guarded by
+  `tests/test_layouts.py::TestNoDuplicateGlyphsWithinALayer` (in particular
+  `test_shifted_variants_never_duplicate_a_visible_key`, which states the
+  property rather than the fix, so it catches an equivalent overlap on any
+  layer that keeps a Shift key) and
+  `tests/test_qml_compact_view.py::TestSecondSymbolPage`.
 - **Digits come back via a panel, not a fifth row.** *Settings → Appearance →
   Panels → Number Row* renders `qml/components/NumberRow.qml` (13 x 1u, flush
   with the compact grid) above the keyboard. Every key must register through

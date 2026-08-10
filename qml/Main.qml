@@ -1850,12 +1850,31 @@ Window {
                                             case "win": keyboard.toggleWin(); break
                                         }
                                     } else if (kd.type === "layer") {
-                                        // Layer switch (?123 / ABC) — purely a
-                                        // QML-side view change.  Deliberately
-                                        // does NOT go through keyboard.setLayout:
-                                        // that would persist as the user's
-                                        // layout preference and report the
-                                        // symbol layer from getCurrentLayout().
+                                        // Layer switch (?123 / =\< / ABC) —
+                                        // purely a QML-side view change.
+                                        // Deliberately does NOT go through
+                                        // keyboard.setLayout: that would persist
+                                        // as the user's layout preference and
+                                        // report the symbol layer from
+                                        // getCurrentLayout().
+                                        //
+                                        // Drop a held Shift on the way. The
+                                        // symbol pages carry no Shift key, so
+                                        // one carried in from the letters page
+                                        // could never be cleared from there,
+                                        // and it would not merely be stuck: the
+                                        // modifier is held at the OS level, so
+                                        // tapping "1" would emit "!" while the
+                                        // keycap still read "1". Every glyph
+                                        // Shift used to reach on these pages now
+                                        // has a key of its own, so there is
+                                        // nothing left for it to do here.
+                                        // toggleShift also clears a right-click
+                                        // lock, which is what we want: a locked
+                                        // Shift would mismatch just as loudly.
+                                        // Caps is left alone; it only affects
+                                        // letters, and these pages have none.
+                                        if (root.shiftOn) keyboard.toggleShift()
                                         root.activeLayer = kd.target || "base"
                                     } else {
                                         keyboard.pressSpecialKey(kd.action)

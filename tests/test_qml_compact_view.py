@@ -30,7 +30,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 # contributor without the Qt system libs still gets the rest of the suite.
 # CI installs the libs (see .github/workflows/ci.yml) so these still run there.
 try:
-    from PySide6.QtCore import QCoreApplication, QSettings, QUrl  # noqa: E402
+    from PySide6.QtCore import QCoreApplication, QSettings, Qt, QUrl  # noqa: E402
     from PySide6.QtGui import QGuiApplication  # noqa: E402
     from PySide6.QtQml import QQmlApplicationEngine  # noqa: E402
 
@@ -39,6 +39,7 @@ try:
     # 'QQuickItem*'". Walking the visual tree is the only way to reach a
     # Repeater's delegates (see _rendered_rows).
     from PySide6.QtQuick import QQuickItem  # noqa: E402,F401
+    from PySide6.QtTest import QTest  # noqa: E402
 except ImportError as exc:  # pragma: no cover - environment-dependent
     pytest.skip(
         f"Qt GUI libraries unavailable ({exc}); install libegl1/libgl1 to run "
@@ -536,3 +537,115 @@ class TestEveryRowFitsTheContentArea:
         )
         assert root.property("totalKeyUnits") == pytest.approx(widest_units)
         assert _real_warnings(warnings) == []
+
+
+class TestSecondSymbolPage:
+    r"""?123 -> =\< -> ?123, and what happens to a held Shift on the way.
+
+    Reported: on ?123, holding Shift re-rendered row 1 as ! @ # $ % ^ & * ( )
+    while row 3 already showed ! @ # $ % : & ( ). Shift on the symbol pages is
+    now a switch to a second page instead, which is the phone convention and
+    makes the overlap impossible rather than merely absent. The layout half of
+    that is asserted in tests/test_layouts.py; this is the QML half.
+    """
+
+    @staticmethod
+    def _key_items(root) -> list:
+        out: list = []
+
+        def walk(item) -> None:
+            for child in item.childItems():
+                if child.property("kd") is not None:
+                    out.append(child)
+                walk(child)
+
+        walk(root.property("contentItem"))
+        return out
+
+    @classmethod
+    def _layer_key(cls, root, target: str):
+        hits = [
+            i
+            for i in cls._key_items(root)
+            if i.isVisible() and (i.property("kd") or {}).get("target") == target
+        ]
+        assert hits, f"no visible layer key targeting {target!r}"
+        return hits[0]
+
+    @staticmethod
+    def _tap(root, item) -> None:
+        point = item.mapToScene(item.boundingRect().center()).toPoint()
+        QTest.mousePress(root, Qt.LeftButton, Qt.NoModifier, point)
+        QCoreApplication.processEvents()
+        QTest.mouseRelease(root, Qt.LeftButton, Qt.NoModifier, point)
+        QCoreApplication.processEvents()
+
+    @pytest.fixture
+    def compact_shown(self, qml_root):
+        root, warnings, bridge = qml_root
+        root.setProperty("compactView", True)
+        root.show()
+        _pump_until(lambda: len(self._key_items(root)))
+        assert root.property("activeLayer") == "base"
+        return root, warnings, bridge
+
+    def test_the_pages_chain_and_come_back(self, compact_shown) -> None:
+        root, warnings, _ = compact_shown
+
+        self._tap(root, self._layer_key(root, "sym"))
+        assert root.property("activeLayer") == "sym"
+        assert len(_rows(root)) == 4
+
+        self._tap(root, self._layer_key(root, "sym2"))
+        assert root.property("activeLayer") == "sym2"
+        assert len(_rows(root)) == 4
+
+        # Back to ?123, then out to letters. A page you cannot leave is worse
+        # than a page that does not exist.
+        self._tap(root, self._layer_key(root, "sym"))
+        assert root.property("activeLayer") == "sym"
+        self._tap(root, self._layer_key(root, "base"))
+        assert root.property("activeLayer") == "base"
+        assert _real_warnings(warnings) == []
+
+    def test_second_page_keys_are_the_same_size(self, compact_shown) -> None:
+        """All three pages are 13.0u with matching key counts, so hopping
+        between them must not resize anything under the pointer."""
+        root, _, _ = compact_shown
+        base_w, base_fixed = root.property("keyW"), root.property("layoutFixedPixels")
+
+        for target in ("sym", "sym2"):
+            self._tap(root, self._layer_key(root, target))
+            assert root.property("keyW") == pytest.approx(base_w), f"keys resized on {target}"
+            assert root.property("layoutFixedPixels") == pytest.approx(base_fixed)
+
+    def test_switching_layer_drops_a_held_shift(self, compact_shown) -> None:
+        """The symbol pages carry no Shift key, so one carried in from the
+        letters page could never be cleared from there.
+
+        It would not merely be stuck. The modifier is held at the OS level, so
+        tapping "1" would emit "!" while the keycap still read "1": the output
+        and the display would disagree, which is worse than either alone.
+        """
+        root, warnings, bridge = compact_shown
+        bridge.toggleShift()
+        QCoreApplication.processEvents()
+        assert root.property("shiftOn") is True, "precondition: Shift is held"
+
+        self._tap(root, self._layer_key(root, "sym"))
+
+        assert root.property("activeLayer") == "sym"
+        assert root.property("shiftOn") is False, (
+            "Shift survived the hop to a page that has no Shift key to clear it"
+        )
+        assert _real_warnings(warnings) == []
+
+    def test_no_shift_key_exists_on_either_symbol_page(self, compact_shown) -> None:
+        """Belt and braces against the QML rendering one anyway."""
+        root, _, _ = compact_shown
+        for target in ("sym", "sym2"):
+            self._tap(root, self._layer_key(root, target))
+            visible = [i for i in self._key_items(root) if i.isVisible()]
+            assert visible, "no keys rendered"
+            actions = {(i.property("kd") or {}).get("action") for i in visible}
+            assert "shift" not in actions, f"{target} still renders a Shift key"

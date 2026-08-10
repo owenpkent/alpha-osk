@@ -194,13 +194,20 @@ class TestCompactLayout:
                 "unequal rows get centred and the side gutters come back"
             )
 
-    def test_has_exactly_two_layers_of_four_rows(self, compact: dict) -> None:
+    def test_has_three_layers_of_four_rows(self, compact: dict) -> None:
+        r"""base, ?123 and =\< , four rows each.
+
+        The second symbol page exists because Shift on ?123 re-rendered row 1
+        as the glyphs row 3 already showed. Replacing Shift with a page switch
+        is the phone convention and makes the overlap structurally impossible;
+        see TestNoDuplicateGlyphsWithinALayer.
+        """
         layers: dict[str, list] = {}
         for row in compact["rows"]:
             layers.setdefault(row["layer"], []).append(row)
-        assert set(layers) == {"base", "sym"}
-        assert len(layers["base"]) == 4
-        assert len(layers["sym"]) == 4
+        assert set(layers) == {"base", "sym", "sym2"}
+        for name, rows in layers.items():
+            assert len(rows) == 4, f"{name} has {len(rows)} rows, expected 4"
 
     def test_bottom_row_identical_across_layers(self, compact: dict) -> None:
         """Space, modifiers and the arrows must not move on a layer switch."""
@@ -331,7 +338,7 @@ class TestBridgeDiscoversCompactLayout:
         assert "qwerty-compact" in ids
         assert "qwerty" in ids
 
-    def test_get_layout_rows_returns_both_layers(self) -> None:
+    def test_get_layout_rows_returns_every_layer(self) -> None:
         pytest.importorskip("PySide6")
         from unittest.mock import MagicMock, patch
 
@@ -348,5 +355,122 @@ class TestBridgeDiscoversCompactLayout:
         rows = bridge.getLayoutRows()
         # The bridge is layer-agnostic — it hands QML every row and the
         # filtering happens there. Guard that contract explicitly.
-        assert len(rows) == 8
-        assert {r["layer"] for r in rows} == {"base", "sym"}
+        assert len(rows) == 12
+        assert {r["layer"] for r in rows} == {"base", "sym", "sym2"}
+
+
+@pytest.mark.parametrize("path", all_layout_files(), ids=lambda p: p.stem)
+class TestNoDuplicateGlyphsWithinALayer:
+    """Reported: on the ?123 page, Shift turned row 1 into ! @ # $ % ^ & * ( )
+    while row 3 already showed ! @ # $ % : & ( ) permanently. Nine of the keys
+    on screen were saying the same thing as another key on screen.
+
+    The fix replaced Shift on the symbol pages with a switch to a second page,
+    the phone convention, so every glyph Shift used to reach has a key of its
+    own. These tests state the property rather than the fix, so a future edit
+    that reintroduces an overlap fails here rather than on a user's screen.
+    """
+
+    @staticmethod
+    def _layer_glyphs(path: Path, layer: str) -> list[str]:
+        """Every glyph a user can *see* on *layer*, in key order."""
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return [
+            key["key"]
+            for row in data["rows"]
+            if row.get("layer") == layer
+            for key in row["keys"]
+            if key.get("type") == "char" and key.get("key")
+        ]
+
+    @staticmethod
+    def _layers(path: Path) -> set[str]:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return {r["layer"] for r in data["rows"] if r.get("layer")}
+
+    def test_no_glyph_appears_twice_on_one_layer(self, path: Path) -> None:
+        for layer in self._layers(path):
+            glyphs = self._layer_glyphs(path, layer)
+            dupes = sorted({g for g in glyphs if glyphs.count(g) > 1})
+            assert not dupes, f"{path.stem}/{layer}: {dupes} appear on more than one key"
+
+    def test_shifted_variants_never_duplicate_a_visible_key(self, path: Path) -> None:
+        """The reported bug, stated as a property rather than as its fix.
+
+        On a layer that has a Shift key, holding Shift re-renders every key
+        that declares a `shifted` variant. If some other key on that same
+        layer already shows that glyph unshifted, the two keys become
+        indistinguishable while Shift is down: on ?123 that made nine of them
+        say the same thing as row 3, which is what was reported.
+
+        This is the assertion that fails on the buggy data. The
+        no-Shift-on-symbol-pages test above only describes how it was fixed,
+        so on its own it would let an equivalent overlap through on a layer
+        that kept its Shift key.
+        """
+        data = json.loads(path.read_text(encoding="utf-8"))
+        by_layer: dict[str, list] = {}
+        for row in data["rows"]:
+            by_layer.setdefault(row.get("layer", "base"), []).extend(row["keys"])
+
+        for layer, keys in by_layer.items():
+            has_shift = any(
+                k.get("type") == "modifier" and k.get("action") == "shift" for k in keys
+            )
+            if not has_shift:
+                continue
+            visible = {k["key"] for k in keys if k.get("type") == "char" and k.get("key")}
+            collisions = sorted({k["shifted"] for k in keys if k.get("shifted") in visible})
+            assert not collisions, (
+                f"{path.stem}/{layer}: holding Shift renders {collisions}, which "
+                "other keys on the same layer already show unshifted"
+            )
+
+    def test_symbol_pages_carry_no_shift_key(self, path: Path) -> None:
+        """Shift is meaningless on a page with no letters, and worse than
+        meaningless here: the modifier is held at the OS level, so with the
+        shifted variants still declared for right-click, a held Shift made a
+        key emit one glyph while displaying another."""
+        data = json.loads(path.read_text(encoding="utf-8"))
+        for row in data["rows"]:
+            layer = row.get("layer", "base")
+            if layer == "base":
+                continue
+            actions = [k.get("action") for k in row["keys"] if k.get("type") == "modifier"]
+            assert "shift" not in actions, (
+                f"{path.stem}/{layer}: a symbol page must not carry a Shift key"
+            )
+
+    def test_every_shifted_variant_on_a_symbol_page_has_its_own_key(self, path: Path) -> None:
+        """The shifted variants stay declared, because right-click still types
+        them, but none may be the *only* way to reach a glyph on these pages:
+        that was the discoverability problem the dedicated symbol row was
+        added to solve, and it is why Shift cannot simply be deleted."""
+        data = json.loads(path.read_text(encoding="utf-8"))
+        symbol_layers = self._layers(path) - {"base"}
+        if not symbol_layers:
+            return
+        visible = {g for layer in symbol_layers for g in self._layer_glyphs(path, layer)}
+        visible |= set(self._layer_glyphs(path, "base"))
+        # Base-layer shifted variants are reachable by the base layer's own
+        # Shift key, which still exists there.
+        visible |= {
+            k["shifted"]
+            for row in data["rows"]
+            if row.get("layer", "base") == "base"
+            for k in row["keys"]
+            if k.get("shifted")
+        }
+        unreachable = sorted(
+            {
+                k["shifted"]
+                for row in data["rows"]
+                if row.get("layer", "base") in symbol_layers
+                for k in row["keys"]
+                if k.get("shifted") and k["shifted"] not in visible
+            }
+        )
+        assert not unreachable, (
+            f"{path.stem}: {unreachable} are only reachable by Shift on a page "
+            "that has no Shift key"
+        )
