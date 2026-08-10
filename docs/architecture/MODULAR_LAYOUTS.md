@@ -166,7 +166,7 @@ Users drag panels into a grid. Each panel is an independent widget:
 - **Navigation Panel**: arrows, home/end, page up/down
 - **Custom Panel**: user-defined from layout JSON
 
-**Implementation**: A QML `GridLayout` where each cell can hold a panel. Panels are registered as plugins. Drag-and-drop to rearrange. Save arrangement to user profile.
+**Implementation**: A QML `Grid` (**not** `GridLayout`) where each cell can hold a panel. `QtQuick.Layouts` rounds every child up to a whole pixel, and key widths are floats derived from the window width, so a layout-managed panel cannot sit flush with the keys beside it; see the panel rule in CLAUDE.md. Panels are registered as plugins. Drag-and-drop to rearrange. Save arrangement to user profile.
 
 ### Level 4 — App-Aware Profiles (future)
 

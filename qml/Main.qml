@@ -717,6 +717,57 @@ Window {
     property color themeKeyPressed: activeTheme.keyPressed
     property color themeTextColor: activeTheme.textColor
     property color themeAccent: activeTheme.accent
+
+    // Key tint for the "accent" style: the editing keys a user reaches for
+    // without looking (Esc, Tab, Shift, Backspace, Del) on the compact
+    // layouts, where the grid is uniform and there are no size cues to tell
+    // them apart from the letters.
+    //
+    // A wash of the accent over the theme's own key colour, NOT the raw
+    // accent. The accent is chosen to stand out against the *background*, so
+    // painting a whole key with it fights the key *label*: three of the nine
+    // themes have a pale accent (Blackboard "#ffffaa", Spaceship "#00ff9f")
+    // and Typewriter is a light theme with near-black text.
+    //
+    // The wash strength is derived, not fixed. A flat 35% was measured
+    // against every theme and dropped the label below WCAG AA (4.5:1) on
+    // five of the nine: Blackboard 6.19 -> 2.66, Vaporwave 6.17 -> 2.97,
+    // Forest 7.53 -> 3.33, Spaceship 10.37 -> 3.85, Ocean 6.96 -> 4.44. That
+    // is the worst possible place to lose contrast, because these are the
+    // keys the style exists to make findable. Forest could not be rescued by
+    // swapping the label to black or white either (best case 4.37), so the
+    // wash itself has to yield. accentWashFor() walks the alpha down from
+    // 0.35 until the theme's own text colour clears 4.5:1, which leaves the
+    // five compliant themes untouched and backs the other four off to
+    // 0.12-0.33. Guarded by tests/test_qml_compact_view.py::TestAccentKeysStayReadable.
+    //
+    // Where the wash has to back off it stops carrying the cue on its own,
+    // so accent keys also take an accent-coloured border (accentKeyBorder).
+    // A border sits beside the label rather than behind it, so it can be the
+    // full-strength accent on every theme without costing any contrast.
+    // The same "muted, not raw" reasoning is why Enter uses "#2a5a2a".
+    function relativeLuminance(c) {
+        function channel(v) {
+            return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4)
+        }
+        return 0.2126 * channel(c.r) + 0.7152 * channel(c.g) + 0.0722 * channel(c.b)
+    }
+    function contrastRatio(a, b) {
+        var la = root.relativeLuminance(a)
+        var lb = root.relativeLuminance(b)
+        return (Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05)
+    }
+    function accentWashFor(key, accent, text) {
+        for (var a = 0.35; a > 0.005; a -= 0.01) {
+            var candidate = Qt.tint(key, Qt.rgba(accent.r, accent.g, accent.b, a))
+            if (root.contrastRatio(text, candidate) >= 4.5)
+                return candidate
+        }
+        return key
+    }
+    readonly property color accentKeyColor: root.accentWashFor(
+        root.themeKeyColor, root.themeAccent, root.themeTextColor)
+    readonly property color accentKeyBorder: root.themeAccent
     property color themeBorder: activeTheme.border
 
     // Update state when bridge emits signals
@@ -1717,12 +1768,16 @@ Window {
                     // Full key height: unlike F-keys these are typed
                     // constantly, so they get a full-size target.
                     Comp.NumberRow {
+                        // Lets the panel-width tests find this without
+                        // property-sniffing; see TestPanelsSitFlushWithTheGrid.
+                        objectName: "numberRowPanel"
                         visible: root.showNumberRow
                         Layout.alignment: Qt.AlignHCenter
                         keyW: root.keyW
                         keyH: root.keyH
                         keySpacing: root.keySpacing
                         keyColor: Qt.darker(root.themeKeyColor, 1.3)
+                        accentKeyColor: root.accentKeyColor
                         keyPressedColor: root.themeKeyPressed
                         keyTextColor: root.themeTextColor
                         accentColor: root.themeAccent
@@ -1738,6 +1793,7 @@ Window {
 
                     // ===== Function Row (F1-F12) =====
                     Comp.FunctionRow {
+                        objectName: "functionRowPanel"
                         visible: root.showFunctionRow
                         Layout.alignment: Qt.AlignHCenter
                         keyW: root.keyW
@@ -1811,6 +1867,7 @@ Window {
                                     switch(kd.style || "default") {
                                         case "secondary": return Qt.darker(root.themeKeyColor, 1.3)
                                         case "special": return Qt.darker(root.themeKeyColor, 1.15)
+                                        case "accent": return root.accentKeyColor
                                         case "enter": return "#2a5a2a"
                                         default: return root.themeKeyColor
                                     }
@@ -1818,7 +1875,12 @@ Window {
                                 keyPressedColor: root.themeKeyPressed
                                 keyTextColor: root.themeTextColor
                                 accentColor: root.themeAccent
-                                borderColor: root.themeBorder
+                                // Accent keys carry the cue on their border as
+                                // well as their fill: the fill has to stay weak
+                                // enough to keep the label readable (see
+                                // accentWashFor), the border does not.
+                                borderColor: (kd.style || "default") === "accent"
+                                             ? root.accentKeyBorder : root.themeBorder
 
                                 // Repeat-worthy specials only.  Character keys
                                 // must never repeat (see KeyButton.qml for the
@@ -1850,12 +1912,40 @@ Window {
                                             case "win": keyboard.toggleWin(); break
                                         }
                                     } else if (kd.type === "layer") {
-                                        // Layer switch (?123 / ABC) — purely a
-                                        // QML-side view change.  Deliberately
-                                        // does NOT go through keyboard.setLayout:
-                                        // that would persist as the user's
-                                        // layout preference and report the
-                                        // symbol layer from getCurrentLayout().
+                                        // Layer switch (?123 / =\< / ABC),
+                                        // purely a QML-side view change.
+                                        // Deliberately does NOT go through
+                                        // keyboard.setLayout: that would persist
+                                        // as the user's layout preference and
+                                        // report the symbol layer from
+                                        // getCurrentLayout().
+                                        //
+                                        // Drop a held Shift on the way. The
+                                        // symbol pages carry no Shift key, so
+                                        // one carried in from the letters page
+                                        // could never be cleared from there,
+                                        // and it would not merely be stuck: the
+                                        // modifier is held at the OS level, so
+                                        // tapping "1" would emit "!" while the
+                                        // keycap still read "1". Every glyph
+                                        // Shift used to reach on these pages now
+                                        // has a key of its own, so there is
+                                        // nothing left for it to do here.
+                                        // releaseShift also clears a right-click
+                                        // lock, which is what we want: a locked
+                                        // Shift would mismatch just as loudly.
+                                        // Caps is left alone; it only affects
+                                        // letters, and these pages have none.
+                                        //
+                                        // releaseShift, not "if (shiftOn)
+                                        // toggleShift": asking for the end state
+                                        // is idempotent, so it cannot turn Shift
+                                        // *on* here if root.shiftOn has drifted
+                                        // from the bridge (it is a mirror kept
+                                        // alive by signal delivery, not a live
+                                        // binding, since the Connections handler
+                                        // assigns to it).
+                                        keyboard.releaseShift()
                                         root.activeLayer = kd.target || "base"
                                     } else {
                                         keyboard.pressSpecialKey(kd.action)
@@ -1922,6 +2012,7 @@ Window {
             }
             
             Comp.NavigationPanel {
+                objectName: "navigationPanel"
                 visible: root.showNavigation
                 keyW: root.keyW
                 keyH: root.keyH
@@ -1944,6 +2035,7 @@ Window {
             }
             
             Comp.NumpadPanel {
+                objectName: "numpadPanel"
                 visible: root.showNumpad
                 keyW: root.keyW
                 keyH: root.keyH

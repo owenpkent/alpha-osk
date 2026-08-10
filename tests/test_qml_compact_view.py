@@ -30,7 +30,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 # contributor without the Qt system libs still gets the rest of the suite.
 # CI installs the libs (see .github/workflows/ci.yml) so these still run there.
 try:
-    from PySide6.QtCore import QCoreApplication, QSettings, QUrl  # noqa: E402
+    from PySide6.QtCore import QCoreApplication, QSettings, Qt, QUrl  # noqa: E402
     from PySide6.QtGui import QGuiApplication  # noqa: E402
     from PySide6.QtQml import QQmlApplicationEngine  # noqa: E402
 
@@ -39,6 +39,7 @@ try:
     # 'QQuickItem*'". Walking the visual tree is the only way to reach a
     # Repeater's delegates (see _rendered_rows).
     from PySide6.QtQuick import QQuickItem  # noqa: E402,F401
+    from PySide6.QtTest import QTest  # noqa: E402
 except ImportError as exc:  # pragma: no cover - environment-dependent
     pytest.skip(
         f"Qt GUI libraries unavailable ({exc}); install libegl1/libgl1 to run "
@@ -140,6 +141,13 @@ def _pump_until(count_fn) -> None:
         QCoreApplication.processEvents()
         if count_fn():
             return
+
+
+def _theme_names(root) -> list[str]:
+    """Theme ids from the live `themeData` map (a QML `var`, so unwrap it)."""
+    value = root.property("themeData")
+    data = value.toVariant() if hasattr(value, "toVariant") else value
+    return list(data.keys())
 
 
 def _row_units(row: dict) -> float:
@@ -535,4 +543,326 @@ class TestEveryRowFitsTheContentArea:
             f"widest row has {most_keys} keys ({most_keys - 1} gaps)"
         )
         assert root.property("totalKeyUnits") == pytest.approx(widest_units)
+        assert _real_warnings(warnings) == []
+
+
+class TestSecondSymbolPage:
+    r"""?123 -> =\< -> ?123, and what happens to a held Shift on the way.
+
+    Reported: on ?123, holding Shift re-rendered row 1 as ! @ # $ % ^ & * ( )
+    while row 3 already showed ! @ # $ % : & ( ). Shift on the symbol pages is
+    now a switch to a second page instead, which is the phone convention and
+    makes the overlap impossible rather than merely absent. The layout half of
+    that is asserted in tests/test_layouts.py; this is the QML half.
+    """
+
+    @staticmethod
+    def _key_items(root) -> list:
+        out: list = []
+
+        def walk(item) -> None:
+            for child in item.childItems():
+                if child.property("kd") is not None:
+                    out.append(child)
+                walk(child)
+
+        walk(root.property("contentItem"))
+        return out
+
+    @classmethod
+    def _layer_key(cls, root, target: str):
+        hits = [
+            i
+            for i in cls._key_items(root)
+            if i.isVisible() and (i.property("kd") or {}).get("target") == target
+        ]
+        assert hits, f"no visible layer key targeting {target!r}"
+        return hits[0]
+
+    @classmethod
+    def _tap(cls, root, target: str) -> None:
+        """Tap the layer key for *target*, holding on to no QML-owned item.
+
+        Resolving the item to a bare point and dropping the reference before
+        any pumping is deliberate. Tapping a layer key changes `activeLayer`,
+        which makes the Repeater tear down and rebuild every row, so the
+        delegate we just found is freed during the very `processEvents` call
+        below. A PySide wrapper that outlives its item is the hazard that
+        segfaulted CI once already; see the rule in GOTCHAS.md.
+        """
+        key = cls._layer_key(root, target)
+        point = key.mapToScene(key.boundingRect().center()).toPoint()
+        del key
+        QTest.mousePress(root, Qt.LeftButton, Qt.NoModifier, point)
+        QCoreApplication.processEvents()
+        QTest.mouseRelease(root, Qt.LeftButton, Qt.NoModifier, point)
+        QCoreApplication.processEvents()
+
+    @pytest.fixture
+    def compact_shown(self, qml_root):
+        root, warnings, bridge = qml_root
+        root.setProperty("compactView", True)
+        root.show()
+        _pump_until(lambda: len(self._key_items(root)))
+        assert root.property("activeLayer") == "base"
+        return root, warnings, bridge
+
+    def test_the_pages_chain_and_come_back(self, compact_shown) -> None:
+        root, warnings, _ = compact_shown
+
+        self._tap(root, "sym")
+        assert root.property("activeLayer") == "sym"
+        assert len(_rows(root)) == 4
+
+        self._tap(root, "sym2")
+        assert root.property("activeLayer") == "sym2"
+        assert len(_rows(root)) == 4
+
+        # Back to ?123, then out to letters. A page you cannot leave is worse
+        # than a page that does not exist.
+        self._tap(root, "sym")
+        assert root.property("activeLayer") == "sym"
+        self._tap(root, "base")
+        assert root.property("activeLayer") == "base"
+        assert _real_warnings(warnings) == []
+
+    def test_second_page_keys_are_the_same_size(self, compact_shown) -> None:
+        """All three pages are 13.0u with matching key counts, so hopping
+        between them must not resize anything under the pointer."""
+        root, _, _ = compact_shown
+        base_w, base_fixed = root.property("keyW"), root.property("layoutFixedPixels")
+
+        for target in ("sym", "sym2"):
+            self._tap(root, target)
+            assert root.property("keyW") == pytest.approx(base_w), f"keys resized on {target}"
+            assert root.property("layoutFixedPixels") == pytest.approx(base_fixed)
+
+    def test_switching_layer_drops_a_held_shift(self, compact_shown) -> None:
+        """The symbol pages carry no Shift key, so one carried in from the
+        letters page could never be cleared from there.
+
+        It would not merely be stuck. The modifier is held at the OS level, so
+        tapping "1" would emit "!" while the keycap still read "1": the output
+        and the display would disagree, which is worse than either alone.
+        """
+        root, warnings, bridge = compact_shown
+        bridge.toggleShift()
+        QCoreApplication.processEvents()
+        assert root.property("shiftOn") is True, "precondition: Shift is held"
+
+        self._tap(root, "sym")
+
+        assert root.property("activeLayer") == "sym"
+        assert root.property("shiftOn") is False, (
+            "Shift survived the hop to a page that has no Shift key to clear it"
+        )
+        assert _real_warnings(warnings) == []
+
+    def test_no_shift_key_exists_on_either_symbol_page(self, compact_shown) -> None:
+        """Belt and braces against the QML rendering one anyway."""
+        root, _, _ = compact_shown
+        for target in ("sym", "sym2"):
+            self._tap(root, target)
+            visible = [i for i in self._key_items(root) if i.isVisible()]
+            assert visible, "no keys rendered"
+            actions = {(i.property("kd") or {}).get("action") for i in visible}
+            assert "shift" not in actions, f"{target} still renders a Shift key"
+
+
+class TestPanelsSitFlushWithTheGrid:
+    """The Number Row and Function Row panels must consume the window exactly
+    the way a keyboard row does.
+
+    Reported with a screenshot: in compact view the number row overhung the
+    window and its last key was clipped. Cause was `RowLayout`, which rounds
+    every child up to a whole pixel: 13 keys of 69.23 px became 13 of 70, so
+    the row rendered 10 px wider than the grid it is meant to sit flush with.
+    The keyboard rows use a plain `Row` positioner, which keeps the float.
+
+    Note the earlier row-fit sweep could not have caught this: it finds rows
+    by their `rowData` property, and these panels are separate components.
+    """
+
+    WIDTHS = (940, 1005, 1100, 1240)
+    # Same 1 px `Row` float-ceil slop the keyboard rows carry; see
+    # TestEveryRowFitsTheContentArea.POSITIONER_SLOP_PX.
+    SLOP_PX = 1
+
+    @staticmethod
+    def _panel(root, name: str):
+        """The panel item, by objectName.
+
+        These are ordinary children of the layout column rather than Repeater
+        delegates, so findChild reaches them (unlike the keyboard rows, which
+        it cannot see at all).
+        """
+        panel = root.findChild(QQuickItem, name)
+        assert panel is not None, f"no panel named {name!r}"
+        return panel
+
+    @staticmethod
+    def _widest_layout_row(root) -> float:
+        rows = TestEveryRowFitsTheContentArea._rendered_rows(root)
+        assert rows, "no keyboard rows rendered"
+        return max(r.width() for r in rows)
+
+    def test_number_row_matches_the_widest_keyboard_row(self, qml_root) -> None:
+        root, warnings, _ = qml_root
+        root.setProperty("showNavigation", False)
+        root.setProperty("showNumpad", False)
+        root.setProperty("compactView", True)
+        root.setProperty("showNumberRow", True)
+        _pump_until(lambda: self._panel(root, "numberRowPanel").width() > 0)
+
+        for width in self.WIDTHS:
+            root.setProperty("width", width)
+            _pump_until(lambda: self._panel(root, "numberRowPanel").width() > 0)
+            panel = self._panel(root, "numberRowPanel")
+            assert panel.width() > 0, f"number row not rendered at {width}"
+            grid = self._widest_layout_row(root)
+
+            assert panel.width() == pytest.approx(grid, abs=1.0), (
+                f"number row is {panel.width() - grid:+.0f} px off the keyboard "
+                f"grid at window width {width} ({panel.width():.0f} vs {grid:.0f}). "
+                "Both are 13 units; they must render identically or the panel "
+                "will not line up with the keys under it."
+            )
+            assert panel.width() <= width - 16 + self.SLOP_PX, (
+                f"number row overhangs the content area by "
+                f"{panel.width() - (width - 16):.0f} px at window width {width}"
+            )
+        assert _real_warnings(warnings) == []
+
+    def test_function_row_fits_too(self, qml_root) -> None:
+        """Same component shape, same rounding trap, so pin it as well."""
+        root, warnings, _ = qml_root
+        root.setProperty("showNavigation", False)
+        root.setProperty("showNumpad", False)
+        root.setProperty("showFunctionRow", True)
+        _pump_until(lambda: self._panel(root, "functionRowPanel").width() > 0)
+
+        for width in self.WIDTHS:
+            root.setProperty("width", width)
+            _pump_until(lambda: self._panel(root, "functionRowPanel").width() > 0)
+            panel = self._panel(root, "functionRowPanel")
+            assert panel.width() <= width - 16 + self.SLOP_PX, (
+                f"function row overhangs by {panel.width() - (width - 16):.0f} px "
+                f"at window width {width}"
+            )
+        assert _real_warnings(warnings) == []
+
+    def test_side_panels_do_not_push_the_window_over(self, qml_root) -> None:
+        """The Navigation and Numpad panels are subject to the same trap.
+
+        Both were left on `GridLayout` when the rounding rule was written, and
+        every case in the two tests above sets showNavigation/showNumpad to
+        False, so nothing measured them. Main.qml reserves an exact float unit
+        budget for each panel when it derives minimumWidth, so a panel that
+        rounds its columns up costs pixels the window was never given.
+        """
+        root, warnings, _ = qml_root
+        root.setProperty("compactView", True)
+        root.setProperty("showNavigation", True)
+        root.setProperty("showNumpad", True)
+        _pump_until(lambda: self._panel(root, "navigationPanel").width() > 0)
+
+        for width in self.WIDTHS:
+            root.setProperty("width", width)
+            _pump_until(lambda: self._panel(root, "navigationPanel").width() > 0)
+            for name, columns in (("navigationPanel", 3), ("numpadPanel", 4)):
+                panel = self._panel(root, name)
+                assert panel.width() > 0, f"{name} not rendered at {width}"
+                keyw = root.property("keyW")
+                spacing = root.property("keySpacing")
+                expected = columns * keyw + (columns - 1) * spacing
+                assert panel.width() == pytest.approx(expected, abs=self.SLOP_PX), (
+                    f"{name} is {panel.width() - expected:+.1f} px off its reserved "
+                    f"{columns}-column budget at window width {width} "
+                    f"({panel.width():.1f} vs {expected:.1f}). A whole-pixel-rounding "
+                    "positioner would show up here."
+                )
+        assert _real_warnings(warnings) == []
+
+
+class TestAccentKeysStayReadable:
+    """The accent-filled editing keys must keep a legible label on every theme.
+
+    The style exists so Esc / Tab / Shift / Backspace / Del are findable by
+    colour on the compact grid, which has no size cues. A flat 35% accent wash
+    inverted that: it dropped the label below WCAG AA on five of the nine
+    themes (Blackboard 6.19 -> 2.66, Vaporwave 6.17 -> 2.97, Forest 7.53 ->
+    3.33, Spaceship 10.37 -> 3.85, Ocean 6.96 -> 4.44), so the keys the change
+    was meant to help were the hardest to read on the board.
+
+    Asserted against the live `accentKeyColor` the QML actually resolves, per
+    theme, rather than against the formula: a future edit to the wash is only
+    safe if the resulting colour still clears the ratio.
+    """
+
+    # WCAG 2.1 AA for body text. Key labels are 10-16 px DemiBold, which is
+    # "normal" text under the spec (the 3:1 large-text allowance starts at
+    # 18.66 px bold), so 4.5 is the applicable threshold, not 3.
+    MIN_RATIO = 4.5
+
+    @staticmethod
+    def _relative_luminance(color) -> float:
+        def channel(v: float) -> float:
+            return v / 12.92 if v <= 0.03928 else ((v + 0.055) / 1.055) ** 2.4
+
+        return (
+            0.2126 * channel(color.redF())
+            + 0.7152 * channel(color.greenF())
+            + 0.0722 * channel(color.blueF())
+        )
+
+    @classmethod
+    def _contrast(cls, a, b) -> float:
+        la, lb = cls._relative_luminance(a), cls._relative_luminance(b)
+        return (max(la, lb) + 0.05) / (min(la, lb) + 0.05)
+
+    def test_label_clears_wcag_aa_on_every_theme(self, qml_root) -> None:
+        root, warnings, _ = qml_root
+        themes = _theme_names(root)
+        assert len(themes) == 9, f"expected 9 themes, found {themes}"
+
+        for theme in themes:
+            root.setProperty("currentTheme", theme)
+            QCoreApplication.processEvents()
+            text = root.property("themeTextColor")
+            accent_key = root.property("accentKeyColor")
+            ratio = self._contrast(text, accent_key)
+            assert ratio >= self.MIN_RATIO, (
+                f"theme {theme!r}: the accent key fill {accent_key.name()} leaves "
+                f"the label {text.name()} at {ratio:.2f}:1, below WCAG AA "
+                f"({self.MIN_RATIO}:1). The wash has to yield to the label, not "
+                "the other way round: these are the keys the style exists to "
+                "make findable."
+            )
+        assert _real_warnings(warnings) == []
+
+    def test_the_wash_is_still_visible_where_it_had_to_back_off(self, qml_root) -> None:
+        """The inverse test, so 'pass by not tinting at all' cannot be the fix.
+
+        Backing the alpha off far enough always satisfies the contrast test
+        above, in the limit by leaving the key colour untouched. That would
+        satisfy the letter of the rule and silently delete the feature, so
+        pin that every theme's accent key is still visibly distinct from an
+        ordinary key.
+        """
+        root, warnings, _ = qml_root
+        for theme in _theme_names(root):
+            root.setProperty("currentTheme", theme)
+            QCoreApplication.processEvents()
+            plain = root.property("themeKeyColor")
+            accent_key = root.property("accentKeyColor")
+            delta = max(
+                abs(accent_key.redF() - plain.redF()),
+                abs(accent_key.greenF() - plain.greenF()),
+                abs(accent_key.blueF() - plain.blueF()),
+            )
+            assert delta >= 0.05, (
+                f"theme {theme!r}: the accent key {accent_key.name()} is within "
+                f"{delta:.3f} of a plain key {plain.name()}, so the style no "
+                "longer marks anything"
+            )
         assert _real_warnings(warnings) == []

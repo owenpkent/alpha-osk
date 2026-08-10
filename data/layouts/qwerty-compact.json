@@ -8,145 +8,1121 @@
       "id": "base-1",
       "layer": "base",
       "keys": [
-        {"type": "char", "key": "q", "width": 1.0},
-        {"type": "char", "key": "w", "width": 1.0},
-        {"type": "char", "key": "e", "width": 1.0},
-        {"type": "char", "key": "r", "width": 1.0},
-        {"type": "char", "key": "t", "width": 1.0},
-        {"type": "char", "key": "y", "width": 1.0},
-        {"type": "char", "key": "u", "width": 1.0},
-        {"type": "char", "key": "i", "width": 1.0},
-        {"type": "char", "key": "o", "width": 1.0},
-        {"type": "char", "key": "p", "width": 1.0},
-        {"type": "special", "action": "backspace", "display": "⌫", "width": 2.0, "fontSize": 16, "style": "special"},
-        {"type": "special", "action": "pageup", "display": "PgUp", "width": 1.0, "fontSize": 11, "style": "special"}
+        {
+          "type": "char",
+          "key": "q",
+          "width": 1.0
+        },
+        {
+          "type": "char",
+          "key": "w",
+          "width": 1.0
+        },
+        {
+          "type": "char",
+          "key": "e",
+          "width": 1.0
+        },
+        {
+          "type": "char",
+          "key": "r",
+          "width": 1.0
+        },
+        {
+          "type": "char",
+          "key": "t",
+          "width": 1.0
+        },
+        {
+          "type": "char",
+          "key": "y",
+          "width": 1.0
+        },
+        {
+          "type": "char",
+          "key": "u",
+          "width": 1.0
+        },
+        {
+          "type": "char",
+          "key": "i",
+          "width": 1.0
+        },
+        {
+          "type": "char",
+          "key": "o",
+          "width": 1.0
+        },
+        {
+          "type": "char",
+          "key": "p",
+          "width": 1.0
+        },
+        {
+          "type": "special",
+          "action": "backspace",
+          "display": "⌫",
+          "width": 2.0,
+          "fontSize": 16,
+          "style": "accent"
+        },
+        {
+          "type": "special",
+          "action": "home",
+          "display": "Home",
+          "width": 1.0,
+          "fontSize": 11,
+          "style": "special"
+        }
       ]
     },
     {
       "id": "base-2",
       "layer": "base",
       "keys": [
-        {"type": "special", "action": "tab", "display": "Tab", "width": 1.0, "fontSize": 11, "style": "special"},
-        {"type": "char", "key": "a", "width": 1.0},
-        {"type": "char", "key": "s", "width": 1.0},
-        {"type": "char", "key": "d", "width": 1.0},
-        {"type": "char", "key": "f", "width": 1.0},
-        {"type": "char", "key": "g", "width": 1.0},
-        {"type": "char", "key": "h", "width": 1.0},
-        {"type": "char", "key": "j", "width": 1.0},
-        {"type": "char", "key": "k", "width": 1.0},
-        {"type": "char", "key": "l", "width": 1.0},
-        {"type": "char", "key": "'", "shifted": "\"", "width": 1.0, "fontSize": 14, "style": "secondary"},
-        {"type": "special", "action": "delete", "display": "Del", "width": 1.0, "fontSize": 11, "style": "special"},
-        {"type": "special", "action": "pagedown", "display": "PgDn", "width": 1.0, "fontSize": 11, "style": "special"}
+        {
+          "type": "special",
+          "action": "tab",
+          "display": "Tab",
+          "width": 1.0,
+          "fontSize": 11,
+          "style": "accent"
+        },
+        {
+          "type": "char",
+          "key": "a",
+          "width": 1.0
+        },
+        {
+          "type": "char",
+          "key": "s",
+          "width": 1.0
+        },
+        {
+          "type": "char",
+          "key": "d",
+          "width": 1.0
+        },
+        {
+          "type": "char",
+          "key": "f",
+          "width": 1.0
+        },
+        {
+          "type": "char",
+          "key": "g",
+          "width": 1.0
+        },
+        {
+          "type": "char",
+          "key": "h",
+          "width": 1.0
+        },
+        {
+          "type": "char",
+          "key": "j",
+          "width": 1.0
+        },
+        {
+          "type": "char",
+          "key": "k",
+          "width": 1.0
+        },
+        {
+          "type": "char",
+          "key": "l",
+          "width": 1.0
+        },
+        {
+          "type": "char",
+          "key": "'",
+          "shifted": "\"",
+          "width": 1.0,
+          "fontSize": 14,
+          "style": "secondary"
+        },
+        {
+          "type": "special",
+          "action": "delete",
+          "display": "Del",
+          "width": 1.0,
+          "fontSize": 11,
+          "style": "accent"
+        },
+        {
+          "type": "special",
+          "action": "pageup",
+          "display": "PgUp",
+          "width": 1.0,
+          "fontSize": 11,
+          "style": "special"
+        }
       ]
     },
     {
       "id": "base-3",
       "layer": "base",
       "keys": [
-        {"type": "modifier", "action": "shift", "display": "⇧", "width": 1.0, "fontSize": 14, "stateKey": "shiftOn", "style": "special"},
-        {"type": "char", "key": "z", "width": 1.0},
-        {"type": "char", "key": "x", "width": 1.0},
-        {"type": "char", "key": "c", "width": 1.0},
-        {"type": "char", "key": "v", "width": 1.0},
-        {"type": "char", "key": "b", "width": 1.0},
-        {"type": "char", "key": "n", "width": 1.0},
-        {"type": "char", "key": "m", "width": 1.0},
-        {"type": "char", "key": ",", "shifted": "<", "width": 1.0, "fontSize": 14, "style": "secondary"},
-        {"type": "char", "key": "/", "shifted": "?", "width": 1.0, "fontSize": 14, "style": "secondary"},
-        {"type": "special", "action": "return", "display": "Enter", "width": 2.0, "fontSize": 12, "style": "enter"},
-        {"type": "special", "action": "home", "display": "Home", "width": 1.0, "fontSize": 11, "style": "special"}
+        {
+          "type": "modifier",
+          "action": "shift",
+          "display": "⇧",
+          "width": 1.0,
+          "fontSize": 14,
+          "stateKey": "shiftOn",
+          "style": "accent"
+        },
+        {
+          "type": "char",
+          "key": "z",
+          "width": 1.0
+        },
+        {
+          "type": "char",
+          "key": "x",
+          "width": 1.0
+        },
+        {
+          "type": "char",
+          "key": "c",
+          "width": 1.0
+        },
+        {
+          "type": "char",
+          "key": "v",
+          "width": 1.0
+        },
+        {
+          "type": "char",
+          "key": "b",
+          "width": 1.0
+        },
+        {
+          "type": "char",
+          "key": "n",
+          "width": 1.0
+        },
+        {
+          "type": "char",
+          "key": "m",
+          "width": 1.0
+        },
+        {
+          "type": "char",
+          "key": ",",
+          "shifted": "<",
+          "width": 1.0,
+          "fontSize": 14,
+          "style": "secondary"
+        },
+        {
+          "type": "char",
+          "key": "/",
+          "shifted": "?",
+          "width": 1.0,
+          "fontSize": 14,
+          "style": "secondary"
+        },
+        {
+          "type": "special",
+          "action": "return",
+          "display": "Enter",
+          "width": 2.0,
+          "fontSize": 12,
+          "style": "enter"
+        },
+        {
+          "type": "special",
+          "action": "pagedown",
+          "display": "PgDn",
+          "width": 1.0,
+          "fontSize": 11,
+          "style": "special"
+        }
       ]
     },
     {
       "id": "base-4",
       "layer": "base",
       "keys": [
-        {"type": "layer", "action": "layer", "target": "sym", "display": "?123", "width": 1.0, "fontSize": 11, "style": "special"},
-        {"type": "modifier", "action": "ctrl", "display": "Ctrl", "width": 1.0, "fontSize": 11, "stateKey": "ctrlOn", "style": "special"},
-        {"type": "modifier", "action": "win", "display": "⊞", "width": 1.0, "fontSize": 16, "stateKey": "winOn", "style": "special"},
-        {"type": "modifier", "action": "alt", "display": "Alt", "width": 1.0, "fontSize": 11, "stateKey": "altOn", "style": "special"},
-        {"type": "special", "action": "space", "display": "", "width": 3.0},
-        {"type": "char", "key": ".", "shifted": ">", "width": 1.0, "fontSize": 14, "style": "secondary"},
-        {"type": "special", "action": "left", "display": "←", "width": 1.0, "fontSize": 15, "style": "special"},
-        {"type": "special", "action": "up", "display": "↑", "width": 1.0, "fontSize": 15, "style": "special"},
-        {"type": "special", "action": "down", "display": "↓", "width": 1.0, "fontSize": 15, "style": "special"},
-        {"type": "special", "action": "right", "display": "→", "width": 1.0, "fontSize": 15, "style": "special"},
-        {"type": "special", "action": "end", "display": "End", "width": 1.0, "fontSize": 11, "style": "special"}
+        {
+          "type": "layer",
+          "action": "layer",
+          "target": "sym",
+          "display": "?123",
+          "width": 1.0,
+          "fontSize": 11,
+          "style": "special"
+        },
+        {
+          "type": "modifier",
+          "action": "ctrl",
+          "display": "Ctrl",
+          "width": 1.0,
+          "fontSize": 11,
+          "stateKey": "ctrlOn",
+          "style": "special"
+        },
+        {
+          "type": "modifier",
+          "action": "win",
+          "display": "⊞",
+          "width": 1.0,
+          "fontSize": 16,
+          "stateKey": "winOn",
+          "style": "special"
+        },
+        {
+          "type": "modifier",
+          "action": "alt",
+          "display": "Alt",
+          "width": 1.0,
+          "fontSize": 11,
+          "stateKey": "altOn",
+          "style": "special"
+        },
+        {
+          "type": "special",
+          "action": "space",
+          "display": "",
+          "width": 3.0
+        },
+        {
+          "type": "char",
+          "key": ".",
+          "shifted": ">",
+          "width": 1.0,
+          "fontSize": 14,
+          "style": "secondary"
+        },
+        {
+          "type": "special",
+          "action": "left",
+          "display": "←",
+          "width": 1.0,
+          "fontSize": 15,
+          "style": "special"
+        },
+        {
+          "type": "special",
+          "action": "up",
+          "display": "↑",
+          "width": 1.0,
+          "fontSize": 15,
+          "style": "special"
+        },
+        {
+          "type": "special",
+          "action": "down",
+          "display": "↓",
+          "width": 1.0,
+          "fontSize": 15,
+          "style": "special"
+        },
+        {
+          "type": "special",
+          "action": "right",
+          "display": "→",
+          "width": 1.0,
+          "fontSize": 15,
+          "style": "special"
+        },
+        {
+          "type": "special",
+          "action": "end",
+          "display": "End",
+          "width": 1.0,
+          "fontSize": 11,
+          "style": "special"
+        }
       ]
     },
-
     {
       "id": "sym-1",
       "layer": "sym",
       "keys": [
-        {"type": "char", "key": "1", "shifted": "!", "width": 1.0, "fontSize": 14, "style": "secondary"},
-        {"type": "char", "key": "2", "shifted": "@", "width": 1.0, "fontSize": 14, "style": "secondary"},
-        {"type": "char", "key": "3", "shifted": "#", "width": 1.0, "fontSize": 14, "style": "secondary"},
-        {"type": "char", "key": "4", "shifted": "$", "width": 1.0, "fontSize": 14, "style": "secondary"},
-        {"type": "char", "key": "5", "shifted": "%", "width": 1.0, "fontSize": 14, "style": "secondary"},
-        {"type": "char", "key": "6", "shifted": "^", "width": 1.0, "fontSize": 14, "style": "secondary"},
-        {"type": "char", "key": "7", "shifted": "&", "width": 1.0, "fontSize": 14, "style": "secondary"},
-        {"type": "char", "key": "8", "shifted": "*", "width": 1.0, "fontSize": 14, "style": "secondary"},
-        {"type": "char", "key": "9", "shifted": "(", "width": 1.0, "fontSize": 14, "style": "secondary"},
-        {"type": "char", "key": "0", "shifted": ")", "width": 1.0, "fontSize": 14, "style": "secondary"},
-        {"type": "special", "action": "backspace", "display": "⌫", "width": 2.0, "fontSize": 16, "style": "special"},
-        {"type": "special", "action": "pageup", "display": "PgUp", "width": 1.0, "fontSize": 11, "style": "special"}
+        {
+          "type": "char",
+          "key": "1",
+          "shifted": "!",
+          "width": 1.0,
+          "fontSize": 14,
+          "style": "secondary"
+        },
+        {
+          "type": "char",
+          "key": "2",
+          "shifted": "@",
+          "width": 1.0,
+          "fontSize": 14,
+          "style": "secondary"
+        },
+        {
+          "type": "char",
+          "key": "3",
+          "shifted": "#",
+          "width": 1.0,
+          "fontSize": 14,
+          "style": "secondary"
+        },
+        {
+          "type": "char",
+          "key": "4",
+          "shifted": "$",
+          "width": 1.0,
+          "fontSize": 14,
+          "style": "secondary"
+        },
+        {
+          "type": "char",
+          "key": "5",
+          "shifted": "%",
+          "width": 1.0,
+          "fontSize": 14,
+          "style": "secondary"
+        },
+        {
+          "type": "char",
+          "key": "6",
+          "shifted": "^",
+          "width": 1.0,
+          "fontSize": 14,
+          "style": "secondary"
+        },
+        {
+          "type": "char",
+          "key": "7",
+          "shifted": "&",
+          "width": 1.0,
+          "fontSize": 14,
+          "style": "secondary"
+        },
+        {
+          "type": "char",
+          "key": "8",
+          "shifted": "*",
+          "width": 1.0,
+          "fontSize": 14,
+          "style": "secondary"
+        },
+        {
+          "type": "char",
+          "key": "9",
+          "shifted": "(",
+          "width": 1.0,
+          "fontSize": 14,
+          "style": "secondary"
+        },
+        {
+          "type": "char",
+          "key": "0",
+          "shifted": ")",
+          "width": 1.0,
+          "fontSize": 14,
+          "style": "secondary"
+        },
+        {
+          "type": "special",
+          "action": "backspace",
+          "display": "⌫",
+          "width": 2.0,
+          "fontSize": 16,
+          "style": "accent"
+        },
+        {
+          "type": "special",
+          "action": "home",
+          "display": "Home",
+          "width": 1.0,
+          "fontSize": 11,
+          "style": "special"
+        }
       ]
     },
     {
       "id": "sym-2",
       "layer": "sym",
       "keys": [
-        {"type": "special", "action": "tab", "display": "Tab", "width": 1.0, "fontSize": 11, "style": "special"},
-        {"type": "char", "key": "-", "shifted": "_", "width": 1.0, "fontSize": 14, "style": "secondary"},
-        {"type": "char", "key": "=", "shifted": "+", "width": 1.0, "fontSize": 14, "style": "secondary"},
-        {"type": "char", "key": "[", "shifted": "{", "width": 1.0, "fontSize": 14, "style": "secondary"},
-        {"type": "char", "key": "]", "shifted": "}", "width": 1.0, "fontSize": 14, "style": "secondary"},
-        {"type": "char", "key": "\\", "shifted": "|", "width": 1.0, "fontSize": 14, "style": "secondary"},
-        {"type": "char", "key": ";", "shifted": ":", "width": 1.0, "fontSize": 14, "style": "secondary"},
-        {"type": "char", "key": "'", "shifted": "\"", "width": 1.0, "fontSize": 14, "style": "secondary"},
-        {"type": "char", "key": "`", "shifted": "~", "width": 1.0, "fontSize": 14, "style": "secondary"},
-        {"type": "special", "action": "insert", "display": "Ins", "width": 1.0, "fontSize": 11, "style": "special"},
-        {"type": "special", "action": "escape", "display": "Esc", "width": 1.0, "fontSize": 11, "style": "special"},
-        {"type": "modifier", "action": "caps", "display": "Caps", "width": 1.0, "fontSize": 10, "stateKey": "capsOn", "style": "special"},
-        {"type": "special", "action": "pagedown", "display": "PgDn", "width": 1.0, "fontSize": 11, "style": "special"}
+        {
+          "type": "special",
+          "action": "tab",
+          "display": "Tab",
+          "width": 1.0,
+          "fontSize": 11,
+          "style": "accent"
+        },
+        {
+          "type": "char",
+          "key": "-",
+          "shifted": "_",
+          "width": 1.0,
+          "fontSize": 14,
+          "style": "secondary"
+        },
+        {
+          "type": "char",
+          "key": "=",
+          "shifted": "+",
+          "width": 1.0,
+          "fontSize": 14,
+          "style": "secondary"
+        },
+        {
+          "type": "char",
+          "key": "[",
+          "shifted": "{",
+          "width": 1.0,
+          "fontSize": 14,
+          "style": "secondary"
+        },
+        {
+          "type": "char",
+          "key": "]",
+          "shifted": "}",
+          "width": 1.0,
+          "fontSize": 14,
+          "style": "secondary"
+        },
+        {
+          "type": "char",
+          "key": "\\",
+          "shifted": "|",
+          "width": 1.0,
+          "fontSize": 14,
+          "style": "secondary"
+        },
+        {
+          "type": "char",
+          "key": ";",
+          "shifted": ":",
+          "width": 1.0,
+          "fontSize": 14,
+          "style": "secondary"
+        },
+        {
+          "type": "char",
+          "key": "'",
+          "shifted": "\"",
+          "width": 1.0,
+          "fontSize": 14,
+          "style": "secondary"
+        },
+        {
+          "type": "char",
+          "key": "`",
+          "shifted": "~",
+          "width": 1.0,
+          "fontSize": 14,
+          "style": "secondary"
+        },
+        {
+          "type": "special",
+          "action": "insert",
+          "display": "Ins",
+          "width": 1.0,
+          "fontSize": 11,
+          "style": "special"
+        },
+        {
+          "type": "special",
+          "action": "escape",
+          "display": "Esc",
+          "width": 1.0,
+          "fontSize": 11,
+          "style": "accent"
+        },
+        {
+          "type": "modifier",
+          "action": "caps",
+          "display": "Caps",
+          "width": 1.0,
+          "fontSize": 10,
+          "stateKey": "capsOn",
+          "style": "special"
+        },
+        {
+          "type": "special",
+          "action": "pageup",
+          "display": "PgUp",
+          "width": 1.0,
+          "fontSize": 11,
+          "style": "special"
+        }
       ]
     },
     {
       "id": "sym-3",
       "layer": "sym",
       "keys": [
-        {"type": "modifier", "action": "shift", "display": "⇧", "width": 1.0, "fontSize": 14, "stateKey": "shiftOn", "style": "special"},
-        {"type": "char", "key": "!", "width": 1.0, "fontSize": 14, "style": "secondary"},
-        {"type": "char", "key": "@", "width": 1.0, "fontSize": 14, "style": "secondary"},
-        {"type": "char", "key": "#", "width": 1.0, "fontSize": 14, "style": "secondary"},
-        {"type": "char", "key": "$", "width": 1.0, "fontSize": 14, "style": "secondary"},
-        {"type": "char", "key": "%", "width": 1.0, "fontSize": 14, "style": "secondary"},
-        {"type": "char", "key": ":", "width": 1.0, "fontSize": 14, "style": "secondary"},
-        {"type": "char", "key": "&", "width": 1.0, "fontSize": 14, "style": "secondary"},
-        {"type": "char", "key": "(", "width": 1.0, "fontSize": 14, "style": "secondary"},
-        {"type": "char", "key": ")", "width": 1.0, "fontSize": 14, "style": "secondary"},
-        {"type": "special", "action": "return", "display": "Enter", "width": 2.0, "fontSize": 12, "style": "enter"},
-        {"type": "special", "action": "home", "display": "Home", "width": 1.0, "fontSize": 11, "style": "special"}
+        {
+          "type": "layer",
+          "action": "layer",
+          "target": "sym2",
+          "display": "=\\<",
+          "width": 1.0,
+          "fontSize": 11,
+          "style": "special"
+        },
+        {
+          "type": "char",
+          "key": "!",
+          "width": 1.0,
+          "fontSize": 14,
+          "style": "secondary"
+        },
+        {
+          "type": "char",
+          "key": "@",
+          "width": 1.0,
+          "fontSize": 14,
+          "style": "secondary"
+        },
+        {
+          "type": "char",
+          "key": "#",
+          "width": 1.0,
+          "fontSize": 14,
+          "style": "secondary"
+        },
+        {
+          "type": "char",
+          "key": "$",
+          "width": 1.0,
+          "fontSize": 14,
+          "style": "secondary"
+        },
+        {
+          "type": "char",
+          "key": "%",
+          "width": 1.0,
+          "fontSize": 14,
+          "style": "secondary"
+        },
+        {
+          "type": "char",
+          "key": ":",
+          "width": 1.0,
+          "fontSize": 14,
+          "style": "secondary"
+        },
+        {
+          "type": "char",
+          "key": "&",
+          "width": 1.0,
+          "fontSize": 14,
+          "style": "secondary"
+        },
+        {
+          "type": "char",
+          "key": "(",
+          "width": 1.0,
+          "fontSize": 14,
+          "style": "secondary"
+        },
+        {
+          "type": "char",
+          "key": ")",
+          "width": 1.0,
+          "fontSize": 14,
+          "style": "secondary"
+        },
+        {
+          "type": "special",
+          "action": "return",
+          "display": "Enter",
+          "width": 2.0,
+          "fontSize": 12,
+          "style": "enter"
+        },
+        {
+          "type": "special",
+          "action": "pagedown",
+          "display": "PgDn",
+          "width": 1.0,
+          "fontSize": 11,
+          "style": "special"
+        }
       ]
     },
     {
       "id": "sym-4",
       "layer": "sym",
       "keys": [
-        {"type": "layer", "action": "layer", "target": "base", "display": "ABC", "width": 1.0, "fontSize": 11, "style": "special"},
-        {"type": "modifier", "action": "ctrl", "display": "Ctrl", "width": 1.0, "fontSize": 11, "stateKey": "ctrlOn", "style": "special"},
-        {"type": "modifier", "action": "win", "display": "⊞", "width": 1.0, "fontSize": 16, "stateKey": "winOn", "style": "special"},
-        {"type": "modifier", "action": "alt", "display": "Alt", "width": 1.0, "fontSize": 11, "stateKey": "altOn", "style": "special"},
-        {"type": "special", "action": "space", "display": "", "width": 3.0},
-        {"type": "char", "key": ".", "shifted": ">", "width": 1.0, "fontSize": 14, "style": "secondary"},
-        {"type": "special", "action": "left", "display": "←", "width": 1.0, "fontSize": 15, "style": "special"},
-        {"type": "special", "action": "up", "display": "↑", "width": 1.0, "fontSize": 15, "style": "special"},
-        {"type": "special", "action": "down", "display": "↓", "width": 1.0, "fontSize": 15, "style": "special"},
-        {"type": "special", "action": "right", "display": "→", "width": 1.0, "fontSize": 15, "style": "special"},
-        {"type": "special", "action": "end", "display": "End", "width": 1.0, "fontSize": 11, "style": "special"}
+        {
+          "type": "layer",
+          "action": "layer",
+          "target": "base",
+          "display": "ABC",
+          "width": 1.0,
+          "fontSize": 11,
+          "style": "special"
+        },
+        {
+          "type": "modifier",
+          "action": "ctrl",
+          "display": "Ctrl",
+          "width": 1.0,
+          "fontSize": 11,
+          "stateKey": "ctrlOn",
+          "style": "special"
+        },
+        {
+          "type": "modifier",
+          "action": "win",
+          "display": "⊞",
+          "width": 1.0,
+          "fontSize": 16,
+          "stateKey": "winOn",
+          "style": "special"
+        },
+        {
+          "type": "modifier",
+          "action": "alt",
+          "display": "Alt",
+          "width": 1.0,
+          "fontSize": 11,
+          "stateKey": "altOn",
+          "style": "special"
+        },
+        {
+          "type": "special",
+          "action": "space",
+          "display": "",
+          "width": 3.0
+        },
+        {
+          "type": "char",
+          "key": ".",
+          "shifted": ">",
+          "width": 1.0,
+          "fontSize": 14,
+          "style": "secondary"
+        },
+        {
+          "type": "special",
+          "action": "left",
+          "display": "←",
+          "width": 1.0,
+          "fontSize": 15,
+          "style": "special"
+        },
+        {
+          "type": "special",
+          "action": "up",
+          "display": "↑",
+          "width": 1.0,
+          "fontSize": 15,
+          "style": "special"
+        },
+        {
+          "type": "special",
+          "action": "down",
+          "display": "↓",
+          "width": 1.0,
+          "fontSize": 15,
+          "style": "special"
+        },
+        {
+          "type": "special",
+          "action": "right",
+          "display": "→",
+          "width": 1.0,
+          "fontSize": 15,
+          "style": "special"
+        },
+        {
+          "type": "special",
+          "action": "end",
+          "display": "End",
+          "width": 1.0,
+          "fontSize": 11,
+          "style": "special"
+        }
+      ]
+    },
+    {
+      "id": "sym2-1",
+      "layer": "sym2",
+      "keys": [
+        {
+          "type": "char",
+          "key": "~",
+          "width": 1.0,
+          "fontSize": 14,
+          "style": "secondary"
+        },
+        {
+          "type": "char",
+          "key": "^",
+          "width": 1.0,
+          "fontSize": 14,
+          "style": "secondary"
+        },
+        {
+          "type": "char",
+          "key": "*",
+          "width": 1.0,
+          "fontSize": 14,
+          "style": "secondary"
+        },
+        {
+          "type": "char",
+          "key": "_",
+          "width": 1.0,
+          "fontSize": 14,
+          "style": "secondary"
+        },
+        {
+          "type": "char",
+          "key": "+",
+          "width": 1.0,
+          "fontSize": 14,
+          "style": "secondary"
+        },
+        {
+          "type": "char",
+          "key": "{",
+          "width": 1.0,
+          "fontSize": 14,
+          "style": "secondary"
+        },
+        {
+          "type": "char",
+          "key": "}",
+          "width": 1.0,
+          "fontSize": 14,
+          "style": "secondary"
+        },
+        {
+          "type": "char",
+          "key": "|",
+          "width": 1.0,
+          "fontSize": 14,
+          "style": "secondary"
+        },
+        {
+          "type": "char",
+          "key": "<",
+          "width": 1.0,
+          "fontSize": 14,
+          "style": "secondary"
+        },
+        {
+          "type": "char",
+          "key": ">",
+          "width": 1.0,
+          "fontSize": 14,
+          "style": "secondary"
+        },
+        {
+          "type": "special",
+          "action": "backspace",
+          "display": "⌫",
+          "width": 2.0,
+          "fontSize": 16,
+          "style": "accent"
+        },
+        {
+          "type": "special",
+          "action": "home",
+          "display": "Home",
+          "width": 1.0,
+          "fontSize": 11,
+          "style": "special"
+        }
+      ]
+    },
+    {
+      "id": "sym2-2",
+      "layer": "sym2",
+      "keys": [
+        {
+          "type": "special",
+          "action": "tab",
+          "display": "Tab",
+          "width": 1.0,
+          "fontSize": 11,
+          "style": "accent"
+        },
+        {
+          "type": "char",
+          "key": "°",
+          "width": 1.0,
+          "fontSize": 14,
+          "style": "secondary"
+        },
+        {
+          "type": "char",
+          "key": "×",
+          "width": 1.0,
+          "fontSize": 14,
+          "style": "secondary"
+        },
+        {
+          "type": "char",
+          "key": "÷",
+          "width": 1.0,
+          "fontSize": 14,
+          "style": "secondary"
+        },
+        {
+          "type": "char",
+          "key": "±",
+          "width": 1.0,
+          "fontSize": 14,
+          "style": "secondary"
+        },
+        {
+          "type": "char",
+          "key": "≈",
+          "width": 1.0,
+          "fontSize": 14,
+          "style": "secondary"
+        },
+        {
+          "type": "char",
+          "key": "≠",
+          "width": 1.0,
+          "fontSize": 14,
+          "style": "secondary"
+        },
+        {
+          "type": "char",
+          "key": "≤",
+          "width": 1.0,
+          "fontSize": 14,
+          "style": "secondary"
+        },
+        {
+          "type": "char",
+          "key": "≥",
+          "width": 1.0,
+          "fontSize": 14,
+          "style": "secondary"
+        },
+        {
+          "type": "special",
+          "action": "insert",
+          "display": "Ins",
+          "width": 1.0,
+          "fontSize": 11,
+          "style": "special"
+        },
+        {
+          "type": "special",
+          "action": "escape",
+          "display": "Esc",
+          "width": 1.0,
+          "fontSize": 11,
+          "style": "accent"
+        },
+        {
+          "type": "modifier",
+          "action": "caps",
+          "display": "Caps",
+          "width": 1.0,
+          "fontSize": 10,
+          "stateKey": "capsOn",
+          "style": "special"
+        },
+        {
+          "type": "special",
+          "action": "pageup",
+          "display": "PgUp",
+          "width": 1.0,
+          "fontSize": 11,
+          "style": "special"
+        }
+      ]
+    },
+    {
+      "id": "sym2-3",
+      "layer": "sym2",
+      "keys": [
+        {
+          "type": "layer",
+          "action": "layer",
+          "target": "sym",
+          "display": "?123",
+          "width": 1.0,
+          "fontSize": 11,
+          "style": "special"
+        },
+        {
+          "type": "char",
+          "key": "€",
+          "width": 1.0,
+          "fontSize": 14,
+          "style": "secondary"
+        },
+        {
+          "type": "char",
+          "key": "£",
+          "width": 1.0,
+          "fontSize": 14,
+          "style": "secondary"
+        },
+        {
+          "type": "char",
+          "key": "¥",
+          "width": 1.0,
+          "fontSize": 14,
+          "style": "secondary"
+        },
+        {
+          "type": "char",
+          "key": "¢",
+          "width": 1.0,
+          "fontSize": 14,
+          "style": "secondary"
+        },
+        {
+          "type": "char",
+          "key": "§",
+          "width": 1.0,
+          "fontSize": 14,
+          "style": "secondary"
+        },
+        {
+          "type": "char",
+          "key": "•",
+          "width": 1.0,
+          "fontSize": 14,
+          "style": "secondary"
+        },
+        {
+          "type": "char",
+          "key": "©",
+          "width": 1.0,
+          "fontSize": 14,
+          "style": "secondary"
+        },
+        {
+          "type": "char",
+          "key": "®",
+          "width": 1.0,
+          "fontSize": 14,
+          "style": "secondary"
+        },
+        {
+          "type": "char",
+          "key": "™",
+          "width": 1.0,
+          "fontSize": 14,
+          "style": "secondary"
+        },
+        {
+          "type": "special",
+          "action": "return",
+          "display": "Enter",
+          "width": 2.0,
+          "fontSize": 12,
+          "style": "enter"
+        },
+        {
+          "type": "special",
+          "action": "pagedown",
+          "display": "PgDn",
+          "width": 1.0,
+          "fontSize": 11,
+          "style": "special"
+        }
+      ]
+    },
+    {
+      "id": "sym2-4",
+      "layer": "sym2",
+      "keys": [
+        {
+          "type": "layer",
+          "action": "layer",
+          "target": "base",
+          "display": "ABC",
+          "width": 1.0,
+          "fontSize": 11,
+          "style": "special"
+        },
+        {
+          "type": "modifier",
+          "action": "ctrl",
+          "display": "Ctrl",
+          "width": 1.0,
+          "fontSize": 11,
+          "stateKey": "ctrlOn",
+          "style": "special"
+        },
+        {
+          "type": "modifier",
+          "action": "win",
+          "display": "⊞",
+          "width": 1.0,
+          "fontSize": 16,
+          "stateKey": "winOn",
+          "style": "special"
+        },
+        {
+          "type": "modifier",
+          "action": "alt",
+          "display": "Alt",
+          "width": 1.0,
+          "fontSize": 11,
+          "stateKey": "altOn",
+          "style": "special"
+        },
+        {
+          "type": "special",
+          "action": "space",
+          "display": "",
+          "width": 3.0
+        },
+        {
+          "type": "char",
+          "key": ".",
+          "shifted": ">",
+          "width": 1.0,
+          "fontSize": 14,
+          "style": "secondary"
+        },
+        {
+          "type": "special",
+          "action": "left",
+          "display": "←",
+          "width": 1.0,
+          "fontSize": 15,
+          "style": "special"
+        },
+        {
+          "type": "special",
+          "action": "up",
+          "display": "↑",
+          "width": 1.0,
+          "fontSize": 15,
+          "style": "special"
+        },
+        {
+          "type": "special",
+          "action": "down",
+          "display": "↓",
+          "width": 1.0,
+          "fontSize": 15,
+          "style": "special"
+        },
+        {
+          "type": "special",
+          "action": "right",
+          "display": "→",
+          "width": 1.0,
+          "fontSize": 15,
+          "style": "special"
+        },
+        {
+          "type": "special",
+          "action": "end",
+          "display": "End",
+          "width": 1.0,
+          "fontSize": 11,
+          "style": "special"
+        }
       ]
     }
   ]

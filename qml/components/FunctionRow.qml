@@ -1,5 +1,4 @@
 import QtQuick 2.15
-import QtQuick.Layouts 1.15
 
 Item {
     id: fnRow
@@ -16,7 +15,10 @@ Item {
     implicitWidth: fnLayout.implicitWidth
     implicitHeight: fnLayout.implicitHeight
 
-    RowLayout {
+    // A plain Row, NOT a RowLayout: QtQuick.Layouts rounds every child up to
+    // a whole pixel, which pushes the panel wider than the keyboard grid it
+    // has to sit flush with. Full rationale in NumberRow.qml.
+    Row {
         id: fnLayout
         spacing: fnRow.keySpacing
 

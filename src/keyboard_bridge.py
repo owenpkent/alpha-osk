@@ -990,43 +990,31 @@ class KeyboardBridge(QObject):
                     self._context_buffer = self._context_buffer[-200:]
 
             # Word-internal boundaries that DON'T get an auto-space:
-            # hyphen / slash / opening bracket / markdown-and-sigil
-            # punctuation.  Without this, typing "word1-word2" left
-            # _current_word = "word1-word2", so clicking a suggestion
-            # for "word2" failed the prefix-match in pressPrediction
-            # and fell through to replace_text, which backspaced
-            # "word1-" off the screen too.  Same bug for "*hello",
-            # "@user", "#tag", "$var", `key=value` etc. — the leading
-            # punctuation got selected and overwritten by the pill.
+            # hyphen / slash / brackets / markdown-and-sigil punctuation /
+            # maths / currency / legal marks.  Without this, typing
+            # "word1-word2" left _current_word = "word1-word2", so clicking
+            # a suggestion for "word2" failed the prefix-match in
+            # pressPrediction and fell through to replace_text, which
+            # backspaced "word1-" off the screen too.  Same bug for
+            # "*hello", "@user", "#tag", "$var", `key=value` etc: the
+            # leading punctuation got selected and overwritten by the pill.
             # Treat each as a word boundary for prediction purposes:
             # keep the character on screen (already sent above), reset
             # _current_word, and append the segment-plus-separator to
             # the buffers WITHOUT a trailing space (the user types
-            # these with no following space, unlike commas).  Excluded
-            # deliberately: apostrophe (contractions like "don't" are
-            # single tokens) and underscore (snake_case identifiers).
-            elif char in (
-                "-",
-                "/",
-                "\\",
-                "(",
-                "[",
-                "{",
-                "<",
-                "*",
-                "@",
-                "#",
-                "$",
-                "%",
-                "&",
-                "+",
-                "=",
-                "~",
-                "^",
-                "|",
-                '"',
-                "`",
-            ):
+            # these with no following space, unlike commas).
+            #
+            # Stated as "everything that isn't a word character" rather than
+            # as a list of separators, because the list form silently failed
+            # open: the second symbol page added 18 glyphs (° × ÷ ± ≈ ≠ ≤ ≥
+            # € £ ¥ ¢ § ¶ © ® ™ •) and every one of them fell through to be
+            # appended to _current_word, so "cost€" became the prediction
+            # prefix and the learned token.  Any glyph a future layer adds is
+            # now covered by construction.  Kept as word characters: letters
+            # and digits (including accented and non-Latin ones, which are
+            # real word content), the apostrophe (contractions like "don't"
+            # are single tokens) and the underscore (snake_case identifiers).
+            elif not (char.isalnum() or char in ("'", "_")):
                 word_before = self._current_word[:-1]
                 if word_before:
                     self._sentence_buffer += word_before + char
@@ -1326,6 +1314,35 @@ class KeyboardBridge(QObject):
             self._clear_lock("shift")  # a tap also clears a right-click lock
         self._update_layer()
         self.shiftActiveChanged.emit(self._shift_active)
+
+    @Slot()
+    def releaseShift(self) -> None:
+        """Drop Shift if it is held; do nothing if it isn't.
+
+        Idempotent, unlike ``toggleShift``, and that is the whole point.
+        The compact layer switch has to drop a held Shift (the symbol pages
+        carry no Shift key, so one carried in from the letters page could
+        never be cleared, and the OS-held modifier would make "1" emit "!"
+        while the keycap still read "1"). Expressing that as
+        ``if (root.shiftOn) keyboard.toggleShift()`` made the correctness of
+        a *release* depend on QML's mirror of the bridge state agreeing with
+        the bridge: ``root.shiftOn`` starts as a binding but is imperatively
+        reassigned by the shiftActiveChanged handler, which breaks the
+        binding permanently, so from then on it is only as accurate as
+        signal delivery. One missed emit and the toggle would turn Shift
+        *on* on a page with no way to clear it. Asking for the end state
+        instead of a flip cannot fail that way.
+
+        Clears a right-click lock too: a locked Shift mismatches the keycaps
+        just as loudly as a sticky one.
+        """
+        if not self._shift_active:
+            return
+        self._shift_active = False
+        self._synth.release_modifier("shift")
+        self._clear_lock("shift")
+        self._update_layer()
+        self.shiftActiveChanged.emit(False)
 
     @Slot()
     def toggleCapsLock(self) -> None:

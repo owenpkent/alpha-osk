@@ -65,12 +65,32 @@ is nothing left to centre and the gutters vanish *by construction* — no
 stretching or justification logic exists anywhere in the QML.
 
 ```
-Base layer                              ?123 layer
-  q w e r t y u i o p [ ⌫ ] PgUp          1 2 3 4 5 6 7 8 9 0 [ ⌫ ] PgUp
- Tab a s d f g h j k l ' Del PgDn        Tab - = [ ] \ ; ' ` Ins Esc Caps PgDn
-  ⇧ z x c v b n m , / [Enter] Home        ⇧ ! @ # $ % : & ( ) [Enter] Home
- ?123 Ctl ⊞ Alt [space] . ← ↑ ↓ → End    ABC Ctl ⊞ Alt [space] . ← ↑ ↓ → End
+Base layer                               ?123 layer
+  q w e r t y u i o p [ ⌫ ] Home           1 2 3 4 5 6 7 8 9 0 [ ⌫ ] Home
+ Tab a s d f g h j k l ' Del PgUp         Tab - = [ ] \ ; ' ` Ins Esc Caps PgUp
+  ⇧ z x c v b n m , / [Enter] PgDn        =\< ! @ # $ % : & ( ) [Enter] PgDn
+ ?123 Ctl ⊞ Alt [space] . ← ↑ ↓ → End     ABC Ctl ⊞ Alt [space] . ← ↑ ↓ → End
+
+=\< layer (second symbol page)
+  ~ ^ * _ + { } | < > [ ⌫ ] Home
+ Tab ° × ÷ ± ≈ ≠ ≤ ≥ Ins Esc Caps PgUp
+ ?123 € £ ¥ ¢ § • © ® ™ [Enter] PgDn
+ ABC Ctl ⊞ Alt [space] . ← ↑ ↓ → End
 ```
+
+**Three layers, and Shift is not one of them.** The `?123` page used to carry
+a Shift key, which re-rendered its row 1 as `! @ # $ % ^ & * ( )` while row 3
+already showed `! @ # $ % : & ( )` permanently: nine keys on screen saying the
+same thing as another key on screen. Shift's slot is now a switch to a second
+symbol page (`=\<`), the phone convention, so every glyph Shift used to reach
+has a key of its own and the overlap is *structurally impossible* rather than
+merely absent. All three layers are 13.0u with matching key counts
+(12/13/12/11), so hopping pages never resizes a key. The `shifted` fields stay
+on the symbol keys: right-click still types them, and right-click output is
+never displayed, so it is a bonus rather than a duplicate.
+
+**The nav column reads top to bottom as a scroll ladder**: Home, PgUp, PgDn,
+End. Jump to the top, page up, page down, jump to the bottom.
 
 **Del and Esc trade layers.** A 13u row has no spare unit, so putting
 forward-delete on the base layer had to cost something, and Esc was the only
@@ -83,9 +103,13 @@ guards that this stayed a trade rather than becoming a deletion.
 
 Design rules, all enforced by `tests/test_layouts.py`:
 
-- **The bottom row and the nav column are identical on both layers.** Space, the
-  modifiers, the arrows and Home/End/PgUp/PgDn hold their exact position across a
-  layer switch, so nothing reached for constantly moves under the pointer.
+- **The bottom row and the nav column are identical on every layer.** Space, the
+  modifiers, the period, the arrows and Home/PgUp/PgDn/End hold their exact
+  position across a layer switch, so nothing reached for constantly moves under
+  the pointer. The guarding tests derive the layer list from the file rather
+  than naming layers: written against a hardcoded base/sym pair, they were blind
+  to the second symbol page, which shipped with a bullet where every other layer
+  has a period.
 - **Arrows, Enter, Home, End, PgUp, PgDn and `/` are never behind a hop.** These
   were named explicitly as high-frequency keys.
 - **Enter and Backspace stay 2u.** Both are high-frequency and Backspace
@@ -111,7 +135,7 @@ off by default). Thirteen 1u keys, so it is exactly 13.0u and sits flush over a
 compact grid with no gutters.
 
 It is a panel rather than a fifth row in the layout JSON because the compact
-layout's two layers must both be four rows of 13u (`test_has_exactly_two_layers_of_four_rows`),
+layout's three layers must each be four rows of 13u (`test_has_three_layers_of_four_rows`),
 and because a panel toggles independently of which letter arrangement is
 selected. The digits behave like any other char key: shift shows and types the
 shifted glyph, right-click types it without flipping sticky shift, both flash

@@ -194,32 +194,65 @@ class TestCompactLayout:
                 "unequal rows get centred and the side gutters come back"
             )
 
-    def test_has_exactly_two_layers_of_four_rows(self, compact: dict) -> None:
+    def test_has_three_layers_of_four_rows(self, compact: dict) -> None:
+        r"""base, ?123 and =\< , four rows each.
+
+        The second symbol page exists because Shift on ?123 re-rendered row 1
+        as the glyphs row 3 already showed. Replacing Shift with a page switch
+        is the phone convention and makes the overlap structurally impossible;
+        see TestNoDuplicateGlyphsWithinALayer.
+        """
         layers: dict[str, list] = {}
         for row in compact["rows"]:
             layers.setdefault(row["layer"], []).append(row)
-        assert set(layers) == {"base", "sym"}
-        assert len(layers["base"]) == 4
-        assert len(layers["sym"]) == 4
+        assert set(layers) == {"base", "sym", "sym2"}
+        for name, rows in layers.items():
+            assert len(rows) == 4, f"{name} has {len(rows)} rows, expected 4"
+
+    @staticmethod
+    def _other_layers(compact: dict) -> set[str]:
+        return {r["layer"] for r in compact["rows"]} - {"base"}
 
     def test_bottom_row_identical_across_layers(self, compact: dict) -> None:
-        """Space, modifiers and the arrows must not move on a layer switch."""
+        """Space, modifiers, the period and the arrows must not move on a
+        layer switch.
+
+        Derived from the layer list rather than a hardcoded base/sym pair:
+        the second symbol page was added while this test named only those
+        two, so it shipped with a bullet where every other layer has a
+        period and the suite stayed green. Any layer added later is covered
+        without touching this test.
+        """
         rows = {r["id"]: r for r in compact["rows"]}
         base = [dict(k) for k in rows["base-4"]["keys"]]
-        sym = [dict(k) for k in rows["sym-4"]["keys"]]
         # The layer key itself necessarily differs (?123 vs ABC).
-        for keys in (base, sym):
-            keys[0].pop("target")
-            keys[0].pop("display")
-        assert base == sym
+        base[0].pop("target")
+        base[0].pop("display")
+        for layer in sorted(self._other_layers(compact)):
+            other = [dict(k) for k in rows[f"{layer}-4"]["keys"]]
+            other[0].pop("target")
+            other[0].pop("display")
+            assert other == base, f"bottom row of {layer} differs from base"
 
     def test_nav_column_is_identical_across_layers(self, compact: dict) -> None:
-        """PgUp/PgDn/Home/End hold position when switching to ?123."""
+        """Home/PgUp/PgDn/End hold position on every layer, not just ?123."""
         rows = {r["id"]: r for r in compact["rows"]}
-        for base_id, sym_id in (("base-1", "sym-1"), ("base-2", "sym-2"), ("base-3", "sym-3")):
-            assert rows[base_id]["keys"][-1] == rows[sym_id]["keys"][-1], (
-                f"nav key differs between {base_id} and {sym_id}"
-            )
+        for layer in sorted(self._other_layers(compact)):
+            for n in (1, 2, 3, 4):
+                assert rows[f"base-{n}"]["keys"][-1] == rows[f"{layer}-{n}"]["keys"][-1], (
+                    f"nav key differs between base-{n} and {layer}-{n}"
+                )
+
+    def test_nav_column_reads_top_to_bottom(self, compact: dict) -> None:
+        """Home above PgUp above PgDn above End.
+
+        The column is a vertical scroll ladder: jump to the top, page up,
+        page down, jump to the bottom. The order is muscle memory, so pin it
+        rather than leaving it to whoever next edits the row.
+        """
+        rows = {r["id"]: r for r in compact["rows"]}
+        column = [rows[f"base-{n}"]["keys"][-1]["action"] for n in (1, 2, 3, 4)]
+        assert column == ["home", "pageup", "pagedown", "end"]
 
     def test_keys_owen_named_are_on_the_base_layer(self, compact: dict) -> None:
         """Arrows, Enter, Home/End, PgUp/PgDn and / — never behind a hop."""
@@ -331,7 +364,7 @@ class TestBridgeDiscoversCompactLayout:
         assert "qwerty-compact" in ids
         assert "qwerty" in ids
 
-    def test_get_layout_rows_returns_both_layers(self) -> None:
+    def test_get_layout_rows_returns_every_layer(self) -> None:
         pytest.importorskip("PySide6")
         from unittest.mock import MagicMock, patch
 
@@ -348,5 +381,180 @@ class TestBridgeDiscoversCompactLayout:
         rows = bridge.getLayoutRows()
         # The bridge is layer-agnostic — it hands QML every row and the
         # filtering happens there. Guard that contract explicitly.
-        assert len(rows) == 8
-        assert {r["layer"] for r in rows} == {"base", "sym"}
+        assert len(rows) == 12
+        assert {r["layer"] for r in rows} == {"base", "sym", "sym2"}
+
+
+@pytest.mark.parametrize("path", all_layout_files(), ids=lambda p: p.stem)
+class TestNoDuplicateGlyphsWithinALayer:
+    """Reported: on the ?123 page, Shift turned row 1 into ! @ # $ % ^ & * ( )
+    while row 3 already showed ! @ # $ % : & ( ) permanently. Nine of the keys
+    on screen were saying the same thing as another key on screen.
+
+    The fix replaced Shift on the symbol pages with a switch to a second page,
+    the phone convention, so every glyph Shift used to reach has a key of its
+    own. These tests state the property rather than the fix, so a future edit
+    that reintroduces an overlap fails here rather than on a user's screen.
+    """
+
+    # A row with no `layer` field always renders, which is how the full-size
+    # layouts are built. Both helpers must therefore default it to "base", not
+    # skip it: filtering on `if r.get("layer")` returned the empty set for
+    # qwerty / dvorak / colemak, so two of the tests below iterated nothing and
+    # passed without asserting anything, while the parametrize ids advertised
+    # coverage of all four layouts.
+
+    @staticmethod
+    def _layer_glyphs(path: Path, layer: str) -> list[str]:
+        """Every glyph a user can *see* on *layer*, in key order."""
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return [
+            key["key"]
+            for row in data["rows"]
+            if row.get("layer", "base") == layer
+            for key in row["keys"]
+            if key.get("type") == "char" and key.get("key")
+        ]
+
+    @staticmethod
+    def _layers(path: Path) -> set[str]:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return {r.get("layer", "base") for r in data["rows"]}
+
+    def test_no_glyph_appears_twice_on_one_layer(self, path: Path) -> None:
+        for layer in self._layers(path):
+            glyphs = self._layer_glyphs(path, layer)
+            dupes = sorted({g for g in glyphs if glyphs.count(g) > 1})
+            assert not dupes, f"{path.stem}/{layer}: {dupes} appear on more than one key"
+
+    def test_shifted_variants_never_duplicate_a_visible_key(self, path: Path) -> None:
+        """The reported bug, stated as a property rather than as its fix.
+
+        On a layer that has a Shift key, holding Shift re-renders every key
+        that declares a `shifted` variant. If some other key on that same
+        layer already shows that glyph unshifted, the two keys become
+        indistinguishable while Shift is down: on ?123 that made nine of them
+        say the same thing as row 3, which is what was reported.
+
+        This is the assertion that fails on the buggy data. The
+        no-Shift-on-symbol-pages test above only describes how it was fixed,
+        so on its own it would let an equivalent overlap through on a layer
+        that kept its Shift key.
+        """
+        data = json.loads(path.read_text(encoding="utf-8"))
+        by_layer: dict[str, list] = {}
+        for row in data["rows"]:
+            by_layer.setdefault(row.get("layer", "base"), []).extend(row["keys"])
+
+        for layer, keys in by_layer.items():
+            has_shift = any(
+                k.get("type") == "modifier" and k.get("action") == "shift" for k in keys
+            )
+            if not has_shift:
+                continue
+            visible = {k["key"] for k in keys if k.get("type") == "char" and k.get("key")}
+            collisions = sorted({k["shifted"] for k in keys if k.get("shifted") in visible})
+            assert not collisions, (
+                f"{path.stem}/{layer}: holding Shift renders {collisions}, which "
+                "other keys on the same layer already show unshifted"
+            )
+
+    def test_symbol_pages_carry_no_shift_key(self, path: Path) -> None:
+        """Shift is meaningless on a page with no letters, and worse than
+        meaningless here: the modifier is held at the OS level, so with the
+        shifted variants still declared for right-click, a held Shift made a
+        key emit one glyph while displaying another."""
+        data = json.loads(path.read_text(encoding="utf-8"))
+        for row in data["rows"]:
+            layer = row.get("layer", "base")
+            if layer == "base":
+                continue
+            actions = [k.get("action") for k in row["keys"] if k.get("type") == "modifier"]
+            assert "shift" not in actions, (
+                f"{path.stem}/{layer}: a symbol page must not carry a Shift key"
+            )
+
+    def test_every_shifted_variant_on_a_symbol_page_has_its_own_key(self, path: Path) -> None:
+        """The shifted variants stay declared, because right-click still types
+        them, but none may be the *only* way to reach a glyph on these pages:
+        that was the discoverability problem the dedicated symbol row was
+        added to solve, and it is why Shift cannot simply be deleted."""
+        data = json.loads(path.read_text(encoding="utf-8"))
+        symbol_layers = self._layers(path) - {"base"}
+        if not symbol_layers:
+            return
+        visible = {g for layer in symbol_layers for g in self._layer_glyphs(path, layer)}
+        visible |= set(self._layer_glyphs(path, "base"))
+        # Base-layer shifted variants are reachable by the base layer's own
+        # Shift key, which still exists there.
+        visible |= {
+            k["shifted"]
+            for row in data["rows"]
+            if row.get("layer", "base") == "base"
+            for k in row["keys"]
+            if k.get("shifted")
+        }
+        unreachable = sorted(
+            {
+                k["shifted"]
+                for row in data["rows"]
+                if row.get("layer", "base") in symbol_layers
+                for k in row["keys"]
+                if k.get("shifted") and k["shifted"] not in visible
+            }
+        )
+        assert not unreachable, (
+            f"{path.stem}: {unreachable} are only reachable by Shift on a page "
+            "that has no Shift key"
+        )
+
+
+class TestCompactEditingKeysAreAccented:
+    """Esc, Tab, Shift, Backspace and Del are accent-filled on the compact
+    layouts.
+
+    Requested because the compact grid is uniform: with every key the same
+    size there are no shape cues, so the keys a user reaches for without
+    looking have to be found by colour. The full-size layouts keep their
+    ordinary styling, where the wide Backspace and Shift are already
+    distinguishable by size.
+    """
+
+    ACCENTED = {"escape", "tab", "shift", "backspace", "delete"}
+
+    @pytest.mark.parametrize("name", ["qwerty-compact"])
+    def test_every_editing_key_is_accented(self, name: str) -> None:
+        data = _load(f"{name}.json")
+        missing = [
+            f"{row['id']}:{key['action']}"
+            for row in data["rows"]
+            for key in row["keys"]
+            if key.get("action") in self.ACCENTED
+            and key.get("type") in {"special", "modifier"}
+            and key.get("style") != "accent"
+        ]
+        assert not missing, f"{name}: not accent-styled: {missing}"
+
+    @pytest.mark.parametrize("name", ["qwerty-compact"])
+    def test_nothing_else_is_accented(self, name: str) -> None:
+        """The point is that these keys stand out. Accenting anything else
+        dilutes them back into the grid."""
+        data = _load(f"{name}.json")
+        stray = [
+            f"{row['id']}:{key.get('action') or key.get('key')}"
+            for row in data["rows"]
+            for key in row["keys"]
+            if key.get("style") == "accent" and key.get("action") not in self.ACCENTED
+        ]
+        assert not stray, f"{name}: unexpected accent keys: {stray}"
+
+    @pytest.mark.parametrize("name", ["qwerty", "dvorak", "colemak"])
+    def test_full_size_layouts_are_untouched(self, name: str) -> None:
+        data = _load(f"{name}.json")
+        accented = [
+            key.get("action")
+            for row in data["rows"]
+            for key in row["keys"]
+            if key.get("style") == "accent"
+        ]
+        assert not accented, f"{name}: accent styling leaked onto a full-size layout"
