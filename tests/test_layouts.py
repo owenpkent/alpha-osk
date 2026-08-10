@@ -474,3 +474,54 @@ class TestNoDuplicateGlyphsWithinALayer:
             f"{path.stem}: {unreachable} are only reachable by Shift on a page "
             "that has no Shift key"
         )
+
+
+class TestCompactEditingKeysAreAccented:
+    """Esc, Tab, Shift, Backspace and Del are accent-filled on the compact
+    layouts.
+
+    Requested because the compact grid is uniform: with every key the same
+    size there are no shape cues, so the keys a user reaches for without
+    looking have to be found by colour. The full-size layouts keep their
+    ordinary styling, where the wide Backspace and Shift are already
+    distinguishable by size.
+    """
+
+    ACCENTED = {"escape", "tab", "shift", "backspace", "delete"}
+
+    @pytest.mark.parametrize("name", ["qwerty-compact"])
+    def test_every_editing_key_is_accented(self, name: str) -> None:
+        data = _load(f"{name}.json")
+        missing = [
+            f"{row['id']}:{key['action']}"
+            for row in data["rows"]
+            for key in row["keys"]
+            if key.get("action") in self.ACCENTED
+            and key.get("type") in {"special", "modifier"}
+            and key.get("style") != "accent"
+        ]
+        assert not missing, f"{name}: not accent-styled: {missing}"
+
+    @pytest.mark.parametrize("name", ["qwerty-compact"])
+    def test_nothing_else_is_accented(self, name: str) -> None:
+        """The point is that these keys stand out. Accenting anything else
+        dilutes them back into the grid."""
+        data = _load(f"{name}.json")
+        stray = [
+            f"{row['id']}:{key.get('action') or key.get('key')}"
+            for row in data["rows"]
+            for key in row["keys"]
+            if key.get("style") == "accent" and key.get("action") not in self.ACCENTED
+        ]
+        assert not stray, f"{name}: unexpected accent keys: {stray}"
+
+    @pytest.mark.parametrize("name", ["qwerty", "dvorak", "colemak"])
+    def test_full_size_layouts_are_untouched(self, name: str) -> None:
+        data = _load(f"{name}.json")
+        accented = [
+            key.get("action")
+            for row in data["rows"]
+            for key in row["keys"]
+            if key.get("style") == "accent"
+        ]
+        assert not accented, f"{name}: accent styling leaked onto a full-size layout"

@@ -64,7 +64,7 @@
           "display": "⌫",
           "width": 2.0,
           "fontSize": 16,
-          "style": "special"
+          "style": "accent"
         },
         {
           "type": "special",
@@ -86,7 +86,7 @@
           "display": "Tab",
           "width": 1.0,
           "fontSize": 11,
-          "style": "special"
+          "style": "accent"
         },
         {
           "type": "char",
@@ -147,7 +147,7 @@
           "display": "Del",
           "width": 1.0,
           "fontSize": 11,
-          "style": "special"
+          "style": "accent"
         },
         {
           "type": "special",
@@ -170,7 +170,7 @@
           "width": 1.0,
           "fontSize": 14,
           "stateKey": "shiftOn",
-          "style": "special"
+          "style": "accent"
         },
         {
           "type": "char",
@@ -427,7 +427,7 @@
           "display": "⌫",
           "width": 2.0,
           "fontSize": 16,
-          "style": "special"
+          "style": "accent"
         },
         {
           "type": "special",
@@ -449,7 +449,7 @@
           "display": "Tab",
           "width": 1.0,
           "fontSize": 11,
-          "style": "special"
+          "style": "accent"
         },
         {
           "type": "char",
@@ -529,7 +529,7 @@
           "display": "Esc",
           "width": 1.0,
           "fontSize": 11,
-          "style": "special"
+          "style": "accent"
         },
         {
           "type": "modifier",
@@ -820,7 +820,7 @@
           "display": "⌫",
           "width": 2.0,
           "fontSize": 16,
-          "style": "special"
+          "style": "accent"
         },
         {
           "type": "special",
@@ -842,7 +842,7 @@
           "display": "Tab",
           "width": 1.0,
           "fontSize": 11,
-          "style": "special"
+          "style": "accent"
         },
         {
           "type": "char",
@@ -914,7 +914,7 @@
           "display": "Esc",
           "width": 1.0,
           "fontSize": 11,
-          "style": "special"
+          "style": "accent"
         },
         {
           "type": "modifier",

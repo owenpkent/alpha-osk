@@ -612,6 +612,28 @@ Load-bearing facts:
   property rather than the fix, so it catches an equivalent overlap on any
   layer that keeps a Shift key) and
   `tests/test_qml_compact_view.py::TestSecondSymbolPage`.
+- **Esc, Tab, Shift, Backspace and Del are accent-filled on the compact layouts**
+  (`"style": "accent"` in the layout JSON, resolved by `root.accentKeyColor` in
+  `Main.qml`). The compact grid is uniform, so unlike the full-size layouts
+  there are no size cues to tell the editing keys apart from the letters, and
+  they have to be findable by colour. The fill is a **35% wash of the accent
+  over the theme's key colour, not the raw accent**: three themes have a pale
+  accent (Blackboard `#ffffaa`, Spaceship `#00ff9f`) and Typewriter is a light
+  theme with near-black text, so a saturated fill would destroy the label
+  contrast. Same reason Enter is a muted `#2a5a2a`. Full-size layouts are
+  deliberately untouched, and `tests/test_layouts.py::TestCompactEditingKeysAreAccented`
+  pins both halves of that.
+- **The Number Row and Function Row panels must use a plain `Row`, never a
+  `RowLayout`.** `QtQuick.Layouts` rounds every child up to a whole pixel, so
+  13 keys of 69.23 px each became 13 of 70 and the panel rendered 10 px wider
+  than the keyboard grid it is supposed to sit flush with, overhanging the
+  window and clipping its last key. The keyboard rows are plain `Row`
+  positioners, which keep `keyW` as the float it is; a panel that sizes itself
+  any other way cannot line up with the keys underneath it. Guarded by
+  `tests/test_qml_compact_view.py::TestPanelsSitFlushWithTheGrid`, which
+  asserts the panel width equals the widest keyboard row rather than merely
+  fitting the window, because "fits" was already true of the broken version at
+  some widths.
 - **Digits come back via a panel, not a fifth row.** *Settings → Appearance →
   Panels → Number Row* renders `qml/components/NumberRow.qml` (13 x 1u, flush
   with the compact grid) above the keyboard. Every key must register through

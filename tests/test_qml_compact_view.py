@@ -572,9 +572,20 @@ class TestSecondSymbolPage:
         assert hits, f"no visible layer key targeting {target!r}"
         return hits[0]
 
-    @staticmethod
-    def _tap(root, item) -> None:
-        point = item.mapToScene(item.boundingRect().center()).toPoint()
+    @classmethod
+    def _tap(cls, root, target: str) -> None:
+        """Tap the layer key for *target*, holding on to no QML-owned item.
+
+        Resolving the item to a bare point and dropping the reference before
+        any pumping is deliberate. Tapping a layer key changes `activeLayer`,
+        which makes the Repeater tear down and rebuild every row, so the
+        delegate we just found is freed during the very `processEvents` call
+        below. A PySide wrapper that outlives its item is the hazard that
+        segfaulted CI once already; see the rule in GOTCHAS.md.
+        """
+        key = cls._layer_key(root, target)
+        point = key.mapToScene(key.boundingRect().center()).toPoint()
+        del key
         QTest.mousePress(root, Qt.LeftButton, Qt.NoModifier, point)
         QCoreApplication.processEvents()
         QTest.mouseRelease(root, Qt.LeftButton, Qt.NoModifier, point)
@@ -592,19 +603,19 @@ class TestSecondSymbolPage:
     def test_the_pages_chain_and_come_back(self, compact_shown) -> None:
         root, warnings, _ = compact_shown
 
-        self._tap(root, self._layer_key(root, "sym"))
+        self._tap(root, "sym")
         assert root.property("activeLayer") == "sym"
         assert len(_rows(root)) == 4
 
-        self._tap(root, self._layer_key(root, "sym2"))
+        self._tap(root, "sym2")
         assert root.property("activeLayer") == "sym2"
         assert len(_rows(root)) == 4
 
         # Back to ?123, then out to letters. A page you cannot leave is worse
         # than a page that does not exist.
-        self._tap(root, self._layer_key(root, "sym"))
+        self._tap(root, "sym")
         assert root.property("activeLayer") == "sym"
-        self._tap(root, self._layer_key(root, "base"))
+        self._tap(root, "base")
         assert root.property("activeLayer") == "base"
         assert _real_warnings(warnings) == []
 
@@ -615,7 +626,7 @@ class TestSecondSymbolPage:
         base_w, base_fixed = root.property("keyW"), root.property("layoutFixedPixels")
 
         for target in ("sym", "sym2"):
-            self._tap(root, self._layer_key(root, target))
+            self._tap(root, target)
             assert root.property("keyW") == pytest.approx(base_w), f"keys resized on {target}"
             assert root.property("layoutFixedPixels") == pytest.approx(base_fixed)
 
@@ -632,7 +643,7 @@ class TestSecondSymbolPage:
         QCoreApplication.processEvents()
         assert root.property("shiftOn") is True, "precondition: Shift is held"
 
-        self._tap(root, self._layer_key(root, "sym"))
+        self._tap(root, "sym")
 
         assert root.property("activeLayer") == "sym"
         assert root.property("shiftOn") is False, (
@@ -644,8 +655,92 @@ class TestSecondSymbolPage:
         """Belt and braces against the QML rendering one anyway."""
         root, _, _ = compact_shown
         for target in ("sym", "sym2"):
-            self._tap(root, self._layer_key(root, target))
+            self._tap(root, target)
             visible = [i for i in self._key_items(root) if i.isVisible()]
             assert visible, "no keys rendered"
             actions = {(i.property("kd") or {}).get("action") for i in visible}
             assert "shift" not in actions, f"{target} still renders a Shift key"
+
+
+class TestPanelsSitFlushWithTheGrid:
+    """The Number Row and Function Row panels must consume the window exactly
+    the way a keyboard row does.
+
+    Reported with a screenshot: in compact view the number row overhung the
+    window and its last key was clipped. Cause was `RowLayout`, which rounds
+    every child up to a whole pixel: 13 keys of 69.23 px became 13 of 70, so
+    the row rendered 10 px wider than the grid it is meant to sit flush with.
+    The keyboard rows use a plain `Row` positioner, which keeps the float.
+
+    Note the earlier row-fit sweep could not have caught this: it finds rows
+    by their `rowData` property, and these panels are separate components.
+    """
+
+    WIDTHS = (940, 1005, 1100, 1240)
+    # Same 1 px `Row` float-ceil slop the keyboard rows carry; see
+    # TestEveryRowFitsTheContentArea.POSITIONER_SLOP_PX.
+    SLOP_PX = 1
+
+    @staticmethod
+    def _panel(root, name: str):
+        """The panel item, by objectName.
+
+        These are ordinary children of the layout column rather than Repeater
+        delegates, so findChild reaches them (unlike the keyboard rows, which
+        it cannot see at all).
+        """
+        panel = root.findChild(QQuickItem, name)
+        assert panel is not None, f"no panel named {name!r}"
+        return panel
+
+    @staticmethod
+    def _widest_layout_row(root) -> float:
+        rows = TestEveryRowFitsTheContentArea._rendered_rows(root)
+        assert rows, "no keyboard rows rendered"
+        return max(r.width() for r in rows)
+
+    def test_number_row_matches_the_widest_keyboard_row(self, qml_root) -> None:
+        root, warnings, _ = qml_root
+        root.setProperty("showNavigation", False)
+        root.setProperty("showNumpad", False)
+        root.setProperty("compactView", True)
+        root.setProperty("showNumberRow", True)
+        _pump_until(lambda: self._panel(root, "numberRowPanel").width() > 0)
+
+        for width in self.WIDTHS:
+            root.setProperty("width", width)
+            _pump_until(lambda: self._panel(root, "numberRowPanel").width() > 0)
+            panel = self._panel(root, "numberRowPanel")
+            assert panel.width() > 0, f"number row not rendered at {width}"
+            grid = self._widest_layout_row(root)
+
+            for panel in (panel,):
+                assert panel.width() == pytest.approx(grid, abs=1.0), (
+                    f"number row is {panel.width() - grid:+.0f} px off the keyboard "
+                    f"grid at window width {width} ({panel.width():.0f} vs {grid:.0f}). "
+                    "Both are 13 units; they must render identically or the panel "
+                    "will not line up with the keys under it."
+                )
+                assert panel.width() <= width - 16 + self.SLOP_PX, (
+                    f"number row overhangs the content area by "
+                    f"{panel.width() - (width - 16):.0f} px at window width {width}"
+                )
+        assert _real_warnings(warnings) == []
+
+    def test_function_row_fits_too(self, qml_root) -> None:
+        """Same component shape, same rounding trap, so pin it as well."""
+        root, warnings, _ = qml_root
+        root.setProperty("showNavigation", False)
+        root.setProperty("showNumpad", False)
+        root.setProperty("showFunctionRow", True)
+        _pump_until(lambda: self._panel(root, "functionRowPanel").width() > 0)
+
+        for width in self.WIDTHS:
+            root.setProperty("width", width)
+            _pump_until(lambda: self._panel(root, "functionRowPanel").width() > 0)
+            for panel in (self._panel(root, "functionRowPanel"),):
+                assert panel.width() <= width - 16 + self.SLOP_PX, (
+                    f"function row overhangs by {panel.width() - (width - 16):.0f} px "
+                    f"at window width {width}"
+                )
+        assert _real_warnings(warnings) == []

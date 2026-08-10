@@ -717,6 +717,24 @@ Window {
     property color themeKeyPressed: activeTheme.keyPressed
     property color themeTextColor: activeTheme.textColor
     property color themeAccent: activeTheme.accent
+
+    // Key tint for the "accent" style: the editing keys a user reaches for
+    // without looking (Esc, Tab, Shift, Backspace, Del) on the compact
+    // layouts, where the grid is uniform and there are no size cues to tell
+    // them apart from the letters.
+    //
+    // A 35% wash of the accent over the theme's own key colour, NOT the raw
+    // accent. The accent is chosen to stand out against the background, so
+    // painting a whole key with it fights the key label: three of the nine
+    // themes have a pale accent (Blackboard "#ffffaa", Spaceship "#00ff9f")
+    // and Typewriter is a light theme with near-black text, which a
+    // saturated fill would render unreadable. Blending keeps every theme's
+    // existing text contrast and still reads unmistakably as accent-coloured.
+    // The same reasoning is why Enter uses a muted "#2a5a2a" rather than a
+    // bright green.
+    readonly property color accentKeyColor: Qt.tint(
+        root.themeKeyColor,
+        Qt.rgba(root.themeAccent.r, root.themeAccent.g, root.themeAccent.b, 0.35))
     property color themeBorder: activeTheme.border
 
     // Update state when bridge emits signals
@@ -1717,12 +1735,16 @@ Window {
                     // Full key height: unlike F-keys these are typed
                     // constantly, so they get a full-size target.
                     Comp.NumberRow {
+                        // Lets the panel-width tests find this without
+                        // property-sniffing; see TestPanelsSitFlushWithTheGrid.
+                        objectName: "numberRowPanel"
                         visible: root.showNumberRow
                         Layout.alignment: Qt.AlignHCenter
                         keyW: root.keyW
                         keyH: root.keyH
                         keySpacing: root.keySpacing
                         keyColor: Qt.darker(root.themeKeyColor, 1.3)
+                        accentKeyColor: root.accentKeyColor
                         keyPressedColor: root.themeKeyPressed
                         keyTextColor: root.themeTextColor
                         accentColor: root.themeAccent
@@ -1738,6 +1760,7 @@ Window {
 
                     // ===== Function Row (F1-F12) =====
                     Comp.FunctionRow {
+                        objectName: "functionRowPanel"
                         visible: root.showFunctionRow
                         Layout.alignment: Qt.AlignHCenter
                         keyW: root.keyW
@@ -1811,6 +1834,7 @@ Window {
                                     switch(kd.style || "default") {
                                         case "secondary": return Qt.darker(root.themeKeyColor, 1.3)
                                         case "special": return Qt.darker(root.themeKeyColor, 1.15)
+                                        case "accent": return root.accentKeyColor
                                         case "enter": return "#2a5a2a"
                                         default: return root.themeKeyColor
                                     }
