@@ -106,6 +106,24 @@ def swipe_root(qapp):
         factory.return_value = synth
         bridge = KeyboardBridge()
 
+    # Pin game auto-compat OFF rather than inheriting whatever the runner's
+    # geometry implies.
+    #
+    # `_window_is_game` treats a window that covers its whole monitor and has
+    # no title bar as a game, and routes its keystrokes through send_key with
+    # a 50 ms hold instead of send_text. An OSK shown under the offscreen
+    # platform plugin is frameless and fills the virtual screen, so these
+    # tests can classify *themselves* as a game, on some machines and not
+    # others. That is not a hypothetical: it silently moved every typed
+    # character onto the other channel and made an assertion here pass for
+    # the wrong reason.
+    #
+    # The assertions below are channel-agnostic on purpose (see `_typed`), so
+    # this is belt and braces. Pinning it means these tests exercise one
+    # deliberate path rather than a coin flip on window geometry.
+    bridge._foreground_timer.stop()
+    bridge._game_auto_active = False
+
     engine = QQmlApplicationEngine()
     engine.warnings.connect(lambda errs: warnings.extend(e.toString() for e in errs))
     engine.rootContext().setContextProperty("keyboard", bridge)
@@ -356,7 +374,12 @@ class TestHoldToRepeat:
         QTest.mouseRelease(root, Qt.LeftButton, Qt.NoModifier, point)
         QCoreApplication.processEvents()
 
-        assert _typed(synth).count("a") <= 1, f"a held character key repeated: {_typed(synth)!r}"
+        # == 1, not <= 1. "at most one" also passes when the key produced
+        # nothing at all, i.e. when the press never landed, so it cannot tell
+        # "does not repeat" from "does not work".
+        assert _typed(synth).count("a") == 1, (
+            f"expected exactly one 'a' from a held character key, got {_typed(synth)!r}"
+        )
 
 
 class TestSwipingStillWorks:
@@ -603,8 +626,10 @@ class TestSwipeOffPathIsUnaffected:
         QTest.mouseRelease(root, Qt.LeftButton, Qt.NoModifier, point)
         QCoreApplication.processEvents()
 
-        assert _typed(synth).count("a") <= 1, (
-            f"a held character key repeated with swipe OFF: {_typed(synth)!r}"
+        # == 1, not <= 1: see the swipe-on version of this test.
+        assert _typed(synth).count("a") == 1, (
+            f"expected exactly one 'a' from a held character key with swipe OFF, "
+            f"got {_typed(synth)!r}"
         )
 
     def test_right_click_types_the_shifted_variant_with_swipe_off(self, plain_root) -> None:

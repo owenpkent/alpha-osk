@@ -406,15 +406,30 @@ class TestEveryRowFitsTheContentArea:
         walk(root.property("contentItem"))
         return found
 
+    @classmethod
+    def _expect_rows(cls, root, label: str) -> list:
+        """Rendered rows, refusing to return an empty list.
+
+        Fail-closed counterpart to `_rendered_rows`: every caller below
+        iterates the result, and iterating nothing passes every assertion in
+        the loop. See the same pattern, and the bug it hid, in
+        `expect_pills` in test_qml_prediction_bar.py.
+        """
+        rows = cls._rendered_rows(root)
+        assert rows, (
+            f"no keyboard rows found in the visual tree ({label}). Either the "
+            "keyboard rendered nothing or the lookup broke; both make the "
+            "assertions that follow vacuous."
+        )
+        return rows
+
     def _assert_rows_fit(self, root, warnings, label: str) -> None:
         for width in self.WIDTHS:
             root.setProperty("width", width)
             # len(), not the list: never retain QML-owned items across a wait.
             _pump_until(lambda: len(self._rendered_rows(root)))
 
-            rows = self._rendered_rows(root)
-            # Non-vacuity: an empty list would satisfy every assertion below.
-            assert rows, f"no rows rendered at width {width} ({label})"
+            rows = self._expect_rows(root, f"{label} at width {width}")
 
             # 8 px margin on each side is the content area the rows are
             # centred in; layoutFixedPixels reserves exactly that 16 px.

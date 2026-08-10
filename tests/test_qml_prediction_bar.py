@@ -37,7 +37,7 @@ try:
     # without which reading the window's `contentItem` raises
     # "Can't find converter for 'QQuickItem*'".
     from PySide6.QtCore import QCoreApplication, QObject, QSettings, QUrl  # noqa: E402
-    from PySide6.QtGui import QGuiApplication  # noqa: E402
+    from PySide6.QtGui import QFont, QFontMetricsF, QGuiApplication  # noqa: E402
     from PySide6.QtQml import QQmlApplicationEngine  # noqa: E402
     from PySide6.QtQuick import QQuickItem  # noqa: E402,F401
 except ImportError as exc:  # pragma: no cover - environment-dependent
@@ -66,6 +66,50 @@ LONG_PREDICTIONS = [
     "responsibilities",
     "acknowledgement",
 ]
+
+
+def _font_is_a_placeholder() -> bool:
+    """True when Qt resolved a fixed-width stand-in instead of a real font.
+
+    On a box with no matching font installed, Qt falls back to a placeholder
+    where every glyph has the same advance. That makes the pill fitter's
+    arithmetic trivially self-consistent: `advanceWidth` and `boundingRect`
+    agree by construction, proportional text never packs tightly, and the
+    260-configuration no-elide sweep below cannot fail whatever the fitter
+    does. It "passed" on a Windows dev box for exactly this reason while a
+    real eliding bug was live on Linux.
+
+    Detected by measuring the narrowest and widest ASCII letters: in any
+    proportional font "i" is far narrower than "W"; in the placeholder they
+    are identical.
+
+    MUST NOT be called at import time. Constructing a QFont before a
+    QGuiApplication exists kills the interpreter outright, with no traceback
+    and no pytest output at all, which is a memorable way to spend ten
+    minutes. Hence the fixture below rather than a module-level skipif.
+    """
+    font = QFont()
+    font.setFamilies(["Ubuntu", "Noto Sans", "sans-serif"])
+    font.setPixelSize(20)
+    font.setWeight(QFont.Medium)
+    metrics = QFontMetricsF(font)
+    return metrics.horizontalAdvance("i") == metrics.horizontalAdvance("W")
+
+
+@pytest.fixture
+def requires_real_font(qapp):
+    """Skip tests whose meaning depends on real proportional metrics.
+
+    A skip is the honest outcome: it reports "not verified here" rather than
+    a green tick that means nothing. CI installs real fonts, so these run
+    there, and CI is where the pill-width bugs actually showed up.
+    """
+    if _font_is_a_placeholder():
+        pytest.skip(
+            "Qt resolved a fixed-width placeholder font, so pill-width "
+            "assertions are vacuous on this machine (every glyph is the same "
+            "width). CI runs them against real fonts."
+        )
 
 
 def _real_warnings(warnings: list[str]) -> list[str]:
@@ -218,6 +262,26 @@ def _pill_count(root) -> int:
     return len(_pill_texts(root))
 
 
+def expect_pills(root) -> list:
+    """Every pill label, refusing to return an empty list.
+
+    The fail-closed counterpart to `_pill_texts`. Use this anywhere the test
+    goes on to *iterate* the pills, because iterating nothing passes every
+    assertion inside the loop and reports success. That is not hypothetical:
+    it is how a whole class named "no pill is ever truncated" ran against
+    zero pills for its entire life while a real eliding bug shipped.
+
+    A test that genuinely expects no pills should say so with `_pill_count`.
+    """
+    pills = _pill_texts(root)
+    assert pills, (
+        "no prediction pills found in the visual tree. Either the bar really "
+        "rendered nothing, or the lookup broke; both make the assertions that "
+        "follow vacuous, so this fails rather than passing quietly."
+    )
+    return pills
+
+
 def _truncated(root) -> list[str]:
     """Pill labels Qt actually had to elide — the ground truth for this bar.
 
@@ -225,7 +289,7 @@ def _truncated(root) -> list[str]:
     the same flag the hover ToolTip is gated on, so it cannot disagree with
     what the user sees.
     """
-    return [t.property("text") for t in _pill_texts(root) if t.property("truncated")]
+    return [t.property("text") for t in expect_pills(root) if t.property("truncated")]
 
 
 class TestClearButtonNeverCoversPills:
@@ -273,6 +337,7 @@ class TestClearButtonNeverCoversPills:
         assert widths[-1] > widths[0] * 1.5
 
 
+@pytest.mark.usefixtures("requires_real_font")
 class TestNoPillIsEverTruncated:
     """The bar drops low-ranked pills rather than eliding any of them.
 
@@ -304,7 +369,7 @@ class TestNoPillIsEverTruncated:
         """
         root, _, _ = qml_root
         row, _ = _show(root, self.CROWDED)
-        pills = _pill_texts(root)
+        pills = expect_pills(root)
         words, _ = _fit(row)
 
         assert len(pills) == len(words) > 0
@@ -342,7 +407,6 @@ class TestNoPillIsEverTruncated:
             for width in range(720, 1240, 4):
                 root.setProperty("width", width)
                 _show(root, self.CROWDED)
-                assert _pill_texts(root), f"no pills rendered at width {width}"
                 for label in _truncated(root):
                     failures.append(f"compact={compact} w={width} {label!r}")
         assert not failures, f"{len(failures)} pill(s) elided:\n  " + "\n  ".join(failures[:10])
@@ -351,7 +415,7 @@ class TestNoPillIsEverTruncated:
         root, _, _ = qml_root
         row, _ = _show(root, self.CROWDED)
 
-        assert _pill_texts(root), "no pills rendered — assertion would be vacuous"
+        expect_pills(root)
         assert _truncated(root) == [], "a pill was elided"
         words, _ = _fit(row)
         assert words, "the bar dropped everything"
@@ -365,7 +429,7 @@ class TestNoPillIsEverTruncated:
         row, _ = _show(root, ["the", "then", "there", "these"])
         words, _ = _fit(row)
         assert len(words) == 4
-        assert len(_pill_texts(root)) == 4
+        assert len(expect_pills(root)) == 4
         assert _truncated(root) == []
 
     def test_survivors_still_clear_the_button(self, qml_root):
@@ -383,7 +447,7 @@ class TestNoPillIsEverTruncated:
 
         narrow_count = len(_fit(row)[0])
         assert narrow_count <= wide_count
-        assert _pill_texts(root), "no pills rendered"
+        expect_pills(root)
         assert _truncated(root) == []
 
     def test_a_single_oversized_word_still_fits_the_bar(self, qml_root):
