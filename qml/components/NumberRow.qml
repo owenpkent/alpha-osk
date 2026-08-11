@@ -3,12 +3,14 @@ import QtQuick 2.15
 // Standalone number row: Esc 1 2 3 4 5 6 7 8 9 0 - =
 //
 // Thirteen 1u keys, which is exactly the compact grid's 13.0 units, so the
-// row sits flush above a compact keyboard with no side gutters. Toggled from
-// Settings -> Appearance -> Panels -> Number Row.
+// row sits flush above a compact keyboard with no side gutters.
 //
 // It exists for the compact view, where the digits live behind the ?123 hop.
-// The full-size layouts carry their own number row inside the layout JSON, so
-// enabling this on top of one just gives a (narrower, centred) duplicate.
+// There is no toggle: Main.qml's `showNumberRow` derives visibility from
+// whether the active layout already carries a `number` row of its own, so
+// this panel fills in for exactly the layouts that lack one (the compact
+// variants) and never stacks a second, narrower number row on a full-size
+// layout that has one built in.
 //
 // The leading slot is Esc, not the physical keyboard's ` / ~ . Compact traded
 // Esc onto the ?123 layer to make room for Del (docs/architecture/
@@ -16,8 +18,8 @@ import QtQuick 2.15
 // dialog" key behind a hop; this row puts it back at the top-left corner
 // where it lives on a real keyboard. Backtick is not lost - it stays on ?123
 // row 2, and the full-size layouts keep their own ` in the layout JSON.
-// Esc duplicates the ?123 one on purpose: this row is optional and off by
-// default, so ?123 has to remain the fallback when it is hidden.
+// Esc duplicates the ?123 one on purpose: ?123 stays the fallback for any
+// future layout that shows the compact grid without this row.
 //
 // Char behaviour deliberately mirrors the main grid's char keys key-for-key:
 // shift shows and types the shifted glyph, right-click types it without

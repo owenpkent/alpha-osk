@@ -9,7 +9,6 @@ Item {
 
     // Layout properties
     property bool showFunctionRow: false
-    property bool showNumberRow: false
     property bool showNavigation: false
     property bool showNumpad: false
     property string currentTheme: "dark"
@@ -362,15 +361,23 @@ Item {
                                 Layout.fillWidth: true
                                 spacing: 4
 
+                                // Compact View leads the section because it
+                                // gates the two toggles under it: the nav
+                                // cluster and numpad are the width compact
+                                // exists to give back, so it forces them off
+                                // and they read as disabled while it is on.
+                                // Reading top-down makes that cause and
+                                // effect obvious instead of leaving the user
+                                // to discover why a toggle stopped working.
                                 SettingsToggle {
                                     Layout.fillWidth: true
-                                    text: "Number Row"
-                                    description: "Adds ` 1-0 - = above the keyboard. "
-                                               + "For Compact View, where the digits sit "
-                                               + "behind ?123; the full-size layouts "
-                                               + "already have one."
-                                    checked: unifiedSettings.showNumberRow
-                                    onToggled: function(c) { unifiedSettings.settingChanged("numberRow", c) }
+                                    text: "Compact View"
+                                    description: "Denser 13×4 grid for small screens. "
+                                               + "Symbols move to a ?123 layer; digits, "
+                                               + "arrows, Home/End and PgUp/PgDn stay "
+                                               + "visible. Turns off the side panels."
+                                    checked: unifiedSettings.compactView
+                                    onToggled: function(c) { unifiedSettings.settingChanged("compactView", c) }
                                 }
 
                                 SettingsToggle {
@@ -382,26 +389,25 @@ Item {
 
                                 SettingsToggle {
                                     Layout.fillWidth: true
+                                    enabled: !unifiedSettings.compactView
                                     text: "Navigation Keys"
+                                    description: unifiedSettings.compactView
+                                               ? "Not available in Compact View, which "
+                                                 + "keeps its own arrow cluster."
+                                               : ""
                                     checked: unifiedSettings.showNavigation
                                     onToggled: function(c) { unifiedSettings.settingChanged("navigation", c) }
                                 }
 
                                 SettingsToggle {
                                     Layout.fillWidth: true
+                                    enabled: !unifiedSettings.compactView
                                     text: "Number Pad"
+                                    description: unifiedSettings.compactView
+                                               ? "Not available in Compact View."
+                                               : ""
                                     checked: unifiedSettings.showNumpad
                                     onToggled: function(c) { unifiedSettings.settingChanged("numpad", c) }
-                                }
-
-                                SettingsToggle {
-                                    Layout.fillWidth: true
-                                    text: "Compact View"
-                                    description: "Denser 13×4 grid for small screens. "
-                                               + "Digits and symbols move to a ?123 layer; "
-                                               + "arrows, Home/End and PgUp/PgDn stay visible."
-                                    checked: unifiedSettings.compactView
-                                    onToggled: function(c) { unifiedSettings.settingChanged("compactView", c) }
                                 }
                             }
                         }

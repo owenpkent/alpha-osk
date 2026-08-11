@@ -180,11 +180,11 @@ The keyboard has toggleable sections (via Settings ⚙ button):
 
 | Panel | Keys | Default |
 |-------|------|---------|
-| Number Row | `Esc` 1-0 `-` `=` (13 x 1u, flush with the compact grid) | Off |
+| Number Row | `Esc` 1-0 `-` `=` (13 x 1u, flush with the compact grid) | No toggle - derived, shows on layouts with no built-in number row (i.e. the compact variants) |
 | Function Row | Esc, F1-F12, PrtSc, ScrLk, Pause | Off |
-| Navigation | Ins, Del, Home, End, PgUp, PgDn, Arrows | Off |
-| Numpad | Full number pad with NumLock | Off |
-| Compact View | Denser 13x4 grid, digits/symbols behind a `?123` layer | Off |
+| Navigation | Ins, Del, Home, End, PgUp, PgDn, Arrows | Off; unavailable in Compact View |
+| Numpad | Full number pad with NumLock | Off; unavailable in Compact View |
+| Compact View | Denser 13x4 grid, symbols behind a `?123` layer | Off |
 
 > This file is a stale snapshot in places (the six accessibility profiles it
 > lists below were removed in favour of a single tuned default). `CLAUDE.md` is

@@ -193,14 +193,21 @@ class TestCompactViewSwitching:
 
     def test_widest_row_drives_total_key_units(self, qml_root) -> None:
         root, _, _ = qml_root
+        # Panels off on both sides of the comparison. Compact forces them
+        # off anyway (TestCompactViewForbidsTheSidePanels), so leaving the
+        # default Navigation panel on would fold its 3.0u into the delta and
+        # stop this measuring the main block at all.
+        root.setProperty("showNavigation", False)
+        root.setProperty("showNumpad", False)
+        QCoreApplication.processEvents()
         base_units = root.property("totalKeyUnits")
 
         root.setProperty("compactView", True)
         QCoreApplication.processEvents()
         compact_units = root.property("totalKeyUnits")
 
-        # Panels contribute the same constant to both, so the difference is
-        # exactly the 15.5u -> 13.0u main-block change.
+        # Nothing else contributes now, so the difference is exactly the
+        # 15.5u -> 13.0u main-block change.
         assert base_units - compact_units == pytest.approx(2.5)
 
     def test_layer_switch_swaps_visible_rows(self, qml_root) -> None:
@@ -343,8 +350,9 @@ class TestNumberRowPanel:
         under the overlay.
         """
         root, warnings, _ = qml_root
+        # Compact brings the panel with it: showNumberRow is derived from
+        # whether the active layout carries a `number` row of its own.
         root.setProperty("compactView", True)
-        root.setProperty("showNumberRow", True)
         QCoreApplication.processEvents()
 
         entries = root.property("charKeyRegistry").toVariant()
@@ -710,8 +718,10 @@ class TestPanelsSitFlushWithTheGrid:
         root, warnings, _ = qml_root
         root.setProperty("showNavigation", False)
         root.setProperty("showNumpad", False)
+        # Compact is the configuration that shows this panel at all: the
+        # full-size layouts carry their own number row, so showNumberRow
+        # derives to False there.
         root.setProperty("compactView", True)
-        root.setProperty("showNumberRow", True)
         _pump_until(lambda: self._panel(root, "numberRowPanel").width() > 0)
 
         for width in self.WIDTHS:
@@ -761,7 +771,10 @@ class TestPanelsSitFlushWithTheGrid:
         rounds its columns up costs pixels the window was never given.
         """
         root, warnings, _ = qml_root
-        root.setProperty("compactView", True)
+        # Full-size view: compact forbids both panels (see
+        # TestCompactViewForbidsTheSidePanels), and the column-budget
+        # arithmetic under test is the same in either view.
+        root.setProperty("compactView", False)
         root.setProperty("showNavigation", True)
         root.setProperty("showNumpad", True)
         _pump_until(lambda: self._panel(root, "navigationPanel").width() > 0)
@@ -782,6 +795,63 @@ class TestPanelsSitFlushWithTheGrid:
                     "positioner would show up here."
                 )
         assert _real_warnings(warnings) == []
+
+
+class TestCompactViewForbidsTheSidePanels:
+    """Compact view and the Navigation / Numpad panels are exclusive.
+
+    The two panels cost roughly 470 px of window width, which is precisely
+    what compact exists to hand back, so allowing all three at once let the
+    user pick a mode and then silently undo it. Compact wins and forces both
+    off, with the Settings toggles disabled while it is on.
+
+    The restore half is the part that is easy to break: the forced-off state
+    must not be written to `savedShowNavigation` / `savedShowNumpad`, or
+    turning compact on once would discard the user's real preference and
+    leaving compact could never bring the panels back.
+    """
+
+    @staticmethod
+    def _set(root, name: str, value) -> None:
+        root.setProperty(name, value)
+        QCoreApplication.processEvents()
+
+    def test_turning_compact_on_drops_both_panels(self, qml_root) -> None:
+        root, warnings, _ = qml_root
+        self._set(root, "showNavigation", True)
+        self._set(root, "showNumpad", True)
+
+        self._set(root, "compactView", True)
+
+        assert root.property("showNavigation") is False
+        assert root.property("showNumpad") is False
+        assert _real_warnings(warnings) == []
+
+    def test_leaving_compact_restores_what_the_user_had(self, qml_root) -> None:
+        root, warnings, _ = qml_root
+        self._set(root, "showNavigation", True)
+        self._set(root, "showNumpad", False)
+
+        self._set(root, "compactView", True)
+        self._set(root, "compactView", False)
+
+        assert root.property("showNavigation") is True, (
+            "compact view discarded the user's Navigation preference instead of suspending it"
+        )
+        assert root.property("showNumpad") is False
+        assert _real_warnings(warnings) == []
+
+    def test_the_panels_stay_off_across_a_compact_round_trip(self, qml_root) -> None:
+        """Both off before compact must mean both off after it."""
+        root, _, _ = qml_root
+        self._set(root, "showNavigation", False)
+        self._set(root, "showNumpad", False)
+
+        self._set(root, "compactView", True)
+        self._set(root, "compactView", False)
+
+        assert root.property("showNavigation") is False
+        assert root.property("showNumpad") is False
 
 
 class TestAccentKeysStayReadable:

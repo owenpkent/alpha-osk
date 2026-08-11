@@ -402,8 +402,9 @@ class TestNoPillIsEverTruncated:
         root, _, _ = qml_root
         failures = []
         for compact in (False, True):
+            # The number row follows the view on its own now: it is derived
+            # from whether the active layout already has one.
             root.setProperty("compactView", compact)
-            root.setProperty("showNumberRow", compact)
             for width in range(720, 1240, 4):
                 root.setProperty("width", width)
                 _show(root, self.CROWDED)
@@ -460,13 +461,24 @@ class TestNoPillIsEverTruncated:
 
 
 class TestNumberRowPanel:
-    def test_off_by_default(self, qml_root):
+    """Visibility is derived, not a setting: the panel fills in for layouts
+    that carry no `number` row of their own, so digits are always on screen
+    in both views and a full-size layout never gets a second, narrower
+    number row stacked on the one built into its JSON."""
+
+    def test_hidden_on_a_full_size_layout(self, qml_root):
         root, _, _ = qml_root
         assert root.property("showNumberRow") is False
 
-    def test_enabling_it_renders_without_qml_errors(self, qml_root):
+    def test_shown_in_compact_view(self, qml_root):
+        root, _, _ = qml_root
+        root.setProperty("compactView", True)
+        QCoreApplication.processEvents()
+        assert root.property("showNumberRow") is True
+
+    def test_renders_without_qml_errors(self, qml_root):
         root, warnings, _ = qml_root
-        root.setProperty("showNumberRow", True)
+        root.setProperty("compactView", True)
         QCoreApplication.processEvents()
         assert _real_warnings(warnings) == []
 
@@ -474,7 +486,6 @@ class TestNumberRowPanel:
         """Unregistered keys are dead taps while the swipe overlay is on."""
         root, _, _ = qml_root
         root.setProperty("compactView", True)
-        root.setProperty("showNumberRow", True)
         QCoreApplication.processEvents()
 
         registry = root.property("charKeyRegistry")
