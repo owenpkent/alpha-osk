@@ -96,6 +96,16 @@ _CHAR_TO_KEYSYM: Dict[str, str] = {
 }
 
 
+# Bounded so a hung xdotool/ydotool (dead X server, unresponsive display,
+# wedged binary) can never freeze the on-screen keyboard: `_run` is called
+# synchronously from Qt's UI thread on every keystroke. Normal synthesis
+# completes in ~5-15ms (see the docstring below), so 2 seconds is two
+# orders of magnitude of headroom for a slow-but-alive system while still
+# bounding a wedged backend to a brief, recoverable stall instead of an
+# indefinite freeze.
+_SUBPROCESS_TIMEOUT_S = 2.0
+
+
 def _run(cmd: List[str]) -> None:
     """Run a key-synthesis command synchronously.
 
@@ -104,7 +114,9 @@ def _run(cmd: List[str]) -> None:
     ``subprocess.Popen`` with no wait, they race each other and the
     target app can see the ``keyup`` first, leaving Ctrl stuck held.
     ``subprocess.run`` blocks until the tool exits (~5–15 ms), which is
-    negligible for key input and guarantees event ordering.
+    negligible for key input and guarantees event ordering. The call is
+    bounded by ``timeout=_SUBPROCESS_TIMEOUT_S`` so a wedged backend
+    raises ``TimeoutExpired`` instead of blocking that thread forever.
     """
     try:
         subprocess.run(
@@ -112,7 +124,10 @@ def _run(cmd: List[str]) -> None:
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             check=False,
+            timeout=_SUBPROCESS_TIMEOUT_S,
         )
+    except subprocess.TimeoutExpired:
+        _logger.error("Command timed out after %.1fs: %s", _SUBPROCESS_TIMEOUT_S, cmd)
     except Exception as exc:
         _logger.error("Command failed %s: %s", cmd, exc)
 
@@ -256,12 +271,18 @@ class LinuxKeySynthesizer(KeySynthesizerBase):
         if not self._tool:
             return
 
+        # "--" ends option parsing for both tools' `type` subcommand, so
+        # typed text that happens to equal a recognised flag (e.g.
+        # "--help") is sent as literal data instead of being parsed as an
+        # option and silently dropped. xdotool's `type` (getopt_long_only)
+        # and ydotool's `type` (getopt_long) both honor a literal "--" as
+        # the end-of-options marker.
         if self._tool == "xdotool":
             self._log_send(f"xdotool type '{text}'")
-            _run(["xdotool", "type", "--clearmodifiers", text])
+            _run(["xdotool", "type", "--clearmodifiers", "--", text])
         elif self._tool == "ydotool":
             self._log_send(f"ydotool type '{text}'")
-            _run(["ydotool", "type", text])
+            _run(["ydotool", "type", "--", text])
 
     def hold_modifier(self, key_name: str) -> None:
         """Send a modifier key-down so it stays held at the OS level.
@@ -369,7 +390,8 @@ class LinuxKeySynthesizer(KeySynthesizerBase):
             self._log_send(f"xdotool key shift+Left×{backspace_count} + type '{text}'")
             _run(["xdotool", "key", "--clearmodifiers", *chords])
             if text:
-                _run(["xdotool", "type", "--clearmodifiers", text])
+                # "--" end-of-options guard, see send_text() above.
+                _run(["xdotool", "type", "--clearmodifiers", "--", text])
         elif self._tool == "ydotool":
             self._log_send(f"ydotool shift+Left×{backspace_count} + type '{text}'")
             _run(["ydotool", "key", "--key-down", "shift"])
@@ -377,4 +399,5 @@ class LinuxKeySynthesizer(KeySynthesizerBase):
                 _run(["ydotool", "key", "Left"])
             _run(["ydotool", "key", "--key-up", "shift"])
             if text:
-                _run(["ydotool", "type", text])
+                # "--" end-of-options guard, see send_text() above.
+                _run(["ydotool", "type", "--", text])
