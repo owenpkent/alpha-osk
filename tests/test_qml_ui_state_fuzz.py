@@ -96,9 +96,12 @@ class _Invariants:
         assert units > 0, f"{step}: totalKeyUnits collapsed to {units}"
         # 30 px is the documented smallest usable target for imprecise motor
         # input; keyW has a Math.max(30, ...) floor, so anything under it
-        # means the floor itself was bypassed (NaN propagation, mostly).
-        assert key_w >= 30, f"{step}: keyW {key_w} under the 30 px floor"
-        assert key_w == key_w, f"{step}: keyW went NaN"
+        # means the floor itself was bypassed. NaN is the usual way that
+        # happens, and it fails this same assertion: every comparison
+        # against NaN is False, so `NaN >= 30` is False. No separate NaN
+        # check is needed (and a `key_w == key_w` one alongside this can
+        # never be the assertion that fires).
+        assert key_w >= 30, f"{step}: keyW {key_w} under the 30 px floor (NaN also lands here)"
 
         # `showNumberRow` is derived from the layout rather than stored, so
         # the standalone panel must appear for exactly those layouts that
@@ -543,6 +546,19 @@ class TestRestartPersistence:
             synth.backend_name.return_value = "MockSynth"
             factory.return_value = synth
             bridge = KeyboardBridge()
+
+        # The one key this helper does write to the store it otherwise
+        # only reads: `savedAutoCheckUpdates` defaults to true, so a load
+        # that is not disarmed arms a 3-second timer firing a real HTTPS
+        # request to the GitHub releases API, then emits the result back
+        # into a bridge this test has already dropped. The shared
+        # `qml_root` fixture disarms it before its own load; `_boot`
+        # deliberately bypasses that fixture, and clears the store first,
+        # so it has to do the same thing itself. Unrelated to any panel
+        # or compact-view state, so it cannot skew what these tests read.
+        settings = QSettings(TEST_ORG, TEST_APP)
+        settings.setValue("ui/savedAutoCheckUpdates", False)
+        settings.sync()
 
         engine = QQmlApplicationEngine()
         engine.warnings.connect(lambda errs: warnings.extend(e.toString() for e in errs))
