@@ -178,6 +178,25 @@ The `.desktop` file declares the app's name, icon, and
 menus once the user integrates the AppImage (e.g. via
 [appimaged](https://github.com/probonopd/go-appimage)).
 
+### appimagetool provenance
+
+`--fetch-appimagetool` used to download `appimagetool` from GitHub's mutable
+`continuous` tag, which is rebuilt on every upstream merge with no fixed
+content to check against. `build/linux/build.py` now pins a specific tagged
+release (`APPIMAGETOOL_URL`, currently `1.9.1`) and verifies its SHA256
+(`APPIMAGETOOL_SHA256`) before the downloaded binary is ever executed. This
+is trust-on-first-use, not a signed guarantee (upstream doesn't ship a signed
+checksum manifest), but it does catch a later swap, a re-pointed tag, or a
+corrupted or intercepted download.
+
+**If you ever bump the appimagetool version, bump `APPIMAGETOOL_URL` and
+`APPIMAGETOOL_SHA256` in the same change.** Updating the URL without updating
+the hash makes every build fail closed (the verification step refuses to run
+an unexpected binary, it doesn't skip the check), and updating the hash
+without the URL pins to a version you didn't intend. Compute the new hash by
+downloading the release asset once by hand and hashing it locally; don't
+trust a hash pasted from anywhere other than a file you fetched yourself.
+
 ---
 
 ## Troubleshooting

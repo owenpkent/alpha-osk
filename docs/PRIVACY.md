@@ -2,6 +2,16 @@
 
 The short version: by default, **nothing leaves your computer**. Alpha-OSK predicts and learns entirely on your machine. Your typed text, vocabulary, keystroke history, and prediction model never touch a server.
 
+## Diagnostic log
+
+Separately from telemetry, Alpha-OSK writes an operational log to `alpha-osk.log` in your config directory (`%APPDATA%\alpha-osk\` on Windows, `~/.config/alpha-osk/` on Linux). It's local only: nothing in it is ever uploaded, and it is not included in Data Backup exports. It rotates automatically (capped at 2 MB, keeping the 3 most recent files), so it can't grow without bound.
+
+**Until this was fixed, the log recorded more than it should have.** Several logging call sites in `keyboard_bridge.py` wrote your actual typed text (up to 200 characters of in-progress context) to this file on every prediction tap, and did so even while privacy mode was paused. That defeated the point of privacy mode for anything written to disk. This is now fixed: those sites log lengths and booleans only (for example "42 chars of context," never the 42 characters themselves). Nothing the app writes at its normal logging level may contain anything you typed.
+
+If you're attaching the log to a bug report, it's safe: it now contains only operational details like platform info, model load paths, and prediction-pipeline timing, never content.
+
+Logs written *before* this fix could contain fragments of what you typed, so they are deleted for you. The first time you launch the fixed version, Alpha-OSK removes any existing `alpha-osk.log` and its rotated `.1` / `.2` / `.3` files, then notes in the new log how many it removed. This runs exactly once, so logs written after the fix are kept normally and you are not fighting the app to retain them. If you had copied an old log somewhere else (into a bug report, a support email, or a backup) that copy is outside our reach and is worth deleting yourself.
+
 ## Optional usage telemetry
 
 Settings → Data & Privacy → Privacy has one toggle: **"Share anonymous usage stats"**. It is off by default. If you turn it on, Alpha-OSK sends a small weekly report so we can track total impact across the community (e.g. "X million keystrokes saved across Y users").

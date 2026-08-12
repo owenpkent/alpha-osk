@@ -75,7 +75,7 @@ Submit uses `urllib.request` (stdlib, no new dependency) with a 5 s timeout. On 
 ## Cloudflare Worker endpoints
 
 `POST /v1/submit`:
-- Validates payload shape (all required keys present, types correct, integer counters non-negative).
+- Validates payload shape (all required keys present, types correct, integer counters non-negative), plus `app_version` against a semver pattern and `os` against the `windows` / `linux` enum.
 - Caps each counter at a sanity ceiling (e.g. 10^9 keystrokes) so a malformed client can't poison the aggregate.
 - Upserts into `users` and `submissions_latest`.
 - Returns 204 on success, 4xx with a one-line reason on validation failure.

@@ -141,6 +141,18 @@ Defines `KeySynthesizerBase` with these abstract methods:
   sticky modifier (Ctrl+C flow) must land at the X server in the order
   Python issued them, and non-blocking `Popen` races lead to stuck
   modifiers. The ~10 ms cost per event is inaudible at typing cadence.
+- `_run()` bounds every call with a 2.0s timeout (`_SUBPROCESS_TIMEOUT_S`).
+  It runs synchronously on the Qt UI thread, so a wedged `xdotool` /
+  `ydotool` child (a hung X server, a dead ydotoold socket) would otherwise
+  freeze the whole keyboard indefinitely instead of just failing that one
+  keystroke.
+- The four call sites that type arbitrary, user-originated text (the
+  `xdotool`/`ydotool` branches of both `send_text()` and `replace_text()`)
+  insert a literal `--` immediately before the text argument. Both tools'
+  `type` subcommand honors `--` as an end-of-options marker; without it,
+  typed text that happens to start with something the tool's option parser
+  recognizes (e.g. a leading `-`) could be consumed as a flag instead of
+  typed as text.
 - Overrides `replace_text()` for atomic select-and-replace. xdotool:
   a single `xdotool key shift+Left shift+Left …` invocation runs N
   chords end-to-end (chord atomicity is handled by xdotool itself), then

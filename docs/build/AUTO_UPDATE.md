@@ -23,13 +23,25 @@ The updater is the highest-value MITM target in the app — a successful attacke
 | Post-redirect host swap                                 | Re-validate `resp.geturl()` after `urlopen` follows redirects                                          |
 | Disk-fill                                               | `_MAX_DOWNLOAD_BYTES = 500 MB` aborts runaway downloads                                                |
 | Downgrade attack                                        | Strict semver compare (`is_newer`); equal/older silently refused                                       |
+| Downgrade via a re-signed / relabeled older installer   | `_verify_signature` also checks the exe's embedded `FileVersion` against the claimed version, so a validly-signed old installer renamed to a newer-looking filename still fails verification |
 | Pre-release/garbage tag confusion (`v1.0.3-evil`)       | Regex `^\d+\.\d+\.\d+$` only — pre-release/+build refused                                              |
 | Misnamed asset                                          | Filename pattern locked to `Alpha-OSK-Setup-{version}.exe`                                             |
+| Attacker-writable install directory                     | `InstallDirRegKey HKCU` removed (it was a dangling read of a key nothing in the build ever wrote); `_install_target_dir()` computes the target explicitly and the install runs with `/S /D=<dir>` |
 | Tag confusion across repos                              | Endpoint hard-pinned to `https://api.github.com/repos/okstudio1/alpha-osk-releases/releases/latest` and the `api_url` prefix is checked at call time |
 | QML-side URL injection                                  | QML never sees the URL — it only triggers `installUpdate()`; the bridge holds `self._update_info`     |
 | Release-notes injection                                 | `_sanitize_notes` strips C0 controls and caps length to 4 KB                                          |
 
 What's **not** covered: compromise of the EV signing key. That's a build-pipeline / cert-rotation response, not a client-side fix.
+
+### Install directory and signature hardening (August 2026)
+
+Three related fixes landed together because they all touch how much the updater trusts, versus verifies, about where and what it installs.
+
+**Install directory is now pinned, not read from the registry.** `installer.nsh` used to declare `InstallDirRegKey HKCU "Software\OK Studio Inc.\Alpha-OSK" "InstallDir"`, so NSIS would prefer whatever that registry value said over its own default whenever the value existed. Nothing in the build ever wrote that value, so the read was pure liability: unprivileged local malware could create it first and redirect the next silent auto-update into a directory the attacker controls, after which the attacker can replace the EV-signed exe and DLLs the user trusts. The key is removed. `src/updater.py::_install_target_dir()` now computes the target directory itself, and `download_and_install` invokes the installer as `/S /D=<dir>`. NSIS has a strict, easy-to-get-wrong rule for `/D=`: it must be the **last** parameter on the command line and must **not** be quoted, or NSIS silently ignores it and falls back to its own compiled-in default. Get either of those wrong and the pin quietly does nothing.
+
+**Signature verification now binds to the claimed version.** `_verify_signature` already checked Authenticode `Status == Valid`, the thumbprint, and the signer CN. It did not check that the signed file's own embedded `FileVersion` matched the version the update claimed to be. That gap meant a validly-signed **older** installer, renamed to a newer version's filename, would pass every existing check, a downgrade path back to a fixed vulnerability using our own signature as cover. `_verify_signature` now also compares the exe's embedded `FileVersion` against the expected version and rejects a mismatch.
+
+**PowerShell single-quote escaping fix.** `_ps_single_quote_escape`, used when building the PowerShell command that invokes `_verify_signature`, had a bug that broke escaping for any Windows username containing an apostrophe (`%TEMP%` paths embed the username). The practical effect was silent, permanent auto-update failure for those users, not a vulnerability, just a real-world reliability bug living in the same function this pass was already touching. Fixed alongside the version-binding change.
 
 ## Original design
 
