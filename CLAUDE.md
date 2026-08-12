@@ -779,12 +779,22 @@ NSWindow tuning in `keyboard_app.py::_apply_macos_window_flags`
 `~/Library/Application Support/alpha-osk/`. Build pipeline scaffolded
 at `build/macos/` (PyInstaller `BUNDLE()` -> `Alpha-OSK.app`, optional
 `hdiutil` `.dmg`) but not yet exercised end-to-end. Code signing,
-notarization, auto-update, and AXUIElement password detection are
-explicit follow-up phases. **First-run gotcha:** macOS requires an
+notarization, and auto-update are the explicit follow-up phases.
+**Password-field auto-detection is done**, not pending: `_MacOSAXDetector`
+in `password_detect.py` resolves the frontmost app's pid ->
+`AXUIElementCreateApplication` -> `kAXFocusedUIElementAttribute` and
+matches the `AXSecureTextField` subrole, which Cocoa, WebKit and
+Chromium all report. It deliberately goes through the frontmost
+*application* rather than `AXUIElementCreateSystemWide()`, because the
+system-wide element returns `kAXErrorCannotComplete` in practice; don't
+"simplify" it back. **First-run gotcha:** macOS requires an
 Accessibility TCC grant (System Settings -> Privacy & Security ->
 Accessibility) before `CGEventPost` reaches other apps - without it
-the OSK UI works but keystrokes silently no-op. Full plan + phase
-breakdown + troubleshooting in `docs/build/MACOS.md`.
+the OSK UI works but keystrokes silently no-op. The same grant gates
+the AX detector, so a missing TCC grant costs you password detection
+too, and it fails open (see the fail-open note under *Privacy Mode &
+Password Detection*). Full plan + phase breakdown + troubleshooting in
+`docs/build/MACOS.md`.
 
 ## Linux build
 
