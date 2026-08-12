@@ -65,6 +65,40 @@ def _settle() -> None:
         QCoreApplication.processEvents()
 
 
+# Bound on _wait_until: 20 ms x 50 is a 1 s ceiling, generous next to the
+# single pass the layout actually needs and short enough that a genuine
+# hang still fails the test rather than the run.
+_LAYOUT_WAIT_MS = 20
+_LAYOUT_WAIT_TRIES = 50
+
+
+def _wait_until(predicate) -> bool:
+    """Spin the event loop until *predicate* holds, bounded. Returns whether
+    it ended up true.
+
+    Uses ``QTest.qWait``, NOT ``processEvents``, and that distinction is the
+    whole point of this helper. ``QtQuick.Layouts`` sizes its children on a
+    deferred polish pass driven by the event loop's timers, which
+    ``processEvents`` alone never runs. Measured against the settings panel
+    in this suite: its toggles sit at their unlaid-out implicit size
+    (74x133) through any number of ``processEvents`` calls, and snap to
+    their real 320x53 on the first ``qWait``. In the stuck state the "Number
+    Pad" toggle's centre maps to y=588 in a 540 px window, i.e. outside it,
+    so a synthetic click at that point lands nowhere. That silently turned
+    "the disabled toggle refused the click" into "the click was never
+    delivered", and made the enabled control case fail outright on the
+    slower Windows CI runner.
+
+    ``predicate`` must return a bool, never a QQuickItem (see the note on
+    ``_pump_until`` in test_qml_compact_view).
+    """
+    for _ in range(_LAYOUT_WAIT_TRIES):
+        if predicate():
+            return True
+        QTest.qWait(_LAYOUT_WAIT_MS)
+    return predicate()
+
+
 def _row_ids(root) -> list[str]:
     value = root.property("layoutRows")
     rows = value.toVariant() if hasattr(value, "toVariant") else value
@@ -247,18 +281,30 @@ class TestDisabledToggleIsInert:
         `root.contentItem()` nor findChild reaches it.
         """
         root.setProperty("showSettings", True)
-        _settle()
 
-        window = next(
-            (w for w in QGuiApplication.topLevelWindows() if w.title() == "Alpha-OSK Settings"),
-            None,
-        )
+        def find_window():
+            return next(
+                (w for w in QGuiApplication.topLevelWindows() if w.title() == "Alpha-OSK Settings"),
+                None,
+            )
+
+        # Wait rather than assume a fixed number of passes: this is a
+        # separate top-level Window, so opening it is not synchronous and
+        # how long it takes is host-dependent.
+        _wait_until(lambda: find_window() is not None)
+        window = find_window()
         assert window is not None, "the settings window never opened"
 
-        panel = next(
-            (i for i in _walk(window.contentItem()) if i.property("currentView") is not None),
-            None,
-        )
+        def find_panel():
+            return next(
+                (i for i in _walk(window.contentItem()) if i.property("currentView") is not None),
+                None,
+            )
+
+        # `_wait_until` must not be handed a QQuickItem (see its docstring),
+        # hence the bool.
+        _wait_until(lambda: find_panel() is not None)
+        panel = find_panel()
         assert panel is not None, "no settings panel inside the settings window"
         panel.setProperty("currentView", "appearance")
         _settle()
@@ -273,6 +319,34 @@ class TestDisabledToggleIsInert:
 
     @staticmethod
     def _click(window, item) -> None:
+        """Deliver a real synthetic click at *item*'s centre.
+
+        Waits for layout before computing the point, and that wait is
+        load-bearing rather than defensive. The settings window is a
+        separate top-level `Window`: it opens, its QML instantiates, and
+        its delegates get their geometry over the following event-loop
+        passes. A fixed number of `processEvents()` calls is enough on
+        some hosts and not others, and the Windows CI runner is one of
+        the slow ones. An item that is found and reports `enabled` can
+        still be sized 0x0 or sitting at the scene origin, and a click at
+        that centre lands on whatever is at the window's top-left corner
+        instead of the toggle, which surfaced as the control case failing
+        with "the click never arrived" while Linux passed.
+        """
+        content = window.contentItem()
+
+        def positioned() -> bool:
+            if item.width() <= 0 or item.height() <= 0:
+                return False
+            point = item.mapToScene(item.boundingRect().center())
+            return 0 <= point.x() < content.width() and 0 <= point.y() < content.height()
+
+        assert _wait_until(positioned), (
+            "the toggle never took a position inside the settings window, so "
+            "a click at its centre would land somewhere else and this harness "
+            "would be testing nothing"
+        )
+
         centre = item.mapToScene(item.boundingRect().center())
         QTest.mouseClick(
             window, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, centre.toPoint()
