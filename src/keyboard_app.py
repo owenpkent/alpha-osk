@@ -50,6 +50,7 @@ from PySide6.QtGui import QIcon
 from PySide6.QtQml import QQmlApplicationEngine
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
+from .__version__ import __version__
 from .keyboard_bridge import KeyboardBridge
 from .platform import CURRENT_PLATFORM, get_config_dir, get_platform_info
 
@@ -666,12 +667,60 @@ def _migrate_legacy_compat_settings() -> None:
     settings.sync()
 
 
+#: Sentinel recording that the one-time pre-fix log purge has run.  Its
+#: presence is the only state: the contents are informational.
+_LOG_PURGE_SENTINEL = ".log-privacy-purge"
+
+
+def _purge_pre_fix_logs(config_dir: Path) -> int:
+    """Delete diagnostic logs written before the typed-content fix.
+
+    Releases up to and including 1.0.30 logged the user's typed text to
+    ``alpha-osk.log`` at INFO, including up to 200 characters of the
+    context buffer, and did so even while privacy mode was active.  The
+    logging sites are fixed, but that only stops *new* leakage: an
+    upgrading user still has up to four rotated files on disk holding a
+    transcript of what they typed, potentially including a password.
+    Purging them is part of the fix, not housekeeping.
+
+    Runs once, guarded by a sentinel, so a user who later wants to keep
+    logs across restarts is not fighting us.  Returns the number of
+    files removed.  Never raises: a failure here must not stop the
+    keyboard from starting.
+    """
+    sentinel = config_dir / _LOG_PURGE_SENTINEL
+    if sentinel.exists():
+        return 0
+
+    removed = 0
+    try:
+        # Matches "alpha-osk.log" plus RotatingFileHandler's .1 / .2 / .3.
+        for stale in sorted(config_dir.glob("alpha-osk.log*")):
+            try:
+                stale.unlink()
+                removed += 1
+            except OSError:
+                # A locked or already-gone file is not worth failing over;
+                # the sentinel still gets written so we do not retry forever.
+                continue
+        sentinel.write_text(
+            f"purged={removed} version={__version__}\n",
+            encoding="utf-8",
+        )
+    except OSError:
+        return removed
+    return removed
+
+
 def _configure_logging() -> Path | None:
     """Wire up stderr + rotating file logging.
 
-    The frozen build runs without a console, so stderr is /dev/null —
+    The frozen build runs without a console, so stderr is /dev/null, and
     file logging is the only way users can capture updater errors,
     crash tracebacks, etc. Returns the log path (or None on failure).
+
+    Nothing written here may contain typed content: see the diagnostic
+    log invariant in CLAUDE.md under "Where User Data Lives".
     """
     fmt = "%(asctime)s [%(name)s] %(levelname)s: %(message)s"
     root = logging.getLogger()
@@ -684,8 +733,13 @@ def _configure_logging() -> Path | None:
     root.addHandler(stream)
 
     log_path: Path | None = None
+    purged = 0
     try:
-        log_path = get_config_dir() / "alpha-osk.log"
+        config_dir = get_config_dir()
+        # Must happen before the handler opens the file: on Windows the
+        # active log cannot be unlinked while the handler holds it.
+        purged = _purge_pre_fix_logs(config_dir)
+        log_path = config_dir / "alpha-osk.log"
         file_handler = logging.handlers.RotatingFileHandler(
             log_path,
             maxBytes=2 * 1024 * 1024,
@@ -699,6 +753,15 @@ def _configure_logging() -> Path | None:
         # without a writable APPDATA are vanishingly rare.
         root.warning("Could not open log file %s: %s", log_path, e)
         log_path = None
+
+    if purged:
+        # Logged after the handler is attached so it lands in the new file,
+        # giving the user a record of why their old logs are gone.
+        root.info(
+            "Removed %d diagnostic log file(s) written before the "
+            "typed-content fix; they could contain text you typed.",
+            purged,
+        )
 
     return log_path
 
