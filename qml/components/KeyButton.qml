@@ -299,6 +299,9 @@ Item {
         Text {
             anchors.centerIn: parent
             text: keyRoot.displayText
+            // displayText is layout-JSON-driven; force plain rendering so a
+            // custom/modular layout's key label can't auto-render as HTML.
+            textFormat: Text.PlainText
             // Ensure readable contrast: use dark text on bright backgrounds, white on dark
             color: {
                 var bg = keyRoot._visualPressed ? keyPressedColor : isActive ? accentColor : keyColor

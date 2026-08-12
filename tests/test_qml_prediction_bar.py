@@ -38,7 +38,7 @@ try:
     # "Can't find converter for 'QQuickItem*'".
     from PySide6.QtCore import QCoreApplication, QObject, QSettings, QUrl  # noqa: E402
     from PySide6.QtGui import QFont, QFontMetricsF, QGuiApplication  # noqa: E402
-    from PySide6.QtQml import QQmlApplicationEngine  # noqa: E402
+    from PySide6.QtQml import QQmlApplicationEngine, QQmlEngine, QQmlExpression  # noqa: E402
     from PySide6.QtQuick import QQuickItem  # noqa: E402,F401
 except ImportError as exc:  # pragma: no cover - environment-dependent
     pytest.skip(
@@ -486,3 +486,36 @@ class TestNumberRowPanel:
             "number-row digits missing from charKeyRegistry — taps on them "
             "would be swallowed by the swipe overlay"
         )
+
+
+class TestPillTextNeverAutoDetectsHtml:
+    """Prediction pill text must render as plain text.
+
+    Predictions can originate from an imported vocabulary pack's
+    unsanitised dictionary.txt (src/prediction/vocabulary_pack.py). QML's
+    `Text` defaults to `Text.AutoText`, which lets Qt auto-detect and
+    render HTML, so a pack entry like `<img src='http://x'>` could fire an
+    outbound request purely from being shown as a pill. See the security
+    notes in CLAUDE.md's vocabulary-pack import-hardening section.
+    """
+
+    def test_pill_text_format_is_plain(self, qml_root):
+        root, warnings, _ = qml_root
+        _show(root, ["hello", "<b>world</b>", "world"])
+        pills = expect_pills(root)
+        # QObject.property("textFormat") raises "Can't find converter for
+        # 'QQuickText::TextFormat'" -- PySide6 has no registered converter
+        # for that internal enum. Evaluating a JS comparison against the
+        # QML `Text.PlainText` constant sidesteps it entirely: the result
+        # is a plain bool, which converts fine. QQmlExpression.evaluate()
+        # returns (value, valueIsUndefined), not just the value.
+        for pill in pills:
+            ctx = QQmlEngine.contextForObject(pill)
+            is_plain, is_undefined = QQmlExpression(
+                ctx, pill, "textFormat === Text.PlainText"
+            ).evaluate()
+            assert is_undefined is False, "textFormat expression could not be evaluated"
+            assert is_plain is True, (
+                "a prediction pill is not forced to Text.PlainText -- an "
+                "imported pack word containing markup could auto-render as HTML"
+            )

@@ -594,6 +594,10 @@ Window {
 
     // Privacy
     property bool privacyMode: keyboard ? keyboard.privacyMode : false
+    // False only when the platform's auto-detection backend failed to
+    // initialise (no AT-SPI on Linux, no Accessibility grant on macOS,
+    // etc). Defaults true so nothing warns before the bridge connects.
+    property bool passwordDetectionAvailable: keyboard ? keyboard.passwordDetectionAvailable : true
 
     // Visualization
     property bool showVisualization: false
@@ -1150,9 +1154,16 @@ Window {
                     border.width: root.privacyMode ? 1 : 0
 
                     ToolTip.visible: privacyBtn.containsMouse
-                    ToolTip.text: root.privacyMode
+                    // When auto-detection has no working backend this
+                    // session (see KeyboardBridge.passwordDetectionAvailable),
+                    // this switch is the user's only protection against
+                    // typing a password into the model, so say so right on
+                    // the control instead of a dialog they'd have to dismiss.
+                    ToolTip.text: (root.privacyMode
                                   ? qsTr("Learning is off. Click to resume learning from your typing")
-                                  : qsTr("Learning is on. Click to pause learning from your typing")
+                                  : qsTr("Learning is on. Click to pause learning from your typing"))
+                                  + (root.passwordDetectionAvailable ? ""
+                                     : qsTr(" (auto-detect unavailable this session: this is your only protection)"))
                     ToolTip.delay: 400
 
                     Row {
@@ -1659,6 +1670,11 @@ Window {
                                 anchors.rightMargin: predBar.predTextInset
                                 horizontalAlignment: Text.AlignHCenter
                                 text: modelData
+                                // Predictions can originate from an imported
+                                // vocabulary pack's dictionary.txt, which is
+                                // unsanitised: force plain text so a crafted
+                                // entry can't auto-render as HTML.
+                                textFormat: Text.PlainText
                                 color: predMouse.containsMouse ? Qt.lighter(root.themeTextColor, 1.3) : root.themeTextColor
                                 font.pixelSize: predBar.predFontSize
                                 font.weight: Font.Medium
@@ -2121,6 +2137,7 @@ Window {
                     topPadding: 6
                     bottomPadding: 4
                     text: predContextMenu.targetWord
+                    textFormat: Text.PlainText
                     color: "#888"
                     font.pixelSize: 11
                     elide: Text.ElideRight
@@ -2691,6 +2708,10 @@ Window {
                                         Layout.fillWidth: true
                                         text: (modelData.label && modelData.label.length)
                                               ? modelData.label : qsTr("(unnamed)")
+                                        // Snippets round-trip through Data Backup import
+                                        // (replace-on-import from a file the user picked),
+                                        // so treat them as untrusted the same as pack data.
+                                        textFormat: Text.PlainText
                                         color: root.themeTextColor
                                         font.pixelSize: 13
                                         font.weight: Font.DemiBold
@@ -2700,6 +2721,7 @@ Window {
                                         Layout.fillWidth: true
                                         text: (modelData.value && modelData.value.length)
                                               ? modelData.value : qsTr("empty, tap to fill in")
+                                        textFormat: Text.PlainText
                                         color: "#999"
                                         font.pixelSize: 11
                                         elide: Text.ElideRight
@@ -3357,6 +3379,7 @@ Window {
                           ? "checking"
                           : (root.updateAvailable ? "available" : root._lastCheckStatus)
             appVersion: keyboard ? keyboard.appVersion : ""
+            passwordDetectionAvailable: root.passwordDetectionAvailable
 
             onSettingChanged: function(setting, value) {
                 if (setting === "functionRow") {

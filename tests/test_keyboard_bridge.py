@@ -7,6 +7,7 @@ don't want tests injecting real keystrokes.
 
 from __future__ import annotations
 
+import logging
 import time
 from unittest.mock import MagicMock, patch
 
@@ -1825,3 +1826,208 @@ class TestEditPredictionSanitize:
 
         assert KeyboardBridge._sanitize_edit("iPhone") == "iPhone"
         assert KeyboardBridge._sanitize_edit("  hello  ") == "hello"
+
+
+class TestNoTypedContentInLogs:
+    """No log record at INFO or above may contain what the user typed: a
+    word, _current_word, _context_buffer, or a prediction list.
+
+    The app logs to a plaintext RotatingFileHandler (see
+    keyboard_app.py::_configure_logging) that is not gated by privacy
+    mode, so anything logged here is a leak regardless of whether the
+    user was in a password field at the time. Security-audit
+    remediation: see CLAUDE.md "Privacy Mode & Password Detection".
+    """
+
+    # Distinctive enough that no unrelated log boilerplate could ever
+    # contain it as a substring, so "not in caplog.text" is unambiguous.
+    _SENTINEL = "zzqxplorbnium"
+
+    def test_press_prediction_does_not_log_the_word(self, bridge: KeyboardBridge, caplog):
+        with caplog.at_level(logging.INFO, logger="KeyboardBridge"):
+            bridge.pressPrediction(self._SENTINEL)
+        assert self._SENTINEL not in caplog.text
+
+    def test_edit_prediction_does_not_log_the_word(self, bridge: KeyboardBridge, caplog):
+        with caplog.at_level(logging.INFO, logger="KeyboardBridge"):
+            bridge.editPrediction("typo", self._SENTINEL)
+        assert self._SENTINEL not in caplog.text
+
+    def test_word_completion_does_not_log_the_word(self, bridge: KeyboardBridge, caplog):
+        with caplog.at_level(logging.INFO, logger="KeyboardBridge"):
+            for c in self._SENTINEL:
+                bridge.pressKey(c)
+            bridge.pressSpecialKey("space")
+        assert self._SENTINEL not in caplog.text
+
+    def test_sentence_end_does_not_log_the_word(self, bridge: KeyboardBridge, caplog):
+        with caplog.at_level(logging.INFO, logger="KeyboardBridge"):
+            for c in self._SENTINEL:
+                bridge.pressKey(c)
+            bridge.pressKey(".")
+        assert self._SENTINEL not in caplog.text
+
+    def test_return_key_does_not_log_the_word(self, bridge: KeyboardBridge, caplog):
+        with caplog.at_level(logging.INFO, logger="KeyboardBridge"):
+            for c in self._SENTINEL:
+                bridge.pressKey(c)
+            bridge.pressSpecialKey("return")
+        assert self._SENTINEL not in caplog.text
+
+    def test_autocorrect_does_not_log_typed_or_corrected_word(self, bridge: KeyboardBridge, caplog):
+        bridge.setAutocorrectEnabled(True)
+        bridge._predictor.check_autocorrect = MagicMock(return_value=self._SENTINEL)
+        with caplog.at_level(logging.INFO, logger="KeyboardBridge"):
+            for c in "zyxw":  # the "typo" being corrected
+                bridge.pressKey(c)
+            bridge.pressSpecialKey("space")
+        assert self._SENTINEL not in caplog.text
+        assert "zyxw" not in caplog.text
+
+    def test_next_word_prediction_context_not_logged(self, bridge: KeyboardBridge, caplog):
+        bridge._context_buffer = self._SENTINEL + " "
+        with caplog.at_level(logging.INFO, logger="KeyboardBridge"):
+            bridge.pressPrediction("hello")
+        assert self._SENTINEL not in caplog.text
+
+
+class TestPressPredictionPrivacyMode:
+    """pressPrediction must still type the tapped word into the target
+    app while in privacy mode (the user tapped a visible pill, so the
+    text must reach the app), but must not persist the selection into
+    analytics or the model. Mirrors the guards _press_char already has.
+    See CLAUDE.md "Privacy Mode & Password Detection".
+    """
+
+    def test_privacy_mode_still_inserts_the_word(self, bridge: KeyboardBridge):
+        bridge.setPrivacyMode(True)
+        bridge._synth.reset_mock()
+        bridge.pressPrediction("hello")
+        bridge._synth.send_text.assert_any_call("hello ")
+
+    def test_privacy_mode_respects_typed_prefix_for_insertion(self, bridge: KeyboardBridge):
+        """Even under privacy mode, a non-empty prefix still gets
+        suffix-only insertion rather than the full word duplicated."""
+        bridge.setPrivacyMode(True)
+        bridge._current_word = "hel"
+        bridge._synth.reset_mock()
+        bridge.pressPrediction("hello")
+        bridge._synth.send_text.assert_any_call("lo ")
+
+    def test_privacy_mode_suppresses_analytics(self, bridge: KeyboardBridge):
+        bridge.setPrivacyMode(True)
+        bridge._analytics.record_prediction_selected = MagicMock()
+        bridge.pressPrediction("hello")
+        bridge._analytics.record_prediction_selected.assert_not_called()
+
+    def test_privacy_mode_suppresses_learn_from_selection(self, bridge: KeyboardBridge):
+        bridge.setPrivacyMode(True)
+        bridge._predictor.learn_from_selection = MagicMock()
+        bridge.pressPrediction("hello")
+        bridge._predictor.learn_from_selection.assert_not_called()
+
+    def test_privacy_mode_suppresses_capitalization_learning(self, bridge: KeyboardBridge):
+        bridge.setPrivacyMode(True)
+        bridge._current_word = "Hel"
+        bridge._predictor.learn_capitalization = MagicMock(return_value=True)
+        bridge.pressPrediction("Hello")
+        bridge._predictor.learn_capitalization.assert_not_called()
+
+    def test_privacy_mode_does_not_grow_context_buffer(self, bridge: KeyboardBridge):
+        bridge.setPrivacyMode(True)
+        bridge._context_buffer = ""
+        bridge.pressPrediction("hello")
+        # Must not linger: it would otherwise feed learn_from_selection() /
+        # predict() on the next call, even after privacy mode ends.
+        assert bridge._context_buffer == ""
+
+    def test_privacy_mode_still_clears_current_word(self, bridge: KeyboardBridge):
+        bridge.setPrivacyMode(True)
+        bridge._current_word = "hel"
+        bridge.pressPrediction("hello")
+        assert bridge._current_word == ""
+
+    def test_privacy_mode_still_refreshes_predictions(self, bridge: KeyboardBridge):
+        bridge.setPrivacyMode(True)
+        emitted: list = []
+        bridge.predictionsChanged.connect(lambda preds: emitted.append(list(preds)))
+        bridge.pressPrediction("hello")
+        # Privacy mode must not freeze the pill bar mid-tap.
+        assert emitted, "predictionsChanged never fired"
+
+    def test_normal_mode_still_persists_everything(self, bridge: KeyboardBridge):
+        """Sanity check: the new guards are privacy-specific, not a
+        general regression that always skips persistence."""
+        bridge._current_word = "hel"
+        bridge._analytics.record_prediction_selected = MagicMock()
+        bridge._predictor.learn_from_selection = MagicMock()
+        bridge.pressPrediction("hello")
+        bridge._analytics.record_prediction_selected.assert_called_once()
+        bridge._predictor.learn_from_selection.assert_called_once()
+
+
+class TestEditPredictionPrivacyMode:
+    """editPrediction must still insert the user's typed correction while
+    in privacy mode, but must not persist it into the model."""
+
+    def test_privacy_mode_still_inserts(self, bridge: KeyboardBridge):
+        bridge.setPrivacyMode(True)
+        bridge._synth.reset_mock()
+        bridge.editPrediction("helo", "hello")
+        bridge._synth.replace_text.assert_called_once()
+
+    def test_privacy_mode_suppresses_set_capitalization(self, bridge: KeyboardBridge):
+        bridge.setPrivacyMode(True)
+        bridge._predictor.set_capitalization = MagicMock()
+        bridge.editPrediction("iphone", "iPhone")
+        bridge._predictor.set_capitalization.assert_not_called()
+
+    def test_privacy_mode_does_not_grow_context_buffer(self, bridge: KeyboardBridge):
+        bridge.setPrivacyMode(True)
+        bridge._context_buffer = ""
+        bridge.editPrediction("helo", "hello")
+        assert bridge._context_buffer == ""
+
+    def test_privacy_mode_still_clears_current_word(self, bridge: KeyboardBridge):
+        bridge.setPrivacyMode(True)
+        bridge._current_word = "helo"
+        bridge.editPrediction("helo", "hello")
+        assert bridge._current_word == ""
+
+    def test_privacy_mode_still_refreshes_predictions(self, bridge: KeyboardBridge):
+        bridge.setPrivacyMode(True)
+        emitted: list = []
+        bridge.predictionsChanged.connect(lambda preds: emitted.append(list(preds)))
+        bridge.editPrediction("helo", "hello")
+        assert emitted, "predictionsChanged never fired"
+
+    def test_normal_mode_still_persists(self, bridge: KeyboardBridge):
+        bridge._predictor.set_capitalization = MagicMock()
+        bridge.editPrediction("iphone", "iPhone")
+        bridge._predictor.set_capitalization.assert_called_once_with("iPhone", "iPhone")
+
+
+class TestPasswordDetectionAvailableProperty:
+    """KeyboardBridge.passwordDetectionAvailable surfaces whether the
+    platform's auto-detect backend is real or the null fallback, so the
+    UI can tell the user the manual Learning toggle is their only
+    protection this session. See
+    src/platform/password_detect.py::detection_available.
+    """
+
+    def _make_bridge(self, monkeypatch, available: bool) -> KeyboardBridge:
+        monkeypatch.setattr("src.keyboard_bridge.detection_available", lambda: available)
+        with patch("src.keyboard_bridge.create_key_synthesizer") as mock_factory:
+            mock_synth = MagicMock()
+            mock_synth.is_available.return_value = True
+            mock_synth.backend_name.return_value = "MockSynth"
+            mock_factory.return_value = mock_synth
+            return KeyboardBridge()
+
+    def test_true_when_backend_available(self, monkeypatch):
+        b = self._make_bridge(monkeypatch, True)
+        assert b.passwordDetectionAvailable is True
+
+    def test_false_when_backend_unavailable(self, monkeypatch):
+        b = self._make_bridge(monkeypatch, False)
+        assert b.passwordDetectionAvailable is False

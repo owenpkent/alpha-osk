@@ -34,7 +34,11 @@ from .__version__ import __version__ as APP_VERSION
 from .analytics import TypingAnalytics
 from .platform import CURRENT_PLATFORM, create_key_synthesizer
 from .platform.base import KeySynthesizerBase
-from .platform.password_detect import focused_element_token, is_password_field
+from .platform.password_detect import (
+    detection_available,
+    focused_element_token,
+    is_password_field,
+)
 from .prediction import HybridPredictor, SwipeRecognizer
 from .snippets import SnippetStore
 from .telemetry import TelemetryClient
@@ -712,6 +716,15 @@ class KeyboardBridge(QObject):
         self._privacy_mode = False
         self._privacy_mode_manual = False  # User toggled manually
         self._password_detect_enabled = True
+        # Whether the platform's auto-detection backend actually works this
+        # session, vs. silently falling back to the null detector (no AT-SPI
+        # on Linux, no Accessibility TCC grant on macOS, etc). Computed once
+        # here -- the module picks its detector on first use and keeps it for
+        # the process lifetime -- and surfaced read-only to QML so the UI can
+        # tell the user the manual Learning toggle is their only protection.
+        # This call is also what lazily creates the cached detector and logs
+        # the one-time startup warning when it falls back to null.
+        self._password_detection_available = detection_available()
         # Last synchronous is_password_field() call, to rate-limit the
         # sync check fired on every keystroke (COM calls are cheap but
         # not free; ~50 ms between calls stops thrashing).
@@ -891,7 +904,7 @@ class KeyboardBridge(QObject):
         ):
             self._send_key("BackSpace")
             self._context_buffer = self._context_buffer[:-1]
-            _logger.info("Removed auto-space before '%s'", char)
+            _logger.info("Removed auto-space before punctuation")
 
         # Any keystroke clears the flag — it tracks one specific window:
         # the moment between us inserting an auto-space and the user's
@@ -956,7 +969,7 @@ class KeyboardBridge(QObject):
                     if new_words:
                         for nw in new_words:
                             self._add_debug_log(f'NEW WORD learned: "{nw}"')
-                            _logger.info("New word learned: %s", nw)
+                            _logger.info("New word learned (len=%d)", len(nw))
                 self._sentence_buffer = ""
                 self._current_word = ""
                 self._word_typed_under_caps_lock = False
@@ -1144,9 +1157,9 @@ class KeyboardBridge(QObject):
                     )
                 self._add_debug_log(f"Autocorrected: {self._current_word!r} → {cased!r}")
                 _logger.info(
-                    "Autocorrected: %r → %r",
-                    self._current_word,
-                    cased,
+                    "Autocorrected (typed_len=%d, corrected_len=%d)",
+                    len(self._current_word),
+                    len(cased),
                 )
                 self._current_word = cased
                 autocorrected = True
@@ -1180,7 +1193,7 @@ class KeyboardBridge(QObject):
                     self._current_word, allow_uppercase=allow_uppercase
                 ):
                     self._add_debug_log(f'Learned capitalization: "{self._current_word}"')
-                    _logger.info("Learned capitalization: %s", self._current_word)
+                    _logger.info("Learned capitalization (len=%d)", len(self._current_word))
                 self._sentence_buffer += self._current_word + " "
                 self._context_buffer += self._current_word + " "
                 # Learn bigrams/trigrams from the running sentence
@@ -1188,7 +1201,7 @@ class KeyboardBridge(QObject):
                 if new_words:
                     for nw in new_words:
                         self._add_debug_log(f'NEW WORD learned: "{nw}"')
-                        _logger.info("New word learned: %s", nw)
+                        _logger.info("New word learned (len=%d)", len(nw))
                 # Keep context buffer bounded
                 if len(self._context_buffer) > 200:
                     self._context_buffer = self._context_buffer[-200:]
@@ -1233,7 +1246,7 @@ class KeyboardBridge(QObject):
                 if new_words:
                     for nw in new_words:
                         self._add_debug_log(f'NEW WORD learned: "{nw}"')
-                        _logger.info("New word learned: %s", nw)
+                        _logger.info("New word learned (len=%d)", len(nw))
             self._sentence_buffer = ""
             # Preserve context across lines (don't wipe)
             if self._current_word:
@@ -1497,18 +1510,24 @@ class KeyboardBridge(QObject):
     @Slot(str)
     def pressPrediction(self, word: str) -> None:
         """Called when user taps a prediction suggestion."""
+        # Close the same 200 ms race _press_char guards against: if focus
+        # just landed on a password field, flip privacy mode before this
+        # selection persists anything to analytics or the model.
+        self._check_password_field_sync()
         _logger.info(
-            "Prediction selected: '%s' | _current_word='%s' (len=%d) | select=%d",
-            word,
-            self._current_word,
-            len(self._current_word),
+            "Prediction selected (word_len=%d, prefix_len=%d)",
+            len(word),
             len(self._current_word),
         )
 
-        # Track prediction usage — keystrokes saved = characters user didn't type + space
-        rank = self._predictions.index(word) + 1 if word in self._predictions else 1
-        saved = len(word) - len(self._current_word) + 1  # +1 for auto-space
-        self._analytics.record_prediction_selected(word, rank, keystrokes_saved=max(0, saved))
+        # Track prediction usage: keystrokes saved = characters user didn't type + space.
+        # Suppressed in privacy mode (analytics is persisted usage data); the
+        # word is still inserted below regardless: the user tapped the pill,
+        # so the text must reach the target app either way.
+        if not self._privacy_mode:
+            rank = self._predictions.index(word) + 1 if word in self._predictions else 1
+            saved = len(word) - len(self._current_word) + 1  # +1 for auto-space
+            self._analytics.record_prediction_selected(word, rank, keystrokes_saved=max(0, saved))
 
         # Complete the word by typing only the suffix (characters the user
         # hasn't typed yet) plus a space.  This avoids Backspace and
@@ -1551,7 +1570,9 @@ class KeyboardBridge(QObject):
 
         # Learn from selection — use context_buffer only, not the typed
         # fragment (_current_word) which is being *replaced* by the prediction.
-        self._predictor.learn_from_selection(self._context_buffer, word)
+        # Suppressed in privacy mode: this persists into the model.
+        if not self._privacy_mode:
+            self._predictor.learn_from_selection(self._context_buffer, word)
 
         # Capture casing intent.  If the user typed *any* uppercase
         # letter in the prefix (right-click → shifted variant, or manual
@@ -1569,15 +1590,26 @@ class KeyboardBridge(QObject):
         # non-lowercase prefix.  All-caps is allowed only if the user
         # didn't have Caps Lock on for any char of the prefix (i.e.
         # they deliberately right-clicked / shifted each letter) —
-        # see `_word_typed_under_caps_lock`.
-        if self._current_word and self._current_word != self._current_word.lower():
+        # see `_word_typed_under_caps_lock`.  Suppressed in privacy mode,
+        # same as the other persistence calls above.
+        if (
+            not self._privacy_mode
+            and self._current_word
+            and self._current_word != self._current_word.lower()
+        ):
             allow_uppercase = not self._word_typed_under_caps_lock
             self._predictor.learn_capitalization(word, allow_uppercase=allow_uppercase)
 
-        # Update context - add the completed word
-        self._context_buffer += word + " "
-        if len(self._context_buffer) > 100:
-            self._context_buffer = self._context_buffer[-100:]
+        # Update context - add the completed word.  Suppressed in privacy
+        # mode: the buffer feeds learn_from_selection() and predict() on
+        # the next call, so a word accepted in a password field must not
+        # linger in it either.  _current_word / caps-lock tracking still
+        # clear unconditionally: those describe the in-progress typed
+        # fragment that was just replaced, not learned content.
+        if not self._privacy_mode:
+            self._context_buffer += word + " "
+            if len(self._context_buffer) > 100:
+                self._context_buffer = self._context_buffer[-100:]
         self._current_word = ""
         self._word_typed_under_caps_lock = False
 
@@ -1589,13 +1621,13 @@ class KeyboardBridge(QObject):
         # Context should end with space to signal "predict next word, not complete current"
         context_for_prediction = self._context_buffer
         _logger.info(
-            "Context for next-word prediction: '%s' (ends_with_space=%s)",
-            context_for_prediction,
+            "Context for next-word prediction (len=%d, ends_with_space=%s)",
+            len(context_for_prediction),
             context_for_prediction.endswith(" "),
         )
 
         next_preds = self._predictor.predict(context_for_prediction, n=self._prediction_count)
-        _logger.info("Next-word predictions: %s", next_preds)
+        _logger.info("Next-word predictions (count=%d)", len(next_preds))
 
         # Update with next-word predictions
         display = self._display_cased(next_preds)
@@ -1761,6 +1793,9 @@ class KeyboardBridge(QObject):
     def _get_synth_available(self) -> bool:
         return self._synth.is_available()
 
+    def _get_password_detection_available(self) -> bool:
+        return self._password_detection_available
+
     shiftActive = Property(bool, _get_shift_active, notify=shiftActiveChanged)
     capsLockActive = Property(bool, _get_caps_lock_active, notify=capsLockActiveChanged)
     ctrlActive = Property(bool, _get_ctrl_active, notify=ctrlActiveChanged)
@@ -1772,6 +1807,7 @@ class KeyboardBridge(QObject):
     winLocked = Property(bool, _get_win_locked, notify=winLockedChanged)
     currentLayer = Property(str, _get_current_layer, notify=currentLayerChanged)
     synthAvailable = Property(bool, _get_synth_available, constant=True)
+    passwordDetectionAvailable = Property(bool, _get_password_detection_available, constant=True)
     # Exposed so the Settings panel can show the running version next to
     # the auto-update controls — easiest sanity-check that an upgrade
     # actually landed.  Sourced from src/__version__.py at import time.
@@ -2972,20 +3008,31 @@ class KeyboardBridge(QObject):
     @Slot(str, str)
     def editPrediction(self, original: str, edited: str) -> None:
         """User edited a prediction (e.g. to fix capitalization). Insert it and learn."""
+        # Close the same 200 ms race _press_char guards against, mirroring
+        # pressPrediction.
+        self._check_password_field_sync()
         edited = self._sanitize_edit(edited)
         if not edited:
             return
 
-        # Learn the preferred capitalization
-        self._predictor.set_capitalization(edited, edited)
+        # Learn the preferred capitalization. Suppressed in privacy mode:
+        # this persists into the model, same as pressPrediction's guards.
+        if not self._privacy_mode:
+            self._predictor.set_capitalization(edited, edited)
 
-        # Insert the edited word (same as pressPrediction but with edited text)
+        # Insert the edited word (same as pressPrediction but with edited
+        # text). Not gated: the user explicitly typed and saved this
+        # correction, so it must still reach the target app.
         self._synth.replace_text(len(self._current_word), edited + " ")
 
-        # Update context
-        self._context_buffer += edited + " "
-        if len(self._context_buffer) > 100:
-            self._context_buffer = self._context_buffer[-100:]
+        # Update context. Suppressed in privacy mode: feeds predict() /
+        # learn_from_selection() on the next call, same reasoning as
+        # pressPrediction. _current_word / caps-lock tracking still clear
+        # unconditionally.
+        if not self._privacy_mode:
+            self._context_buffer += edited + " "
+            if len(self._context_buffer) > 100:
+                self._context_buffer = self._context_buffer[-100:]
         self._current_word = ""
         self._word_typed_under_caps_lock = False
 
@@ -2998,7 +3045,11 @@ class KeyboardBridge(QObject):
         self.predictionsChanged.emit(display)
 
         self._add_debug_log(f"Edited prediction: {original} → {edited}")
-        _logger.info("Prediction edited: %s → %s", original, edited)
+        _logger.info(
+            "Prediction edited (original_len=%d, edited_len=%d)",
+            len(original),
+            len(edited),
+        )
 
     # --- Swipe / Glide Typing ---
 
@@ -3118,7 +3169,7 @@ class KeyboardBridge(QObject):
         self.predictionsChanged.emit(display)
         self._analytics.record_word_completed(top)
         self._add_debug_log(f"Swipe → {top} (alts: {display[1:4]})")
-        _logger.info("Swipe decoded: %s (alts: %s)", top, display[1:4])
+        _logger.info("Swipe decoded (word_len=%d, alt_count=%d)", len(top), len(display[1:4]))
 
     # --- Audio Feedback ---
 

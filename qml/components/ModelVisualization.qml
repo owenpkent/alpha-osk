@@ -723,6 +723,9 @@ Item {
                                         Text {
                                             Layout.preferredWidth: 80
                                             text: modelData.word
+                                            // Words here can include an imported vocabulary
+                                            // pack's unsanitised dictionary entries.
+                                            textFormat: Text.PlainText
                                             color: "#ddd"
                                             font.pixelSize: 12
                                             elide: Text.ElideRight
@@ -812,6 +815,7 @@ Item {
                                                 spacing: 4
                                                 Text {
                                                     text: modelData.word + " (+" + modelData.count + ")"
+                                                    textFormat: Text.PlainText
                                                     color: "#9e9"
                                                     font.pixelSize: 11
                                                 }
@@ -898,6 +902,7 @@ Item {
                                                 spacing: 4
                                                 Text {
                                                     text: modelData
+                                                    textFormat: Text.PlainText
                                                     color: "#f88"
                                                     font.pixelSize: 11
                                                 }
@@ -953,6 +958,7 @@ Item {
                                                 spacing: 4
                                                 Text {
                                                     text: modelData.word + " (" + modelData.count + ")"
+                                                    textFormat: Text.PlainText
                                                     color: "#dd9"
                                                     font.pixelSize: 11
                                                 }
@@ -1013,6 +1019,7 @@ Item {
                                         Text {
                                             Layout.preferredWidth: 80
                                             text: modelData.from
+                                            textFormat: Text.PlainText
                                             color: "#4dabf7"
                                             font.pixelSize: 12
                                             horizontalAlignment: Text.AlignRight
@@ -1027,6 +1034,7 @@ Item {
                                         Text {
                                             Layout.preferredWidth: 80
                                             text: modelData.to
+                                            textFormat: Text.PlainText
                                             color: "#69db7c"
                                             font.pixelSize: 12
                                         }
@@ -1119,6 +1127,7 @@ Item {
                                     text: vizPanel.wordContext
                                         ? vizPanel.wordContext.word
                                         : ""
+                                    textFormat: Text.PlainText
                                     color: "#fff"
                                     font.pixelSize: 18
                                     font.weight: Font.DemiBold
@@ -1196,6 +1205,7 @@ Item {
                                                 anchors.rightMargin: 6
                                                 Text {
                                                     text: modelData.word
+                                                    textFormat: Text.PlainText
                                                     color: "#dde"
                                                     font.pixelSize: 12
                                                     Layout.fillWidth: true
@@ -1251,6 +1261,7 @@ Item {
                                                 anchors.rightMargin: 6
                                                 Text {
                                                     text: modelData.word
+                                                    textFormat: Text.PlainText
                                                     color: "#dde"
                                                     font.pixelSize: 12
                                                     Layout.fillWidth: true
@@ -1301,6 +1312,7 @@ Item {
                                             spacing: 4
                                             Text {
                                                 text: modelData.phrase
+                                                textFormat: Text.PlainText
                                                 color: "#dde"
                                                 font.pixelSize: 12
                                                 Layout.fillWidth: true

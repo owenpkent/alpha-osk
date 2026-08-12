@@ -96,6 +96,23 @@ def is_password_field() -> bool:
         return False
 
 
+def detection_available() -> bool:
+    """Return True if auto-detection has a working platform backend.
+
+    False exactly when the active detector is the null fallback: UIA
+    failed to initialise on Windows (rare -- the Win32 fallback still
+    counts as available), AT-SPI / python3-gi is missing on Linux, or
+    the Accessibility TCC grant hasn't been made on macOS. This does
+    not mean detection is off -- it means it can never turn on, so the
+    manual Learning toggle is the user's only protection. Lazily
+    creates the detector on first call, same as ``is_password_field``.
+    """
+    global _detector
+    if _detector is None:
+        _detector = _create_detector()
+    return not isinstance(_detector, _NullDetector)
+
+
 def focused_element_token() -> Optional[str]:
     """Return a stable identity string for the focused UI element, or None.
 
@@ -159,8 +176,12 @@ def _create_detector() -> _Detector:
         if det_linux.available:
             _logger.info("Password detection: Linux AT-SPI")
             return det_linux
-        _logger.info(
-            "Password detection: AT-SPI unavailable — "
+        # Auto-detection is genuinely off here (not just quiet): the null
+        # detector always returns False, so the manual Learning toggle is
+        # the user's only protection until this is fixed. Warn once at
+        # startup rather than logging it as routine info.
+        _logger.warning(
+            "Password detection: AT-SPI unavailable, "
             "install python3-gi + gir1.2-atspi-2.0, or use the "
             "manual privacy toggle."
         )
@@ -170,13 +191,15 @@ def _create_detector() -> _Detector:
         if det_mac.available:
             _logger.info("Password detection: macOS AXUIElement")
             return det_mac
-        _logger.info(
-            "Password detection: macOS AX unavailable — "
+        # Same reasoning as the Linux branch above: this is a fail-open
+        # condition worth a warning, not routine info.
+        _logger.warning(
+            "Password detection: macOS AX unavailable, "
             "grant Accessibility in System Settings and restart, or "
             "use the manual privacy toggle in the title bar."
         )
         return _NullDetector()
-    _logger.info("Password detection: not available on this platform")
+    _logger.warning("Password detection: not available on this platform")
     return _NullDetector()
 
 

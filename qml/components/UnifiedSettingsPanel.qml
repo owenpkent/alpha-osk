@@ -66,6 +66,12 @@ Item {
     // Running app version, surfaced in the Updates section so a user
     // (or you, debugging) can confirm what's actually installed.
     property string appVersion: ""
+    // False only when the platform's password-field auto-detection has
+    // no working backend this session (see KeyboardBridge.passwordDetectionAvailable).
+    // Surfaced in the Privacy section so the user knows the manual
+    // Learning toggle is their only protection. Defaults true so nothing
+    // warns before the bridge connects.
+    property bool passwordDetectionAvailable: true
 
     // Drill-down navigation.  "home" shows the four category cards;
     // each other value shows that category's sub-view with a back
@@ -1542,11 +1548,16 @@ Item {
                                             }
                                             Text {
                                                 text: "Exported by Alpha-OSK v" + (dataBackupCol.pendingImportSummary ? dataBackupCol.pendingImportSummary.app_version : "")
+                                                // app_version / exported_at come straight from the
+                                                // imported archive's manifest.json -- a hand-crafted
+                                                // backup file is untrusted input, same as pack.json.
+                                                textFormat: Text.PlainText
                                                 color: "#ccc"
                                                 font.pixelSize: 10
                                             }
                                             Text {
                                                 text: "Date: " + (dataBackupCol.pendingImportSummary ? dataBackupCol.pendingImportSummary.exported_at : "")
+                                                textFormat: Text.PlainText
                                                 color: "#ccc"
                                                 font.pixelSize: 10
                                                 Layout.fillWidth: true
@@ -1663,6 +1674,20 @@ Item {
                                 Text {
                                     text: "Alpha-OSK runs entirely on your computer. Nothing leaves your machine unless you opt in below."
                                     color: "#aaa"
+                                    font.pixelSize: 10
+                                    wrapMode: Text.WordWrap
+                                    Layout.fillWidth: true
+                                }
+
+                                // Low-key heads-up, not a dialog: password-field
+                                // auto-detect fails open (see password_detect.py),
+                                // so when it has no working backend this session,
+                                // the title-bar Learning switch is the only thing
+                                // stopping a password from reaching the model.
+                                Text {
+                                    visible: !unifiedSettings.passwordDetectionAvailable
+                                    text: "Password-field auto-detection is unavailable this session (see the app log). Use the Learning switch in the title bar before typing a password."
+                                    color: "#e0a85a"
                                     font.pixelSize: 10
                                     wrapMode: Text.WordWrap
                                     Layout.fillWidth: true
