@@ -3408,9 +3408,17 @@ Window {
                     root.showFunctionRow = value
                     appSettings.savedShowFunctionRow = value
                 } else if (setting === "navigation") {
-                    root.showNavigation = value
+                    // Compact forbids the side panels, and it enforces that
+                    // only at the moment it is switched on.  The Settings
+                    // toggle is disabled while compact is active, so the UI
+                    // cannot reach here — this keeps the invariant true for
+                    // any *other* caller of this dispatch (a preset, a
+                    // shortcut, a restored panel), which would otherwise
+                    // leave compact rendering the very panels it exists to
+                    // remove until the user toggled compact again.
+                    if (!root.compactView) root.showNavigation = value
                 } else if (setting === "numpad") {
-                    root.showNumpad = value
+                    if (!root.compactView) root.showNumpad = value
                 } else if (setting === "theme") {
                     root.currentTheme = value
                     appSettings.savedTheme = value

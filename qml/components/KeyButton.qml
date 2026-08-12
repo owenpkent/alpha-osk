@@ -353,6 +353,9 @@ Item {
         // out past the curve.
         Rectangle {
             id: lockBar
+            // Lets the headless tests reach the bar; a Repeater's delegates
+            // are visual children, so this is the only handle on it.
+            objectName: "keyLockBar"
             visible: keyRoot.isLocked
             height: 3
             radius: height / 2
