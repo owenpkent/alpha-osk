@@ -16,3 +16,29 @@ database_id   = "PASTE-FROM-WRANGLER-D1-CREATE"
 # Daily GC at 04:00 UTC. Prunes users with last_seen older than 365 days.
 [triggers]
 crons = ["0 4 * * *"]
+
+# Cloudflare's native Workers rate-limiting binding. Check your account's
+# plan includes it: https://developers.cloudflare.com/workers/runtime-apis/bindings/rate-limit/
+#
+# src/worker.ts calls this keyed by "submit:<anon_id>" / "forget:<anon_id>",
+# never by IP, header, geo or User-Agent -- the worker must never read or
+# store those (see the privacy guarantees in docs/architecture/TELEMETRY.md).
+# namespace_id is an arbitrary account-unique number you choose yourself, not
+# something fetched from a `wrangler` command the way database_id above is;
+# it only needs to change if you add a second rate limiter later. limit /
+# period below cap each anon_id (or forget-id) to 5 calls per 60s at the
+# edge -- a cheap first line of defense in front of the authoritative
+# per-anon_id cooldown enforced in D1 (SUBMIT_COOLDOWN_SECONDS in worker.ts).
+#
+# What this binding does NOT do: stop an attacker who cycles through many
+# distinct fake anon_ids to flood /v1/submit. Closing that gap needs an
+# IP-based control, and this worker deliberately never touches IPs in code
+# to preserve the privacy guarantee above. If you need it, add it out of
+# band instead: a Cloudflare dashboard rule under Security -> WAF -> Rate
+# limiting rules, scoped to this worker's route, throttling on the
+# platform's own client IP -- that is account configuration, not something
+# this repo can pin in code, so the maintainer has to set it up by hand.
+[[ratelimits]]
+name         = "RATE_LIMITER"
+namespace_id = "1001"
+simple       = { limit = 5, period = 60 }
