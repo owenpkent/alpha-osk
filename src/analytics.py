@@ -106,47 +106,106 @@ class TypingAnalytics(QObject):
         self._alltime_key_freq = Counter()
         self._load_alltime()
 
+    # Cap on the raw analytics.json file itself, checked via stat() before
+    # it is ever read, mirroring NgramPredictor.load and SnippetStore.load
+    # (both of which also stat() before opening rather than reading an
+    # arbitrarily large file into memory first). A legitimate file is a
+    # handful of scalar counters plus at most _WORD_FREQ_CAP +
+    # _KEY_FREQ_CAP frequency entries, which comfortably fits in the low
+    # hundreds of KB even pretty-printed; anything past this is assumed
+    # corrupt or hostile. The Data Backup archive itself permits an
+    # analytics.json up to 75 MB (data_export._MAX_FILE_BYTES, sized for
+    # every kind of file the archive carries); this is the narrower,
+    # content-aware limit for this file specifically.
+    _MAX_STATS_FILE_BYTES = 5 * 1024 * 1024
+
     def _load_alltime(self) -> None:
-        """Load all-time stats from disk."""
+        """Load all-time stats from disk.
+
+        Parses into local variables first and only assigns to ``self``
+        once everything has succeeded, so a partial failure partway
+        through (a bad type in the middle of a dict, a cap trip) can
+        never leave the in-memory state half-updated. Any failure here,
+        including the size cap, falls back to whatever the caller already
+        reset the lifetime counters to (a fresh instance: all zero; a
+        manual ``reload_from_disk``: also all zero, since that resets
+        before calling this) rather than raising and blocking startup.
+        """
         if not self._stats_path.exists():
             return
         try:
+            if self._stats_path.stat().st_size > self._MAX_STATS_FILE_BYTES:
+                _logger.warning(
+                    "analytics.json exceeds %d bytes, ignoring and starting fresh",
+                    self._MAX_STATS_FILE_BYTES,
+                )
+                return
             data = json.loads(self._stats_path.read_text())
-            self._alltime_keystrokes = data.get("keystrokes", 0)
-            self._alltime_words = data.get("words", 0)
-            self._alltime_predictions = data.get("predictions", 0)
-            self._alltime_keystrokes_saved = data.get("keystrokes_saved", 0)
-            self._alltime_sessions = data.get("sessions", 0)
-            self._alltime_minutes = data.get("minutes", 0.0)
-            self._alltime_backspaces = data.get("backspaces", 0)
-            self._alltime_prediction_offers = data.get("prediction_offers", 0)
-            self._alltime_prediction_rank_sum = data.get("prediction_rank_sum", 0)
-            self._alltime_prediction_rank_count = data.get("prediction_rank_count", 0)
-            self._alltime_top_pick_count = data.get("top_pick_count", 0)
+            keystrokes = data.get("keystrokes", 0)
+            words = data.get("words", 0)
+            predictions = data.get("predictions", 0)
+            keystrokes_saved = data.get("keystrokes_saved", 0)
+            sessions = data.get("sessions", 0)
+            minutes = data.get("minutes", 0.0)
+            backspaces = data.get("backspaces", 0)
+            prediction_offers = data.get("prediction_offers", 0)
+            prediction_rank_sum = data.get("prediction_rank_sum", 0)
+            prediction_rank_count = data.get("prediction_rank_count", 0)
+            top_pick_count = data.get("top_pick_count", 0)
+
             wf = data.get("word_freq", {})
             kf = data.get("key_freq", {})
+            word_freq: Counter[str] = Counter()
+            key_freq: Counter[str] = Counter()
             if isinstance(wf, dict):
-                self._alltime_word_freq = Counter(
-                    {k: int(v) for k, v in wf.items() if isinstance(v, (int, float))}
-                )
+                counted = Counter({k: int(v) for k, v in wf.items() if isinstance(v, (int, float))})
+                # Entries beyond the cap are the long tail by definition
+                # (most_common keeps the highest counts), so an old or
+                # hostile file with more than _WORD_FREQ_CAP entries is
+                # truncated to its heaviest hitters rather than refused
+                # outright: unlike the size cap above, losing the tail of
+                # a word-frequency table isn't a reason to also discard
+                # every scalar counter (keystrokes, sessions, ...) in the
+                # same file.
+                word_freq = Counter(dict(counted.most_common(self._WORD_FREQ_CAP)))
             if isinstance(kf, dict):
-                self._alltime_key_freq = Counter(
-                    {k: int(v) for k, v in kf.items() if isinstance(v, (int, float))}
-                )
-            _logger.info(
-                "Loaded all-time analytics: %d words, %d keystrokes saved",
-                self._alltime_words,
-                self._alltime_keystrokes_saved,
-            )
-        except (json.JSONDecodeError, OSError) as e:
+                counted = Counter({k: int(v) for k, v in kf.items() if isinstance(v, (int, float))})
+                key_freq = Counter(dict(counted.most_common(self._KEY_FREQ_CAP)))
+        except (json.JSONDecodeError, OSError, ValueError, TypeError, OverflowError) as e:
             _logger.warning("Failed to load analytics: %s", e)
+            return
 
-    # Cap on persisted unique-word entries.  Top-N display only ever needs
-    # the heavy hitters; without a cap, a few years of typing could push
-    # word_freq into the megabytes.  Pruning keeps the most-typed entries
-    # plus anything from the current session (so an in-progress word
-    # frequency is never silently dropped).
+        self._alltime_keystrokes = keystrokes
+        self._alltime_words = words
+        self._alltime_predictions = predictions
+        self._alltime_keystrokes_saved = keystrokes_saved
+        self._alltime_sessions = sessions
+        self._alltime_minutes = minutes
+        self._alltime_backspaces = backspaces
+        self._alltime_prediction_offers = prediction_offers
+        self._alltime_prediction_rank_sum = prediction_rank_sum
+        self._alltime_prediction_rank_count = prediction_rank_count
+        self._alltime_top_pick_count = top_pick_count
+        self._alltime_word_freq = word_freq
+        self._alltime_key_freq = key_freq
+        _logger.info(
+            "Loaded all-time analytics: %d words, %d keystrokes saved",
+            self._alltime_words,
+            self._alltime_keystrokes_saved,
+        )
+
+    # Caps on persisted unique word/key entries.  Top-N display only ever
+    # needs the heavy hitters; without a cap, a few years of typing could
+    # push word_freq into the megabytes.  Pruning keeps the most-typed
+    # entries plus anything from the current session (so an in-progress
+    # word frequency is never silently dropped).  key_freq has a far
+    # smaller natural vocabulary than word_freq (every letter/digit/
+    # punctuation key plus a handful of named specials), but it went
+    # uncapped even after word_freq was bounded, so a hostile or
+    # corrupted file could still grow it without limit; the same cap
+    # value is already generous for a real keyboard's key set.
     _WORD_FREQ_CAP = 5000
+    _KEY_FREQ_CAP = 5000
 
     def save(self) -> None:
         """Save all-time stats to disk (merges current session)."""
@@ -156,6 +215,8 @@ class TypingAnalytics(QObject):
             # which is fine at this scale.
             merged_words = Counter(dict(merged_words.most_common(self._WORD_FREQ_CAP)))
         merged_keys = self._alltime_key_freq + self._key_freq
+        if len(merged_keys) > self._KEY_FREQ_CAP:
+            merged_keys = Counter(dict(merged_keys.most_common(self._KEY_FREQ_CAP)))
 
         data = {
             "keystrokes": self._alltime_keystrokes + self._keystroke_count,

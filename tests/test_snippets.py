@@ -139,6 +139,26 @@ def test_value_preserves_newlines(store):
     assert store.get_value(0) == "123 Main St\nApt 4\nAnytown"
 
 
+def test_value_strips_carriage_return(store):
+    """A raw \\r has no legitimate place in a typed value: on Linux
+    xdotool turns an embedded newline into a real Return keypress, and a
+    stray \\r reaching a Windows console behaves the same way. \\n stays
+    permitted (see test_value_preserves_newlines above); only \\r is
+    stripped."""
+    store.load()
+    store.set(0, "Address", "123 Main St\r\nApt 4\r\nAnytown")
+    value = store.get_value(0)
+    assert "\r" not in value
+    assert value == "123 Main St\nApt 4\nAnytown"
+
+
+def test_value_strips_other_c0_control_characters(store):
+    """Every C0 control character except tab and newline is stripped."""
+    store.load()
+    store.set(0, "Weird", "a\x07b\x1bc\td\ne")
+    assert store.get_value(0) == "abc\td\ne"
+
+
 def test_corrupt_file_falls_back_to_defaults(tmp_path):
     path = tmp_path / "snippets.json"
     path.write_text("this is not json {{{", encoding="utf-8")

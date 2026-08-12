@@ -76,12 +76,20 @@ def _clean_label(label: str) -> str:
 
 
 def _clean_value(value: str) -> str:
-    """Trim a value to the length cap, preserving internal characters.
+    """Trim a value to the length cap, stripping unsafe control characters.
 
-    Newlines are kept — a snippet may legitimately be a multi-line
-    block (e.g. a mailing address).  Only the overall length is bounded.
+    Newlines are kept: a snippet may legitimately be a multi-line block
+    (e.g. a mailing address), and typing one is meant to send a real
+    keypress between lines. Every other C0 control character is
+    stripped, in particular carriage return. On Linux ``xdotool type``
+    turns an embedded newline into a real Return keypress, and on
+    Windows a raw carriage return reaching a console behaves the same
+    way, so nothing that can act as an unintended keypress may survive
+    into a value that gets typed verbatim into whatever app currently
+    has focus.
     """
-    return str(value)[:MAX_VALUE_LEN]
+    cleaned = "".join(ch for ch in str(value) if ch in ("\n", "\t") or ord(ch) >= 0x20)
+    return cleaned[:MAX_VALUE_LEN]
 
 
 class SnippetStore:

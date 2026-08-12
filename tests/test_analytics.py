@@ -140,3 +140,82 @@ class TestPersistenceRoundTrip:
         a = TypingAnalytics()
         assert a._alltime_top_pick_count == 0
         assert a.get_session_stats()["alltimeTopPickRate"] == 0.0
+
+
+class TestLoadCaps:
+    """analytics.json is bounded by size before it is ever read (mirroring
+    NgramPredictor.load / SnippetStore.load), and word_freq / key_freq are
+    both bounded by entry count on load and on save."""
+
+    def test_oversized_file_falls_back_to_empty_lifetime_counters(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        stats_file = tmp_path / "analytics.json"
+        stats_file.write_text(json.dumps({"keystrokes": 12345, "words": 999, "sessions": 7}))
+        assert stats_file.stat().st_size > 4
+        monkeypatch.setattr(TypingAnalytics, "_get_stats_path", staticmethod(lambda: stats_file))
+        monkeypatch.setattr(TypingAnalytics, "_MAX_STATS_FILE_BYTES", 4)
+
+        a = TypingAnalytics()
+
+        assert a._alltime_keystrokes == 0
+        assert a._alltime_words == 0
+        assert a.get_session_stats()["alltimeKeystrokes"] == 0
+
+    def test_partial_failure_never_leaves_a_half_loaded_state(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A NaN count (valid JSON, invalid data) fails converting
+        word_freq to int partway through _load_alltime. The scalar
+        counters parsed earlier in the same call must not stick around:
+        either the whole load succeeds, or none of it does."""
+        stats_file = tmp_path / "analytics.json"
+        stats_file.write_text(
+            json.dumps({"keystrokes": 999, "words": 999, "word_freq": {"x": float("nan")}})
+        )
+        monkeypatch.setattr(TypingAnalytics, "_get_stats_path", staticmethod(lambda: stats_file))
+
+        a = TypingAnalytics()
+
+        assert a._alltime_keystrokes == 0
+        assert a._alltime_words == 0
+
+    def test_word_freq_capped_on_load(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        stats_file = tmp_path / "analytics.json"
+        stats_file.write_text(json.dumps({"word_freq": {f"word{i}": i for i in range(10)}}))
+        monkeypatch.setattr(TypingAnalytics, "_get_stats_path", staticmethod(lambda: stats_file))
+        monkeypatch.setattr(TypingAnalytics, "_WORD_FREQ_CAP", 3)
+
+        a = TypingAnalytics()
+
+        assert len(a._alltime_word_freq) == 3
+        # The heaviest hitters survive (most_common), not an arbitrary slice.
+        assert a._alltime_word_freq.most_common(1)[0][0] == "word9"
+
+    def test_key_freq_capped_on_load(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        stats_file = tmp_path / "analytics.json"
+        stats_file.write_text(
+            json.dumps({"key_freq": {chr(97 + i): i for i in range(10)}})  # a..j
+        )
+        monkeypatch.setattr(TypingAnalytics, "_get_stats_path", staticmethod(lambda: stats_file))
+        monkeypatch.setattr(TypingAnalytics, "_KEY_FREQ_CAP", 3)
+
+        a = TypingAnalytics()
+
+        assert len(a._alltime_key_freq) == 3
+
+    def test_key_freq_capped_on_save(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        stats_file = tmp_path / "analytics.json"
+        monkeypatch.setattr(TypingAnalytics, "_get_stats_path", staticmethod(lambda: stats_file))
+        monkeypatch.setattr(TypingAnalytics, "_KEY_FREQ_CAP", 3)
+        a = TypingAnalytics()
+        for i in range(10):
+            for _ in range(i + 1):
+                a.record_keystroke(chr(97 + i))
+
+        a.save()
+
+        on_disk = json.loads(stats_file.read_text())
+        assert len(on_disk["key_freq"]) == 3

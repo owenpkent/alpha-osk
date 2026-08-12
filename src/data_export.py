@@ -58,7 +58,7 @@ import zipfile
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import List, Optional, Set
+from typing import IO, List, Optional, Set
 
 _logger = logging.getLogger("DataExport")
 
@@ -93,6 +93,34 @@ _PACK_ID_RE = re.compile(r"^[a-z0-9_-]{1,64}$")
 
 _REQUIRED_PACK_FILE = "dictionary.txt"
 _PACK_FILES = frozenset({"dictionary.txt", "bigrams.txt", "trigrams.txt", "pack.json"})
+
+# Windows reserves these device names for every path component, regardless
+# of case and regardless of any extension attached ("con.txt" is exactly as
+# unrepresentable as "con"). _PACK_ID_RE happily matches "con": it is a
+# valid lowercase [a-z0-9_-] string. Without this check, a pack id of "con"
+# extracted on Windows would hit dest_dir.mkdir() raising an uncaught
+# OSError partway through import, after model files/analytics/snippets have
+# already been replaced, leaving a half-applied import.
+_WINDOWS_RESERVED_NAMES = frozenset(
+    {"con", "prn", "aux", "nul"}
+    | {f"com{i}" for i in range(1, 10)}
+    | {f"lpt{i}" for i in range(1, 10)}
+)
+
+# Chunk size for the bounded copy used during extraction (see
+# _bounded_copy). Arbitrary but reasonable: big enough to be efficient,
+# small enough that overshoot past a cap is bounded to one chunk.
+_COPY_CHUNK_BYTES = 1024 * 1024
+
+
+def _is_reserved_device_name(name: str) -> bool:
+    """True if *name* collides with a Windows reserved device name.
+
+    Checked on the base name before any extension, case-insensitively,
+    matching how Windows itself resolves these names.
+    """
+    base = name.split(".", 1)[0].lower()
+    return base in _WINDOWS_RESERVED_NAMES
 
 
 class DataExportError(Exception):
@@ -156,7 +184,11 @@ def export_user_data(config_dir: Path, dest: Path) -> ExportSummary:
         for pack_entry in sorted(packs_dir.iterdir()):
             if not pack_entry.is_dir():
                 continue
-            if not _PACK_ID_RE.match(pack_entry.name):
+            # A reserved-name pack can only exist on a platform that never
+            # enforced the restriction (e.g. it was created on Linux); skip
+            # it here too so export never produces an archive that would
+            # abort partway through re-import on Windows.
+            if not _PACK_ID_RE.match(pack_entry.name) or _is_reserved_device_name(pack_entry.name):
                 _logger.warning(
                     "Skipping pack with non-sanitised id during export: %s",
                     pack_entry.name,
@@ -241,6 +273,55 @@ def _validate_archive_entry(entry: zipfile.ZipInfo) -> None:
         )
 
 
+def _bounded_copy(src_f: IO[bytes], dst_f: IO[bytes], name: str, total_before: int) -> int:
+    """Copy *src_f* to *dst_f*, capping on bytes actually read, not on the
+    zip's declared (and forgeable) ``file_size``.
+
+    ``entry.file_size`` comes from the archive's own central directory and
+    need not match what decompression actually produces.
+    ``_validate_archive_entry`` only checks that declared metadata, so it
+    is a cheap early reject, not a guarantee; this is the backstop that
+    enforces ``_MAX_FILE_BYTES`` and ``_MAX_TOTAL_UNCOMPRESSED`` against
+    the real byte stream, chunk by chunk, so a forged size cannot smuggle
+    more data past either cap than one chunk's worth.
+
+    A member whose declared size undershoots what is really there is also
+    exactly the shape zipfile's own CRC check rejects (the checksum was
+    computed over the real, larger data, so reading only the declared
+    prefix never matches). That surfaces as ``zipfile.BadZipFile``, not
+    our own error type, so it is translated to ``DataExportError`` here
+    too: every failure importing a member should look the same to the
+    caller, whether the entry lies about its size or is simply corrupt.
+
+    Returns the new running total across the whole import so the caller
+    can thread it into the next entry.
+    """
+    written_this_entry = 0
+    total = total_before
+    while True:
+        try:
+            chunk = src_f.read(_COPY_CHUNK_BYTES)
+        except zipfile.BadZipFile as exc:
+            raise DataExportError(
+                f"Archive entry {name!r} failed an integrity check: {exc}"
+            ) from exc
+        if not chunk:
+            return total
+        written_this_entry += len(chunk)
+        total += len(chunk)
+        if written_this_entry > _MAX_FILE_BYTES:
+            raise DataExportError(
+                f"Archive entry {name!r} exceeds per-file cap while extracting "
+                f"({written_this_entry} > {_MAX_FILE_BYTES})"
+            )
+        if total > _MAX_TOTAL_UNCOMPRESSED:
+            raise DataExportError(
+                f"Archive uncompressed size exceeds cap while extracting "
+                f"({total} > {_MAX_TOTAL_UNCOMPRESSED})"
+            )
+        dst_f.write(chunk)
+
+
 def _allowed_archive_member(name: str) -> bool:
     """Allow-list for which archive members get extracted on import.
 
@@ -255,6 +336,8 @@ def _allowed_archive_member(name: str) -> bool:
     parts = name.split("/")
     if len(parts) == 3 and parts[0] == "packs":
         pack_id, filename = parts[1], parts[2]
+        if _is_reserved_device_name(pack_id):
+            return False
         return bool(_PACK_ID_RE.match(pack_id)) and filename in _PACK_FILES
     return False
 
@@ -316,6 +399,48 @@ def inspect_export(src: Path) -> ExportSummary:
     )
 
 
+def _flatten_imported_snippet_newlines(snippets_path: Path) -> None:
+    """Replace carriage return / newline with a space in every value of an
+    imported ``snippets.json``.
+
+    Called only right after the file has been extracted and replaced as
+    part of an import (see the caller). Best-effort and non-fatal by
+    design: this runs after an otherwise-successful import has already
+    written every other file, so a snippets.json that turns out to be
+    malformed or unreadable at this stage must not undo that or raise out
+    of :func:`import_user_data`. ``SnippetStore``'s own loader falls back
+    to seeded defaults for anything it cannot parse, so the worst case of
+    skipping this step is the user's snippets resetting to defaults on
+    next load, not a security regression.
+    """
+    try:
+        data = json.loads(snippets_path.read_text(encoding="utf-8"))
+        snippets = data.get("snippets") if isinstance(data, dict) else None
+        if not isinstance(snippets, list):
+            return
+        changed = False
+        for item in snippets:
+            if not isinstance(item, dict):
+                continue
+            value = item.get("value")
+            if isinstance(value, str) and ("\r" in value or "\n" in value):
+                item["value"] = value.replace("\r", " ").replace("\n", " ")
+                changed = True
+        if not changed:
+            return
+        tmp = snippets_path.with_suffix(snippets_path.suffix + ".flattening")
+        tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        tmp.replace(snippets_path)
+    except (OSError, ValueError) as exc:
+        # ValueError covers json.JSONDecodeError (a subclass) as well as
+        # any other malformed-content surprise from the dict/list walk.
+        _logger.warning(
+            "Could not flatten newlines in imported snippets.json (%s); "
+            "leaving the file as extracted",
+            exc,
+        )
+
+
 def import_user_data(src: Path, config_dir: Path) -> ExportSummary:
     """Replace the user data in *config_dir* with the contents of *src*.
 
@@ -344,6 +469,11 @@ def import_user_data(src: Path, config_dir: Path) -> ExportSummary:
 
     with zipfile.ZipFile(src, "r") as zf:
         archive_names = {e.filename for e in zf.infolist()}
+        # Running total across every member extracted in this import,
+        # measured in real bytes written rather than declared file_size.
+        # Threaded through both extraction loops below so the cap applies
+        # to the archive as a whole, not per-loop.
+        total_uncompressed_read = 0
 
         # Model files: copy out via tempfile then atomic rename.
         for relpath, archive_name in _MODEL_FILES.items():
@@ -356,7 +486,9 @@ def import_user_data(src: Path, config_dir: Path) -> ExportSummary:
             tmp = dest.with_suffix(dest.suffix + ".importing")
             try:
                 with zf.open(entry) as src_f, open(tmp, "wb") as dst_f:
-                    shutil.copyfileobj(src_f, dst_f)
+                    total_uncompressed_read = _bounded_copy(
+                        src_f, dst_f, entry.filename, total_uncompressed_read
+                    )
                 tmp.replace(dest)
             finally:
                 if tmp.exists():
@@ -364,6 +496,25 @@ def import_user_data(src: Path, config_dir: Path) -> ExportSummary:
                         tmp.unlink()
                     except OSError:
                         pass
+
+        # snippets.json travels through the archive as an opaque blob like
+        # any other model file above, but its *values* are typed verbatim
+        # into whatever app currently has OS focus (see
+        # KeyboardBridge.insertSnippet). A value the user typed themselves
+        # through the snippet editor is allowed to carry a real newline (a
+        # multi-line mailing address is a documented feature) because the
+        # user constructed and reviewed it before it ever reached disk. A
+        # value arriving from an imported archive was never reviewed here
+        # (the import preview does not show snippet contents), so it is
+        # untrusted: flatten every carriage return and newline in every
+        # imported value to a single space, so an imported snippet can
+        # never carry a payload that behaves like a Return keypress (Enter
+        # on Linux via `xdotool type`, line-terminating input on a Windows
+        # console) the first time the user taps it. This only touches the
+        # file the loop above just wrote; a pre-existing snippets.json that
+        # this archive did not include is left alone.
+        if "snippets.json" in archive_names:
+            _flatten_imported_snippet_newlines(config_dir / "snippets.json")
 
         # Packs: full replace. Remove all existing packs (matching the
         # id regex, defensively) before extraction.
@@ -394,19 +545,30 @@ def import_user_data(src: Path, config_dir: Path) -> ExportSummary:
             if len(parts) != 3 or parts[0] != "packs":
                 continue
             pack_id, filename = parts[1], parts[2]
-            if not _PACK_ID_RE.match(pack_id):
+            if not _PACK_ID_RE.match(pack_id) or _is_reserved_device_name(pack_id):
                 continue
             if filename not in _PACK_FILES:
                 continue
             dest_dir = packs_dir / pack_id
-            dest_dir.mkdir(parents=True, exist_ok=True)
             dest_file = dest_dir / filename
             tmp = dest_file.with_suffix(dest_file.suffix + ".importing")
             try:
+                # mkdir and the copy are wrapped together: an OSError from
+                # either (a pack id that is fine by the regex but still
+                # unrepresentable on this filesystem, a permissions issue,
+                # a locked file) must skip just this one archive member,
+                # not abort the rest of the import when model files,
+                # analytics and snippets have already been replaced.
+                dest_dir.mkdir(parents=True, exist_ok=True)
                 with zf.open(entry) as src_f, open(tmp, "wb") as dst_f:
-                    shutil.copyfileobj(src_f, dst_f)
+                    total_uncompressed_read = _bounded_copy(
+                        src_f, dst_f, entry.filename, total_uncompressed_read
+                    )
                 tmp.replace(dest_file)
                 extracted_pack_ids.add(pack_id)
+            except OSError as exc:
+                _logger.warning("Skipping pack file %r during import: %s", entry.filename, exc)
+                continue
             finally:
                 if tmp.exists():
                     try:
