@@ -95,7 +95,7 @@ def qml_root(qapp):
 
     # Disarm the startup update check.  `savedAutoCheckUpdates` defaults to
     # true, so three seconds after load Main.qml fires a real HTTPS request
-    # to the GitHub releases API from a daemon thread — in every headless QML
+    # to the GitHub releases API from a daemon thread, in every headless QML
     # test that lives that long.  Besides making the suite depend on the
     # network, that thread emits its result back into a bridge the fixture
     # has already torn down, which surfaces as `RuntimeError: Signal source
