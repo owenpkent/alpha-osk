@@ -2,9 +2,15 @@
 # Works on Linux, Windows, and macOS.  Platform-specific packages use
 # PEP 508 environment markers so pip resolves the right set per host
 # without manual extras.
+#
+# Pinned to exact (`==`) versions rather than floors: `run.py` can run
+# this install under an elevated (admin) token on Windows, so a bare
+# `>=` floor would let a brand-new, unreviewed release install itself
+# with elevated privileges the moment it hits PyPI.  Bump deliberately
+# (re-freeze from a venv you've actually tested), not by drift.
 
 # Core UI framework (Qt6 / QML)
-PySide6>=6.6.0
+PySide6==6.11.1
 
 # macOS key synthesis (Quartz CGEvent) + NSWindow tuning + AXIsProcessTrusted.
 # - pyobjc-framework-Quartz: CGEventCreateKeyboardEvent / CGEventPost.
@@ -12,6 +18,12 @@ PySide6>=6.6.0
 # - pyobjc-framework-ApplicationServices: AXIsProcessTrusted readout, plus the
 #   future AXUIElement-based password detector.  Quartz doesn't pull it in
 #   transitively even though both wrap CoreGraphics, so list it explicitly.
+# Left on a floor (not pinned) deliberately: the only venv available to
+# derive an exact pin from is Windows, so there is no macOS install to
+# freeze against, and guessing an exact version here risks pinning one
+# that's actually wrong for a platform nobody here can verify it on. Pin
+# these to `==` from a real macOS venv before relying on this file for
+# hash-locked (`--require-hashes`) installs.
 pyobjc-framework-Quartz>=10.0; sys_platform == "darwin"
 pyobjc-framework-Cocoa>=10.0; sys_platform == "darwin"
 pyobjc-framework-ApplicationServices>=10.0; sys_platform == "darwin"

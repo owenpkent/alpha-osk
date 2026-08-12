@@ -24,6 +24,13 @@ attacker host                          a spoofed host, the served exe
 Compromised       Authenticode pin     ``_verify_signature`` rejects
 GitHub asset                           anything not signed by SHA1
                                        ``fc22b522...``.
+Signed-asset      Embedded-version     ``_verify_signature`` also
+rollback          pin                  requires the exe's own
+                                       ``FileVersion`` to match the
+                                       release tag we asked for, so a
+                                       genuinely-signed OLDER installer
+                                       can't be re-served under a
+                                       NEWER version's filename.
 Asset URL         Host whitelist       Only ``github.com``,
 redirection                            ``objects.githubusercontent.com``,
                                        and ``release-assets.githubusercontent.com``
@@ -347,14 +354,70 @@ def _download_with_cap(
         return False
 
 
-def _verify_signature(exe_path: Path) -> bool:
-    """Verify ``exe_path`` was signed by our EV cert.
+def _ps_single_quote_escape(value: str) -> str:
+    """Escape ``value`` for embedding inside a *single-quoted*
+    PowerShell string literal.
+
+    A single-quoted PowerShell string is literal except for an
+    embedded apostrophe, which must be doubled (``'`` becomes ``''``).
+    Without this, a path under a Windows username containing an
+    apostrophe (``C:\\Users\\O'Brien\\...``; ``%TEMP%`` paths are
+    exactly this shape) terminates the string early and PowerShell
+    fails to parse. That fails closed (``_verify_signature`` returns
+    False), so it isn't exploitable, but it silently and permanently
+    disables auto-update for that user.
+
+    This is a different escaping rule than ``platform/windows.py``'s
+    ``_ps_escape``, which targets a *double*-quoted context (backtick,
+    double-quote, dollar sign). Reusing that helper here would apply
+    the wrong rules to a single-quoted string, so this module keeps
+    its own copy rather than importing across that dependency
+    direction.
+    """
+    return value.replace("'", "''")
+
+
+def _file_version_matches(file_version: str, expected_version: str) -> bool:
+    """Compare a Windows-embedded ``FileVersion`` against the semver we
+    expect the installer to be.
+
+    ``FileVersion`` is frequently four-part (``1.0.30.0``) while our
+    release tags and ``info.version`` are three-part semver
+    (``1.0.30``), so only the first three components are compared.
+    Anything short of three numeric components on either side fails
+    closed (returns False) rather than guessing.
+    """
+    fv_parts = file_version.strip().split(".")
+    exp_parts = expected_version.strip().split(".")
+    if len(fv_parts) < 3 or len(exp_parts) < 3:
+        return False
+    try:
+        fv_head = tuple(int(p) for p in fv_parts[:3])
+        exp_head = tuple(int(p) for p in exp_parts[:3])
+    except ValueError:
+        return False
+    return fv_head == exp_head
+
+
+def _verify_signature(exe_path: Path, expected_version: str) -> bool:
+    """Verify ``exe_path`` was signed by our EV cert AND embeds the
+    version we asked to install.
 
     Uses PowerShell's ``Get-AuthenticodeSignature``, which is on every
-    supported Windows version.  Status MUST be ``Valid`` and the
-    SignerCertificate's SHA1 thumbprint MUST equal our pinned value.
-    Anything else — unsigned, hash-mismatched, untrusted root, wrong
-    publisher — fails closed.
+    supported Windows version.  Status MUST be ``Valid``, the
+    SignerCertificate's SHA1 thumbprint MUST equal our pinned value,
+    and the exe's own embedded ``FileVersion`` MUST match
+    ``expected_version``.  Anything else, unsigned, hash-mismatched,
+    untrusted root, wrong publisher, wrong embedded version, fails
+    closed.
+
+    The version check matters because the asset filename
+    (``Alpha-OSK-Setup-{version}.exe``) is an asset *selector*, not a
+    trust boundary: someone who can rename or re-upload a release
+    asset (but cannot forge a signature, e.g. a compromised
+    release-publish token) could otherwise re-attach an older,
+    genuinely-signed installer under a newer version's name and
+    silently roll every user back onto a build with known-fixed bugs.
     """
     if sys.platform != "win32":
         # No Authenticode outside Windows — refuse.  Linux/macOS aren't
@@ -367,19 +430,24 @@ def _verify_signature(exe_path: Path) -> bool:
         return False
 
     # PowerShell expression — emit a single line:
-    #     Status|Thumbprint|SubjectCN
+    #     Status|Thumbprint|SubjectCN|FileVersion
     # Using ``|`` as separator since Windows Authenticode subjects
-    # can contain commas but never pipes in our cert.
+    # can contain commas but never pipes in our cert. The path is
+    # escaped for single-quoted-literal embedding (see
+    # _ps_single_quote_escape) since %TEMP% paths embed the Windows
+    # username, which can contain an apostrophe.
+    escaped_path = _ps_single_quote_escape(str(exe_path))
     ps_script = (
         f"$ErrorActionPreference='Stop';"
-        f"$s = Get-AuthenticodeSignature -FilePath '{exe_path}';"
+        f"$s = Get-AuthenticodeSignature -FilePath '{escaped_path}';"
         f"$cn = '';"
         f"if ($s.SignerCertificate) {{"
         f"  $cn = ($s.SignerCertificate.Subject -split ',')[0]"
         f"        -replace '^CN=', '';"
         f"}}"
-        f'Write-Output ("{{0}}|{{1}}|{{2}}" -f '
-        f"  $s.Status, $s.SignerCertificate.Thumbprint, $cn)"
+        f"$fv = (Get-Item -LiteralPath '{escaped_path}').VersionInfo.FileVersion;"
+        f'Write-Output ("{{0}}|{{1}}|{{2}}|{{3}}" -f '
+        f"  $s.Status, $s.SignerCertificate.Thumbprint, $cn, $fv)"
     )
 
     try:
@@ -403,14 +471,15 @@ def _verify_signature(exe_path: Path) -> bool:
         return False
 
     line = result.stdout.strip().splitlines()[-1] if result.stdout else ""
-    parts = line.split("|", 2)
-    if len(parts) != 3:
+    parts = line.split("|", 3)
+    if len(parts) != 4:
         _logger.error("Unparseable signature output: %r", line)
         return False
-    status, thumbprint, signer_cn = parts
+    status, thumbprint, signer_cn, file_version = parts
     status = status.strip()
     thumbprint = thumbprint.strip().lower()
     signer_cn = signer_cn.strip()
+    file_version = file_version.strip()
 
     if status != "Valid":
         _logger.error("Signature status is %r, not Valid", status)
@@ -429,8 +498,15 @@ def _verify_signature(exe_path: Path) -> bool:
             EXPECTED_SIGNER_CN,
         )
         return False
+    if not _file_version_matches(file_version, expected_version):
+        _logger.error(
+            "Embedded version mismatch: exe reports %r, expected %r",
+            file_version,
+            expected_version,
+        )
+        return False
 
-    _logger.info("Signature verified: %s (CN=%s)", thumbprint, signer_cn)
+    _logger.info("Signature verified: %s (CN=%s, version=%s)", thumbprint, signer_cn, file_version)
     return True
 
 
@@ -455,31 +531,81 @@ def _make_private_tempdir() -> Path:
     return d
 
 
+def _default_install_dir() -> str:
+    """Return the Program Files default install directory.
+
+    Mirrors ``INSTALL_DIR`` in the generated NSIS script
+    (``build/windows/build.py``): ``$PROGRAMFILES64\\Alpha-OSK``. Used
+    only as a fallback when we can't resolve where the app is actually
+    running from (a non-frozen dev or test invocation has no real
+    install to preserve).
+
+    Built with plain string concatenation rather than ``pathlib.Path``
+    so the result is a deterministic backslash-joined Windows path no
+    matter which OS this happens to run on (this function's tests run
+    on both the Windows and Linux CI legs).
+    """
+    program_files = os.environ.get("ProgramW6432") or os.environ.get(
+        "ProgramFiles", r"C:\Program Files"
+    )
+    return program_files.rstrip("\\/") + "\\Alpha-OSK"
+
+
+def _install_target_dir() -> str:
+    """Resolve the directory a silent update install should target.
+
+    Prefers the directory containing the currently-running frozen
+    executable, so a user who installed somewhere other than the
+    Program Files default still gets updated in place instead of
+    silently relocated. Falls back to the Program Files default when
+    not running frozen (dev shells, tests): there is no real install
+    to preserve in that case.
+    """
+    if getattr(sys, "frozen", False):
+        return str(Path(sys.executable).parent)
+    return _default_install_dir()
+
+
 def _launch_installer(dest: Path) -> Tuple[bool, str]:
     """Spawn the signed installer with admin elevation.
 
     The NSIS installer needs admin to write to ``C:\\Program Files``.
     ``subprocess.Popen`` doesn't honour the manifest's
-    ``RequestExecutionLevel admin`` — Windows refuses with
+    ``RequestExecutionLevel admin``: Windows refuses with
     ``ERROR_ELEVATION_REQUIRED`` (WinError 740).  ``ShellExecuteW`` with
     the ``runas`` verb explicitly requests elevation, which surfaces
     the UAC consent prompt; if the user accepts, the installer
     launches elevated and ``/S`` runs it silently from there.
 
+    ``/D=<dir>`` pins the install directory to a value we compute
+    ourselves (``_install_target_dir``) rather than letting NSIS fall
+    back to ``InstallDirRegKey`` (a user-writable HKCU value nothing in
+    the build ever writes) or its compiled-in default. NSIS has two
+    strict syntax rules for ``/D=``: it must be the LAST parameter on
+    the command line, and the path must be UNQUOTED even when it
+    contains spaces (quoting it would make NSIS treat the quote
+    characters as part of the path). Do not reorder the parameters or
+    add quotes around the directory.
+
     Returns ``(ok, error_msg)``.  Pulled out of ``download_and_install``
     so tests can monkey-patch a single seam without faking ctypes.
     """
+    install_dir = _install_target_dir()
+
     if sys.platform == "win32":
         import ctypes
 
         SW_SHOWNORMAL = 1
         SE_ERR_ACCESSDENIED = 5  # User cancelled the UAC dialog.
         shell32 = ctypes.windll.shell32  # type: ignore[attr-defined]
+        # NSIS silent-install switches: /S first, /D=<dir> LAST and
+        # unquoted. See the docstring above; do not change this shape.
+        params = f"/S /D={install_dir}"
         ret = shell32.ShellExecuteW(
             None,  # parent hwnd — not tied to a window
             "runas",  # verb: trigger UAC elevation
             str(dest),  # installer path
-            "/S",  # silent flag (NSIS)
+            params,  # silent flag + install dir (NSIS)
             None,  # working directory
             SW_SHOWNORMAL,
         )
@@ -495,7 +621,7 @@ def _launch_installer(dest: Path) -> Tuple[bool, str]:
     # Non-Windows path — kept for tests/dev shells; production
     # release pipeline is Windows-only since Authenticode is.
     subprocess.Popen(
-        [str(dest), "/S"],
+        [str(dest), "/S", f"/D={install_dir}"],
         close_fds=True,
         creationflags=getattr(subprocess, "DETACHED_PROCESS", 0),
     )
@@ -629,7 +755,7 @@ def download_and_install(
         if not ok:
             return False, "Download failed (see log)"
 
-        if not _verify_signature(dest):
+        if not _verify_signature(dest, info.version):
             _logger.error("Aborting install — signature verification failed")
             return False, "Signature check failed (see log)"
 

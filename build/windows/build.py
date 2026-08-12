@@ -613,8 +613,13 @@ def _generate_nsi_script(version: str, installer_name: str) -> str:
 ; --- Installer metadata ---
 Name "${{APP_NAME}} ${{APP_VERSION}}"
 OutFile "{release_dir_nsis}\\{installer_name}.exe"
+; $INSTDIR comes from InstallDir below, or an explicit /D= on the
+; command line (see src/updater.py::_launch_installer). Deliberately no
+; InstallDirRegKey: nothing in this build ever writes
+; HKCU\\Software\\Alpha-OSK, so that key exists only if something else
+; (potentially unprivileged, attacker-controlled) created it, and NSIS
+; prefers a present InstallDirRegKey value over the InstallDir default.
 InstallDir "${{INSTALL_DIR}}"
-InstallDirRegKey HKCU "Software\\${{APP_NAME}}" "InstallLocation"
 RequestExecutionLevel admin
 {icon_line}
 {unicon_line}

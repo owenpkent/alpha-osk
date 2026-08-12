@@ -1,17 +1,23 @@
 # Development dependencies for Alpha-OSK
 -r requirements.txt
 
+# Pinned to exact (`==`) versions rather than floors, for the same
+# reason as requirements.txt: reproducible installs that don't pick up
+# an unreviewed release just because it landed on PyPI. Versions below
+# were captured from `venv/Scripts/pip.exe freeze` against a working,
+# tested dev environment; re-freeze deliberately when bumping.
+
 # Testing
-pytest>=9.0.3
-pytest-cov>=5.0.0
-pytest-mock>=3.12.0
+pytest==9.1.1
+pytest-cov==7.1.0
+pytest-mock==3.15.1
 # Property-based tests (tests/test_property_*.py).  Generates adversarial
 # inputs for the import-hardening paths and the prediction-engine
 # invariants, where hand-picked examples only cover the cases we thought
 # of.  Deterministic in CI: the profile in tests/conftest.py fixes the
 # example count and disables the .hypothesis example database, so a run
 # cannot pass locally and fail on CI from a stale corpus.
-hypothesis>=6.100.0
+hypothesis==6.165.3
 
 # Linting & formatting.  Pinned exactly, not floored: `ruff format --check`
 # is a CI gate, and the formatter's output changes between releases, so a
@@ -21,19 +27,19 @@ hypothesis>=6.100.0
 ruff==0.16.2
 
 # Type checking
-mypy>=1.9.0
+mypy==2.3.0
 
 # Transitive dependency constraints (security)
 # Pulled in by pytest/rich; pin away from ReDoS-vulnerable versions
 # (CVE-2022-40896, CVE-2026-4539).
-Pygments>=2.20.0
+Pygments==2.20.0
 # Pulled in transitively by cyclonedx-bom -> py-serializable; pin past
 # CVE-2026-41066 (GHSA-vfmq-68hx-4jfw, fixed in 6.1.0).
-lxml>=6.1.0
+lxml==6.1.1
 
 # SBOM generation (used at release time by build/{windows,linux}/build.py
 # to emit CycloneDX 1.6 SBOMs alongside the .exe / AppImage).  Not used
 # at runtime; safe to skip for dev installs that won't run the release
 # build, but pinned here so `pip install -r requirements-dev.txt` gets
 # the same toolchain CI uses.
-cyclonedx-bom>=7.0.0
+cyclonedx-bom==7.3.0
