@@ -538,6 +538,39 @@ class TestSnippetNewlineFlattening:
         store.load()
         assert store.get_value(0) == "rm -rf ~ done"
 
+    def test_a_failed_flatten_leaves_no_temp_file_behind(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The flatten writes through a `.flattening` temp file, and it is
+        the last thing an otherwise-successful import touches, so a stray
+        one is exactly what the user would be left looking at. The two
+        extraction loops clean up their own `.importing` files the same
+        way."""
+        archive = tmp_path / "evil.zip"
+        self._archive_with_snippet_value(archive, "one\ntwo")
+        dst = tmp_path / "dst"
+        dst.mkdir()
+
+        real_replace = Path.replace
+
+        def explode(self: Path, target):  # type: ignore[no-untyped-def]
+            if self.name.endswith(".flattening"):
+                raise OSError("simulated rename failure")
+            return real_replace(self, target)
+
+        monkeypatch.setattr(Path, "replace", explode)
+
+        import_user_data(archive, dst)  # must not raise
+
+        # Proves the flatten really did run and really did fail -- without
+        # this the glob below would pass on a build where the step never
+        # executed at all.
+        data = json.loads((dst / "snippets.json").read_text())
+        assert data["snippets"][0]["value"] == "one\ntwo", "the simulated failure did not fire"
+
+        leftovers = list(dst.glob("*.flattening"))
+        assert leftovers == [], f"flatten left a temp file behind: {leftovers}"
+
     def test_malformed_snippets_json_does_not_abort_the_rest_of_the_import(
         self, tmp_path: Path
     ) -> None:

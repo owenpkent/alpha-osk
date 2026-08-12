@@ -429,8 +429,20 @@ def _flatten_imported_snippet_newlines(snippets_path: Path) -> None:
         if not changed:
             return
         tmp = snippets_path.with_suffix(snippets_path.suffix + ".flattening")
-        tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-        tmp.replace(snippets_path)
+        try:
+            tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+            tmp.replace(snippets_path)
+        finally:
+            # A failed write must not leave a stray .flattening file in the
+            # config dir: the two extraction loops in import_user_data clean
+            # up their own .importing temp files the same way, and this is
+            # the last thing an otherwise-successful import touches, so a
+            # leftover here is what the user would be looking at.
+            if tmp.exists():
+                try:
+                    tmp.unlink()
+                except OSError:
+                    pass
     except (OSError, ValueError) as exc:
         # ValueError covers json.JSONDecodeError (a subclass) as well as
         # any other malformed-content surprise from the dict/list walk.

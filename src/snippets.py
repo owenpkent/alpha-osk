@@ -87,8 +87,16 @@ def _clean_value(value: str) -> str:
     way, so nothing that can act as an unintended keypress may survive
     into a value that gets typed verbatim into whatever app currently
     has focus.
+
+    DEL (0x7F) is stripped along with the C0 range even though it sits
+    above it numerically: the rule this implements is "no control
+    character other than the two we deliberately allow", and an
+    ``ord(ch) >= 0x20`` test alone would let DEL through on a
+    technicality.
     """
-    cleaned = "".join(ch for ch in str(value) if ch in ("\n", "\t") or ord(ch) >= 0x20)
+    cleaned = "".join(
+        ch for ch in str(value) if ch in ("\n", "\t") or (ord(ch) >= 0x20 and ord(ch) != 0x7F)
+    )
     return cleaned[:MAX_VALUE_LEN]
 
 

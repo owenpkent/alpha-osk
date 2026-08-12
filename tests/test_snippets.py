@@ -159,6 +159,14 @@ def test_value_strips_other_c0_control_characters(store):
     assert store.get_value(0) == "abc\td\ne"
 
 
+def test_value_strips_del(store):
+    """DEL (0x7F) is a control character too, even though it sorts above
+    the C0 range: an `ord(ch) >= 0x20` filter alone would let it through."""
+    store.load()
+    store.set(0, "Weird", "a\x7fb")
+    assert store.get_value(0) == "ab"
+
+
 def test_corrupt_file_falls_back_to_defaults(tmp_path):
     path = tmp_path / "snippets.json"
     path.write_text("this is not json {{{", encoding="utf-8")

@@ -74,6 +74,31 @@ _MAX_PACK_BIGRAM_ENTRIES = 200_000
 _MAX_PACK_TRIGRAM_ENTRIES = 200_000
 
 
+# Cap on a pack.json name/description once parsed. The 64 KB byte cap on
+# the file as a whole is about not reading a huge file; this is about what
+# a single field may be after it has been read.
+_MAX_PACK_META_FIELD_LEN = 200
+
+
+def _clean_meta_text(value: object, fallback: str) -> str:
+    """Return *value* as a single-line, bounded string, or *fallback*.
+
+    ``pack.json`` is attacker-controlled: it arrives with an imported
+    pack and nothing else validates it. Two consumers care. The Settings
+    UI renders these fields, which is why the QML side forces
+    ``Text.PlainText``. This module *logs* them, and the diagnostic log
+    is the file users attach to bug reports, so an embedded newline here
+    would let a pack name forge whole log lines. Collapsing to one line
+    and bounding the length handles both, and a non-string (a JSON list,
+    an object, null) falls back rather than being coerced into
+    ``"['a', 'b']"``.
+    """
+    if not isinstance(value, str):
+        return fallback
+    collapsed = " ".join(value.split())
+    return collapsed[:_MAX_PACK_META_FIELD_LEN] if collapsed else fallback
+
+
 def _is_reserved_device_name(name: str) -> bool:
     """True if *name* collides with a Windows reserved device name.
 
@@ -136,9 +161,11 @@ class VocabularyPack:
             else:
                 try:
                     meta = json.loads(meta_path.read_text())
-                    name = meta.get("name", pack_dir.name)
-                    description = meta.get("description", "")
-                    version = meta.get("version", 1)
+                    if isinstance(meta, dict):
+                        name = _clean_meta_text(meta.get("name"), pack_dir.name)
+                        description = _clean_meta_text(meta.get("description"), "")
+                        raw_version = meta.get("version", 1)
+                        version = raw_version if isinstance(raw_version, int) else 1
                 except (json.JSONDecodeError, OSError):
                     pass
 

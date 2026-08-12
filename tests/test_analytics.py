@@ -180,6 +180,76 @@ class TestLoadCaps:
         assert a._alltime_keystrokes == 0
         assert a._alltime_words == 0
 
+    @pytest.mark.parametrize(
+        "payload",
+        (
+            {"keystrokes": "lots"},
+            {"keystrokes": None},
+            {"keystrokes": [1, 2]},
+            {"keystrokes": True},
+            {"minutes": "3.5"},
+            {"minutes": float("inf")},
+        ),
+        ids=("str", "null", "list", "bool", "minutes-str", "minutes-inf"),
+    )
+    def test_a_wrong_typed_scalar_discards_the_file(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, payload: dict
+    ) -> None:
+        """The scalar counters need the same type validation the frequency
+        dicts already had.
+
+        analytics.json is replaced wholesale by a Data Backup import from a
+        file the user picked, so its contents are untrusted. A field that
+        loaded as the wrong type would not fail here at all: it would fail
+        much later, inside save(), where every one of these values is fed
+        into an addition, and that runs from aboutToQuit and from
+        exportUserData.
+        """
+        stats_file = tmp_path / "analytics.json"
+        stats_file.write_text(json.dumps({"words": 42, **payload}))
+        monkeypatch.setattr(TypingAnalytics, "_get_stats_path", staticmethod(lambda: stats_file))
+
+        a = TypingAnalytics()
+
+        assert a._alltime_keystrokes == 0
+        assert a._alltime_words == 0, "a rejected file must not leave sibling fields loaded"
+
+    def test_negative_counters_clamp_to_zero(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A negative lifetime counter is meaningless and would render on
+        the dashboard as a negative 'keystrokes saved'."""
+        stats_file = tmp_path / "analytics.json"
+        stats_file.write_text(json.dumps({"keystrokes_saved": -5000, "minutes": -3.0}))
+        monkeypatch.setattr(TypingAnalytics, "_get_stats_path", staticmethod(lambda: stats_file))
+
+        a = TypingAnalytics()
+
+        assert a._alltime_keystrokes_saved == 0
+        assert a._alltime_minutes == 0.0
+
+    def test_a_non_object_file_is_rejected(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        stats_file = tmp_path / "analytics.json"
+        stats_file.write_text(json.dumps([1, 2, 3]))
+        monkeypatch.setattr(TypingAnalytics, "_get_stats_path", staticmethod(lambda: stats_file))
+
+        assert TypingAnalytics()._alltime_keystrokes == 0
+
+    def test_save_never_raises_on_a_poisoned_counter(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """save() builds its whole payload out of additions, so it does that
+        inside its try. It runs from aboutToQuit and exportUserData, neither
+        of which can afford a propagating TypeError."""
+        stats_file = tmp_path / "analytics.json"
+        monkeypatch.setattr(TypingAnalytics, "_get_stats_path", staticmethod(lambda: stats_file))
+        a = TypingAnalytics()
+        a._alltime_keystrokes = "poisoned"  # type: ignore[assignment]
+
+        a.save()  # must not raise
+
     def test_word_freq_capped_on_load(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

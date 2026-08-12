@@ -56,8 +56,11 @@ const AGGREGATE_CACHE_SECONDS = 300;
 // re-submits for one id are realistically hours apart, not seconds. One hour
 // is well below that cadence, so it never clips a real user, even one with
 // several quit/relaunch cycles in a day, while still capping a single id to
-// at most 24 D1 writes/day instead of unlimited. Because the counters are
-// monotonic lifetime totals, a submission dropped for being inside the
+// at most 24 accepted submissions/day instead of unlimited. Applied to BOTH
+// statements in handleSubmit (users and submissions_latest); gating only one
+// of them would leave the other taking a write per request. Because the
+// counters are monotonic lifetime totals, a submission dropped for being
+// inside the
 // cooldown costs nothing: the next accepted submission for that id carries
 // the same up-to-date totals, so nothing is lost, only delayed.
 const SUBMIT_COOLDOWN_SECONDS = 60 * 60; // 1 hour
@@ -176,14 +179,26 @@ async function handleSubmit(req: Request, env: Env): Promise<Response> {
     // last_seen / app_version / os update. The "excluded.first_seen"
     // expression in SQLite ON CONFLICT refers to the would-be-inserted
     // row, which is what we want for first_seen on the insert path.
+    //
+    // Carries the SAME cooldown WHERE clause as submissions_latest below,
+    // and that is the point: without it this statement runs on every
+    // request and the cooldown bounds only half the write path, so one
+    // anon_id could still drive unlimited writes here while its
+    // submissions row sat frozen. The insert path is unaffected (the
+    // WHERE only gates DO UPDATE), so a first-ever submission for an id
+    // still lands immediately.
     await env.DB.prepare(
         `INSERT INTO users (anon_id, first_seen, last_seen, app_version, os)
          VALUES (?1, ?2, ?2, ?3, ?4)
          ON CONFLICT(anon_id) DO UPDATE SET
             last_seen   = excluded.last_seen,
             app_version = excluded.app_version,
-            os          = excluded.os`
-    ).bind(validated.anon_id, now, validated.app_version, validated.os).run();
+            os          = excluded.os
+         WHERE excluded.last_seen - users.last_seen >= ?5`
+    ).bind(
+        validated.anon_id, now, validated.app_version, validated.os,
+        SUBMIT_COOLDOWN_SECONDS,
+    ).run();
 
     // Replace the latest submission row -- but only if the existing row (if
     // any) is older than SUBMIT_COOLDOWN_SECONDS. A same-id submission

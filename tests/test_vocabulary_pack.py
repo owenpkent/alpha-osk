@@ -410,3 +410,70 @@ class TestPackInputCaps:
 
         assert mgr.import_pack(source) is None
         assert list(user_dir.iterdir()) == []
+
+
+class TestPackMetadataIsSanitised:
+    """`pack.json`'s name / description are attacker-controlled: they
+    arrive with an imported pack and nothing else validates them.
+
+    Two consumers care.  The Settings UI renders both fields, which is why
+    the QML side forces `Text.PlainText`.  This module *logs* the name on
+    every cap-trip and load message, and the diagnostic log is the file
+    users attach to bug reports, so an embedded newline lets a pack name
+    forge whole log lines in it.
+    """
+
+    @staticmethod
+    def _pack_with_meta(tmp_path: Path, meta: object) -> VocabularyPack:
+        pack_dir = tmp_path / "my_pack"
+        pack_dir.mkdir()
+        (pack_dir / "pack.json").write_text(json.dumps(meta))
+        pack = VocabularyPack.from_directory(pack_dir)
+        assert pack is not None
+        return pack
+
+    def test_newlines_in_the_name_are_collapsed(self, tmp_path: Path) -> None:
+        pack = self._pack_with_meta(
+            tmp_path,
+            {"name": "Innocent\n2026-01-01 [Updater] ERROR: forged line"},
+        )
+        assert "\n" not in pack.name
+        assert "\r" not in pack.name
+
+    def test_newlines_in_the_description_are_collapsed(self, tmp_path: Path) -> None:
+        pack = self._pack_with_meta(tmp_path, {"description": "line one\nline two"})
+        assert pack.description == "line one line two"
+
+    def test_an_overlong_field_is_bounded(self, tmp_path: Path) -> None:
+        from src.prediction import vocabulary_pack as vp
+
+        pack = self._pack_with_meta(tmp_path, {"name": "x" * 5000})
+        assert len(pack.name) == vp._MAX_PACK_META_FIELD_LEN
+
+    @pytest.mark.parametrize("value", ([1, 2], {"a": 1}, None, 7), ids=str)
+    def test_a_non_string_name_falls_back_to_the_directory_name(
+        self, tmp_path: Path, value: object
+    ) -> None:
+        """Coercing would render a JSON list as the literal "[1, 2]"."""
+        pack = self._pack_with_meta(tmp_path, {"name": value})
+        assert pack.name == "my_pack"
+
+    def test_a_non_integer_version_falls_back_to_1(self, tmp_path: Path) -> None:
+        pack = self._pack_with_meta(tmp_path, {"version": "not a number"})
+        assert pack.version == 1
+
+    def test_a_non_object_pack_json_falls_back_entirely(self, tmp_path: Path) -> None:
+        pack = self._pack_with_meta(tmp_path, ["not", "an", "object"])
+        assert pack.name == "my_pack"
+        assert pack.description == ""
+        assert pack.version == 1
+
+    def test_a_normal_pack_json_is_untouched(self, tmp_path: Path) -> None:
+        """The inverse test: a sanitiser that emptied every field would
+        satisfy every assertion above."""
+        pack = self._pack_with_meta(
+            tmp_path, {"name": "Medical Terms", "description": "Clinical vocab", "version": 3}
+        )
+        assert pack.name == "Medical Terms"
+        assert pack.description == "Clinical vocab"
+        assert pack.version == 3

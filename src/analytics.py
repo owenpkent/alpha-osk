@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import time
 from collections import Counter
 from pathlib import Path
@@ -119,6 +120,46 @@ class TypingAnalytics(QObject):
     # content-aware limit for this file specifically.
     _MAX_STATS_FILE_BYTES = 5 * 1024 * 1024
 
+    @staticmethod
+    def _as_count(data: dict, field: str) -> int:
+        """Read *field* from *data* as a non-negative integer counter.
+
+        Raises ``TypeError`` for anything that is not already a JSON
+        number (a string, a list, a null), which the caller's ``except``
+        turns into "discard the whole file". Bools are rejected too:
+        ``True`` is an ``int`` in Python, and a counter that loaded as 1
+        because the file said ``true`` is silently wrong rather than
+        loudly wrong. Negatives clamp to 0, since a negative lifetime
+        counter has no meaning and would surface on the dashboard as a
+        negative "keystrokes saved".
+
+        Type-checking these matters as much as the frequency dicts below,
+        which were already coerced: ``analytics.json`` is replaced
+        wholesale by a Data Backup import (``data_export.import_user_data``)
+        from a file the user picked, and every one of these fields is
+        later fed straight into an addition in :meth:`save`.
+        """
+        value = data.get(field, 0)
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise TypeError(f"analytics field {field!r} is {type(value).__name__}, expected number")
+        if not math.isfinite(value):
+            raise ValueError(f"analytics field {field!r} is {value!r}, expected a finite number")
+        return max(0, int(value))
+
+    @staticmethod
+    def _as_minutes(data: dict) -> float:
+        """Read the ``minutes`` field as a non-negative finite float.
+
+        Separate from :meth:`_as_count` because this one is genuinely
+        fractional; same rejection rules otherwise.
+        """
+        value = data.get("minutes", 0.0)
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise TypeError(f"analytics field 'minutes' is {type(value).__name__}, expected number")
+        if not math.isfinite(value):
+            raise ValueError(f"analytics field 'minutes' is {value!r}, expected a finite number")
+        return max(0.0, float(value))
+
     def _load_alltime(self) -> None:
         """Load all-time stats from disk.
 
@@ -130,6 +171,11 @@ class TypingAnalytics(QObject):
         reset the lifetime counters to (a fresh instance: all zero; a
         manual ``reload_from_disk``: also all zero, since that resets
         before calling this) rather than raising and blocking startup.
+
+        Every scalar goes through :meth:`_as_count` / :meth:`_as_minutes`
+        rather than a bare ``data.get``: a field that loaded as the wrong
+        type would not fail here at all, it would fail much later inside
+        :meth:`save`, where the arithmetic happens.
         """
         if not self._stats_path.exists():
             return
@@ -141,17 +187,19 @@ class TypingAnalytics(QObject):
                 )
                 return
             data = json.loads(self._stats_path.read_text())
-            keystrokes = data.get("keystrokes", 0)
-            words = data.get("words", 0)
-            predictions = data.get("predictions", 0)
-            keystrokes_saved = data.get("keystrokes_saved", 0)
-            sessions = data.get("sessions", 0)
-            minutes = data.get("minutes", 0.0)
-            backspaces = data.get("backspaces", 0)
-            prediction_offers = data.get("prediction_offers", 0)
-            prediction_rank_sum = data.get("prediction_rank_sum", 0)
-            prediction_rank_count = data.get("prediction_rank_count", 0)
-            top_pick_count = data.get("top_pick_count", 0)
+            if not isinstance(data, dict):
+                raise TypeError(f"analytics.json holds a {type(data).__name__}, expected an object")
+            keystrokes = self._as_count(data, "keystrokes")
+            words = self._as_count(data, "words")
+            predictions = self._as_count(data, "predictions")
+            keystrokes_saved = self._as_count(data, "keystrokes_saved")
+            sessions = self._as_count(data, "sessions")
+            minutes = self._as_minutes(data)
+            backspaces = self._as_count(data, "backspaces")
+            prediction_offers = self._as_count(data, "prediction_offers")
+            prediction_rank_sum = self._as_count(data, "prediction_rank_sum")
+            prediction_rank_count = self._as_count(data, "prediction_rank_count")
+            top_pick_count = self._as_count(data, "top_pick_count")
 
             wf = data.get("word_freq", {})
             kf = data.get("key_freq", {})
@@ -208,37 +256,48 @@ class TypingAnalytics(QObject):
     _KEY_FREQ_CAP = 5000
 
     def save(self) -> None:
-        """Save all-time stats to disk (merges current session)."""
-        merged_words = self._alltime_word_freq + self._word_freq
-        if len(merged_words) > self._WORD_FREQ_CAP:
-            # Keep only the top-N by count.  Counter.most_common is O(n log k)
-            # which is fine at this scale.
-            merged_words = Counter(dict(merged_words.most_common(self._WORD_FREQ_CAP)))
-        merged_keys = self._alltime_key_freq + self._key_freq
-        if len(merged_keys) > self._KEY_FREQ_CAP:
-            merged_keys = Counter(dict(merged_keys.most_common(self._KEY_FREQ_CAP)))
+        """Save all-time stats to disk (merges current session).
 
-        data = {
-            "keystrokes": self._alltime_keystrokes + self._keystroke_count,
-            "words": self._alltime_words + self._word_count,
-            "predictions": self._alltime_predictions + self._prediction_hits,
-            "keystrokes_saved": self._alltime_keystrokes_saved + self._keystrokes_saved,
-            "sessions": self._alltime_sessions,
-            "minutes": self._alltime_minutes + (time.time() - self._session_start) / 60,
-            "backspaces": self._alltime_backspaces + self._backspace_count,
-            "prediction_offers": self._alltime_prediction_offers + self._prediction_offers,
-            "prediction_rank_sum": (self._alltime_prediction_rank_sum + self._prediction_rank_sum),
-            "prediction_rank_count": (
-                self._alltime_prediction_rank_count + self._prediction_rank_count
-            ),
-            "top_pick_count": self._alltime_top_pick_count + self._top_pick_count,
-            "word_freq": dict(merged_words),
-            "key_freq": dict(merged_keys),
-        }
+        The whole body sits inside the ``try``, not just the write. Every
+        value below is the sum of a lifetime counter and a session
+        counter, so building the dict is arithmetic, and arithmetic on a
+        counter that somehow arrived as the wrong type raises. This is
+        called from ``aboutToQuit`` and from ``exportUserData``; neither
+        can afford to propagate. ``_load_alltime`` validates the types on
+        the way in, so this is the belt to that braces.
+        """
         try:
+            merged_words = self._alltime_word_freq + self._word_freq
+            if len(merged_words) > self._WORD_FREQ_CAP:
+                # Keep only the top-N by count.  Counter.most_common is O(n log k)
+                # which is fine at this scale.
+                merged_words = Counter(dict(merged_words.most_common(self._WORD_FREQ_CAP)))
+            merged_keys = self._alltime_key_freq + self._key_freq
+            if len(merged_keys) > self._KEY_FREQ_CAP:
+                merged_keys = Counter(dict(merged_keys.most_common(self._KEY_FREQ_CAP)))
+
+            data = {
+                "keystrokes": self._alltime_keystrokes + self._keystroke_count,
+                "words": self._alltime_words + self._word_count,
+                "predictions": self._alltime_predictions + self._prediction_hits,
+                "keystrokes_saved": self._alltime_keystrokes_saved + self._keystrokes_saved,
+                "sessions": self._alltime_sessions,
+                "minutes": self._alltime_minutes + (time.time() - self._session_start) / 60,
+                "backspaces": self._alltime_backspaces + self._backspace_count,
+                "prediction_offers": self._alltime_prediction_offers + self._prediction_offers,
+                "prediction_rank_sum": (
+                    self._alltime_prediction_rank_sum + self._prediction_rank_sum
+                ),
+                "prediction_rank_count": (
+                    self._alltime_prediction_rank_count + self._prediction_rank_count
+                ),
+                "top_pick_count": self._alltime_top_pick_count + self._top_pick_count,
+                "word_freq": dict(merged_words),
+                "key_freq": dict(merged_keys),
+            }
             self._stats_path.write_text(json.dumps(data, indent=2))
             _logger.info("Saved analytics to %s", self._stats_path)
-        except OSError as e:
+        except (OSError, TypeError, ValueError, OverflowError) as e:
             _logger.warning("Failed to save analytics: %s", e)
 
     def record_keystroke(self, key: str) -> None:
