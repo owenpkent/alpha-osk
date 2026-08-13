@@ -16,7 +16,7 @@ import pytest
 # If PySide6 is not available, skip these tests.
 PySide6 = pytest.importorskip("PySide6")
 
-from src.prediction.hybrid_predictor import HybridPredictor
+from src.prediction.hybrid_predictor import HybridPredictor, _short_word_allowed
 
 
 @pytest.fixture
@@ -423,3 +423,44 @@ class TestMergeStrategies:
         assert "everywhere" in merged
         if "narrow" in merged:
             assert merged.index("everywhere") < merged.index("narrow")
+
+
+class TestShortWordsAreOfferedAsNextWords:
+    """Two-letter words are the ones next-word prediction is best at.
+
+    The filter used to be a blanket ``len(word) <= 2`` with "i" as the
+    only exception, which discarded "to", "of", "in", "is", "it", "my",
+    "we" -- simultaneously the most useful next-word guesses and the
+    highest-frequency words in English, so the bar withheld its strongest
+    candidates and showed the fourth-best instead.
+
+    It is an allow-list rather than a relaxed length rule because the
+    engine learns whatever the user types: stray two-character fragments
+    from a typo or an interrupted word accumulate in the model, and a
+    bare length change would let every one of them compete for a pill.
+    """
+
+    @pytest.mark.parametrize(
+        "word",
+        ["to", "of", "in", "is", "it", "my", "we", "be", "on", "at", "or", "so", "up", "us"],
+    )
+    def test_real_two_letter_words_pass(self, word) -> None:
+        assert _short_word_allowed(word)
+
+    @pytest.mark.parametrize("word", ["i", "a"])
+    def test_the_two_real_one_letter_words_pass(self, word) -> None:
+        assert _short_word_allowed(word)
+
+    @pytest.mark.parametrize("word", ["th", "ap", "sm", "xz", "qq", "b", "z", "kj"])
+    def test_fragments_are_still_filtered(self, word) -> None:
+        """The inverse: relaxing the length rule would pass the tests above."""
+        assert not _short_word_allowed(word)
+
+    @pytest.mark.parametrize("word", ["the", "hello", "keyboard"])
+    def test_longer_words_are_untouched(self, word) -> None:
+        assert _short_word_allowed(word)
+
+    def test_casing_does_not_decide_it(self) -> None:
+        """A sentence-start "To" is judged as a word, not as a capital."""
+        assert _short_word_allowed("To")
+        assert _short_word_allowed("I")

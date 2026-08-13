@@ -12,6 +12,22 @@ If you're attaching the log to a bug report, it's safe: it now contains only ope
 
 Logs written *before* this fix could contain fragments of what you typed, so they are deleted for you. The first time you launch the fixed version, Alpha-OSK removes any existing `alpha-osk.log` and its rotated `.1` / `.2` / `.3` files, then notes in the new log how many it removed. This runs exactly once, so logs written after the fix are kept normally and you are not fighting the app to retain them. If you had copied an old log somewhere else (into a bug report, a support email, or a backup) that copy is outside our reach and is worth deleting yourself.
 
+## Snippet auto-detection
+
+Settings → Data & Privacy → Privacy has a toggle: **"Offer to save emails, phones and addresses"**. It is **on** by default. With it on, Alpha-OSK watches the text you type for something shaped like an email address, a phone number, or a street address, and when it sees one it offers to save it into Snippets so you can insert it with one tap instead of retyping it.
+
+This is worth being precise about, because it means the keyboard is pattern-matching your typing for personal details:
+
+- **It all happens on your machine.** The matching is a handful of regular expressions in `src/text_patterns.py`. Nothing is uploaded, and this is entirely separate from the telemetry toggle below.
+- **Nothing is stored until you say so.** Detection produces an on-screen offer and nothing else. If you dismiss it, or ignore it until it fades after 8 seconds, nothing is written to disk. Only tapping **Save** writes anything.
+- **It never runs while learning is paused.** In privacy mode, whether you paused it yourself with the title-bar Learning switch or a password field triggered it automatically, no detection happens at all. A password field cannot produce an offer, let alone a saved value.
+- **It won't nag.** A value you dismissed is not offered again for the rest of the session, and a value already in your snippets is never offered.
+- **It doesn't overwrite.** If the matching slot already holds a different value, saving appends a new one ("Email 2") rather than replacing what you had.
+- **What you save is ordinary snippet data.** It goes into `snippets.json` in your config directory, the same file the Snippets editor writes, and it is included in Data Backup exports along with the rest of your snippets (see below).
+- **Nothing detected is written to the log.** The log records that an offer was raised and how long the value was, never the value.
+
+Turn the toggle off and no detection runs at all. Your existing snippets are untouched either way.
+
 ## Optional usage telemetry
 
 Settings → Data & Privacy → Privacy has one toggle: **"Share anonymous usage stats"**. It is off by default. If you turn it on, Alpha-OSK sends a small weekly report so we can track total impact across the community (e.g. "X million keystrokes saved across Y users").
@@ -67,6 +83,7 @@ What the export contains:
 
 - Your prediction model (`ngram_model.json`, `ppm_model.json`).
 - Lifetime analytics (`analytics.json` — the counters shown on the dashboard).
+- Your snippets (`snippets.json`), including anything you saved from a detection offer. These are quick-insert text you wrote or approved, so they are personal by nature: a name, an email address, a phone number, a mailing address. The export is a plain, unencrypted `.zip`, so treat the file you produce with the same care you would treat that information anywhere else, and think twice before putting it somewhere shared.
 - Imported vocabulary packs (the folders under `packs/`).
 - A manifest with the schema version, the Alpha-OSK version that wrote the file, an ISO-8601 UTC timestamp, and the list of files.
 

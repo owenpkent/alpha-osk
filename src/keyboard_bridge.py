@@ -17,8 +17,9 @@ from __future__ import annotations
 import json
 import logging
 import time
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 from PySide6.QtCore import Property, QObject, QTimer, QUrl, Signal, Slot
 
@@ -35,6 +36,7 @@ from .analytics import TypingAnalytics
 from .platform import CURRENT_PLATFORM, create_key_synthesizer
 from .platform.base import KeySynthesizerBase
 from .platform.password_detect import (
+    caret_position_token,
     detection_available,
     focused_element_token,
     is_password_field,
@@ -42,6 +44,7 @@ from .platform.password_detect import (
 from .prediction import HybridPredictor, SwipeRecognizer
 from .snippets import SnippetStore
 from .telemetry import TelemetryClient
+from .text_patterns import detect_snippet_candidate, label_for_kind, suppresses_auto_space
 from .updater import UpdateInfo, check_for_update, download_and_install
 
 # How long to keep the "installing v… keyboard back in a moment" toast
@@ -428,6 +431,31 @@ _NAV_KEYS = frozenset(
 
 _logger = logging.getLogger("KeyboardBridge")
 
+# Cap on ``_raw_token``.  It only ever answers "does the run before the
+# cursor have a recognisable shape", and every shape that matters (an
+# email, a URL, a decimal) is decided well inside this, so an unbounded
+# buffer would only be storing typed characters for no benefit.
+_MAX_RAW_TOKEN_LEN = 128
+
+# Special keys after which ``_raw_token`` no longer describes the run
+# before the cursor: every one of them either inserts whitespace, moves
+# the caret somewhere we aren't tracking, or deletes text ahead of it.
+# Backspace is deliberately absent — it is the one key whose effect on
+# the run we can follow exactly, by popping a character.
+_TOKEN_BREAKING_KEYS = _NAV_KEYS | frozenset({"tab", "escape", "delete"})
+
+# How far back through ``_context_buffer`` snippet detection looks for a
+# shape that spans whitespace (an address, a spaced-out phone number).
+# Bounded so something typed a paragraph ago doesn't surface as an offer
+# at an unrelated word boundary; long enough for any of the shapes.
+_SNIPPET_SCAN_TAIL = 120
+
+# How many already-offered values to remember before the oldest fall
+# off.  These are emails, phone numbers and addresses the user typed,
+# so the ledger is bounded rather than session-long; overflowing costs
+# at most a re-offer of something dismissed long ago.
+_MAX_REMEMBERED_OFFERS = 64
+
 
 class KeyboardBridge(QObject):
     """
@@ -529,6 +557,17 @@ class KeyboardBridge(QObject):
     # move) so the Snippets popup re-queries getSnippets() and rebuilds
     # its rows.
     snippetsChanged = Signal(list)
+
+    # Emitted when a just-typed email / phone / address looks worth
+    # saving: (kind, label, value).  QML shows a one-tap offer and calls
+    # acceptSnippetOffer() / dismissSnippetOffer().  Suppressed in
+    # privacy mode along with everything else that touches typed content.
+    snippetOffered = Signal(str, str, str)
+
+    # Emitted when a live offer stops being about what the user is
+    # doing (app switch, context reset, privacy mode).  QML closes the
+    # toast; without it a Save button stays on screen doing nothing.
+    snippetOfferWithdrawn = Signal()
 
     def __init__(self, parent: Optional[QObject] = None) -> None:
         super().__init__(parent)
@@ -645,7 +684,44 @@ class KeyboardBridge(QObject):
         self._predictions: List[str] = []
         self._auto_space_after_punctuation = True
         self._auto_capitalize_after_punctuation = False
+        # Auto-capitalize is NOT a held Shift.  Setting _shift_active
+        # for it looked equivalent and was not: _send_key builds its
+        # chord modifiers straight from that flag, so after a sentence
+        # ending, Enter became Shift+Enter (a newline in Slack rather
+        # than send), Ctrl+C became Ctrl+Shift+C, and arrows started
+        # extending a selection.  It was also the one site that set
+        # _shift_active with no paired hold_modifier(), so the bridge
+        # believed in a hold the OS did not have.  This flag capitalises
+        # the next character and touches nothing else.
+        self._pending_auto_cap = False
         self._auto_save_on_exit = True
+        # Intelligent spacing — skip the punctuation auto-space when it
+        # would break a structured token (an email, a URL, a decimal).
+        # See src/text_patterns.py for the shapes and the known gap.
+        self._intelligent_spacing = True
+        # The unbroken run of characters immediately before the cursor,
+        # punctuation included.  Deliberately NOT _current_word, which is
+        # the prediction engine's notion of a word and resets at "@" and
+        # every other non-word character — so by the time the "." in
+        # "owen@gmail.com" arrives, _current_word is "gmail" and the "@"
+        # that proves this is an email is already gone.  Reset on any
+        # whitespace, cursor motion, or verbatim insert; trimmed by
+        # backspace.  Only maintained outside privacy mode, same as
+        # _current_word: it holds typed characters.
+        self._raw_token = ""
+        # Snippet auto-detection — offer to save an email / phone /
+        # address the user just typed into Snippets (see
+        # _maybe_offer_snippet).
+        self._snippet_detection_enabled = True
+        # Values already offered this session, accepted or dismissed, so
+        # a declined offer stays declined and an accepted one doesn't
+        # immediately re-offer itself.  Session-scoped by design: this is
+        # a nag guard, not a preference worth persisting.  A dict used as
+        # an ordered set so _remember_offered can bound it -- it holds
+        # typed values, which must not accumulate for a whole session.
+        self._offered_snippet_values: Dict[str, None] = {}
+        # The offer currently on screen as ``(kind, value)``, or None.
+        self._pending_snippet_offer: Optional[Tuple[str, str]] = None
         # True iff the most recent character sent to the OS was a space
         # that *we* auto-inserted (after a prediction click or after
         # punctuation).  Used to decide whether the punctuation-spacing
@@ -745,6 +821,12 @@ class KeyboardBridge(QObject):
         # between two controls inside the *same* window — e.g. two text
         # boxes on one web page — which the window-handle check can't see.
         self._last_focus_token: Optional[str] = None
+        # Where the caret sat at the last poll, and whether the user
+        # typed anything since.  Together they separate a caret move
+        # the user made (click into another paragraph) from one we
+        # made (typing), which the element token cannot distinguish.
+        self._last_caret_token: Optional[str] = None
+        self._keystroke_since_poll = False
         self._foreground_timer = QTimer(self)
         self._foreground_timer.setInterval(250)
         self._foreground_timer.timeout.connect(self._check_foreground_window)
@@ -790,6 +872,80 @@ class KeyboardBridge(QObject):
     def _send_text(self, text: str) -> None:
         """Send a string of text via the platform synthesizer."""
         self._synth.send_text(text)
+
+    def _suppress_auto_space(self, token_before: str, punct: str) -> bool:
+        """Should the punctuation auto-space be skipped this time?
+
+        Thin wrapper over :func:`text_patterns.suppresses_auto_space` that
+        honours the user's Intelligent Spacing setting.  The decision is
+        made entirely from the token, deliberately: an earlier version
+        also passed a "has anything with a space been typed yet" hint
+        derived from ``_context_buffer``, which turned out to be a proxy
+        for the wrong thing -- that buffer is emptied on every app switch
+        and focused-element change, so the hint was true at the start of
+        every newly focused field and ate the space after its first
+        sentence.  See ``suppresses_auto_space`` for the full account.
+        """
+        if not self._intelligent_spacing:
+            return False
+        return suppresses_auto_space(token_before, punct)
+
+    @contextmanager
+    def _without_held_modifiers(self) -> Iterator[None]:
+        """Run a verbatim insert with every held modifier temporarily down.
+
+        Verbatim inserts (prediction pills, snippets, swipe words, the
+        autocorrect retype) push text the user never typed character by
+        character, and a modifier standing held at the OS level silently
+        rewrites all of it.  With Shift down the scancode path emits
+        "HELLO" for "hello" -- ``_make_char_scancode_events`` only knows
+        not to *add* a redundant Shift wrap, it cannot cancel a standing
+        hold -- and with Ctrl down every character arrives as a chord
+        rather than as text.  Sticky and right-click-locked modifiers both
+        survive a pill tap, so this is reachable in ordinary use rather
+        than only mid-chord.
+
+        **It wraps the whole insert, not just the text.**  Two of
+        ``pressPrediction``'s branches never reach ``send_text`` at all:
+        compat mode sends ``BackSpace`` N times, and the casing-mismatch
+        branch calls ``replace_text``, whose Shift+Left selection is
+        itself a chord.  Under a locked Alt those backspaces arrive as
+        Alt+BackSpace (undo, N times); under a locked Ctrl the selection
+        becomes Ctrl+Shift+Left and swallows three preceding *words*,
+        which the insert then overwrites.  Guarding only the text half
+        left the two most destructive branches unguarded.
+
+        Restores in a ``finally`` because leaving a locked modifier up at
+        the OS while the keycap still shows it held is the worse of the
+        two failures.
+
+        This reads the ``_*_active`` flags rather than querying the OS,
+        which is sound **only because those flags always imply a real
+        hold**.  That invariant was briefly false: auto-capitalize used to
+        set ``_shift_active`` with no ``hold_modifier``, and the restore
+        below would then have pinned a Shift that was never down.  Any new
+        code that sets an ``_*_active`` flag must pair it with a hold.
+
+        The single-character path in ``_press_char`` deliberately does not
+        use this: there a held Shift is doing its job (it is what makes
+        the keystroke uppercase), and a release plus re-hold on every
+        keystroke would be churn on the hottest path in the app.  Callers
+        that also want the sticky auto-release should do it *before*
+        entering, which leaves nothing for this to restore.
+        """
+        held = [name for name in self._MODIFIERS if getattr(self, f"_{name}_active", False)]
+        for name in held:
+            self._synth.release_modifier(name)
+        try:
+            yield
+        finally:
+            for name in held:
+                self._synth.hold_modifier(name)
+
+    def _send_literal_text(self, text: str) -> None:
+        """Type ``text`` verbatim, immune to any modifier held at the OS level."""
+        with self._without_held_modifiers():
+            self._send_text(text)
 
     @staticmethod
     def _match_case(typed: str, replacement: str) -> str:
@@ -862,7 +1018,7 @@ class KeyboardBridge(QObject):
             self._play_click()
             if literal:
                 char = key
-            elif self._shift_active or self._caps_lock_active:
+            elif self._shift_active or self._caps_lock_active or self._pending_auto_cap:
                 char = key.upper()
             else:
                 char = key.lower()
@@ -880,12 +1036,13 @@ class KeyboardBridge(QObject):
         # password field, flip privacy mode *before* we touch any
         # prediction state with this keystroke.
         self._check_password_field_sync()
+        self._keystroke_since_poll = True
         self._play_click()
         if not self._privacy_mode:
             self._analytics.record_keystroke(key)
         if literal:
             char = key
-        elif self._shift_active or self._caps_lock_active:
+        elif self._shift_active or self._caps_lock_active or self._pending_auto_cap:
             char = key.upper()
         else:
             char = key.lower()
@@ -911,6 +1068,11 @@ class KeyboardBridge(QObject):
         # immediate next keystroke.  Set again below if this keystroke
         # itself adds an auto-space (after . , ; : ! ?).
         self._auto_space_pending = False
+
+        # A pending auto-capital is spent on the character this keystroke
+        # types, so record that it was owed *before* the punctuation
+        # branches below get a chance to arm a fresh one.
+        consumed_auto_cap = self._pending_auto_cap
 
         # Use _send_key for modifier combos (Ctrl+C, Win+Shift+S, etc.)
         # Send the lowercase key — Shift is included as a modifier by _send_key
@@ -961,6 +1123,13 @@ class KeyboardBridge(QObject):
             if self._caps_lock_active:
                 self._word_typed_under_caps_lock = True
 
+            # Snapshot the run *before* this character, then extend it.
+            # Intelligent spacing asks "would a space here break what is
+            # already on screen", so it needs the token as it stood when
+            # the punctuation landed, not including the punctuation.
+            token_before = self._raw_token
+            self._raw_token = (self._raw_token + char)[-_MAX_RAW_TOKEN_LEN:]
+
             # Sentence-ending punctuation triggers sentence learning
             if char in (".", "!", "?"):
                 sentence = self._sentence_buffer + self._current_word
@@ -973,32 +1142,47 @@ class KeyboardBridge(QObject):
                 self._sentence_buffer = ""
                 self._current_word = ""
                 self._word_typed_under_caps_lock = False
-                if self._auto_space_after_punctuation:
+                suppressed = self._auto_space_after_punctuation and self._suppress_auto_space(
+                    token_before, char
+                )
+                if self._auto_space_after_punctuation and not suppressed:
                     self._send_text(" ")
                     self._auto_space_pending = True
-                self._context_buffer += char + " "
-                # Auto-capitalize next letter
-                if self._auto_capitalize_after_punctuation:
-                    self._shift_active = True
-                    self.shiftActiveChanged.emit(True)
+                    self._raw_token = ""
+                # Mirror on screen: no space sent means no space in the
+                # buffer either, or a pill click would insert against a
+                # prefix that isn't there.  The auto-space-off path is
+                # deliberately left alone (it has always recorded the
+                # boundary even without sending a space).
+                self._context_buffer += char if suppressed else char + " "
+                # Auto-capitalize next letter — but not mid-token, or
+                # "example.com" comes out "example.Com".
+                if self._auto_capitalize_after_punctuation and not suppressed:
+                    self._pending_auto_cap = True
+                    self._update_layer()
                 if len(self._context_buffer) > 200:
                     self._context_buffer = self._context_buffer[-200:]
 
             # Mid-sentence punctuation — auto-space but no learning/capitalize
             elif char in (",", ";", ":"):
+                suppressed = self._auto_space_after_punctuation and self._suppress_auto_space(
+                    token_before, char
+                )
+                trailing = "" if suppressed else " "
                 # Preserve the word before the comma in the sentence buffer
                 # (_current_word includes the comma at this point, strip it)
                 word_before = self._current_word[:-1]
                 if word_before:
-                    self._sentence_buffer += word_before + char + " "
-                    self._context_buffer += word_before + char + " "
+                    self._sentence_buffer += word_before + char + trailing
+                    self._context_buffer += word_before + char + trailing
                 else:
-                    self._context_buffer += char + " "
+                    self._context_buffer += char + trailing
                 self._current_word = ""
                 self._word_typed_under_caps_lock = False
-                if self._auto_space_after_punctuation:
+                if self._auto_space_after_punctuation and not suppressed:
                     self._send_text(" ")
                     self._auto_space_pending = True
+                    self._raw_token = ""
                 if len(self._context_buffer) > 200:
                     self._context_buffer = self._context_buffer[-200:]
 
@@ -1046,8 +1230,17 @@ class KeyboardBridge(QObject):
                 self._predictions = []
                 self.predictionsChanged.emit([])
 
+        # Spend the pending auto-capital on the character just typed.
+        # Guarded on `consumed_auto_cap` so a capital armed by *this*
+        # keystroke (the punctuation branches above) survives for the
+        # next one, which is the whole point of it.
+        if consumed_auto_cap:
+            self._pending_auto_cap = False
+            self._update_layer()
+
         # Auto-release shift after one keypress (not caps lock, not a
-        # right-click-locked hold)
+        # right-click-locked hold).  Auto-capitalize needs no exception
+        # here any more: it sets _pending_auto_cap, not _shift_active.
         if self._shift_active and not self._caps_lock_active and not self._shift_locked:
             self._shift_active = False
             self._synth.release_modifier("shift")
@@ -1080,6 +1273,7 @@ class KeyboardBridge(QObject):
             return
 
         self._check_password_field_sync()
+        self._keystroke_since_poll = True
         self._play_click()
         # Any user-driven special key invalidates the auto-space window —
         # they pressed space themselves, or they're backspacing, or
@@ -1142,19 +1336,20 @@ class KeyboardBridge(QObject):
             )
             if correction and correction.lower() != self._current_word.lower():
                 cased = self._match_case(self._current_word, correction)
-                if self._in_compat_mode():
-                    # Compat mode: Shift+Left selection is unsafe under
-                    # remote-forwarding pipelines and IDE interception.
-                    # Use BackSpace × N + type instead — same end result,
-                    # robust to per-event drops/duplicates.
-                    for _ in range(len(self._current_word)):
-                        self._synth.send_key("BackSpace")
-                    self._send_text(cased + " ")
-                else:
-                    self._synth.replace_text(
-                        len(self._current_word),
-                        cased + " ",
-                    )
+                with self._without_held_modifiers():
+                    if self._in_compat_mode():
+                        # Compat mode: Shift+Left selection is unsafe under
+                        # remote-forwarding pipelines and IDE interception.
+                        # Use BackSpace × N + type instead — same end result,
+                        # robust to per-event drops/duplicates.
+                        for _ in range(len(self._current_word)):
+                            self._synth.send_key("BackSpace")
+                        self._send_text(cased + " ")
+                    else:
+                        self._synth.replace_text(
+                            len(self._current_word),
+                            cased + " ",
+                        )
                 self._add_debug_log(f"Autocorrected: {self._current_word!r} → {cased!r}")
                 _logger.info(
                     "Autocorrected (typed_len=%d, corrected_len=%d)",
@@ -1207,9 +1402,15 @@ class KeyboardBridge(QObject):
                     self._context_buffer = self._context_buffer[-200:]
             self._current_word = ""
             self._word_typed_under_caps_lock = False
+            # The space ended the run, so the token is complete: this is
+            # the moment to look at it for a saveable email / phone /
+            # address, and the moment it stops being the current one.
+            self._maybe_offer_snippet()
+            self._raw_token = ""
             self._update_predictions()
         elif key_name == "backspace":
             self._analytics.record_backspace()
+            self._raw_token = self._raw_token[:-1]
             if self._current_word:
                 self._current_word = self._current_word[:-1]
                 if not self._current_word:
@@ -1255,7 +1456,23 @@ class KeyboardBridge(QObject):
                 self._context_buffer = self._context_buffer[-200:]
             self._current_word = ""
             self._word_typed_under_caps_lock = False
+            self._maybe_offer_snippet()
+            self._raw_token = ""
             self._update_predictions()
+        elif key_name in _TOKEN_BREAKING_KEYS:
+            # Tab, Escape, Delete and every cursor-motion key move or
+            # destroy text we can no longer account for, so the run before
+            # the cursor is no longer whatever we last watched being
+            # typed.  Clearing it costs one missed auto-space decision and
+            # is the only honest answer; a stale token would suppress a
+            # space somewhere unrelated.
+            self._raw_token = ""
+            # A capital owed to the word after a full stop does not
+            # survive the caret moving somewhere else.  Space is
+            # deliberately not in this set: the word after the auto-space
+            # is exactly the one the capital was meant for.
+            self._pending_auto_cap = False
+            self._update_layer()
 
         # Auto-release shift/ctrl/alt/win after special key too. Without
         # this, Shift+Tab (or any sticky-Shift + special key combo) left
@@ -1327,6 +1544,7 @@ class KeyboardBridge(QObject):
             self._clear_lock("shift")  # a tap also clears a right-click lock
         self._update_layer()
         self.shiftActiveChanged.emit(self._shift_active)
+        self._recase_visible_predictions()
 
     @Slot()
     def releaseShift(self) -> None:
@@ -1356,6 +1574,7 @@ class KeyboardBridge(QObject):
         self._clear_lock("shift")
         self._update_layer()
         self.shiftActiveChanged.emit(False)
+        self._recase_visible_predictions()
 
     @Slot()
     def toggleCapsLock(self) -> None:
@@ -1368,12 +1587,25 @@ class KeyboardBridge(QObject):
         self._caps_lock_active = not self._caps_lock_active
         self._update_layer()
         self.capsLockActiveChanged.emit(self._caps_lock_active)
-        # Re-query the engine so currently-visible pills flip case to
-        # match the new mode. We can't just uppercase/lowercase the
-        # stored list in-place — once predictions are uppercased we've
-        # lost the original capitalisation the engine gave us
-        # (e.g. "iPhone" vs "IPHONE"), so the engine is the source of
-        # truth.
+        self._recase_visible_predictions()
+
+    def _recase_visible_predictions(self) -> None:
+        """Re-emit the visible pills for a changed Shift / Caps Lock state.
+
+        Both modifiers feed ``_display_cased``, so flipping either has to
+        redraw whatever is already on screen or the bar contradicts the
+        keycaps until the next keystroke.
+
+        It re-queries the engine rather than re-casing the stored list in
+        place, and that is the whole reason this is a method call and not
+        a ``.upper()``: ``self._predictions`` holds the *displayed* form,
+        so once "iPhone" has been shown as "IPHONE" the original casing is
+        gone and no amount of ``.lower()`` gets it back.  The engine is the
+        only source of truth for what a word looks like un-cased.
+
+        No-op when the bar is empty, which also keeps a Shift tap from
+        costing a prediction round trip during ordinary typing.
+        """
         if self._predictions:
             self._update_predictions()
 
@@ -1449,6 +1681,36 @@ class KeyboardBridge(QObject):
     # ``{name}LockedChanged``), so the four modifiers stay DRY.
     _MODIFIERS = ("shift", "ctrl", "alt", "win")
 
+    def _release_sticky_modifiers(self) -> None:
+        """Drop every sticky (non-locked) modifier, OS hold and state alike.
+
+        The per-keystroke auto-release, factored out.  A right-click lock
+        is skipped, matching every other release site: the whole point of
+        the lock is surviving a keystroke.
+
+        ``_press_char`` and ``pressSpecialKey`` keep their own inline
+        copies rather than calling this, and deliberately so — each has
+        per-site conditions this can't express (``pressSpecialKey`` holds
+        Shift/Ctrl across ``_NAV_KEYS`` so Shift+arrow selection persists,
+        and the char path sequences the layer update against the chord
+        branch).  This exists for the *verbatim insert* paths, which have
+        no such exceptions: they consume the modifiers outright.
+        """
+        for name in self._MODIFIERS:
+            if not getattr(self, f"_{name}_active") or getattr(self, f"_{name}_locked"):
+                continue
+            if name == "shift" and self._caps_lock_active:
+                # Caps Lock deliberately pins a sticky Shift, the same
+                # exception both inline copies carry.  Dropping it here
+                # silently ended a Shift+drag the user had set up.
+                continue
+            setattr(self, f"_{name}_active", False)
+            self._synth.release_modifier(name)
+            getattr(self, f"{name}ActiveChanged").emit(False)
+            if name == "shift":
+                # Shift drives the upper/lower layer; resync the keycaps.
+                self._update_layer()
+
     def _clear_lock(self, name: str) -> None:
         """Drop a right-click lock without touching the active/held state.
 
@@ -1500,6 +1762,11 @@ class KeyboardBridge(QObject):
         getattr(self, f"{name}LockedChanged").emit(new_locked)
         if new_active != was_active:
             getattr(self, f"{name}ActiveChanged").emit(new_active)
+            if name == "shift":
+                # Right-click-locking Shift capitalises the pills exactly
+                # like tapping it does; only the held state matters to
+                # _display_cased, not how it came to be held.
+                self._recase_visible_predictions()
 
     @Slot(str)
     def switchLayer(self, layer: str) -> None:
@@ -1549,21 +1816,38 @@ class KeyboardBridge(QObject):
         # everything to BackSpace × N + type the full word, a sequence
         # of independent single-event keystrokes that is robust to
         # per-event drops / duplicates.
-        if self._in_compat_mode() and self._current_word:
-            for _ in range(len(self._current_word)):
-                self._synth.send_key("BackSpace")
-            self._send_text(word + " ")
-        elif word.startswith(self._current_word) and self._current_word:
-            # Prediction extends what was typed (same case) — type the rest
-            suffix = word[len(self._current_word) :] + " "
-            self._send_text(suffix)
-        elif not self._current_word:
-            # Next-word prediction (nothing typed) — type the full word
-            self._send_text(word + " ")
-        else:
-            # Casing differs (e.g. "iph"→"iPhone") or prefix mismatch —
-            # select the typed letters and overwrite with the correct word.
-            self._synth.replace_text(len(self._current_word), word + " ")
+        #
+        # Drop the sticky modifiers *before* the insert, not after.  A pill
+        # tap is a keystroke, so it consumes a one-shot Shift the same way
+        # typing a character does — and with Shift the ordering is load-
+        # bearing rather than cosmetic: `word` already carries the capital
+        # _display_cased put there, so a Shift still held at the OS level
+        # would uppercase the whole insert on top of it and "Hello" would
+        # arrive as "HELLO".  Releasing first also leaves nothing for
+        # _send_literal_text to drop and restore, so the ordinary path
+        # costs no extra modifier round trip.
+        self._release_sticky_modifiers()
+        # The guard wraps every branch, including the two that never reach
+        # send_text: a locked Alt turns the compat BackSpaces into
+        # Alt+BackSpace (undo), and a locked Ctrl turns replace_text's
+        # Shift+Left selection into Ctrl+Shift+Left, which eats whole
+        # preceding words that the insert then overwrites.
+        with self._without_held_modifiers():
+            if self._in_compat_mode() and self._current_word:
+                for _ in range(len(self._current_word)):
+                    self._synth.send_key("BackSpace")
+                self._send_text(word + " ")
+            elif word.startswith(self._current_word) and self._current_word:
+                # Prediction extends what was typed (same case) — type the rest
+                suffix = word[len(self._current_word) :] + " "
+                self._send_text(suffix)
+            elif not self._current_word:
+                # Next-word prediction (nothing typed) — type the full word
+                self._send_text(word + " ")
+            else:
+                # Casing differs (e.g. "iph"→"iPhone") or prefix mismatch —
+                # select the typed letters and overwrite with the correct word.
+                self._synth.replace_text(len(self._current_word), word + " ")
         # All three paths append an auto-space; flag it so the next
         # keystroke (if it's punctuation) can elide it cleanly.
         self._auto_space_pending = True
@@ -1611,6 +1895,7 @@ class KeyboardBridge(QObject):
             if len(self._context_buffer) > 100:
                 self._context_buffer = self._context_buffer[-100:]
         self._current_word = ""
+        self._raw_token = ""
         self._word_typed_under_caps_lock = False
 
         # IMPORTANT: Clear predictions first, then get next-word predictions
@@ -1653,6 +1938,7 @@ class KeyboardBridge(QObject):
         """Full reset of typing state — for explicit user action only."""
         self._predictions = []
         self._current_word = ""
+        self._raw_token = ""
         self._word_typed_under_caps_lock = False
         self._sentence_buffer = ""
         self._context_buffer = ""
@@ -1727,12 +2013,176 @@ class KeyboardBridge(QObject):
         value = self._snippets.get_value(index)
         if not value:
             return
-        self._send_text(value)
+        # A snippet tap is a keystroke, so it consumes the sticky
+        # modifiers like any other — and a held Shift would otherwise
+        # deliver the whole address in capitals.
+        self._release_sticky_modifiers()
+        self._send_literal_text(value)
         self._current_word = ""
+        self._raw_token = ""
         self._word_typed_under_caps_lock = False
         self._auto_space_pending = False
         self._predictions = []
         self.predictionsChanged.emit([])
+
+    # --- Snippet auto-detection ----------------------------------------
+
+    def _maybe_offer_snippet(self) -> None:
+        """Offer to save a just-typed email / phone / address as a snippet.
+
+        Called at word boundaries.  Everything about this is opt-outable
+        and conservative, because the failure mode is offering to store
+        the user's personal data when they didn't ask:
+
+        - **Never in privacy mode.**  Both call sites already sit inside
+          the non-privacy branch, and the guard here is belt-and-braces
+          for any future caller: a password field must not produce an
+          offer, let alone a saved copy.
+        - **Never twice for the same value.**  A dismissed offer stays
+          dismissed for the session, and an accepted one doesn't bounce
+          straight back.
+        - **Never for something already saved.**  If the value is in any
+          snippet already, there is nothing to offer.
+        - **Never on top of a live offer.**  One at a time, or the toast
+          would flicker between candidates as the sentence grows.
+
+        Two scan windows, and both are needed.  ``_raw_token`` is the run
+        that just ended, and it is the only place a single-token shape
+        survives intact: ``_current_word`` resets at "@" and at every dot,
+        so by the time "owen@example.com" is finished the prediction
+        engine's idea of the word is "com".  The recent tail of
+        ``_context_buffer`` then covers the shapes that span whitespace --
+        a street address is several words long, and a phone number is
+        often written "(555) 123 4567".  The tail is bounded so an
+        address typed a paragraph ago doesn't resurface at an unrelated
+        word boundary.
+
+        Nothing here is logged: it is all typed content (see the
+        diagnostic-log rules in CLAUDE.md).
+        """
+        if not self._snippet_detection_enabled or self._privacy_mode:
+            return
+        if self._pending_snippet_offer is not None:
+            return
+
+        span = (self._context_buffer[-_SNIPPET_SCAN_TAIL:] + " " + self._current_word).strip()
+        found = detect_snippet_candidate(self._raw_token) or detect_snippet_candidate(span)
+        if found is None:
+            return
+        kind, value = found
+        if value in self._offered_snippet_values:
+            return
+        if any(s.get("value", "") == value for s in self._snippets.get_all()):
+            return
+
+        self._pending_snippet_offer = (kind, value)
+        self._remember_offered(value)
+        _logger.info("Snippet offer raised (kind=%s, value_len=%d)", kind, len(value))
+        self.snippetOffered.emit(kind, label_for_kind(kind), value)
+
+    def _remember_offered(self, value: str) -> None:
+        """Record *value* as already-offered, keeping the set bounded.
+
+        This is the "don't nag" ledger, and it holds values the user
+        typed, so it is not allowed to grow for the life of the session:
+        an unbounded set of emails, phone numbers and addresses is both a
+        slow leak and a pile of personal data sitting in memory for no
+        reason.  A dict is used as an ordered set (insertion order is
+        guaranteed) so the oldest entries fall off first.  Overflowing
+        only costs a re-offer of something dismissed a very long time ago.
+        """
+        self._offered_snippet_values[value] = None
+        while len(self._offered_snippet_values) > _MAX_REMEMBERED_OFFERS:
+            self._offered_snippet_values.pop(next(iter(self._offered_snippet_values)))
+
+    def _withdraw_snippet_offer(self) -> None:
+        """Drop a live offer that is no longer about what the user is doing.
+
+        Used when the typing context is torn down underneath it (an app
+        switch, a context reset, entering privacy mode).  Emitting the
+        withdrawal matters: the toast lives in QML on its own 8 s timer,
+        so clearing only the Python side would leave a Save button on
+        screen that silently does nothing.
+        """
+        if self._pending_snippet_offer is None:
+            return
+        self._pending_snippet_offer = None
+        self.snippetOfferWithdrawn.emit()
+
+    @Slot(result=bool)
+    def acceptSnippetOffer(self) -> bool:
+        """Save the offered value into Snippets.  True iff it was written.
+
+        The value lands in the matching labelled slot when that slot is
+        still empty (the seeded Name / Email / Phone / Address slots exist
+        precisely to be filled).  When the slot already holds a *different*
+        value, a new numbered slot is appended instead -- "Email 2" -- so
+        a second address never overwrites the first.  Work and personal
+        emails are both worth keeping, and silently replacing one the user
+        had already curated would be the worse failure.
+
+        **The return value is load-bearing.**  ``SnippetStore.add`` refuses
+        past ``MAX_SNIPPETS`` and reports it by returning False, so at the
+        cap this used to do nothing at all while QML flashed "Saved" -- the
+        user walks away believing their email is stored.  QML now flashes
+        the confirmation only on True.
+        """
+        offer = self._pending_snippet_offer
+        self._pending_snippet_offer = None
+        if offer is None:
+            return False
+        kind, value = offer
+        label = label_for_kind(kind)
+        existing = self._snippets.get_all()
+
+        for index, snippet in enumerate(existing):
+            if snippet.get("label", "").strip().lower() != label.lower():
+                continue
+            if snippet.get("value", "").strip():
+                break  # slot taken — fall through to the numbered append
+            if not self._snippets.set(index, snippet.get("label") or label, value):
+                return False
+            self.snippetsChanged.emit(self._snippets.get_all())
+            _logger.info("Snippet offer accepted into existing slot (kind=%s)", kind)
+            return True
+
+        # Number from the count of slots already carrying this label, so
+        # the second email is "Email 2" whether or not the user renamed
+        # or reordered anything.
+        taken = sum(
+            1 for s in existing if s.get("label", "").strip().lower().startswith(label.lower())
+        )
+        if not self._snippets.add(f"{label} {taken + 1}" if taken else label, value):
+            _logger.info("Snippet offer could not be saved: snippet list is full")
+            return False
+        self.snippetsChanged.emit(self._snippets.get_all())
+        _logger.info("Snippet offer accepted into new slot (kind=%s)", kind)
+        return True
+
+    @Slot()
+    def dismissSnippetOffer(self) -> None:
+        """Drop the offer without saving.
+
+        The value stays in ``_offered_snippet_values``, so dismissing is
+        what makes it stop asking -- otherwise the next word boundary
+        would re-detect the same address still sitting in the sentence
+        buffer and put the toast straight back.
+        """
+        if self._pending_snippet_offer is not None:
+            _logger.info("Snippet offer dismissed")
+        self._pending_snippet_offer = None
+
+    @Slot(bool)
+    def setSnippetDetection(self, enabled: bool) -> None:
+        """Enable/disable offering to save detected emails/phones/addresses."""
+        self._snippet_detection_enabled = bool(enabled)
+        if not self._snippet_detection_enabled:
+            self._pending_snippet_offer = None
+
+    @Slot(bool)
+    def setIntelligentSpacing(self, enabled: bool) -> None:
+        """Enable/disable skipping the auto-space inside structured tokens."""
+        self._intelligent_spacing = bool(enabled)
 
     @Slot(int, str, str)
     def setSnippet(self, index: int, label: str, value: str) -> None:
@@ -1819,7 +2269,11 @@ class KeyboardBridge(QObject):
         """Update the current layer based on shift/caps state."""
         if self._current_layer in ("numbers", "symbols"):
             return  # Don't change layer if user is on numbers/symbols
-        new_layer = "upper" if (self._shift_active or self._caps_lock_active) else "lower"
+        new_layer = (
+            "upper"
+            if (self._shift_active or self._caps_lock_active or self._pending_auto_cap)
+            else "lower"
+        )
         if new_layer != self._current_layer:
             self._current_layer = new_layer
             self.currentLayerChanged.emit(self._current_layer)
@@ -1879,7 +2333,8 @@ class KeyboardBridge(QObject):
     def _display_cased(self, predictions: List[str]) -> List[str]:
         """Transform predictions to match the user's active case mode.
 
-        Two cases:
+        Three cases, in this order — the earlier ones are more specific
+        about what the user actually typed, so they win:
 
         1. Caps Lock on — every character the user types is being sent
            uppercase, and `_current_word` accumulates uppercase too.
@@ -1901,6 +2356,14 @@ class KeyboardBridge(QObject):
            for the suffix-only insert: "hello".startswith("HEL") is
            False without mirroring, so the click would fall through to
            a full replace and clobber the user's capitals.
+        3. Shift held, nothing uppercase typed yet.  Capitalise the first
+           letter only.  Shift means "the next character is a capital",
+           and a tapped pill *is* the next thing typed, so a user who
+           wants "Boston" out of a "bost" prefix can tap Shift and see
+           the pill change rather than having to type the B themselves.
+           It ranks below case 2 because an uppercase already in the
+           prefix says something more specific about the word's shape
+           (mid-word caps like "iP" → "iPhone") than a pending Shift does.
 
         Sentence-start and proper-noun capitalisation are handled
         upstream by :func:`NgramPredictor.get_capitalized`; this layer
@@ -1925,6 +2388,17 @@ class KeyboardBridge(QObject):
                         new_chars.append(ch)
                 result.append("".join(new_chars))
             return result
+        if self._shift_active:
+            # 3. Shift held with nothing uppercase typed yet.  Shift is the
+            #    "next character is a capital" signal, and the pill *is* the
+            #    next thing that gets typed, so it capitalises too.  This is
+            #    the same courtesy Caps Lock already got (case 1); without it
+            #    the only way to capitalise a suggested word was to type its
+            #    first letter shifted and wait for case 2 to mirror it, which
+            #    defeats the point of tapping a pill.  Tapping one drops
+            #    Shift the way any single keystroke does, so this is a
+            #    one-word capital rather than a mode.
+            return [w[:1].upper() + w[1:] for w in predictions]
         return predictions
 
     def _on_predictions_ready(self, predictions: List[str]) -> None:
@@ -2128,6 +2602,7 @@ class KeyboardBridge(QObject):
             except Exception as exc:  # pragma: no cover — defensive
                 _logger.warning("Snippet reload after import failed: %s", exc)
             self._current_word = ""
+            self._raw_token = ""
             self._context_buffer = ""
             self._sentence_buffer = ""
             self._predictions = []
@@ -2599,6 +3074,7 @@ class KeyboardBridge(QObject):
             # Window changed but the element is unreadable; drop the stale
             # token so the next readable one re-seeds instead of mismatching.
             self._last_focus_token = None
+        self._check_caret_moved(window_switched)
         # Update auto-detect for compat mode on every poll (cheap on
         # Windows — class lookup is a syscall, process check only fires
         # on class miss).  Auto-active toggling is debounced internally
@@ -2621,6 +3097,53 @@ class KeyboardBridge(QObject):
             if callable(set_target):
                 set_target(hwnd)
         self._last_foreground_hwnd = hwnd
+
+    def _check_caret_moved(self, window_switched: bool) -> None:
+        """Clear stale context when the user moves the caret themselves.
+
+        ``focused_element_token`` answers "different control?".  This
+        answers "different *place*?", which it cannot: clicking from one
+        paragraph to another inside a single text box keeps the same
+        element, and a web page often exposes one UIA element for the
+        whole document, so two fields on it share a RuntimeId.  Either way
+        the prediction context ends up describing text that is no longer
+        beside the caret.
+
+        Two guards keep this from firing on its own movement:
+
+        **Typing moves the caret too**, so a keystroke since the previous
+        poll means the move was ours and is expected.
+
+        **Only between words.**  A reset mid-word is the dangerous
+        direction: it clears ``_current_word`` while the partial word is
+        still on screen, and the next pill tap would then insert the whole
+        word beside it ("backspacbackspaces"). Scrolling also drags the
+        caret rectangle across the screen without the caret moving in the
+        text, and that is the false positive most likely to land
+        mid-word. Waiting for a word boundary costs the mid-word case,
+        where a stale context matters least because the user is about to
+        finish the word anyway.
+        """
+        token = caret_position_token()
+        if token is None:
+            # No caret published (most browsers, Electron) or not Windows.
+            # Fail closed: forget the baseline so a later readable token
+            # re-seeds rather than comparing against something ancient.
+            self._last_caret_token = None
+            self._keystroke_since_poll = False
+            return
+
+        typed_since_last_poll = self._keystroke_since_poll
+        self._keystroke_since_poll = False
+        previous = self._last_caret_token
+        self._last_caret_token = token
+
+        if window_switched or previous is None or token == previous:
+            return
+        if typed_since_last_poll or self._current_word:
+            return
+        self._reset_typing_context()
+        _logger.debug("Caret moved without typing — predictions cleared")
 
     def _get_foreground_window_id(self) -> int:
         """Return the focused-window ID, or 0 if unavailable.
@@ -2735,9 +3258,17 @@ class KeyboardBridge(QObject):
         """
         self._predictions = []
         self._current_word = ""
+        self._raw_token = ""
+        self._pending_auto_cap = False
         self._word_typed_under_caps_lock = False
         self._sentence_buffer = ""
         self._context_buffer = ""
+        # A live snippet offer is about the text these buffers held, so it
+        # goes with them.  This is also what stops an offer raised just
+        # before focus landed on a password field from sitting there
+        # savable: privacy mode has to mean "stop doing this", not "stop
+        # starting new ones".
+        self._withdraw_snippet_offer()
         self.predictionsChanged.emit([])
 
     def _enter_privacy_mode(self) -> None:
@@ -3034,6 +3565,7 @@ class KeyboardBridge(QObject):
             if len(self._context_buffer) > 100:
                 self._context_buffer = self._context_buffer[-100:]
         self._current_word = ""
+        self._raw_token = ""
         self._word_typed_under_caps_lock = False
 
         # Refresh predictions
@@ -3156,12 +3688,17 @@ class KeyboardBridge(QObject):
 
         display = self._display_cased(capitalised)
         top = display[0]
-        self._send_text(top + " ")
+        # Same as the pill and snippet paths: the gesture is a keystroke,
+        # and the capital (if any) is already in `top`, so a Shift still
+        # held would double-apply and deliver the whole word uppercase.
+        self._release_sticky_modifiers()
+        self._send_literal_text(top + " ")
         self._context_buffer += top + " "
         self._sentence_buffer += top + " "
         if len(self._context_buffer) > 200:
             self._context_buffer = self._context_buffer[-200:]
         self._current_word = ""
+        self._raw_token = ""
         self._word_typed_under_caps_lock = False
 
         # Show the rest as alternative predictions in case the top guess is wrong.

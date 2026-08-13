@@ -34,6 +34,8 @@ Window {
         property bool savedCompactView: false
         property bool savedAudioEnabled: false
         property bool savedAutoSpaceAfterPunctuation: true
+        property bool savedIntelligentSpacing: true
+        property bool savedSnippetDetection: true
         property bool savedAutoCapitalizeAfterPunctuation: false
         property bool savedAutoSaveOnExit: true
         property bool savedSwipeEnabled: false
@@ -143,12 +145,16 @@ Window {
         }
     }
 
-    // Safety net: if the keyboard was parked off-screen (DOCK) and then hidden
-    // and re-shown via the tray, bring it back to a usable on-screen NORMAL
-    // state instead of reappearing off-screen. Tuck's own move doesn't change
-    // visibility, so this only fires on the tray hide→show path.
+    // Safety net: if the keyboard was parked off-screen (DOCK) and then put
+    // away and brought back via the tray, restore it to a usable on-screen
+    // NORMAL state instead of reappearing off-screen. Tuck's own move doesn't
+    // change visibility, so this only fires on the tray round trip. Minimized
+    // is excluded alongside Hidden for the same reason: it's a way *out*, so
+    // untucking there would fire on the way down instead of the way back up.
     onVisibilityChanged: {
-        if (root.tucked && root.visibility !== Window.Hidden) {
+        if (root.tucked
+                && root.visibility !== Window.Hidden
+                && root.visibility !== Window.Minimized) {
             root.x = root.preTuckX
             root.y = root.preTuckY
             root.tucked = false
@@ -249,6 +255,8 @@ Window {
         // Load punctuation and auto-save settings
         if (keyboard) {
             keyboard.setAutoSpaceAfterPunctuation(appSettings.savedAutoSpaceAfterPunctuation)
+            keyboard.setIntelligentSpacing(appSettings.savedIntelligentSpacing)
+            keyboard.setSnippetDetection(appSettings.savedSnippetDetection)
             keyboard.setAutoCapitalizeAfterPunctuation(appSettings.savedAutoCapitalizeAfterPunctuation)
             keyboard.setAutoSaveOnExit(appSettings.savedAutoSaveOnExit)
             keyboard.setSwipeEnabled(appSettings.savedSwipeEnabled)
@@ -395,6 +403,12 @@ Window {
 
     // Auto-space and auto-capitalize after punctuation
     property bool autoSpaceAfterPunctuation: appSettings.savedAutoSpaceAfterPunctuation
+    // Skip the punctuation auto-space inside a structured token (an
+    // email, a link, a decimal). Only meaningful while the auto-space
+    // above is on; see src/text_patterns.py for the shapes.
+    property bool intelligentSpacing: appSettings.savedIntelligentSpacing
+    // Offer to save a just-typed email / phone / address to Snippets.
+    property bool snippetDetection: appSettings.savedSnippetDetection
     property bool autoCapitalizeAfterPunctuation: appSettings.savedAutoCapitalizeAfterPunctuation
 
     // Auto-save prediction model on exit
@@ -767,6 +781,18 @@ Window {
     property color themeKeyPressed: activeTheme.keyPressed
     property color themeTextColor: activeTheme.textColor
     property color themeAccent: activeTheme.accent
+
+    // Ink for text drawn ON TOP of an accent-coloured fill.  Same
+    // luminance rule as KeyButton._onFillColor, and it exists for the
+    // same reason: several themes ship a pale accent (Blackboard,
+    // Spaceship) and Typewriter is a light theme outright, so any fixed
+    // colour is unreadable on about half of them.  Pass an *opaque*
+    // fill — a semi-transparent one reports its own channels rather than
+    // the blend the eye sees, so the luminance would be a lie.
+    function inkOn(fill) {
+        var lum = fill.r * 0.299 + fill.g * 0.587 + fill.b * 0.114
+        return lum > 0.5 ? "#111111" : "#ffffff"
+    }
 
     // Key tint for the "accent" style: the editing keys a user reaches for
     // without looking (Esc, Tab, Shift, Backspace, Del) on the compact
@@ -3153,6 +3179,256 @@ Window {
             }
         }
 
+        // "Save this to Snippets?" offer, raised by the bridge when a
+        // just-typed email / phone / address looks worth keeping.
+        //
+        // Unlike its two sibling toasts above this one is *interactive*,
+        // which changes three things:
+        //   * closePolicy MUST stay NoAutoClose. Every OSK key click is a
+        //     press-outside, so CloseOnPressOutside would slam it shut on
+        //     the first keystroke after it appears — the same trap the
+        //     prediction-edit popup documents.
+        //   * the dwell is long (8 s, not 1.4 s) because the user has to
+        //     read it, decide, and land a click with an imprecise pointer.
+        //     Any tap on either button stops the timer.
+        //   * it must never steal a keystroke, so it is not modal and
+        //     installs no overlay.
+        // The value is typed content, so the Text renders it as
+        // PlainText — see the AutoText gotcha in CLAUDE.md.
+        Popup {
+            id: snippetOfferToast
+            objectName: "snippetOfferToast"
+            parent: Overlay.overlay
+
+            property string offerKind: ""
+            property string offerLabel: ""
+            property string offerValue: ""
+            // Both buttons stay inert for a moment after the banner opens.
+            // The offer is raised by the same keystroke that repopulates
+            // the suggestion pills, so without this a click already on its
+            // way to a pill would be caught by a Save button that did not
+            // exist when the user started the movement -- and "Save" here
+            // means writing their email or address to disk. Deliberately
+            // longer than a UI-polish delay: this is a mouse-driven
+            // keyboard for imprecise motor input, so a click can land well
+            // after the intent formed.
+            property bool armed: false
+
+            x: (root.width - width) / 2
+            // Parked at the bottom, clear of the suggestion row. The pill
+            // row (y 52 to ~95, see outerLayout.anchors.topMargin) is the
+            // one place on screen that changes at the instant this appears,
+            // which makes it exactly the wrong place to put a button that
+            // persists personal data. The bottom row is static by
+            // comparison, and a mis-click that lands on a key instead of
+            // here merely types a character.
+            y: root.height - height - 10
+            width: Math.min(root.width - 24, Math.max(280, offerRow.implicitWidth + 24))
+            height: offerRow.implicitHeight + 16
+            modal: false
+            dim: false
+            closePolicy: Popup.NoAutoClose
+
+            background: Rectangle {
+                color: "#22282e"
+                border.color: root.themeAccent
+                border.width: 1
+                radius: 8
+            }
+
+            contentItem: Row {
+                id: offerRow
+                spacing: 10
+
+                Column {
+                    spacing: 1
+                    anchors.verticalCenter: parent.verticalCenter
+                    Text {
+                        text: qsTr("Save this %1 to Snippets?").arg(
+                                  snippetOfferToast.offerLabel.toLowerCase())
+                        color: "#dfe6ec"
+                        font.pixelSize: 12
+                        textFormat: Text.PlainText
+                    }
+                    Text {
+                        // The detected value, so the user can see exactly
+                        // what would be stored before agreeing to store it.
+                        text: snippetOfferToast.offerValue
+                        color: root.themeAccent
+                        font.pixelSize: 13
+                        font.weight: Font.Bold
+                        textFormat: Text.PlainText
+                        elide: Text.ElideRight
+                        width: Math.min(implicitWidth, root.width - 190)
+                    }
+                }
+
+                // Deliberately large hit targets: this is a mouse-driven
+                // keyboard for imprecise motor input, and a 20 px "x" in a
+                // corner would be unusable.
+                Rectangle {
+                    width: 64
+                    height: 34
+                    radius: 6
+                    anchors.verticalCenter: parent.verticalCenter
+                    // Kept opaque in both states so inkOn() can read a
+                    // luminance that matches what is actually on screen.
+                    color: saveOfferMouse.containsMouse
+                           ? Qt.lighter(root.themeAccent, 1.15)
+                           : root.themeAccent
+                    border.color: root.themeAccent
+                    border.width: 1
+                    Text {
+                        anchors.centerIn: parent
+                        text: qsTr("Save")
+                        color: root.inkOn(parent.color)
+                        font.pixelSize: 13
+                        font.weight: Font.Bold
+                        textFormat: Text.PlainText
+                    }
+                    MouseArea {
+                        id: saveOfferMouse
+                        anchors.fill: parent
+                        enabled: snippetOfferToast.armed
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: {
+                            // Only confirm what actually got written. The
+                            // store refuses past its 50-snippet cap, and
+                            // flashing "Saved" regardless left the user
+                            // believing their email was stored when it
+                            // was not.
+                            var saved = keyboard.acceptSnippetOffer()
+                            snippetOfferToast.dismiss()
+                            if (saved) {
+                                editSavedToast.flash()
+                            } else {
+                                snippetsFullToast.flash()
+                            }
+                        }
+                    }
+                }
+
+                Rectangle {
+                    width: 34
+                    height: 34
+                    radius: 6
+                    anchors.verticalCenter: parent.verticalCenter
+                    color: dismissOfferMouse.containsMouse ? "#3a4048" : "transparent"
+                    border.color: "#55606a"
+                    border.width: 1
+                    Text {
+                        anchors.centerIn: parent
+                        text: "✕"
+                        color: "#aab4be"
+                        font.pixelSize: 13
+                        textFormat: Text.PlainText
+                    }
+                    MouseArea {
+                        id: dismissOfferMouse
+                        anchors.fill: parent
+                        enabled: snippetOfferToast.armed
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: {
+                            keyboard.dismissSnippetOffer()
+                            snippetOfferToast.dismiss()
+                        }
+                    }
+                }
+            }
+
+            Timer {
+                id: snippetOfferArmTimer
+                interval: 400
+                onTriggered: snippetOfferToast.armed = true
+            }
+
+            Timer {
+                id: snippetOfferTimer
+                interval: 8000
+                // Ignoring an offer is a decision too: tell the bridge, or
+                // the value stays "pending" there and the next word
+                // boundary can't raise a different one.
+                onTriggered: {
+                    keyboard.dismissSnippetOffer()
+                    snippetOfferToast.close()
+                }
+            }
+
+            function show(kind, label, value) {
+                offerKind = kind
+                offerLabel = label
+                offerValue = value
+                armed = false
+                open()
+                snippetOfferArmTimer.restart()
+                snippetOfferTimer.restart()
+            }
+
+            function dismiss() {
+                snippetOfferArmTimer.stop()
+                snippetOfferTimer.stop()
+                armed = false
+                close()
+            }
+        }
+
+        // Shown when Save is tapped but the snippet list is already at its
+        // 50-entry cap, so the user finds out instead of walking away
+        // believing the value was stored.
+        Popup {
+            id: snippetsFullToast
+            parent: Overlay.overlay
+            x: (root.width - width) / 2
+            y: 36
+            width: 260
+            height: 32
+            modal: false
+            dim: false
+            closePolicy: Popup.NoAutoClose
+
+            background: Rectangle {
+                color: "#3e2e1e"
+                border.color: "#e0a85a"
+                border.width: 1
+                radius: 8
+            }
+
+            contentItem: Text {
+                text: qsTr("Snippets are full — delete one first")
+                color: "#f0d0a0"
+                font.pixelSize: 12
+                textFormat: Text.PlainText
+                verticalAlignment: Text.AlignVCenter
+            }
+
+            Timer {
+                id: snippetsFullToastTimer
+                interval: 2600
+                onTriggered: snippetsFullToast.close()
+            }
+
+            function flash() {
+                open()
+                snippetsFullToastTimer.restart()
+            }
+        }
+
+        Connections {
+            target: keyboard
+            function onSnippetOffered(kind, label, value) {
+                if (!root.snippetDetection) return
+                snippetOfferToast.show(kind, label, value)
+            }
+            // The bridge dropped the offer underneath us (app switch,
+            // context reset, privacy mode). Close the toast rather than
+            // leave a Save button on screen that would do nothing.
+            function onSnippetOfferWithdrawn() {
+                snippetOfferToast.dismiss()
+            }
+        }
+
         // Key-press preview bubble — flashed just above a key to confirm
         // the character that was actually typed (the shifted variant on
         // right-click isn't always the glyph drawn on the key).  Shown on
@@ -3408,6 +3684,8 @@ Window {
             suggestionsEnabled: root.suggestionsEnabled
             predictionCount: keyboard ? keyboard.predictionCount : 8
             autoSpaceAfterPunctuation: root.autoSpaceAfterPunctuation
+            intelligentSpacing: root.intelligentSpacing
+            snippetDetection: root.snippetDetection
             autoCapitalizeAfterPunctuation: root.autoCapitalizeAfterPunctuation
             autoSaveOnExit: root.autoSaveOnExit
             swipeEnabled: root.swipeEnabled
@@ -3472,6 +3750,14 @@ Window {
                     root.autoCapitalizeAfterPunctuation = value
                     appSettings.savedAutoCapitalizeAfterPunctuation = value
                     if (keyboard) keyboard.setAutoCapitalizeAfterPunctuation(value)
+                } else if (setting === "intelligentSpacing") {
+                    root.intelligentSpacing = value
+                    appSettings.savedIntelligentSpacing = value
+                    if (keyboard) keyboard.setIntelligentSpacing(value)
+                } else if (setting === "snippetDetection") {
+                    root.snippetDetection = value
+                    appSettings.savedSnippetDetection = value
+                    if (keyboard) keyboard.setSnippetDetection(value)
                 } else if (setting === "autoSaveOnExit") {
                     root.autoSaveOnExit = value
                     appSettings.savedAutoSaveOnExit = value

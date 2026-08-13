@@ -29,6 +29,72 @@ from .vocabulary_pack import PackManager
 
 _logger = logging.getLogger("HybridPredictor")
 
+# Real one- and two-letter English words, allowed through the next-word
+# short-word filter.
+#
+# That filter used to be a blanket ``len(word) <= 2`` (with "i" as the
+# single exception), which threw away most of the words a next-word
+# prediction is *best* at: after "I want", the useful suggestions are
+# "to", "it", "my", "us"; after "one", they are "of" and "or".  Those are
+# also the highest-frequency words in English, so the bar was silently
+# withholding its strongest guesses and offering the fourth-best instead.
+#
+# It stays an allow-list rather than a length change because the filter
+# is also doing real work: the engine learns whatever the user types, so
+# stray two-character fragments ("th", "ap", "sm") from a typo or an
+# interrupted word accumulate in the model, and a bare length rule would
+# let every one of them compete for a pill. Words, not lengths.
+_SHORT_WORDS_ALLOWED = frozenset(
+    {
+        # one letter
+        "a",
+        "i",
+        # two letters
+        "am",
+        "an",
+        "as",
+        "at",
+        "be",
+        "by",
+        "do",
+        "go",
+        "he",
+        "hi",
+        "id",
+        "if",
+        "in",
+        "is",
+        "it",
+        "me",
+        "my",
+        "no",
+        "of",
+        "oh",
+        "ok",
+        "on",
+        "or",
+        "so",
+        "to",
+        "up",
+        "us",
+        "we",
+        "ye",
+    }
+)
+
+
+def _short_word_allowed(word: str) -> bool:
+    """True if *word* may be offered as a next-word prediction.
+
+    Anything three characters or longer passes untouched; shorter words
+    have to be on :data:`_SHORT_WORDS_ALLOWED`.  Case-insensitive, so a
+    capitalised "To" at a sentence start is judged on the word rather
+    than its casing.
+    """
+    if len(word) > 2:
+        return True
+    return word.lower() in _SHORT_WORDS_ALLOWED
+
 
 class HybridPredictor(QObject):
     """
@@ -539,7 +605,7 @@ class HybridPredictor(QObject):
         adding a word to ``scores``.  Used by every strategy that
         iterates per-source predictions before merging.
         """
-        if is_next_word and len(word) <= 2 and word != "i":
+        if is_next_word and not _short_word_allowed(word):
             return False
         return self._is_valid_word(word)
 
@@ -603,7 +669,7 @@ class HybridPredictor(QObject):
             # Final short-word guard — catches any short word that
             # slipped past the per-source filter (e.g. fuzzy, which
             # the rank strategy historically didn't filter).
-            if is_next_word and len(word) <= 2 and word != "i":
+            if is_next_word and not _short_word_allowed(word):
                 continue
             capped = self._ngram.get_capitalized(word, sentence_start)
             results.append(capped)

@@ -195,6 +195,8 @@ Yes on Windows (Unicode keystroke injection covers anything in BMP and supplemen
 - Right-click a character key for its shifted variant without flipping sticky shift
 - Optional swipe / glide typing (Gboard-style shape matching)
 - Numpad panel with NumLock toggle between digits and navigation keys
+- Intelligent spacing: the auto-space after punctuation stands down inside an email, a link, a decimal, a time, or a file path, instead of breaking it in half
+- Snippets for text you type constantly (name, email, address, canned replies), inserted with one tap. Alpha-OSK can spot an email, phone number or address as you type it and offer to save it for you, on your machine only and never while learning is paused
 
 ### Prediction
 
@@ -204,6 +206,7 @@ Yes on Windows (Unicode keystroke injection covers anything in BMP and supplemen
 - Auto-rehabilitation of suppressed words after 3 manual retypes
 - Custom vocabulary pack import for domain dictionaries (medical, programming, etc.)
 - Per-keystroke autocorrect surfaced as suggestion pills, never silent overwrites
+- Shift and Caps Lock both recase the suggestions live, so the pill you tap arrives capitalised the way you meant it
 
 ### Data backup
 

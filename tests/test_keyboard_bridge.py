@@ -2031,3 +2031,665 @@ class TestPasswordDetectionAvailableProperty:
     def test_false_when_backend_unavailable(self, monkeypatch):
         b = self._make_bridge(monkeypatch, False)
         assert b.passwordDetectionAvailable is False
+
+
+def _typed(bridge: KeyboardBridge) -> list[str]:
+    """Every string the bridge sent to the synthesizer, in order."""
+    return [c[0][0] for c in bridge._synth.send_text.call_args_list]
+
+
+def _type(bridge: KeyboardBridge, text: str) -> None:
+    """Drive the bridge through *text* one keystroke at a time.
+
+    Space goes through pressSpecialKey because that is the path QML uses
+    and the one that completes a word; everything else is a char key.
+    """
+    for ch in text:
+        if ch == " ":
+            bridge.pressSpecialKey("space")
+        else:
+            bridge.pressKeyLiteral(ch)
+
+
+class TestShiftCapitalizesSuggestions:
+    """Shift capitalises the suggestion pills, the way Caps Lock already did.
+
+    Shift means "the next character is a capital", and a tapped pill *is*
+    the next thing typed.  Without this the only way to capitalise a
+    suggested word was to type its first letter shifted and wait for the
+    typed-prefix mirror to catch up, which defeats the point of tapping
+    a pill at all.
+    """
+
+    def test_shift_capitalizes_the_first_letter(self, bridge: KeyboardBridge):
+        bridge._shift_active = True
+        assert bridge._display_cased(["hello", "help"]) == ["Hello", "Help"]
+
+    def test_without_shift_nothing_changes(self, bridge: KeyboardBridge):
+        """The inverse: "always capitalise" would pass the test above."""
+        bridge._shift_active = False
+        assert bridge._display_cased(["hello", "help"]) == ["hello", "help"]
+
+    def test_only_the_first_letter(self, bridge: KeyboardBridge):
+        """Shift is one character's worth of capital, not a mode."""
+        bridge._shift_active = True
+        assert bridge._display_cased(["hello"]) == ["Hello"]
+
+    def test_caps_lock_still_wins(self, bridge: KeyboardBridge):
+        bridge._caps_lock_active = True
+        bridge._shift_active = True
+        assert bridge._display_cased(["hello"]) == ["HELLO"]
+
+    def test_a_typed_uppercase_prefix_still_wins(self, bridge: KeyboardBridge):
+        """An uppercase already in the prefix says more about the word's
+        shape (mid-word caps like "iP" -> "iPhone") than a pending Shift.
+        """
+        bridge._shift_active = True
+        bridge._current_word = "iP"
+        assert bridge._display_cased(["iphone"]) == ["iPhone"]
+
+    def test_empty_predictions_are_left_alone(self, bridge: KeyboardBridge):
+        bridge._shift_active = True
+        assert bridge._display_cased([]) == []
+
+    def test_toggling_shift_redraws_the_visible_pills(self, bridge: KeyboardBridge):
+        """Otherwise the bar contradicts the keycaps until the next keystroke."""
+        bridge._predictions = ["hello"]
+        with patch.object(bridge, "_update_predictions") as refresh:
+            bridge.toggleShift()
+        refresh.assert_called_once()
+
+    def test_releasing_shift_redraws_them_too(self, bridge: KeyboardBridge):
+        bridge._shift_active = True
+        bridge._predictions = ["Hello"]
+        with patch.object(bridge, "_update_predictions") as refresh:
+            bridge.releaseShift()
+        refresh.assert_called_once()
+
+    def test_locking_shift_redraws_them_too(self, bridge: KeyboardBridge):
+        """Only the held state matters, not how it came to be held."""
+        bridge._predictions = ["hello"]
+        with patch.object(bridge, "_update_predictions") as refresh:
+            bridge.lockModifier("shift")
+        refresh.assert_called_once()
+
+    def test_an_empty_bar_costs_no_prediction_round_trip(self, bridge: KeyboardBridge):
+        bridge._predictions = []
+        with patch.object(bridge, "_update_predictions") as refresh:
+            bridge.toggleShift()
+        refresh.assert_not_called()
+
+
+class TestVerbatimInsertsSurviveAHeldModifier:
+    """A modifier held at the OS level rewrites a whole verbatim insert.
+
+    ``_make_char_scancode_events`` only knows not to *add* a redundant
+    Shift wrap; it cannot cancel a standing hold, so "Hello" typed with
+    Shift down arrives as "HELLO", and with Ctrl down every character
+    arrives as a chord instead of as text.  Sticky and right-click-locked
+    modifiers both survive a pill tap, so this is reachable in ordinary
+    use rather than only mid-chord.
+    """
+
+    def test_a_pill_tap_drops_a_sticky_shift_before_typing(self, bridge: KeyboardBridge):
+        bridge._shift_active = True
+        bridge._current_word = ""
+        bridge.pressPrediction("Hello")
+        assert bridge._shift_active is False
+        bridge._synth.release_modifier.assert_any_call("shift")
+        assert _typed(bridge)[-1] == "Hello "
+
+    def test_a_locked_shift_survives_the_tap_but_not_the_text(self, bridge: KeyboardBridge):
+        """The lock is the user's decision; corrupting the word is not.
+
+        The hold is dropped for the duration of the insert and put back
+        after, so the word lands as written and the keycap still agrees
+        with the OS about Shift being down.
+        """
+        bridge.lockModifier("shift")
+        bridge._synth.reset_mock()
+        bridge._current_word = ""
+        bridge.pressPrediction("Hello")
+        assert bridge._shift_locked is True
+        assert bridge._shift_active is True
+        bridge._synth.release_modifier.assert_any_call("shift")
+        bridge._synth.hold_modifier.assert_any_call("shift")
+        assert _typed(bridge)[-1] == "Hello "
+
+    def test_a_snippet_insert_drops_a_sticky_shift(self, bridge: KeyboardBridge):
+        """Otherwise the whole address arrives in capitals."""
+        bridge._snippets.set(1, "Email", "owen@example.com")
+        bridge._shift_active = True
+        bridge.insertSnippet(1)
+        assert bridge._shift_active is False
+        assert _typed(bridge)[-1] == "owen@example.com"
+
+    def test_ctrl_is_dropped_too(self, bridge: KeyboardBridge):
+        """With Ctrl held every character arrives as a chord, not as text."""
+        bridge._ctrl_active = True
+        bridge._current_word = ""
+        bridge.pressPrediction("hello")
+        assert bridge._ctrl_active is False
+        bridge._synth.release_modifier.assert_any_call("ctrl")
+
+    def test_nothing_held_means_no_modifier_traffic(self, bridge: KeyboardBridge):
+        """The ordinary path must not pay for a release/re-hold round trip."""
+        bridge._current_word = ""
+        bridge._synth.reset_mock()
+        bridge.pressPrediction("hello")
+        bridge._synth.release_modifier.assert_not_called()
+        bridge._synth.hold_modifier.assert_not_called()
+
+
+class TestIntelligentSpacing:
+    """The punctuation auto-space is skipped inside a structured token.
+
+    The shapes themselves are covered in tests/test_text_patterns.py;
+    these are about the bridge handing it the right token.  That is the
+    part with a trap in it: ``_current_word`` resets at "@" and at every
+    dot, so an email is only visible through ``_raw_token``.
+    """
+
+    def test_a_decimal_point_gets_no_space(self, bridge: KeyboardBridge):
+        _type(bridge, "pi is 3")
+        bridge._synth.send_text.reset_mock()
+        bridge.pressKeyLiteral(".")
+        assert _typed(bridge) == ["."]
+
+    def test_a_sentence_end_still_gets_its_space(self, bridge: KeyboardBridge):
+        """The inverse, and the half that matters: never eat a prose space."""
+        _type(bridge, "i went home")
+        bridge._synth.send_text.reset_mock()
+        bridge.pressKeyLiteral(".")
+        assert _typed(bridge) == [".", " "]
+
+    def test_an_email_domain_gets_no_space(self, bridge: KeyboardBridge):
+        """_current_word is "gmail" here; only _raw_token still has the "@"."""
+        _type(bridge, "mail me at owen@gmail")
+        bridge._synth.send_text.reset_mock()
+        bridge.pressKeyLiteral(".")
+        assert _typed(bridge) == ["."]
+
+    def test_a_thousands_separator_gets_no_space(self, bridge: KeyboardBridge):
+        _type(bridge, "it cost 1")
+        bridge._synth.send_text.reset_mock()
+        bridge.pressKeyLiteral(",")
+        assert _typed(bridge) == [","]
+
+    def test_a_prose_comma_still_gets_its_space(self, bridge: KeyboardBridge):
+        _type(bridge, "well hello")
+        bridge._synth.send_text.reset_mock()
+        bridge.pressKeyLiteral(",")
+        assert _typed(bridge) == [",", " "]
+
+    def test_a_dotted_run_stays_joined_once_the_first_dot_was_suppressed(
+        self, bridge: KeyboardBridge
+    ):
+        """Evidence at the first dot carries the whole run.
+
+        "@" proves the rest is a domain, so no space is inserted, so the
+        run before the cursor is still intact when the next dot lands and
+        the "already contains a dot" rule sees it.  This used to be
+        demonstrated with a bare "example.co" typed into an empty field,
+        via a first-token rescue that has since been removed for eating
+        the first sentence of every newly focused field -- see
+        TestIntelligentSpacingInAFreshField.
+        """
+        _type(bridge, "mail owen@example.co")
+        bridge._synth.send_text.reset_mock()
+        bridge.pressKeyLiteral(".")
+        assert _typed(bridge) == ["."]
+
+    def test_a_mid_sentence_bare_domain_loses_a_space_per_dot(self, bridge: KeyboardBridge):
+        """Documenting the known limitation, not endorsing it.
+
+        Mid-sentence there is no evidence at the first dot ("example" is
+        an ordinary word), so a space goes in.  That space ends the run,
+        which means the *second* dot has no evidence either and the miss
+        repeats: "example.co.uk" arrives as "example. co. uk".
+
+        Guessing from the following character was tried and rejected --
+        it turns "i went home. then i left" into "home.then", and
+        corrupting prose is far worse than a space the user can delete.
+        Closing this properly needs lookahead (buffering keystrokes until
+        a known TLD resolves), which costs the immediate visual feedback
+        that a mouse-driven keyboard depends on.  If you improve it,
+        change this test rather than deleting it.
+        """
+        _type(bridge, "go to example.co")
+        bridge._synth.send_text.reset_mock()
+        bridge.pressKeyLiteral(".")
+        assert _typed(bridge) == [".", " "]
+
+    def test_turning_it_off_restores_the_plain_auto_space(self, bridge: KeyboardBridge):
+        bridge.setIntelligentSpacing(False)
+        _type(bridge, "pi is 3")
+        bridge._synth.send_text.reset_mock()
+        bridge.pressKeyLiteral(".")
+        assert _typed(bridge) == [".", " "]
+
+    def test_a_suppressed_space_is_not_recorded_in_the_context_buffer(self, bridge: KeyboardBridge):
+        """The buffer mirrors the screen; a phantom space breaks pill inserts."""
+        _type(bridge, "pi is 3")
+        bridge.pressKeyLiteral(".")
+        assert not bridge._context_buffer.endswith(". ")
+
+    def test_no_auto_capital_mid_token(self, bridge: KeyboardBridge):
+        """Otherwise "example.com" comes out "example.Com"."""
+        bridge._auto_capitalize_after_punctuation = True
+        _type(bridge, "visit example.co")
+        bridge.pressKeyLiteral(".")
+        assert bridge._shift_active is False
+
+    def test_a_sentence_end_still_auto_capitalizes(self, bridge: KeyboardBridge):
+        """Arms _pending_auto_cap, deliberately *not* _shift_active.
+
+        See TestAutoCapitalizeIsNotAHeldShift for why the difference
+        matters: the Shift version leaked into every chord.
+        """
+        bridge._auto_capitalize_after_punctuation = True
+        _type(bridge, "i went home")
+        bridge.pressKeyLiteral(".")
+        assert bridge._pending_auto_cap is True
+        assert bridge._shift_active is False
+
+    def test_backspace_walks_the_token_back(self, bridge: KeyboardBridge):
+        _type(bridge, "3")
+        bridge.pressSpecialKey("backspace")
+        assert bridge._raw_token == ""
+
+    def test_a_cursor_move_abandons_the_token(self, bridge: KeyboardBridge):
+        """We can no longer say what sits before the caret, so we say nothing."""
+        _type(bridge, "example")
+        bridge.pressSpecialKey("left")
+        assert bridge._raw_token == ""
+
+    def test_privacy_mode_tracks_nothing(self, bridge: KeyboardBridge):
+        """_raw_token holds typed characters, so it is scrubbed like the rest."""
+        bridge.setPrivacyMode(True)
+        _type(bridge, "hunter2")
+        assert bridge._raw_token == ""
+
+
+class TestSnippetOffers:
+    """Detecting a just-typed email / phone / address and offering to save it."""
+
+    @pytest.fixture(autouse=True)
+    def _isolate_snippets(self, bridge: KeyboardBridge, tmp_path):
+        """Never touch the real snippets.json — these tests write to it."""
+        from src.snippets import SnippetStore
+
+        bridge._snippets = SnippetStore(tmp_path / "snippets.json")
+        bridge._snippets.load()
+
+    def _offers(self, bridge: KeyboardBridge) -> list:
+        seen: list = []
+        bridge.snippetOffered.connect(lambda k, lbl, v: seen.append((k, lbl, v)))
+        return seen
+
+    def test_an_email_is_offered(self, bridge: KeyboardBridge):
+        seen = self._offers(bridge)
+        _type(bridge, "write to owen@example.com ")
+        assert seen == [("email", "Email", "owen@example.com")]
+
+    def test_a_phone_is_offered(self, bridge: KeyboardBridge):
+        seen = self._offers(bridge)
+        _type(bridge, "call 555-123-4567 ")
+        assert seen == [("phone", "Phone", "555-123-4567")]
+
+    def test_ordinary_typing_offers_nothing(self, bridge: KeyboardBridge):
+        """The inverse: an over-eager detector trains the user to dismiss."""
+        seen = self._offers(bridge)
+        _type(bridge, "the quick brown fox jumped over 500 people ")
+        assert seen == []
+
+    def test_accepting_fills_the_empty_matching_slot(self, bridge: KeyboardBridge):
+        _type(bridge, "write to owen@example.com ")
+        bridge.acceptSnippetOffer()
+        saved = {s["label"]: s["value"] for s in bridge._snippets.get_all()}
+        assert saved["Email"] == "owen@example.com"
+
+    def test_a_second_email_becomes_its_own_slot(self, bridge: KeyboardBridge):
+        """A curated value is never overwritten; work and personal both matter."""
+        bridge._snippets.set(1, "Email", "first@example.com")
+        _type(bridge, "write to second@example.com ")
+        bridge.acceptSnippetOffer()
+        saved = {s["label"]: s["value"] for s in bridge._snippets.get_all()}
+        assert saved["Email"] == "first@example.com"
+        assert saved["Email 2"] == "second@example.com"
+
+    def test_dismissing_saves_nothing(self, bridge: KeyboardBridge):
+        _type(bridge, "write to owen@example.com ")
+        bridge.dismissSnippetOffer()
+        saved = {s["label"]: s["value"] for s in bridge._snippets.get_all()}
+        assert saved["Email"] == ""
+
+    def test_a_dismissed_value_is_not_offered_again(self, bridge: KeyboardBridge):
+        """Otherwise the next word boundary re-detects it from the buffer."""
+        _type(bridge, "write to owen@example.com ")
+        bridge.dismissSnippetOffer()
+        seen = self._offers(bridge)
+        _type(bridge, "again ")
+        assert seen == []
+
+    def test_a_value_already_saved_is_never_offered(self, bridge: KeyboardBridge):
+        bridge._snippets.set(1, "Email", "owen@example.com")
+        seen = self._offers(bridge)
+        _type(bridge, "write to owen@example.com ")
+        assert seen == []
+
+    def test_only_one_offer_at_a_time(self, bridge: KeyboardBridge):
+        """A second candidate must not replace the one being decided on."""
+        seen = self._offers(bridge)
+        _type(bridge, "owen@example.com and 555-123-4567 ")
+        assert len(seen) == 1
+
+    def test_privacy_mode_offers_nothing(self, bridge: KeyboardBridge):
+        """A password field must not produce an offer, let alone a saved copy."""
+        bridge.setPrivacyMode(True)
+        seen = self._offers(bridge)
+        _type(bridge, "write to owen@example.com ")
+        assert seen == []
+
+    def test_turning_detection_off_offers_nothing(self, bridge: KeyboardBridge):
+        bridge.setSnippetDetection(False)
+        seen = self._offers(bridge)
+        _type(bridge, "write to owen@example.com ")
+        assert seen == []
+
+    def test_accepting_with_no_offer_pending_is_a_no_op(self, bridge: KeyboardBridge):
+        before = bridge._snippets.get_all()
+        bridge.acceptSnippetOffer()
+        assert bridge._snippets.get_all() == before
+
+
+def _press(bridge: KeyboardBridge, text: str) -> None:
+    """Type *text* through the ordinary (non-literal) character path.
+
+    Distinct from ``_type`` above, which uses ``pressKeyLiteral`` and so
+    bypasses the shift / caps / auto-capital case computation entirely.
+    Anything asserting on *casing* has to come through here.
+    """
+    for ch in text:
+        if ch == " ":
+            bridge.pressSpecialKey("space")
+        else:
+            bridge.pressKey(ch)
+
+
+class TestAutoCapitalizeIsNotAHeldShift:
+    """Auto-capitalize must capitalize the next letter and nothing else.
+
+    The first attempt at making this setting work expressed it as
+    ``_shift_active = True``, which looked equivalent and was not.
+    ``_send_key`` builds its chord modifiers straight from that flag, so
+    a sentence-ending period left a Shift that the OS never had but the
+    bridge believed in: Enter became Shift+Enter (a newline in Slack
+    rather than send), Ctrl+C became Ctrl+Shift+C, and arrows started
+    extending a selection instead of moving. It was also the one site in
+    the file that set an ``_*_active`` flag with no paired
+    ``hold_modifier``, which is the invariant ``_without_held_modifiers``
+    relies on to decide what to restore.
+    """
+
+    @pytest.fixture
+    def capping(self, bridge: KeyboardBridge) -> KeyboardBridge:
+        bridge._auto_capitalize_after_punctuation = True
+        return bridge
+
+    def test_the_next_letter_is_capitalized(self, capping: KeyboardBridge):
+        _press(capping, "i went home. world")
+        assert "".join(_typed(capping)).endswith(". World")
+
+    def test_no_shift_is_claimed(self, capping: KeyboardBridge):
+        """The state the whole bug came from."""
+        _press(capping, "i went home.")
+        assert capping._shift_active is False
+        assert capping._pending_auto_cap is True
+
+    def test_no_shift_is_held_at_the_os(self, capping: KeyboardBridge):
+        """Belief and reality have to agree, or the restore path pins it."""
+        _press(capping, "i went home.")
+        capping._synth.hold_modifier.assert_not_called()
+
+    def test_enter_is_not_shift_enter(self, capping: KeyboardBridge):
+        """Shift+Enter inserts a newline in Slack / Teams / Discord."""
+        _press(capping, "i went home.")
+        capping._synth.send_key.reset_mock()
+        capping.pressSpecialKey("return")
+        sent = [c for c in capping._synth.send_key.call_args_list if c[0][0] == "Return"]
+        assert sent, "Return was never sent"
+        assert not sent[0][1].get("modifiers")
+
+    def test_ctrl_c_is_not_ctrl_shift_c(self, capping: KeyboardBridge):
+        _press(capping, "i went home.")
+        capping._synth.send_key.reset_mock()
+        capping.toggleCtrl()
+        capping.pressKey("c")
+        sent = [c for c in capping._synth.send_key.call_args_list if c[0][0] == "c"]
+        assert sent, "the chord was never sent"
+        assert sent[0][1].get("modifiers") == ["ctrl"]
+
+    def test_the_keycaps_follow_it(self, capping: KeyboardBridge):
+        _press(capping, "i went home.")
+        assert capping._current_layer == "upper"
+        _press(capping, "w")
+        assert capping._current_layer == "lower"
+
+    def test_it_is_spent_on_one_letter(self, capping: KeyboardBridge):
+        """Only the first letter, not everything after the full stop.
+
+        Typed spaces go out through ``send_key``, so the joined
+        ``send_text`` stream has none of them in it -- only the auto-space
+        the period inserted.  "Worldhere" is the expected shape: W
+        capitalised, the following word untouched.
+        """
+        _press(capping, "i went home. world here")
+        assert "".join(_typed(capping)).endswith(". Worldhere")
+
+    def test_a_caret_move_drops_it(self, capping: KeyboardBridge):
+        """The capital belonged to the word after the full stop."""
+        _press(capping, "done. ")
+        capping.pressSpecialKey("left")
+        _press(capping, "x")
+        assert _typed(capping)[-1] == "x"
+
+    def test_a_context_reset_drops_it(self, capping: KeyboardBridge):
+        _press(capping, "done. ")
+        capping._reset_typing_context()
+        _press(capping, "x")
+        assert _typed(capping)[-1] == "x"
+
+    def test_off_by_default_changes_nothing(self, bridge: KeyboardBridge):
+        """The inverse: capitalising unconditionally would pass the rest."""
+        _press(bridge, "done. x")
+        assert _typed(bridge)[-1] == "x"
+        assert bridge._pending_auto_cap is False
+
+
+class TestIntelligentSpacingInAFreshField:
+    """The rescue rule that ate the first sentence of every focused field.
+
+    ``suppresses_auto_space`` used to take a "nothing with a space has
+    been typed yet" hint, meant to catch a bare domain typed into a URL
+    bar.  The hint was derived from ``_context_buffer``, which is emptied
+    on every app switch *and* every focused-element change, so it was
+    true at the start of every newly focused text box.  Clicking into a
+    field and typing "hello." lost its space, and then kept losing it,
+    because the buffer still contained none.
+
+    The rule is gone rather than repaired: at the instant the dot lands,
+    "example" and "hello" are the same string, and only text that has not
+    been typed yet tells them apart.
+    """
+
+    def test_the_first_sentence_in_a_fresh_field_keeps_its_space(self, bridge: KeyboardBridge):
+        bridge._reset_typing_context()  # what an app / element switch does
+        _type(bridge, "hello")
+        bridge._synth.send_text.reset_mock()
+        bridge.pressKeyLiteral(".")
+        assert _typed(bridge) == [".", " "]
+
+    def test_and_the_one_after_it(self, bridge: KeyboardBridge):
+        """The original failure repeated, so assert past the first."""
+        bridge._reset_typing_context()
+        _type(bridge, "hello")
+        bridge.pressKeyLiteral(".")
+        _type(bridge, "world")
+        bridge._synth.send_text.reset_mock()
+        bridge.pressKeyLiteral(".")
+        assert _typed(bridge) == [".", " "]
+
+    def test_a_lowercase_first_word_is_not_treated_as_a_domain(self, bridge: KeyboardBridge):
+        bridge._reset_typing_context()
+        _type(bridge, "ok")
+        bridge._synth.send_text.reset_mock()
+        bridge.pressKeyLiteral(".")
+        assert _typed(bridge) == [".", " "]
+
+    @pytest.mark.parametrize(
+        "typed,punct",
+        [("mail owen@gmail", "."), ("pi is 3", "."), ("go to www", "."), ("open https", ":")],
+    )
+    def test_evidence_based_suppression_still_works(self, bridge: KeyboardBridge, typed, punct):
+        """The inverse: deleting every rule would pass the tests above."""
+        _type(bridge, typed)
+        bridge._synth.send_text.reset_mock()
+        bridge.pressKeyLiteral(punct)
+        assert _typed(bridge) == [punct]
+
+
+class TestLockedModifiersCannotCorruptAnInsert:
+    """A right-click-locked modifier survives a pill tap by design.
+
+    ``_release_sticky_modifiers`` deliberately spares it, so the *whole*
+    insert has to run inside ``_without_held_modifiers`` -- not just the
+    ``send_text`` half.  Two of ``pressPrediction``'s four branches never
+    reach ``send_text`` at all, and they are the destructive ones.
+    """
+
+    def test_compat_backspaces_do_not_run_under_a_locked_alt(self, bridge: KeyboardBridge):
+        """Alt+BackSpace is undo; N of them undo N times."""
+        bridge._current_word = "iph"
+        bridge.lockModifier("alt")
+        with patch.object(bridge, "_in_compat_mode", return_value=True):
+            bridge._synth.reset_mock()
+            bridge.pressPrediction("iPhone")
+        order = [c[0][0] for c in bridge._synth.method_calls if c[0]]
+        released = [
+            i for i, c in enumerate(bridge._synth.method_calls) if c[0] == "release_modifier"
+        ]
+        backspaces = [i for i, c in enumerate(bridge._synth.method_calls) if c[0] == "send_key"]
+        assert released and backspaces, f"expected both, got {order}"
+        assert released[0] < backspaces[0], "Alt was still held over the BackSpaces"
+        bridge._synth.hold_modifier.assert_any_call("alt")
+        assert bridge._alt_locked is True
+
+    def test_replace_text_does_not_run_under_a_locked_ctrl(self, bridge: KeyboardBridge):
+        """Ctrl+Shift+Left selects whole words, which the insert overwrites."""
+        bridge._current_word = "iph"
+        bridge.lockModifier("ctrl")
+        bridge._synth.reset_mock()
+        bridge.pressPrediction("iPhone")  # casing mismatch -> replace_text branch
+        calls = [c[0] for c in bridge._synth.method_calls]
+        assert "replace_text" in calls
+        assert calls.index("release_modifier") < calls.index("replace_text")
+        bridge._synth.hold_modifier.assert_any_call("ctrl")
+        assert bridge._ctrl_locked is True
+
+    def test_caps_lock_still_pins_a_sticky_shift(self, bridge: KeyboardBridge):
+        """The exception both inline auto-release copies carry.
+
+        With Caps Lock on, a tapped Shift is meant to persist (it is how
+        a Shift+drag selection is set up). The shared helper dropped it.
+        """
+        bridge._caps_lock_active = True
+        bridge._shift_active = True
+        bridge._current_word = ""
+        bridge.pressPrediction("hello")
+        assert bridge._shift_active is True
+
+    def test_without_caps_lock_it_is_still_released(self, bridge: KeyboardBridge):
+        """The inverse, so "never release" cannot pass as the fix."""
+        bridge._caps_lock_active = False
+        bridge._shift_active = True
+        bridge._current_word = ""
+        bridge.pressPrediction("hello")
+        assert bridge._shift_active is False
+
+
+class TestCaretMoveClearsContext:
+    """Clearing stale context when the user moves the caret themselves.
+
+    ``focused_element_token`` answers "different control?" and cannot
+    answer "different *place* in the same control?".  Clicking from one
+    paragraph to another inside a single text box keeps the element, and
+    a web page commonly exposes one UIA element for the whole document,
+    so two fields on it share a RuntimeId.  Either way the prediction
+    context ends up describing text that is no longer beside the caret.
+    """
+
+    def _poll(self, bridge: KeyboardBridge, token, switched: bool = False) -> None:
+        with patch("src.keyboard_bridge.caret_position_token", return_value=token):
+            bridge._check_caret_moved(switched)
+
+    def test_a_caret_jump_between_words_clears_the_context(self, bridge: KeyboardBridge):
+        bridge._context_buffer = "hello world "
+        self._poll(bridge, "A,10,20")  # seed the baseline
+        self._poll(bridge, "A,400,90")  # user clicked somewhere else
+        assert bridge._context_buffer == ""
+
+    def test_an_unchanged_caret_changes_nothing(self, bridge: KeyboardBridge):
+        bridge._context_buffer = "hello world "
+        self._poll(bridge, "A,10,20")
+        self._poll(bridge, "A,10,20")
+        assert bridge._context_buffer == "hello world "
+
+    def test_typing_does_not_trigger_it(self, bridge: KeyboardBridge):
+        """Our own keystrokes move the caret every time."""
+        bridge._context_buffer = "hello "
+        self._poll(bridge, "A,10,20")
+        bridge._keystroke_since_poll = True
+        self._poll(bridge, "A,30,20")
+        assert bridge._context_buffer == "hello "
+
+    def test_never_mid_word(self, bridge: KeyboardBridge):
+        """The dangerous direction, and the one scrolling would hit.
+
+        A reset mid-word clears ``_current_word`` while the partial word
+        is still on screen, so the next pill tap inserts the whole word
+        beside it -- the "backspacbackspaces" duplication.  Scrolling
+        drags the caret rectangle without the caret moving in the text,
+        which is exactly the false positive most likely to land mid-word.
+        """
+        bridge._context_buffer = "hello "
+        bridge._current_word = "wor"
+        self._poll(bridge, "A,10,20")
+        self._poll(bridge, "A,10,400")
+        assert bridge._context_buffer == "hello "
+        assert bridge._current_word == "wor"
+
+    def test_no_caret_published_is_a_no_op(self, bridge: KeyboardBridge):
+        """Most browsers and Electron apps publish no caret at all.
+
+        None means "don't know", and the whole feature has to fail closed
+        there -- the same contract ``focused_element_token`` uses for a
+        transient UIA failure.
+        """
+        bridge._context_buffer = "hello "
+        self._poll(bridge, None)
+        self._poll(bridge, None)
+        assert bridge._context_buffer == "hello "
+
+    def test_an_app_switch_is_left_to_the_window_check(self, bridge: KeyboardBridge):
+        """Not a second reset for the same event."""
+        bridge._context_buffer = "hello "
+        self._poll(bridge, "A,10,20")
+        self._poll(bridge, "B,10,20", switched=True)
+        assert bridge._context_buffer == "hello "
+
+    def test_the_first_reading_only_seeds(self, bridge: KeyboardBridge):
+        """With no baseline there is nothing to compare against."""
+        bridge._context_buffer = "hello "
+        self._poll(bridge, "A,10,20")
+        assert bridge._context_buffer == "hello "
