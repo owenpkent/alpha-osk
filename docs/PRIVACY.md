@@ -21,7 +21,8 @@ This is worth being precise about, because it means the keyboard is pattern-matc
 - **It all happens on your machine.** The matching is a handful of regular expressions in `src/text_patterns.py`. Nothing is uploaded, and this is entirely separate from the telemetry toggle below.
 - **Nothing is stored until you say so.** Detection produces an on-screen offer and nothing else. If you dismiss it, or ignore it until it fades after 8 seconds, nothing is written to disk. Only tapping **Save** writes anything.
 - **It never runs while learning is paused.** In privacy mode, whether you paused it yourself with the title-bar Learning switch or a password field triggered it automatically, no detection happens at all. A password field cannot produce an offer, let alone a saved value.
-- **It won't nag.** A value you dismissed is not offered again for the rest of the session, and a value already in your snippets is never offered.
+- **It won't nag.** A value you dismissed is not offered again (Alpha-OSK remembers the last 64 it showed you, and forgets them all when you quit), and a value already in your snippets is never offered.
+- **The offer goes away when your attention does.** Switching apps, clicking into a different field, or learning being paused all withdraw a pending offer rather than leaving it on screen. In particular, an offer raised just before you clicked into a password field cannot be saved afterwards.
 - **It doesn't overwrite.** If the matching slot already holds a different value, saving appends a new one ("Email 2") rather than replacing what you had.
 - **What you save is ordinary snippet data.** It goes into `snippets.json` in your config directory, the same file the Snippets editor writes, and it is included in Data Backup exports along with the rest of your snippets (see below).
 - **Nothing detected is written to the log.** The log records that an offer was raised and how long the value was, never the value.

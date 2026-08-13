@@ -29,71 +29,39 @@ from .vocabulary_pack import PackManager
 
 _logger = logging.getLogger("HybridPredictor")
 
-# Real one- and two-letter English words, allowed through the next-word
-# short-word filter.
-#
-# That filter used to be a blanket ``len(word) <= 2`` (with "i" as the
-# single exception), which threw away most of the words a next-word
-# prediction is *best* at: after "I want", the useful suggestions are
-# "to", "it", "my", "us"; after "one", they are "of" and "or".  Those are
-# also the highest-frequency words in English, so the bar was silently
-# withholding its strongest guesses and offering the fourth-best instead.
-#
-# It stays an allow-list rather than a length change because the filter
-# is also doing real work: the engine learns whatever the user types, so
-# stray two-character fragments ("th", "ap", "sm") from a typo or an
-# interrupted word accumulate in the model, and a bare length rule would
-# let every one of them compete for a pill. Words, not lengths.
-_SHORT_WORDS_ALLOWED = frozenset(
-    {
-        # one letter
-        "a",
-        "i",
-        # two letters
-        "am",
-        "an",
-        "as",
-        "at",
-        "be",
-        "by",
-        "do",
-        "go",
-        "he",
-        "hi",
-        "id",
-        "if",
-        "in",
-        "is",
-        "it",
-        "me",
-        "my",
-        "no",
-        "of",
-        "oh",
-        "ok",
-        "on",
-        "or",
-        "so",
-        "to",
-        "up",
-        "us",
-        "we",
-        "ye",
-    }
-)
-
 
 def _short_word_allowed(word: str) -> bool:
     """True if *word* may be offered as a next-word prediction.
 
     Anything three characters or longer passes untouched; shorter words
-    have to be on :data:`_SHORT_WORDS_ALLOWED`.  Case-insensitive, so a
-    capitalised "To" at a sentence start is judged on the word rather
-    than its casing.
+    have to be real, which is decided by ``NgramPredictor``'s existing
+    short-word whitelist rather than by a second list living here.
+
+    This filter used to be a blanket ``len(word) <= 2`` with "i" as the
+    only exception, which discarded most of what next-word prediction is
+    *best* at: after "I want" the useful pills are "to", "it", "my",
+    "us"; after "one" they are "of" and "or".  Those are also the
+    highest-frequency words in English, so the bar was withholding its
+    strongest guesses and offering the fourth-best instead.
+
+    It stays an allow-list rather than a relaxed length rule because the
+    engine learns whatever the user types: stray two-character fragments
+    ("th", "ap", "sm") left by a typo or an interrupted word accumulate
+    in the model, and a bare length change would let every one of them
+    compete for a pill.  Words, not lengths.
+
+    Reusing ``_SHORT_WORD_WHITELIST`` is deliberate.  It is already the
+    project's answer to "is this short string a real word or a keyboard
+    slip" (it gates the dictionary-load fragment filter), so a second
+    copy here would be one more list to keep in sync and one more place
+    for the two to disagree.  Extend that set to extend this filter.
+
+    Case-insensitive, so a capitalised "To" at a sentence start is judged
+    on the word rather than on its casing.
     """
     if len(word) > 2:
         return True
-    return word.lower() in _SHORT_WORDS_ALLOWED
+    return word.lower() in NgramPredictor._SHORT_WORD_WHITELIST
 
 
 class HybridPredictor(QObject):
