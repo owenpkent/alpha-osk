@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import subprocess
 import sys
 from pathlib import Path
 
@@ -146,14 +147,14 @@ class TestLinuxReplaceText:
             "shift+Left",
             "shift+Left",
         ]
-        assert calls[1] == ["xdotool", "type", "--clearmodifiers", "hello"]
+        assert calls[1] == ["xdotool", "type", "--clearmodifiers", "--", "hello"]
         assert len(calls) == 2
 
     def test_xdotool_zero_backspace_skips_selection(self, monkeypatch):
         synth, calls = self._make_synth("xdotool", monkeypatch)
         synth.replace_text(0, "hi")
         # No shift+Left chain; falls through to send_text.
-        assert calls == [["xdotool", "type", "--clearmodifiers", "hi"]]
+        assert calls == [["xdotool", "type", "--clearmodifiers", "--", "hi"]]
 
     def test_xdotool_empty_text_still_selects(self, monkeypatch):
         synth, calls = self._make_synth("xdotool", monkeypatch)
@@ -176,7 +177,7 @@ class TestLinuxReplaceText:
             ["ydotool", "key", "Left"],
             ["ydotool", "key", "Left"],
             ["ydotool", "key", "--key-up", "shift"],
-            ["ydotool", "type", "hi"],
+            ["ydotool", "type", "--", "hi"],
         ]
 
     def test_no_tool_is_silent_noop(self, monkeypatch):
@@ -300,6 +301,104 @@ class TestLinuxSuperNeverHeld:
         synth, calls = self._make_synth("xdotool", monkeypatch)
         synth.release_modifier("win")
         assert calls == [["xdotool", "keyup", "super"]]
+
+
+class TestLinuxSendText:
+    """``send_text()`` must end-of-options guard the typed text.
+
+    Regression: ``xdotool type --clearmodifiers <text>`` and
+    ``ydotool type <text>`` pass user-controlled text (typed words,
+    inserted snippets, swipe results) as the final argv token with
+    nothing forcing positional interpretation. A typed string that
+    exactly matches a recognised flag (``--help``, ``--window``) would
+    be parsed as an option and silently dropped instead of typed: a
+    correctness bug on an accessibility tool, where a keystroke that
+    does nothing is a real problem. A literal ``"--"`` immediately
+    before the text argument forces both tools to treat it as data.
+    """
+
+    def _make_synth(self, tool, monkeypatch):
+        from src.platform import linux as linux_mod
+
+        calls: list[list[str]] = []
+        monkeypatch.setattr(linux_mod, "_run", lambda cmd: calls.append(cmd))
+        synth = linux_mod.LinuxKeySynthesizer.__new__(linux_mod.LinuxKeySynthesizer)
+        synth._tool = tool
+        return synth, calls
+
+    def test_xdotool_type_has_end_of_options_guard(self, monkeypatch):
+        synth, calls = self._make_synth("xdotool", monkeypatch)
+        synth.send_text("hello")
+        assert calls == [["xdotool", "type", "--clearmodifiers", "--", "hello"]]
+
+    def test_ydotool_type_has_end_of_options_guard(self, monkeypatch):
+        synth, calls = self._make_synth("ydotool", monkeypatch)
+        synth.send_text("hello")
+        assert calls == [["ydotool", "type", "--", "hello"]]
+
+    def test_xdotool_flag_like_text_is_typed_as_data(self, monkeypatch):
+        # The motivating case: a snippet or typed word that happens to
+        # equal a real xdotool flag token must still reach `type` as data.
+        synth, calls = self._make_synth("xdotool", monkeypatch)
+        synth.send_text("--help")
+        assert calls == [["xdotool", "type", "--clearmodifiers", "--", "--help"]]
+
+    def test_ydotool_flag_like_text_is_typed_as_data(self, monkeypatch):
+        synth, calls = self._make_synth("ydotool", monkeypatch)
+        synth.send_text("--window")
+        assert calls == [["ydotool", "type", "--", "--window"]]
+
+    def test_no_tool_is_silent_noop(self, monkeypatch):
+        synth, calls = self._make_synth(None, monkeypatch)
+        synth.send_text("x")
+        assert calls == []
+
+
+class TestLinuxRunTimeout:
+    """``_run()`` must bound every subprocess call.
+
+    Regression: ``_run`` called ``subprocess.run(...)`` with no
+    ``timeout=``, so a hung xdotool/ydotool (dead X server, wedged
+    binary) would freeze the whole on-screen keyboard indefinitely -
+    ``_run`` executes synchronously on Qt's UI thread for every
+    keystroke. These tests stub ``subprocess.run`` itself (not the
+    ``_run`` wrapper) so they can assert on the arguments ``_run``
+    passes down, and on what happens when the call times out.
+    """
+
+    def test_run_passes_a_bounded_timeout(self, monkeypatch):
+        from src.platform import linux as linux_mod
+
+        captured: dict = {}
+
+        def fake_run(cmd, **kwargs):
+            captured.update(kwargs)
+            return subprocess.CompletedProcess(cmd, 0)
+
+        monkeypatch.setattr(linux_mod.subprocess, "run", fake_run)
+        linux_mod._run(["xdotool", "key", "a"])
+        assert captured.get("timeout") == linux_mod._SUBPROCESS_TIMEOUT_S
+        assert 0 < captured["timeout"] < 30  # generous, but not "forever"
+
+    def test_timeout_expired_is_swallowed_not_raised(self, monkeypatch):
+        from src.platform import linux as linux_mod
+
+        def fake_run(cmd, **kwargs):
+            raise subprocess.TimeoutExpired(cmd=cmd, timeout=kwargs.get("timeout", 0))
+
+        monkeypatch.setattr(linux_mod.subprocess, "run", fake_run)
+        # Must not raise - a wedged backend should degrade to a dropped
+        # keystroke, never an unhandled exception on the UI thread.
+        linux_mod._run(["xdotool", "key", "a"])
+
+    def test_other_subprocess_failure_still_swallowed(self, monkeypatch):
+        from src.platform import linux as linux_mod
+
+        def fake_run(cmd, **kwargs):
+            raise OSError("xdotool binary vanished")
+
+        monkeypatch.setattr(linux_mod.subprocess, "run", fake_run)
+        linux_mod._run(["xdotool", "key", "a"])  # must not raise
 
 
 class TestWindowsReplaceText:

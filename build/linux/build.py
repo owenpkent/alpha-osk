@@ -54,6 +54,7 @@ See Also
 from __future__ import annotations
 
 import argparse
+import hashlib
 import os
 import shutil
 import stat
@@ -61,7 +62,6 @@ import subprocess
 import sys
 import urllib.request
 from pathlib import Path
-
 
 SCRIPT_DIR = Path(__file__).parent.resolve()        # build/linux/
 PROJECT_ROOT = SCRIPT_DIR.parent.parent              # repo root
@@ -71,10 +71,25 @@ RELEASE_DIR = PROJECT_ROOT / "release"
 LINUX_DIR = SCRIPT_DIR                               # AppRun + .desktop live here
 ICON_SOURCE = PROJECT_ROOT / "assets" / "logo-1024.png"
 CACHE_DIR = Path.home() / ".cache" / "alpha-osk-build"
+# Pinned to a specific tagged release, not the mutable "continuous" tag --
+# "continuous" is rebuilt on every upstream merge, so a compromise of that
+# channel would be silently picked up by every future `--fetch-appimagetool`
+# run. Bump this (and APPIMAGETOOL_SHA256 below) deliberately when upgrading.
 APPIMAGETOOL_URL = (
-    "https://github.com/AppImage/appimagetool/releases/download/"
-    "continuous/appimagetool-x86_64.AppImage"
+    "https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-x86_64.AppImage"
 )
+# SHA256 of the file at APPIMAGETOOL_URL, recorded from the digest GitHub
+# publishes for that release asset. Be clear about what this does and does
+# not buy, because it is trust-on-first-use, not independent verification:
+# upstream appimagetool ships no signed checksum manifest, so this pins the
+# artefact as it stood when the value was recorded rather than proving the
+# maintainers intended those bytes. What it does catch is everything that
+# happens afterwards: the release asset being replaced, the tag being
+# re-pointed, a corrupted download, or an intercepted one. That is the
+# actual risk here, since the old code fetched from the mutable `continuous`
+# tag and executed whatever came back.
+# Bump this together with APPIMAGETOOL_URL, never on its own.
+APPIMAGETOOL_SHA256 = "ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0"
 
 
 class Colors:
@@ -249,6 +264,45 @@ def emit_sbom(version: str) -> Path | None:
     return sbom
 
 
+def _sha256_of(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as fh:
+        for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _verify_appimagetool(path: Path) -> bool:
+    """Check *path* against APPIMAGETOOL_SHA256 before it is ever executed.
+
+    Returns True if *path* is safe to use, False if it must be discarded.
+    The blank-constant branch is the escape hatch for a version bump: clear
+    APPIMAGETOOL_SHA256, run once, and paste back the hash it prints. It
+    warns loudly rather than failing so the bump is not a chicken-and-egg
+    problem, which also means leaving the constant blank silently downgrades
+    this to logging. See the comment on the constant for what the pin buys.
+    """
+    observed = _sha256_of(path)
+    if not APPIMAGETOOL_SHA256:
+        warn(
+            "APPIMAGETOOL_SHA256 is not set -- checksum verification skipped.\n"
+            f"    Observed SHA256: {observed}\n"
+            "    If you trust this download, paste the above into "
+            "APPIMAGETOOL_SHA256 in build/linux/build.py so future runs "
+            "are verified instead of merely logged."
+        )
+        return True
+    if observed != APPIMAGETOOL_SHA256:
+        fail(
+            "appimagetool checksum mismatch -- refusing to use it.\n"
+            f"    Expected: {APPIMAGETOOL_SHA256}\n"
+            f"    Observed: {observed}"
+        )
+        return False
+    ok("appimagetool checksum verified")
+    return True
+
+
 def find_appimagetool(auto_fetch: bool) -> Path | None:
     step("Locating appimagetool")
     on_path = shutil.which("appimagetool")
@@ -258,6 +312,11 @@ def find_appimagetool(auto_fetch: bool) -> Path | None:
 
     cached = CACHE_DIR / "appimagetool-x86_64.AppImage"
     if cached.exists():
+        step("Verifying cached appimagetool")
+        if not _verify_appimagetool(cached):
+            cached.unlink(missing_ok=True)
+            fail("Cached appimagetool was removed. Re-run to download a fresh copy.")
+            return None
         ok(f"Using cached copy: {cached}")
         return cached
 
@@ -275,6 +334,13 @@ def find_appimagetool(auto_fetch: bool) -> Path | None:
     except Exception as exc:
         fail(f"Download failed: {exc}")
         return None
+
+    step("Verifying downloaded appimagetool")
+    if not _verify_appimagetool(cached):
+        cached.unlink(missing_ok=True)
+        fail("Downloaded appimagetool failed verification and was deleted.")
+        return None
+
     cached.chmod(cached.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
     ok(f"Downloaded to {cached}")
     return cached
@@ -480,13 +546,13 @@ cp -r "$HERE/alpha-osk" "$PREFIX/opt/alpha-osk"
 
 # Wrapper on PATH. Use an unquoted heredoc so $PREFIX expands NOW (at
 # install time) to the chosen install root. Runtime variables that must
-# survive into the launcher are escaped with \$ so the shell only
+# survive into the launcher are escaped with \\$ so the shell only
 # expands them when the launcher itself runs.
 cat > "$PREFIX/bin/alpha-osk" <<LAUNCHER
 #!/bin/sh
-: "\${QT_QPA_PLATFORM:=xcb}"
+: "\\${QT_QPA_PLATFORM:=xcb}"
 export QT_QPA_PLATFORM
-exec "$PREFIX/opt/alpha-osk/alpha-osk" "\$@"
+exec "$PREFIX/opt/alpha-osk/alpha-osk" "\\$@"
 LAUNCHER
 chmod +x "$PREFIX/bin/alpha-osk"
 

@@ -8,8 +8,10 @@ flag) and the fallback path (no gi → null detector).
 
 from __future__ import annotations
 
+import logging
 import sys
 import types
+from unittest.mock import MagicMock
 
 from src.platform import password_detect as pd
 
@@ -193,3 +195,46 @@ class TestCreateDetector:
         # Force a fresh detector creation on the module.
         monkeypatch.setattr(pd, "_detector", None)
         assert isinstance(pd.is_password_field(), bool)
+
+
+class TestDetectionAvailable:
+    """detection_available() surfaces whether the active detector has a
+    working backend, vs. the null fallback. Exposed to QML via
+    KeyboardBridge.passwordDetectionAvailable so the UI can tell the
+    user the manual Learning toggle is their only protection.
+    """
+
+    def test_false_when_detector_is_null(self, monkeypatch):
+        monkeypatch.setattr(pd, "_detector", pd._NullDetector())
+        assert pd.detection_available() is False
+
+    def test_true_when_detector_is_not_null(self, monkeypatch):
+        monkeypatch.setattr(pd, "_detector", MagicMock())
+        assert pd.detection_available() is True
+
+    def test_lazily_creates_detector_on_first_call(self, monkeypatch):
+        monkeypatch.setattr(pd, "_detector", None)
+        monkeypatch.setattr(sys, "platform", "linux")
+        monkeypatch.setitem(sys.modules, "gi", None)  # force the null fallback
+        assert pd.detection_available() is False
+        assert isinstance(pd._detector, pd._NullDetector)
+
+
+class TestUnavailableDetectionWarns:
+    """Falling back to the null detector must log a warning, not routine
+    info: it means auto-detection can never turn on this session, so the
+    user needs to know the manual toggle is now load-bearing.
+    """
+
+    def test_linux_without_gi_logs_a_warning(self, monkeypatch, caplog):
+        monkeypatch.setattr(sys, "platform", "linux")
+        monkeypatch.setitem(sys.modules, "gi", None)
+        with caplog.at_level(logging.WARNING, logger="PasswordDetect"):
+            pd._create_detector()
+        assert any(r.levelno == logging.WARNING for r in caplog.records)
+
+    def test_unsupported_platform_logs_a_warning(self, monkeypatch, caplog):
+        monkeypatch.setattr(sys, "platform", "freebsd")
+        with caplog.at_level(logging.WARNING, logger="PasswordDetect"):
+            pd._create_detector()
+        assert any(r.levelno == logging.WARNING for r in caplog.records)

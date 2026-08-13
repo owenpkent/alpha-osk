@@ -318,6 +318,9 @@ Item {
         Text {
             anchors.centerIn: parent
             text: keyRoot.displayText
+            // displayText is layout-JSON-driven; force plain rendering so a
+            // custom/modular layout's key label can't auto-render as HTML.
+            textFormat: Text.PlainText
             // Readable contrast on the active / pressed fill (dark ink on a
             // bright one, white on a dark one) via the shared luminance rule
             // up top, so the label and the lock bar can never disagree about

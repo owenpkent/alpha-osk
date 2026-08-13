@@ -274,3 +274,206 @@ class TestImportPackSecurity:
         src = self._make_source_with_dict(tmp_path / "ok_pack")
         # Regular case still works
         assert mgr.import_pack(src) == "ok_pack"
+
+    def test_rejects_reserved_windows_device_name(self, tmp_path: Path):
+        """A source folder that sanitises to a Windows reserved device
+        name (con, nul, com1, ...) must be rejected: it passes
+        _VALID_PACK_ID (a normal-looking lowercase id) but
+        dest_dir.mkdir() would raise an uncaught OSError for it on
+        Windows."""
+        mgr = self._mgr(tmp_path)
+        src = self._make_source_with_dict(tmp_path / "con")
+        assert mgr.import_pack(src) is None
+        assert list((tmp_path / "user_packs").iterdir()) == []
+
+    def test_rejects_reserved_name_case_insensitively(self, tmp_path: Path):
+        mgr = self._mgr(tmp_path)
+        src = self._make_source_with_dict(tmp_path / "COM1")
+        assert mgr.import_pack(src) is None
+
+    def test_accepts_name_that_merely_contains_a_reserved_word(self, tmp_path: Path):
+        """Only an exact reserved-name match is rejected; a name that
+        merely starts with one (e.g. "console") is a normal import."""
+        mgr = self._mgr(tmp_path)
+        src = self._make_source_with_dict(tmp_path / "console")
+        assert mgr.import_pack(src) == "console"
+
+
+class TestPackInputCaps:
+    """pack.json / dictionary.txt / bigrams.txt / trigrams.txt and the
+    import source tree are all bounded, mirroring the caps every other
+    loader in this codebase already has (model files 50 MB, Data Backup
+    archives 75 MB per file, snippets.json 1 MB). Every cap below is
+    monkeypatched to a small value so the test doesn't need to write
+    megabytes of fixture data, matching the pattern already used for
+    _MAX_FILE_BYTES in tests/test_data_export.py."""
+
+    def test_oversized_pack_json_falls_back_to_directory_name(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from src.prediction import vocabulary_pack as vp
+
+        monkeypatch.setattr(vp, "_MAX_PACK_META_BYTES", 10)
+        pack_dir = tmp_path / "my_pack"
+        pack_dir.mkdir()
+        (pack_dir / "pack.json").write_text(
+            json.dumps({"name": "Way too long a name for the patched cap"})
+        )
+        (pack_dir / "dictionary.txt").write_text("alpha\n")
+
+        pack = VocabularyPack.from_directory(pack_dir)
+
+        assert pack is not None
+        assert pack.name == "my_pack"  # metadata ignored; fell back to dir name
+
+    def test_oversized_dictionary_is_skipped_entirely(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from src.prediction import vocabulary_pack as vp
+
+        monkeypatch.setattr(vp, "_MAX_PACK_FILE_BYTES", 10)
+        pack_dir = tmp_path / "big_pack"
+        pack_dir.mkdir()
+        (pack_dir / "dictionary.txt").write_text("alpha\nbeta\ngamma\ndelta\n")  # > 10 bytes
+
+        pack = VocabularyPack.from_directory(pack_dir)
+        assert pack is not None
+        assert pack.load() is False
+        assert pack.words == set()
+
+    def test_dictionary_word_count_is_capped(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from src.prediction import vocabulary_pack as vp
+
+        monkeypatch.setattr(vp, "_MAX_PACK_WORDS", 3)
+        pack_dir = tmp_path / "many_words"
+        pack_dir.mkdir()
+        (pack_dir / "dictionary.txt").write_text("\n".join(f"word{i}" for i in range(20)))
+
+        pack = VocabularyPack.from_directory(pack_dir)
+        assert pack is not None
+        assert pack.load() is True
+        assert len(pack.words) == 3
+
+    def test_bigram_entry_count_is_capped(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from src.prediction import vocabulary_pack as vp
+
+        monkeypatch.setattr(vp, "_MAX_PACK_BIGRAM_ENTRIES", 2)
+        pack_dir = tmp_path / "many_bigrams"
+        pack_dir.mkdir()
+        (pack_dir / "dictionary.txt").write_text("a\n")
+        (pack_dir / "bigrams.txt").write_text("\n".join(f"w{i} w{i + 1}" for i in range(20)))
+
+        pack = VocabularyPack.from_directory(pack_dir)
+        assert pack is not None
+        pack.load()
+        total_bigram_entries = sum(len(v) for v in pack.bigrams.values())
+        assert total_bigram_entries == 2
+
+    def test_trigram_entry_count_is_capped(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from src.prediction import vocabulary_pack as vp
+
+        monkeypatch.setattr(vp, "_MAX_PACK_TRIGRAM_ENTRIES", 2)
+        pack_dir = tmp_path / "many_trigrams"
+        pack_dir.mkdir()
+        (pack_dir / "dictionary.txt").write_text("a\n")
+        (pack_dir / "trigrams.txt").write_text(
+            "\n".join(f"w{i} w{i + 1} w{i + 2}" for i in range(20))
+        )
+
+        pack = VocabularyPack.from_directory(pack_dir)
+        assert pack is not None
+        pack.load()
+        total_trigram_entries = sum(len(v) for v in pack.trigrams.values())
+        assert total_trigram_entries == 2
+
+    def test_import_rejects_oversized_source_tree(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from src.prediction import vocabulary_pack as vp
+
+        monkeypatch.setattr(vp, "_MAX_PACK_IMPORT_TOTAL_BYTES", 10)
+        packs_dir = tmp_path / "builtin"
+        packs_dir.mkdir()
+        user_dir = tmp_path / "user_packs"
+        user_dir.mkdir()
+        mgr = PackManager(packs_dir=packs_dir, user_packs_dir=user_dir)
+
+        source = tmp_path / "big_source"
+        source.mkdir()
+        (source / "dictionary.txt").write_text("x" * 100)  # > patched 10-byte cap
+
+        assert mgr.import_pack(source) is None
+        assert list(user_dir.iterdir()) == []
+
+
+class TestPackMetadataIsSanitised:
+    """`pack.json`'s name / description are attacker-controlled: they
+    arrive with an imported pack and nothing else validates them.
+
+    Two consumers care.  The Settings UI renders both fields, which is why
+    the QML side forces `Text.PlainText`.  This module *logs* the name on
+    every cap-trip and load message, and the diagnostic log is the file
+    users attach to bug reports, so an embedded newline lets a pack name
+    forge whole log lines in it.
+    """
+
+    @staticmethod
+    def _pack_with_meta(tmp_path: Path, meta: object) -> VocabularyPack:
+        pack_dir = tmp_path / "my_pack"
+        pack_dir.mkdir()
+        (pack_dir / "pack.json").write_text(json.dumps(meta))
+        pack = VocabularyPack.from_directory(pack_dir)
+        assert pack is not None
+        return pack
+
+    def test_newlines_in_the_name_are_collapsed(self, tmp_path: Path) -> None:
+        pack = self._pack_with_meta(
+            tmp_path,
+            {"name": "Innocent\n2026-01-01 [Updater] ERROR: forged line"},
+        )
+        assert "\n" not in pack.name
+        assert "\r" not in pack.name
+
+    def test_newlines_in_the_description_are_collapsed(self, tmp_path: Path) -> None:
+        pack = self._pack_with_meta(tmp_path, {"description": "line one\nline two"})
+        assert pack.description == "line one line two"
+
+    def test_an_overlong_field_is_bounded(self, tmp_path: Path) -> None:
+        from src.prediction import vocabulary_pack as vp
+
+        pack = self._pack_with_meta(tmp_path, {"name": "x" * 5000})
+        assert len(pack.name) == vp._MAX_PACK_META_FIELD_LEN
+
+    @pytest.mark.parametrize("value", ([1, 2], {"a": 1}, None, 7), ids=str)
+    def test_a_non_string_name_falls_back_to_the_directory_name(
+        self, tmp_path: Path, value: object
+    ) -> None:
+        """Coercing would render a JSON list as the literal "[1, 2]"."""
+        pack = self._pack_with_meta(tmp_path, {"name": value})
+        assert pack.name == "my_pack"
+
+    def test_a_non_integer_version_falls_back_to_1(self, tmp_path: Path) -> None:
+        pack = self._pack_with_meta(tmp_path, {"version": "not a number"})
+        assert pack.version == 1
+
+    def test_a_non_object_pack_json_falls_back_entirely(self, tmp_path: Path) -> None:
+        pack = self._pack_with_meta(tmp_path, ["not", "an", "object"])
+        assert pack.name == "my_pack"
+        assert pack.description == ""
+        assert pack.version == 1
+
+    def test_a_normal_pack_json_is_untouched(self, tmp_path: Path) -> None:
+        """The inverse test: a sanitiser that emptied every field would
+        satisfy every assertion above."""
+        pack = self._pack_with_meta(
+            tmp_path, {"name": "Medical Terms", "description": "Clinical vocab", "version": 3}
+        )
+        assert pack.name == "Medical Terms"
+        assert pack.description == "Clinical vocab"
+        assert pack.version == 3

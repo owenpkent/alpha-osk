@@ -29,10 +29,10 @@ See Also:
     - ``docs/architecture/PLATFORM_ARCHITECTURE.md`` — cross-platform design.
 """
 
-import sys
-import subprocess
 import os
 import shutil
+import subprocess
+import sys
 import venv
 from pathlib import Path
 
@@ -196,8 +196,14 @@ def check_dependencies():
                 stdout=subprocess.DEVNULL,
             )
             subprocess.check_call(
-                [str(venv_python), "-m", "pip", "install", "-r",
-                 str(SCRIPT_DIR / "requirements.txt")],
+                [
+                    str(venv_python),
+                    "-m",
+                    "pip",
+                    "install",
+                    "-r",
+                    str(SCRIPT_DIR / "requirements.txt"),
+                ],
             )
             print("Dependencies installed successfully!")
 
@@ -278,6 +284,7 @@ def ensure_admin_windows():
         return
     try:
         import ctypes
+
         if ctypes.windll.shell32.IsUserAnAdmin():
             return  # Already elevated
         print("Re-launching with administrator privileges (required for keystroke injection)...")
@@ -307,10 +314,6 @@ def main():
     print("=" * 50)
     print()
 
-    # Windows: elevate before doing anything else so the keyboard process
-    # inherits admin rights and SendInput can reach all windows.
-    ensure_admin_windows()
-
     os.chdir(SCRIPT_DIR)
 
     # Dashboard mode
@@ -335,6 +338,27 @@ def main():
     # Check/install Python dependencies
     if not check_dependencies():
         return 1
+
+    # Windows: elevate now, immediately before launching the keyboard, so
+    # everything above (venv creation, "pip install -r requirements.txt",
+    # and every module those steps import) already ran at the user's own
+    # integrity level, not admin. This process tree and its dependencies
+    # live in a user-writable directory; elevating first (the previous
+    # order) ran pip install and every subsequent import under an admin
+    # token, so any unprivileged local process that could modify run.py
+    # or src/ before the user approved the UAC prompt would have executed
+    # with that approval. Moving elevation to last narrows that window,
+    # it does not close it: the interpreter and its imports still come
+    # from a user-writable tree, so a well-timed local attacker with
+    # write access here remains a privilege-escalation path. Closing
+    # that fully needs signed/read-only distribution, which is out of
+    # scope for this reorder.
+    #
+    # The relaunch below cannot loop: the elevated process re-enters
+    # main() from the top, finds the venv and dependencies already in
+    # place (cheap no-ops), and IsUserAnAdmin() then returns True, so
+    # ensure_admin_windows() returns immediately instead of re-elevating.
+    ensure_admin_windows()
 
     print("Starting Alpha-OSK keyboard...")
     print()

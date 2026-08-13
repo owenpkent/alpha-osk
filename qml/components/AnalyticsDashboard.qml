@@ -234,6 +234,9 @@ Item {
 
                     Text {
                         text: modelData.word
+                        // Can include an imported vocabulary pack's
+                        // unsanitised dictionary entries.
+                        textFormat: Text.PlainText
                         font.pixelSize: 11
                         color: "#ccc"
                         Layout.fillWidth: true

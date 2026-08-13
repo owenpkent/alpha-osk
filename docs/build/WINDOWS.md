@@ -511,6 +511,7 @@ The build script generates a proper NSIS installer that:
 - **Creates shortcuts**: Desktop + Start Menu.
 - **Registers in Add/Remove Programs** for clean uninstall.
 - **Asks about AppData** on uninstall (keep learned vocabulary or delete).
+- **Silent (auto-update) installs pin the target directory explicitly** instead of reading it from the registry. `installer.nsh` used to declare an `InstallDirRegKey HKCU` value that nothing in the build ever wrote, so an unprivileged local process could create that value first and redirect the next silent install into an attacker-writable directory. It's removed; the auto-updater now computes the target itself via `_install_target_dir()` and passes it as `/S /D=<dir>` (see `AUTO_UPDATE.md` for the full threat-model writeup). Interactive installs are unaffected: the Directory page below still lets the user pick, and its default is still `C:\Program Files\Alpha-OSK`.
 
 The installer customizations live in `build/windows/installer.nsh`, following the
 same macro patterns as gitconnect's `build/windows/installer.nsh`.

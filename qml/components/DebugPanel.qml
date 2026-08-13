@@ -95,15 +95,17 @@ Rectangle {
 
                 Text {
                     text: "Context: " + (debugPanel.currentContext || "(empty)")
+                    textFormat: Text.PlainText
                     color: "#aaa"
                     font.pixelSize: 10
                     font.family: "monospace"
                     elide: Text.ElideLeft
                     Layout.fillWidth: true
                 }
-                
+
                 Text {
                     text: "Predictions: [" + debugPanel.currentPredictions.join(", ") + "]"
+                    textFormat: Text.PlainText
                     color: "#6ab4ff"
                     font.pixelSize: 10
                     font.family: "monospace"
@@ -131,6 +133,7 @@ Rectangle {
                 delegate: Text {
                     width: logView.width
                     text: modelData
+                    textFormat: Text.PlainText
                     color: {
                         if (modelData.indexOf("ERROR") >= 0) return "#ff6666"
                         if (modelData.indexOf("WARN") >= 0) return "#ffaa44"

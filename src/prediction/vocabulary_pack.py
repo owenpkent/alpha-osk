@@ -27,12 +27,86 @@ from typing import Dict, List, Optional, Set
 # directory) must be rejected before any shutil.rmtree / copytree call.
 _VALID_PACK_ID = re.compile(r"^[a-z0-9][a-z0-9_\-]{0,63}$")
 
+# Windows reserves these device names for every path component, regardless
+# of case and regardless of any extension attached ("con.txt" is exactly as
+# unrepresentable as "con"). _VALID_PACK_ID happily matches "con": it is a
+# valid lowercase id. Without this check, importing a pack derived from a
+# folder named "con" would hit shutil.copytree's destination mkdir raising
+# an uncaught OSError on Windows.
+_RESERVED_DEVICE_NAMES = frozenset(
+    {"con", "prn", "aux", "nul"}
+    | {f"com{i}" for i in range(1, 10)}
+    | {f"lpt{i}" for i in range(1, 10)}
+)
+
 _logger = logging.getLogger("VocabularyPack")
 
 # Weight for pack vocabulary (lower than user-learned so personal typing wins)
 PACK_UNIGRAM_WEIGHT = 3
 PACK_BIGRAM_WEIGHT = 30
 PACK_TRIGRAM_WEIGHT = 30
+
+# Byte and entry caps for pack input.  Every sibling loader in this
+# codebase caps its input (model files 50 MB, Data Backup archives 75 MB
+# per file / 500 MB total, snippets.json 1 MB); packs previously had none
+# of these, so a hostile or merely corrupt pack could exhaust memory on
+# load or fill the disk on import.
+#
+# _MAX_PACK_META_BYTES: pack.json is just {name, description, version}.
+# _MAX_PACK_FILE_BYTES: each of dictionary.txt / bigrams.txt / trigrams.txt
+#   individually.  Generous for a real word list (the built-in base
+#   dictionary is ~20K words) while still bounding a hostile file.
+# _MAX_PACK_IMPORT_TOTAL_BYTES: the whole source folder, checked by
+#   walking it before any copy starts.
+_MAX_PACK_META_BYTES = 64 * 1024
+_MAX_PACK_FILE_BYTES = 20 * 1024 * 1024
+_MAX_PACK_IMPORT_TOTAL_BYTES = 50 * 1024 * 1024
+
+# Entry caps applied while load() iterates each file: a file within the
+# byte cap above can still be millions of very short lines. The base
+# dictionary is ~20K words, so these leave a generous 10x headroom for a
+# legitimate custom pack. Unlike the byte cap (checked up front, whole
+# file skipped if it fails), these are discovered mid-iteration, so
+# load() truncates at the cap and keeps what was already read rather than
+# discarding the section entirely.
+_MAX_PACK_WORDS = 200_000
+_MAX_PACK_BIGRAM_ENTRIES = 200_000
+_MAX_PACK_TRIGRAM_ENTRIES = 200_000
+
+
+# Cap on a pack.json name/description once parsed. The 64 KB byte cap on
+# the file as a whole is about not reading a huge file; this is about what
+# a single field may be after it has been read.
+_MAX_PACK_META_FIELD_LEN = 200
+
+
+def _clean_meta_text(value: object, fallback: str) -> str:
+    """Return *value* as a single-line, bounded string, or *fallback*.
+
+    ``pack.json`` is attacker-controlled: it arrives with an imported
+    pack and nothing else validates it. Two consumers care. The Settings
+    UI renders these fields, which is why the QML side forces
+    ``Text.PlainText``. This module *logs* them, and the diagnostic log
+    is the file users attach to bug reports, so an embedded newline here
+    would let a pack name forge whole log lines. Collapsing to one line
+    and bounding the length handles both, and a non-string (a JSON list,
+    an object, null) falls back rather than being coerced into
+    ``"['a', 'b']"``.
+    """
+    if not isinstance(value, str):
+        return fallback
+    collapsed = " ".join(value.split())
+    return collapsed[:_MAX_PACK_META_FIELD_LEN] if collapsed else fallback
+
+
+def _is_reserved_device_name(name: str) -> bool:
+    """True if *name* collides with a Windows reserved device name.
+
+    Checked on the base name before any extension, case-insensitively,
+    matching how Windows itself resolves these names.
+    """
+    base = name.split(".", 1)[0].lower()
+    return base in _RESERVED_DEVICE_NAMES
 
 
 @dataclass
@@ -60,26 +134,40 @@ class VocabularyPack:
 
         Returns:
             VocabularyPack if valid, None if missing/invalid
+
+        ``pack.json`` is capped at ``_MAX_PACK_META_BYTES``: an oversized
+        file is treated the same as a missing or unparsable one, falling
+        back to the directory name rather than being read at all.
         """
         if not pack_dir.is_dir():
             return None
 
         # Load metadata
         meta_path = pack_dir / "pack.json"
+        name = pack_dir.name
+        description = ""
+        version = 1
         if meta_path.exists():
             try:
-                meta = json.loads(meta_path.read_text())
-                name = meta.get("name", pack_dir.name)
-                description = meta.get("description", "")
-                version = meta.get("version", 1)
-            except (json.JSONDecodeError, OSError):
-                name = pack_dir.name
-                description = ""
-                version = 1
-        else:
-            name = pack_dir.name
-            description = ""
-            version = 1
+                oversized = meta_path.stat().st_size > _MAX_PACK_META_BYTES
+            except OSError:
+                oversized = True
+            if oversized:
+                _logger.warning(
+                    "Pack '%s': pack.json exceeds %d bytes, ignoring metadata",
+                    pack_dir.name,
+                    _MAX_PACK_META_BYTES,
+                )
+            else:
+                try:
+                    meta = json.loads(meta_path.read_text())
+                    if isinstance(meta, dict):
+                        name = _clean_meta_text(meta.get("name"), pack_dir.name)
+                        description = _clean_meta_text(meta.get("description"), "")
+                        raw_version = meta.get("version", 1)
+                        version = raw_version if isinstance(raw_version, int) else 1
+                except (json.JSONDecodeError, OSError):
+                    pass
 
         pack = cls(
             name=name,
@@ -89,9 +177,31 @@ class VocabularyPack:
         )
         return pack
 
+    def _oversized(self, path: Path, cap: int, label: str) -> bool:
+        """True if *path* exceeds *cap* bytes (checked via stat, not by
+        reading it). Also true, conservatively, if stat() itself fails."""
+        try:
+            size = path.stat().st_size
+        except OSError:
+            return True
+        if size > cap:
+            _logger.warning("Pack '%s': %s exceeds %d bytes, skipping", self.name, label, cap)
+            return True
+        return False
+
     def load(self) -> bool:
         """
         Load vocabulary data from disk into memory.
+
+        Each of dictionary.txt / bigrams.txt / trigrams.txt is capped at
+        ``_MAX_PACK_FILE_BYTES`` (checked up front via stat, so an
+        oversized file is skipped in full rather than partially read) and
+        at ``_MAX_PACK_WORDS`` / ``_MAX_PACK_BIGRAM_ENTRIES`` /
+        ``_MAX_PACK_TRIGRAM_ENTRIES`` entries (discovered while iterating,
+        so instead the read stops there and keeps what was already
+        parsed. A small file can still hold millions of short lines within
+        the byte cap, so the entry cap is what bounds memory in that case,
+        often well before the byte cap would ever trip).
 
         Returns:
             True if any data was loaded
@@ -100,13 +210,22 @@ class VocabularyPack:
 
         # Load dictionary (one word per line)
         dict_path = self.path / "dictionary.txt"
-        if dict_path.exists():
+        if dict_path.exists() and not self._oversized(
+            dict_path, _MAX_PACK_FILE_BYTES, "dictionary.txt"
+        ):
             try:
                 with open(dict_path) as f:
                     for line in f:
                         word = line.strip().lower()
                         if word and not word.startswith("#"):
                             self.words.add(word)
+                            if len(self.words) >= _MAX_PACK_WORDS:
+                                _logger.warning(
+                                    "Pack '%s': dictionary.txt exceeds %d words, truncating",
+                                    self.name,
+                                    _MAX_PACK_WORDS,
+                                )
+                                break
                 loaded_any = bool(self.words)
                 _logger.info("Pack '%s': loaded %d words", self.name, len(self.words))
             except OSError as e:
@@ -114,7 +233,9 @@ class VocabularyPack:
 
         # Load bigrams
         bigrams_path = self.path / "bigrams.txt"
-        if bigrams_path.exists():
+        if bigrams_path.exists() and not self._oversized(
+            bigrams_path, _MAX_PACK_FILE_BYTES, "bigrams.txt"
+        ):
             try:
                 count = 0
                 with open(bigrams_path) as f:
@@ -129,6 +250,13 @@ class VocabularyPack:
                                 self.bigrams[w1] = {}
                             self.bigrams[w1][w2] = self.bigrams[w1].get(w2, 0) + PACK_BIGRAM_WEIGHT
                             count += 1
+                            if count >= _MAX_PACK_BIGRAM_ENTRIES:
+                                _logger.warning(
+                                    "Pack '%s': bigrams.txt exceeds %d entries, truncating",
+                                    self.name,
+                                    _MAX_PACK_BIGRAM_ENTRIES,
+                                )
+                                break
                 _logger.info("Pack '%s': loaded %d bigrams", self.name, count)
                 loaded_any = loaded_any or count > 0
             except OSError as e:
@@ -136,7 +264,9 @@ class VocabularyPack:
 
         # Load trigrams
         trigrams_path = self.path / "trigrams.txt"
-        if trigrams_path.exists():
+        if trigrams_path.exists() and not self._oversized(
+            trigrams_path, _MAX_PACK_FILE_BYTES, "trigrams.txt"
+        ):
             try:
                 count = 0
                 with open(trigrams_path) as f:
@@ -154,6 +284,13 @@ class VocabularyPack:
                                 self.trigrams[key].get(w3, 0) + PACK_TRIGRAM_WEIGHT
                             )
                             count += 1
+                            if count >= _MAX_PACK_TRIGRAM_ENTRIES:
+                                _logger.warning(
+                                    "Pack '%s': trigrams.txt exceeds %d entries, truncating",
+                                    self.name,
+                                    _MAX_PACK_TRIGRAM_ENTRIES,
+                                )
+                                break
                 _logger.info("Pack '%s': loaded %d trigrams", self.name, count)
                 loaded_any = loaded_any or count > 0
             except OSError as e:
@@ -336,6 +473,14 @@ class PackManager:
         must contain at least a ``dictionary.txt`` file. A ``pack.json``
         is optional (the folder name is used as the pack ID).
 
+        The source tree is capped at ``_MAX_PACK_IMPORT_TOTAL_BYTES``
+        total, checked by walking it before ``shutil.copytree`` starts
+        (so a hostile or accidentally huge folder is refused up front
+        rather than filling the disk partway through the copy). The
+        derived pack ID is also rejected if it is a Windows reserved
+        device name (``con``, ``nul``, ``com1``, ...): those pass the
+        regular id regex but would fail ``dest_dir.mkdir()`` on Windows.
+
         Args:
             source_dir: Path to the pack folder to import.
 
@@ -360,7 +505,7 @@ class PackManager:
         # user_packs_dir — defence in depth against symlinked configs.
         raw_id = source_dir.name.lower().replace(" ", "_")
         pack_id = re.sub(r"[^a-z0-9_\-]", "", raw_id).strip("_-")
-        if not pack_id or not _VALID_PACK_ID.match(pack_id):
+        if not pack_id or not _VALID_PACK_ID.match(pack_id) or _is_reserved_device_name(pack_id):
             _logger.error(
                 "Rejected pack import: invalid pack id %r derived from %s",
                 pack_id,
@@ -384,6 +529,29 @@ class PackManager:
         if pack_id in self._packs and (self._packs_dir / pack_id).is_dir():
             _logger.error("Cannot overwrite built-in pack: %s", pack_id)
             return None
+
+        # Refuse an oversized source tree before touching the filesystem.
+        # shutil.copytree has no size limit of its own, and walking the
+        # tree to sum real file sizes is cheap next to the copy itself
+        # (or next to filling the disk with a hostile folder no single
+        # per-file cap downstream would have caught, since that cap only
+        # applies later, at load() time, to files that already exist on
+        # disk under the pack).
+        total_bytes = 0
+        for entry in source_dir.rglob("*"):
+            if not entry.is_file() or entry.is_symlink():
+                continue
+            try:
+                total_bytes += entry.stat().st_size
+            except OSError:
+                continue
+            if total_bytes > _MAX_PACK_IMPORT_TOTAL_BYTES:
+                _logger.error(
+                    "Rejected pack import: source tree exceeds %d bytes: %s",
+                    _MAX_PACK_IMPORT_TOTAL_BYTES,
+                    source_dir,
+                )
+                return None
 
         # Skip any symlinks in the source tree — they can dereference to
         # files outside the pack (secrets, device files) and shutil's

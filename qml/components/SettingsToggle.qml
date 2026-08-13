@@ -41,6 +41,12 @@ Item {
 
                 Text {
                     text: toggle.text
+                    // Both fields can carry externally-sourced strings (e.g.
+                    // an imported vocabulary pack's name/description from
+                    // pack.json). Force plain rendering so Qt's AutoText
+                    // HTML auto-detection can't turn a crafted <img> tag
+                    // into an outbound request just from this list rendering.
+                    textFormat: Text.PlainText
                     color: "#c0c0c0"
                     font.pixelSize: 12
                     Layout.fillWidth: true
@@ -50,6 +56,7 @@ Item {
                 Text {
                     visible: toggle.description !== ""
                     text: toggle.description
+                    textFormat: Text.PlainText
                     color: "#8a8a8a"
                     font.pixelSize: 10
                     Layout.fillWidth: true

@@ -289,8 +289,13 @@ Coverage observed in casual testing:
 Failure mode if the AX grant is missing: detector reports
 `available = False` at init, `_create_detector()` falls back to
 `_NullDetector`, and the title-bar manual toggle remains the only
-control. Logged at INFO so it's visible in `~/Library/Application
-Support/alpha-osk/alpha-osk.log`.
+control. This is logged at **WARNING**, not INFO: auto-pause on
+password fields is silently off in this state, so it gets a level
+that's visible by default rather than routine info, in
+`~/Library/Application Support/alpha-osk/alpha-osk.log`. `detection_available()`
+(bridge property `passwordDetectionAvailable`) also surfaces this to
+the UI as a low-key note, so the user isn't relying on auto-detection
+without knowing it's off.
 
 #### Known constraint: Secure Event Input blocks OSK typing into *some* password fields
 

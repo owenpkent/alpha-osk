@@ -75,7 +75,7 @@ Submit uses `urllib.request` (stdlib, no new dependency) with a 5 s timeout. On 
 ## Cloudflare Worker endpoints
 
 `POST /v1/submit`:
-- Validates payload shape (all required keys present, types correct, integer counters non-negative).
+- Validates payload shape (all required keys present, types correct, integer counters non-negative), plus `app_version` against a semver pattern and `os` against the `windows` / `linux` enum.
 - Caps each counter at a sanity ceiling (e.g. 10^9 keystrokes) so a malformed client can't poison the aggregate.
 - Upserts into `users` and `submissions_latest`.
 - Returns 204 on success, 4xx with a one-line reason on validation failure.
@@ -98,7 +98,7 @@ A daily Cloudflare cron deletes `users` rows where `last_seen < now - 365 days`.
 
 - **Operator can see**: anon_ids, app version distribution, OS distribution, lifetime counters per user. Cannot see content, individual keystrokes, words used, sessions when, or anything that would identify a user.
 - **A passive network observer** can see that the user POSTed to the telemetry endpoint, plus the payload size (~200 bytes). Cannot see the content (TLS).
-- **A compromised backend** could backfill submissions to fake the public aggregate. Sanity ceilings on each counter limit the blast radius. Rate-limiting per-IP at the Cloudflare edge limits volume.
+- **A compromised backend** could backfill submissions to fake the public aggregate. Sanity ceilings on each counter limit the blast radius. Volume is limited by two `anon_id`-keyed layers: a Cloudflare rate-limit binding on both POST routes, and a `SUBMIT_COOLDOWN_SECONDS` window enforced in the D1 upsert so a given id cannot move its own row more than once an hour. Neither keys off IP, because the worker deliberately never reads a request header. Both reject by no-opping and returning the same 204 as success, so neither is an oracle for whether an id exists. A flood from many *distinct* fabricated ids is not covered in code and needs an out-of-band WAF rule; see `backend/cf-worker/wrangler.toml.example`.
 - **An adversary trying to deanonymize a user** has very little to work with: the anon_id is opaque, no IP is stored, no User-Agent is stored, no submission timestamps are kept (only the latest), and the aggregate endpoint never exposes individual rows. Linking attempts would have to rely on the lifetime counter values being unique enough to fingerprint, which they aren't (two power users with similar usage have similar totals).
 
 ## Why not just use Plausible / Umami / Google Analytics?

@@ -9,6 +9,8 @@ is a regression that ships arbitrary code on every user's machine.
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
 from unittest import mock
 
 import pytest
@@ -17,8 +19,11 @@ from src import updater
 from src.updater import (
     EV_CERT_SHA1_THUMBPRINT,
     UpdateInfo,
+    _file_version_matches,
+    _install_target_dir,
     _is_safe_download_url,
     _parse_version,
+    _ps_single_quote_escape,
     _sanitize_notes,
     check_for_update,
     is_newer,
@@ -277,11 +282,17 @@ class TestCheckForUpdate:
 
 
 class TestSignatureVerification:
-    """The Authenticode pin is the last line of defence — pin both
-    Status==Valid AND the exact thumbprint AND the publisher CN."""
+    """The Authenticode pin is the last line of defence, so pin
+    Status==Valid AND the exact thumbprint AND the publisher CN AND
+    (see TestEmbeddedVersionPin below) the exe's own embedded
+    version."""
 
-    def _ps_output(self, status: str, thumbprint: str, cn: str) -> str:
-        return f"{status}|{thumbprint}|{cn}\n"
+    EXPECTED_VERSION = "1.0.3"
+
+    def _ps_output(
+        self, status: str, thumbprint: str, cn: str, file_version: str = "1.0.3.0"
+    ) -> str:
+        return f"{status}|{thumbprint}|{cn}|{file_version}\n"
 
     @pytest.fixture
     def fake_exe(self, tmp_path):
@@ -300,7 +311,7 @@ class TestSignatureVerification:
         self._patch_run(
             monkeypatch, self._ps_output("Valid", EV_CERT_SHA1_THUMBPRINT.upper(), "OK Studio Inc.")
         )
-        assert updater._verify_signature(fake_exe) is True
+        assert updater._verify_signature(fake_exe, self.EXPECTED_VERSION) is True
 
     def test_rejects_wrong_thumbprint(self, monkeypatch, fake_exe):
         monkeypatch.setattr(updater.sys, "platform", "win32")
@@ -312,39 +323,169 @@ class TestSignatureVerification:
                 "OK Studio Inc.",
             ),
         )
-        assert updater._verify_signature(fake_exe) is False
+        assert updater._verify_signature(fake_exe, self.EXPECTED_VERSION) is False
 
     def test_rejects_wrong_signer_cn(self, monkeypatch, fake_exe):
         monkeypatch.setattr(updater.sys, "platform", "win32")
         self._patch_run(monkeypatch, self._ps_output("Valid", EV_CERT_SHA1_THUMBPRINT, "Evil Inc."))
-        assert updater._verify_signature(fake_exe) is False
+        assert updater._verify_signature(fake_exe, self.EXPECTED_VERSION) is False
 
     def test_rejects_invalid_status(self, monkeypatch, fake_exe):
         monkeypatch.setattr(updater.sys, "platform", "win32")
         self._patch_run(
             monkeypatch, self._ps_output("HashMismatch", EV_CERT_SHA1_THUMBPRINT, "OK Studio Inc.")
         )
-        assert updater._verify_signature(fake_exe) is False
+        assert updater._verify_signature(fake_exe, self.EXPECTED_VERSION) is False
 
     def test_rejects_unsigned(self, monkeypatch, fake_exe):
         monkeypatch.setattr(updater.sys, "platform", "win32")
-        self._patch_run(monkeypatch, self._ps_output("NotSigned", "", ""))
-        assert updater._verify_signature(fake_exe) is False
+        self._patch_run(monkeypatch, self._ps_output("NotSigned", "", "", ""))
+        assert updater._verify_signature(fake_exe, self.EXPECTED_VERSION) is False
 
     def test_rejects_powershell_failure(self, monkeypatch, fake_exe):
         monkeypatch.setattr(updater.sys, "platform", "win32")
         self._patch_run(monkeypatch, "", returncode=1)
-        assert updater._verify_signature(fake_exe) is False
+        assert updater._verify_signature(fake_exe, self.EXPECTED_VERSION) is False
 
     def test_rejects_on_non_windows(self, monkeypatch, fake_exe):
         monkeypatch.setattr(updater.sys, "platform", "linux")
         # Authenticode isn't a thing here — fail closed instead of
         # blindly running the .exe.
-        assert updater._verify_signature(fake_exe) is False
+        assert updater._verify_signature(fake_exe, self.EXPECTED_VERSION) is False
 
     def test_rejects_missing_file(self, monkeypatch, tmp_path):
         monkeypatch.setattr(updater.sys, "platform", "win32")
-        assert updater._verify_signature(tmp_path / "nope.exe") is False
+        assert updater._verify_signature(tmp_path / "nope.exe", self.EXPECTED_VERSION) is False
+
+
+class TestEmbeddedVersionPin:
+    """FIX: the asset filename (`Alpha-OSK-Setup-{version}.exe`) is an
+    asset *selector*, not a trust boundary. A genuinely-signed but
+    OLDER installer re-served under a NEWER version's filename must be
+    rejected even though its Authenticode signature is perfectly
+    valid, or a compromised release-publish token (without any
+    signing capability) could downgrade every user silently."""
+
+    def _ps_output(self, status: str, thumbprint: str, cn: str, file_version: str) -> str:
+        return f"{status}|{thumbprint}|{cn}|{file_version}\n"
+
+    @pytest.fixture
+    def fake_exe(self, tmp_path):
+        p = tmp_path / "installer.exe"
+        p.write_bytes(b"MZ\x90\x00")
+        return p
+
+    def _patch_run(self, monkeypatch, stdout: str):
+        monkeypatch.setattr(
+            updater.subprocess,
+            "run",
+            lambda *a, **kw: mock.Mock(stdout=stdout, stderr="", returncode=0),
+        )
+
+    def test_rejects_genuinely_signed_older_installer(self, monkeypatch, fake_exe):
+        # Valid signature, correct thumbprint, correct CN, but the exe
+        # itself reports an older FileVersion than the release we asked
+        # to install. Must fail closed even though everything else checks out.
+        monkeypatch.setattr(updater.sys, "platform", "win32")
+        self._patch_run(
+            monkeypatch,
+            self._ps_output("Valid", EV_CERT_SHA1_THUMBPRINT, "OK Studio Inc.", "1.0.2.0"),
+        )
+        assert updater._verify_signature(fake_exe, "1.0.3") is False
+
+    def test_accepts_four_part_file_version_matching_first_three(self, monkeypatch, fake_exe):
+        # Windows FileVersion is commonly four-part; our semver is three.
+        # A matching build/revision suffix must not cause a false reject.
+        monkeypatch.setattr(updater.sys, "platform", "win32")
+        self._patch_run(
+            monkeypatch,
+            self._ps_output("Valid", EV_CERT_SHA1_THUMBPRINT, "OK Studio Inc.", "1.0.3.42"),
+        )
+        assert updater._verify_signature(fake_exe, "1.0.3") is True
+
+    def test_rejects_unparseable_embedded_version(self, monkeypatch, fake_exe):
+        monkeypatch.setattr(updater.sys, "platform", "win32")
+        self._patch_run(
+            monkeypatch,
+            self._ps_output("Valid", EV_CERT_SHA1_THUMBPRINT, "OK Studio Inc.", ""),
+        )
+        assert updater._verify_signature(fake_exe, "1.0.3") is False
+
+
+class TestFileVersionMatches:
+    """Unit coverage for the three-vs-four-part comparison in isolation
+    from the PowerShell plumbing."""
+
+    def test_exact_three_part_match(self):
+        assert _file_version_matches("1.0.3", "1.0.3") is True
+
+    def test_four_part_matches_three_part_expected(self):
+        assert _file_version_matches("1.0.3.0", "1.0.3") is True
+        assert _file_version_matches("1.0.3.42", "1.0.3") is True
+
+    def test_mismatched_version_rejected(self):
+        assert _file_version_matches("1.0.2.0", "1.0.3") is False
+
+    def test_garbage_file_version_rejected(self):
+        assert _file_version_matches("not.a.version", "1.0.3") is False
+        assert _file_version_matches("", "1.0.3") is False
+        assert _file_version_matches("1.0", "1.0.3") is False
+
+
+class TestPowerShellSingleQuoteEscaping:
+    """FIX: a Windows username containing an apostrophe (O'Brien,
+    D'Angelo) produces a %TEMP% path that terminates the single-quoted
+    PowerShell literal `_verify_signature` builds early, which fails
+    closed but permanently and silently disables auto-update for that
+    user. The fix doubles embedded apostrophes."""
+
+    def test_escape_doubles_embedded_apostrophe(self):
+        assert _ps_single_quote_escape("O'Brien") == "O''Brien"
+        assert _ps_single_quote_escape("plain/path") == "plain/path"
+        assert _ps_single_quote_escape("a''b") == "a''''b"
+
+    def test_verify_signature_escapes_apostrophe_in_path(self, monkeypatch, tmp_path):
+        tricky_dir = tmp_path / "O'Brien"
+        tricky_dir.mkdir()
+        exe = tricky_dir / "installer.exe"
+        exe.write_bytes(b"MZ\x90\x00")
+        monkeypatch.setattr(updater.sys, "platform", "win32")
+
+        captured: dict[str, str] = {}
+
+        def _fake_run(cmd, **kwargs):
+            captured["script"] = cmd[-1]
+            return mock.Mock(
+                stdout=f"Valid|{EV_CERT_SHA1_THUMBPRINT}|OK Studio Inc.|1.0.3.0\n",
+                stderr="",
+                returncode=0,
+            )
+
+        monkeypatch.setattr(updater.subprocess, "run", _fake_run)
+        assert updater._verify_signature(exe, "1.0.3") is True
+        # The apostrophe must be doubled, not left to terminate the
+        # single-quoted literal early. "O'Brien" (single apostrophe) is
+        # not a substring of the correctly-escaped "O''Brien", so this
+        # also catches a regression back to the unescaped form.
+        assert "O''Brien" in captured["script"]
+        assert "O'Brien" not in captured["script"]
+
+    @pytest.mark.skipif(sys.platform != "win32", reason="requires real powershell.exe")
+    def test_real_powershell_round_trips_apostrophe_path(self, tmp_path):
+        # Prove the escaping is actually valid PowerShell syntax, not
+        # just "looks right" in a Python f-string: round-trip through
+        # the real interpreter the production code shells out to.
+        tricky = str(tmp_path / "O'Brien's Files" / "installer.exe")
+        escaped = _ps_single_quote_escape(tricky)
+        script = f"Write-Output '{escaped}'"
+        result = subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        assert result.returncode == 0, result.stderr
+        assert result.stdout.strip() == tricky
 
 
 # ---------------------------------------------------------------------------
@@ -367,7 +508,7 @@ class TestDownloadAndInstall:
             "_download_with_cap",
             lambda *a, **kw: True,
         )
-        monkeypatch.setattr(updater, "_verify_signature", lambda p: False)
+        monkeypatch.setattr(updater, "_verify_signature", lambda p, v: False)
         popen_calls = []
         monkeypatch.setattr(
             updater.subprocess,
@@ -392,7 +533,7 @@ class TestDownloadAndInstall:
             "_download_with_cap",
             lambda *a, **kw: True,
         )
-        monkeypatch.setattr(updater, "_verify_signature", lambda p: True)
+        monkeypatch.setattr(updater, "_verify_signature", lambda p, v: True)
         launch_calls = []
 
         def fake_launch(dest):
@@ -416,7 +557,7 @@ class TestDownloadAndInstall:
             notes="",
         )
         monkeypatch.setattr(updater, "_download_with_cap", lambda *a, **kw: True)
-        monkeypatch.setattr(updater, "_verify_signature", lambda p: True)
+        monkeypatch.setattr(updater, "_verify_signature", lambda p, v: True)
         # Simulate the user declining the UAC prompt.
         monkeypatch.setattr(
             updater,
@@ -444,7 +585,7 @@ class TestDownloadAndInstall:
         monkeypatch.setattr(
             updater,
             "_verify_signature",
-            lambda p: verify_calls.append(p) or True,
+            lambda p, v: verify_calls.append(p) or True,
         )
         ok, err = updater.download_and_install(info)
         assert ok is False
@@ -468,7 +609,7 @@ class TestInstallerLaunchingCallback:
 
     def _stub_happy_path(self, monkeypatch):
         monkeypatch.setattr(updater, "_download_with_cap", lambda *a, **kw: True)
-        monkeypatch.setattr(updater, "_verify_signature", lambda p: True)
+        monkeypatch.setattr(updater, "_verify_signature", lambda p, v: True)
         monkeypatch.setattr(updater, "_spawn_relauncher", lambda v: True)
         monkeypatch.setattr(updater, "_launch_installer", lambda dest: (True, ""))
 
@@ -503,7 +644,7 @@ class TestInstallerLaunchingCallback:
 
     def test_callback_does_not_fire_when_signature_fails(self, monkeypatch):
         monkeypatch.setattr(updater, "_download_with_cap", lambda *a, **kw: True)
-        monkeypatch.setattr(updater, "_verify_signature", lambda p: False)
+        monkeypatch.setattr(updater, "_verify_signature", lambda p, v: False)
         called: list[str] = []
         monkeypatch.setattr(updater, "_spawn_relauncher", lambda v: True)
         monkeypatch.setattr(updater, "_launch_installer", lambda dest: (True, ""))
@@ -536,3 +677,112 @@ class TestInstallerLaunchingCallback:
         self._stub_happy_path(monkeypatch)
         ok, err = updater.download_and_install(self._info())
         assert ok is True
+
+
+# ---------------------------------------------------------------------------
+#  Install directory resolution + the /D= installer parameter
+# ---------------------------------------------------------------------------
+
+
+class TestInstallTargetDir:
+    """FIX: the installer must never resolve $INSTDIR from a
+    user-writable registry value (HKCU\\Software\\Alpha-OSK, nothing
+    in the build ever writes it). ``_install_target_dir`` is the
+    trusted value we compute ourselves and pass via ``/D=`` instead."""
+
+    def test_prefers_frozen_executable_directory(self, monkeypatch, tmp_path):
+        # A user who installed somewhere other than Program Files must
+        # still be updated in place, not silently relocated.
+        fake_exe = tmp_path / "CustomLocation" / "alpha-osk.exe"
+        monkeypatch.setattr(updater.sys, "frozen", True, raising=False)
+        monkeypatch.setattr(updater.sys, "executable", str(fake_exe))
+        assert _install_target_dir() == str(fake_exe.parent)
+
+    def test_falls_back_to_program_files_when_not_frozen(self, monkeypatch):
+        # Dev/test invocations aren't frozen and have no real install
+        # to preserve, so the Program Files default is correct there.
+        monkeypatch.setattr(updater.sys, "frozen", False, raising=False)
+        monkeypatch.delenv("ProgramW6432", raising=False)
+        monkeypatch.setenv("ProgramFiles", r"C:\Program Files")
+        assert _install_target_dir() == r"C:\Program Files\Alpha-OSK"
+
+    def test_prefers_programw6432_over_programfiles(self, monkeypatch):
+        # On 64-bit Windows, a 32-bit process would see %ProgramFiles%
+        # pointing at the (x86) tree; %ProgramW6432% is the real one.
+        monkeypatch.setattr(updater.sys, "frozen", False, raising=False)
+        monkeypatch.setenv("ProgramW6432", r"D:\Apps")
+        monkeypatch.setenv("ProgramFiles", r"C:\Program Files (x86)")
+        assert _install_target_dir() == r"D:\Apps\Alpha-OSK"
+
+
+class TestLaunchInstaller:
+    """NSIS's ``/D=`` switch has two strict rules: it must be the LAST
+    parameter on the command line, and the path must be UNQUOTED even
+    when it contains spaces. Quoting it, or putting it before ``/S``,
+    makes NSIS treat the literal quote characters as part of the path
+    and silently breaks the install. These tests pin the exact
+    parameter string ``_launch_installer`` builds."""
+
+    @pytest.mark.skipif(sys.platform != "win32", reason="ShellExecuteW is Windows-only")
+    def test_windows_launch_passes_unquoted_d_flag_as_last_param(self, monkeypatch, tmp_path):
+        import ctypes
+
+        dest = tmp_path / "Alpha-OSK-Setup-1.2.3.exe"
+        dest.write_bytes(b"MZ")
+        monkeypatch.setattr(updater.sys, "platform", "win32")
+        monkeypatch.setattr(updater, "_install_target_dir", lambda: r"C:\Program Files\Alpha-OSK")
+
+        calls = []
+
+        def fake_shell_execute(hwnd, verb, file, params, directory, show):
+            calls.append((hwnd, verb, file, params, directory, show))
+            return 42  # ShellExecuteW: > 32 means success
+
+        monkeypatch.setattr(ctypes.windll.shell32, "ShellExecuteW", fake_shell_execute)
+
+        ok, err = updater._launch_installer(dest)
+
+        assert ok is True
+        assert len(calls) == 1
+        _, verb, file, params, _, _ = calls[0]
+        assert verb == "runas"
+        assert file == str(dest)
+        # The exact NSIS parameter string: /S first, /D=<dir> last,
+        # unquoted, even though the directory contains a space.
+        assert params == r"/S /D=C:\Program Files\Alpha-OSK"
+        assert '"' not in params
+        assert params.index("/D=") > params.index("/S")
+
+    @pytest.mark.skipif(sys.platform != "win32", reason="ShellExecuteW is Windows-only")
+    def test_windows_launch_reports_uac_decline(self, monkeypatch, tmp_path):
+        import ctypes
+
+        dest = tmp_path / "Alpha-OSK-Setup-1.2.3.exe"
+        dest.write_bytes(b"MZ")
+        monkeypatch.setattr(updater.sys, "platform", "win32")
+        monkeypatch.setattr(updater, "_install_target_dir", lambda: r"C:\Program Files\Alpha-OSK")
+        SE_ERR_ACCESSDENIED = 5
+        monkeypatch.setattr(ctypes.windll.shell32, "ShellExecuteW", lambda *a: SE_ERR_ACCESSDENIED)
+
+        ok, err = updater._launch_installer(dest)
+        assert ok is False
+        assert "UAC" in err
+
+    def test_non_windows_fallback_includes_d_flag(self, monkeypatch, tmp_path):
+        dest = tmp_path / "Alpha-OSK-Setup-1.2.3.exe"
+        dest.write_bytes(b"MZ")
+        monkeypatch.setattr(updater.sys, "platform", "linux")
+        monkeypatch.setattr(updater, "_install_target_dir", lambda: "/opt/alpha-osk")
+        popen_calls = []
+        monkeypatch.setattr(
+            updater.subprocess,
+            "Popen",
+            lambda *a, **kw: popen_calls.append((a, kw)),
+        )
+
+        ok, err = updater._launch_installer(dest)
+
+        assert ok is True
+        assert len(popen_calls) == 1
+        args = popen_calls[0][0][0]
+        assert args == [str(dest), "/S", "/D=/opt/alpha-osk"]

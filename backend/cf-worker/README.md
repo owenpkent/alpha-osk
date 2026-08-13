@@ -68,12 +68,17 @@ before shipping a release that has telemetry enabled.
 
 ## Routes
 
-- `POST /v1/submit` — upsert one user's lifetime counters. 204 on
-  success, 400 with a one-line reason on validation failure.
-- `GET /v1/aggregate` — return summed counters across all users.
+- `POST /v1/submit`: upsert one user's lifetime counters. 204 on
+  success, 400 with a one-line reason on validation failure. Also 204,
+  but a no-op, when the same `anon_id` was submitted too recently (see
+  Rate limiting below). That case is deliberately indistinguishable
+  from a real success, so re-running the curl example below in quick
+  succession will keep returning 204 without necessarily updating the
+  row.
+- `GET /v1/aggregate`: return summed counters across all users.
   Cached at the edge for 5 minutes.
-- `POST /v1/forget` — delete a user's row. Always returns 204
-  (doesn't reveal whether the id existed).
+- `POST /v1/forget`: delete a user's row. Always returns 204
+  (doesn't reveal whether the id existed, including when throttled).
 
 ## Schema
 
@@ -86,10 +91,35 @@ per user, replaced on each POST).
 Daily at 04:00 UTC, prunes users with `last_seen` older than 365 days.
 The CASCADE on `submissions_latest.anon_id` cleans up the child row.
 
+## Rate limiting
+
+Two layers, both keyed on `anon_id` only (never IP, header, geo, or
+User-Agent: this worker doesn't read those):
+
+- **Edge**: a Cloudflare Workers rate-limiting binding (`RATE_LIMITER` in
+  `wrangler.toml.example`), checked before either POST route touches D1.
+  It fails open if the binding isn't configured, so treat it as a cheap
+  optimization layered in front of the D1 check, not the primary guarantee.
+- **D1**: `POST /v1/submit` won't replace a user's row if the existing one
+  is younger than `SUBMIT_COOLDOWN_SECONDS` (1 hour, see the comment on
+  that constant in `worker.ts` for why). A throttled request returns the
+  same 204 as a real success, on purpose: a distinguishable response would
+  let an attacker probe whether a given `anon_id` already exists.
+
+Neither layer stops an attacker who cycles through many distinct fake
+`anon_id`s to flood `/v1/submit`. That needs an IP-based control, and this
+worker deliberately doesn't implement one in code: doing so would mean
+reading and storing caller IPs, which breaks the no-IP privacy guarantee
+this service is built around. If you need that protection, add it out of
+band: a Cloudflare dashboard WAF rate-limiting rule scoped to this worker's
+route (see the comment above the `[[ratelimits]]` block in
+`wrangler.toml.example`). That's account configuration the maintainer sets
+up by hand, not something this repo can pin in code.
+
 ## Threat model
 
 See `docs/architecture/TELEMETRY.md` § "Threat model". Short version: an attacker
 who compromises this worker can see anon_ids and lifetime counters
-(no IP, no UA, no content) and could backfill fake submissions to
-poison the aggregate (limited by per-counter sanity ceilings and
-per-IP rate limiting at the Cloudflare edge).
+(no IP, no UA, no content) and could try to backfill fake submissions to
+poison the aggregate. That's limited by the per-counter sanity ceilings and
+the rate limiting described above.
