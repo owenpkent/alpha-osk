@@ -99,6 +99,19 @@ def swipe_root(qapp):
     warnings: list[str] = []
     QSettings(TEST_ORG, TEST_APP).clear()
 
+    # Disarm the startup update check.  `savedAutoCheckUpdates` defaults to
+    # true, so three seconds after load Main.qml fires a real HTTPS request
+    # to the GitHub releases API from a daemon thread, in every headless QML
+    # test that lives that long.  Besides making the suite depend on the
+    # network, that thread emits its result back into a bridge the fixture
+    # has already torn down, which surfaces as `RuntimeError: Signal source
+    # has been deleted` or, in a longer run, a hard access violation that
+    # kills the whole pytest process.  Writing the setting before the load
+    # means `Component.onCompleted` never starts the timer at all.
+    settings = QSettings(TEST_ORG, TEST_APP)
+    settings.setValue("ui/savedAutoCheckUpdates", False)
+    settings.sync()
+
     with patch("src.keyboard_bridge.create_key_synthesizer") as factory:
         synth = MagicMock()
         synth.is_available.return_value = True

@@ -15,6 +15,13 @@ Item {
 
     implicitHeight: Math.max(28, labelCol.implicitHeight + 10)
 
+    // `enabled` propagates to the MouseArea below, so a disabled toggle
+    // already ignores clicks; this is the matching visual.  Dimmed rather
+    // than hidden: a setting that vanishes reads as a missing feature,
+    // where a greyed one plus its description says "unavailable, and here
+    // is why".
+    opacity: toggle.enabled ? 1.0 : 0.4
+
     Rectangle {
         anchors.fill: parent
         radius: 4

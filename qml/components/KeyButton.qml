@@ -19,9 +19,11 @@ Item {
     property real radius: 8
     property bool isSpecial: false
     property bool isActive: false  // For modifier keys (shift, ctrl, etc.)
-    // Right-click "lock": the modifier is held down until released. Drawn
-    // with a distinct ring + corner padlock so it reads differently from
-    // a sticky one-shot press (which just uses the isActive highlight).
+    // Right-click "lock": the modifier is held down until released.
+    // Locked always implies isActive, so the key already carries the accent
+    // fill; the lock adds a solid bar along the bottom edge on top of it
+    // (see lockBar below) so a held modifier reads as *more than* a sticky
+    // one-shot press rather than as a different thing entirely.
     property bool isLocked: false
     property bool isWide: false
 
@@ -71,6 +73,19 @@ Item {
     // property instead and clear it on release, cancel, drag-off, AND
     // a safety timeout so a missed event can't strand the key visually.
     property bool _visualPressed: false
+
+    // Ink colour for anything drawn ON TOP of the active / pressed fill:
+    // the key label and the lock bar.  Nine themes ship and several have a
+    // pale accent (Blackboard, Spaceship) while Typewriter is a light theme
+    // outright, so a fixed colour is unreadable on roughly half of them.
+    // Picking by luminance means both marks stay legible on every theme
+    // with no per-theme table, and it keeps the bar the same ink as the
+    // label it underlines rather than a third colour competing with it.
+    readonly property color _onFillColor: {
+        var bg = keyRoot._visualPressed ? keyRoot.keyPressedColor : keyRoot.accentColor
+        var lum = bg.r * 0.299 + bg.g * 0.587 + bg.b * 0.114
+        return lum > 0.5 ? "#111111" : "#ffffff"
+    }
 
     // Signals
     signal keyPressed()
@@ -242,7 +257,12 @@ Item {
     Rectangle {
         id: keyBackground
         anchors.fill: parent
-        anchors.margins: 2
+        // Inset of the drawn keycap inside its allocated slot.  This is
+        // doubled into every visible gap (my inset + my neighbour's), so
+        // it dominates the apparent spacing far more than `keySpacing`
+        // does.  1 px keeps the keycaps visually distinct without the
+        // dead space reading as a grid of separated tiles.
+        anchors.margins: 1
         radius: keyRoot.radius
         clip: true
         color: keyRoot._visualPressed ? keyPressedColor
@@ -250,11 +270,10 @@ Item {
              : mouseArea.containsMouse ? Qt.lighter(keyColor, 1.25)
              : keyColor
 
-        border.color: keyRoot.isLocked ? "#ffd84d"
-                    : isActive ? Qt.lighter(accentColor, 1.3)
+        border.color: isActive ? Qt.lighter(accentColor, 1.3)
                     : mouseArea.containsMouse ? Qt.lighter(borderColor, 1.4)
                     : borderColor
-        border.width: keyRoot.isLocked ? 2 : 1
+        border.width: 1
 
         // Subtle gradient overlay — enhanced depth on press
         Rectangle {
@@ -302,16 +321,12 @@ Item {
             // displayText is layout-JSON-driven; force plain rendering so a
             // custom/modular layout's key label can't auto-render as HTML.
             textFormat: Text.PlainText
-            // Ensure readable contrast: use dark text on bright backgrounds, white on dark
-            color: {
-                var bg = keyRoot._visualPressed ? keyPressedColor : isActive ? accentColor : keyColor
-                // Luminance approximation: bright backgrounds need dark text
-                var lum = bg.r * 0.299 + bg.g * 0.587 + bg.b * 0.114
-                if (keyRoot._visualPressed || isActive) {
-                    return lum > 0.5 ? "#111111" : "#ffffff"
-                }
-                return keyTextColor
-            }
+            // Readable contrast on the active / pressed fill (dark ink on a
+            // bright one, white on a dark one) via the shared luminance rule
+            // up top, so the label and the lock bar can never disagree about
+            // what is legible on a given theme.  The resting key keeps the
+            // theme's own text colour.
+            color: (keyRoot._visualPressed || isActive) ? keyRoot._onFillColor : keyTextColor
             font.pixelSize: keyRoot.fontSize
             font.family: "Segoe UI, Inter, Ubuntu, Noto Sans, sans-serif"
             font.weight: isSpecial ? Font.DemiBold : Font.DemiBold
@@ -319,29 +334,41 @@ Item {
             verticalAlignment: Text.AlignVCenter
         }
 
-        // Right-click "lock" badge — a small padlock in the top-right
-        // corner, shown only while the modifier is held down. Pairs with
-        // the gold ring above so the held state is unmistakable.
+        // Right-click "lock" indicator: a solid bar along the bottom edge,
+        // shown only while the modifier is held down.  Locked implies
+        // isActive, so this sits on top of the accent fill a sticky
+        // one-shot press already has, and the difference between "held for
+        // one keystroke" and "held until you release it" is one unmissable
+        // mark rather than a second colour scheme.
+        //
+        // This replaced a gold ring plus a 15x15 gold badge holding a 9 px
+        // 🔒.  Two things were wrong with that: at 9 px the padlock is a
+        // smudge, and Windows renders it through Segoe UI Emoji as a colour
+        // glyph, which ignores the `color` property outright, so what
+        // actually shipped was a yellow blob in the corner.  The gold was
+        // hardcoded too, so it fought all nine themes.  No emoji here for
+        // the same reason: any glyph small enough to fit on a keycap is
+        // at the mercy of the host emoji font.
+        //
+        // Inset horizontally so the square ends clear the keycap's rounded
+        // corners.  `clip: true` on the parent clips to its bounding rect,
+        // not to the rounded shape, so a full-bleed bar would visibly poke
+        // out past the curve.
         Rectangle {
+            id: lockBar
+            // Lets the headless tests reach the bar; a Repeater's delegates
+            // are visual children, so this is the only handle on it.
+            objectName: "keyLockBar"
             visible: keyRoot.isLocked
-            width: 15
-            height: 15
-            radius: 4
-            anchors.top: parent.top
+            height: 3
+            radius: height / 2
+            anchors.left: parent.left
             anchors.right: parent.right
-            anchors.topMargin: 3
-            anchors.rightMargin: 3
-            color: "#ffd84d"
-            border.color: Qt.rgba(0, 0, 0, 0.35)
-            border.width: 1
-            Text {
-                anchors.centerIn: parent
-                text: "🔒"  // 🔒 padlock
-                font.pixelSize: 9
-                color: "#1a1a1a"
-                horizontalAlignment: Text.AlignHCenter
-                verticalAlignment: Text.AlignVCenter
-            }
+            anchors.bottom: parent.bottom
+            anchors.leftMargin: Math.max(4, keyRoot.radius * 0.75)
+            anchors.rightMargin: anchors.leftMargin
+            anchors.bottomMargin: 3
+            color: keyRoot._onFillColor
         }
 
         // Smooth color transition

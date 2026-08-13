@@ -301,9 +301,11 @@ The one exception to "held at the OS level": on Linux, `LinuxKeySynthesizer.hold
 
 State model: each modifier keeps its existing `_*_active` (held-at-OS, drives the highlight + chord logic) plus a new `_*_locked` flag. **Locked always implies active.** `lockModifier(name)` (bridge slot, called from QML `onKeyRightPressed` for `type === "modifier"` keys) toggles the lock: locking sets active+locked and holds at OS (only if not already held, so locking an already-sticky-active modifier doesn't re-send a key-down); unlocking clears both and releases. The sticky `toggleX()` paths call `_clear_lock(name)` when they turn a modifier off, so a left-tap on a locked key also clears the lock (easy way out). **Every** auto-release site is guarded with `and not self._*_locked` — there are four: the edit-mode intercept, the Ctrl/Alt/Win chord branch, the char-path end (`_press_char`), and the special-key end (`pressSpecialKey`, alongside the existing nav-key `keep_selection_modifiers` exception). Miss one and a locked modifier would silently drop after a keystroke. `shutdown()` releases locked modifiers too (and clears the flags) so quitting never pins one desktop-wide.
 
-QML surfaces the lock via `shiftLocked` / `ctrlLocked` / `altLocked` / `winLocked` bridge properties (+ `*LockedChanged` signals), bound in `Main.qml` and mapped per `kd.stateKey` onto `KeyButton.isLocked`. A locked key draws a distinct **gold 2 px ring + a small padlock badge** in the top-right corner, so a held modifier reads differently from a sticky one-shot press (which just uses the accent `isActive` highlight).
+QML surfaces the lock via `shiftLocked` / `ctrlLocked` / `altLocked` / `winLocked` bridge properties (+ `*LockedChanged` signals), bound in `Main.qml` and mapped per `kd.stateKey` onto `KeyButton.isLocked`. Because locked implies active, a locked key already carries the accent fill a sticky one-shot has; the lock adds a **solid 3 px bar along the bottom edge** (`lockBar` in `KeyButton.qml`) on top of it, so the two states differ by one unmissable mark rather than by a whole second colour scheme. The bar is inked with `KeyButton._onFillColor`, the shared luminance rule that also picks the key label's colour on an active/pressed fill: dark on a bright accent, white on a dark one. Nine themes ship, several with a pale accent (Blackboard, Spaceship) and one light outright (Typewriter), so any fixed colour is unreadable on roughly half of them. It is inset horizontally past the keycap's corner radius because `clip: true` clips to the bounding rect, not the rounded shape, so a full-bleed bar pokes out past the curve.
 
-**Synth invariant (load-bearing — the lock is worthless without it).** Keeping the bridge state "held" isn't enough; the OS modifier must physically stay down. `hold_modifier` puts it down, but `send_key`/`replace_text` used to *wrap* the action key with a modifier down+up, and that trailing key-up silently released a held modifier after the first keystroke (mouse Ctrl+click / Shift+drag / Alt+Tab then broke even though the padlock still showed it held). Fix: **`WindowsKeySynthesizer.send_key` and `replace_text` skip wrapping any modifier that is already physically held** (`_modifier_already_held` → `GetAsyncKeyState`), relying on the standing hold instead. This mirrors the pre-existing `shift_already_held` guard in `_make_char_scancode_events`. Any new synth path that wraps a modifier around a keystroke must apply the same guard, or a locked (or sticky) modifier will drop. Mirrored in C++ (`WindowsKeySynthesizer::modifierAlreadyHeld`, used by `sendKey` + `replaceText`). Covered by `tests/test_platform.py::TestWindowsSendKeyPunctuationChord::test_already_held_modifier_is_not_wrapped` and `TestWindowsReplaceText::test_held_shift_not_wrapped_in_selection`.
+This replaced a hardcoded gold 2 px ring plus a 15x15 gold badge holding a 9 px 🔒. **Don't reintroduce an emoji on a keycap**: at that size the padlock is a smudge, and Windows renders it through Segoe UI Emoji as a *colour* glyph, which ignores the `color` property outright, so what shipped was a yellow blob. Any glyph small enough to fit on a keycap is at the mercy of the host emoji font.
+
+**Synth invariant (load-bearing — the lock is worthless without it).** Keeping the bridge state "held" isn't enough; the OS modifier must physically stay down. `hold_modifier` puts it down, but `send_key`/`replace_text` used to *wrap* the action key with a modifier down+up, and that trailing key-up silently released a held modifier after the first keystroke (mouse Ctrl+click / Shift+drag / Alt+Tab then broke even though the key still showed it held). Fix: **`WindowsKeySynthesizer.send_key` and `replace_text` skip wrapping any modifier that is already physically held** (`_modifier_already_held` → `GetAsyncKeyState`), relying on the standing hold instead. This mirrors the pre-existing `shift_already_held` guard in `_make_char_scancode_events`. Any new synth path that wraps a modifier around a keystroke must apply the same guard, or a locked (or sticky) modifier will drop. Mirrored in C++ (`WindowsKeySynthesizer::modifierAlreadyHeld`, used by `sendKey` + `replaceText`). Covered by `tests/test_platform.py::TestWindowsSendKeyPunctuationChord::test_already_held_modifier_is_not_wrapped` and `TestWindowsReplaceText::test_held_shift_not_wrapped_in_selection`.
 
 **Parity**: mirrored 1:1 in C++ (`KeyboardBridge::lockModifier` / `clearLock`, the `m_*Locked` members, the guarded `releaseStickyAll()` + `pressSpecialKey` + edit-mode blocks, and the `*Locked` Q_PROPERTY/signals). Bridge behaviour is covered by `tests/test_keyboard_bridge.py::TestModifierLock` on the Python side.
 
@@ -319,7 +321,7 @@ The parent (`Main.qml`'s settings popup window) calls `settingsPanel.resetToHome
 
 | Top-level | Section | What's inside |
 |-----------|---------|---------------|
-| **Appearance** | Panels | Number row / Function row / Navigation / Numpad toggles, Compact View |
+| **Appearance** | Panels | Compact View / Function row / Navigation / Numpad toggles. Compact View leads the section because it gates the two below it: it forces Navigation + Numpad off (restoring them on exit) and renders their toggles disabled. There is no Number Row toggle - `Main.qml::showNumberRow` derives from whether the active layout JSON already carries a `number` row, so the standalone panel appears exactly on the compact layouts, which lack one. |
 | | Keyboard Layout | qwerty / dvorak / colemak picker (compact variants are filtered out - see *Compact View*) |
 | | Theme | 9-theme color picker |
 | | Sound & Opacity | Key click sound, opacity slider |
@@ -600,8 +602,9 @@ Load-bearing facts:
   the two traded places; Esc was the only base-layer key not in the protected
   "never behind a hop" set. Don't swap them back without reading the rationale
   in `docs/architecture/COMPACT_VIEW.md`. The Number Row panel (below) puts a
-  second Esc back at the top-left; that duplicate is deliberate, because the
-  panel is optional and `?123` has to stay the fallback when it's hidden.
+  second Esc back at the top-left; that duplicate is deliberate, so `?123`
+  stays the fallback for any future layout that shows the compact grid without
+  the panel.
 - **`:` has its own key on `?123` row 3**, in the slot `^` used to hold. Row 2
   already carried `;`→`:`, but a shifted variant is invisible (the keycap reads
   `;`), so the layer read as having no colon.
@@ -677,9 +680,15 @@ Load-bearing facts:
   asserts the panel width equals the widest keyboard row rather than merely
   fitting the window, because "fits" was already true of the broken version at
   some widths.
-- **Digits come back via a panel, not a fifth row.** *Settings → Appearance →
-  Panels → Number Row* renders `qml/components/NumberRow.qml` (13 x 1u, flush
-  with the compact grid) above the keyboard. Every key must register through
+- **Digits come back via a panel, not a fifth row, and not via a toggle.**
+  `qml/components/NumberRow.qml` (13 x 1u, flush with the compact grid) renders
+  above the keyboard whenever `Main.qml::showNumberRow` is true, which is
+  derived: true exactly when the active layout JSON carries no `number` row of
+  its own. That is the compact variants and nothing else, so digits are always
+  on screen in both views and a full-size layout can never end up with a
+  second, narrower number row stacked on the one built into its JSON. Keying it
+  off the layout rather than `compactView` matters because a letter arrangement
+  with no compact variant silently falls back to full size. Every key must register through
   `registerFn` or the swipe overlay swallows every tap on it. Its leading key
   is **Esc, not `` ` ``** (backtick lives on `?123` row 2), and Esc registers
   as a `special`, not a `char`: that keeps it hit-testable while keeping a
