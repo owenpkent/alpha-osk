@@ -129,15 +129,23 @@ Design rules, all enforced by `tests/test_layouts.py`:
 
 ## Getting the digits back without leaving compact
 
-*Settings → Appearance → Panels → **Number Row*** adds a standalone
-`Esc` `1`–`0` `-` `=` strip above the keyboard (`qml/components/NumberRow.qml`,
-off by default). Thirteen 1u keys, so it is exactly 13.0u and sits flush over a
-compact grid with no gutters.
+Compact renders a standalone `Esc` `1`–`0` `-` `=` strip above the keyboard
+(`qml/components/NumberRow.qml`). Thirteen 1u keys, so it is exactly 13.0u and
+sits flush over a compact grid with no gutters.
+
+**There is no toggle.** `Main.qml::showNumberRow` is derived: true exactly when
+the active layout JSON carries no row with `id: "number"`. The full-size
+layouts all have one; the compact variants do not, so the panel fills in for
+precisely the layouts that are missing it. Digits are therefore always on
+screen in both views, and a full-size layout can never end up with this
+narrower, centred strip stacked on top of the number row already inside its
+JSON. It keys off the layout rather than off `compactView` because a letter
+arrangement with no compact variant silently falls back to full size.
 
 It is a panel rather than a fifth row in the layout JSON because the compact
-layout's three layers must each be four rows of 13u (`test_has_three_layers_of_four_rows`),
-and because a panel toggles independently of which letter arrangement is
-selected. The digits behave like any other char key: shift shows and types the
+layout's three layers must each be four rows of 13u
+(`test_has_three_layers_of_four_rows`), and because a panel is independent of
+which letter arrangement is selected. The digits behave like any other char key: shift shows and types the
 shifted glyph, right-click types it without flipping sticky shift, both flash
 the key preview, and every digit registers in `charKeyRegistry` so the swipe
 overlay passes taps through instead of swallowing them.
@@ -147,8 +155,8 @@ trade above put Esc behind a hop, and "get me out of this dialog" is a bad key
 to make people navigate to. This row restores it at the top-left corner where a
 real keyboard keeps it. Nothing is lost: `` ` ``→`~` stays on `?123` row 2, and
 the full-size layouts carry their own `` ` `` in the layout JSON. The Esc here
-duplicates the `?123` one deliberately — this panel is optional and off by
-default, so `?123` has to stay the fallback for anyone who never enables it.
+duplicates the `?123` one deliberately, so `?123` stays the fallback for any
+future layout that shows the compact grid without this panel.
 
 Two consequences of Esc being a special key rather than a char key: it takes no
 key-preview bubble (a bubble over Esc isn't "what it typed", matching the main
@@ -157,8 +165,23 @@ would corrupt every swipe shape match. That makes it a dead tap while swipe
 typing is on — which is exactly how Backspace, Tab and Enter already behave
 under the overlay, not a regression specific to this row.
 
-Enabling it alongside a full-size layout is allowed but pointless: those layouts
-carry their own number row, so you get a narrower centred duplicate.
+## Compact turns the side panels off
+
+The Navigation cluster and the Numpad cost roughly 470 px of window width,
+which is exactly what compact exists to hand back, so the three are no longer
+independent: turning compact on forces both panels off, and their toggles
+render disabled (with a reason on the second line) while it is on. Offering all
+three freely meant a user could pick the small-screen mode and then, one toggle
+later, silently undo it.
+
+`onCompactViewChanged` in `Main.qml` does the forcing; the restore is the half
+that is easy to break. `onShowNavigationChanged` / `onShowNumpadChanged` skip
+their `appSettings` write while `compactView` is true, so the forced-off state
+never overwrites the user's real preference, and leaving compact reads it back
+out and restores whatever they had. `Component.onCompleted` applies the same
+rule on a cold start (`savedShowNavigation && !compactView`), otherwise
+quitting in compact would bring the panels back on next launch. Guarded by
+`tests/test_qml_compact_view.py::TestCompactViewForbidsTheSidePanels`.
 
 ## How layers work
 

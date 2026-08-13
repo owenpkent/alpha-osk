@@ -95,7 +95,7 @@ After the keyboard window appears:
 2. **Click letters on the keyboard.** They appear in the focused app exactly as a physical keypress would. Try typing a sentence.
 3. **Watch the pills above the keys.** After a few characters, prediction pills appear. Click any pill to insert the rest of that word plus a space. The longer you use the keyboard, the better the predictions get.
 4. **Move the window.** Drag the dark title bar at the top to reposition. Drag either left or right edge to resize the width; height auto-fits content.
-5. **Open settings.** The ⚙ icon in the top-right opens a drill-down menu. Change theme, switch layout (QWERTY / Dvorak / Colemak), turn Compact View on for a denser keyboard, toggle the number row, function row, navigation cluster, or numpad, adjust opacity, and more.
+5. **Open settings.** The ⚙ icon in the top-right opens a drill-down menu. Change theme, switch layout (QWERTY / Dvorak / Colemak), turn Compact View on for a denser keyboard, toggle the function row, navigation cluster, or numpad, adjust opacity, and more.
 6. **Pause learning.** The **Learning** switch in the title bar toggles whether the keyboard updates its model from what you type. Password fields auto-pause learning automatically.
 
 That covers ~90% of day-to-day use. The rest of this README and the [white paper](docs/WHITEPAPER.md) cover the depth.
@@ -112,7 +112,7 @@ That covers ~90% of day-to-day use. The rest of this README and the [white paper
 <tr>
 <td width="50%" align="center">
 <img src="assets/screenshots/settings-appearance.png" alt="Appearance settings: panel toggles, layout picker, theme picker, opacity slider" width="100%" />
-<br /><em>Appearance: toggle the number row, function row, navigation, and numpad panels plus Compact View; pick QWERTY / Dvorak / Colemak; pick a theme; adjust opacity.</em>
+<br /><em>Appearance: Compact View plus the function row, navigation, and numpad panel toggles; pick QWERTY / Dvorak / Colemak; pick a theme; adjust opacity.</em>
 </td>
 <td width="50%" align="center">
 <img src="assets/screenshots/settings-data-privacy.png" alt="Data and Privacy settings: data backup export and import, telemetry opt-in, auto-update toggle" width="100%" />

@@ -32,10 +32,6 @@ Window {
         // see the Compact view block near `currentLayout` for how the two
         // resolve into one layout id.
         property bool savedCompactView: false
-        // Standalone ` 1..0 - = row above the keyboard.  Exists for the
-        // compact view, whose digits are behind the ?123 hop; the full-size
-        // layouts already carry a number row of their own.
-        property bool savedNumberRow: false
         property bool savedAudioEnabled: false
         property bool savedAutoSpaceAfterPunctuation: true
         property bool savedAutoCapitalizeAfterPunctuation: false
@@ -228,9 +224,12 @@ Window {
             root.width = Math.max(root.minimumWidth, appSettings.savedWindowWidth)
         root._geometryRestored = true
 
-        // Load saved preferences
-        root.showNavigation = appSettings.savedShowNavigation
-        root.showNumpad = appSettings.savedShowNumpad
+        // Load saved preferences.  Compact view forbids the side panels
+        // (see onCompactViewChanged), and it is restored from settings
+        // before this runs, so honour it on a cold start too, otherwise a
+        // user who quit in compact would come back with the panels on.
+        root.showNavigation = appSettings.savedShowNavigation && !root.compactView
+        root.showNumpad = appSettings.savedShowNumpad && !root.compactView
         root.showFunctionRow = appSettings.savedShowFunctionRow
         root.currentTheme = appSettings.savedTheme
         root.suggestionsEnabled = appSettings.savedSuggestionsEnabled
@@ -319,23 +318,48 @@ Window {
     // When side panels toggle, grow/shrink from the right edge (left stays put).
     // Deltas sized to keep main keys ~same size at the default scale:
     // nav = 3.0*keyW + per-panel fixed (≈ 220), numpad = 4.0*keyW + per-panel fixed (≈ 250).
+    //
+    // The save is skipped while compact view is on, because compact forces
+    // both panels off (see onCompactViewChanged) and that forced state is
+    // not a preference.  Persisting it would mean turning compact on once
+    // silently threw away the user's real panel choice, so leaving compact
+    // could never bring the panels back.
     onShowNavigationChanged: {
         if (_loaded) root.width += showNavigation ? 220 : -220
-        appSettings.savedShowNavigation = showNavigation
+        if (!compactView) appSettings.savedShowNavigation = showNavigation
     }
     onShowNumpadChanged: {
         if (_loaded) root.width += showNumpad ? 250 : -250
-        appSettings.savedShowNumpad = showNumpad
+        if (!compactView) appSettings.savedShowNumpad = showNumpad
     }
 
     // Switching view density re-resolves the layout, then resizes the window
     // so the *key size* is preserved rather than the window width — giving
     // the screen back is the entire point of compact view, so keeping the
     // window the same size and just growing the keys would miss it.
+    //
+    // Compact view and the side panels are mutually exclusive.  The nav
+    // cluster and numpad cost ~470 px of width, which is precisely what
+    // compact exists to hand back, so offering all three independently
+    // produced combinations that undid the mode the user just picked.
+    // Compact wins: both panels are forced off here and their toggles are
+    // disabled in Settings while it is on.  The user's real preference
+    // still lives in appSettings (the change handlers above stop writing
+    // to it while compact is on), so leaving compact restores whatever
+    // they had.
     onCompactViewChanged: {
         appSettings.savedCompactView = compactView
         if (!_loaded || !keyboard) return
+        // Captured before the panels move, so the post-toggle resize below
+        // preserves the key size the user is actually looking at.
         var keyWBefore = root.keyW
+        if (compactView) {
+            root.showNavigation = false
+            root.showNumpad = false
+        } else {
+            root.showNavigation = appSettings.savedShowNavigation
+            root.showNumpad = appSettings.savedShowNumpad
+        }
         applyLayout()
         Qt.callLater(function() {
             var target = Math.round(keyWBefore * root.totalKeyUnits + root.layoutFixedPixels)
@@ -584,7 +608,24 @@ Window {
     }
 
     // Layout toggles (modular panels)
-    property bool showNumberRow: appSettings.savedNumberRow
+    //
+    // The standalone number row is derived, not a setting.  Digits are
+    // never optional: the full-size layouts carry a `number` row inside
+    // their layout JSON, and compact moves the digits behind the ?123 hop,
+    // so the standalone panel is exactly the compact layouts' missing row.
+    // Deriving it means digits are always on screen in both views, with no
+    // toggle that could either hide them or stack a second, narrower number
+    // row on top of a layout that already has one.  Keyed off the layout's
+    // own rows rather than `compactView` so a letter arrangement with no
+    // compact variant (which silently falls back to full size) still
+    // resolves correctly.
+    property bool showNumberRow: {
+        var rows = root.layoutRows
+        if (!rows || !rows.length) return false
+        for (var i = 0; i < rows.length; i++)
+            if (rows[i].id === "number") return false
+        return true
+    }
     property bool showFunctionRow: false
     property bool showNavigation: false
     property bool showNumpad: false
@@ -608,7 +649,12 @@ Window {
 
     // Sizing — keys scale dynamically with window width using closed-form calculation.
     // All visible panels share the window width proportionally, avoiding static estimates.
-    property real keySpacing: Math.max(1, Math.floor(root.width * 0.0025))
+    // The visible gap between two keycaps is `keySpacing` plus twice
+    // KeyButton's own 1 px background inset, so keep this modest: the
+    // inset already guarantees the caps never touch.  Wider gaps just
+    // shrink the click targets, which is the wrong trade on a
+    // mouse-driven OSK.
+    property real keySpacing: Math.max(1, Math.floor(root.width * 0.0018))
 
     // The widest visible row drives sizing — every narrower row is centred
     // against it.  Derived from the layout data rather than hardcoded so a
@@ -3329,7 +3375,6 @@ Window {
             anchors.fill: parent
 
             showFunctionRow: root.showFunctionRow
-            showNumberRow: root.showNumberRow
             showNavigation: root.showNavigation
             showNumpad: root.showNumpad
             currentTheme: root.currentTheme
@@ -3362,13 +3407,18 @@ Window {
                 if (setting === "functionRow") {
                     root.showFunctionRow = value
                     appSettings.savedShowFunctionRow = value
-                } else if (setting === "numberRow") {
-                    root.showNumberRow = value
-                    appSettings.savedNumberRow = value
                 } else if (setting === "navigation") {
-                    root.showNavigation = value
+                    // Compact forbids the side panels, and it enforces that
+                    // only at the moment it is switched on.  The Settings
+                    // toggle is disabled while compact is active, so the UI
+                    // cannot reach here — this keeps the invariant true for
+                    // any *other* caller of this dispatch (a preset, a
+                    // shortcut, a restored panel), which would otherwise
+                    // leave compact rendering the very panels it exists to
+                    // remove until the user toggled compact again.
+                    if (!root.compactView) root.showNavigation = value
                 } else if (setting === "numpad") {
-                    root.showNumpad = value
+                    if (!root.compactView) root.showNumpad = value
                 } else if (setting === "theme") {
                     root.currentTheme = value
                     appSettings.savedTheme = value
