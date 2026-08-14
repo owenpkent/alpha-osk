@@ -63,6 +63,11 @@ _EMAIL_RE = re.compile(
 # there is no backtracking blow-up.
 _NUMERIC_RUN_RE = re.compile(r"^[0-9]+(?:[.,:\-/][0-9]+)*$")
 
+# A run of digits with no separator in it yet -- the one token shape for
+# which a following "." or "," is genuinely ambiguous.  See
+# ``suppression_is_provisional``.
+_BARE_DIGITS_RE = re.compile(r"^[0-9]+$")
+
 # URL schemes worth recognising before the "://" is typed, so the colon
 # in "https:" doesn't get an auto-space.
 _URL_SCHEMES = frozenset(
@@ -299,15 +304,20 @@ def suppresses_auto_space(token: str, punct: str) -> bool:
 
     lowered = token.lower()
 
-    # Email: everything after the "@" is a domain, so its dots are
-    # structural.  Checked before the numeric rules because an address
-    # can be entirely numeric on either side.
-    if "@" in lowered:
-        return True
-
-    # Paths and URLs.
-    if "/" in lowered or "\\" in lowered or "://" in lowered:
-        return True
+    # Email and paths, but only for the punctuation that can be *part* of
+    # one.  A domain and a path both contain dots and colons; neither
+    # contains a comma or a semicolon, so one typed after an address is
+    # ordinary prose and still earns its space.  Suppressing there ran
+    # the next word straight into the address: "owen@gmail.com, thanks"
+    # came out "owen@gmail.com,thanks".
+    if punct in (".", ":"):
+        # Everything after the "@" is a domain, so its dots are
+        # structural.  Checked before the numeric rules because an
+        # address can be entirely numeric on either side.
+        if "@" in lowered:
+            return True
+        if "/" in lowered or "\\" in lowered:
+            return True
     if punct == ":" and lowered in _URL_SCHEMES:
         return True
     if punct == "." and lowered in _HOST_PREFIXES:
@@ -325,6 +335,30 @@ def suppresses_auto_space(token: str, punct: str) -> bool:
         return True
 
     return False
+
+
+def suppression_is_provisional(token: str, punct: str) -> bool:
+    """Is a suppression resting only on a bare run of digits?
+
+    "3" + "." is the start of a decimal; "42" + "." is the end of a
+    sentence.  At the instant the dot lands the two are the same string,
+    exactly like "example" and "hello" in the known gap above -- but
+    unlike that case, the *next* character settles it, and settles it
+    additively: a digit confirms the decimal and nothing needs doing,
+    while a letter proves prose and the skipped space can simply be
+    typed then.  So the caller suppresses provisionally and delivers the
+    space one keystroke late rather than guessing now.  Nothing is ever
+    deleted, so the wrong guess costs a late space rather than mangled
+    text.
+
+    True only when a bare digit run was the *sole* evidence.  Anything
+    with a separator already in it ("192.168.1", "1,000") or with an
+    "@", a slash or a known scheme is structural on its own terms and
+    stays suppressed outright.
+    """
+    if not suppresses_auto_space(token, punct):
+        return False
+    return bool(_BARE_DIGITS_RE.match(token))
 
 
 # ---------------------------------------------------------------------

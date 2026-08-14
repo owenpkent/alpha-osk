@@ -2402,6 +2402,23 @@ class TestSnippetOffers:
         bridge.acceptSnippetOffer()
         assert bridge._snippets.get_all() == before
 
+    def test_turning_detection_off_withdraws_a_live_offer(self, bridge: KeyboardBridge):
+        """Not merely drops it -- the toast is a QML window on its own timer.
+
+        Clearing only the Python side left a Save button on screen that
+        did nothing, and worse than nothing: ``acceptSnippetOffer``
+        returns False for "no offer" and for "snippet list is full"
+        alike, so the user was told their email could not be saved
+        because they were out of slots.
+        """
+        withdrawn: list[bool] = []
+        bridge.snippetOfferWithdrawn.connect(lambda: withdrawn.append(True))
+        _type(bridge, "write to owen@example.com ")
+        assert bridge._pending_snippet_offer is not None
+        bridge.setSnippetDetection(False)
+        assert withdrawn == [True]
+        assert bridge._pending_snippet_offer is None
+
 
 def _press(bridge: KeyboardBridge, text: str) -> None:
     """Type *text* through the ordinary (non-literal) character path.
@@ -2505,6 +2522,171 @@ class TestAutoCapitalizeIsNotAHeldShift:
         _press(bridge, "done. x")
         assert _typed(bridge)[-1] == "x"
         assert bridge._pending_auto_cap is False
+
+    @pytest.mark.parametrize("run", ["!?", "?!", "!!"])
+    def test_a_run_of_punctuation_still_arms_it(self, capping: KeyboardBridge, run: str):
+        """ "Wait!?" must still capitalise the next sentence.
+
+        The spend was guarded on "was one owed when this keystroke
+        started", which is not the same question as "did this keystroke
+        arm one".  The "?" of "Wait!?" does both: it spends the capital
+        the "!" armed and arms another, and clearing on the spend threw
+        the new one away.
+
+        The runs here are all of *even* length on purpose.  Each mark
+        alternately armed and cleared the flag, so a three-dot ellipsis
+        came out capitalised by parity alone and passes against the bug
+        — the obvious example to reach for is the one that proves
+        nothing.
+        """
+        _press(capping, f"wait{run}")
+        assert capping._pending_auto_cap is True
+        _press(capping, "then")
+        assert "".join(_typed(capping)).endswith("Then")
+
+    def test_the_edit_popup_does_not_eat_it(self, capping: KeyboardBridge):
+        """Nor capitalise everything typed into the popup.
+
+        The edit-mode branch applied the pending capital and returned
+        before the spend, so after a full stop *every* character entered
+        in the prediction-edit popup or the snippets editor came out
+        uppercase.  The capital belongs to the app behind us -- nothing
+        typed in edit mode can arm one -- so it is neither applied nor
+        spent here.
+        """
+        _press(capping, "i went home.")
+        typed: list[str] = []
+        capping.editKeyTyped.connect(typed.append)
+        capping.setEditMode(True)
+        _press(capping, "abc")
+        capping.setEditMode(False)
+        assert typed == ["a", "b", "c"]
+        assert capping._pending_auto_cap is True
+
+    def test_a_tapped_pill_spends_it(self, capping: KeyboardBridge):
+        """The pill is the next thing typed, so it takes the capital.
+
+        Both halves matter: the pill has to *show* the capital (it is
+        what will be inserted), and the flag has to be cleared, or the
+        same capital lands again on a later, unrelated character.
+        """
+        _press(capping, "i went home. ")
+        assert capping._display_cased(["then"]) == ["Then"]
+        capping.pressPrediction("Then")
+        assert capping._pending_auto_cap is False
+        capping._synth.send_text.reset_mock()
+        _press(capping, "x")
+        assert _typed(capping) == ["x"]
+
+    def test_a_snippet_spends_it(self, capping: KeyboardBridge, tmp_path):
+        """A snippet is verbatim, so it takes the capital without wearing it."""
+        from src.snippets import SnippetStore
+
+        capping._snippets = SnippetStore(tmp_path / "snippets.json")
+        capping._snippets.load()
+        capping._snippets.set(0, "Email", "owen@example.com")
+        _press(capping, "i went home. ")
+        capping.insertSnippet(0)
+        assert capping._pending_auto_cap is False
+        capping._synth.send_text.reset_mock()
+        _press(capping, "x")
+        assert _typed(capping) == ["x"]
+
+
+class TestTheDeferredSpaceAfterABareNumber:
+    """ "3" and "42" are the same token until the next character lands.
+
+    ``is_numeric_run`` cannot tell a decimal point from a full stop, so
+    suppressing on it outright broke prose ("the total is 42. Then" came
+    out "42.Then", auto-capital skipped too) and not suppressing broke
+    "3.14".  The next character settles it, and settles it *additively*:
+    a digit confirms the decimal and there was never a space to send,
+    while a letter proves prose and the withheld space is simply typed
+    then.  Nothing is ever deleted, so a wrong guess costs a late space
+    rather than mangled text -- which is why this is allowed where the
+    rejected "guess from the following character" rule was not.
+    """
+
+    @pytest.fixture
+    def capping(self, bridge: KeyboardBridge) -> KeyboardBridge:
+        bridge._auto_capitalize_after_punctuation = True
+        return bridge
+
+    def test_a_decimal_keeps_its_dot(self, bridge: KeyboardBridge):
+        _press(bridge, "pi is 3")
+        bridge._synth.send_text.reset_mock()
+        _press(bridge, ".14")
+        assert "".join(_typed(bridge)) == ".14"
+
+    def test_a_sentence_ending_number_gets_its_space_back(self, bridge: KeyboardBridge):
+        _press(bridge, "the total is 42")
+        bridge._synth.send_text.reset_mock()
+        _press(bridge, ".then")
+        assert "".join(_typed(bridge)) == ". then"
+
+    def test_and_the_capital_it_owed(self, capping: KeyboardBridge):
+        """The auto-capital was skipped along with the space, so it is owed too."""
+        _press(capping, "the total is 42")
+        capping._synth.send_text.reset_mock()
+        _press(capping, ".then")
+        assert "".join(_typed(capping)) == ". Then"
+
+    def test_a_thousands_separator_survives(self, bridge: KeyboardBridge):
+        _press(bridge, "it cost 1")
+        bridge._synth.send_text.reset_mock()
+        _press(bridge, ",000")
+        assert "".join(_typed(bridge)) == ",000"
+
+    def test_a_prose_comma_after_a_number_gets_its_space_back(self, bridge: KeyboardBridge):
+        _press(bridge, "i bought 5")
+        bridge._synth.send_text.reset_mock()
+        _press(bridge, ",then")
+        assert "".join(_typed(bridge)) == ", then"
+
+    def test_a_user_typed_space_is_not_doubled(self, bridge: KeyboardBridge):
+        """They supplied the space themselves; ours would be a second one."""
+        _press(bridge, "the total is 42.")
+        bridge._synth.send_text.reset_mock()
+        _press(bridge, " then")
+        assert "".join(_typed(bridge)) == "then"
+
+    def test_backspace_drops_it(self, bridge: KeyboardBridge):
+        _press(bridge, "the total is 42.")
+        bridge.pressSpecialKey("backspace")
+        bridge._synth.send_text.reset_mock()
+        _press(bridge, "x")
+        assert "".join(_typed(bridge)) == "x"
+
+    def test_a_context_reset_drops_it(self, bridge: KeyboardBridge):
+        """The punctuation that withheld the space is no longer at the caret."""
+        _press(bridge, "the total is 42.")
+        bridge._reset_typing_context()
+        bridge._synth.send_text.reset_mock()
+        _press(bridge, "x")
+        assert "".join(_typed(bridge)) == "x"
+
+    def test_a_tapped_pill_settles_it(self, bridge: KeyboardBridge):
+        """A pill is a word, so the full stop ended a sentence after all."""
+        _press(bridge, "the total is 42.")
+        bridge._synth.send_text.reset_mock()
+        bridge.pressPrediction("then")
+        assert "".join(_typed(bridge)) == " then "
+
+    def test_an_evidenced_suppression_is_not_provisional(self, bridge: KeyboardBridge):
+        """ "192.168.1" carries a separator already, so no space is owed."""
+        _press(bridge, "ping 192.168.1")
+        bridge._synth.send_text.reset_mock()
+        _press(bridge, ".1")
+        assert "".join(_typed(bridge)) == ".1"
+
+    def test_the_setting_off_still_spaces_everything(self, bridge: KeyboardBridge):
+        """The auto-space-off path stays byte-identical, deferral included."""
+        bridge.setIntelligentSpacing(False)
+        _press(bridge, "pi is 3")
+        bridge._synth.send_text.reset_mock()
+        _press(bridge, ".14")
+        assert "".join(_typed(bridge)) == ". 14"
+        assert bridge._deferred_auto_space == ""
 
 
 class TestIntelligentSpacingInAFreshField:
@@ -2693,3 +2875,33 @@ class TestCaretMoveClearsContext:
         bridge._context_buffer = "hello "
         self._poll(bridge, "A,10,20")
         assert bridge._context_buffer == "hello "
+
+    @pytest.mark.parametrize(
+        "insert",
+        [
+            pytest.param(lambda b: b.pressPrediction("world"), id="pill"),
+            pytest.param(lambda b: b.insertSnippet(0), id="snippet"),
+        ],
+    )
+    def test_our_own_inserts_do_not_trigger_it(self, bridge: KeyboardBridge, tmp_path, insert):
+        """A pill tap and a snippet move the caret exactly as typing does.
+
+        ``_keystroke_since_poll`` was set only by ``_press_char`` and
+        ``pressSpecialKey``, so every path that types without going
+        through them -- a tapped pill, a snippet, a swiped word, the
+        autocorrect retype -- read to this poll as the user clicking
+        somewhere else.  The context and the freshly emitted next-word
+        pills were then torn down within 250 ms of the insert that
+        produced them.  It is set in the synthesizer wrappers now, so a
+        future insert path is covered by construction.
+        """
+        from src.snippets import SnippetStore
+
+        bridge._snippets = SnippetStore(tmp_path / "snippets.json")
+        bridge._snippets.load()
+        bridge._snippets.set(0, "Email", "owen@example.com")
+        bridge._context_buffer = "hello "
+        self._poll(bridge, "A,10,20")
+        insert(bridge)
+        self._poll(bridge, "A,400,90")
+        assert bridge._context_buffer != ""

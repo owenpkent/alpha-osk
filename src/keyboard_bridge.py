@@ -44,7 +44,12 @@ from .platform.password_detect import (
 from .prediction import HybridPredictor, SwipeRecognizer
 from .snippets import SnippetStore
 from .telemetry import TelemetryClient
-from .text_patterns import detect_snippet_candidate, label_for_kind, suppresses_auto_space
+from .text_patterns import (
+    detect_snippet_candidate,
+    label_for_kind,
+    suppresses_auto_space,
+    suppression_is_provisional,
+)
 from .updater import UpdateInfo, check_for_update, download_and_install
 
 # How long to keep the "installing v… keyboard back in a moment" toast
@@ -694,6 +699,13 @@ class KeyboardBridge(QObject):
         # believed in a hold the OS did not have.  This flag capitalises
         # the next character and touches nothing else.
         self._pending_auto_cap = False
+        # The punctuation whose auto-space was skipped *provisionally*
+        # (see text_patterns.suppression_is_provisional), empty when
+        # nothing is owed.  A bare number is the one token shape where
+        # "3" + "." and "42" + "." are indistinguishable at the moment
+        # the dot lands, so the space is withheld and delivered on the
+        # next character if that character proves it was prose.
+        self._deferred_auto_space = ""
         self._auto_save_on_exit = True
         # Intelligent spacing — skip the punctuation auto-space when it
         # would break a structured token (an email, a URL, a decimal).
@@ -862,6 +874,7 @@ class KeyboardBridge(QObject):
             modifiers.append("win")
 
         mods = modifiers if modifiers else None
+        self._keystroke_since_poll = True
         # Only thread hold_seconds through when actually holding (game mode) so
         # the common zero-hold call keeps its original two-arg signature.
         if hold_seconds > 0:
@@ -871,7 +884,13 @@ class KeyboardBridge(QObject):
 
     def _send_text(self, text: str) -> None:
         """Send a string of text via the platform synthesizer."""
+        self._keystroke_since_poll = True
         self._synth.send_text(text)
+
+    def _replace_text(self, backspaces: int, text: str) -> None:
+        """Select the last *backspaces* characters and overwrite with *text*."""
+        self._keystroke_since_poll = True
+        self._synth.replace_text(backspaces, text)
 
     def _suppress_auto_space(self, token_before: str, punct: str) -> bool:
         """Should the punctuation auto-space be skipped this time?
@@ -889,6 +908,61 @@ class KeyboardBridge(QObject):
         if not self._intelligent_spacing:
             return False
         return suppresses_auto_space(token_before, punct)
+
+    def _defer_auto_space(self, token_before: str, punct: str) -> None:
+        """Remember that *punct*'s auto-space was skipped on thin evidence.
+
+        Only a bare run of digits qualifies (see
+        ``text_patterns.suppression_is_provisional``): "3" and "42" are
+        the same token, so the dot is either a decimal point or a full
+        stop and nothing on screen yet says which.
+        """
+        self._deferred_auto_space = punct if suppression_is_provisional(token_before, punct) else ""
+
+    def _consume_auto_cap(self) -> None:
+        """Spend a pending auto-capital on a verbatim insert.
+
+        A tapped pill, a snippet and a swiped word are each "the next
+        thing typed", so they spend the capital exactly as a character
+        does.  The capital itself is already *in* the inserted text --
+        ``_display_cased`` applies it to pills and swipe results, and a
+        snippet is verbatim by definition -- so all that is missing is
+        clearing the flag.  Without that the capital stays owed and
+        lands later on some unrelated character: type "hello. ", tap a
+        pill, and the next letter you type comes out uppercase mid-word.
+        """
+        if not self._pending_auto_cap:
+            return
+        self._pending_auto_cap = False
+        self._update_layer()
+
+    def _flush_deferred_space(self, prose: bool) -> bool:
+        """Deliver or drop a deferred auto-space.  True if a capital is owed.
+
+        *prose* is the caller's verdict on what follows: a letter, a
+        tapped pill or a snippet all mean the punctuation ended a
+        sentence after all, so the withheld space is typed now.  A digit
+        (``prose=False``) confirms the decimal and the space is simply
+        dropped.  Either way the deferral is spent, so this must be
+        called on every path that types after one was armed.
+
+        The space goes out through ``_send_text`` rather than being
+        wrapped in ``_without_held_modifiers``: a held modifier maps a
+        space to a chord, but the caller is about to send the following
+        character through the very same path, so a divergence here would
+        be the odd one out rather than a fix.
+        """
+        punct = self._deferred_auto_space
+        self._deferred_auto_space = ""
+        if not punct or not prose:
+            return False
+        self._send_text(" ")
+        if not self._privacy_mode:
+            # Mirror it in the buffer for the same reason the ordinary
+            # auto-space is mirrored: a pill click inserts against what
+            # the buffer says is on screen.
+            self._context_buffer += " "
+        return self._auto_capitalize_after_punctuation and punct in (".", "!", "?")
 
     @contextmanager
     def _without_held_modifiers(self) -> Iterator[None]:
@@ -1016,9 +1090,18 @@ class KeyboardBridge(QObject):
         # predictions) — the user is editing a word, not typing.
         if self._edit_mode_active:
             self._play_click()
+            # _pending_auto_cap is deliberately not consulted here.  It is
+            # owed to the *app behind us* -- the period that armed it was
+            # typed there, and nothing typed inside an edit field can arm
+            # one, because this branch returns before the punctuation
+            # handling below.  Applying it here spent nothing and cleared
+            # nothing, so after typing "hello." every single character
+            # entered in the prediction-edit popup or the snippets editor
+            # came out uppercase.  Leaving it armed keeps the capital for
+            # the character it was actually meant for.
             if literal:
                 char = key
-            elif self._shift_active or self._caps_lock_active or self._pending_auto_cap:
+            elif self._shift_active or self._caps_lock_active:
                 char = key.upper()
             else:
                 char = key.lower()
@@ -1047,6 +1130,15 @@ class KeyboardBridge(QObject):
         else:
             char = key.lower()
 
+        # Settle a provisionally suppressed auto-space now that the next
+        # character is known: a letter after "42." means it was the end of
+        # a sentence, so the space (and any capital it owed) is delivered
+        # one keystroke late.  A digit means it was "3.14" and there was
+        # never a space to send.  Anything else is left alone rather than
+        # guessed at.  Purely additive — nothing typed is ever taken back.
+        if self._deferred_auto_space and self._flush_deferred_space(char.isalpha()) and not literal:
+            char = char.upper()
+
         # Handle punctuation spacing — remove preceding space only if WE
         # auto-inserted it (after a prediction click or punctuation auto-
         # space).  Never undo a space the user typed manually: a visible
@@ -1071,8 +1163,15 @@ class KeyboardBridge(QObject):
 
         # A pending auto-capital is spent on the character this keystroke
         # types, so record that it was owed *before* the punctuation
-        # branches below get a chance to arm a fresh one.
+        # branches below get a chance to arm a fresh one — and record
+        # separately whether they did, because the two are not mutually
+        # exclusive.  "Wait!" arms a capital, and the "?" of "Wait!?"
+        # both spends that one and arms another; clearing on the spend
+        # alone threw the new one away and left the next sentence
+        # lowercase.  Same for "..." and for any run of sentence-ending
+        # punctuation.
         consumed_auto_cap = self._pending_auto_cap
+        rearmed_auto_cap = False
 
         # Use _send_key for modifier combos (Ctrl+C, Win+Shift+S, etc.)
         # Send the lowercase key — Shift is included as a modifier by _send_key
@@ -1149,6 +1248,8 @@ class KeyboardBridge(QObject):
                     self._send_text(" ")
                     self._auto_space_pending = True
                     self._raw_token = ""
+                elif suppressed:
+                    self._defer_auto_space(token_before, char)
                 # Mirror on screen: no space sent means no space in the
                 # buffer either, or a pill click would insert against a
                 # prefix that isn't there.  The auto-space-off path is
@@ -1159,6 +1260,7 @@ class KeyboardBridge(QObject):
                 # "example.com" comes out "example.Com".
                 if self._auto_capitalize_after_punctuation and not suppressed:
                     self._pending_auto_cap = True
+                    rearmed_auto_cap = True
                     self._update_layer()
                 if len(self._context_buffer) > 200:
                     self._context_buffer = self._context_buffer[-200:]
@@ -1183,6 +1285,8 @@ class KeyboardBridge(QObject):
                     self._send_text(" ")
                     self._auto_space_pending = True
                     self._raw_token = ""
+                elif suppressed:
+                    self._defer_auto_space(token_before, char)
                 if len(self._context_buffer) > 200:
                     self._context_buffer = self._context_buffer[-200:]
 
@@ -1234,7 +1338,7 @@ class KeyboardBridge(QObject):
         # Guarded on `consumed_auto_cap` so a capital armed by *this*
         # keystroke (the punctuation branches above) survives for the
         # next one, which is the whole point of it.
-        if consumed_auto_cap:
+        if consumed_auto_cap and not rearmed_auto_cap:
             self._pending_auto_cap = False
             self._update_layer()
 
@@ -1280,6 +1384,11 @@ class KeyboardBridge(QObject):
         # navigating cursor; any subsequent punctuation should not undo
         # whatever space is on screen.
         self._auto_space_pending = False
+        # A deferred auto-space is dropped rather than delivered here: the
+        # user typing their own space, backspacing, or moving the caret
+        # all settle the question themselves, and inserting ours on top
+        # would be the one outcome none of them asked for.
+        self._deferred_auto_space = ""
         key_map = {
             "backspace": "BackSpace",
             "return": "Return",
@@ -1346,7 +1455,7 @@ class KeyboardBridge(QObject):
                             self._synth.send_key("BackSpace")
                         self._send_text(cased + " ")
                     else:
-                        self._synth.replace_text(
+                        self._replace_text(
                             len(self._current_word),
                             cased + " ",
                         )
@@ -1827,6 +1936,20 @@ class KeyboardBridge(QObject):
         # _send_literal_text to drop and restore, so the ordinary path
         # costs no extra modifier round trip.
         self._release_sticky_modifiers()
+        # A provisionally suppressed auto-space is settled by this tap: a
+        # pill is a word, so the "42." that withheld the space ended a
+        # sentence after all.  It goes out before the insert so the space
+        # lands between the two, and it can owe a capital the pill was
+        # never given — nothing armed _pending_auto_cap while the
+        # question was still open, so _display_cased had nothing to act
+        # on.
+        if self._deferred_auto_space and self._flush_deferred_space(True) and word[:1].islower():
+            word = word[0].upper() + word[1:]
+        # The tap also spends any *armed* auto-capital.  That one is
+        # already visible on the pill (_display_cased case 3), so only
+        # the flag is left to clear; leaving it set would hand the same
+        # capital to a later, unrelated character.
+        self._consume_auto_cap()
         # The guard wraps every branch, including the two that never reach
         # send_text: a locked Alt turns the compat BackSpaces into
         # Alt+BackSpace (undo), and a locked Ctrl turns replace_text's
@@ -1847,7 +1970,7 @@ class KeyboardBridge(QObject):
             else:
                 # Casing differs (e.g. "iph"→"iPhone") or prefix mismatch —
                 # select the typed letters and overwrite with the correct word.
-                self._synth.replace_text(len(self._current_word), word + " ")
+                self._replace_text(len(self._current_word), word + " ")
         # All three paths append an auto-space; flag it so the next
         # keystroke (if it's punctuation) can elide it cleanly.
         self._auto_space_pending = True
@@ -1939,6 +2062,7 @@ class KeyboardBridge(QObject):
         self._predictions = []
         self._current_word = ""
         self._raw_token = ""
+        self._deferred_auto_space = ""
         self._word_typed_under_caps_lock = False
         self._sentence_buffer = ""
         self._context_buffer = ""
@@ -2017,6 +2141,12 @@ class KeyboardBridge(QObject):
         # modifiers like any other — and a held Shift would otherwise
         # deliver the whole address in capitals.
         self._release_sticky_modifiers()
+        # Settle a deferred auto-space (the snippet is prose following the
+        # punctuation that withheld it) and spend any armed auto-capital.
+        # The capital is deliberately *not* applied to the value: a
+        # snippet is verbatim, and its own casing is the whole point.
+        self._flush_deferred_space(True)
+        self._consume_auto_cap()
         self._send_literal_text(value)
         self._current_word = ""
         self._raw_token = ""
@@ -2174,10 +2304,17 @@ class KeyboardBridge(QObject):
 
     @Slot(bool)
     def setSnippetDetection(self, enabled: bool) -> None:
-        """Enable/disable offering to save detected emails/phones/addresses."""
+        """Enable/disable offering to save detected emails/phones/addresses.
+
+        Turning it off withdraws a live offer rather than merely dropping
+        it: the toast is a QML window on its own timer, so clearing only
+        the Python side left a Save button on screen that reported
+        "Snippets are full" when tapped (``acceptSnippetOffer`` finds no
+        offer and returns False, which is the same signal the cap uses).
+        """
         self._snippet_detection_enabled = bool(enabled)
         if not self._snippet_detection_enabled:
-            self._pending_snippet_offer = None
+            self._withdraw_snippet_offer()
 
     @Slot(bool)
     def setIntelligentSpacing(self, enabled: bool) -> None:
@@ -2356,8 +2493,9 @@ class KeyboardBridge(QObject):
            for the suffix-only insert: "hello".startswith("HEL") is
            False without mirroring, so the click would fall through to
            a full replace and clobber the user's capitals.
-        3. Shift held, nothing uppercase typed yet.  Capitalise the first
-           letter only.  Shift means "the next character is a capital",
+        3. Shift held (or an auto-capital pending after a full stop),
+           nothing uppercase typed yet.  Capitalise the first
+           letter only.  Both mean "the next character is a capital",
            and a tapped pill *is* the next thing typed, so a user who
            wants "Boston" out of a "bost" prefix can tap Shift and see
            the pill change rather than having to type the B themselves.
@@ -2388,7 +2526,7 @@ class KeyboardBridge(QObject):
                         new_chars.append(ch)
                 result.append("".join(new_chars))
             return result
-        if self._shift_active:
+        if self._shift_active or self._pending_auto_cap:
             # 3. Shift held with nothing uppercase typed yet.  Shift is the
             #    "next character is a capital" signal, and the pill *is* the
             #    next thing that gets typed, so it capitalises too.  This is
@@ -3111,8 +3249,14 @@ class KeyboardBridge(QObject):
 
         Two guards keep this from firing on its own movement:
 
-        **Typing moves the caret too**, so a keystroke since the previous
-        poll means the move was ours and is expected.
+        **Typing moves the caret too**, so anything synthesized since the
+        previous poll means the move was ours and is expected.  The flag
+        is set in ``_send_key`` / ``_send_text`` / ``_replace_text``
+        rather than at the keystroke entry points, because a tapped pill,
+        a snippet and a swiped word all move the caret without going
+        through ``_press_char``: set only there, this poll mistook our
+        own insert for the user clicking elsewhere and tore down the
+        context — and the next-word pills — the insert had just produced.
 
         **Only between words.**  A reset mid-word is the dangerous
         direction: it clears ``_current_word`` while the partial word is
@@ -3260,6 +3404,10 @@ class KeyboardBridge(QObject):
         self._current_word = ""
         self._raw_token = ""
         self._pending_auto_cap = False
+        # Dropped, not delivered: the punctuation that withheld this
+        # space is no longer where the caret is, so typing one now would
+        # put it in whatever field the user just moved to.
+        self._deferred_auto_space = ""
         self._word_typed_under_caps_lock = False
         self._sentence_buffer = ""
         self._context_buffer = ""
@@ -3554,7 +3702,7 @@ class KeyboardBridge(QObject):
         # Insert the edited word (same as pressPrediction but with edited
         # text). Not gated: the user explicitly typed and saved this
         # correction, so it must still reach the target app.
-        self._synth.replace_text(len(self._current_word), edited + " ")
+        self._replace_text(len(self._current_word), edited + " ")
 
         # Update context. Suppressed in privacy mode: feeds predict() /
         # learn_from_selection() on the next call, same reasoning as
@@ -3692,6 +3840,12 @@ class KeyboardBridge(QObject):
         # and the capital (if any) is already in `top`, so a Shift still
         # held would double-apply and deliver the whole word uppercase.
         self._release_sticky_modifiers()
+        # Same settlement the pill path does: deliver a deferred space
+        # (with the capital it owes, which _display_cased could not have
+        # known about) and spend an armed one, which is already in `top`.
+        if self._deferred_auto_space and self._flush_deferred_space(True) and top[:1].islower():
+            top = top[0].upper() + top[1:]
+        self._consume_auto_cap()
         self._send_literal_text(top + " ")
         self._context_buffer += top + " "
         self._sentence_buffer += top + " "

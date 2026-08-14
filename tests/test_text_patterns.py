@@ -28,6 +28,7 @@ from src.text_patterns import (
     is_phone,
     label_for_kind,
     suppresses_auto_space,
+    suppression_is_provisional,
 )
 
 
@@ -203,6 +204,69 @@ class TestAutoSpaceSurvivesProse:
 
     def test_an_absurdly_long_token_is_left_alone(self) -> None:
         assert not suppresses_auto_space("a" * 500, ".")
+
+    @pytest.mark.parametrize(
+        "token,punct",
+        [
+            ("owen@gmail.com", ","),  # "owen@gmail.com, thanks"
+            ("owen@gmail.com", ";"),
+            ("@owen", ","),  # "@owen, hi"
+            ("C:/Users/owen", ","),  # "see C:/Users/owen, then"
+            ("https://example.com", ","),
+            ("https://example.com", ";"),
+        ],
+    )
+    def test_a_comma_after_an_address_is_prose(self, token, punct) -> None:
+        """The "@" and path rules used to fire for every auto-spaced mark.
+
+        A domain contains dots and colons; it never contains a comma or a
+        semicolon, so one typed after an address belongs to the sentence
+        around it.  Suppressing there ran the next word straight into the
+        address: "owen@gmail.com, thanks" came out "owen@gmail.com,thanks".
+        """
+        assert not suppresses_auto_space(token, punct)
+
+    def test_the_structural_marks_are_still_suppressed(self) -> None:
+        """The inverse: gating on punctuation must not disarm the rule."""
+        assert suppresses_auto_space("owen@gmail", ".")
+        assert suppresses_auto_space("owen@host", ":")
+        assert suppresses_auto_space("C:/Users/owen", ".")
+
+
+class TestProvisionalSuppression:
+    """Which suppressions rest on evidence, and which on a coin flip.
+
+    A bare run of digits is the one token shape where the following
+    punctuation is genuinely ambiguous: "3" + "." starts a decimal and
+    "42" + "." ends a sentence, and at that instant they are the same
+    string.  The caller withholds the space and delivers it on the next
+    character if that character proves prose, so this predicate is what
+    separates "wait and see" from "suppress outright".
+    """
+
+    @pytest.mark.parametrize("token,punct", [("3", "."), ("42", "."), ("1", ","), ("12", ":")])
+    def test_a_bare_number_is_provisional(self, token, punct) -> None:
+        assert suppression_is_provisional(token, punct)
+
+    @pytest.mark.parametrize(
+        "token,punct",
+        [
+            ("192.168.1", "."),  # a separator is already in it
+            ("1,000", ","),
+            ("owen@gmail", "."),  # the "@" is the evidence
+            ("C:/Users/owen", "."),
+            ("www", "."),
+            ("https", ":"),
+            ("example.co", "."),
+        ],
+    )
+    def test_an_evidenced_suppression_is_not(self, token, punct) -> None:
+        assert not suppression_is_provisional(token, punct)
+
+    @pytest.mark.parametrize("token,punct", [("hello", "."), ("world", ","), ("", ".")])
+    def test_nothing_suppressed_is_nothing_to_defer(self, token, punct) -> None:
+        """Provisional is a *kind* of suppression, never a source of one."""
+        assert not suppression_is_provisional(token, punct)
 
 
 class TestTheRemovedFirstTokenRescue:
