@@ -1,24 +1,31 @@
-"""Tests for system-tray click routing.
+"""Tests for system-tray click routing and what a tray click does.
 
-The behaviour under test is small but easy to regress silently, because
-nothing about it is visible in a unit test of the surrounding code: the
-router used to map a tray double-click to ``showMinimized()``, and a
-single click sat behind a timer for the system's double-click interval so
-the two gestures could be told apart.  Both are gone; these tests exist so
-neither comes back unnoticed.
+Two halves, both easy to regress silently because neither is visible in a
+unit test of the surrounding code:
 
-No ``QApplication`` is created here.  ``_TrayClickRouter`` takes its clock
-and its double-click interval as callables precisely so it can be driven
-with fakes, and ``QSystemTrayIcon.ActivationReason`` is a plain enum that
-imports fine without a running app.
+``_TrayClickRouter`` collapses a raw activation burst into one toggle.  A
+single click used to sit behind a timer for the system's double-click
+interval so a double click could be told apart, which made the keyboard
+appear half a second late; that's gone and shouldn't come back.
+
+``_toggle_keyboard_window`` decides where the keyboard goes.  It used to
+``hide()`` the window, which dropped its taskbar entry and left the tray
+icon as the only route back; it now minimizes everywhere that has a
+taskbar to minimize into.
+
+No ``QApplication`` is created here.  The router takes its clock and its
+double-click interval as callables, and the toggle takes the window, so
+both can be driven with fakes; ``QSystemTrayIcon.ActivationReason`` and
+``QWindow.Visibility`` are plain enums that import fine without an app.
 """
 
 from __future__ import annotations
 
 import pytest
+from PySide6.QtGui import QWindow
 from PySide6.QtWidgets import QSystemTrayIcon
 
-from src.keyboard_app import _TrayClickRouter
+from src.keyboard_app import _toggle_keyboard_window, _TrayClickRouter
 
 TRIGGER = QSystemTrayIcon.ActivationReason.Trigger
 DOUBLE_CLICK = QSystemTrayIcon.ActivationReason.DoubleClick
@@ -142,23 +149,133 @@ class TestNonClickActivations:
         assert toggles == ["toggle"]
 
 
-class TestTrayNeverMinimizes:
-    def test_nothing_in_keyboard_app_calls_showminimized(self) -> None:
-        """No code path in the module minimizes the window.
+class FakeWindow:
+    """The two QWindow calls the toggle makes, plus a settable visibility.
 
-        This is a source-level assertion because the tray wiring lives
-        inside ``main()``, which cannot be exercised headlessly.  It walks
-        the AST rather than grepping the text so that *documenting* the
-        removed behaviour (this file and the router's docstring both name
-        ``showMinimized``) can't fail the test: only a real attribute
-        access counts.  Minimize belongs to the title-bar minus button,
-        which lives in QML.
+    ``_toggle_keyboard_window`` touches nothing else on the root object, so
+    a stand-in is enough to drive every branch without a QApplication or a
+    loaded QML tree (``main()`` cannot be exercised headlessly).  Each
+    method records the call *and* moves ``_visibility`` the way the real
+    window would, so a test can chain calls and assert on the round trip.
+    """
+
+    def __init__(
+        self,
+        visibility: QWindow.Visibility = QWindow.Visibility.Windowed,
+        tucked: object = None,
+    ) -> None:
+        self._visibility = visibility
+        self._tucked = tucked
+        self.calls: list[str] = []
+
+    def visibility(self) -> QWindow.Visibility:
+        return self._visibility
+
+    def property(self, name: str) -> object:
+        """``QObject.property`` returns None for a name the object lacks.
+
+        The default stands in for every window that isn't the X11 tuck
+        case — including the real one on Windows and macOS, where
+        ``tucked`` exists in QML but is never true.
         """
-        import ast
-        from pathlib import Path
+        return self._tucked if name == "tucked" else None
 
-        import src.keyboard_app as keyboard_app
+    def showMinimized(self) -> None:
+        self.calls.append("showMinimized")
+        self._visibility = QWindow.Visibility.Minimized
 
-        tree = ast.parse(Path(keyboard_app.__file__).read_text(encoding="utf-8"))
-        accessed = {n.attr for n in ast.walk(tree) if isinstance(n, ast.Attribute)}
-        assert "showMinimized" not in accessed
+    def showNormal(self) -> None:
+        self.calls.append("showNormal")
+        self._visibility = QWindow.Visibility.Windowed
+
+    def hide(self) -> None:
+        self.calls.append("hide")
+        self._visibility = QWindow.Visibility.Hidden
+
+    def raise_(self) -> None:
+        self.calls.append("raise_")
+
+
+class TestTrayMinimizes:
+    """A tray click parks the keyboard in the taskbar, not out of existence.
+
+    The window carries a normal taskbar entry (no ``WS_EX_TOOLWINDOW``), so
+    minimizing leaves the user a second, more discoverable way back than
+    the tray icon.  ``hide()`` removed that entry and made the tray the
+    only route — the behaviour these tests exist to keep from returning.
+    """
+
+    @pytest.mark.parametrize("platform_name", ["windows", "linux"])
+    def test_a_visible_window_is_minimized_not_hidden(self, platform_name) -> None:
+        win = FakeWindow()
+        _toggle_keyboard_window(win, platform_name)
+        assert win.calls == ["showMinimized"]
+
+    @pytest.mark.parametrize("platform_name", ["windows", "linux", "macos"])
+    def test_a_minimized_window_is_restored(self, platform_name) -> None:
+        win = FakeWindow(QWindow.Visibility.Minimized)
+        _toggle_keyboard_window(win, platform_name)
+        assert win.calls == ["showNormal", "raise_"]
+
+    @pytest.mark.parametrize("platform_name", ["windows", "linux"])
+    def test_two_clicks_return_the_window_to_where_it_started(self, platform_name) -> None:
+        win = FakeWindow()
+        _toggle_keyboard_window(win, platform_name)
+        _toggle_keyboard_window(win, platform_name)
+        assert win.calls == ["showMinimized", "showNormal", "raise_"]
+        assert win.visibility() == QWindow.Visibility.Windowed
+
+    def test_a_window_minimized_by_the_title_bar_button_is_restored(self) -> None:
+        """The restore branch keys on the window, not on what we did last.
+
+        The title-bar minus button and the taskbar both minimize without
+        going through this function, and a tray click has to bring those
+        back too — otherwise it would try to minimize an already-minimized
+        window and read as a dead icon.
+        """
+        win = FakeWindow()
+        win.showMinimized()  # stands in for the QML minus button
+        win.calls.clear()
+        _toggle_keyboard_window(win, "windows")
+        assert win.calls == ["showNormal", "raise_"]
+
+
+class TestTuckedWindowStillHides:
+    """A tucked (DOCK-typed) window has no taskbar entry and can't minimize.
+
+    ``showMinimized()`` is inert while the window is DOCK-typed, so the
+    minimize branch would leave the tray icon looking dead.  Hiding keeps
+    the round trip working: the ``onVisibilityChanged`` handler in
+    ``Main.qml`` untucks and restores the on-screen position on the way
+    back up.
+    """
+
+    def test_a_tucked_window_is_hidden_not_minimized(self) -> None:
+        win = FakeWindow(tucked=True)
+        _toggle_keyboard_window(win, "linux")
+        assert win.calls == ["hide"]
+
+    def test_an_untucked_window_still_minimizes(self) -> None:
+        """The inverse, so 'always hide' can't pass as a fix."""
+        win = FakeWindow(tucked=False)
+        _toggle_keyboard_window(win, "linux")
+        assert win.calls == ["showMinimized"]
+
+
+class TestMacOSStillHides:
+    """macOS has nothing to minimize into, so it keeps the hide/show pair.
+
+    The app runs under the Accessory activation policy: no Dock icon, no
+    taskbar entry.  Minimizing there would be the branch that leaves the
+    tray icon as the only way back, which is the opposite of the point.
+    """
+
+    def test_a_visible_window_is_hidden(self) -> None:
+        win = FakeWindow()
+        _toggle_keyboard_window(win, "macos")
+        assert win.calls == ["hide"]
+
+    def test_a_hidden_window_is_restored(self) -> None:
+        win = FakeWindow(QWindow.Visibility.Hidden)
+        _toggle_keyboard_window(win, "macos")
+        assert win.calls == ["showNormal", "raise_"]

@@ -30,6 +30,40 @@ from .vocabulary_pack import PackManager
 _logger = logging.getLogger("HybridPredictor")
 
 
+def _short_word_allowed(word: str) -> bool:
+    """True if *word* may be offered as a next-word prediction.
+
+    Anything three characters or longer passes untouched; shorter words
+    have to be real, which is decided by ``NgramPredictor``'s existing
+    short-word whitelist rather than by a second list living here.
+
+    This filter used to be a blanket ``len(word) <= 2`` with "i" as the
+    only exception, which discarded most of what next-word prediction is
+    *best* at: after "I want" the useful pills are "to", "it", "my",
+    "us"; after "one" they are "of" and "or".  Those are also the
+    highest-frequency words in English, so the bar was withholding its
+    strongest guesses and offering the fourth-best instead.
+
+    It stays an allow-list rather than a relaxed length rule because the
+    engine learns whatever the user types: stray two-character fragments
+    ("th", "ap", "sm") left by a typo or an interrupted word accumulate
+    in the model, and a bare length change would let every one of them
+    compete for a pill.  Words, not lengths.
+
+    Reusing ``_SHORT_WORD_WHITELIST`` is deliberate.  It is already the
+    project's answer to "is this short string a real word or a keyboard
+    slip" (it gates the dictionary-load fragment filter), so a second
+    copy here would be one more list to keep in sync and one more place
+    for the two to disagree.  Extend that set to extend this filter.
+
+    Case-insensitive, so a capitalised "To" at a sentence start is judged
+    on the word rather than on its casing.
+    """
+    if len(word) > 2:
+        return True
+    return word.lower() in NgramPredictor._SHORT_WORD_WHITELIST
+
+
 class HybridPredictor(QObject):
     """
     Hybrid prediction engine combining multiple approaches:
@@ -539,7 +573,7 @@ class HybridPredictor(QObject):
         adding a word to ``scores``.  Used by every strategy that
         iterates per-source predictions before merging.
         """
-        if is_next_word and len(word) <= 2 and word != "i":
+        if is_next_word and not _short_word_allowed(word):
             return False
         return self._is_valid_word(word)
 
@@ -603,7 +637,7 @@ class HybridPredictor(QObject):
             # Final short-word guard — catches any short word that
             # slipped past the per-source filter (e.g. fuzzy, which
             # the rank strategy historically didn't filter).
-            if is_next_word and len(word) <= 2 and word != "i":
+            if is_next_word and not _short_word_allowed(word):
                 continue
             capped = self._ngram.get_capitalized(word, sentence_start)
             results.append(capped)

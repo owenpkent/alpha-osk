@@ -67,11 +67,34 @@ still contributes roughly 10% of rank-1.
 
 ### Short-word filter
 
-Two-letter words (`it`, `an`, `is`, `of`, …) are excluded from
-**next-word** predictions to keep the pill bar populated with
-higher-information content.  The literal `"i"` is whitelisted because
-it's always grammatically plausible.  Mid-word completions bypass this
-filter entirely — users should still be able to complete short words.
+`_short_word_allowed` gates one- and two-letter words out of
+**next-word** predictions.  Anything three characters or longer passes
+untouched; shorter words must be in
+`NgramPredictor._SHORT_WORD_WHITELIST`.  Mid-word completions bypass the
+filter entirely, since users should still be able to complete short words.
+
+It used to be a blanket exclusion of everything `<= 2` characters, with
+the literal `"i"` as the only exception, on the theory that short words
+are low-information.  That was backwards: `to`, `of`, `in`, `is`, `it`,
+`my`, `we` are simultaneously the most useful next-word guesses (after
+"I want", the answers are "to", "it", "my", "us") and the most frequent
+words in English, so the bar was withholding its strongest candidates
+and showing the fourth-best instead.
+
+It stays an **allow-list** rather than becoming a length change, because
+the engine learns whatever the user types: two-character fragments
+("th", "ap", "sm") left behind by a typo or an interrupted word live in
+the model too, and relaxing the length would let all of them compete for
+a pill.  Words, not lengths.
+
+The list is `NgramPredictor._SHORT_WORD_WHITELIST` rather than a second
+set in `hybrid_predictor`, because it is already the project's answer to
+"real word or keyboard slip" (it gates the dictionary-load fragment filter in
+`_is_plausible_word`), and a private copy would be one more thing to
+keep in sync.  Extend that set to extend this filter.  Note this is
+distinct from the ~30-word inline set in `_is_valid_word` below, which
+answers a different question: "is this a word at all, even if it never
+made it into `unigrams`".
 
 ## Validation — `_is_valid_word`
 

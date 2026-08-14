@@ -142,6 +142,64 @@ def focused_element_token() -> Optional[str]:
     return result if isinstance(result, str) else None
 
 
+def caret_position_token() -> Optional[str]:
+    """Return a token identifying where the caret currently sits, or None.
+
+    Complements :func:`focused_element_token`, which answers "is this a
+    different control".  It cannot answer "is this a different *place* in
+    the same control", and that is a real gap: clicking from one
+    paragraph to another inside a single text box leaves the prediction
+    context describing text that is no longer next to the caret.  It also
+    covers the case where UI Automation reports one element for a whole
+    web document, so two fields on a page share a RuntimeId.
+
+    Windows only (``GetGUIThreadInfo`` on the foreground thread).
+    Returns None everywhere else, and on any app that does not publish a
+    caret -- which is most of the browser and Electron world.  That makes
+    the whole thing fail closed: no caret means no token means callers
+    leave the context alone, exactly as they do for a UIA hiccup.
+    """
+    if sys.platform != "win32":
+        return None
+    try:
+        import ctypes
+        import ctypes.wintypes as wintypes
+
+        class _GTI(ctypes.Structure):
+            _fields_ = [
+                ("cbSize", wintypes.DWORD),
+                ("flags", wintypes.DWORD),
+                ("hwndActive", wintypes.HWND),
+                ("hwndFocus", wintypes.HWND),
+                ("hwndCapture", wintypes.HWND),
+                ("hwndMenuOwner", wintypes.HWND),
+                ("hwndMoveSize", wintypes.HWND),
+                ("hwndCaret", wintypes.HWND),
+                ("rcCaret", wintypes.RECT),
+            ]
+
+        user32 = ctypes.windll.user32
+        hwnd = user32.GetForegroundWindow()
+        if not hwnd:
+            return None
+        tid = user32.GetWindowThreadProcessId(hwnd, None)
+        if not tid:
+            return None
+        info = _GTI()
+        info.cbSize = ctypes.sizeof(info)
+        if not user32.GetGUIThreadInfo(tid, ctypes.byref(info)):
+            return None
+        if not info.hwndCaret:
+            # No caret published by this app; say "don't know".
+            return None
+        # The owning control plus the caret's top-left.  Deliberately not
+        # the width/height: some controls resize the caret for a wide
+        # glyph, which would read as a move.
+        return f"{int(info.hwndCaret)},{int(info.rcCaret.left)},{int(info.rcCaret.top)}"
+    except Exception:
+        return None
+
+
 def shutdown() -> None:
     """Release any resources held by the active detector.
 

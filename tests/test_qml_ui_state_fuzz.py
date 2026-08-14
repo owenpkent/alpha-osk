@@ -71,6 +71,13 @@ def _settle() -> None:
 _LAYOUT_WAIT_MS = 20
 _LAYOUT_WAIT_TRIES = 50
 
+# QtQuick.Labs `Settings` batches property writes behind a ~100 ms timer
+# rather than hitting the store on every assignment.  Waited out in full
+# (with headroom) by _flush_settings, because a restart test that reads
+# the store before that timer fires is testing the debounce, not the
+# persistence.
+_SETTINGS_DEBOUNCE_MS = 300
+
 
 def _wait_until(predicate) -> bool:
     """Spin the event loop until *predicate* holds, bounded. Returns whether
@@ -697,7 +704,18 @@ class TestRestartPersistence:
 
 
 def _flush_settings() -> None:
-    """QML `Settings` writes are debounced; give the timer a chance to run."""
-    for _ in range(6):
-        QCoreApplication.processEvents()
+    """Wait out the QML `Settings` write debounce, then sync the store.
+
+    ``QTest.qWait``, not ``processEvents``, for the same reason
+    ``_wait_until`` gives above: the debounce is a *timer*, and
+    ``processEvents`` dispatches what is already due without advancing
+    the clock.  Six passes of it therefore complete well inside the
+    ~100 ms window and return with the write still pending, so whether
+    the setting reached disk before the session was torn down came down
+    to how much wall time the surrounding test happened to take.  That
+    is a coin flip, and it landed the wrong way on the ubuntu runner as
+    "compact view did not persist" while passing everywhere else.
+    """
+    QTest.qWait(_SETTINGS_DEBOUNCE_MS)
+    QCoreApplication.processEvents()
     QSettings(TEST_ORG, TEST_APP).sync()

@@ -33,6 +33,8 @@ Item {
     property bool suggestionsEnabled: true
     property int predictionCount: 8
     property bool autoSpaceAfterPunctuation: true
+    property bool intelligentSpacing: true
+    property bool snippetDetection: true
     property bool autoCapitalizeAfterPunctuation: false
     // Merge strategy -- see docs/architecture/HYBRID_MERGING.md.  "rank" is the
     // default and historical behaviour; the others are alternatives.
@@ -634,6 +636,19 @@ Item {
                                     text: "Auto-Space After Punctuation"
                                     checked: unifiedSettings.autoSpaceAfterPunctuation
                                     onToggled: function(c) { unifiedSettings.settingChanged("autoSpaceAfterPunctuation", c) }
+                                }
+
+                                // Sits directly under the toggle it modifies:
+                                // it does nothing unless auto-space is on.
+                                SettingsToggle {
+                                    Layout.fillWidth: true
+                                    text: "Intelligent Spacing"
+                                    description: unifiedSettings.autoSpaceAfterPunctuation
+                                        ? "Skip the auto-space inside emails, links and numbers"
+                                        : "Needs Auto-Space After Punctuation"
+                                    enabled: unifiedSettings.autoSpaceAfterPunctuation
+                                    checked: unifiedSettings.intelligentSpacing
+                                    onToggled: function(c) { unifiedSettings.settingChanged("intelligentSpacing", c) }
                                 }
 
                                 SettingsToggle {
@@ -1697,6 +1712,21 @@ Item {
                                     font.pixelSize: 10
                                     wrapMode: Text.WordWrap
                                     Layout.fillWidth: true
+                                }
+
+                                // Lives under Privacy rather than Smart
+                                // Typing because the question it raises is
+                                // "may the keyboard notice personal details
+                                // you type", not "how should typing behave".
+                                // Detection is local-only and never runs in
+                                // privacy mode; nothing is stored until the
+                                // user taps Save on the offer.
+                                SettingsToggle {
+                                    Layout.fillWidth: true
+                                    text: "Offer to save emails, phones and addresses"
+                                    description: "Spots them as you type and offers a one-tap save to Snippets"
+                                    checked: unifiedSettings.snippetDetection
+                                    onToggled: function(c) { unifiedSettings.settingChanged("snippetDetection", c) }
                                 }
 
                                 SettingsToggle {

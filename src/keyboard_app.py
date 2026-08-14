@@ -46,7 +46,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from PySide6.QtCore import QSettings, QSharedMemory, Qt, QUrl
-from PySide6.QtGui import QIcon
+from PySide6.QtGui import QIcon, QWindow
 from PySide6.QtQml import QQmlApplicationEngine
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
@@ -799,19 +799,53 @@ def _set_windows_app_user_model_id() -> None:
         _logger.debug("SetCurrentProcessExplicitAppUserModelID failed: %s", exc)
 
 
+def _toggle_keyboard_window(root, platform_name: str = CURRENT_PLATFORM) -> None:
+    """Put the keyboard away, or bring it back.  One click each way.
+
+    On Windows and Linux "away" means **minimized**, not hidden.  The OSK
+    carries a normal taskbar entry (``WS_EX_TOOLWINDOW`` is deliberately
+    not applied — see :func:`_apply_windows_extended_styles`), so a
+    minimized keyboard is still visibly parked somewhere the user can get
+    at it, and the tray icon and the taskbar entry agree about where the
+    window went.  Hiding it outright threw that away: the window vanished
+    from the taskbar and the tray icon became the only route back.
+
+    macOS keeps the hide/show pair because it has no taskbar or Dock entry
+    to minimize *into* (the app runs under the Accessory activation policy
+    — see :func:`_apply_macos_window_flags`), so there minimizing would be
+    the version that leaves the user with only the tray icon.
+
+    A **tucked** window falls back to hiding for the same reason: while
+    parked off-screen it is DOCK-typed, which costs it the taskbar entry
+    and makes ``showMinimized()`` inert, so minimizing there would be a
+    dead tray icon rather than a stash.  ``tucked`` is QML-side state
+    (X11 only, see ``toggleTuck`` in ``Main.qml``); reading it through
+    ``property()`` yields ``None`` on any window that doesn't declare it,
+    which is the right answer everywhere else.
+
+    The restore branch is keyed on the window's own visibility rather than
+    on what this function did last, so it also picks up a window the user
+    minimized with the title-bar minus button or the taskbar.
+
+    ``platform_name`` is a parameter rather than a direct read of
+    ``CURRENT_PLATFORM`` so the tests can drive every branch on one host.
+    """
+    if root.visibility() in (QWindow.Visibility.Hidden, QWindow.Visibility.Minimized):
+        root.showNormal()
+        root.raise_()
+    elif platform_name == "macos" or bool(root.property("tucked")):
+        root.hide()
+    else:
+        root.showMinimized()
+
+
 class _TrayClickRouter:
-    """Turn raw tray activations into exactly one show/hide toggle per click.
+    """Turn raw tray activations into exactly one window toggle per click.
 
-    Lives at module level, rather than as a closure in ``main()``, purely so
-    the tests can reach it without a running ``QApplication``.  Two
-    behaviours are worth pinning down:
-
-    **A tray click never minimizes.** Earlier builds mapped double-click to
-    ``root.showMinimized()``.  No mainstream tray app does that (Discord,
-    Slack and qBittorrent all just show/hide), and it is the wrong answer
-    for an OSK besides: the user asked the tray to put the keyboard away,
-    and parking it behind a taskbar entry only moves the problem.  The
-    title-bar minus button is still the way to minimize to the taskbar.
+    *Which* activations count lives here; *what* the toggle does lives in
+    :func:`_toggle_keyboard_window`.  Lives at module level, rather than as
+    a closure in ``main()``, purely so the tests can reach it without a
+    running ``QApplication``.
 
     **A double click toggles once, not twice.** Windows delivers a double
     click as Trigger, DoubleClick, Trigger, so acting on every activation
@@ -991,22 +1025,14 @@ def main() -> int:
     # --- System tray icon ---
     tray = QSystemTrayIcon(app_icon, app)
     tray_menu = QMenu()
-    show_action = tray_menu.addAction("Show / Hide")
+    show_action = tray_menu.addAction(
+        "Show / Hide" if CURRENT_PLATFORM == "macos" else "Show / Minimize"
+    )
     tray_menu.addSeparator()
     quit_action = tray_menu.addAction("Quit Alpha-OSK")
 
     def _toggle_visibility() -> None:
-        """Bring the keyboard up, or put it away again.
-
-        This is the mainstream tray convention (Discord, Slack,
-        qBittorrent): click to show, click again to hide back to the tray.
-        It deliberately never minimizes; see :class:`_TrayClickRouter`.
-        """
-        if root.isVisible():
-            root.hide()
-        else:
-            root.show()
-            root.raise_()
+        _toggle_keyboard_window(root)
 
     # Held in a local (not inlined into connect) so the router outlives the
     # call: PySide does not promise to keep a strong reference to a callable
