@@ -2905,6 +2905,68 @@ class TestOutsideClickClearsContext:
         assert bridge._pending_snippet_offer is None
 
 
+class TestTabClearsContext:
+    """Tab moves to the next field, so the buffers describing this one go.
+
+    Same failure the outside-click signal exists for, arriving through the
+    keyboard instead: left alone, a pill tapped after tabbing inserts the
+    tail of a word whose head is in the field the user just left.
+    """
+
+    def test_the_context_is_cleared(self, bridge: KeyboardBridge):
+        _type(bridge, "dear bob hel")
+        assert bridge._current_word == "hel"
+        bridge.pressSpecialKey("tab")
+        assert bridge._current_word == ""
+        assert bridge._context_buffer == ""
+        assert bridge._sentence_buffer == ""
+
+    def test_the_keystroke_still_reaches_the_app(self, bridge: KeyboardBridge):
+        """The reset must not swallow the Tab itself."""
+        _type(bridge, "hel")
+        bridge._synth.send_key.reset_mock()
+        bridge.pressSpecialKey("tab")
+        sent = [c[0][0] for c in bridge._synth.send_key.call_args_list]
+        assert "Tab" in sent
+
+    def test_an_ordinary_key_does_not_clear(self, bridge: KeyboardBridge):
+        """The inverse, so "reset on every special key" cannot pass as this."""
+        _type(bridge, "dear bob hel")
+        bridge.pressSpecialKey("left")
+        assert bridge._context_buffer != ""
+
+    def test_the_word_in_progress_is_not_learned(self, bridge: KeyboardBridge):
+        """Tab is the accept-completion key in every IDE and shell.
+
+        There `_current_word` is a *prefix* the app is about to finish, so
+        learning it would feed the model "hel" every time the user
+        completed "hello".
+        """
+        before = bridge._predictor.get_unigram_freqs().get("hel", 0)
+        _type(bridge, "hel")
+        bridge.pressSpecialKey("tab")
+        assert bridge._predictor.get_unigram_freqs().get("hel", 0) == before
+
+    def test_a_live_snippet_offer_survives(self, bridge: KeyboardBridge, tmp_path):
+        """Tabbing to the next field of a form must not close the Save button.
+
+        Exactly the outside-click case reached by keyboard: typing an
+        email and then moving to the next field is the single most likely
+        thing to happen while the offer is on screen.
+        """
+        from src.snippets import SnippetStore
+
+        bridge._snippets = SnippetStore(tmp_path / "snippets.json")
+        bridge._snippets.load()
+        withdrawn: list[bool] = []
+        bridge.snippetOfferWithdrawn.connect(lambda: withdrawn.append(True))
+        _type(bridge, "write to owen@example.com ")
+        assert bridge._pending_snippet_offer is not None
+        bridge.pressSpecialKey("tab")
+        assert bridge._pending_snippet_offer is not None
+        assert withdrawn == []
+
+
 class TestCaretMoveClearsContext:
     """Clearing stale context when the user moves the caret themselves.
 

@@ -1603,6 +1603,25 @@ class KeyboardBridge(QObject):
             self._maybe_offer_snippet()
             self._raw_token = ""
             self._update_predictions()
+        elif key_name == "tab":
+            # Tab moves to the next field, so everything the buffers
+            # describe is about a field the caret has left.  This is the
+            # same failure the outside-click signal exists for, arriving
+            # through the keyboard instead: left alone, a pill tapped
+            # after tabbing inserts the tail of a word whose head is in
+            # the previous field.
+            #
+            # The word in progress is deliberately **not** learned first.
+            # Tab is also the accept-completion key in every IDE and the
+            # shell, where `_current_word` is a *prefix* the app is about
+            # to finish, so learning it would feed the model "hel" every
+            # time the user completed "hello".
+            #
+            # A live snippet offer survives, for the reason the outside
+            # click path documents: tabbing to the next field of a form
+            # is the most likely thing to happen right after typing an
+            # email address, and it must not close the Save button.
+            self._reset_typing_context(keep_snippet_offer=True)
         elif key_name in _TOKEN_BREAKING_KEYS:
             # Tab, Escape, Delete and every cursor-motion key move or
             # destroy text we can no longer account for, so the run before

@@ -14,6 +14,7 @@ right-hand pill rendered *underneath* the button.
 
 from __future__ import annotations
 
+import math
 import os
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -348,6 +349,90 @@ class TestClearButtonNeverCoversPills:
         # "I" and "the" settle at the min-width floor while the long word
         # absorbs the slack. An equal split would make all three identical.
         assert widths[-1] > widths[0] * 1.5
+
+
+class TestTheClearButtonIconIsConcentric:
+    """The circle-arrow must sit *in* the circle it is drawn on.
+
+    It used to be the glyph "⟲" in a `Text` with `anchors.centerIn`, which
+    centres the text *item* and not the ink inside it.  A glyph's ink is
+    rarely centred in its em box, and U+27F2 also hangs its tail outside
+    the ring, so the ring the eye actually reads sat down and right of the
+    button while the tail stuck out to the left.
+
+    **The obvious measurement here is a trap.**  The ink bounding box is
+    centred in both versions to within half a pixel, because the tail
+    hanging off one side cancels the ring being pushed to the other. A
+    bbox assertion would have passed against the bug it was written for.
+    What separates them is the *spread* of the ink about the button
+    centre: a ring concentric with the button puts every pixel at nearly
+    the same radius, and an off-centre one smears across radii. Measured
+    on this button, the glyph scored 0.29 and the drawn arc 0.09, so the
+    0.15 bar below is a real threshold with both versions on the correct
+    side of it rather than a number picked to pass.
+    """
+
+    _MAX_RADIAL_SPREAD = 0.15
+
+    def _button_pixels(self, root):
+        button = _child(root, "clearContextButton")
+        assert button.property("visible"), "the clear-context button is hidden"
+        QCoreApplication.processEvents()
+
+        top_left = button.mapToScene(button.boundingRect().topLeft())
+        size = round(button.property("width"))
+        shot = root.grabWindow()
+        if shot.isNull():  # pragma: no cover - depends on the Qt renderer
+            pytest.skip("this Qt build cannot grab an offscreen window")
+        return button, shot.copy(round(top_left.x()), round(top_left.y()), size, size)
+
+    def _ink_radii(self, crop):
+        """Distance from the button's centre for every lit pixel."""
+        centre = (crop.width() - 1) / 2
+        radii = []
+        for y in range(crop.height()):
+            for x in range(crop.width()):
+                colour = crop.pixelColor(x, y)
+                luminance = 0.299 * colour.red() + 0.587 * colour.green() + 0.114 * colour.blue()
+                if luminance > 110:  # the icon, not the circle's own fill
+                    radii.append(math.hypot(x - centre, y - centre))
+        return radii
+
+    def test_the_icon_is_a_ring_around_the_button_centre(self, qml_root):
+        root, _, _ = qml_root
+        _, crop = self._button_pixels(root)
+        radii = self._ink_radii(crop)
+
+        # Inverse first: "draw nothing" would satisfy every spread bound
+        # ever written, so the test has to insist there is an icon at all.
+        assert len(radii) > 40, f"the button has almost no icon on it ({len(radii)} px)"
+
+        mean = sum(radii) / len(radii)
+        spread = math.sqrt(sum((r - mean) ** 2 for r in radii) / len(radii))
+        assert mean > crop.width() * 0.15, (
+            f"the icon is a blob near the centre (mean radius {mean:.1f}px), not a ring"
+        )
+        assert spread / mean <= self._MAX_RADIAL_SPREAD, (
+            f"the icon is not concentric with its button: ink sits at "
+            f"{mean:.1f}px +/- {spread:.1f}px from the centre "
+            f"({spread / mean:.2f} > {self._MAX_RADIAL_SPREAD})"
+        )
+
+    def test_it_is_drawn_rather_than_typeset(self, qml_root):
+        """States the fix, so a future "just use a glyph" reads as a change.
+
+        Same reasoning as the padlock badge that was removed from the
+        keycaps: any glyph small enough to fit is at the mercy of whatever
+        font the host resolves it through.
+        """
+        root, _, _ = qml_root
+        button = _child(root, "clearContextButton")
+        glyphs = [
+            child
+            for child in button.findChildren(QQuickItem)
+            if child.property("text") not in (None, "")
+        ]
+        assert glyphs == [], f"the icon is a text glyph again: {glyphs}"
 
 
 @pytest.mark.usefixtures("requires_real_font")
