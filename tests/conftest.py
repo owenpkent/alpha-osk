@@ -36,6 +36,28 @@ else:
     settings.load_profile("alpha-osk")
 
 
+@pytest.fixture(autouse=True)
+def _unplug_the_live_desktop(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Stop the bridge's environment probes from reading the real desktop.
+
+    ``KeyboardBridge`` is constructed for real in these tests, and two of
+    its inputs are the machine it happens to be running on:
+    ``is_password_field()`` is called synchronously on *every* keystroke
+    (``_check_password_field_sync``), and ``external_click_detected()``
+    is polled on a timer.  On a Windows dev box both answer questions
+    about whatever window the developer left focused, so a password field
+    on screen flips the bridge into privacy mode mid-test and every
+    ``_current_word`` assertion after it fails.  That reproduces as "the
+    suite is flaky", passes on re-run, and passes on CI (Linux has no
+    detector at all), which is the worst shape a failure can take.
+
+    Both stubs are plain module attributes, so any test that wants the
+    other answer patches the same name and wins.
+    """
+    monkeypatch.setattr("src.keyboard_bridge.is_password_field", lambda: False)
+    monkeypatch.setattr("src.keyboard_bridge.external_click_detected", lambda: False)
+
+
 @pytest.fixture
 def tmp_model_dir(tmp_path: Path) -> Path:
     """Temporary directory for model files."""

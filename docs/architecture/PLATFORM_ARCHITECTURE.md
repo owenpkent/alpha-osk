@@ -49,6 +49,9 @@ logic, data files — is **100% shared** between platforms.
                          │  base.py            │
                          │  linux.py           │
                          │  windows.py         │
+                         │  macos.py           │
+                         │  password_detect.py │
+                         │  pointer.py         │
                          └─────────┬───────────┘
                                    │
                     ┌──────────────┼──────────────┐
@@ -100,10 +103,13 @@ function has docstrings explaining what it does and why.
 
 ```
 src/platform/
-├── __init__.py      # Factory function, platform detection, config paths
-├── base.py          # Abstract base class: KeySynthesizerBase
-├── linux.py         # Linux: xdotool (X11) / ydotool (Wayland)
-└── windows.py       # Windows: SendInput via ctypes + shortcut helpers
+├── __init__.py        # Factory function, platform detection, config paths
+├── base.py            # Abstract base class: KeySynthesizerBase
+├── linux.py           # Linux: xdotool (X11) / ydotool (Wayland)
+├── windows.py         # Windows: SendInput via ctypes + shortcut helpers
+├── macos.py           # macOS: Quartz CGEvent (phase 1, see docs/build/MACOS.md)
+├── password_detect.py # Password fields, focused element, caret position
+└── pointer.py         # Was the last click ours, or somebody else's window
 
 build/
 ├── alpha-osk.spec            # PyInstaller build specification
@@ -333,6 +339,7 @@ by `hybrid_predictor.py` when initialising the prediction engine.
 | Platform detection | `src/platform/__init__.py` | Factory + config paths |
 | Password-field detection | `src/platform/password_detect.py` | Windows: UIA COM / Win32 `EM_GETPASSWORDCHAR`. Linux: AT-SPI 2 via `gi.repository.Atspi` (daemon thread owning a GLib loop, listens for `object:state-changed:focused`). Unsupported platforms get a null detector. |
 | Foreground-window polling | `src/keyboard_bridge.py::_get_foreground_window_id` | Windows: `GetForegroundWindow` via ctypes. X11: `xdotool getactivewindow` subprocess (250 ms poll). Wayland: returns 0 so `_check_foreground_window` skips the state wipe entirely. |
+| Outside-click detection | `src/platform/pointer.py` | Windows: `GetAsyncKeyState(VK_LBUTTON)` + `WindowFromPoint` → owning pid, polled at 50 ms. Everywhere else returns False, so the bridge falls back to the window / element / caret signals alone. |
 | Window flags | `src/keyboard_app.py` | Win32 extended styles on Windows |
 | Env setup | `src/keyboard_app.py` | `QT_QPA_PLATFORM=xcb` on Linux only |
 | Launcher | `run.py` | Venv path (`bin` vs `Scripts`), dep checks |
@@ -601,6 +608,9 @@ retry logic (matching gitconnect's `build/sign.js`).
 | `src/platform/base.py` | Abstract `KeySynthesizerBase` interface |
 | `src/platform/linux.py` | Linux: xdotool / ydotool backend |
 | `src/platform/windows.py` | Windows: SendInput backend + shortcut helpers |
+| `src/platform/macos.py` | macOS: Quartz CGEvent backend (phase 1) |
+| `src/platform/password_detect.py` | Password fields + `focused_element_token` / `caret_position_token` |
+| `src/platform/pointer.py` | `external_click_detected()`: did the last click land outside our process |
 
 ### Modified for Cross-Platform (Phase 7)
 

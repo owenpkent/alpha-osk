@@ -59,7 +59,7 @@ Alpha-OSK is an AI-powered on-screen keyboard for Windows and Linux. Users click
 
 ```bash
 python run.py          # Creates venv, installs deps, launches keyboard
-python -m pytest       # Run tests (1009 tests)
+python -m pytest       # Run tests (1289 tests)
 ```
 
 ## Architecture Overview
@@ -574,13 +574,18 @@ Protects sensitive input (passwords, PINs) from leaking into the prediction mode
 
 ### Clearing stale context when focus or the caret moves
 
-Three independent signals, all polled by `_check_foreground_window` at 4 Hz, each catching what the one before it cannot:
+Four independent signals, each catching what the ones before it cannot. The first three are polled by `_check_foreground_window` at 4 Hz:
 
 1. **The foreground window** (`GetForegroundWindow` / `xdotool getactivewindow`). Catches an app switch.
 2. **The focused element** (`focused_element_token`, UIA RuntimeId, Windows only). Catches the caret moving between two controls *inside* one window, e.g. two text boxes on a web page.
 3. **The caret position** (`caret_position_token`, `GetGUIThreadInfo` on the foreground thread, Windows only). Catches what (2) structurally cannot: a move *within the same control*, such as clicking from one paragraph to another in a single text box, and the common case where UIA reports one element for a whole web document so two fields share a RuntimeId.
+4. **A click outside our own window** (`external_click_detected` in `src/platform/pointer.py`, polled by `_check_external_click` on its own 50 ms timer, Windows only).
 
-All three treat `None` as "don't know" and leave state untouched, so a transient failure never wipes context. Most browsers and Electron apps publish no caret at all, which makes (3) a silent no-op there rather than a source of false resets.
+Both (2) and (3) treat `None` as "don't know" and leave state untouched, so a transient failure never wipes context. That is correct in isolation and adds up to a hole: browsers and Electron apps expose one UIA element for a whole document *and* publish no caret, so both fail closed at once and clicking from one field to another in a single window had no signal at all. That is exactly the case (4) exists for, and it is why the fallback is a click rather than a better token: a click is observable in every app, no accessibility cooperation required.
+
+(4) is deliberately coarser than the signals it backs up. A click on a toolbar button or a scrollbar does not move the caret, and resetting there costs the next-word prediction the user would have got. That trade is worth taking because the failure it replaces is worse: context describing a field the caret has left produces pills that insert the wrong text into the field it is now in. It carries the same **only between words** guard as `_check_caret_moved`, and for the same reason (see below); clicks that don't move the caret are exactly where the mid-word duplication would bite.
+
+Two implementation notes on (4), both load-bearing. **Clicks on our own window are filtered by process id**, not by geometry: `WindowFromPoint` -> `GetWindowThreadProcessId` compared against `os.getpid()`, which covers the keyboard, the snippets window and every popup in one check, and is what stops the keyboard clearing its own context on every key tap. And **it polls rather than hooking**: `WS_EX_NOACTIVATE` keeps our window off the focus path so Qt never sees the event, and a `WH_MOUSE_LL` hook would put this process on the input path of every mouse event on the desktop, which is a latency and antivirus-heuristic cost out of proportion to a signal this coarse. Polling reads the pointer's *current* position, so the 50 ms interval is part of the correctness argument, not a tuning knob: the longer the gap, the more chance the pointer has already travelled back onto a key and reads as ours. `GetAsyncKeyState`'s two bits are both read (`_left_button_pressed_since_last_call`) because each has a hole the other covers: the high bit misses a click that opens and closes between polls, and the low bit is cleared for whichever process asks first, so any other poller on the desktop can steal it.
 
 `_check_caret_moved` carries two guards, and both matter:
 
@@ -589,6 +594,7 @@ All three treat `None` as "don't know" and leave state untouched, so a transient
 
 ### Key files
 - `src/platform/password_detect.py` - platform-specific detection (UIA COM via ctypes), plus `focused_element_token` / `caret_position_token`
+- `src/platform/pointer.py` - `external_click_detected()`, the outside-click probe behind signal (4) above (Windows only, no-op elsewhere)
 - `src/keyboard_bridge.py` - `_privacy_mode` flag, `_check_password_field()` timer, `_check_password_field_sync()` per-keystroke, `setPrivacyMode()` slot, `passwordDetectionAvailable` read-only property
 
 ### Linux

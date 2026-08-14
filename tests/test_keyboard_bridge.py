@@ -2800,6 +2800,49 @@ class TestLockedModifiersCannotCorruptAnInsert:
         assert bridge._shift_active is False
 
 
+class TestOutsideClickClearsContext:
+    """The backstop for two fields inside one window.
+
+    ``GetForegroundWindow`` only sees whole-app switches, a web document
+    commonly exposes one UIA element for every field on it, and most
+    browsers and Electron apps publish no caret rectangle at all, so the
+    other three signals all fail closed on the single most common way
+    context goes stale: clicking from one field into another.  A click
+    is observable in all of them.
+    """
+
+    def _click(self, bridge: KeyboardBridge, outside: bool) -> None:
+        with patch("src.keyboard_bridge.external_click_detected", return_value=outside):
+            bridge._check_external_click()
+
+    def test_a_click_outside_clears_the_context(self, bridge: KeyboardBridge):
+        bridge._context_buffer = "dear bob "
+        bridge._sentence_buffer = "dear bob "
+        self._click(bridge, outside=True)
+        assert bridge._context_buffer == ""
+        assert bridge._sentence_buffer == ""
+
+    def test_a_click_on_the_keyboard_itself_changes_nothing(self, bridge: KeyboardBridge):
+        """The inverse, so "always reset" cannot pass as the fix: every key
+        tap is a click, and clearing on those would leave the engine with
+        no context to predict from at all."""
+        bridge._context_buffer = "dear bob "
+        self._click(bridge, outside=False)
+        assert bridge._context_buffer == "dear bob "
+
+    def test_never_mid_word(self, bridge: KeyboardBridge):
+        """Same guard ``_check_caret_moved`` carries, same reason: a reset
+        mid-word clears ``_current_word`` while the partial word is still
+        on screen, so the next pill tap inserts the whole word beside it.
+        Clicks that don't move the caret (a toolbar button, a scrollbar)
+        are exactly where that would bite."""
+        bridge._context_buffer = "hello "
+        bridge._current_word = "wor"
+        self._click(bridge, outside=True)
+        assert bridge._context_buffer == "hello "
+        assert bridge._current_word == "wor"
+
+
 class TestCaretMoveClearsContext:
     """Clearing stale context when the user moves the caret themselves.
 

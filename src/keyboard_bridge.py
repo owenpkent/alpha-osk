@@ -41,6 +41,7 @@ from .platform.password_detect import (
     focused_element_token,
     is_password_field,
 )
+from .platform.pointer import external_click_detected
 from .prediction import HybridPredictor, SwipeRecognizer
 from .snippets import SnippetStore
 from .telemetry import TelemetryClient
@@ -415,6 +416,15 @@ def _window_is_game(hwnd: int) -> bool:
 # crossing at least one keyboard-state poll. Only applied on the game path so
 # normal typing keeps its zero-latency atomic injection.
 _GAME_KEY_HOLD_SECONDS = 0.05
+
+
+# How often to ask whether the user clicked outside the keyboard. Fast on
+# purpose: the answer is paired with the pointer's *current* position, so
+# every millisecond between the press and the reading is a millisecond the
+# pointer has to travel back onto a key and be mistaken for one of ours.
+# Two syscalls per tick when nothing was clicked, so the cost is noise next
+# to the 200 ms password poll.
+_CLICK_POLL_MS = 50
 
 
 # Cursor-movement keys. When a sticky modifier is held, pressing one of
@@ -843,6 +853,19 @@ class KeyboardBridge(QObject):
         self._foreground_timer.setInterval(250)
         self._foreground_timer.timeout.connect(self._check_foreground_window)
         self._foreground_timer.start()
+
+        # A click landing outside our own window is the user moving the
+        # caret, and it is the one signal that survives the case the other
+        # three miss: two fields inside a single window, where the UIA
+        # element id is shared and no caret is published.  Polled on its own
+        # fast timer rather than folded into the 250 ms foreground poll
+        # because the check reads the pointer's *current* position, so the
+        # closer the reading sits to the press, the less chance the pointer
+        # has already travelled back onto the keyboard.
+        self._click_timer = QTimer(self)
+        self._click_timer.setInterval(_CLICK_POLL_MS)
+        self._click_timer.timeout.connect(self._check_external_click)
+        self._click_timer.start()
 
         # Auto-update — last fetched UpdateInfo, used by installUpdate()
         # so the QML side doesn't have to round-trip the URL/asset name
@@ -2953,6 +2976,7 @@ class KeyboardBridge(QObject):
         for timer in (
             getattr(self, "_password_timer", None),
             getattr(self, "_foreground_timer", None),
+            getattr(self, "_click_timer", None),
             getattr(self, "_telemetry_timer", None),
         ):
             if timer is not None:
@@ -3288,6 +3312,42 @@ class KeyboardBridge(QObject):
             return
         self._reset_typing_context()
         _logger.debug("Caret moved without typing — predictions cleared")
+
+    def _check_external_click(self) -> None:
+        """Clear stale context when the user clicks away from the keyboard.
+
+        The signal of last resort, and the only one that covers clicking
+        from one field to another inside a single window: ``GetForeground
+        Window`` sees whole apps, the UIA element id is shared across a
+        whole web document, and most of the browser and Electron world
+        publishes no caret rectangle for ``_check_caret_moved`` to read.
+        A click is observable in all of them.
+
+        It is coarser than the signals it backs up: a click on a toolbar
+        button or a scrollbar doesn't move the caret, and resetting there
+        costs the next-word prediction the user would have got.  That is
+        the deliberate trade, because the failure it replaces is worse:
+        context describing a field the caret has left produces pills that
+        insert the wrong text into the field it is now in.
+
+        **Only between words**, the same guard ``_check_caret_moved``
+        carries and for the same reason: a reset mid-word clears
+        ``_current_word`` while the partial word is still on screen, so
+        the next pill tap inserts the whole word beside it (the
+        "backspacbackspaces" duplication).  Clicks that don't move the
+        caret are exactly where that would bite.
+
+        Clicks on our own window (a key, a pill, the title bar, the
+        snippets window) are filtered out inside
+        :func:`external_click_detected` by process id, so the keyboard
+        can never clear its own context by being typed on.
+        """
+        if not external_click_detected():
+            return
+        if self._current_word:
+            return
+        self._reset_typing_context()
+        _logger.debug("Click outside the keyboard — predictions cleared")
 
     def _get_foreground_window_id(self) -> int:
         """Return the focused-window ID, or 0 if unavailable.

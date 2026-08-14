@@ -40,7 +40,7 @@ Python status columns reflect `main`; C++ columns reflect the `cpp-rewrite` bran
 | Key synthesis | ✅ | ✅ | 🚧 ⁴ | ✅ | ❌ | ❌ |
 | Typing state machine (press / backspace / suffix insert) | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ |
 | Sticky modifiers + auto-release | ✅ | ✅ ⁵ | ✅ | ✅ | ❌ | ❌ |
-| Right-click modifier lock | 🚧 ¹ | 🚧 ¹ | 🚧 ¹ | ✅ | ❌ | ❌ |
+| Right-click modifier lock | ✅ ¹ | ✅ ¹ | ✅ ¹ | ✅ | ❌ | ❌ |
 | Key-click audio | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ |
 | Key preview bubble (pure QML) | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ |
 | Compact view + layers (pure QML + data) ⁷ | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ |
@@ -61,17 +61,18 @@ Python status columns reflect `main`; C++ columns reflect the `cpp-rewrite` bran
 | **Platform integration** | | | | | | |
 | Password detection + privacy auto-pause | ✅ | ✅ | ❌ ⁴ | ✅ | ❌ | ❌ |
 | Compat auto-detect (IDE / RDP) | ✅ | — ⁶ | — ⁶ | ✅ | ❌ | ❌ |
-| Game key-hold compat | 🚧 ¹ | 🚧 ¹ | 🚧 ¹ | ✅ | ❌ | ❌ |
-| Context reset on focus change | 🚧 ¹ | 🚧 ¹ | 🚧 ¹ | ✅ | ❌ | ❌ |
+| Game key-hold compat | ✅ ¹ | — ⁶ | — ⁶ | ✅ | ❌ | ❌ |
+| Context reset on focus change | ✅ ¹ | 🚧 ⁸ | 🚧 ⁸ | ✅ | ❌ | ❌ |
 
 ## Footnotes
 
-1. **Stranded on `cpp-rewrite`.** Right-click modifier lock, game key-hold compat,
-   and focus-change context reset were built on the `cpp-rewrite` branch (both the
-   shared QML and the Python backend halves) but have **not** landed on `main`.
-   They should be extracted to `main` so the Python backend gains them
-   independently of the rewrite. See the branch-sync plan (below / `git log`
-   commits `9fbf065`, `8942af7`, `31a7b96`, `91bfce5`).
+1. **Was stranded on `cpp-rewrite`, now landed.** Right-click modifier lock, game
+   key-hold compat and focus-change context reset were all built on the
+   `cpp-rewrite` branch first and have since been extracted to the Python backend
+   on `main` (`lockModifier` / `_*_locked`, `_window_is_game` +
+   `_GAME_KEY_HOLD_SECONDS`, `_check_foreground_window` + `_reset_typing_context`).
+   The platform caveats that remain are per-OS, not per-branch, and are footnoted
+   on their own rows.
 2. **Doc says done, header says stubbed.** `docs/build/CPP_WINDOWS.md` (on the
    `cpp-rewrite` branch) marks the
    C++ PPM / fuzzy / hybrid pillars "done", but the `cpp/prediction/HybridPredictor.h`
@@ -89,7 +90,11 @@ Python status columns reflect `main`; C++ columns reflect the `cpp-rewrite` bran
    `CLAUDE.md`.
 6. Compat auto-detect matches on Windows `.exe` basenames (VS Code / JetBrains /
    RDP). The mechanism is Windows-specific today; the Linux/macOS equivalent is
-   unbuilt, so it reads as N/A rather than missing.
+   unbuilt, so it reads as N/A rather than missing. Game key-hold compat shares
+   both halves of that reasoning: it keys off the same exe list plus a Win32
+   borderless-fullscreen probe, and the reason it exists (a key-down+up injected
+   in one batch lands between two of the game's input polls) is a `SendInput`
+   property, so there is nothing to port to `xdotool` as-is.
 7. **Free on every backend.** The compact view is a layout JSON plus QML row
    filtering — keyboard *layers* are a QML-side view concept the backends never
    see, and `_load_layouts` already globs `data/layouts/*.json`. So there was no
@@ -97,6 +102,16 @@ Python status columns reflect `main`; C++ columns reflect the `cpp-rewrite` bran
    the C++ columns track the C++ backend's general state rather than this
    feature. See [`COMPACT_VIEW.md`](COMPACT_VIEW.md). A row like this is the
    argument for keeping `qml/` and `data/` shared.
+8. **Context reset is four signals on Windows and one everywhere else.** All
+   platforms notice an app switch (`GetForegroundWindow` / `xdotool
+   getactivewindow`; Wayland exposes nothing, so it is a no-op there). The three
+   that catch a move *inside* one window are Windows-only: the UIA focused-element
+   RuntimeId, the published caret rectangle, and an outside-click probe
+   (`src/platform/pointer.py`). Linux could gain the first through AT-SPI, which
+   already backs password detection there; macOS could through AX. Both are
+   unbuilt, so those platforms still carry stale context when the user clicks from
+   one field to another in a single window. See the *Clearing stale context* section
+   in `CLAUDE.md`.
 
 ## Keeping this current
 

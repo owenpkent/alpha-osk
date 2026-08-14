@@ -29,6 +29,19 @@ This is worth being precise about, because it means the keyboard is pattern-matc
 
 Turn the toggle off and no detection runs at all. Your existing snippets are untouched either way.
 
+## What the keyboard notices about your screen
+
+To predict the *next* word, Alpha-OSK keeps a short memory of the words you just typed. That memory has to be thrown away the moment you move to somewhere else, or the suggestions would describe a box you have already left, and tapping one would insert the wrong text where you are now. So the keyboard watches for four things, all of them locally, none of them recorded:
+
+- **Which application is in front**, checked four times a second.
+- **Which control has keyboard focus** inside that application, read through Windows accessibility (the same system that tells the keyboard when you are in a password box).
+- **Where the text cursor is**, when the app publishes it. Many apps, browsers especially, publish nothing here.
+- **Whether you clicked outside the keyboard**, checked twenty times a second. This is the backstop for browsers, where the two signals above often say nothing at all: clicking from one field to another on a web page is invisible to them, and used to leave stale suggestions behind.
+
+Precisely what that last one reads: whether the left mouse button went down, and which program owns the window under the pointer. Not where you clicked, not what you clicked on, not what any other program is doing. If the answer is "the keyboard itself" it is ignored, which is what stops your own key taps from clearing your context. Nothing here is written to disk, put in the log, included in a Data Backup, or sent anywhere, and none of it depends on the telemetry toggle below. All four answers are used once and discarded.
+
+Only the first works everywhere; the other three are Windows-only. On Linux and macOS the keyboard notices application switches but not moves inside a single window.
+
 ## Optional usage telemetry
 
 Settings → Data & Privacy → Privacy has one toggle: **"Share anonymous usage stats"**. It is off by default. If you turn it on, Alpha-OSK sends a small weekly report so we can track total impact across the community (e.g. "X million keystrokes saved across Y users").
