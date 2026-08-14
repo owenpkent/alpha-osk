@@ -4,7 +4,8 @@ Pre-push sanity check.
 Runs the same four checks GitHub Actions runs in .github/workflows/ci.yml:
     1. ruff check src/ tests/
     2. ruff format --check src/ tests/
-    3. mypy src/ --ignore-missing-imports
+    3. mypy src/ --ignore-missing-imports (pinned to --platform linux,
+       the runner CI type-checks on)
     4. pytest
 
 Run before `git push` to catch lint / type / test failures locally
@@ -102,7 +103,13 @@ def main() -> int:
     steps = [
         ("ruff", [py, "-m", "ruff", "check", "src/", "tests/"]),
         ("format", [py, "-m", "ruff", "format", "--check", "src/", "tests/"]),
-        ("mypy", [py, "-m", "mypy", "src/", "--ignore-missing-imports"]),
+        # --platform linux is not a typo: CI type-checks on ubuntu, and
+        # typeshed gates whole symbols on the platform (ctypes.WinDLL does
+        # not exist off Windows, so a call to it degrades to Any and trips
+        # warn_return_any). Without this the gate passes on a Windows dev
+        # box and fails on the runner, which is the one thing check.py
+        # exists to prevent.
+        ("mypy", [py, "-m", "mypy", "src/", "--ignore-missing-imports", "--platform", "linux"]),
         ("pytest", pytest_cmd),
     ]
 

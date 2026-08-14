@@ -157,7 +157,12 @@ def _load_user32() -> Optional[ctypes.CDLL]:
         return None
     import ctypes.wintypes as wintypes
 
-    user32 = ctypes.WinDLL("user32", use_last_error=True)  # type: ignore[attr-defined]
+    # Annotated, not inferred: ``ctypes.WinDLL`` does not exist in typeshed
+    # off Windows, so on a Linux type-check run the call degrades to ``Any``
+    # and returning it trips ``warn_return_any``.
+    user32: ctypes.CDLL = ctypes.WinDLL(  # type: ignore[attr-defined]
+        "user32", use_last_error=True
+    )
     user32.GetAsyncKeyState.argtypes = [ctypes.c_int]
     user32.GetAsyncKeyState.restype = ctypes.c_short
     user32.GetCursorPos.argtypes = [ctypes.POINTER(wintypes.POINT)]
