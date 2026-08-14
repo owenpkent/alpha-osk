@@ -30,7 +30,7 @@ Alpha-OSK is an AI-assisted, mouse-driven on-screen keyboard for Windows and Lin
 
 - Run: `python run.py` (creates venv, installs deps, launches the keyboard).
 - Test: `python -m pytest` (also `-k fuzzy`, or a single file like `tests/test_keyboard_bridge.py`).
-- Pre-push gate, same four checks as CI (`ruff check`, `ruff format --check`, `mypy`, `pytest`): `python check.py` (fast, ~85s); `python check.py --full` adds the `--cov-fail-under=60` coverage gate (~3min, full CI parity). CI additionally runs `osv-scanner` over the lockfiles. Formatting is gated separately from linting because `ruff check` ignores layout; fix a format failure with `ruff format src/ tests/`.
+- Pre-push gate, the same checks as CI (`ruff check`, `ruff format --check`, `mypy` under **both** `--platform linux` and `--platform win32`, `pytest`): `python check.py` (fast, ~85s); `python check.py --full` adds the `--cov-fail-under=60` coverage gate (~3min, full CI parity). CI additionally runs `osv-scanner` over the lockfiles. Formatting is gated separately from linting because `ruff check` ignores layout; fix a format failure with `ruff format src/ tests/`. The two mypy passes are both required and neither substitutes for the other: `linux` is what the runner uses (typeshed gates whole symbols on platform, so `ctypes.WinDLL` degrades to `Any` there and trips `warn_return_any`), and `win32` is the only thing that type-checks the `if sys.platform == "win32"` bodies at all, since mypy prunes them as unreachable under the other.
 
 ## Conventions
 
@@ -59,7 +59,7 @@ Alpha-OSK is an AI-powered on-screen keyboard for Windows and Linux. Users click
 
 ```bash
 python run.py          # Creates venv, installs deps, launches keyboard
-python -m pytest       # Run tests (1009 tests)
+python -m pytest       # Run tests (1289 tests)
 ```
 
 ## Architecture Overview
@@ -503,10 +503,17 @@ on the predicate instead of discarding.
 ### Pre-push check
 
 Run `python check.py` before `git push` to catch lint / format / type /
-test failures locally instead of waiting for CI's red X (the same four
-gates GitHub Actions runs).  Default mode skips coverage tracking
+test failures locally instead of waiting for CI's red X (the same gates
+GitHub Actions runs).  Default mode skips coverage tracking
 (~85 s); add `--full` to include the `--cov-fail-under=60` gate
 (~3 min, matches CI exactly).
+
+`mypy` runs **twice**, under `--platform linux` and `--platform win32`,
+and CI mirrors both.  Neither covers the other: linux is the runner's
+platform, and win32 is the only pass that type-checks the
+`if sys.platform == "win32"` bodies, which mypy otherwise prunes as
+unreachable.  On the linux pass alone, a deliberate `int = "str"` planted
+inside `_window_class_name`'s Windows branch was invisible.
 
 The `format` step is `ruff format --check src/ tests/`, and it is a
 separate gate from `ruff` because `ruff check` does not look at layout.
@@ -574,13 +581,22 @@ Protects sensitive input (passwords, PINs) from leaking into the prediction mode
 
 ### Clearing stale context when focus or the caret moves
 
-Three independent signals, all polled by `_check_foreground_window` at 4 Hz, each catching what the one before it cannot:
+Four independent signals, each catching what the ones before it cannot. The first three are polled by `_check_foreground_window` at 4 Hz:
 
 1. **The foreground window** (`GetForegroundWindow` / `xdotool getactivewindow`). Catches an app switch.
 2. **The focused element** (`focused_element_token`, UIA RuntimeId, Windows only). Catches the caret moving between two controls *inside* one window, e.g. two text boxes on a web page.
 3. **The caret position** (`caret_position_token`, `GetGUIThreadInfo` on the foreground thread, Windows only). Catches what (2) structurally cannot: a move *within the same control*, such as clicking from one paragraph to another in a single text box, and the common case where UIA reports one element for a whole web document so two fields share a RuntimeId.
+4. **A click outside our own window** (`external_click_detected` in `src/platform/pointer.py`, polled by `_check_external_click` on its own 50 ms timer, Windows only).
 
-All three treat `None` as "don't know" and leave state untouched, so a transient failure never wipes context. Most browsers and Electron apps publish no caret at all, which makes (3) a silent no-op there rather than a source of false resets.
+Both (2) and (3) treat `None` as "don't know" and leave state untouched, so a transient failure never wipes context. That is correct in isolation and adds up to a hole: browsers and Electron apps expose one UIA element for a whole document *and* publish no caret, so both fail closed at once and clicking from one field to another in a single window had no signal at all. That is exactly the case (4) exists for, and it is why the fallback is a click rather than a better token: a click is observable in every app, no accessibility cooperation required.
+
+(4) is deliberately coarser than the signals it backs up. A click on a toolbar button or a scrollbar does not move the caret, and resetting there costs the next-word prediction the user would have got. That trade is worth taking because the failure it replaces is worse: context describing a field the caret has left produces pills that insert the wrong text into the field it is now in. It carries the same **only between words** guard as `_check_caret_moved`, and for the same reason (see below); clicks that don't move the caret are exactly where the mid-word duplication would bite.
+
+**Mid-word the click is held, not dropped** (`_external_click_pending`). This is the one place (4) cannot copy (2) and (3): those are *levels*, so an unread change is still there to compare at the next poll, while a press is an *edge* and discarding it discards the reset for good. Type `hel`, click into another field, finish the word, and the stale context would drive every pill from then on with nothing left to notice it. Detection keeps running every 50 ms (which is what keeps the pointer position fresh enough to attribute the click); only the reset waits for the word boundary. `_reset_typing_context` clears the flag, so a reset from any other signal leaves nothing pending.
+
+**A live snippet offer survives this reset alone.** `_check_external_click` passes `keep_snippet_offer=True`; every other caller takes the default, and privacy mode in particular must. The offer describes a value the user typed rather than a caret position, and clicking the next field of the same form is the single most likely thing to happen right after an email address is typed, so withdrawing here closed the Save button before the user could travel to it. The "only between words" guard cannot protect it either: `_maybe_offer_snippet` runs at word boundaries, *after* `_current_word` is cleared, so an offer is only ever live while that guard is a no-op. An app switch still withdraws it through `_check_foreground_window`'s own reset.
+
+Two implementation notes on (4), both load-bearing. **Clicks on our own window are filtered by process id**, not by geometry: `WindowFromPoint` -> `GetWindowThreadProcessId` compared against `os.getpid()`, which covers the keyboard, the snippets window and every popup in one check, and is what stops the keyboard clearing its own context on every key tap. And **it polls rather than hooking**: `WS_EX_NOACTIVATE` keeps our window off the focus path so Qt never sees the event, and a `WH_MOUSE_LL` hook would put this process on the input path of every mouse event on the desktop, which is a latency and antivirus-heuristic cost out of proportion to a signal this coarse. Polling reads the pointer's *current* position, so the 50 ms interval is part of the correctness argument, not a tuning knob: the longer the gap, the more chance the pointer has already travelled back onto a key and reads as ours. **Only `GetAsyncKeyState`'s high bit is read** (`_left_button_pressed_since_last_call`), as a transition against the previous poll. The low bit ("pressed since the last call") would catch a click shorter than one poll interval, which the high bit structurally misses, and reading it is still the wrong trade: that bit is system-wide and **the read clears it**, so polling 20x a second silently steals every press from anything else watching the same way. Dwell-click and switch-access utilities are exactly the software an on-screen keyboard user runs alongside this one, and degrading another assistive tool to sharpen a signal this coarse is not worth it. A missed click costs one next-word suggestion, and the next click resets anyway. `tests/test_pointer.py::TestPressDetection::test_the_pressed_since_last_call_bit_is_ignored` asserts the *absence* of that detection, so restoring the bit fails loudly.
 
 `_check_caret_moved` carries two guards, and both matter:
 
@@ -589,6 +605,7 @@ All three treat `None` as "don't know" and leave state untouched, so a transient
 
 ### Key files
 - `src/platform/password_detect.py` - platform-specific detection (UIA COM via ctypes), plus `focused_element_token` / `caret_position_token`
+- `src/platform/pointer.py` - `external_click_detected()`, the outside-click probe behind signal (4) above (Windows only, no-op elsewhere)
 - `src/keyboard_bridge.py` - `_privacy_mode` flag, `_check_password_field()` timer, `_check_password_field_sync()` per-keystroke, `setPrivacyMode()` slot, `passwordDetectionAvailable` read-only property
 
 ### Linux

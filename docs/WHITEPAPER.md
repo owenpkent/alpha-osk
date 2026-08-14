@@ -52,7 +52,7 @@ Alpha-OSK is a single user-mode process. There is no daemon, no background servi
 
 - A Qt Quick UI thread rendering the keyboard surface (`qml/Main.qml` and the components under `qml/components/`).
 - A Python "bridge" object (`src/keyboard_bridge.py`) that holds the prediction engine, the modifier state machine, the context buffer, and the per-platform key synthesiser.
-- Two long-lived `QTimer` instances: a 200 ms password-field poller (Windows) and a 250 ms foreground-window poller for predicting context resets across app switches.
+- Three long-lived `QTimer` instances: a 200 ms password-field poller (Windows), a 250 ms foreground-window poller driving context resets across app and focus changes, and a 50 ms outside-click poller (Windows, `src/platform/pointer.py`) that catches the caret moving inside a single window where the accessibility signals report nothing.
 
 The process never elevates voluntarily. On Windows, the launcher (`run.py`) intentionally avoids `runas` and the build pipeline produces an installer that drops a UIAccess-marked executable into a Program Files subdirectory. UIAccess lets the OSK inject input into elevated target windows without itself running elevated, preserving the sandboxing properties of medium integrity level.
 
@@ -343,6 +343,25 @@ The resolution is a priority order rather than a better fit function. Padding co
 
 The visible consequence is that raising the maximum-suggestion count past what the window can hold no longer adds pills. That is the correct behaviour under the priority order, and it makes window width, not a count setting, the real lever on how many suggestions a user sees.
 
+### 4.9 Knowing when the context went stale
+
+`_context_buffer` and `_current_word` are a mirror of text the process does not own: they model what sits beside the caret in another application's window. Nothing notifies us when that caret moves. §4.1's non-focus invariant is the reason, and it is not incidental. A window that never activates receives no focus events, and the events we would want belong to a foreign process regardless. The mirror is therefore maintained by polling, and the design question is what to poll.
+
+A stale mirror is not a cosmetic problem. Suffix-only insertion (§4.3) types only the unseen tail of the chosen word, so a context describing a field the user has left inserts a fragment into the field they are now in. The failure is silent, lands in the user's text, and is most likely exactly when the user is moving between fields on a form, which is when an on-screen keyboard is under the most load.
+
+Four signals are polled, ordered from cheapest and most portable to most specific:
+
+1. **Foreground window** (`GetForegroundWindow`, or `xdotool getactivewindow` on X11), at 4 Hz. Catches application switches. Wayland exposes no equivalent to unprivileged clients, so this degrades to a no-op there.
+2. **Focused element identity** (UIA `RuntimeId`), Windows only, on the same poll. Catches the caret moving between two controls inside one window. The RuntimeId is the right key precisely because it is *not* the element's screen rectangle: it survives scrolling and window moves, so neither produces a false reset.
+3. **Caret position** (`GetGUIThreadInfo`, the caret's owning window plus its top-left), Windows only, on the same poll. Catches a move *within* one control, which (2) structurally cannot see.
+4. **A click outside the process** (`GetAsyncKeyState(VK_LBUTTON)` plus `WindowFromPoint` resolved to an owning pid, `src/platform/pointer.py`), Windows only, at 20 Hz.
+
+Signals 2 and 3 both treat an unreadable answer as "do not know" and leave the mirror untouched, which is the correct failure direction for each in isolation: an accessibility hiccup must not discard the user's context. Composed, they produce a gap. A browser commonly exposes a single UIA element for an entire document and publishes no caret, so both fall silent *simultaneously* on the most common move a user makes, clicking from one field to the next on a form. Signal 4 exists for that intersection, and it is deliberately of a different kind: it asks the input system rather than the accessibility layer, so it needs no cooperation from the target application.
+
+Two properties make signal 4 tractable. Ownership is resolved by process id rather than by geometry, which classifies the keyboard's own keys, pills, title bar, popups and detached snippets window in a single comparison, and without which every keystroke would clear the context it just contributed to. And the poll interval is part of the correctness argument rather than a tuning parameter: the button state is paired with the pointer's *current* position, so the interval bounds how far the pointer can travel between the press and the reading, and therefore how often a click in the target application is misattributed to the keyboard. 20 Hz costs two syscalls per tick against a pointer that must physically cross the screen.
+
+Signal 4 is coarser than the three it backs up: a click on a toolbar button or a scrollbar moves no caret, and resetting there costs a next-word suggestion. This is an asymmetric trade taken deliberately. A missed reset corrupts text; a spurious reset costs one suggestion. It also inherits the guard from (3) of never firing mid-word, since clearing `_current_word` while its characters remain on screen makes the next pill insertion duplicate them.
+
 ---
 
 ## 5. Privacy and Security
@@ -445,6 +464,8 @@ Alpha-OSK is intended to run unobtrusively on hardware that motor-impaired users
 | Network | Update check on startup only (opt-out) |
 
 The prediction engine is pure Python with no native extensions. The hot paths (n-gram lookup, fuzzy candidate generation) operate on plain dicts and lists rather than NumPy or compiled tries. This is deliberate: the working-set size is small enough (tens of thousands of words) that Python dict performance is adequate, and a native dependency would complicate cross-platform builds.
+
+Idle cost is dominated by three timers rather than by the engine, which does nothing between keystrokes. Two run at 4-5 Hz (the password-field detector's UIA call, the foreground/focus/caret poll). The third, the outside-click probe of §4.9, runs at 20 Hz but is two syscalls per tick, `GetAsyncKeyState` plus a cached comparison, and only resolves a window and its owning process on the ticks where a button actually went down. The asymmetry is intentional: the expensive checks are the ones that can afford to be slow, because the state they watch changes on human timescales, while the cheap one is the one whose accuracy degrades with interval length.
 
 The single-instance lock uses `QSharedMemory`. The lock-holder reference is module-level in `keyboard_app.py`. A function-local would be destroyed before the application started, releasing the lock prematurely.
 

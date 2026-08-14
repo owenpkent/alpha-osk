@@ -41,6 +41,7 @@ from .platform.password_detect import (
     focused_element_token,
     is_password_field,
 )
+from .platform.pointer import external_click_detected
 from .prediction import HybridPredictor, SwipeRecognizer
 from .snippets import SnippetStore
 from .telemetry import TelemetryClient
@@ -415,6 +416,15 @@ def _window_is_game(hwnd: int) -> bool:
 # crossing at least one keyboard-state poll. Only applied on the game path so
 # normal typing keeps its zero-latency atomic injection.
 _GAME_KEY_HOLD_SECONDS = 0.05
+
+
+# How often to ask whether the user clicked outside the keyboard. Fast on
+# purpose: the answer is paired with the pointer's *current* position, so
+# every millisecond between the press and the reading is a millisecond the
+# pointer has to travel back onto a key and be mistaken for one of ours.
+# Two syscalls per tick when nothing was clicked, so the cost is noise next
+# to the 200 ms password poll.
+_CLICK_POLL_MS = 50
 
 
 # Cursor-movement keys. When a sticky modifier is held, pressing one of
@@ -844,6 +854,26 @@ class KeyboardBridge(QObject):
         self._foreground_timer.timeout.connect(self._check_foreground_window)
         self._foreground_timer.start()
 
+        # A click landing outside our own window is the user moving the
+        # caret, and it is the one signal that survives the case the other
+        # three miss: two fields inside a single window, where the UIA
+        # element id is shared and no caret is published.  Polled on its own
+        # fast timer rather than folded into the 250 ms foreground poll
+        # because the check reads the pointer's *current* position, so the
+        # closer the reading sits to the press, the less chance the pointer
+        # has already travelled back onto the keyboard.
+        # A detected click that arrived mid-word, waiting for the word
+        # boundary to act on.  A click is an edge rather than a level, so
+        # unlike the caret and element tokens it cannot simply be
+        # re-observed at the next poll; dropping it drops the reset for
+        # good.  See _check_external_click.  Assigned before the timer
+        # starts, because the slot reads it.
+        self._external_click_pending = False
+        self._click_timer = QTimer(self)
+        self._click_timer.setInterval(_CLICK_POLL_MS)
+        self._click_timer.timeout.connect(self._check_external_click)
+        self._click_timer.start()
+
         # Auto-update — last fetched UpdateInfo, used by installUpdate()
         # so the QML side doesn't have to round-trip the URL/asset name
         # back through Python (and so we never trust QML-supplied URLs).
@@ -936,33 +966,34 @@ class KeyboardBridge(QObject):
         self._pending_auto_cap = False
         self._update_layer()
 
-    def _flush_deferred_space(self, prose: bool) -> bool:
-        """Deliver or drop a deferred auto-space.  True if a capital is owed.
+    def _take_deferred_space(self, prose: bool) -> Tuple[str, bool]:
+        """Settle a deferred auto-space: ``(text to type, capital owed)``.
 
         *prose* is the caller's verdict on what follows: a letter, a
-        tapped pill or a snippet all mean the punctuation ended a
-        sentence after all, so the withheld space is typed now.  A digit
-        (``prose=False``) confirms the decimal and the space is simply
-        dropped.  Either way the deferral is spent, so this must be
-        called on every path that types after one was armed.
+        tapped pill, a snippet or a swiped word all mean the punctuation
+        ended a sentence after all, so the withheld space is owed.  A
+        digit (``prose=False``) confirms the decimal and there was never
+        a space to send.  Either way the deferral is spent, so this must
+        be called on every path that types after one was armed.
 
-        The space goes out through ``_send_text`` rather than being
-        wrapped in ``_without_held_modifiers``: a held modifier maps a
-        space to a chord, but the caller is about to send the following
-        character through the very same path, so a divergence here would
-        be the odd one out rather than a fix.
+        It **returns** the space rather than sending it, so each caller
+        can emit it the same way it emits the text that follows.  That is
+        not tidiness: the verbatim inserts type inside
+        ``_without_held_modifiers``, and a space sent outside it would
+        arrive as a chord under a right-click-locked Ctrl (Ctrl+Space is
+        an IME toggle on Windows) -- a hole in the very guard that
+        exists to stop a held modifier rewriting an insert.
         """
         punct = self._deferred_auto_space
         self._deferred_auto_space = ""
         if not punct or not prose:
-            return False
-        self._send_text(" ")
+            return "", False
         if not self._privacy_mode:
             # Mirror it in the buffer for the same reason the ordinary
             # auto-space is mirrored: a pill click inserts against what
             # the buffer says is on screen.
             self._context_buffer += " "
-        return self._auto_capitalize_after_punctuation and punct in (".", "!", "?")
+        return " ", self._auto_capitalize_after_punctuation and punct in (".", "!", "?")
 
     @contextmanager
     def _without_held_modifiers(self) -> Iterator[None]:
@@ -1135,9 +1166,13 @@ class KeyboardBridge(QObject):
         # a sentence, so the space (and any capital it owed) is delivered
         # one keystroke late.  A digit means it was "3.14" and there was
         # never a space to send.  Anything else is left alone rather than
-        # guessed at.  Purely additive — nothing typed is ever taken back.
-        if self._deferred_auto_space and self._flush_deferred_space(char.isalpha()) and not literal:
-            char = char.upper()
+        # guessed at.  Purely additive: nothing typed is ever taken back.
+        if self._deferred_auto_space:
+            deferred_space, owes_capital = self._take_deferred_space(char.isalpha())
+            if deferred_space:
+                self._send_text(deferred_space)
+            if owes_capital and not literal:
+                char = char.upper()
 
         # Handle punctuation spacing — remove preceding space only if WE
         # auto-inserted it (after a prediction click or punctuation auto-
@@ -1938,12 +1973,13 @@ class KeyboardBridge(QObject):
         self._release_sticky_modifiers()
         # A provisionally suppressed auto-space is settled by this tap: a
         # pill is a word, so the "42." that withheld the space ended a
-        # sentence after all.  It goes out before the insert so the space
-        # lands between the two, and it can owe a capital the pill was
-        # never given — nothing armed _pending_auto_cap while the
-        # question was still open, so _display_cased had nothing to act
-        # on.
-        if self._deferred_auto_space and self._flush_deferred_space(True) and word[:1].islower():
+        # sentence after all.  It can also owe a capital the pill was
+        # never given, because nothing armed _pending_auto_cap while the
+        # question was still open and _display_cased had nothing to act
+        # on.  The space itself is typed inside the guard below, with the
+        # rest of the insert.
+        deferred_space, owes_capital = self._take_deferred_space(True)
+        if owes_capital and word[:1].islower():
             word = word[0].upper() + word[1:]
         # The tap also spends any *armed* auto-capital.  That one is
         # already visible on the pill (_display_cased case 3), so only
@@ -1956,6 +1992,8 @@ class KeyboardBridge(QObject):
         # Shift+Left selection into Ctrl+Shift+Left, which eats whole
         # preceding words that the insert then overwrites.
         with self._without_held_modifiers():
+            if deferred_space:
+                self._send_text(deferred_space)
             if self._in_compat_mode() and self._current_word:
                 for _ in range(len(self._current_word)):
                     self._synth.send_key("BackSpace")
@@ -2145,9 +2183,11 @@ class KeyboardBridge(QObject):
         # punctuation that withheld it) and spend any armed auto-capital.
         # The capital is deliberately *not* applied to the value: a
         # snippet is verbatim, and its own casing is the whole point.
-        self._flush_deferred_space(True)
+        # The space rides along inside the literal insert so it is under
+        # the same held-modifier guard the value is.
+        deferred_space, _ = self._take_deferred_space(True)
         self._consume_auto_cap()
-        self._send_literal_text(value)
+        self._send_literal_text(deferred_space + value)
         self._current_word = ""
         self._raw_token = ""
         self._word_typed_under_caps_lock = False
@@ -2953,6 +2993,7 @@ class KeyboardBridge(QObject):
         for timer in (
             getattr(self, "_password_timer", None),
             getattr(self, "_foreground_timer", None),
+            getattr(self, "_click_timer", None),
             getattr(self, "_telemetry_timer", None),
         ):
             if timer is not None:
@@ -3289,6 +3330,65 @@ class KeyboardBridge(QObject):
         self._reset_typing_context()
         _logger.debug("Caret moved without typing — predictions cleared")
 
+    def _check_external_click(self) -> None:
+        """Clear stale context when the user clicks away from the keyboard.
+
+        The signal of last resort, and the only one that covers clicking
+        from one field to another inside a single window: ``GetForeground
+        Window`` sees whole apps, the UIA element id is shared across a
+        whole web document, and most of the browser and Electron world
+        publishes no caret rectangle for ``_check_caret_moved`` to read.
+        A click is observable in all of them.
+
+        It is coarser than the signals it backs up: a click on a toolbar
+        button or a scrollbar doesn't move the caret, and resetting there
+        costs the next-word prediction the user would have got.  That is
+        the deliberate trade, because the failure it replaces is worse:
+        context describing a field the caret has left produces pills that
+        insert the wrong text into the field it is now in.
+
+        **Only between words**, the same guard ``_check_caret_moved``
+        carries and for the same reason: a reset mid-word clears
+        ``_current_word`` while the partial word is still on screen, so
+        the next pill tap inserts the whole word beside it (the
+        "backspacbackspaces" duplication).  Clicks that don't move the
+        caret are exactly where that would bite.
+
+        Mid-word the click is **held, not dropped**.  A click is an
+        *edge*, unlike the caret and element tokens, which are levels
+        that can simply be compared again at the next poll: discarding it
+        discards it for good.  Type "hel", click into another field,
+        finish the word, and the stale context would then drive every
+        pill from there on with nothing left to notice it.  So the
+        detection keeps running every 50 ms (which is what keeps the
+        pointer position fresh enough to attribute the click) and the
+        reset waits for the word boundary.
+
+        Clicks on our own window (a key, a pill, the title bar, the
+        snippets window) are filtered out inside
+        :func:`external_click_detected` by process id, so the keyboard
+        can never clear its own context by being typed on.
+
+        A live snippet offer **survives** this reset, which is the one
+        way it differs from the others.  The offer is about a value the
+        user typed, not about where the caret is, and clicking the next
+        field of the same form is the single most likely thing to happen
+        right after typing an email address -- withdrawing here closed
+        the Save button before the user could travel to it.  The guard
+        above cannot protect it either: ``_maybe_offer_snippet`` runs at
+        word boundaries, *after* ``_current_word`` is cleared, so an
+        offer is only ever live while that guard is a no-op.  An app
+        switch and privacy mode still withdraw it, through their own
+        calls to :meth:`_reset_typing_context`.
+        """
+        if external_click_detected():
+            self._external_click_pending = True
+        if not self._external_click_pending or self._current_word:
+            return
+        self._external_click_pending = False
+        self._reset_typing_context(keep_snippet_offer=True)
+        _logger.debug("Click outside the keyboard — predictions cleared")
+
     def _get_foreground_window_id(self) -> int:
         """Return the focused-window ID, or 0 if unavailable.
 
@@ -3389,7 +3489,7 @@ class KeyboardBridge(QObject):
             else:
                 _logger.info("Password field cleared — privacy mode OFF")
 
-    def _reset_typing_context(self) -> None:
+    def _reset_typing_context(self, *, keep_snippet_offer: bool = False) -> None:
         """Drop all in-progress typing state because the context went stale.
 
         Shared by the app-switch and focused-element-switch paths in
@@ -3399,6 +3499,11 @@ class KeyboardBridge(QObject):
         built from them would be wrong.  Clears the same fields as
         ``_enter_privacy_mode`` (which scrubs for the different reason of
         keeping sensitive input out of the model).
+
+        ``keep_snippet_offer`` is for the outside-click path alone, where
+        the caret moved but the *user* did not go anywhere -- see
+        :meth:`_check_external_click`.  Every other caller wants the
+        default, and privacy mode in particular must keep it.
         """
         self._predictions = []
         self._current_word = ""
@@ -3415,8 +3520,14 @@ class KeyboardBridge(QObject):
         # goes with them.  This is also what stops an offer raised just
         # before focus landed on a password field from sitting there
         # savable: privacy mode has to mean "stop doing this", not "stop
-        # starting new ones".
-        self._withdraw_snippet_offer()
+        # starting new ones".  The one exception is the outside-click
+        # path; see _check_external_click for why a click within the same
+        # app is not a reason to close the Save button.
+        if not keep_snippet_offer:
+            self._withdraw_snippet_offer()
+        # Whatever the reason, the context is gone now, so a click still
+        # waiting for a word boundary has nothing left to clear.
+        self._external_click_pending = False
         self.predictionsChanged.emit([])
 
     def _enter_privacy_mode(self) -> None:
@@ -3843,10 +3954,11 @@ class KeyboardBridge(QObject):
         # Same settlement the pill path does: deliver a deferred space
         # (with the capital it owes, which _display_cased could not have
         # known about) and spend an armed one, which is already in `top`.
-        if self._deferred_auto_space and self._flush_deferred_space(True) and top[:1].islower():
+        deferred_space, owes_capital = self._take_deferred_space(True)
+        if owes_capital and top[:1].islower():
             top = top[0].upper() + top[1:]
         self._consume_auto_cap()
-        self._send_literal_text(top + " ")
+        self._send_literal_text(deferred_space + top + " ")
         self._context_buffer += top + " "
         self._sentence_buffer += top + " "
         if len(self._context_buffer) > 200:

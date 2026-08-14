@@ -1,11 +1,15 @@
 """
 Pre-push sanity check.
 
-Runs the same four checks GitHub Actions runs in .github/workflows/ci.yml:
+Runs the same checks GitHub Actions runs in .github/workflows/ci.yml:
     1. ruff check src/ tests/
     2. ruff format --check src/ tests/
-    3. mypy src/ --ignore-missing-imports
-    4. pytest
+    3. mypy src/ --ignore-missing-imports --platform linux
+       (the platform CI type-checks on)
+    4. mypy src/ --ignore-missing-imports --platform win32
+       (the `if sys.platform == "win32"` bodies, which mypy prunes as
+       unreachable under the pass above)
+    5. pytest
 
 Run before `git push` to catch lint / type / test failures locally
 instead of waiting for the CI red X.
@@ -61,10 +65,7 @@ def run(label: str, cmd: list[str]) -> tuple[bool, float]:
     rc = subprocess.run(cmd).returncode
     elapsed = time.perf_counter() - start
     ok = rc == 0
-    status = (
-        f"{C.OK}OK{C.END}" if ok
-        else f"{C.FAIL}FAIL (exit {rc}){C.END}"
-    )
+    status = f"{C.OK}OK{C.END}" if ok else f"{C.FAIL}FAIL (exit {rc}){C.END}"
     print(_safe(f"{status}  {label} ({elapsed:.1f}s)"))
     return ok, elapsed
 
@@ -78,7 +79,8 @@ def _have_module(name: str) -> bool:
     try:
         subprocess.run(
             [sys.executable, "-m", name, "--version"],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
             check=True,
             # Output is discarded; CREATE_NO_WINDOW suppresses the flash
             # of a console window on Windows when the parent has no
@@ -96,13 +98,29 @@ def main() -> int:
     pytest_cmd = [py, "-m", "pytest", "-q"]
     if full:
         pytest_cmd += [
-            "--cov=src", "--cov-report=term-missing",
+            "--cov=src",
+            "--cov-report=term-missing",
             "--cov-fail-under=60",
         ]
     steps = [
         ("ruff", [py, "-m", "ruff", "check", "src/", "tests/"]),
         ("format", [py, "-m", "ruff", "format", "--check", "src/", "tests/"]),
-        ("mypy", [py, "-m", "mypy", "src/", "--ignore-missing-imports"]),
+        # Both platforms, and both are load-bearing. --platform linux is
+        # what CI type-checks under, and typeshed gates whole symbols on
+        # the platform (ctypes.WinDLL does not exist off Windows, so a
+        # call to it degrades to Any and trips warn_return_any); without
+        # it the gate passes on a Windows dev box and fails on the
+        # runner, which is the one thing check.py exists to prevent.
+        # But mypy also prunes `if sys.platform == "win32"` bodies as
+        # unreachable, so pinning to linux alone type-checked the Windows
+        # half of every platform branch *nowhere*: a deliberate
+        # `int = "str"` inside _window_class_name's Windows branch was
+        # invisible. The second pass is what covers them.
+        ("mypy", [py, "-m", "mypy", "src/", "--ignore-missing-imports", "--platform", "linux"]),
+        (
+            "mypy-win32",
+            [py, "-m", "mypy", "src/", "--ignore-missing-imports", "--platform", "win32"],
+        ),
         ("pytest", pytest_cmd),
     ]
 
@@ -111,10 +129,12 @@ def main() -> int:
     # requirement to have a `format` module installed.
     missing = sorted({cmd[2] for _, cmd in steps if not _have_module(cmd[2])})
     if missing:
-        print(_safe(
-            f"{C.FAIL}Missing tools: {', '.join(missing)}.{C.END}\n"
-            f"Install with: pip install ruff mypy pytest pytest-cov PySide6"
-        ))
+        print(
+            _safe(
+                f"{C.FAIL}Missing tools: {', '.join(missing)}.{C.END}\n"
+                f"Install with: pip install ruff mypy pytest pytest-cov PySide6"
+            )
+        )
         return 1
 
     results: list[tuple[str, bool, float]] = []
@@ -135,10 +155,7 @@ def main() -> int:
         print(_safe(f"\n{C.OK}{C.BOLD}All checks passed.{C.END} Safe to push."))
         return 0
     failed = [label for label, ok, _ in results if not ok]
-    print(_safe(
-        f"\n{C.FAIL}{C.BOLD}{len(failed)} check(s) failed:{C.END} "
-        f"{', '.join(failed)}"
-    ))
+    print(_safe(f"\n{C.FAIL}{C.BOLD}{len(failed)} check(s) failed:{C.END} {', '.join(failed)}"))
     return 1
 
 

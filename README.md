@@ -228,7 +228,7 @@ Yes on Windows (Unicode keystroke injection covers anything in BMP and supplemen
 ### Reliability
 
 - Single-instance lock prevents accidental duplicates
-- 842 tests covering prediction, platform abstraction, bridge, vocab packs, telemetry, data export,
+- 1289 tests covering prediction, platform abstraction, bridge, vocab packs, telemetry, data export,
   including property-based suites that generate adversarial inputs for the archive / pack import
   paths and the prediction-engine invariants
 - CI runs ruff + mypy + pytest + OSV CVE scan on every push and PR
@@ -291,6 +291,7 @@ For security issues, follow [`SECURITY.md`](SECURITY.md). Do not file public iss
 
 - Learning is on-device only. Your typing never leaves your computer unless you opt into telemetry.
 - Password fields are auto-detected (Windows UI Automation, Linux AT-SPI) and pause learning automatically. There's also a manual **Learning** switch in the title bar.
+- To know when its suggestions have gone stale, the keyboard watches which app is in front, which control has focus, where the caret is, and whether you clicked outside the keyboard. All of it is read locally, used once, and discarded: nothing is logged, stored, or sent. See [`docs/PRIVACY.md`](docs/PRIVACY.md).
 - Telemetry is opt-in and off by default. The client and the consent toggle are in the build, but the submission endpoint isn't deployed yet, so opting in is currently a no-op. When the endpoint goes live, opting in would send nine integer counters per week and never any content. See [`docs/PRIVACY.md`](docs/PRIVACY.md) and [`docs/architecture/TELEMETRY.md`](docs/architecture/TELEMETRY.md).
 - Data export bundles your model, lifetime stats, and imported vocabulary packs into a single `.zip` you control. The telemetry contributor ID is **excluded** from exports so contributions stay unlinkable across machines.
 - Auto-update fetches release metadata from GitHub. Installers are verified against an EV-signed certificate before launching.
