@@ -28,6 +28,13 @@ process on the input path of every mouse event on the desktop, which is a
 latency and antivirus-heuristic cost out of proportion to a signal this
 coarse.
 
+**And the poll reads only what it can read without taking it.**
+``GetAsyncKeyState``'s low bit is consumed by the reader, so polling it
+would steal every press from any other process watching the same way --
+including the dwell-click and switch-access utilities an on-screen
+keyboard user is most likely to be running.  See
+:func:`_left_button_pressed_since_last_call`.
+
 Windows only.  Everywhere else :func:`external_click_detected` returns
 False and the caller keeps whatever the older signals give it.
 """
@@ -42,10 +49,10 @@ from typing import Optional
 _IS_WINDOWS = sys.platform == "win32"
 
 _VK_LBUTTON = 0x01
-# GetAsyncKeyState's two result bits.  See _left_button_pressed_since_last_call
-# for why neither one is enough on its own.
+# GetAsyncKeyState's high bit: the button's physical state right now.
+# Its low bit ("pressed since the last call") is deliberately NOT read --
+# see _left_button_pressed_since_last_call.
 _KEY_IS_DOWN = 0x8000
-_KEY_PRESSED_SINCE_LAST_CALL = 0x0001
 
 # Whether the left button was down at the previous poll, so a press can be
 # recognised as a transition rather than a level.
@@ -80,15 +87,25 @@ def external_click_detected() -> bool:
 
 
 def _left_button_pressed_since_last_call() -> bool:
-    """Detect a left-button press using both of GetAsyncKeyState's bits.
+    """Detect a left-button press from the high bit alone, as an edge.
 
-    Each bit has a hole the other covers.  The high bit is the button's
-    state *right now*, so a click that opens and closes entirely between
-    two polls is invisible to it.  The low bit reports "pressed since the
-    previous call", which closes that hole, but Windows clears it for
-    whichever process asks first, so a second poller elsewhere on the
-    desktop can steal it.  Read together, the only click missed is one
-    that was both stolen and shorter than a poll interval.
+    ``GetAsyncKeyState`` also has a low bit meaning "pressed since the
+    previous call", which would catch a click that opens and closes
+    entirely between two polls.  **Reading it is not free and we do not
+    read it.**  That bit is system-wide state, and the read *clears* it
+    for whoever asks next, so polling 20x a second would quietly steal
+    every press from any other process watching the same way.  On this
+    machine that is not hypothetical: dwell-click and switch-access
+    utilities are exactly the software an on-screen keyboard user runs
+    alongside this one, and breaking another assistive tool to sharpen a
+    signal this coarse is not a trade worth making.
+
+    The high bit is the button's physical state and reading it takes
+    nothing from anyone, so the press is recovered as a transition
+    against the previous poll.  What that misses is a click shorter than
+    the 50 ms interval -- shorter than a typical human click, and far
+    shorter than a dwell click -- and missing one costs a single
+    next-word suggestion, since the next click detects it anyway.
     """
     global _button_was_down
     state = _read_left_button_state()
@@ -98,7 +115,7 @@ def _left_button_pressed_since_last_call() -> bool:
     is_down = bool(state & _KEY_IS_DOWN)
     was_down = _button_was_down
     _button_was_down = is_down
-    return bool(state & _KEY_PRESSED_SINCE_LAST_CALL) or (is_down and not was_down)
+    return is_down and not was_down
 
 
 def _read_left_button_state() -> Optional[int]:

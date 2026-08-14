@@ -2,7 +2,7 @@
 
 The ctypes calls themselves can only run on Windows, so the seams under
 test are the two layers above them: the bit arithmetic that turns
-``GetAsyncKeyState``'s two flags into "a press happened", and the
+``GetAsyncKeyState``'s reading into "a press happened", and the
 composition that decides whether that press belongs to us.  Both are
 where the behaviour lives; both are platform-independent.
 """
@@ -63,14 +63,13 @@ class TestExternalClickDetected:
 
 
 class TestPressDetection:
-    """Both of ``GetAsyncKeyState``'s bits, because each has a hole."""
+    """The high bit only, read as a transition against the previous poll."""
 
     def _states(self, monkeypatch, values):
         it = iter(values)
         monkeypatch.setattr(pointer, "_read_left_button_state", lambda: next(it))
 
     def test_a_button_down_transition_counts(self, monkeypatch):
-        # Low bit absent: another process on the desktop got there first.
         self._states(monkeypatch, [0x0000, 0x8000])
         assert pointer._left_button_pressed_since_last_call() is False
         assert pointer._left_button_pressed_since_last_call() is True
@@ -82,12 +81,25 @@ class TestPressDetection:
         assert pointer._left_button_pressed_since_last_call() is False
         assert pointer._left_button_pressed_since_last_call() is False
 
-    def test_a_click_that_ends_between_polls_still_counts(self, monkeypatch):
-        """The hole the high bit alone has: button already released by the
-        time we look, so only "pressed since last call" saw it."""
-        self._states(monkeypatch, [0x0000, 0x0001])
+    def test_the_pressed_since_last_call_bit_is_ignored(self, monkeypatch):
+        """Reading that bit consumes it for every other process too.
+
+        It would catch a click shorter than one 50 ms poll, which the
+        high bit alone misses.  That is not worth having: the bit is
+        system-wide and the read clears it, so polling it 20x a second
+        steals presses from anything else watching the same way --
+        dwell-click and switch-access utilities being exactly the
+        software an OSK user runs alongside this one.  A missed click
+        costs one next-word suggestion; the next click resets anyway.
+
+        Asserted as the *absence* of detection, so restoring the bit for
+        sharper coverage fails here loudly rather than quietly
+        regressing another assistive tool.
+        """
+        self._states(monkeypatch, [0x0000, 0x0001, 0x0001])
         assert pointer._left_button_pressed_since_last_call() is False
-        assert pointer._left_button_pressed_since_last_call() is True
+        assert pointer._left_button_pressed_since_last_call() is False
+        assert pointer._left_button_pressed_since_last_call() is False
 
     def test_an_idle_button_never_counts(self, monkeypatch):
         self._states(monkeypatch, [0x0000, 0x0000])

@@ -2842,6 +2842,68 @@ class TestOutsideClickClearsContext:
         assert bridge._context_buffer == "hello "
         assert bridge._current_word == "wor"
 
+    def test_a_mid_word_click_is_held_not_dropped(self, bridge: KeyboardBridge):
+        """The click is an edge, so discarding it discards it for good.
+
+        The caret and element tokens are *levels* -- an unread change is
+        still there to compare at the next poll.  A press is not.  Type
+        "hel", click into another field, finish the word, and the stale
+        context would drive every pill from then on with nothing left to
+        notice it.  So the reset waits for the word boundary instead.
+        """
+        bridge._context_buffer = "hello "
+        bridge._current_word = "wor"
+        self._click(bridge, outside=True)
+        bridge._current_word = ""  # the user finished the word
+        self._click(bridge, outside=False)  # no new click, just the next poll
+        assert bridge._context_buffer == ""
+
+    def test_a_held_click_is_dropped_once_the_context_goes(self, bridge: KeyboardBridge):
+        """An app switch already cleared it; nothing is left to clear."""
+        bridge._context_buffer = "hello "
+        bridge._current_word = "wor"
+        self._click(bridge, outside=True)
+        bridge._reset_typing_context()
+        assert bridge._external_click_pending is False
+
+    def test_a_live_snippet_offer_survives(self, bridge: KeyboardBridge, tmp_path):
+        """Clicking the next field of a form must not close the Save button.
+
+        The offer is about a value the user typed, not about where the
+        caret is, and typing an email then clicking the next field is the
+        single most likely thing to happen right after one is raised.
+        The "only between words" guard cannot protect it either:
+        ``_maybe_offer_snippet`` runs at word boundaries, after
+        ``_current_word`` is cleared, so an offer is only ever live while
+        that guard is a no-op.
+        """
+        from src.snippets import SnippetStore
+
+        bridge._snippets = SnippetStore(tmp_path / "snippets.json")
+        bridge._snippets.load()
+        withdrawn: list[bool] = []
+        bridge.snippetOfferWithdrawn.connect(lambda: withdrawn.append(True))
+        _type(bridge, "write to owen@example.com ")
+        assert bridge._pending_snippet_offer is not None
+        self._click(bridge, outside=True)
+        assert bridge._context_buffer == ""
+        assert bridge._pending_snippet_offer is not None
+        assert withdrawn == []
+
+    def test_an_app_switch_still_withdraws_the_offer(self, bridge: KeyboardBridge, tmp_path):
+        """The inverse: keeping it *everywhere* would be the wrong fix.
+
+        Privacy mode routes through the same reset, and there "stop doing
+        this" has to include the offer already on screen.
+        """
+        from src.snippets import SnippetStore
+
+        bridge._snippets = SnippetStore(tmp_path / "snippets.json")
+        bridge._snippets.load()
+        _type(bridge, "write to owen@example.com ")
+        bridge._reset_typing_context()
+        assert bridge._pending_snippet_offer is None
+
 
 class TestCaretMoveClearsContext:
     """Clearing stale context when the user moves the caret themselves.

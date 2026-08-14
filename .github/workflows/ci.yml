@@ -55,6 +55,11 @@ jobs:
           python-version: "3.11"
       - run: pip install mypy PySide6
       - run: mypy src/ --ignore-missing-imports
+      # mypy prunes `if sys.platform == "win32"` bodies as unreachable on
+      # a linux runner, so the pass above type-checks the Windows half of
+      # every platform branch nowhere. Alpha-OSK's primary target is
+      # Windows. Mirrors check.py's second mypy step.
+      - run: mypy src/ --ignore-missing-imports --platform win32
 
   test:
     name: Test (${{ matrix.os }})
