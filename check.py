@@ -100,12 +100,76 @@ def banner(msg: str) -> None:
     print(_safe(f"\n{C.HEADER}{C.BOLD}== {msg} =={C.END}"))
 
 
-def run(label: str, cmd: list[str]) -> tuple[bool, float]:
+def _child_creationflags() -> int:
+    """``CREATE_NO_WINDOW`` when there is no console for children to inherit.
+
+    Every step here launches a console-subsystem binary (``python -m
+    ruff`` and friends) and deliberately does *not* capture its output,
+    so it streams to the terminal.  That is right whenever a terminal
+    exists: the child inherits this process's console and no window
+    appears.
+
+    Run from the pre-push hook, there may be no console at all.  Git for
+    Windows executes hooks through ``sh.exe``, and when the push itself
+    came from a GUI (an IDE's source-control panel, a git client),
+    nothing in that chain owns a console.  Windows then allocates a fresh
+    one per child, which is where the two blank windows titled with the
+    repo path come from -- one per ruff step, the two fastest steps, so
+    they appear and vanish while the slower ones are still to come.
+
+    Probing ``GetConsoleWindow`` rather than ``isatty`` is deliberate.
+    stdout being a pipe does not mean there is no console: a hook run
+    from a terminal has both, and there the flag is unwanted, because a
+    process created with ``CREATE_NO_WINDOW`` has no console of its own
+    and ruff and pytest would drop their colour. Asking about the
+    console directly keeps the ordinary terminal path byte-identical to
+    what it has always done, and changes behaviour only in the case that
+    actually pops a window.  Inherited stdout / stderr handles are
+    unaffected either way, so git still shows the output.
+    """
+    if sys.platform != "win32":
+        return 0
+    # Two conditions, and the tty one is first because it is the one that
+    # is certain.  `GetConsoleWindow` is the direct question but its
+    # answer is not always what the name suggests: it reports 0 for a
+    # process attached to a pseudo-console, and for one launched with its
+    # output on a pipe, so on its own it would set the flag for an
+    # ordinary terminal run too.  Requiring stdout to be a non-tty as
+    # well means the hand-run path can never take this branch at all,
+    # whatever the console probe says.
+    try:
+        if sys.stdout is not None and sys.stdout.isatty():
+            return 0
+    except (AttributeError, ValueError):
+        pass
+    try:
+        if _get_console_window() != 0:
+            return 0
+    except (AttributeError, OSError):
+        # Fail open.  Getting this wrong costs a blank window; raising
+        # here would cost the gate itself.
+        return 0
+    return getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+
+def _get_console_window() -> int:
+    """``GetConsoleWindow()``: the console's HWND, or 0 if there is none.
+
+    Split out so the branch above is testable from a terminal, which is
+    the only place anyone runs this script by hand and therefore the one
+    place the interesting case never occurs.
+    """
+    import ctypes
+
+    return int(ctypes.windll.kernel32.GetConsoleWindow())
+
+
+def run(label: str, cmd: list[str], creationflags: int = 0) -> tuple[bool, float]:
     """Run a CI step.  Returns (ok, elapsed_seconds)."""
     banner(label)
     print(_safe(f"{C.DIM}$ {' '.join(cmd)}{C.END}"))
     start = time.perf_counter()
-    rc = subprocess.run(cmd).returncode
+    rc = subprocess.run(cmd, creationflags=creationflags).returncode
     elapsed = time.perf_counter() - start
     ok = rc == 0
     status = f"{C.OK}OK{C.END}" if ok else f"{C.FAIL}FAIL (exit {rc}){C.END}"
@@ -237,8 +301,9 @@ def main() -> int:
         )
 
     results: list[tuple[str, bool, float]] = []
+    creationflags = _child_creationflags()
     for label, cmd in steps:
-        ok, elapsed = run(label, cmd)
+        ok, elapsed = run(label, cmd, creationflags)
         results.append((label, ok, elapsed))
 
     # Summary
