@@ -704,9 +704,24 @@ def _spawn_relauncher(new_version: str) -> bool:
 
         flags = 0
         if sys.platform == "win32":
-            # Detach: the helper survives our taskkill. No new console.
-            flags = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(
-                subprocess, "CREATE_NEW_PROCESS_GROUP", 0
+            # Detach so the helper survives our taskkill, and suppress the
+            # console explicitly.
+            #
+            # CREATE_NO_WINDOW is not redundant with DETACHED_PROCESS here,
+            # which is what the comment this replaces assumed ("No new
+            # console").  DETACHED_PROCESS only detaches the process it
+            # creates, and it does not propagate: in dev mode `cmd` starts
+            # `venv\Scripts\python.exe`, that interpreter re-executes as
+            # the base interpreter, and the re-exec is a fresh
+            # CreateProcess carrying none of these flags, so it allocates
+            # a console.  Observed as a live `venv python -> base python ->
+            # conhost.exe` tree, i.e. one empty console window per
+            # relauncher, titled with the working directory because the
+            # helper writes nothing to it.
+            flags = (
+                getattr(subprocess, "DETACHED_PROCESS", 0)
+                | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+                | getattr(subprocess, "CREATE_NO_WINDOW", 0)
             )
         subprocess.Popen(
             cmd,
