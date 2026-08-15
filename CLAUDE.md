@@ -59,7 +59,7 @@ Alpha-OSK is an AI-powered on-screen keyboard for Windows and Linux. Users click
 
 ```bash
 python run.py          # Creates venv, installs deps, launches keyboard
-python -m pytest       # Run tests (1420 tests)
+python -m pytest       # Run tests (1421 tests)
 ```
 
 ## Architecture Overview
@@ -536,6 +536,25 @@ counter breaks on the sequence nobody thought to write down).
   spatial model's normalisation and the `_context_buffer` / `_current_word`
   accounting.
 
+### Autouse guards in `tests/conftest.py`
+
+Two fixtures apply to every test, both stating a property that has to hold
+for tests nobody has written yet rather than being patched in case by case:
+
+- **`_unplug_the_live_desktop`** stubs `is_password_field()` and
+  `external_click_detected()`. `KeyboardBridge` is constructed for real, and
+  both read the developer's actual desktop, so a password field on screen
+  flipped the bridge into privacy mode mid-test.
+- **`_no_real_update_relauncher`** stubs `updater._spawn_relauncher`. Several
+  `download_and_install` tests stub only `_launch_installer` and reached the
+  real spawn, which launches a *detached* process by design; it outlives the
+  pytest worker and never exits, so every run of `tests/test_updater.py`
+  stranded four of them, each holding a console window.
+
+Both fail the same way when absent: something outside the test survives it.
+A test wanting the real behaviour patches the same name and wins, since its
+own monkeypatch applies after the fixture's.
+
 Determinism is load-bearing: the `alpha-osk` profile in `tests/conftest.py`
 sets `database=None` and `derandomize=True`, so these cannot pass locally
 and fail on CI from a stale `.hypothesis` corpus. Use
@@ -923,6 +942,8 @@ Version source of truth is `src/__version__.py`. The release-asset filename **mu
 ### Update progress UI
 
 Full walkthrough (the four pieces from "user clicks install" to "new keyboard appears", plus the v1.0.19 file list) is in `docs/build/AUTO_UPDATE.md`. The non-obvious bits to remember: **never expose the download URL to QML** (the bridge only emits primitive ints); the pre-install toast sleeps `_PRE_INSTALL_TOAST_DWELL_S` (1.8 s) in the worker so it paints before the installer's taskkill; the relauncher splash is a `QTimer` state machine with an indeterminate `QProgressBar` (NSIS silent install has no real percentage); `_run_headless` is preserved as the test target and no-display fallback; and `_is_dev_target()` routes `python`/`pythonw` straight to headless so dev runs don't hang waiting for an exe mtime that never changes.
+
+**`_spawn_relauncher` must OR `CREATE_NO_WINDOW` in with the detach flags, and it is not redundant.** `DETACHED_PROCESS` applies only to the process that call creates and does not propagate: in dev mode the command starts `venv\Scripts\python.exe`, that interpreter re-execs as the base interpreter, and the re-exec allocates a console. The symptom is an empty terminal per relauncher, titled with the working directory. Relatedly, **no test may reach the real `_spawn_relauncher`** (an autouse guard in `tests/conftest.py` enforces it): several `download_and_install` tests stub only `_launch_installer`, and each real spawn is a detached process that outlives the pytest worker and never exits, because the helper has no branch for a parent PID that is already gone. That last part is still open, see `TODO.md`. Full write-up in `docs/build/AUTO_UPDATE.md`.
 
 ## Accessibility Ecosystem
 

@@ -245,3 +245,73 @@ The T40 work covered the gap *after* the user clicked Install. Two more silent s
 - `src/keyboard_bridge.py` — `updateDownloadProgress = Signal(int, int)`; throttled `_on_progress` callback in `installUpdate`'s worker (256 KB cadence + always-final-chunk).
 - `src/_update_relauncher.py` — `QProgressBar` import + insert into splash; `_settle_progress(full)` helper wired into all three terminal-phase branches; splash height 140 → 170 px.
 - `qml/Main.qml` — `updateDownloadBytes` / `updateDownloadTotal` root properties; `onUpdateDownloadProgress` handler; `Connections.onUpdateInstallStarted` zeros the counters; popup text computes MB/% from the two properties; new `ProgressBar` inside the popup `contentItem`, indeterminate when `updateDownloadTotal <= 0`.
+
+## The relauncher spawn: no console, and no strays
+
+The relauncher is spawned *detached*, on purpose, because its entire job is
+to outlive the process that spawned it. Two consequences of that design bit
+back, and both are easy to reintroduce.
+
+### `DETACHED_PROCESS` does not mean "no console"
+
+`_spawn_relauncher` used to pass `DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP`
+under a comment reading "Detach: the helper survives our taskkill. No new
+console." The first half is right and the second is not, because
+`DETACHED_PROCESS` applies only to the process that call creates and does
+not propagate to anything that process goes on to launch.
+
+In dev mode the command begins with `venv\Scripts\python.exe`. That
+interpreter re-executes as the base interpreter, and the re-exec is a fresh
+`CreateProcess` carrying none of the parent's flags, so it allocates a
+console. Observed as a live `venv python -> base python -> conhost.exe`
+tree: one empty terminal window per relauncher, titled with the working
+directory, because the helper writes nothing to it.
+
+The spawn now ORs `CREATE_NO_WINDOW` in alongside the detach flags rather
+than relying on detachment to imply it. Pinned by
+`tests/test_updater.py::TestRelauncherSpawnHasNoConsole`, which asserts both
+bits: dropping the detach flag would break the relaunch, and dropping the
+window flag would bring the terminals back.
+
+The general lesson, also recorded in `docs/architecture/GOTCHAS.md`: when
+auditing a spawn on Windows, check the whole process tree it produces, not
+the immediate child.
+
+### The test suite was spawning real ones
+
+`download_and_install` ends by calling `_spawn_relauncher`. Several tests in
+`tests/test_updater.py` drive that function far enough to reach it while
+stubbing only `_launch_installer`, so each run launched four real detached
+processes.
+
+They did not clean up after themselves, and could not: the helper waits on a
+`--parent-pid` that is gone the moment the pytest worker exits, and it has no
+exit path for a parent that is already dead. So they accumulated across runs,
+each holding a console window.
+
+`tests/conftest.py` has an autouse guard that stubs `_spawn_relauncher` for
+every test. Autouse rather than per-test because the property wanted is "no
+test spawns a real OS process", which has to hold for tests nobody has
+written yet; it is the same shape, and the same reasoning, as the
+`_unplug_the_live_desktop` fixture beside it. A test that wants the real
+function patches the same name and wins, since its own monkeypatch applies
+afterwards. `TestRelauncherSpawnHasNoConsole` does exactly that, via a
+module-level `_REAL_SPAWN_RELAUNCHER` captured at import time.
+
+**Worth knowing for the next one of these.** These windows were misread for
+some time as the build tooling misbehaving: they appeared around the time of
+a `git push`, were titled with the repo path, and were empty, so they looked
+like a lint or test step opening a console. Two unrelated real defects were
+found and fixed while chasing them. A blank console is close to anonymous
+from the outside, so enumerate `conhost.exe` and walk up to its parent's
+command line before believing whichever of your own tools you last ran.
+
+### Open: the helper never exits when its parent is already gone
+
+The remaining half is unfixed and tracked in `TODO.md`. `run_relauncher`
+polls for the parent to die, then for the new exe, then launches. There is no
+branch for "the parent PID does not resolve at all", which is the normal case
+when the spawn was incidental (a test) or the parent crashed. It should exit
+early there, and the overall wait should be bounded. Until then, a stray
+relauncher runs until it is killed; it no longer shows a window, so it is
+also no longer visible.

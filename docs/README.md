@@ -36,7 +36,7 @@ Per-platform build pipelines and the auto-update path. Edit when the release pro
 - [`build/WINDOWS.md`](build/WINDOWS.md): Windows build, EV signing, NSIS installer, release checklist, troubleshooting.
 - [`build/LINUX.md`](build/LINUX.md): Linux build pipeline, AppImage internals, troubleshooting.
 - [`build/MACOS.md`](build/MACOS.md): macOS port plan, phase breakdown, TCC and SEI specifics.
-- [`build/AUTO_UPDATE.md`](build/AUTO_UPDATE.md): auto-update flow, threat model, signature verification.
+- [`build/AUTO_UPDATE.md`](build/AUTO_UPDATE.md): auto-update flow, threat model, signature verification, and the relauncher spawn (why it needs `CREATE_NO_WINDOW` on top of detaching, and why no test may reach it).
 - [`build/BRANDING.md`](build/BRANDING.md): asset regeneration (icons, installer images).
 
 ## `roadmap/`: planned, not-yet-built
