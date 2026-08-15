@@ -316,10 +316,21 @@ def main() -> int:
         _settle()
 
         # Snippets: a separate top-level window, opened from the title bar.
+        # Six fills the grid exactly (2 columns x 3 rows), which is also
+        # what the pager keys off, so this shot shows a full page without
+        # advertising a second empty one.
         bridge.setSnippet(0, "Name", "Alex Rivera")
         bridge.setSnippet(1, "Email", "alex.rivera@example.com")
         bridge.setSnippet(2, "Phone", "555-123-4567")
         bridge.setSnippet(3, "Address", "128 Juniper Lane, Springfield")
+        for _ in range(2):
+            bridge.addSnippet()
+        bridge.setSnippet(4, "Work email", "a.rivera@example.org")
+        bridge.setSnippet(5, "Sign-off", "Thanks, Alex")
+        # Tagged so the shot shows what the tags are for: telling two
+        # similar snippets apart without reading either one.
+        for index, tag in ((1, "blue"), (2, "green"), (3, "amber"), (4, "blue")):
+            bridge.setSnippetColor(index, tag)
         snippets_window = _window_named("snippetsWindow")
         # openList(), not visible = true: the rows are built by its refresh(),
         # so simply showing the window renders an empty list.

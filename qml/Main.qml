@@ -90,6 +90,13 @@ Window {
         // properties, not bound to content.
         property int savedWindowX: -1000000
         property int savedWindowY: -1000000
+
+        // Snippets window position, same sentinel and same reasoning. It
+        // used to reset to "centred above the keyboard" on every launch,
+        // which undoes the one adjustment a user makes to it: dragging it
+        // clear of the field they are filling in.
+        property int savedSnippetsX: -1000000
+        property int savedSnippetsY: -1000000
     }
 
     // Set when Component.onCompleted finishes restoring the saved
@@ -2611,14 +2618,138 @@ Window {
             flags: Qt.Window | Qt.FramelessWindowHint
                    | Qt.WindowStaysOnTopHint | Qt.WindowDoesNotAcceptFocus
 
-            // -1 = list view; >= 0 = editing that snippet index.
+            // Three views share the window, in priority order: the editor
+            // (editingIndex >= 0), the per-snippet actions sheet
+            // (menuIndex >= 0), otherwise the tile grid.
+            //
+            // The actions sheet is a *view*, not a floating menu, and that
+            // is deliberate. A popup anchored to a 165 px tile inside a
+            // 360 px window has to be clamped away from two edges, and it
+            // puts every management action on a target smaller than the
+            // tile it came from. Taking over the window instead gives each
+            // action the full width, which is the whole reason this
+            // keyboard exists.
             property int editingIndex: -1
+            property int menuIndex: -1
+            property bool confirmingDelete: false
             // Which editor field OSK keys flow to while editing.
             property string editTarget: "value"
             property var snippetList: []
 
+            // Grid paging. Six tiles (3 rows x 2) per page keeps the window
+            // a fixed height no matter how many snippets exist, which
+            // matters more here than on an ordinary list: this window
+            // floats over whatever the user is typing into, so a list that
+            // grew downward would eventually cover the target app, and at
+            // the 50-snippet cap it would run off the screen entirely.
+            property int page: 0
+            readonly property int pageSize: 6
+            readonly property int pageCount: Math.max(1, Math.ceil(snippetList.length / pageSize))
+            readonly property int snippetLimit: keyboard ? keyboard.getSnippetLimit() : 50
+            // Two columns inside the 12 px window margins, 6 px apart.
+            readonly property real cellW: (width - 24 - 6) / 2
+
+            readonly property var menuSnip: menuIndex >= 0 ? snippetList[menuIndex] : undefined
+            readonly property bool menuHasValue:
+                menuSnip !== undefined && menuSnip.value && menuSnip.value.length > 0
+            readonly property bool canMoveEarlier: menuIndex > 0
+            readonly property bool canMoveLater: menuIndex >= 0 && menuIndex < snippetList.length - 1
+
+            // Theme-derived chrome. Everything in this window used to be
+            // hardcoded blues, reds and greens, which read as foreign on
+            // the dark themes and broke outright on Typewriter (a light
+            // theme with near-black text).
+            readonly property color surface: root.themeKeyColor
+            readonly property color surfaceHi: root.themeKeyPressed
+            readonly property color txt: root.themeTextColor
+            readonly property color muted: Qt.rgba(txt.r, txt.g, txt.b, 0.58)
+            readonly property color faint: Qt.rgba(txt.r, txt.g, txt.b, 0.42)
+            readonly property bool lightTheme:
+                (0.299 * root.themeBackground.r + 0.587 * root.themeBackground.g
+                 + 0.114 * root.themeBackground.b) > 0.5
+            // One destructive colour, picked per theme rather than fixed:
+            // a dark red is illegible on Typewriter's cream and a bright
+            // one glares on Spaceship's near-black.
+            readonly property color danger: lightTheme ? "#a3271c" : "#ef8b80"
+
+            // Tag name -> ink. The names come from the store's allow-list
+            // (getSnippetColors), the hexes live here, because they have to
+            // stay readable on all nine themes and the store has no idea
+            // what is behind them. Mid-tone and mildly desaturated for that
+            // reason: a fully saturated tag disappears into Vaporwave and
+            // burns out on Typewriter.
+            readonly property var tagInks: ({
+                "":       "transparent",
+                "red":    "#e0574f",
+                "amber":  "#d3902c",
+                "green":  "#4fa855",
+                "blue":   "#4a9eff",
+                "purple": "#a274ef"
+            })
+            // The untagged default is grey, and the grey is the theme's own
+            // key colour on the tile (nothing is drawn over it). The swatch
+            // needs an actual fill though, so it reads as "grey" rather than
+            // as a hole in the row.
+            readonly property color defaultTagInk: "#8b9098"
+            property var tagNames: keyboard ? keyboard.getSnippetColors() : [""]
+
+            function tagColor(name) {
+                var c = tagInks[name === undefined || name === null ? "" : name]
+                return c ? c : "transparent"
+            }
+
+            function clampPage() {
+                if (page > pageCount - 1) page = pageCount - 1
+                if (page < 0) page = 0
+            }
+
             function refresh() {
                 snippetList = keyboard ? keyboard.getSnippets() : []
+                clampPage()
+            }
+
+            function openMenu(idx) {
+                confirmingDelete = false
+                menuIndex = idx
+            }
+
+            function closeMenu() {
+                confirmingDelete = false
+                menuIndex = -1
+            }
+
+            // Left-click on a tile: copy it to the clipboard, or open the
+            // editor when the slot is still empty so a seeded slot is never
+            // a dead tap.
+            //
+            // Copy rather than type. Typing is one click against a paste's
+            // two, and it is still offered in the actions sheet, but it only
+            // lands correctly when the caret is already in the right field
+            // and the app does not intercept synthetic keystrokes. The
+            // clipboard has no focus race, and a toast is proof it worked:
+            // an insert into the wrong window is silent and invisible.
+            function primaryTap(idx) {
+                var s = snippetList[idx]
+                if (s && s.value && s.value.length > 0) {
+                    if (keyboard && keyboard.copySnippet(idx)) {
+                        snippetCopiedToast.flash(s.label)
+                        snippetsWindow.hide()
+                    }
+                } else {
+                    beginEdit(idx)
+                }
+            }
+
+            function moveSnippet(dir) {
+                if (menuIndex < 0 || !keyboard) return
+                var target = menuIndex + dir
+                if (target < 0 || target >= snippetList.length) return
+                keyboard.moveSnippet(menuIndex, dir)
+                // Follow the snippet rather than the slot: the sheet is
+                // about one snippet, and staying put would silently retarget
+                // it at whichever one swapped into this index.
+                menuIndex = target
+                page = Math.floor(target / pageSize)
             }
 
             function activeField() {
@@ -2627,14 +2758,26 @@ Window {
 
             function openList() {
                 editingIndex = -1
+                closeMenu()
+                page = 0
                 if (keyboard) keyboard.setEditMode(false)
                 refresh()
-                // Center over the keyboard the first time; afterwards the
-                // user's dragged position is kept (x/y persist while the
-                // window object lives).
+                // Restore where the user last left it, clamped back
+                // on-screen in case the display layout changed since. Only
+                // the first open of a session positions the window; after
+                // that x/y persist with the object.
                 if (!_positioned) {
-                    snippetsWindow.x = root.x + (root.width - snippetsWindow.width) / 2
-                    snippetsWindow.y = Math.max(0, root.y - snippetsWindow.height - 8)
+                    if (appSettings.savedSnippetsX > -1000000
+                            && appSettings.savedSnippetsY > -1000000) {
+                        snippetsWindow.x = Math.max(0, Math.min(appSettings.savedSnippetsX,
+                                                                Screen.width - snippetsWindow.width))
+                        snippetsWindow.y = Math.max(0, Math.min(appSettings.savedSnippetsY,
+                                                                Screen.height - snippetsWindow.height))
+                    } else {
+                        // Centred just above the keyboard on a fresh install.
+                        snippetsWindow.x = root.x + (root.width - snippetsWindow.width) / 2
+                        snippetsWindow.y = Math.max(0, root.y - snippetsWindow.height - 8)
+                    }
                     _positioned = true
                 }
                 snippetsWindow.show()
@@ -2648,6 +2791,10 @@ Window {
                 snipLabelField.text = s ? s.label : ""
                 snipValueField.text = s ? s.value : ""
                 editTarget = "value"
+                // Saving returns to the grid, not to the sheet the user may
+                // have come from: the edit is the errand, and one Back is
+                // less work than two.
+                closeMenu()
                 editingIndex = idx
                 if (keyboard) keyboard.setEditMode(true)
                 snipValueField.forceActiveFocus()
@@ -2680,6 +2827,11 @@ Window {
 
                 function onSnippetsChanged(list) {
                     snippetsWindow.snippetList = list
+                    // Deleting the only snippet on the last page would
+                    // otherwise strand the grid on a page that no longer
+                    // exists, showing six empty cells and a pager that
+                    // counts past its own end.
+                    snippetsWindow.clampPage()
                 }
 
                 function onEditKeyTyped(ch) {
@@ -2740,6 +2892,36 @@ Window {
                     Layout.fillWidth: true
                     spacing: 6
 
+                    // Back out of the editor / actions sheet. Absent in the
+                    // grid, where there is nothing to go back to. It sits
+                    // outside the drag Item on purpose: the drag MouseArea
+                    // fills that Item and would swallow the clicks.
+                    Rectangle {
+                        visible: snippetsWindow.editingIndex >= 0 || snippetsWindow.menuIndex >= 0
+                        Layout.preferredWidth: 28
+                        Layout.preferredHeight: 28
+                        radius: 4
+                        color: snipBackMa.containsMouse
+                               ? snippetsWindow.surfaceHi : "transparent"
+                        Comp.StrokeIcon {
+                            anchors.centerIn: parent
+                            width: 16; height: 16
+                            ink: snipBackMa.containsMouse
+                                 ? snippetsWindow.txt : snippetsWindow.muted
+                            paths: ["M15 5 L8 12 L15 19"]
+                        }
+                        MouseArea {
+                            id: snipBackMa
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: {
+                                if (snippetsWindow.editingIndex >= 0) snippetsWindow.endEdit()
+                                else snippetsWindow.closeMenu()
+                            }
+                        }
+                    }
+
                     Item {
                         Layout.fillWidth: true
                         Layout.preferredHeight: 28
@@ -2750,17 +2932,33 @@ Window {
                             Row {
                                 anchors.verticalCenter: parent.verticalCenter
                                 spacing: 3
+                                visible: snippetsWindow.editingIndex < 0
+                                         && snippetsWindow.menuIndex < 0
                                 Repeater {
                                     model: 4
-                                    Rectangle { width: 3; height: 3; radius: 1.5; color: "#666" }
+                                    Rectangle {
+                                        width: 3; height: 3; radius: 1.5
+                                        color: snippetsWindow.faint
+                                    }
                                 }
                             }
                             Text {
                                 anchors.verticalCenter: parent.verticalCenter
-                                text: snippetsWindow.editingIndex >= 0 ? qsTr("Edit snippet") : qsTr("Snippets")
+                                text: snippetsWindow.editingIndex >= 0
+                                      ? qsTr("Edit snippet")
+                                      : (snippetsWindow.menuIndex >= 0
+                                         ? (snippetsWindow.menuSnip && snippetsWindow.menuSnip.label
+                                            ? snippetsWindow.menuSnip.label : qsTr("Snippet"))
+                                         : qsTr("Snippets"))
+                                // The sheet title is a user-supplied label,
+                                // and snippets round-trip through the Data
+                                // Backup import.
+                                textFormat: Text.PlainText
                                 color: root.themeTextColor
                                 font.pixelSize: 14
                                 font.weight: Font.DemiBold
+                                elide: Text.ElideRight
+                                width: Math.min(implicitWidth, snippetsWindow.width - 130)
                             }
                         }
 
@@ -2791,16 +2989,30 @@ Window {
                                 snippetsWindow.x = startX + (g.x - startMx)
                                 snippetsWindow.y = startY + (g.y - startMy)
                             }
+                            // Persist on release rather than on every motion
+                            // event: one write per drag instead of hundreds.
+                            onReleased: {
+                                appSettings.savedSnippetsX = Math.round(snippetsWindow.x)
+                                appSettings.savedSnippetsY = Math.round(snippetsWindow.y)
+                            }
                         }
                     }
 
                     Rectangle {
-                        width: 28; height: 28; radius: 4
-                        color: snipCloseMa.containsMouse ? "#c33" : "transparent"
-                        Text {
-                            anchors.centerIn: parent; text: "✕"
-                            font.pixelSize: 13
-                            color: snipCloseMa.containsMouse ? "#fff" : "#999"
+                        Layout.preferredWidth: 28
+                        Layout.preferredHeight: 28
+                        radius: 4
+                        color: snipCloseMa.containsMouse
+                               ? Qt.rgba(snippetsWindow.danger.r, snippetsWindow.danger.g,
+                                         snippetsWindow.danger.b, 0.22)
+                               : "transparent"
+                        Comp.StrokeIcon {
+                            anchors.centerIn: parent
+                            width: 13; height: 13
+                            strokeWidth: 2.4
+                            ink: snipCloseMa.containsMouse
+                                 ? snippetsWindow.danger : snippetsWindow.muted
+                            paths: ["M5 5 L19 19", "M19 5 L5 19"]
                         }
                         MouseArea {
                             id: snipCloseMa; anchors.fill: parent; hoverEnabled: true
@@ -2810,120 +3022,279 @@ Window {
                     }
                 }
 
-                // ---- List view ----
+                // ---- Grid view ----
                 ColumnLayout {
+                    id: snipGridView
+                    // Named so the headless QML tests can assert on real
+                    // visibility rather than restating the binding.
+                    objectName: "snipGridView"
                     Layout.fillWidth: true
                     spacing: 6
-                    visible: snippetsWindow.editingIndex < 0
+                    visible: snippetsWindow.editingIndex < 0 && snippetsWindow.menuIndex < 0
 
-                    Repeater {
-                        model: snippetsWindow.snippetList
-                        delegate: RowLayout {
-                            Layout.fillWidth: true
-                            spacing: 4
+                    Grid {
+                        Layout.alignment: Qt.AlignHCenter
+                        columns: 2
+                        spacing: 6
 
-                            // Primary action: insert if it has a value,
-                            // otherwise open the editor (so an empty slot
-                            // is never a dead tap).
-                            Rectangle {
-                                Layout.fillWidth: true
-                                Layout.preferredHeight: 44
-                                radius: 6
-                                color: insMa.containsMouse
-                                       ? Qt.lighter(root.themeKeyColor, 1.2) : root.themeKeyColor
-                                border.color: "#444"; border.width: 1
+                        Repeater {
+                            // A page keeps its full cell count as soon as
+                            // there is more than one page, so a short last
+                            // page does not pull the pager and the Add
+                            // button up the window: the two controls the
+                            // user is aiming at while paging are exactly the
+                            // ones that must not move underneath them.
+                            model: snippetsWindow.pageCount > 1
+                                   ? snippetsWindow.pageSize
+                                   : snippetsWindow.snippetList.length
 
-                                ColumnLayout {
+                            delegate: Item {
+                                id: snipCell
+                                objectName: "snippetCell"
+                                width: snippetsWindow.cellW
+                                height: 58
+
+                                readonly property int snipIndex:
+                                    snippetsWindow.page * snippetsWindow.pageSize + index
+                                readonly property var snip: snippetsWindow.snippetList[snipIndex]
+                                readonly property string tagName:
+                                    snip && snip.color ? snip.color : ""
+                                readonly property bool filled:
+                                    snip !== undefined && snip.value && snip.value.length > 0
+
+                                Rectangle {
+                                    id: snipTile
+                                    objectName: "snippetTile"
                                     anchors.fill: parent
-                                    anchors.leftMargin: 10
-                                    anchors.rightMargin: 10
-                                    spacing: 0
-                                    Text {
-                                        Layout.fillWidth: true
-                                        text: (modelData.label && modelData.label.length)
-                                              ? modelData.label : qsTr("(unnamed)")
-                                        // Snippets round-trip through Data Backup import
-                                        // (replace-on-import from a file the user picked),
-                                        // so treat them as untrusted the same as pack data.
-                                        textFormat: Text.PlainText
-                                        color: root.themeTextColor
-                                        font.pixelSize: 13
-                                        font.weight: Font.DemiBold
-                                        elide: Text.ElideRight
+                                    visible: snipCell.snip !== undefined
+                                    radius: 6
+
+                                    readonly property color tag:
+                                        snippetsWindow.tagColor(snipCell.tagName)
+                                    readonly property bool tagged: snipCell.tagName !== ""
+
+                                    // The tag tints the whole tile as well as
+                                    // inking the bar: at 165 px a 4 px stripe
+                                    // alone is easy to miss, and the point of
+                                    // tagging is to find a snippet without
+                                    // reading every label.
+                                    color: tileMa.containsMouse
+                                           ? snippetsWindow.surfaceHi
+                                           : (tagged
+                                              ? Qt.tint(snippetsWindow.surface,
+                                                        Qt.rgba(tag.r, tag.g, tag.b, 0.18))
+                                              : snippetsWindow.surface)
+                                    border.width: 1
+                                    border.color: tileMa.containsMouse
+                                                  ? root.themeAccent : root.themeBorder
+
+                                    // Inset rather than full-bleed: `clip`
+                                    // clips to the bounding rect, not the
+                                    // rounded shape, so a flush bar pokes out
+                                    // past the corner curve (the same trap
+                                    // KeyButton's lock bar documents).
+                                    Rectangle {
+                                        visible: snipTile.tagged
+                                        x: 6
+                                        y: 9
+                                        width: 4
+                                        height: parent.height - 18
+                                        radius: 2
+                                        color: snipTile.tag
                                     }
-                                    Text {
-                                        Layout.fillWidth: true
-                                        text: (modelData.value && modelData.value.length)
-                                              ? modelData.value : qsTr("empty, tap to fill in")
-                                        textFormat: Text.PlainText
-                                        color: "#999"
-                                        font.pixelSize: 11
-                                        elide: Text.ElideRight
-                                    }
-                                }
-                                MouseArea {
-                                    id: insMa
-                                    anchors.fill: parent
-                                    hoverEnabled: true
-                                    cursorShape: Qt.PointingHandCursor
-                                    onClicked: {
-                                        if (modelData.value && modelData.value.length > 0) {
-                                            if (keyboard) keyboard.insertSnippet(index)
-                                            snippetsWindow.hide()
-                                        } else {
-                                            snippetsWindow.beginEdit(index)
+
+                                    Column {
+                                        anchors.fill: parent
+                                        anchors.leftMargin: snipTile.tagged ? 17 : 10
+                                        anchors.rightMargin: 9
+                                        anchors.topMargin: 10
+                                        spacing: 2
+
+                                        Text {
+                                            objectName: "snippetTileLabel"
+                                            width: parent.width
+                                            text: (snipCell.snip && snipCell.snip.label
+                                                   && snipCell.snip.label.length)
+                                                  ? snipCell.snip.label : qsTr("(unnamed)")
+                                            // Snippets round-trip through Data
+                                            // Backup import (replace-on-import
+                                            // from a file the user picked), so
+                                            // treat them as untrusted the same
+                                            // as pack data.
+                                            textFormat: Text.PlainText
+                                            color: root.themeTextColor
+                                            font.pixelSize: 13
+                                            font.weight: Font.DemiBold
+                                            elide: Text.ElideRight
+                                        }
+                                        Text {
+                                            width: parent.width
+                                            text: snipCell.filled
+                                                  ? snipCell.snip.value : qsTr("empty, tap to fill in")
+                                            textFormat: Text.PlainText
+                                            color: snippetsWindow.muted
+                                            font.pixelSize: 11
+                                            font.italic: !snipCell.filled
+                                            elide: Text.ElideRight
                                         }
                                     }
-                                }
-                            }
 
-                            // Edit
-                            Rectangle {
-                                width: 38; height: 44; radius: 6
-                                color: edMa.containsMouse ? "#2a4a6a" : "#1e3450"
-                                border.color: "#46a"; border.width: 1
-                                Text { anchors.centerIn: parent; text: "✎"; font.pixelSize: 16; color: "#9cf" }
-                                MouseArea {
-                                    id: edMa; anchors.fill: parent; hoverEnabled: true
-                                    cursorShape: Qt.PointingHandCursor
-                                    onClicked: snippetsWindow.beginEdit(index)
-                                }
-                            }
-
-                            // Delete
-                            Rectangle {
-                                width: 38; height: 44; radius: 6
-                                color: delMa.containsMouse ? "#6a2a2a" : "#3e1e1e"
-                                border.color: "#a44"; border.width: 1
-                                Text { anchors.centerIn: parent; text: "✕"; font.pixelSize: 15; color: "#f88" }
-                                MouseArea {
-                                    id: delMa; anchors.fill: parent; hoverEnabled: true
-                                    cursorShape: Qt.PointingHandCursor
-                                    onClicked: if (keyboard) keyboard.deleteSnippet(index)
+                                    MouseArea {
+                                        id: tileMa
+                                        anchors.fill: parent
+                                        hoverEnabled: true
+                                        cursorShape: Qt.PointingHandCursor
+                                        // Right-click opens the actions
+                                        // sheet. Press-and-hold deliberately
+                                        // does not: a click held a beat too
+                                        // long is ordinary on this keyboard,
+                                        // and it must never turn typing a
+                                        // snippet into opening a menu.
+                                        acceptedButtons: Qt.LeftButton | Qt.RightButton
+                                        onClicked: function(mouse) {
+                                            if (mouse.button === Qt.RightButton)
+                                                snippetsWindow.openMenu(snipCell.snipIndex)
+                                            else
+                                                snippetsWindow.primaryTap(snipCell.snipIndex)
+                                        }
+                                    }
                                 }
                             }
                         }
                     }
 
-                    // Add button
+                    // Pager, shown only once there is somewhere to page to.
+                    RowLayout {
+                        Layout.fillWidth: true
+                        Layout.topMargin: 2
+                        spacing: 6
+                        visible: snippetsWindow.pageCount > 1
+
+                        Rectangle {
+                            Layout.preferredWidth: 44
+                            Layout.preferredHeight: 30
+                            radius: 6
+                            enabled: snippetsWindow.page > 0
+                            opacity: enabled ? 1.0 : 0.35
+                            color: prevPageMa.containsMouse
+                                   ? snippetsWindow.surfaceHi : snippetsWindow.surface
+                            border.width: 1
+                            border.color: root.themeBorder
+                            Comp.StrokeIcon {
+                                anchors.centerIn: parent
+                                width: 14; height: 14
+                                ink: snippetsWindow.txt
+                                paths: ["M15 5 L8 12 L15 19"]
+                            }
+                            MouseArea {
+                                id: prevPageMa
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: snippetsWindow.page = Math.max(0, snippetsWindow.page - 1)
+                            }
+                        }
+
+                        Text {
+                            Layout.fillWidth: true
+                            horizontalAlignment: Text.AlignHCenter
+                            text: qsTr("Page %1 of %2")
+                                  .arg(snippetsWindow.page + 1).arg(snippetsWindow.pageCount)
+                            color: snippetsWindow.muted
+                            font.pixelSize: 11
+                        }
+
+                        Rectangle {
+                            Layout.preferredWidth: 44
+                            Layout.preferredHeight: 30
+                            radius: 6
+                            enabled: snippetsWindow.page < snippetsWindow.pageCount - 1
+                            opacity: enabled ? 1.0 : 0.35
+                            color: nextPageMa.containsMouse
+                                   ? snippetsWindow.surfaceHi : snippetsWindow.surface
+                            border.width: 1
+                            border.color: root.themeBorder
+                            Comp.StrokeIcon {
+                                anchors.centerIn: parent
+                                width: 14; height: 14
+                                ink: snippetsWindow.txt
+                                paths: ["M9 5 L16 12 L9 19"]
+                            }
+                            MouseArea {
+                                id: nextPageMa
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: snippetsWindow.page =
+                                    Math.min(snippetsWindow.pageCount - 1, snippetsWindow.page + 1)
+                            }
+                        }
+                    }
+
+                    // Add: a dashed outline rather than a filled button, so
+                    // the one control that is not a snippet does not compete
+                    // with the six that are.
                     Rectangle {
+                        id: snipAddBtn
+                        objectName: "snipAddButton"
                         Layout.fillWidth: true
                         Layout.preferredHeight: 38
                         radius: 6
-                        color: addMa.containsMouse ? "#2a5a2a" : "#1e3e1e"
-                        border.color: "#4a4"; border.width: 1
-                        Text {
-                            anchors.centerIn: parent; text: qsTr("+ Add snippet")
-                            color: "#8d8"; font.pixelSize: 13; font.weight: Font.DemiBold
+                        readonly property bool atCap:
+                            snippetsWindow.snippetList.length >= snippetsWindow.snippetLimit
+                        color: addMa.containsMouse && !snipAddBtn.atCap
+                               ? Qt.rgba(root.themeAccent.r, root.themeAccent.g,
+                                         root.themeAccent.b, 0.16)
+                               : "transparent"
+                        border.width: 1
+                        border.color: snipAddBtn.atCap
+                                      ? root.themeBorder
+                                      : Qt.rgba(root.themeAccent.r, root.themeAccent.g,
+                                                root.themeAccent.b, 0.6)
+
+                        Row {
+                            anchors.centerIn: parent
+                            spacing: 7
+                            Comp.StrokeIcon {
+                                anchors.verticalCenter: parent.verticalCenter
+                                visible: !snipAddBtn.atCap
+                                width: 13; height: 13
+                                strokeWidth: 2.2
+                                ink: root.themeAccent
+                                paths: ["M12 5 L12 19", "M5 12 L19 12"]
+                            }
+                            Text {
+                                anchors.verticalCenter: parent.verticalCenter
+                                text: snipAddBtn.atCap
+                                      ? qsTr("Full, %1 snippets").arg(snippetsWindow.snippetLimit)
+                                      : qsTr("Add snippet")
+                                color: snipAddBtn.atCap
+                                       ? snippetsWindow.faint : root.themeAccent
+                                font.pixelSize: 13
+                                font.weight: Font.DemiBold
+                            }
                         }
+
                         MouseArea {
-                            id: addMa; anchors.fill: parent; hoverEnabled: true
+                            id: addMa
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            // At the cap SnippetStore.add refuses and the
+                            // list does not grow. Editing "the last snippet"
+                            // regardless would open somebody else's snippet
+                            // for editing, so the button goes inert instead.
+                            enabled: !snipAddBtn.atCap
                             cursorShape: Qt.PointingHandCursor
                             onClicked: {
-                                if (keyboard) {
-                                    keyboard.addSnippet()
-                                    snippetsWindow.refresh()
-                                    snippetsWindow.beginEdit(snippetsWindow.snippetList.length - 1)
+                                if (!keyboard) return
+                                var before = snippetsWindow.snippetList.length
+                                keyboard.addSnippet()
+                                snippetsWindow.refresh()
+                                if (snippetsWindow.snippetList.length > before) {
+                                    var added = snippetsWindow.snippetList.length - 1
+                                    snippetsWindow.page =
+                                        Math.floor(added / snippetsWindow.pageSize)
+                                    snippetsWindow.beginEdit(added)
                                 }
                             }
                         }
@@ -2931,9 +3302,188 @@ Window {
 
                     Text {
                         Layout.fillWidth: true
-                        text: qsTr("Tap a snippet to type it. Pencil edits, trash removes.")
-                        color: "#777"; font.pixelSize: 10
+                        text: qsTr("Tap a snippet to copy it. Right-click one for edit, colour, reorder and delete.")
+                        color: snippetsWindow.faint
+                        font.pixelSize: 10
                         wrapMode: Text.WordWrap
+                    }
+                }
+
+                // ---- Actions sheet (right-click a tile) ----
+                ColumnLayout {
+                    objectName: "snipSheetView"
+                    Layout.fillWidth: true
+                    spacing: 6
+                    visible: snippetsWindow.menuIndex >= 0 && snippetsWindow.editingIndex < 0
+
+                    Text {
+                        Layout.fillWidth: true
+                        text: (snippetsWindow.menuSnip && snippetsWindow.menuSnip.value
+                               && snippetsWindow.menuSnip.value.length)
+                              ? snippetsWindow.menuSnip.value : qsTr("empty, nothing to copy yet")
+                        textFormat: Text.PlainText
+                        color: snippetsWindow.muted
+                        font.pixelSize: 11
+                        font.italic: !(snippetsWindow.menuSnip && snippetsWindow.menuSnip.value
+                                       && snippetsWindow.menuSnip.value.length)
+                        wrapMode: Text.Wrap
+                        maximumLineCount: 2
+                        elide: Text.ElideRight
+                    }
+
+                    Comp.SheetRow {
+                        Layout.fillWidth: true
+                        label: qsTr("Copy to clipboard")
+                        enabled: snippetsWindow.menuHasValue
+                        ink: root.themeAccent
+                        surface: snippetsWindow.surface
+                        hover: snippetsWindow.surfaceHi
+                        hairline: root.themeBorder
+                        onActivated: {
+                            var s = snippetsWindow.menuSnip
+                            if (keyboard && keyboard.copySnippet(snippetsWindow.menuIndex)) {
+                                snippetCopiedToast.flash(s ? s.label : "")
+                                snippetsWindow.closeMenu()
+                                snippetsWindow.hide()
+                            }
+                        }
+                    }
+
+                    Comp.SheetRow {
+                        Layout.fillWidth: true
+                        label: qsTr("Edit label and text")
+                        ink: snippetsWindow.txt
+                        surface: snippetsWindow.surface
+                        hover: snippetsWindow.surfaceHi
+                        hairline: root.themeBorder
+                        onActivated: snippetsWindow.beginEdit(snippetsWindow.menuIndex)
+                    }
+
+                    Text {
+                        Layout.topMargin: 2
+                        text: qsTr("Colour tag")
+                        color: snippetsWindow.faint
+                        font.pixelSize: 10
+                    }
+
+                    Row {
+                        Layout.fillWidth: true
+                        spacing: 6
+
+                        Repeater {
+                            // Straight from the store's allow-list, so a
+                            // swatch can never offer a tag the store would
+                            // drop back to untagged.
+                            model: snippetsWindow.tagNames
+
+                            delegate: Rectangle {
+                                readonly property bool isClear: modelData === ""
+                                readonly property bool isCurrent:
+                                    snippetsWindow.menuSnip !== undefined
+                                    && (snippetsWindow.menuSnip.color || "") === modelData
+
+                                width: 34
+                                height: 34
+                                radius: 17
+                                color: isClear ? snippetsWindow.defaultTagInk
+                                               : snippetsWindow.tagColor(modelData)
+                                border.width: isCurrent ? 3 : 0
+                                border.color: snippetsWindow.txt
+
+                                MouseArea {
+                                    anchors.fill: parent
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: {
+                                        if (keyboard)
+                                            keyboard.setSnippetColor(snippetsWindow.menuIndex,
+                                                                     modelData)
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        Layout.topMargin: 2
+                        spacing: 6
+
+                        Comp.SheetRow {
+                            Layout.fillWidth: true
+                            label: qsTr("Move earlier")
+                            enabled: snippetsWindow.canMoveEarlier
+                            ink: snippetsWindow.txt
+                            surface: snippetsWindow.surface
+                            hover: snippetsWindow.surfaceHi
+                            hairline: root.themeBorder
+                            onActivated: snippetsWindow.moveSnippet(-1)
+                        }
+                        Comp.SheetRow {
+                            Layout.fillWidth: true
+                            label: qsTr("Move later")
+                            enabled: snippetsWindow.canMoveLater
+                            ink: snippetsWindow.txt
+                            surface: snippetsWindow.surface
+                            hover: snippetsWindow.surfaceHi
+                            hairline: root.themeBorder
+                            onActivated: snippetsWindow.moveSnippet(1)
+                        }
+                    }
+
+                    // Delete, in two steps always. A snippet is typed-once,
+                    // kept-forever data with no undo behind it, and this
+                    // window is operated with an imprecise pointer.
+                    Comp.SheetRow {
+                        Layout.fillWidth: true
+                        visible: !snippetsWindow.confirmingDelete
+                        label: qsTr("Delete")
+                        ink: snippetsWindow.danger
+                        surface: snippetsWindow.surface
+                        hover: Qt.rgba(snippetsWindow.danger.r, snippetsWindow.danger.g,
+                                       snippetsWindow.danger.b, 0.18)
+                        hairline: root.themeBorder
+                        onActivated: snippetsWindow.confirmingDelete = true
+                    }
+
+                    ColumnLayout {
+                        Layout.fillWidth: true
+                        spacing: 6
+                        visible: snippetsWindow.confirmingDelete
+
+                        Text {
+                            Layout.fillWidth: true
+                            text: qsTr("Delete this snippet? This cannot be undone.")
+                            color: snippetsWindow.danger
+                            font.pixelSize: 11
+                            wrapMode: Text.WordWrap
+                        }
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 6
+                            // Keep sits first and wider: the safe answer
+                            // should be the easier target.
+                            Comp.SheetRow {
+                                Layout.fillWidth: true
+                                label: qsTr("Keep")
+                                ink: snippetsWindow.txt
+                                surface: snippetsWindow.surface
+                                hover: snippetsWindow.surfaceHi
+                                hairline: root.themeBorder
+                                onActivated: snippetsWindow.confirmingDelete = false
+                            }
+                            Comp.SheetRow {
+                                Layout.preferredWidth: 110
+                                label: qsTr("Delete")
+                                ink: root.inkOn(snippetsWindow.danger)
+                                surface: snippetsWindow.danger
+                                hover: Qt.lighter(snippetsWindow.danger, 1.12)
+                                hairline: snippetsWindow.danger
+                                onActivated: {
+                                    if (keyboard) keyboard.deleteSnippet(snippetsWindow.menuIndex)
+                                    snippetsWindow.closeMenu()
+                                }
+                            }
+                        }
                     }
                 }
 
@@ -2943,17 +3493,22 @@ Window {
                     spacing: 6
                     visible: snippetsWindow.editingIndex >= 0
 
-                    Text { text: qsTr("Label (shown on the button)"); color: "#aaa"; font.pixelSize: 11 }
+                    Text {
+                        text: qsTr("Label (shown on the tile)")
+                        color: snippetsWindow.muted; font.pixelSize: 11
+                    }
                     TextField {
                         id: snipLabelField
                         Layout.fillWidth: true
                         Layout.preferredHeight: 36
-                        color: "#f0f0f0"; font.pixelSize: 14
-                        selectionColor: root.themeAccent; selectedTextColor: "#fff"
+                        color: snippetsWindow.txt; font.pixelSize: 14
+                        selectionColor: root.themeAccent
+                        selectedTextColor: root.inkOn(root.themeAccent)
                         leftPadding: 10; rightPadding: 10
                         background: Rectangle {
-                            color: "#1a1a2a"; radius: 6
-                            border.color: snippetsWindow.editTarget === "label" ? root.themeAccent : "#444"
+                            color: snippetsWindow.surface; radius: 6
+                            border.color: snippetsWindow.editTarget === "label"
+                                          ? root.themeAccent : root.themeBorder
                             border.width: snippetsWindow.editTarget === "label" ? 2 : 1
                         }
                         MouseArea {
@@ -2963,17 +3518,22 @@ Window {
                         }
                     }
 
-                    Text { text: qsTr("Text to type"); color: "#aaa"; font.pixelSize: 11 }
+                    Text {
+                        text: qsTr("Text to type")
+                        color: snippetsWindow.muted; font.pixelSize: 11
+                    }
                     TextField {
                         id: snipValueField
                         Layout.fillWidth: true
                         Layout.preferredHeight: 36
-                        color: "#f0f0f0"; font.pixelSize: 14
-                        selectionColor: root.themeAccent; selectedTextColor: "#fff"
+                        color: snippetsWindow.txt; font.pixelSize: 14
+                        selectionColor: root.themeAccent
+                        selectedTextColor: root.inkOn(root.themeAccent)
                         leftPadding: 10; rightPadding: 10
                         background: Rectangle {
-                            color: "#1a1a2a"; radius: 6
-                            border.color: snippetsWindow.editTarget === "value" ? root.themeAccent : "#444"
+                            color: snippetsWindow.surface; radius: 6
+                            border.color: snippetsWindow.editTarget === "value"
+                                          ? root.themeAccent : root.themeBorder
                             border.width: snippetsWindow.editTarget === "value" ? 2 : 1
                         }
                         MouseArea {
@@ -2986,7 +3546,7 @@ Window {
                     Text {
                         Layout.fillWidth: true
                         text: qsTr("Type with the keyboard below. The highlighted box is where text goes. Tap the other box to switch.")
-                        color: "#777"; font.pixelSize: 10
+                        color: snippetsWindow.faint; font.pixelSize: 10
                         wrapMode: Text.WordWrap
                     }
 
@@ -2995,10 +3555,14 @@ Window {
                         spacing: 6
                         Item { Layout.fillWidth: true }
                         Rectangle {
-                            width: 84; height: 36; radius: 6
-                            color: snipCancelMa.containsMouse ? "#6a2a2a" : "#3e1e1e"
-                            border.color: "#a44"; border.width: 1
-                            Text { anchors.centerIn: parent; text: qsTr("Cancel"); color: "#f88"; font.pixelSize: 13 }
+                            width: 92; height: 36; radius: 6
+                            color: snipCancelMa.containsMouse
+                                   ? snippetsWindow.surfaceHi : snippetsWindow.surface
+                            border.color: root.themeBorder; border.width: 1
+                            Text {
+                                anchors.centerIn: parent; text: qsTr("Cancel")
+                                color: snippetsWindow.txt; font.pixelSize: 13
+                            }
                             MouseArea {
                                 id: snipCancelMa; anchors.fill: parent; hoverEnabled: true
                                 cursorShape: Qt.PointingHandCursor
@@ -3006,12 +3570,19 @@ Window {
                             }
                         }
                         Rectangle {
-                            width: 84; height: 36; radius: 6
-                            color: snipSaveMa.containsMouse ? "#2a6a2a" : "#1e3e1e"
-                            border.color: "#4a4"; border.width: 1
+                            width: 92; height: 36; radius: 6
+                            // The one filled control in the window: Save is
+                            // the action the editor exists for.
+                            color: snipSaveMa.containsMouse
+                                   ? Qt.lighter(root.themeAccent, 1.15) : root.themeAccent
+                            border.color: root.themeAccent; border.width: 1
                             Text {
                                 anchors.centerIn: parent; text: qsTr("Save")
-                                color: "#6f6"; font.pixelSize: 13; font.weight: Font.Bold
+                                // Same luminance rule KeyButton uses on an
+                                // accent fill: several themes ship a pale
+                                // accent, where white text is unreadable.
+                                color: root.inkOn(root.themeAccent)
+                                font.pixelSize: 13; font.weight: Font.Bold
                             }
                             MouseArea {
                                 id: snipSaveMa; anchors.fill: parent; hoverEnabled: true
@@ -3188,6 +3759,82 @@ Window {
             function flash() {
                 open()
                 editSavedToastTimer.restart()
+            }
+        }
+
+        // "Copied" confirmation toast, fired when a snippet tile is tapped.
+        //
+        // It lives on the *keyboard* window rather than in the snippets
+        // window, because the snippets window hides itself on the same tap:
+        // a toast parented there would be taken down with it and never
+        // seen. It is also the only feedback a copy has. An insert types
+        // visible characters into the target app, but a clipboard write is
+        // invisible by nature, and the failure the user most needs to catch
+        // (nothing happened) looks exactly like the success.
+        //
+        // Names the snippet, since with colour tags there may be three
+        // similar ones and the confirmation is worth nothing if it does not
+        // say which was taken.
+        Popup {
+            id: snippetCopiedToast
+            objectName: "snippetCopiedToast"
+            parent: Overlay.overlay
+            x: (root.width - width) / 2
+            y: 36
+            width: Math.min(root.width - 24, copiedRow.implicitWidth + 28)
+            height: 32
+            modal: false
+            dim: false
+            // Every OSK key click is a press-outside, so any auto-close
+            // policy would slam this shut on the next keystroke (the trap
+            // the prediction-edit popup documents).
+            closePolicy: Popup.NoAutoClose
+
+            property string snippetLabel: ""
+
+            background: Rectangle {
+                color: Qt.rgba(root.themeAccent.r, root.themeAccent.g, root.themeAccent.b, 0.18)
+                border.color: root.themeAccent
+                border.width: 1
+                radius: 8
+            }
+
+            contentItem: Row {
+                id: copiedRow
+                spacing: 7
+                Comp.StrokeIcon {
+                    width: 14; height: 14
+                    anchors.verticalCenter: parent.verticalCenter
+                    ink: root.themeAccent
+                    strokeWidth: 2.4
+                    paths: ["M4 12 L9 17 L20 6"]
+                }
+                Text {
+                    text: snippetCopiedToast.snippetLabel.length
+                          ? qsTr("Copied %1").arg(snippetCopiedToast.snippetLabel)
+                          : qsTr("Copied")
+                    // The label is user data and round-trips through the
+                    // Data Backup import.
+                    textFormat: Text.PlainText
+                    color: root.themeTextColor
+                    font.pixelSize: 13
+                    elide: Text.ElideRight
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+            }
+
+            Timer {
+                id: snippetCopiedToastTimer
+                // Longer than the 1.4 s confirmations: this one is read for
+                // *which* snippet, not just that something happened.
+                interval: 2000
+                onTriggered: snippetCopiedToast.close()
+            }
+
+            function flash(label) {
+                snippetCopiedToast.snippetLabel = label ? label : ""
+                open()
+                snippetCopiedToastTimer.restart()
             }
         }
 

@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 from PySide6.QtCore import Property, QObject, QTimer, QUrl, Signal, Slot
+from PySide6.QtGui import QGuiApplication
 
 # Audio feedback — optional, gracefully degrades if QtMultimedia unavailable
 try:
@@ -44,7 +45,7 @@ from .platform.password_detect import (
 from .platform.pointer import external_click_detected
 from .prediction import HybridPredictor, SwipeRecognizer
 from .prediction.token_predictor import TokenPredictor
-from .snippets import SnippetStore
+from .snippets import MAX_SNIPPETS, SNIPPET_COLORS, SnippetStore
 from .telemetry import TelemetryClient
 from .text_patterns import (
     detect_snippet_candidate,
@@ -2439,9 +2440,74 @@ class KeyboardBridge(QObject):
 
     @Slot(int, str, str)
     def setSnippet(self, index: int, label: str, value: str) -> None:
-        """Replace the label + value of the snippet at *index*."""
+        """Replace the label + value of the snippet at *index*.
+
+        The colour tag is deliberately not a parameter: the editor does
+        not show one, and passing a default here would clear whatever the
+        actions sheet had set (see ``SnippetStore.set``).
+        """
         if self._snippets.set(index, label, value):
             self.snippetsChanged.emit(self._snippets.get_all())
+
+    @Slot(int, result=bool)
+    def copySnippet(self, index: int) -> bool:
+        """Put the snippet at *index* on the system clipboard.
+
+        This is what a tile tap does, in preference to typing the value in.
+        Typing it is one click, but it only lands correctly if the caret is
+        already in the right field and the app does not intercept synthetic
+        keystrokes (the whole reason Compatibility Mode exists); a long
+        address also arrives one character at a time. The clipboard has no
+        focus race and no per-character path, at the cost of a paste. Typing
+        is still one row away in the actions sheet.
+
+        Returns False without touching the clipboard for an out-of-range
+        index and for an empty snippet: copying "nothing" would silently
+        wipe whatever the user had already put there, which is the one way
+        this can destroy something.
+
+        Not gated on privacy mode, for the same reason inserting is not: the
+        user asked for their own text. Nothing here is learned or logged.
+        """
+        value = self._snippets.get_value(index)
+        if not value:
+            return False
+        app = QGuiApplication.instance()
+        if app is None:  # no GUI (headless tests) — nothing to copy to
+            return False
+        clipboard = QGuiApplication.clipboard()
+        if clipboard is None:
+            return False
+        clipboard.setText(value)
+        return True
+
+    @Slot(int, str)
+    def setSnippetColor(self, index: int, color: str) -> None:
+        """Tag the snippet at *index* with a colour (empty name clears it)."""
+        if self._snippets.set_color(index, color):
+            self.snippetsChanged.emit(self._snippets.get_all())
+
+    @Slot(result="QStringList")
+    def getSnippetColors(self) -> List[str]:
+        """Return the allowed colour-tag names, untagged ("") first.
+
+        QML builds its swatch row from this rather than from a list of
+        its own, so a swatch can never offer a name the store would
+        reject and silently drop back to untagged.
+        """
+        return list(SNIPPET_COLORS)
+
+    @Slot(result=int)
+    def getSnippetLimit(self) -> int:
+        """Return the maximum number of snippets the store will hold.
+
+        QML needs it to disable Add at the cap. ``SnippetStore.add``
+        refuses past it by returning False and the list simply does not
+        grow, which the old button could not tell from success: it opened
+        the editor on "the last snippet" either way, which at the cap is
+        an existing snippet the user never asked to edit.
+        """
+        return MAX_SNIPPETS
 
     @Slot()
     def addSnippet(self) -> None:
