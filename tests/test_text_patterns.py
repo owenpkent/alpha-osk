@@ -24,6 +24,7 @@ import pytest
 from src.text_patterns import (
     detect_snippet_candidate,
     is_email,
+    is_learnable_token,
     is_numeric_run,
     is_phone,
     label_for_kind,
@@ -433,3 +434,56 @@ class TestSnippetDetection:
         assert label_for_kind("email") == "Email"
         assert label_for_kind("phone") == "Phone"
         assert label_for_kind("address") == "Address"
+
+
+class TestLearnableToken:
+    """What the structured-token store is allowed to remember.
+
+    The asymmetry is the whole design: a rejected token costs one
+    suggestion the user never sees, while an accepted one is prefix-
+    matched into the suggestion bar, written to ``ngram_model.json`` and
+    carried in the Data Backup archive.  So the pairs below are chosen to
+    be hostile rather than tidy -- an SSN and a phone number differ only
+    in how their digits are grouped, and "7-15 digits with a separator",
+    the rule that suggests itself first, accepts both.
+    """
+
+    @pytest.mark.parametrize(
+        "token",
+        [
+            "owen@gmail.com",  # the local part is worth completing too
+            "555-123-4567",  # phone, an admitted grouping
+            "+44 7700 900123".replace(" ", ""),  # international, "+" as intent
+            "02134",  # zip
+            "1247",  # house number
+            "apt4b",  # alphanumeric mix
+            "192.168.1.1",  # eight digits, four groups
+            "v2.1.4",
+        ],
+    )
+    def test_worth_remembering(self, token: str) -> None:
+        assert is_learnable_token(token) is True
+
+    @pytest.mark.parametrize(
+        "token",
+        [
+            "123-45-6789",  # SSN: (3, 2, 4)
+            "123456789",  # SSN with the dashes left out
+            "4111111111111111",  # card number
+            "12345678901234",  # fourteen digits: account-number territory
+            "hello",  # a word: the n-gram model's job, with context
+            "@owen",  # a mention, not an address
+            "42",  # too short to be worth a pill
+            "3 14",  # whitespace: never a single run before the cursor
+            "!!!",  # no digit, no "@"
+        ],
+    )
+    def test_not_worth_remembering(self, token: str) -> None:
+        assert is_learnable_token(token) is False
+
+    def test_sentence_punctuation_does_not_disqualify_a_token(self) -> None:
+        """ "...at 555-123-4567." is still a phone number."""
+        assert is_learnable_token("555-123-4567.") is True
+
+    def test_an_over_long_token_is_rejected(self) -> None:
+        assert is_learnable_token("1" + "a" * 200) is False

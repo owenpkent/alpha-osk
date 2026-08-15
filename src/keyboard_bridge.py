@@ -43,10 +43,13 @@ from .platform.password_detect import (
 )
 from .platform.pointer import external_click_detected
 from .prediction import HybridPredictor, SwipeRecognizer
+from .prediction.token_predictor import TokenPredictor
 from .snippets import SnippetStore
 from .telemetry import TelemetryClient
 from .text_patterns import (
     detect_snippet_candidate,
+    is_email,
+    is_phone,
     label_for_kind,
     suppresses_auto_space,
     suppression_is_provisional,
@@ -731,6 +734,14 @@ class KeyboardBridge(QObject):
         # backspace.  Only maintained outside privacy mode, same as
         # _current_word: it holds typed characters.
         self._raw_token = ""
+        # Structured-token pills: displayed text -> the text a tap should
+        # type.  These two differ, which is the whole reason for the map:
+        # a domain pill reads "gmail.com" while the run before the cursor
+        # is "owen@", so neither `word` nor `_current_word` tells
+        # pressPrediction what to insert.  Rebuilt on every token-pill
+        # emit and emptied whenever the bar goes back to words, so a
+        # stale entry can never be tapped.
+        self._token_pill_inserts: Dict[str, str] = {}
         # Snippet auto-detection — offer to save an email / phone /
         # address the user just typed into Snippets (see
         # _maybe_offer_snippet).
@@ -1282,6 +1293,13 @@ class KeyboardBridge(QObject):
                 if self._auto_space_after_punctuation and not suppressed:
                     self._send_text(" ")
                     self._auto_space_pending = True
+                    # Not suppressed means intelligent spacing judged the
+                    # punctuation to be prose rather than part of the
+                    # token, so the run before it is finished: "my zip is
+                    # 02134." learns "02134".  The suppressed branch
+                    # deliberately does not learn: there the token is
+                    # still being typed.
+                    self._learn_raw_token(token_before)
                     self._raw_token = ""
                 elif suppressed:
                     self._defer_auto_space(token_before, char)
@@ -1319,6 +1337,7 @@ class KeyboardBridge(QObject):
                 if self._auto_space_after_punctuation and not suppressed:
                     self._send_text(" ")
                     self._auto_space_pending = True
+                    self._learn_raw_token(token_before)
                     self._raw_token = ""
                 elif suppressed:
                     self._defer_auto_space(token_before, char)
@@ -1362,10 +1381,20 @@ class KeyboardBridge(QObject):
                 if len(self._context_buffer) > 200:
                     self._context_buffer = self._context_buffer[-200:]
 
-            # Only show predictions for alphabetic input
-            if char.isalpha():
+            # Which bar to show.  The token check comes first because the
+            # two are mutually exclusive rather than ranked: part-way
+            # through "owen@gm" or "555-123-", no English word is a
+            # plausible suggestion, and the word engine is looking at a
+            # `_current_word` of "gm" that it reset at the "@" anyway.
+            #
+            # The old gate here was `if char.isalpha()`, which is why a
+            # digit used to blank the bar outright.
+            if self._in_token_context():
+                self._emit_token_predictions()
+            elif char.isalpha():
                 self._update_predictions()
             else:
+                self._clear_token_pills()
                 self._predictions = []
                 self.predictionsChanged.emit([])
 
@@ -1550,6 +1579,9 @@ class KeyboardBridge(QObject):
             # the moment to look at it for a saveable email / phone /
             # address, and the moment it stops being the current one.
             self._maybe_offer_snippet()
+            # Space retires the run, so this is where a phone number, zip
+            # or email the user typed by hand enters the token store.
+            self._learn_raw_token(self._raw_token)
             self._raw_token = ""
             self._update_predictions()
         elif key_name == "backspace":
@@ -1559,7 +1591,15 @@ class KeyboardBridge(QObject):
                 self._current_word = self._current_word[:-1]
                 if not self._current_word:
                     self._word_typed_under_caps_lock = False
-                self._update_predictions()
+                # Backspacing inside "owen@gmai" or "555-123-" must keep
+                # offering the token bar.  `_current_word` is no help in
+                # telling the two apart: it holds only the letters since
+                # the last "@" or dot, so mid-address it looks exactly
+                # like an ordinary partial word.
+                if self._in_token_context():
+                    self._emit_token_predictions()
+                else:
+                    self._update_predictions()
             elif self._context_buffer:
                 # Stay in sync with on-screen text: backspace pops one
                 # char from the committed context too.  Without this, a
@@ -1601,6 +1641,7 @@ class KeyboardBridge(QObject):
             self._current_word = ""
             self._word_typed_under_caps_lock = False
             self._maybe_offer_snippet()
+            self._learn_raw_token(self._raw_token)
             self._raw_token = ""
             self._update_predictions()
         elif key_name == "tab":
@@ -1944,6 +1985,22 @@ class KeyboardBridge(QObject):
         # just landed on a password field, flip privacy mode before this
         # selection persists anything to analytics or the model.
         self._check_password_field_sync()
+        # Structured-token pills take a different insert path entirely:
+        # what they display is not what they type, and the prefix they
+        # continue is `_raw_token`, which the word path below never looks
+        # at.  Dispatched on the map rather than on a mode flag so a pill
+        # can only ever be inserted the way it was emitted.
+        #
+        # `_predictions` is in the condition as well, and that is the part
+        # doing the safety work: there are a dozen sites in this file that
+        # emit a pill row, so "clear the map at every one of them" would
+        # be another set of parallel blocks to keep in sync, and missing
+        # one would leave a stale entry tappable.  Requiring the pill to
+        # be *on the bar right now* makes that impossible without
+        # touching any of them.
+        if word in self._token_pill_inserts and word in self._predictions:
+            self._insert_token_pill(word)
+            return
         _logger.info(
             "Prediction selected (word_len=%d, prefix_len=%d)",
             len(word),
@@ -2487,6 +2544,184 @@ class KeyboardBridge(QObject):
             prev_word = ctx_tokens[-1].lower() if ctx_tokens else ""
             self.activeContextChanged.emit(prev_word, self._current_word.lower())
 
+    # ------------------------------------------------------------------
+    #  Structured-token predictions (numbers, phone numbers, emails)
+    # ------------------------------------------------------------------
+
+    def _in_token_context(self) -> bool:
+        """Is the run before the cursor a structured token in progress?
+
+        Two signals, and the asymmetry between them is deliberate:
+
+        * **A digit anywhere.**  The word engine discards digits when it
+          tokenises, so anything containing one is already outside what
+          it can complete.
+        * **An "@" that is not the first character.**  ``@owen`` is a
+          mention and belongs to the word model, which can genuinely
+          complete a name the user has typed before.  ``owen@`` is an
+          address, and the only useful continuation is a domain.
+
+        Two characters minimum: on a single one the prefix matches most
+        of the store, so the bar would fill with unrelated numbers the
+        moment the user typed any digit at all.
+        """
+        tok = self._raw_token
+        if len(tok) < TokenPredictor.MIN_PREFIX_LEN:
+            return False
+        if any(ch.isdigit() for ch in tok):
+            return True
+        return tok.find("@") > 0
+
+    def _token_suggestions(self) -> List[Tuple[str, str]]:
+        """``[(pill text, text a tap should type), ...]`` for the current run.
+
+        The two halves differ for domain pills and that is the point: the
+        pill reads ``gmail.com`` while the user has typed ``owen@``, so a
+        tap types only ``gmail.com``.  Showing the whole address instead
+        would be consistent with how word pills render, and worse -- at
+        20-odd characters a pill, the fitter would drop the row to two
+        suggestions (it drops rather than elides, see the prediction-bar
+        notes), and the local part is already on screen a centimetre
+        away.  Full learned tokens *do* show whole, because there the
+        pill is the answer rather than half of it.
+        """
+        tok = self._raw_token
+        at = tok.rfind("@")
+        if at > 0:
+            typed = tok[at + 1 :]
+            return [
+                (domain, domain[len(typed) :])
+                for domain in self._predictor.predict_email_domains(typed, self._prediction_count)
+                if len(domain) > len(typed)
+            ]
+        return [
+            (full, full[len(tok) :])
+            for full in self._predictor.predict_tokens(tok, self._prediction_count)
+        ]
+
+    def _emit_token_predictions(self) -> None:
+        """Put structured-token pills on the bar (possibly none)."""
+        pairs = self._token_suggestions()
+        self._token_pill_inserts = dict(pairs)
+        # Deliberately not routed through _display_cased, and the reason
+        # is that these pills insert *verbatim* rather than continuing
+        # the typed letters.  What arrives is exactly the stored string:
+        # `_release_sticky_modifiers` drops a held Shift before the
+        # insert, and the synthesizer already inverts its own shift for
+        # an OS Caps Lock (see `_resolve_char_scancode`), so a stored
+        # "gmail.com" types as "gmail.com" whatever the case state is.
+        # Running _display_cased over it would show "GMAIL.COM" under
+        # Caps Lock and then insert lowercase, which is precisely the
+        # display/insert mismatch that function exists to prevent.
+        self._predictions = [display for display, _ in pairs]
+        if self._predictions:
+            self._analytics.record_prediction_offered()
+        self.predictionsChanged.emit(self._predictions)
+
+    def _clear_token_pills(self) -> None:
+        """Forget the token-pill insert map (the bar is showing words now)."""
+        self._token_pill_inserts = {}
+
+    def _token_pill_trailing_space(self, completed: str) -> str:
+        """Should a tap append a space after *completed*?
+
+        Word pills always do, and most token pills should too: a house
+        number, a zip or an apartment number sits mid-sentence with words
+        after it, and on a mouse-driven keyboard a free space is a click
+        saved.
+
+        Emails and phone numbers are the exception, because they are
+        field *values* rather than sentence content.  A login form that
+        does not trim its input rejects "owen@gmail.com " with a
+        validation error the user then has to notice, diagnose and
+        backspace out of -- a far worse outcome than the one click a
+        wanted space costs.  Nothing follows either shape in the same
+        field anyway.
+        """
+        return "" if is_email(completed) or is_phone(completed) else " "
+
+    def _insert_token_pill(self, word: str) -> None:
+        """Type the continuation behind a structured-token pill.
+
+        Mirrors ``pressPrediction``'s contract: the insert itself is
+        never gated on privacy mode (the user tapped it, so the text must
+        reach the app), while everything that *persists* is.
+        """
+        suffix = self._token_pill_inserts.get(word, "")
+        if not suffix:
+            return
+        completed = self._raw_token + suffix
+        trailing = self._token_pill_trailing_space(completed)
+        _logger.info(
+            "Token prediction selected (suffix_len=%d, token_len=%d)",
+            len(suffix),
+            len(completed),
+        )
+
+        if not self._privacy_mode:
+            rank = self._predictions.index(word) + 1 if word in self._predictions else 1
+            # Deliberately not record_prediction_selected: that one feeds
+            # the value into word_freq, and a phone number has no place
+            # in the dashboard's Top Words or in the backup archive.
+            self._analytics.record_token_prediction_selected(
+                rank, keystrokes_saved=len(suffix) + len(trailing)
+            )
+
+        # A pill tap is a keystroke, so it spends a one-shot Shift and any
+        # armed auto-capital, both *before* the insert. A Shift still
+        # held at the OS level would rewrite the whole string (see
+        # _without_held_modifiers).
+        self._release_sticky_modifiers()
+        self._consume_auto_cap()
+        # prose=False: the tap continues the token, which settles the
+        # withheld space as "the punctuation was structural after all".
+        # Delivering it would put a space inside the number being built.
+        self._take_deferred_space(False)
+
+        with self._without_held_modifiers():
+            self._send_text(suffix + trailing)
+
+        if not self._privacy_mode:
+            self._context_buffer += suffix + trailing
+            if len(self._context_buffer) > 200:
+                self._context_buffer = self._context_buffer[-200:]
+        self._raw_token = completed[-_MAX_RAW_TOKEN_LEN:]
+        self._current_word = ""
+        self._word_typed_under_caps_lock = False
+        # The tap finished the token either way, so this is a word
+        # boundary in the sense both of these care about: learn it, and
+        # let an address the user just completed raise a Snippets offer,
+        # exactly as typing the last character by hand would have.
+        self._learn_raw_token(self._raw_token)
+        self._maybe_offer_snippet()
+        if trailing:
+            self._raw_token = ""
+            self._auto_space_pending = True
+
+        if self._in_token_context():
+            self._emit_token_predictions()
+        else:
+            self._clear_token_pills()
+            self._update_predictions()
+
+    def _learn_raw_token(self, token: str) -> None:
+        """Offer a completed run to the token store.
+
+        Called wherever ``_raw_token`` is retired by something that means
+        "the user finished typing that": space, Return, and the
+        punctuation branches that end a token rather than sit inside one.
+        Tab is deliberately not among them, for the same reason it does
+        not learn ``_current_word`` -- it is the accept-completion key in
+        every IDE and shell, so what precedes it is a prefix the app is
+        about to finish, not a token the user typed.
+
+        Nothing here is logged.  The argument is typed content, and the
+        diagnostic log is attached to bug reports.
+        """
+        if self._privacy_mode or not token:
+            return
+        self._predictor.learn_token(token)
+
     def _rehydrate_current_word_from_context(self) -> None:
         """Move a mid-edit partial word from context back into _current_word.
 
@@ -2600,6 +2835,12 @@ class KeyboardBridge(QObject):
 
     def _on_predictions_ready(self, predictions: List[str]) -> None:
         """Handle instant n-gram predictions."""
+        # Words are landing, so any structured-token pill map is stale.
+        # Clearing it here rather than at each call site is what makes
+        # "a pill can only be inserted the way it was emitted" hold by
+        # construction: every word emit in the app goes through here or
+        # its refined twin.
+        self._clear_token_pills()
         display = self._display_cased(predictions)
         self._predictions = display
         if display:
@@ -2608,6 +2849,7 @@ class KeyboardBridge(QObject):
 
     def _on_predictions_refined(self, predictions: List[str]) -> None:
         """Handle LLM-refined predictions."""
+        self._clear_token_pills()
         display = self._display_cased(predictions)
         self._predictions = display
         self.predictionsRefined.emit(display)
@@ -3527,6 +3769,7 @@ class KeyboardBridge(QObject):
         self._predictions = []
         self._current_word = ""
         self._raw_token = ""
+        self._clear_token_pills()
         self._pending_auto_cap = False
         # Dropped, not delivered: the punctuation that withheld this
         # space is no longer where the caret is, so typing one now would

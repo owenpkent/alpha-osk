@@ -3072,3 +3072,110 @@ class TestCaretMoveClearsContext:
         insert(bridge)
         self._poll(bridge, "A,400,90")
         assert bridge._context_buffer != ""
+
+
+class TestStructuredTokenPredictions:
+    """Numbers, phone numbers and email domains reach the prediction bar.
+
+    Before this, ``_press_char`` ended with ``if char.isalpha()`` and
+    blanked the bar on every other character, so a digit produced no
+    suggestion at all and the engine had no way to learn one: the n-gram
+    tokeniser is ``[a-zA-Z']+``, which discards digits and symbols before
+    a word reaches the vocabulary.  The strings this covers -- a phone
+    number, a zip, a house number, an email address -- are the ones a
+    mouse-driven keyboard makes most expensive to type.
+    """
+
+    def test_a_digit_no_longer_blanks_the_bar(self, bridge: KeyboardBridge):
+        """The regression this feature is: a number offered nothing."""
+        bridge._predictor.learn_token("1247")
+        _type(bridge, "12")
+        assert bridge._predictions == ["1247"]
+
+    def test_a_typed_phone_number_is_learned(self, bridge: KeyboardBridge):
+        _type(bridge, "555-123-4567 ")
+        assert bridge._predictor.predict_tokens("555") == ["555-123-4567"]
+
+    def test_a_typed_social_security_number_is_not(self, bridge: KeyboardBridge):
+        """The paired hostile case, end to end through the keystroke path."""
+        _type(bridge, "123-45-6789 ")
+        assert bridge._predictor.predict_tokens("123") == []
+
+    def test_a_return_also_completes_the_token(self, bridge: KeyboardBridge):
+        _type(bridge, "02134")
+        bridge.pressSpecialKey("return")
+        assert bridge._predictor.predict_tokens("021") == ["02134"]
+
+    def test_privacy_mode_learns_nothing(self, bridge: KeyboardBridge):
+        bridge.setPrivacyMode(True)
+        _type(bridge, "555-123-4567 ")
+        assert bridge._predictor.predict_tokens("555") == []
+
+    def test_tapping_a_number_pill_types_only_the_unseen_tail(self, bridge: KeyboardBridge):
+        bridge._predictor.learn_token("1247")
+        _type(bridge, "12")
+        bridge.pressPrediction("1247")
+        assert "".join(_typed(bridge)) == "1247 "
+
+    def test_a_number_pill_appends_a_space(self, bridge: KeyboardBridge):
+        """A house number sits mid-sentence: "1247 Main Street"."""
+        bridge._predictor.learn_token("1247")
+        _type(bridge, "12")
+        bridge.pressPrediction("1247")
+        assert "".join(_typed(bridge)).endswith(" ")
+
+
+class TestEmailDomainSuggestions:
+    """Typing "@" offers the domain, which is the expensive half."""
+
+    def test_the_at_sign_offers_common_domains(self, bridge: KeyboardBridge):
+        _type(bridge, "owen@")
+        assert "gmail.com" in bridge._predictions
+
+    def test_the_domain_narrows_as_it_is_typed(self, bridge: KeyboardBridge):
+        _type(bridge, "owen@out")
+        assert bridge._predictions == ["outlook.com"]
+
+    def test_a_pill_shows_the_domain_not_the_whole_address(self, bridge: KeyboardBridge):
+        """20-character pills would push the row down to two suggestions."""
+        _type(bridge, "owen@")
+        assert all("@" not in pill for pill in bridge._predictions)
+
+    def test_tapping_one_completes_the_address(self, bridge: KeyboardBridge):
+        _type(bridge, "owen@")
+        bridge.pressPrediction("gmail.com")
+        assert "".join(_typed(bridge)) == "owen@gmail.com"
+
+    def test_an_address_gets_no_trailing_space(self, bridge: KeyboardBridge):
+        """A login field that does not trim rejects "owen@gmail.com "."""
+        _type(bridge, "owen@")
+        bridge.pressPrediction("gmail.com")
+        assert not "".join(_typed(bridge)).endswith(" ")
+
+    def test_a_completed_address_is_learned(self, bridge: KeyboardBridge):
+        _type(bridge, "owen@")
+        bridge.pressPrediction("gmail.com")
+        assert bridge._predictor.predict_tokens("owen@") == ["owen@gmail.com"]
+
+    def test_a_learned_domain_outranks_the_built_ins(self, bridge: KeyboardBridge):
+        _type(bridge, "owen@alphaosk.dev ")
+        _type(bridge, "sam@")
+        assert bridge._predictions[0] == "alphaosk.dev"
+
+    def test_a_mention_still_gets_word_predictions(self, bridge: KeyboardBridge):
+        """ "@owen" is a handle, and the word model can complete a name."""
+        _type(bridge, "@ow")
+        assert bridge._token_pill_inserts == {}
+
+    def test_the_pill_map_is_dropped_when_words_come_back(self, bridge: KeyboardBridge):
+        """A pill can only ever be inserted the way it was emitted."""
+        _type(bridge, "owen@")
+        assert bridge._token_pill_inserts
+        _type(bridge, "gmail.com ")
+        assert bridge._token_pill_inserts == {}
+
+    def test_backspacing_inside_an_address_keeps_the_domain_bar(self, bridge: KeyboardBridge):
+        """`_current_word` is "out" here, which reads as an ordinary word."""
+        _type(bridge, "owen@outl")
+        bridge.pressSpecialKey("backspace")
+        assert bridge._predictions == ["outlook.com"]

@@ -241,6 +241,81 @@ def is_phone(token: str) -> bool:
     return _digit_groups(token) in _PHONE_GROUPINGS
 
 
+# ---------------------------------------------------------------------
+#  Learnable tokens
+# ---------------------------------------------------------------------
+
+# The n-gram model tokenises on ``[a-zA-Z']+``, so every digit and every
+# symbol is discarded before it ever reaches the vocabulary.  That is the
+# right call for a *word* model -- but it means a house number, a zip, a
+# phone number and an email address are, to the prediction engine, things
+# the user has never typed.  ``TokenPredictor`` keeps them in a separate
+# prefix-matched store, and this is the gate on what gets in.
+#
+# It lives here rather than next to the store because it is the same
+# question the rest of this module answers ("does this text have a
+# recognisable shape"), and answering it in two places is how the two
+# copies start disagreeing about what an email looks like.
+
+_MIN_LEARNABLE_LEN = 3
+_MAX_LEARNABLE_LEN = 64
+
+# Above this many digits a token stops looking like something a person
+# retypes often and starts looking like something they would not want a
+# keyboard to remember: card numbers (16), IBANs, account and policy
+# numbers.  Eight is chosen to sit *below* a bare nine-digit US Social
+# Security number while still clearing every shape worth learning -- a
+# zip (5), a house number (1-6), a year (4), an IP (8), an ISO date (8).
+# Real phone numbers run longer than this and are admitted separately by
+# ``is_phone``, which vets their digit *grouping* first.
+_MAX_LEARNABLE_DIGITS = 8
+
+# Digit groupings that are never learned even when they clear the count.
+# (3, 2, 4) is a US Social Security number; ``is_phone`` already rejects
+# it, but this store would otherwise accept it through the generic
+# "has a digit" path below, and a keyboard that offers to complete an SSN
+# from its first three digits is the worst thing this feature could do.
+_NEVER_LEARNED_GROUPINGS = frozenset({(3, 2, 4)})
+
+
+def is_learnable_token(token: str) -> bool:
+    """True if *token* is a structured token worth remembering verbatim.
+
+    The bar is deliberately asymmetric.  A missed token costs one
+    suggestion the user never sees; a wrongly-learned one puts a slice of
+    something private into a store that is prefix-matched into the
+    suggestion bar and travels in the Data Backup archive.  So this
+    admits the shapes people genuinely retype (emails, phone numbers,
+    house numbers, zips, apartment numbers, versions, IPs) and rejects
+    long digit runs wholesale rather than trying to enumerate which kinds
+    of identifier are sensitive.
+
+    Plain alphabetic words are rejected: they are the n-gram model's job,
+    and duplicating them here would put a second, dumber vocabulary in
+    front of the one that does context.
+    """
+    token = _strip_trailing_punctuation(token.strip())
+    if not (_MIN_LEARNABLE_LEN <= len(token) <= _MAX_LEARNABLE_LEN):
+        return False
+    if any(ch.isspace() for ch in token):
+        return False
+
+    digits = sum(1 for ch in token if ch.isdigit())
+    if "@" in token:
+        # An address or nothing.  "@owen" is a mention, not a token with a
+        # domain to complete, and is left to the word model.
+        return is_email(token)
+    if not digits:
+        return False
+
+    groups = _digit_groups(token)
+    if groups in _NEVER_LEARNED_GROUPINGS:
+        return False
+    if is_phone(token):
+        return True
+    return digits <= _MAX_LEARNABLE_DIGITS
+
+
 # There is deliberately no ``looks_like_url``.  Neither caller needs one:
 # intelligent spacing reasons about a *partial* token mid-typing (is there
 # a "/" or an "@" in it yet), and snippet detection only offers emails,

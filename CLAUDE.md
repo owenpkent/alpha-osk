@@ -30,7 +30,7 @@ Alpha-OSK is an AI-assisted, mouse-driven on-screen keyboard for Windows and Lin
 
 - Run: `python run.py` (creates venv, installs deps, launches the keyboard).
 - Test: `python -m pytest` (also `-k fuzzy`, or a single file like `tests/test_keyboard_bridge.py`).
-- Pre-push gate, the same checks as CI (`ruff check`, `ruff format --check`, `mypy` under **both** `--platform linux` and `--platform win32`, `pytest`): `python check.py` (fast, ~85s); `python check.py --full` adds the `--cov-fail-under=60` coverage gate (~3min, full CI parity). CI additionally runs `osv-scanner` over the lockfiles. Formatting is gated separately from linting because `ruff check` ignores layout; fix a format failure with `ruff format src/ tests/`. The two mypy passes are both required and neither substitutes for the other: `linux` is what the runner uses (typeshed gates whole symbols on platform, so `ctypes.WinDLL` degrades to `Any` there and trips `warn_return_any`), and `win32` is the only thing that type-checks the `if sys.platform == "win32"` bodies at all, since mypy prunes them as unreachable under the other.
+- Pre-push gate, the same checks as CI (`ruff check`, `ruff format --check`, `mypy` under **both** `--platform linux` and `--platform win32`, `pytest`): `python check.py` (~60s); `python check.py --full` adds the `--cov-fail-under=60` coverage gate (~110s, full CI parity). `python check.py --install-hook` wires it to `git push` so it runs automatically rather than by hand (`--no-verify` skips it once). CI additionally runs `osv-scanner` over the lockfiles. Formatting is gated separately from linting because `ruff check` ignores layout; fix a format failure with `ruff format src/ tests/`. The two mypy passes are both required and neither substitutes for the other: `linux` is what the runner uses (typeshed gates whole symbols on platform, so `ctypes.WinDLL` degrades to `Any` there and trips `warn_return_any`), and `win32` is the only thing that type-checks the `if sys.platform == "win32"` bodies at all, since mypy prunes them as unreachable under the other.
 
 ## Conventions
 
@@ -99,6 +99,7 @@ All in `src/prediction/`. Orchestrated by `hybrid_predictor.py`:
 | `ppm_predictor.py` | Character-level PPM (Dasher algorithm). Predicts next characters. |
 | `fuzzy_recognizer.py` | Spatial error correction. Considers nearby keys as candidates. Single tuned default (no profiles). |
 | `hybrid_predictor.py` | Merges all predictors. Manages model save/load. Emits Qt signals. |
+| `token_predictor.py` | Whole structured tokens the word model cannot hold: phone numbers, zips, house numbers, emails. Prefix-matched, no context, no fuzzy. See *Structured Tokens*. |
 | `vocabulary_pack.py` | Custom vocab pack import (no built-ins ship - see *Vocabulary Packs* section) |
 | `transformer_predictor.py` | Optional LLM re-ranking (disabled by default) |
 
@@ -231,6 +232,53 @@ Every positive case in `tests/test_text_patterns.py` is paired with the near-mis
 **The toast is parked at the bottom of the window and its buttons arm after 400 ms.** Both are deliberate, and neither is polish. The offer is raised by the *same keystroke* that repopulates the suggestion pills, so the pill row (y 52 to ~95, see `outerLayout.anchors.topMargin`) is the one region on screen that changes at the instant the banner appears, which makes it exactly the wrong place for a button that persists personal data: a click already travelling toward a pill would be caught by a control that did not exist when the user began the movement. The bottom row is static by comparison, and a mis-click landing on a key merely types a character. The `armed` flag closes the same race in time rather than in space, and 400 ms is chosen for imprecise motor input, where a click can land well after the intent formed.
 
 The toast is interactive, which is why its `closePolicy` **must** stay `Popup.NoAutoClose`: every OSK key click is a press-outside, so `CloseOnPressOutside` would slam it shut on the first keystroke (the same trap the prediction-edit popup documents). Its dwell is 8 s rather than the 1.4 s of the sibling confirmation toasts because the user has to read it, decide, and land a click with an imprecise pointer, and timing out calls `dismissSnippetOffer()`, because ignoring an offer is a decision too and without telling the bridge the value would stay "pending" and block the next one.
+
+## Structured Tokens (numbers, phone numbers, email domains)
+
+`NgramPredictor._tokenize` is `re.findall(r"[a-zA-Z']+", text.lower())`. Every digit and every symbol is discarded before a word reaches the vocabulary, which is right for a word model and leaves the engine structurally unable to learn a phone number, a zip, a house number or an email address. Those are among the strings the user retypes most, and each is expensive here: ten digits is ten clicks, and on the compact layouts the digit row is a layer hop away. `src/prediction/token_predictor.py` is that gap and nothing else.
+
+`_press_char` used to end with `if char.isalpha(): _update_predictions() else: <blank the bar>`, so a digit produced no suggestion at all. It now picks between two bars.
+
+### What it is not
+A flat count-weighted store of whole tokens, matched by prefix. **No context model** (the useful signal, "this is the number I always type", is already the count), **no fuzzy matching** (correcting a mistyped letter is a favour; "correcting" a digit silently changes a number, and a phone number one digit out is worse than no suggestion), **no capitalisation logic** (irrelevant for digits and domains, already carried in the stored form otherwise). It is deliberately **not merged into the pill ranking**: while the user is part-way through `owen@gm` or `555-123-`, no English word is a plausible suggestion, so the two bars are mutually exclusive rather than ranked, and the bridge picks.
+
+### The two bars
+`KeyboardBridge._in_token_context()` decides, off `_raw_token` (not `_current_word`, which resets at `@` and at every dot: see the `_raw_token` note under *Intelligent Spacing*). Two signals, and the asymmetry is deliberate:
+- **a digit anywhere**: already outside what the word engine can complete;
+- **an `@` that is not the first character**: `owen@` is an address whose only useful continuation is a domain, while `@owen` is a *mention*, which the word model can genuinely complete from a learned name. `tok.find("@") > 0`, not `"@" in tok`.
+
+Two characters minimum (`TokenPredictor.MIN_PREFIX_LEN`): on one character the prefix matches most of the store, so the bar would fill with unrelated numbers on the first digit of anything.
+
+**Every path that repopulates the bar has to route through the same choice**, and the backspace branch is the one that was missed first: mid-address `_current_word` holds only the letters since the last `@` or dot, so it looks exactly like an ordinary partial word and fell straight through to `_update_predictions()`.
+
+### Pills carry an insert map, not just text
+`_token_pill_inserts` maps **displayed text -> text a tap should type**, and the two differ. A domain pill reads `gmail.com` while the run before the cursor is `owen@`, so neither `word` nor `_current_word` tells `pressPrediction` what to insert; it dispatches on membership in that map, so a pill can only ever be inserted the way it was emitted. **The dispatch requires the pill to be in `self._predictions` too, and that half is the safety property.** There are a dozen sites in `keyboard_bridge.py` that emit a pill row, so "clear the map at each one" would be one more set of parallel blocks to keep in sync (the failure mode this file warns about for sticky-modifier release), and missing one would leave a stale entry tappable. Requiring the pill to be *on the bar right now* makes that impossible without touching any of them. `_on_predictions_ready` / `_on_predictions_refined` clear the map as well, but only to keep it small; correctness does not rest on them.
+
+**Domain pills show the domain, full learned tokens show the whole token.** Showing `owen@gmail.com` would match how word pills render and would be worse: at 20-odd characters the fitter drops the row to two suggestions (it drops rather than elides, see *Prediction pill widths*), and the local part is already on screen a centimetre away. Within any one row the semantics are uniform, because after an `@` every pill is a domain.
+
+**Token pills bypass `_display_cased`.** It mirrors the typed prefix's capitals onto the pill, which is right for a word and wrong here: under Caps Lock, case 1 would render `gmail.com` as `GMAIL.COM` and then insert it that way.
+
+**A trailing space is appended except after an email or a phone number.** A house number sits mid-sentence (`1247 Main Street`) and a free space is a click saved. An email or a phone is a field *value*: a login form that does not trim rejects `owen@gmail.com ` with a validation error the user then has to notice, diagnose and backspace out of, which costs far more than the one click a wanted space costs. Nothing follows either shape in the same field anyway.
+
+Insert-path invariants mirror `pressPrediction` exactly: `_release_sticky_modifiers()` and `_consume_auto_cap()` **before** the insert, the `_send_text` inside `_without_held_modifiers()`, the insert itself never gated on privacy mode (the user tapped it) while everything that persists is. A deferred auto-space is settled with `prose=False`: the tap continues the token, so the punctuation was structural and delivering the space would put it inside the number.
+
+### What may be learned
+`text_patterns.is_learnable_token` lives in that module, beside the other shape rules, because it is the same question ("does this text have a recognisable shape") and two copies of "what does an email look like" is how they start disagreeing. Learning happens at every point `_raw_token` is retired by something meaning *the user finished typing that*: space, Return, and the two punctuation branches **on their non-suppressed path only** (suppressed means intelligent spacing judged the mark to be part of the token, so it is still being typed). **Tab is deliberately excluded**, for the same reason it does not learn `_current_word`: it is the accept-completion key in every IDE and shell, so what precedes it is a prefix the app is about to finish.
+
+**The bar is asymmetric on purpose and was set against hostile examples, not tidy ones.** A missed token costs one suggestion the user never sees; a wrongly-learned one is prefix-matched into the suggestion bar, written to `ngram_model.json`, and carried in the Data Backup archive. So:
+- **Long digit runs are rejected wholesale** (`_MAX_LEARNABLE_DIGITS` = 8) rather than by trying to enumerate which identifiers are sensitive. Eight sits *below* a bare nine-digit US Social Security number while clearing every shape worth learning: zip (5), house number (1-6), year (4), IP (8), ISO date (8). Card numbers (16) and account numbers fall out by construction.
+- **Real phone numbers run longer than that** and are admitted separately by `is_phone`, which vets the digit *grouping* first (see the `_PHONE_GROUPINGS` comment: `(3,2,4)` is an SSN, `(4,2,2)` a date, `(4,4,4,4)` a card, `(3,3,1,1)` an IP). `_NEVER_LEARNED_GROUPINGS` re-blocks `(3,2,4)` because the generic "has a digit" path below `is_phone` would otherwise let it through.
+- **Plain alphabetic words are rejected**: they are the n-gram model's job, and a second, dumber vocabulary in front of the one that does context is a regression.
+
+**Entries are re-validated against the current rule on every load** (`from_dict`), so tightening the rule retroactively cleans an existing store: a file written by an older build, hand-edited, or arriving in an imported archive is not a reason to start offering an SSN. Malformed entries are dropped individually rather than rejecting the file: this rides in `ngram_model.json` alongside the vocabulary, and one bad token is not a reason to lose someone's learned words.
+
+### Analytics and the log
+Selections go through `TypingAnalytics.record_token_prediction_selected(rank, keystrokes_saved)`, **not** `record_prediction_selected`, which feeds its argument into `word_freq`. That table is persisted, surfaced as the dashboard's "Top Words" and carried in the backup archive; a phone number belongs in none of the three, least of all on a dashboard the user might screen-share. The word counter is skipped for the same reason it should be: a zip code is not a word, and counting it would inflate WPM. **Nothing in this path logs token content**, the same rule as the rest of the keystroke path, and every argument here is typed content by construction.
+
+### Storage
+Persisted in `ngram_model.json` under a `tokens` key, not a file of its own. That file is already the "everything the user taught us" store (capitalisation, blacklist, boosts), already in the Data Backup archive, and already has load-time size caps; a separate file would have needed all three re-established **and** a `_MODEL_FILES` change to the export. Absent from every model saved before this existed, which `from_dict` reads as an empty store. `clear_user_data()` clears it too: "clear my learned data" has to mean all of it. Bounded at `TokenPredictor.MAX_TOKENS` (2 000), evicting least-seen first with ties breaking toward the *longer* token (it cost more clicks to type, so it is worth more as a completion).
+
+Guarded by `tests/test_token_predictor.py`, `tests/test_text_patterns.py::TestLearnableToken`, and `tests/test_keyboard_bridge.py::TestStructuredTokenPredictions` / `TestEmailDomainSuggestions`. Every positive case is paired with the near-miss it must reject, and the pairs that bite are the SSN family, not the tidy ones.
 
 ## Data Backup (Export / Import)
 
@@ -511,8 +559,45 @@ on the predicate instead of discarding.
 Run `python check.py` before `git push` to catch lint / format / type /
 test failures locally instead of waiting for CI's red X (the same gates
 GitHub Actions runs).  Default mode skips coverage tracking
-(~85 s); add `--full` to include the `--cov-fail-under=60` gate
-(~3 min, matches CI exactly).
+(~60 s); add `--full` to include the `--cov-fail-under=60` gate
+(~110 s, matches CI exactly).  **`python check.py --install-hook`** writes
+`.git/hooks/pre-push` so it runs on `git push` instead of from memory;
+`git push --no-verify` is the escape hatch.  Hooks are not version
+controlled, so a fresh clone has to run that once.
+
+**The suite is sharded with `pytest-xdist` (`-n auto`), and that is what
+makes the gate a minute instead of twenty-five.**  There is deliberately
+**no fast-subset tier**, and the reason is worth keeping: the three
+static steps cost ~5 s between them, so the gate *was* pytest, and pytest
+was slow for a reason unrelated to how many tests there are.  Building a
+`KeyboardBridge` cost ~1 s (20k-word dictionary + SymSpell deletion index
++ PPM), the `bridge` fixture is function-scoped, and there are ~1300
+tests: per-process setup repeated 1300 times, which no amount of clever
+test selection touches and which shards almost linearly.  Half of that
+per-bridge second was also a genuine bug: `HybridPredictor.__init__`
+called `set_frequencies` twice, and the first call's SymSpell index was
+discarded four lines later by the second, on every app launch as well as
+every test.  If the gate creeps back up, **measure before tiering**;
+trading away coverage on the one gate that runs before code leaves the
+machine is the last resort, not the first.
+
+Sharding needed one test-side fix, and it is the kind that recurs: the
+four headless QML modules each persist through a QML `Settings {}`
+element, which resolves to a *process-external* store (a key under HKCU
+on Windows).  Three of them defined the same `TEST_ORG` literal
+independently and the fourth imported it, so under `-n auto` several
+workers shared one scope and called `.clear()` on each other mid-test.
+That surfaced as "the window width drifted across restarts: [1160, 940,
+1160]", indistinguishable from the persistence bug those tests exist to
+catch. The scope now lives once in `tests/qt_settings_scope.py`, suffixed
+with `PYTEST_XDIST_WORKER`. Any new test touching QSettings, the
+registry, a fixed temp path, or any other machine-global resource has to
+key it per worker the same way.
+
+CI is deliberately left serial for now: it is the release gate, its
+runners have far fewer cores, and the local iteration loop was the
+problem being solved. Turning `-n auto` on there is a reasonable
+follow-up once this has some mileage.
 
 `mypy` runs **twice**, under `--platform linux` and `--platform win32`,
 and CI mirrors both.  Neither covers the other: linux is the runner's

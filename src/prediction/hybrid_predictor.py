@@ -133,17 +133,26 @@ class HybridPredictor(QObject):
         # Load common-misspellings fast-path table for autocorrect.
         self._misspellings = CommonMisspellings()
         self._misspellings.load(data_dir / "common_misspellings.txt")
-        # Inject n-gram unigram frequencies so candidate ranking
-        # prefers common words ("the") over rare ones ("tha").  Done
-        # before the training corpus runs since we want this snapshot
-        # at startup; learning during a session updates the n-gram
-        # model directly and re-injects via _refresh_fuzzy_frequencies.
-        self._fuzzy.set_frequencies(self._ngram.unigrams)
         _logger.info("Fuzzy recognizer initialized")
 
         # Load training corpus for better predictions
         self._load_training_corpus()
-        # Re-inject after corpus training expanded the unigram counts.
+        # Inject n-gram unigram frequencies so candidate ranking prefers
+        # common words ("the") over rare ones ("tha").  Learning during a
+        # session updates the n-gram model directly and re-injects via
+        # _refresh_fuzzy_frequencies.
+        #
+        # Injected *once*, and after the corpus rather than before it.
+        # There used to be a second call above `_load_training_corpus`,
+        # on the reasoning that we wanted the snapshot at startup, but
+        # the corpus expands the unigram counts, so this call replaced
+        # that snapshot wholesale four lines later, and
+        # `_load_training_corpus` never reads `self._fuzzy` at all.  The
+        # discarded half was not free: `set_frequencies` ends in
+        # `SymSpell.prepare()`, which walks every dictionary word
+        # generating deletion variants, so the wasted build was ~0.5 s of
+        # the ~1.5 s this constructor took, paid on every launch, and on
+        # every one of the ~1300 tests that builds a bridge.
         self._fuzzy.set_frequencies(self._ngram.unigrams)
 
         # Initialize vocabulary pack manager
@@ -718,6 +727,29 @@ class HybridPredictor(QObject):
     def unlearn_word(self, word: str) -> bool:
         """Reverse one sighting of a word — see ``NgramPredictor.unlearn_word``."""
         return self._ngram.unlearn_word(word)
+
+    # ------------------------------------------------------------------
+    #  Structured tokens (numbers, emails, phone numbers)
+    #
+    #  Deliberately *not* merged into the pill ranking below.  These are
+    #  verbatim strings matched on a raw prefix that the word engine
+    #  never sees (it resets at "@" and at every dot), and they compete
+    #  for the same bar rather than alongside words: while the user is
+    #  part-way through an email address, no English word is a plausible
+    #  suggestion.  The bridge picks which of the two is showing.
+    # ------------------------------------------------------------------
+
+    def learn_token(self, token: str) -> bool:
+        """Record a completed structured token.  False if it didn't qualify."""
+        return self._ngram.tokens.learn(token)
+
+    def predict_tokens(self, prefix: str, n: int = 5) -> List[str]:
+        """Learned tokens continuing *prefix*."""
+        return self._ngram.tokens.predict(prefix, n)
+
+    def predict_email_domains(self, prefix: str, n: int = 5) -> List[str]:
+        """Email domains continuing *prefix* (learned first, then common ones)."""
+        return self._ngram.tokens.domains(prefix, n)
 
     def learn_from_selection(self, context: str, selected_word: str) -> None:
         """

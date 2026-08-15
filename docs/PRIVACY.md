@@ -29,6 +29,26 @@ This is worth being precise about, because it means the keyboard is pattern-matc
 
 Turn the toggle off and no detection runs at all. Your existing snippets are untouched either way.
 
+## Numbers, phone numbers and email addresses in your suggestions
+
+Alpha-OSK learns the words you type so it can suggest them back to you. It now does the same for a small set of things that are *not* words: your phone number, your zip code, a house number, an email address. These are among the most tedious things to type on a keyboard you drive with a mouse, and the word model literally cannot hold them (it throws away every digit and symbol before storing anything), so they lived in a blind spot where the keyboard could never help.
+
+This is the same kind of learning that has always applied to words, and it is worth being just as precise about, because the shapes involved are more personal than "hello":
+
+- **It all happens on your machine**, and it goes into the same prediction model file as everything else you type (`ngram_model.json` in your config directory). Nothing is uploaded, and this has no connection to the telemetry toggle below.
+- **It never runs while learning is paused.** In privacy mode, whether you paused it yourself with the title-bar Learning switch or a password field triggered it automatically, nothing is learned and nothing is suggested. A PIN or a numeric password typed into a detected password field cannot enter the store.
+- **Only shapes worth retyping are kept.** An email address, a phone number, and short numbers like a zip, a house number, an apartment number, a year, a version or an IP address.
+- **Long runs of digits are refused outright.** Anything with more than eight digits that is not shaped like a phone number is rejected without further inspection: card numbers, account numbers, policy numbers and the like are never stored, and neither is a US Social Security number in any of its forms. This is a deliberately blunt rule. Trying to enumerate which kinds of long number are sensitive is a game you lose eventually, so the keyboard declines the whole category and accepts that it will occasionally fail to help with a legitimate one.
+- **The rule is re-applied every time the model loads**, so if a future version tightens it, anything it now considers off-limits is dropped from your existing model rather than grandfathered in.
+- **Nothing learned here is written to the log**, the same rule that applies to everything else you type.
+- **It is capped and it forgets.** At most 2 000 entries are kept; beyond that the least-used fall off.
+- **Clearing your learned data clears it too.** Settings → Your Language Model → Prediction Model → **Clear Learned Data** removes these along with your learned words.
+- **It never reaches the dashboard.** Accepting one of these suggestions counts toward your keystrokes-saved total, but the value itself is deliberately kept out of the "Top Words" chart and out of `analytics.json`. You should not have to worry about your phone number appearing on a screen you might share.
+
+When you type `@` in an email address, the keyboard also offers common domains (`gmail.com`, `outlook.com` and so on). Those are a built-in list, not something read from your machine; domains you have actually typed simply move ahead of them over time.
+
+Because these live in your prediction model, they are included in a Data Backup export. See the export section below, which is worth reading before you put one of those files somewhere shared.
+
 ## What the keyboard notices about your screen
 
 To predict the *next* word, Alpha-OSK keeps a short memory of the words you just typed. That memory has to be thrown away the moment you move to somewhere else, or the suggestions would describe a box you have already left, and tapping one would insert the wrong text where you are now. So the keyboard watches for four things, all of them locally, none of them recorded:
@@ -95,7 +115,7 @@ Settings → Data & Privacy → Data Backup lets you export your prediction mode
 
 What the export contains:
 
-- Your prediction model (`ngram_model.json`, `ppm_model.json`).
+- Your prediction model (`ngram_model.json`, `ppm_model.json`). As well as your vocabulary, `ngram_model.json` holds the structured tokens described above, so an email address or a phone number you have typed is in this file, and therefore in the export. The same "treat the `.zip` with care" advice below applies to it, not only to your snippets.
 - Lifetime analytics (`analytics.json` — the counters shown on the dashboard).
 - Your snippets (`snippets.json`), including anything you saved from a detection offer. These are quick-insert text you wrote or approved, so they are personal by nature: a name, an email address, a phone number, a mailing address. The export is a plain, unencrypted `.zip`, so treat the file you produce with the same care you would treat that information anywhere else, and think twice before putting it somewhere shared.
 - Imported vocabulary packs (the folders under `packs/`).

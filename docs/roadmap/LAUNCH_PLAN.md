@@ -46,7 +46,7 @@ This is a meaningful enough scope to warrant a **minor version bump (1.1.0)** ra
 
 - [ ] Bump `src/__version__.py` to `1.1.0`.
 - [ ] In `CHANGELOG.md`, replace `## [Unreleased]` heading with `## [1.1.0] — 2026-05-26` (move existing entries under it). Add a fresh empty `## [Unreleased]` above.
-- [ ] Run `python check.py --full` (the `--full` flag enables the coverage gate; matches CI exactly, ~3 min).
+- [ ] Run `python check.py --full` (the `--full` flag enables the coverage gate; matches CI exactly, ~110 s).
 - [ ] `python build/windows/build.py` from a non-elevated shell with the eToken plugged in. (See `../build/WINDOWS.md` for the signing requirement.)
 - [ ] Test the installer in `release/` on a clean account or VM. Specifically: install, launch OSK, open Settings → Data & Privacy → Privacy, toggle on, restart, confirm toggle persisted.
 - [ ] `python build/linux/build.py --appimage --fetch-appimagetool` if the Linux build is also shipping this cycle.

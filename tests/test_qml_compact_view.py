@@ -52,8 +52,7 @@ from src.keyboard_bridge import KeyboardBridge  # noqa: E402
 REPO_ROOT = Path(__file__).resolve().parent.parent
 QML_MAIN = REPO_ROOT / "qml" / "Main.qml"
 
-TEST_ORG = "alpha-osk-tests"
-TEST_APP = "Alpha-OSK-Tests"
+from tests.qt_settings_scope import TEST_APP, TEST_ORG  # noqa: E402
 
 # Qt Quick Controls emits this for every Rectangle-customised control in the
 # app (HelpPanel, the settings toggles, ...). It predates this feature and is

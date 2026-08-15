@@ -55,8 +55,7 @@ from src.keyboard_bridge import KeyboardBridge  # noqa: E402
 REPO_ROOT = Path(__file__).resolve().parent.parent
 QML_MAIN = REPO_ROOT / "qml" / "Main.qml"
 
-TEST_ORG = "alpha-osk-tests"
-TEST_APP = "Alpha-OSK-Tests"
+from tests.qt_settings_scope import TEST_APP, TEST_ORG  # noqa: E402
 
 IGNORED_WARNING_FRAGMENTS = ("does not support customization",)
 
