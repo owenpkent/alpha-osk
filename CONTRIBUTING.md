@@ -41,10 +41,15 @@ launches the keyboard. Subsequent runs reuse the venv.
 ### Running tests
 
 ```bash
-python -m pytest                    # full suite
+python -m pytest -n auto            # full suite, sharded (~50s; ~25min without -n)
 python -m pytest tests/test_keyboard_bridge.py
 python -m pytest -k "fuzzy"
 ```
+
+`-n auto` matters more here than it usually would: the suite's cost is
+per-process setup repeated per test rather than any single slow test, so
+running it in one process is roughly 25x slower. `python check.py` passes
+the flag for you.
 
 Two suites are property-based (`tests/test_property_*.py`, using
 [Hypothesis](https://hypothesis.readthedocs.io/)): they cover the archive
