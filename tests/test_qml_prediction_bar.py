@@ -14,7 +14,6 @@ right-hand pill rendered *underneath* the button.
 
 from __future__ import annotations
 
-import math
 import os
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -351,28 +350,42 @@ class TestClearButtonNeverCoversPills:
         assert widths[-1] > widths[0] * 1.5
 
 
-class TestTheClearButtonIconIsConcentric:
-    """The circle-arrow must sit *in* the circle it is drawn on.
+class TestTheClearButtonIcon:
+    """The circle-arrow must be drawn, and must sit in the middle.
 
-    It used to be the glyph "⟲" in a `Text` with `anchors.centerIn`, which
-    centres the text *item* and not the ink inside it.  A glyph's ink is
-    rarely centred in its em box, and U+27F2 also hangs its tail outside
-    the ring, so the ring the eye actually reads sat down and right of the
-    button while the tail stuck out to the left.
+    It used to be the glyph "⟲" in a `Text` with `anchors.centerIn`,
+    which centres the text *item* and not the ink inside it.  A glyph's
+    ink is rarely centred in its em box, so the ring the eye actually
+    reads sat down and right of the button while the glyph's tail stuck
+    out to the left.  It is now Feather's `rotate-ccw`, drawn from its
+    published path data through the Canvas that was already there.
 
-    **The obvious measurement here is a trap.**  The ink bounding box is
-    centred in both versions to within half a pixel, because the tail
-    hanging off one side cancels the ring being pushed to the other. A
-    bbox assertion would have passed against the bug it was written for.
-    What separates them is the *spread* of the ink about the button
-    centre: a ring concentric with the button puts every pixel at nearly
-    the same radius, and an off-centre one smears across radii. Measured
-    on this button, the glyph scored 0.29 and the drawn arc 0.09, so the
-    0.15 bar below is a real threshold with both versions on the correct
-    side of it rather than a number picked to pass.
+    **The obvious measurement is a trap, and so was the clever one.**
+    The ink bounding box was centred in the glyph version too, to within
+    half a pixel, because the tail hanging off one side cancelled the
+    ring being pushed to the other -- so a bbox assertion alone would
+    have passed against the bug it was written for.  This class briefly
+    used a radial-spread metric instead (glyph 0.29, hand-drawn arc
+    0.09, bar at 0.15), which did separate them.  That metric is gone
+    because it no longer measures *us*: Feather puts the arrow outside
+    the ring deliberately, which scores 0.147 against a 0.15 bar.  A
+    test passing by three thousandths is not a test, and tightening the
+    icon to satisfy it would mean redrawing a designer's composition to
+    fit an assertion.
+
+    What is left is the pair that is honest about what the code
+    guarantees: the icon is *drawn* rather than typeset, which is what
+    caught the original bug, and it is grossly centred, which catches a
+    dropped or wrong transform.  The one-unit optical correction in
+    `inkOffsetX` is deliberately *not* pinned here: it is a sub-pixel
+    nicety at this size, and asserting it across renderers would buy a
+    flake rather than a guard.
     """
 
-    _MAX_RADIAL_SPREAD = 0.15
+    # Generous on purpose: a dropped translate puts the icon a third of
+    # the button away, which is what this is for. Anything tighter is
+    # measuring the antialiaser.
+    _MAX_CENTRE_OFFSET_PX = 3.0
 
     def _button_pixels(self, root):
         button = _child(root, "clearContextButton")
@@ -386,44 +399,57 @@ class TestTheClearButtonIconIsConcentric:
             pytest.skip("this Qt build cannot grab an offscreen window")
         return button, shot.copy(round(top_left.x()), round(top_left.y()), size, size)
 
-    def _ink_radii(self, crop):
-        """Distance from the button's centre for every lit pixel."""
-        centre = (crop.width() - 1) / 2
-        radii = []
+    def _ink(self, crop):
+        """Every lit pixel of the icon, as (x, y)."""
+        lit = []
         for y in range(crop.height()):
             for x in range(crop.width()):
                 colour = crop.pixelColor(x, y)
                 luminance = 0.299 * colour.red() + 0.587 * colour.green() + 0.114 * colour.blue()
                 if luminance > 110:  # the icon, not the circle's own fill
-                    radii.append(math.hypot(x - centre, y - centre))
-        return radii
+                    lit.append((x, y))
+        return lit
 
-    def test_the_icon_is_a_ring_around_the_button_centre(self, qml_root):
+    def test_the_icon_is_centred_on_the_button(self, qml_root):
         root, _, _ = qml_root
         _, crop = self._button_pixels(root)
-        radii = self._ink_radii(crop)
+        lit = self._ink(crop)
 
-        # Inverse first: "draw nothing" would satisfy every spread bound
+        # Inverse first: "draw nothing" satisfies every centring bound
         # ever written, so the test has to insist there is an icon at all.
-        assert len(radii) > 40, f"the button has almost no icon on it ({len(radii)} px)"
+        assert len(lit) > 40, f"the button has almost no icon on it ({len(lit)} px)"
 
-        mean = sum(radii) / len(radii)
-        spread = math.sqrt(sum((r - mean) ** 2 for r in radii) / len(radii))
-        assert mean > crop.width() * 0.15, (
-            f"the icon is a blob near the centre (mean radius {mean:.1f}px), not a ring"
+        xs = [x for x, _ in lit]
+        ys = [y for _, y in lit]
+        centre = (crop.width() - 1) / 2
+        offset_x = (min(xs) + max(xs)) / 2 - centre
+        offset_y = (min(ys) + max(ys)) / 2 - centre
+        assert abs(offset_x) <= self._MAX_CENTRE_OFFSET_PX, (
+            f"the icon sits {offset_x:+.1f}px off centre horizontally"
         )
-        assert spread / mean <= self._MAX_RADIAL_SPREAD, (
-            f"the icon is not concentric with its button: ink sits at "
-            f"{mean:.1f}px +/- {spread:.1f}px from the centre "
-            f"({spread / mean:.2f} > {self._MAX_RADIAL_SPREAD})"
+        assert abs(offset_y) <= self._MAX_CENTRE_OFFSET_PX, (
+            f"the icon sits {offset_y:+.1f}px off centre vertically"
+        )
+
+    def test_it_fills_a_sensible_share_of_the_button(self, qml_root):
+        """Catches a broken scale, which centring alone would not notice."""
+        root, _, _ = qml_root
+        _, crop = self._button_pixels(root)
+        lit = self._ink(crop)
+        span = max(
+            max(x for x, _ in lit) - min(x for x, _ in lit),
+            max(y for _, y in lit) - min(y for _, y in lit),
+        )
+        assert 0.45 <= span / crop.width() <= 0.95, (
+            f"the icon spans {span / crop.width():.0%} of the button"
         )
 
     def test_it_is_drawn_rather_than_typeset(self, qml_root):
         """States the fix, so a future "just use a glyph" reads as a change.
 
         Same reasoning as the padlock badge that was removed from the
-        keycaps: any glyph small enough to fit is at the mercy of whatever
-        font the host resolves it through.
+        keycaps: any glyph small enough to fit is at the mercy of
+        whatever font the host resolves it through.
         """
         root, _, _ = qml_root
         button = _child(root, "clearContextButton")

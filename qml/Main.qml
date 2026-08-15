@@ -1814,23 +1814,49 @@ Window {
                     ToolTip.text: qsTr("Clear suggestion context")
                     ToolTip.delay: 400
 
-                    // Drawn, not a "⟲" glyph, and the difference is
-                    // visible rather than academic.  A glyph's ink is not
-                    // centred in its em box, so `anchors.centerIn` centres
-                    // the *text item* while the mark inside it sits low
-                    // and right; U+27F2 also hangs its tail outside the
-                    // ring, which pushes the whole thing off balance.
-                    // Measured in the shipped build, the ring sat ~3 px
-                    // down-right of the circle it lives in.  It is the
-                    // same lesson as the padlock badge on a keycap: any
-                    // glyph small enough to fit is at the mercy of the
-                    // host font.  Drawn here, the arc is concentric with
-                    // its button by construction, at every size and in
-                    // every theme.
+                    // Feather's "rotate-ccw", drawn from its published
+                    // path data rather than typeset as a glyph.
+                    //
+                    // The glyph it replaces was "⟲" in a Text with
+                    // anchors.centerIn, which centres the text *item* while
+                    // the ink inside it sits wherever the font puts it: the
+                    // ring the eye reads sat down-and-right of the circle it
+                    // lives on, with the glyph's tail hanging out to the
+                    // left.  Same lesson as the padlock badge that came off
+                    // the keycaps -- any glyph small enough to be an icon is
+                    // at the mercy of the host font.
+                    //
+                    // Fed to the Canvas already here via ctx.path, which
+                    // takes SVG path data directly.  That is deliberate:
+                    // QtQuick.Shapes or QtSvg would render it just as well
+                    // and would each add a QML module the frozen build has
+                    // to carry, where a missing module does not degrade --
+                    // it fails Main.qml and ships as a blank keyboard.
                     Canvas {
                         id: clearCtxIcon
                         anchors.fill: parent
                         antialiasing: true
+
+                        // Feather rotate-ccw, MIT, (c) 2013-2023 Cole Bemis.
+                        // See THIRD_PARTY_NOTICES.md.  Verbatim from the
+                        // 24x24 source, with the polyline written as an
+                        // equivalent path; keep them that way so the icon
+                        // can be diffed against upstream.
+                        readonly property string arrowPath: "M1 4 L1 10 L7 10"
+                        readonly property string ringPath:
+                            "M3.51 15a9 9 0 1 0 2.13-9.36L1 10"
+                        readonly property real viewBox: 24
+                        readonly property real strokeWidth: 2
+                        // Fraction of the button the 24-unit box spans.
+                        readonly property real boxFraction: 0.70
+                        // The composition is not centred in its own viewBox:
+                        // the corner arrow sits outside the ring at the top
+                        // left, which puts the ink's centre one unit to the
+                        // left of the box's.  Measured, not guessed, and
+                        // corrected here so the icon is centred by *ink*,
+                        // which is what the eye reads, rather than by a box
+                        // it cannot see.
+                        readonly property real inkOffsetX: 1
 
                         property color inkColor: clearCtxBtn.containsMouse
                                                  ? root.themeTextColor : "#bbb"
@@ -1839,55 +1865,21 @@ Window {
                         onPaint: {
                             var ctx = getContext("2d")
                             ctx.reset()
-                            var cx = width / 2
-                            var cy = height / 2
-                            var lw = Math.max(1.5, width * 0.062)
-                            // The head is sized off the *radius*, not the
-                            // stroke, and the arc stops short of it.  Both
-                            // matter at this size: a head scaled off a
-                            // ~3 px stroke is only a few pixels across and
-                            // antialiases into a nub, and an arc that runs
-                            // under it fills the notch that makes it read
-                            // as an arrow at all.
-                            var r = width * 0.29
-                            var headLen = r * 0.62
-                            var headHalf = r * 0.36
-
+                            var box = width * boxFraction
+                            var scale = box / viewBox
+                            ctx.save()
+                            ctx.translate((width - box) / 2 + inkOffsetX * scale,
+                                          (height - box) / 2)
+                            ctx.scale(scale, scale)
                             ctx.strokeStyle = inkColor
-                            ctx.fillStyle = inkColor
-                            ctx.lineWidth = lw
+                            ctx.lineWidth = strokeWidth
                             ctx.lineCap = "round"
-
-                            // Anticlockwise arc, open at the top: the
-                            // "undo / start over" shape.  The head occupies
-                            // the last stretch, so the stroke ends where
-                            // the triangle's base begins.  The ring is
-                            // nearly closed on purpose: the first attempt
-                            // left a quarter of it open, which put the head
-                            // out on its own at the side and read as
-                            // lopsided rather than as a circle with an
-                            // arrow on it.
-                            var a0 = -Math.PI * 0.30
-                            var a1 = Math.PI * 1.34
-                            var headSpan = Math.atan2(headHalf, r)
-                            ctx.beginPath()
-                            ctx.arc(cx, cy, r, a0, a1 - headSpan, false)
+                            ctx.lineJoin = "round"
+                            ctx.path = arrowPath
                             ctx.stroke()
-
-                            // Head at the arc's leading end, pointing along
-                            // the anticlockwise tangent.
-                            var px = cx + r * Math.cos(a1)
-                            var py = cy + r * Math.sin(a1)
-                            var tx = Math.sin(a1)       // anticlockwise tangent
-                            var ty = -Math.cos(a1)
-                            var rx = Math.cos(a1)       // radial, outward
-                            var ry = Math.sin(a1)
-                            ctx.beginPath()
-                            ctx.moveTo(px + tx * headLen, py + ty * headLen)
-                            ctx.lineTo(px + rx * headHalf, py + ry * headHalf)
-                            ctx.lineTo(px - rx * headHalf, py - ry * headHalf)
-                            ctx.closePath()
-                            ctx.fill()
+                            ctx.path = ringPath
+                            ctx.stroke()
+                            ctx.restore()
                         }
                     }
 
