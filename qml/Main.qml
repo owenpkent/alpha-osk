@@ -2118,13 +2118,10 @@ Window {
                         keyW: root.keyW
                         keyH: root.keyH * 0.7
                         keySpacing: root.keySpacing
-                        // The width of the widest keyboard row, so this panel
-                        // sits flush with the grid instead of floating inset
-                        // inside it.  Same expression the grid rows resolve
-                        // to, read from the same derived _widestRow, so the
-                        // two cannot drift.
-                        rowWidth: root.keyW * root._widestRow.units
-                                + root.keySpacing * root._widestRow.gaps
+                        // Centred rather than filling the grid width, which
+                        // leaves visible space at both ends. That is the
+                        // chosen shape, not an oversight: see the geometry
+                        // note in FunctionRow.qml before changing it.
                         registerFn: root.registerCharKey
                         unregisterFn: root.unregisterCharKey
                         keyColor: Qt.darker(root.themeKeyColor, 1.15)
