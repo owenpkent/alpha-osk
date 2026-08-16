@@ -175,13 +175,29 @@ def _key_items(root) -> list:
     return out
 
 
+def _kd(item) -> dict:
+    """A key's `kd` as a plain dict, whichever side of the bridge built it.
+
+    The layout-driven keys get theirs from the layout JSON, so it arrives as
+    a QVariantMap and converts to a dict on its own. A key whose `kd` is
+    written as an object literal in QML (the Number Row, the Function Row)
+    arrives as a `QJSValue` instead, which has no `.get`, so a bare
+    `.get(...)` silently blew up rather than not matching.
+    """
+    kd = item.property("kd")
+    if kd is None:
+        return {}
+    if hasattr(kd, "toVariant"):
+        kd = kd.toVariant()
+    return kd if isinstance(kd, dict) else {}
+
+
 def _find_key(root, **match) -> object:
     """The single visible KeyButton whose `kd` matches every given field."""
     hits = [
         item
         for item in _key_items(root)
-        if item.isVisible()
-        and all((item.property("kd") or {}).get(k) == v for k, v in match.items())
+        if item.isVisible() and all(_kd(item).get(k) == v for k, v in match.items())
     ]
     assert hits, f"no visible key matching {match} (searched {len(_key_items(root))})"
     return hits[0]
@@ -296,6 +312,44 @@ class TestSpecialKeysAreNotDeadTaps:
             f"{_sent_keys(synth)!r}; a dead tap sends nothing at all"
         )
         assert _real_warnings(warnings) == []
+
+    def test_function_row_keys_reach_the_synthesizer(self, swipe_root) -> None:
+        """The Function row was the last panel not registering its keys.
+
+        Issue #15 is the general case: the overlay takes every press inside
+        the keyboard area and resolves it against the registry, so a key that
+        never registers is a dead tap for as long as Swipe Typing is on. It
+        was fixed for the main grid and for the Number Row; this panel was
+        missed, and being off by default is why nobody hit it.
+        """
+        root, warnings, synth = swipe_root
+        root.setProperty("showFunctionRow", True)
+        QCoreApplication.processEvents()
+        key = _find_key(root, type="special", action="f7")
+        synth.reset_mock()
+
+        _tap(root, key)
+
+        assert "F7" in _sent_keys(synth), (
+            f"tapping F7 under the swipe overlay sent {_sent_keys(synth)!r}; "
+            "a dead tap sends nothing at all"
+        )
+        assert _real_warnings(warnings) == []
+
+    def test_function_keys_stay_out_of_the_swipe_shape_map(self, swipe_root) -> None:
+        """Registered, but as specials.
+
+        An "F7" centre in the key-centre map is a phantom letter in every
+        shape match, which is the reason the two registries are separate in
+        the first place.
+        """
+        root, _, _ = swipe_root
+        root.setProperty("showFunctionRow", True)
+        QCoreApplication.processEvents()
+
+        chars = root.property("charKeyRegistry").toVariant()
+        leaked = [e for e in chars if str((e["kd"] or {}).get("action", "")).startswith("f")]
+        assert not leaked, "a function key leaked into the swipe key-centre map"
 
     def test_character_keys_still_work(self, swipe_root) -> None:
         """The tap fall-through for characters must survive the split."""
