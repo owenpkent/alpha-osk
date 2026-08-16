@@ -3041,6 +3041,89 @@ class TestOutsideClickClearsContext:
         assert bridge._pending_snippet_offer is None
 
 
+class TestCursorMotionClearsContext:
+    """Home, End, the arrows and the page keys move the caret somewhere we
+    did not watch it go, so everything describing the old position goes.
+
+    The branch that handles these keys already reasoned this way about
+    `_raw_token` and stopped there, which left the word half of the same
+    state describing text the caret has left.
+
+    It matters more than a wrong suggestion. `_current_word` and
+    `_context_buffer` are what the insert path measures against: a pill
+    types only the tail it believes is unseen, and otherwise selects
+    `len(_current_word)` characters backwards and overwrites them. Both
+    are arithmetic on a prefix that is no longer where the caret is.
+    """
+
+    @pytest.mark.parametrize(
+        "key", ["home", "end", "left", "right", "up", "down", "pageup", "pagedown"]
+    )
+    def test_every_cursor_key_clears_the_context(self, bridge: KeyboardBridge, key: str):
+        _type(bridge, "dear bob hel")
+        assert bridge._current_word == "hel"
+
+        bridge.pressSpecialKey(key)
+
+        assert bridge._current_word == ""
+        assert bridge._context_buffer == ""
+        assert bridge._sentence_buffer == ""
+
+    def test_the_pills_go_too(self, bridge: KeyboardBridge):
+        """Otherwise the bar is left offering a word for a prefix the
+        caret has left, and tapping it inserts into the new position."""
+        emitted: list = []
+        bridge.predictionsChanged.connect(emitted.append)
+        _type(bridge, "dear bob hel")
+
+        bridge.pressSpecialKey("home")
+
+        assert bridge._predictions == []
+        assert emitted[-1] == []
+
+    def test_the_keystroke_still_reaches_the_app(self, bridge: KeyboardBridge):
+        """The reset must not swallow the key itself."""
+        _type(bridge, "hel")
+        bridge._synth.send_key.reset_mock()
+        bridge.pressSpecialKey("home")
+        sent = [c[0][0] for c in bridge._synth.send_key.call_args_list]
+        assert "Home" in sent
+
+    def test_a_held_key_does_not_reset_per_repeat(self, bridge: KeyboardBridge):
+        """These auto-repeat. The guard is self-limiting rather than a
+        rate limit: after the first reset every field is already empty."""
+        _type(bridge, "dear bob hel")
+        emitted: list = []
+        bridge.predictionsChanged.connect(emitted.append)
+
+        for _ in range(8):
+            bridge.pressSpecialKey("left")
+
+        assert len(emitted) == 1, f"emitted {len(emitted)} times for one held key"
+
+    def test_delete_keeps_the_context(self, bridge: KeyboardBridge):
+        """The inverse, and the reason the set is the cursor keys rather
+        than every key in `_TOKEN_BREAKING_KEYS`. Delete removes the
+        character *after* the caret, so the run before it is untouched."""
+        _type(bridge, "dear bob hel")
+        bridge.pressSpecialKey("delete")
+        assert bridge._current_word == "hel"
+        assert bridge._context_buffer != ""
+
+    def test_a_snippet_offer_survives(self, bridge: KeyboardBridge):
+        """Same rule as Tab: moving the caret around a form you are
+        filling in must not close the Save button on the address you
+        just typed."""
+        offers: list = []
+        bridge.snippetOffered.connect(lambda *a: offers.append(a))
+        _type(bridge, "write to owen@example.com ")
+        assert offers, "no offer was raised, so this proves nothing"
+
+        bridge.pressSpecialKey("end")
+
+        assert bridge._pending_snippet_offer is not None
+
+
 class TestTabClearsContext:
     """Tab moves to the next field, so the buffers describing this one go.
 
@@ -3066,10 +3149,18 @@ class TestTabClearsContext:
         assert "Tab" in sent
 
     def test_an_ordinary_key_does_not_clear(self, bridge: KeyboardBridge):
-        """The inverse, so "reset on every special key" cannot pass as this."""
+        """The inverse, so "reset on every special key" cannot pass as this.
+
+        Delete rather than Left, which used to play this role: the cursor
+        keys clear now too (see TestCursorMotionClearsContext), and Delete
+        is the sharper example anyway. It removes the character *after*
+        the caret, so the run before it, which is the only thing these
+        buffers describe, is untouched.
+        """
         _type(bridge, "dear bob hel")
-        bridge.pressSpecialKey("left")
+        bridge.pressSpecialKey("delete")
         assert bridge._context_buffer != ""
+        assert bridge._current_word == "hel"
 
     def test_the_word_in_progress_is_not_learned(self, bridge: KeyboardBridge):
         """Tab is the accept-completion key in every IDE and shell.

@@ -1732,13 +1732,57 @@ class KeyboardBridge(QObject):
             # is the most likely thing to happen right after typing an
             # email address, and it must not close the Save button.
             self._reset_typing_context(keep_snippet_offer=True)
+        elif key_name in _NAV_KEYS:
+            # **A cursor-motion key invalidates the whole typing context,
+            # not just the token run.**  Home, End, the arrows and the page
+            # keys all put the caret somewhere we did not watch it go, so
+            # `_current_word` and `_context_buffer` stop describing the
+            # text in front of it.  This used to clear only `_raw_token`,
+            # which is the same reasoning applied to half the state.
+            #
+            # It is worth more than better suggestions.  Those two buffers
+            # are what the insert path measures against: a pill types only
+            # the tail it believes is unseen, and falls back to selecting
+            # `len(_current_word)` characters backwards and overwriting
+            # them.  Both are arithmetic on a prefix that is no longer at
+            # the caret, so a stale context does not merely suggest the
+            # wrong word, it can eat text the user typed somewhere else.
+            #
+            # The pills go with it, so there is nothing stale left to tap.
+            # That is what separates this from the mid-word reset the
+            # caret *poll* deliberately avoids: that one clears the buffers
+            # while leaving a live bar and a partial word on screen, which
+            # is how a tap ends up inserting a whole word beside its own
+            # prefix.  Here the bar is emptied in the same breath.
+            #
+            # Delete and Escape are deliberately NOT here.  Delete removes
+            # the character *after* the caret, so the run before it, which
+            # is the only thing these buffers describe, is untouched; and
+            # Escape does not move the caret at all.  They keep the
+            # narrower token-only clearing below.
+            #
+            # A live snippet offer survives, exactly as it does for Tab:
+            # moving the caret within a form you are filling in must not
+            # close the Save button on the address you just typed.
+            #
+            # Guarded so a held arrow does not fire a reset per repeat.
+            # After the first one every field is already empty, so the
+            # condition is self-limiting rather than a rate limit.
+            if (
+                self._current_word
+                or self._context_buffer
+                or self._sentence_buffer
+                or self._predictions
+                or self._raw_token
+            ):
+                self._reset_typing_context(keep_snippet_offer=True)
+                self._update_layer()
         elif key_name in _TOKEN_BREAKING_KEYS:
-            # Tab, Escape, Delete and every cursor-motion key move or
-            # destroy text we can no longer account for, so the run before
-            # the cursor is no longer whatever we last watched being
-            # typed.  Clearing it costs one missed auto-space decision and
-            # is the only honest answer; a stale token would suppress a
-            # space somewhere unrelated.
+            # Escape and Delete destroy text we can no longer account for,
+            # so the run before the cursor is no longer whatever we last
+            # watched being typed.  Clearing it costs one missed auto-space
+            # decision and is the only honest answer; a stale token would
+            # suppress a space somewhere unrelated.
             self._raw_token = ""
             # A capital owed to the word after a full stop does not
             # survive the caret moving somewhere else.  Space is
