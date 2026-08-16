@@ -19,7 +19,7 @@ Alpha-OSK is an AI-assisted, mouse-driven on-screen keyboard for Windows and Lin
 - Releases: `src/__version__.py` is the single source of version truth; publish to the separate `okstudio1/alpha-osk-releases` repo with an explicit `--repo` (the updater API URL is hard-pinned there); the installer asset name must be exactly `Alpha-OSK-Setup-{version}.exe`.
 - The generated NSIS installer no longer relies on `InstallDirRegKey HKCU` (a dangling read of a user-writable registry value nothing in the build ever wrote, which the silent `/S` auto-update path honoured anyway); `updater.py::_install_target_dir()` computes the directory instead and every silent install passes an explicit `/S /D=<dir>`. NSIS requires `/D=` to be the last parameter on the command line and unquoted even when the path has spaces. Don't reorder or requote it.
 - `run.py::ensure_admin_windows()` runs after dependency installation, not as the first statement in `main()`, so `pip install` never executes with an admin token; `--dashboard` never elevates at all. The repo tree is still user-writable, so this narrows the blast radius rather than closing it.
-- Load-bearing invariants: merge-strategy default MUST stay `"rank"`; `NgramPredictor._user_total == sum(user_vocab.values())`; window height is content-bound (never persist or assign it); every analytics metric needs both a session and an `_alltime_*` form; Windows subprocess calls that suppress output need `CREATE_NO_WINDOW`.
+- Load-bearing invariants: merge-strategy default MUST stay `"rank"`; `NgramPredictor._user_total == sum(user_vocab.values())`; window height is content-bound (never persist or assign it); every analytics metric needs both a session and an `_alltime_*` form; Windows subprocess calls need `CREATE_NO_WINDOW` when they suppress output *or* may run without a console to inherit (a git hook, a frozen GUI build).
 
 ## Stack & layout
 
@@ -30,7 +30,7 @@ Alpha-OSK is an AI-assisted, mouse-driven on-screen keyboard for Windows and Lin
 
 - Run: `python run.py` (creates venv, installs deps, launches the keyboard).
 - Test: `python -m pytest` (also `-k fuzzy`, or a single file like `tests/test_keyboard_bridge.py`).
-- Pre-push gate, the same checks as CI (`ruff check`, `ruff format --check`, `mypy` under **both** `--platform linux` and `--platform win32`, `pytest`): `python check.py` (fast, ~85s); `python check.py --full` adds the `--cov-fail-under=60` coverage gate (~3min, full CI parity). CI additionally runs `osv-scanner` over the lockfiles. Formatting is gated separately from linting because `ruff check` ignores layout; fix a format failure with `ruff format src/ tests/`. The two mypy passes are both required and neither substitutes for the other: `linux` is what the runner uses (typeshed gates whole symbols on platform, so `ctypes.WinDLL` degrades to `Any` there and trips `warn_return_any`), and `win32` is the only thing that type-checks the `if sys.platform == "win32"` bodies at all, since mypy prunes them as unreachable under the other.
+- Pre-push gate, the same checks as CI (`ruff check`, `ruff format --check`, `mypy` under **both** `--platform linux` and `--platform win32`, `pytest`): `python check.py` (~60s); `python check.py --full` adds the `--cov-fail-under=60` coverage gate (~110s, full CI parity). `python check.py --install-hook` wires it to `git push` so it runs automatically rather than by hand (`--no-verify` skips it once). CI additionally runs `osv-scanner` over the lockfiles. Formatting is gated separately from linting because `ruff check` ignores layout; fix a format failure with `ruff format src/ tests/`. The two mypy passes are both required and neither substitutes for the other: `linux` is what the runner uses (typeshed gates whole symbols on platform, so `ctypes.WinDLL` degrades to `Any` there and trips `warn_return_any`), and `win32` is the only thing that type-checks the `if sys.platform == "win32"` bodies at all, since mypy prunes them as unreachable under the other.
 
 ## Conventions
 
@@ -59,7 +59,7 @@ Alpha-OSK is an AI-powered on-screen keyboard for Windows and Linux. Users click
 
 ```bash
 python run.py          # Creates venv, installs deps, launches keyboard
-python -m pytest       # Run tests (1289 tests)
+python -m pytest       # Run tests (1421 tests)
 ```
 
 ## Architecture Overview
@@ -99,6 +99,7 @@ All in `src/prediction/`. Orchestrated by `hybrid_predictor.py`:
 | `ppm_predictor.py` | Character-level PPM (Dasher algorithm). Predicts next characters. |
 | `fuzzy_recognizer.py` | Spatial error correction. Considers nearby keys as candidates. Single tuned default (no profiles). |
 | `hybrid_predictor.py` | Merges all predictors. Manages model save/load. Emits Qt signals. |
+| `token_predictor.py` | Whole structured tokens the word model cannot hold: phone numbers, zips, house numbers, emails. Prefix-matched, no context, no fuzzy. See *Structured Tokens*. |
 | `vocabulary_pack.py` | Custom vocab pack import (no built-ins ship - see *Vocabulary Packs* section) |
 | `transformer_predictor.py` | Optional LLM re-ranking (disabled by default) |
 
@@ -231,6 +232,73 @@ Every positive case in `tests/test_text_patterns.py` is paired with the near-mis
 **The toast is parked at the bottom of the window and its buttons arm after 400 ms.** Both are deliberate, and neither is polish. The offer is raised by the *same keystroke* that repopulates the suggestion pills, so the pill row (y 52 to ~95, see `outerLayout.anchors.topMargin`) is the one region on screen that changes at the instant the banner appears, which makes it exactly the wrong place for a button that persists personal data: a click already travelling toward a pill would be caught by a control that did not exist when the user began the movement. The bottom row is static by comparison, and a mis-click landing on a key merely types a character. The `armed` flag closes the same race in time rather than in space, and 400 ms is chosen for imprecise motor input, where a click can land well after the intent formed.
 
 The toast is interactive, which is why its `closePolicy` **must** stay `Popup.NoAutoClose`: every OSK key click is a press-outside, so `CloseOnPressOutside` would slam it shut on the first keystroke (the same trap the prediction-edit popup documents). Its dwell is 8 s rather than the 1.4 s of the sibling confirmation toasts because the user has to read it, decide, and land a click with an imprecise pointer, and timing out calls `dismissSnippetOffer()`, because ignoring an offer is a decision too and without telling the bridge the value would stay "pending" and block the next one.
+
+## Structured Tokens (numbers, phone numbers, email domains)
+
+`NgramPredictor._tokenize` is `re.findall(r"[a-zA-Z']+", text.lower())`. Every digit and every symbol is discarded before a word reaches the vocabulary, which is right for a word model and leaves the engine structurally unable to learn a phone number, a zip, a house number or an email address. Those are among the strings the user retypes most, and each is expensive here: ten digits is ten clicks, and on the compact layouts the digit row is a layer hop away. `src/prediction/token_predictor.py` is that gap and nothing else.
+
+`_press_char` used to end with `if char.isalpha(): _update_predictions() else: <blank the bar>`, so a digit produced no suggestion at all. It now picks between two bars.
+
+### What it is not
+A flat count-weighted store of whole tokens, matched by prefix. **No context model** (the useful signal, "this is the number I always type", is already the count), **no fuzzy matching** (correcting a mistyped letter is a favour; "correcting" a digit silently changes a number, and a phone number one digit out is worse than no suggestion), **no capitalisation logic** (irrelevant for digits and domains, already carried in the stored form otherwise). It is deliberately **not merged into the pill ranking**: while the user is part-way through `owen@gm` or `555-123-`, no English word is a plausible suggestion, so the two bars are mutually exclusive rather than ranked, and the bridge picks.
+
+### The two bars
+`KeyboardBridge._in_token_context()` decides, off `_raw_token` (not `_current_word`, which resets at `@` and at every dot: see the `_raw_token` note under *Intelligent Spacing*). Two signals, and the asymmetry is deliberate:
+- **a digit anywhere**: already outside what the word engine can complete;
+- **an `@` that is not the first character**: `owen@` is an address whose only useful continuation is a domain, while `@owen` is a *mention*, which the word model can genuinely complete from a learned name. `tok.find("@") > 0`, not `"@" in tok`.
+
+Two characters minimum (`TokenPredictor.MIN_PREFIX_LEN`): on one character the prefix matches most of the store, so the bar would fill with unrelated numbers on the first digit of anything.
+
+**Every path that repopulates the bar routes through `_refresh_prediction_bar()`**, and that is structural rather than a convention: written out inline at each site the choice was missed twice. The backspace branch was the first, and only half-fixed: mid-address `_current_word` holds only the letters since the last `@` or dot, so it looks like an ordinary partial word, but after any `-`, `.`, `/`, `(` or `@` it is *empty*, so `555-` + Backspace lands in the `elif self._context_buffer` branch, which had no guard at all. `_recase_visible_predictions` was the second: tapping Shift or Caps Lock mid-token threw the whole token bar away. Both are the parallel-blocks failure this file warns about for sticky-modifier release, so the fix is the one prescribed there: one method, every emit through it.
+
+Two related invariants live with it. `_recase_visible_predictions` **returns early on a token bar** rather than routing through the helper: token pills bypass `_display_cased` so there is nothing to recase, and re-emitting would double-count `record_prediction_offered`. And the `_TOKEN_BREAKING_KEYS` branch **refreshes the bar when it clears `_raw_token`**, guarded on `_token_pill_inserts` being non-empty: a pill continues that run, so an arrow key leaves a pill promising a prefix the caret has left (the "on the bar right now" check cannot catch it, because that branch never touched the bar), while an unconditional refresh would fire a prediction query per auto-repeat.
+
+### Pills carry an insert map, not just text
+`_token_pill_inserts` maps **displayed text -> text a tap should type**, and the two differ. A domain pill reads `gmail.com` while the run before the cursor is `owen@`, so neither `word` nor `_current_word` tells `pressPrediction` what to insert; it dispatches on membership in that map, so a pill can only ever be inserted the way it was emitted. **The dispatch requires the pill to be in `self._predictions` too, and that half is the safety property.** There are a dozen sites in `keyboard_bridge.py` that emit a pill row, so "clear the map at each one" would be one more set of parallel blocks to keep in sync (the failure mode this file warns about for sticky-modifier release), and missing one would leave a stale entry tappable. Requiring the pill to be *on the bar right now* makes that impossible without touching any of them. `_on_predictions_ready` / `_on_predictions_refined` clear the map as well, but only to keep it small; correctness does not rest on them.
+
+**Domain pills show the domain, full learned tokens show the whole token.** Showing `owen@gmail.com` would match how word pills render and would be worse: at 20-odd characters the fitter drops the row to two suggestions (it drops rather than elides, see *Prediction pill widths*), and the local part is already on screen a centimetre away. Within any one row the semantics are uniform, because after an `@` every pill is a domain.
+
+**A tap inserts what the pill displayed, which is not always a suffix.** The store matches case-insensitively, so the pill and the characters on screen can disagree: with Caps Lock on and `OWEN@GM` typed, the pill reads `gmail.com` and a suffix-only insert of `ail.com` leaves `OWEN@GMail.com`, which is neither what the pill promised nor what the user typed, and is then learned back in that corrupted form. `Apt4B` matched from a typed `apt` fails the same way. So `_insert_token_pill` takes the suffix path only when the pill **case-sensitively** continues the typed run, and otherwise selects that run and overwrites it, exactly as `pressPrediction` falls back to `replace_text`. The run being continued is carried in `_token_pill_typed` (the tail after the `@` for a domain, the whole run otherwise), because it cannot be recovered from the pair. `keystrokes_saved` counts the pill minus what was typed, not the length of the retype.
+
+**Token pills bypass `_display_cased`.** It mirrors the typed prefix's capitals onto the pill, which is right for a word and wrong here: under Caps Lock, case 1 would render `gmail.com` as `GMAIL.COM` and then insert it that way.
+
+**A trailing space is appended except after an email or a phone number.** A house number sits mid-sentence (`1247 Main Street`) and a free space is a click saved. An email or a phone is a field *value*: a login form that does not trim rejects `owen@gmail.com ` with a validation error the user then has to notice, diagnose and backspace out of, which costs far more than the one click a wanted space costs. Nothing follows either shape in the same field anyway.
+
+Insert-path invariants mirror `pressPrediction` exactly, and the three that were missed are worth naming because each is a way the mirror can be *nearly* right. `_release_sticky_modifiers()` and `_consume_auto_cap()` **before** the insert, the `_send_text` inside `_without_held_modifiers()`, the insert itself never gated on privacy mode (the user tapped it) while everything that persists is. A deferred auto-space is settled with `prose=False`: the tap continues the token, so the punctuation was structural and delivering the space would put it inside the number. **Compatibility Mode rewires this too** (BackSpace x len(typed) + full retype): suffix-only insertion and `replace_text`'s Shift+Left selection are both unsafe inside an IDE or an RDP client, which is the whole reason that branch exists in `pressPrediction`.
+
+**The `_context_buffer` update is arithmetic on the join, not on the buffer.** The typed run straddles the two halves of the on-screen mirror: part of it sits in `_context_buffer` and part in `_current_word`, which is never committed. Computing `screen = _context_buffer + _current_word` and replacing the last `len(typed)` characters of *that* is the only formulation that works, and it works for all three send branches at once, because all three leave the same text on screen. Written against the buffer alone it recorded `555-3-4567` for a screen reading `555-123-4567`, and the replace branch additionally chopped `len(typed)` real characters off the front. It then cascaded: the next Backspace rehydrated the corrupted tail into `_current_word`, so the tap after that called `replace_text` with a length that ate real text. Guarded by `TestTokenPillsInsertWhatTheyDisplay`.
+
+**A tapped pill is one sighting, not two.** `_learn_raw_token` is called at the tap, because a domain accepted from the built-in list would otherwise never be learned at all; but emails and phones deliberately withhold the trailing space, so `_raw_token` still holds the completed token when the user's own space retires it again. `_learned_raw_token` records what was last handed to the store and suppresses the repeat; typing or backspacing clears it, so re-typing the same number later still counts. Count is the sort key in `TokenPredictor.predict`, so an unguarded double put pill-accepted tokens (including a built-in domain nobody typed) ahead of hand-typed ones.
+
+**The prediction-pill context menu is suppressed on a token pill** (`isTokenPill`, gating the right-click in `Main.qml`, with `_is_live_token_pill` guarding the four bridge slots as well because QML is free to drift). All four actions are word-model writes: "Show more" pushed a phone number into `unigrams` and `preferred`, which is the word cloud, Top Words, the dashboard's green boosted tags and the backup archive, i.e. exactly what `record_token_prediction_selected` exists to prevent. The other three do not even work in the other direction, since `TokenPredictor.predict` never consults `dispreference` or `blacklist`, and `editPrediction` is word-shaped throughout (it replaces `len(_current_word)`, which is only part of the run, always appends the withheld space, and persists the result into `capitalization`). Forgetting a token is `forgetToken`, in the dashboard's *Saved Numbers & Addresses*.
+
+### What may be learned
+`text_patterns.is_learnable_token` lives in that module, beside the other shape rules, because it is the same question ("does this text have a recognisable shape") and two copies of "what does an email look like" is how they start disagreeing. Learning happens at every point `_raw_token` is retired by something meaning *the user finished typing that*: space, Return, and the two punctuation branches **on their non-suppressed path only** (suppressed means intelligent spacing judged the mark to be part of the token, so it is still being typed). **Tab is deliberately excluded**, for the same reason it does not learn `_current_word`: it is the accept-completion key in every IDE and shell, so what precedes it is a prefix the app is about to finish.
+
+**The bar is asymmetric on purpose and was set against hostile examples, not tidy ones.** A missed token costs one suggestion the user never sees; a wrongly-learned one is prefix-matched into the suggestion bar, written to `ngram_model.json`, and carried in the Data Backup archive. So:
+- **Long digit runs are rejected wholesale** (`_MAX_LEARNABLE_DIGITS` = 8) rather than by trying to enumerate which identifiers are sensitive. Eight sits *below* a bare nine-digit US Social Security number while clearing every shape worth learning: zip (5), house number (1-6), year (4), IP (8), ISO date (8). Card numbers (16) and account numbers fall out by construction.
+- **Real phone numbers run longer than that** and are admitted separately by `is_phone`, which vets the digit *grouping* first (see the `_PHONE_GROUPINGS` comment: `(3,2,4)` is an SSN, `(4,2,2)` a date, `(4,4,4,4)` a card, `(3,3,1,1)` an IP). `_NEVER_LEARNED_GROUPINGS` re-blocks `(3,2,4)` because the generic "has a digit" path below `is_phone` would otherwise let it through.
+- **Plain alphabetic words are rejected**: they are the n-gram model's job, and a second, dumber vocabulary in front of the one that does context is a regression.
+
+**Entries are re-validated against the current rule on every load** (`from_dict`), so tightening the rule retroactively cleans an existing store: a file written by an older build, hand-edited, or arriving in an imported archive is not a reason to start offering an SSN. Malformed entries are dropped individually rather than rejecting the file: this rides in `ngram_model.json` alongside the vocabulary, and one bad token is not a reason to lose someone's learned words. **Load strips before it validates, exactly as `learn` does**, and the order is the point: validating the stripped form while storing the raw one let the store keep `555-1234.`, admitted on the strength of `555-1234` and then offered as a pill that types a stray full stop into the number. Counts merge rather than overwrite, so a file carrying both written forms keeps both sightings instead of whichever iterated last.
+
+### Analytics and the log
+Selections go through `TypingAnalytics.record_token_prediction_selected(rank, keystrokes_saved)`, **not** `record_prediction_selected`, which feeds its argument into `word_freq`. That table is persisted, surfaced as the dashboard's "Top Words" and carried in the backup archive; a phone number belongs in none of the three, least of all on a dashboard the user might screen-share. The word counter is skipped for the same reason it should be: a zip code is not a word, and counting it would inflate WPM. **Nothing in this path logs token content**, the same rule as the rest of the keystroke path, and every argument here is typed content by construction.
+
+### Storage
+Persisted in `ngram_model.json` under a `tokens` key, not a file of its own. That file is already the "everything the user taught us" store (capitalisation, blacklist, boosts), already in the Data Backup archive, and already has load-time size caps; a separate file would have needed all three re-established **and** a `_MODEL_FILES` change to the export. Absent from every model saved before this existed, which `from_dict` reads as an empty store. `clear_user_data()` clears it too: "clear my learned data" has to mean all of it. Bounded at `TokenPredictor.MAX_TOKENS` (2 000), evicting least-seen first with ties breaking toward the *longer* token (it cost more clicks to type, so it is worth more as a completion).
+
+### Seeing and forgetting what was learned
+
+*Dashboard -> **Saved Numbers & Addresses***, one removable tag per learned token, driven by `getLearnedTokens()` and `forgetToken(token)`.
+
+This is not a nicety, it is the other half of the admission rule. That rule is a **shape** test, not a judgement about sensitivity: it accepts any short run carrying a digit, which is also the shape of `hunter2`, `Tr0ub4dor`, `AB1234567` (a passport) and `sk-abc123def` (an API key). Password auto-detection **fails open** by design (no AT-SPI on Linux, no TCC grant on macOS, any field UIA does not mark), so the store must be assumed to see a password eventually. Rejecting every letters-plus-digits token would close that, and was tried and backed out: it also drops `Apt4B` and `v1.2`, and no rule keeps one while dropping the other because they are the same shape. **The project's position is that the recall is worth more, on the condition that a wrongly-learned token is visible and individually removable.** Delete this section and that trade stops being defensible.
+
+It is also the only window the store has onto itself. Learned *words* surface in the word cloud, the flow graph and Top Words; a phone number or an email deliberately reaches none of the three (see the analytics note above), so before this the only answer to "what has it remembered" was Clear Learned Data, which throws the vocabulary away too. `TokenPredictor.forget` had existed the whole time with nothing in QML calling it.
+
+`forgetToken` deliberately does **not** log, unlike its `unblacklistWord` siblings: those take a dictionary word, this takes whatever the user typed, and the diagnostic log is what gets attached to bug reports.
+
+Guarded by `tests/test_token_predictor.py`, `tests/test_text_patterns.py::TestLearnableToken`, and `tests/test_keyboard_bridge.py::TestStructuredTokenPredictions` / `TestEmailDomainSuggestions` / `TestLearnedTokensCanBeSeenAndRemoved` / `TestTheTokenBarSurvivesEveryWayTheBarIsRepopulated` / `TestTokenPillsInsertWhatTheyDisplay`. Every positive case is paired with the near-miss it must reject, and the pairs that bite are the SSN family, not the tidy ones.
 
 ## Data Backup (Export / Import)
 
@@ -488,6 +556,25 @@ counter breaks on the sequence nobody thought to write down).
   spatial model's normalisation and the `_context_buffer` / `_current_word`
   accounting.
 
+### Autouse guards in `tests/conftest.py`
+
+Two fixtures apply to every test, both stating a property that has to hold
+for tests nobody has written yet rather than being patched in case by case:
+
+- **`_unplug_the_live_desktop`** stubs `is_password_field()` and
+  `external_click_detected()`. `KeyboardBridge` is constructed for real, and
+  both read the developer's actual desktop, so a password field on screen
+  flipped the bridge into privacy mode mid-test.
+- **`_no_real_update_relauncher`** stubs `updater._spawn_relauncher`. Several
+  `download_and_install` tests stub only `_launch_installer` and reached the
+  real spawn, which launches a *detached* process by design; it outlives the
+  pytest worker and never exits, so every run of `tests/test_updater.py`
+  stranded four of them, each holding a console window.
+
+Both fail the same way when absent: something outside the test survives it.
+A test wanting the real behaviour patches the same name and wins, since its
+own monkeypatch applies after the fixture's.
+
 Determinism is load-bearing: the `alpha-osk` profile in `tests/conftest.py`
 sets `database=None` and `derandomize=True`, so these cannot pass locally
 and fail on CI from a stale `.hypothesis` corpus. Use
@@ -511,8 +598,45 @@ on the predicate instead of discarding.
 Run `python check.py` before `git push` to catch lint / format / type /
 test failures locally instead of waiting for CI's red X (the same gates
 GitHub Actions runs).  Default mode skips coverage tracking
-(~85 s); add `--full` to include the `--cov-fail-under=60` gate
-(~3 min, matches CI exactly).
+(~60 s); add `--full` to include the `--cov-fail-under=60` gate
+(~110 s, matches CI exactly).  **`python check.py --install-hook`** writes
+`.git/hooks/pre-push` so it runs on `git push` instead of from memory;
+`git push --no-verify` is the escape hatch.  Hooks are not version
+controlled, so a fresh clone has to run that once.
+
+**The suite is sharded with `pytest-xdist` (`-n auto`), and that is what
+makes the gate a minute instead of twenty-five.**  There is deliberately
+**no fast-subset tier**, and the reason is worth keeping: the three
+static steps cost ~5 s between them, so the gate *was* pytest, and pytest
+was slow for a reason unrelated to how many tests there are.  Building a
+`KeyboardBridge` cost ~1 s (20k-word dictionary + SymSpell deletion index
++ PPM), the `bridge` fixture is function-scoped, and there are ~1300
+tests: per-process setup repeated 1300 times, which no amount of clever
+test selection touches and which shards almost linearly.  Half of that
+per-bridge second was also a genuine bug: `HybridPredictor.__init__`
+called `set_frequencies` twice, and the first call's SymSpell index was
+discarded four lines later by the second, on every app launch as well as
+every test.  If the gate creeps back up, **measure before tiering**;
+trading away coverage on the one gate that runs before code leaves the
+machine is the last resort, not the first.
+
+Sharding needed one test-side fix, and it is the kind that recurs: the
+four headless QML modules each persist through a QML `Settings {}`
+element, which resolves to a *process-external* store (a key under HKCU
+on Windows).  Three of them defined the same `TEST_ORG` literal
+independently and the fourth imported it, so under `-n auto` several
+workers shared one scope and called `.clear()` on each other mid-test.
+That surfaced as "the window width drifted across restarts: [1160, 940,
+1160]", indistinguishable from the persistence bug those tests exist to
+catch. The scope now lives once in `tests/qt_settings_scope.py`, suffixed
+with `PYTEST_XDIST_WORKER`. Any new test touching QSettings, the
+registry, a fixed temp path, or any other machine-global resource has to
+key it per worker the same way.
+
+CI is deliberately left serial for now: it is the release gate, its
+runners have far fewer cores, and the local iteration loop was the
+problem being solved. Turning `-n auto` on there is a reasonable
+follow-up once this has some mileage.
 
 `mypy` runs **twice**, under `--platform linux` and `--platform win32`,
 and CI mirrors both.  Neither covers the other: linux is the runner's
@@ -839,6 +963,8 @@ Version source of truth is `src/__version__.py`. The release-asset filename **mu
 
 Full walkthrough (the four pieces from "user clicks install" to "new keyboard appears", plus the v1.0.19 file list) is in `docs/build/AUTO_UPDATE.md`. The non-obvious bits to remember: **never expose the download URL to QML** (the bridge only emits primitive ints); the pre-install toast sleeps `_PRE_INSTALL_TOAST_DWELL_S` (1.8 s) in the worker so it paints before the installer's taskkill; the relauncher splash is a `QTimer` state machine with an indeterminate `QProgressBar` (NSIS silent install has no real percentage); `_run_headless` is preserved as the test target and no-display fallback; and `_is_dev_target()` routes `python`/`pythonw` straight to headless so dev runs don't hang waiting for an exe mtime that never changes.
 
+**`_spawn_relauncher` must pass `CREATE_NO_WINDOW` *instead of* `DETACHED_PROCESS`, not alongside it.** Windows documents the two as mutually exclusive ("CREATE_NO_WINDOW ... is ignored if it is used with either CREATE_NEW_CONSOLE or DETACHED_PROCESS"), so OR-ing them, which this did first, leaves `DETACHED_PROCESS` winning and the console suppression inert. The console has to be *suppressed* rather than absent because the flags do not propagate: in dev mode the command starts `venv\Scripts\python.exe`, that interpreter re-execs as the base interpreter, and the re-exec is a fresh `CreateProcess` carrying none of them. Under `DETACHED_PROCESS` there is no console for it to inherit so it allocates one (an empty terminal per relauncher, titled with the working directory); under `CREATE_NO_WINDOW` it inherits a console that is merely invisible. Detachment is not lost: Windows has no parent-death signal, so the child already outlives us, and `CREATE_NEW_PROCESS_GROUP` keeps it clear of the installer's taskkill. Relatedly, **no test may reach the real `_spawn_relauncher`** (an autouse guard in `tests/conftest.py` enforces it): several `download_and_install` tests stub only `_launch_installer`, and each real spawn is a detached process that outlives the pytest worker and never exits, because the helper has no branch for a parent PID that is already gone. That last part is still open, see `TODO.md`. Full write-up in `docs/build/AUTO_UPDATE.md`.
+
 ## Accessibility Ecosystem
 
 Design doc at `docs/roadmap/ECOSYSTEM.md`. Alpha-OSK is part of a four-tool adaptive input platform:
@@ -1000,7 +1126,7 @@ easiest to reintroduce:
 - **Games need a held key, not a zero-gap tap.** Games read the keyboard by *polling* state once per render frame (DirectInput / Raw Input / `GetAsyncKeyState`), so a key-down+key-up injected in one `SendInput` batch can land entirely between two polls and be missed: the keystroke does nothing in-game even though it works everywhere else. Auto game-compat fixes this: when `_window_is_game(hwnd)` is true, `_game_auto_active` flips on (set in the same 250 ms foreground poll as compat auto-detect) and single keys are sent with `hold_seconds = _GAME_KEY_HOLD_SECONDS` (50 ms). `WindowsKeySynthesizer.send_key` then splits the injection into a down-batch, a real `time.sleep`, and an up-batch (modifiers wrap the held key). Non-game keystrokes keep the zero-latency atomic path. `_window_is_game` uses two signals (`keyboard_bridge.py`): (1) the owning-process exe is in `_GAME_PROCESS_NAMES` (seeded with Age of Empires; extend like `_COMPAT_PROCESS_NAMES`), which catches games even in windowed mode; (2) a **borderless-fullscreen heuristic** (`_window_is_borderless_fullscreen`: window rect covers the whole monitor *and* the window has no `WS_CAPTION`) as a zero-config catch-all for unlisted games. The heuristic is deliberately skipped for exes in `_COMPAT_PROCESS_NAMES` (IDEs / remote-desktop clients), which are sometimes run fullscreen and must not get the typing-lag hold. Requiring "no caption" excludes normal maximized windows (which keep their title bar); the remaining false positives (fullscreen video players, slideshows) are harmless because a 50 ms hold doesn't hurt there. This is unrelated to UIAccess: a signed Program-Files install still hit it because the keystrokes *reach* the game, they're just too brief to be polled.
 - **`pressKey` lowercases its input** - use `pressKeyLiteral` when QML already resolved the final character (right-click shifted variant, etc.).
 - **QML `Text` defaults to `AutoText`, which sniffs the string for HTML and can trigger an outbound request just from being displayed.** Any `Text` rendering a value that ultimately came from imported or otherwise untrusted data (a vocabulary pack's `name`/`description`, anything read from a file the user picked) must set `textFormat: Text.PlainText` explicitly, or an `<img src=...>` planted in that string makes Qt fetch it the moment the Settings page renders. 23 `Text` elements across 7 QML files (`Main.qml`, `UnifiedSettingsPanel.qml`, `DebugPanel.qml`, `AnalyticsDashboard.qml`, `ModelVisualization.qml`, `KeyButton.qml`, `SettingsToggle.qml`) now set it explicitly; new `Text` elements displaying untrusted strings must too. **Known gap**: the attached-property `ToolTip.text` idiom has no `textFormat` to set, so a tooltip built from untrusted text is not covered.
-- **Invariants**: `NgramPredictor._user_total == sum(user_vocab.values())`; merge strategy default MUST stay `"rank"`; window height is content-bound (never persist/assign it); analytics metrics need both session and `_alltime_*` forms; Windows subprocess calls suppressing output need `CREATE_NO_WINDOW`.
+- **Invariants**: `NgramPredictor._user_total == sum(user_vocab.values())`; merge strategy default MUST stay `"rank"`; window height is content-bound (never persist/assign it); analytics metrics need both session and `_alltime_*` forms; Windows subprocess calls need `CREATE_NO_WINDOW` when they suppress output *or* may run without a console to inherit.
 
 ## Right-Click for Shifted Character
 

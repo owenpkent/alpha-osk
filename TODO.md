@@ -7,6 +7,10 @@
 - [x] **Key input simulation** — Send keystrokes to focused app via xdotool
 - [x] **Simple QWERTY layout** — Standard keyboard arrangement
 
+## Known bugs
+
+- [ ] **The update relauncher never exits when its parent PID is gone.** Its whole job is to wait for a parent to die and then relaunch, but there is no exit path for "the parent is already gone", so it waits indefinitely. Found live: `python -m src.keyboard_app --update-relauncher --parent-pid N` process trees still running with their parent PIDs long dead. The two things that made this *visible* are fixed (each was holding a console window, and the test suite was spawning four of them per run), so what is left is stranded processes nobody sees. Fix is an early exit when the parent PID does not resolve, plus a bounded overall timeout. See the detached-spawn paragraph in `docs/architecture/GOTCHAS.md`.
+
 ## Phase 2: Accessibility Core
 
 - [ ] **Dwell-click support** — Trigger keys by hovering

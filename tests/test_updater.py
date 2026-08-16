@@ -29,6 +29,10 @@ from src.updater import (
     is_newer,
 )
 
+# Captured before the autouse guard in conftest.py replaces it, so the
+# flag assertions below can inspect what would really be launched.
+_REAL_SPAWN_RELAUNCHER = updater._spawn_relauncher
+
 
 class TestVersionComparison:
     """Strict semver — string compare would let 1.0.10 lose to 1.0.2."""
@@ -786,3 +790,62 @@ class TestLaunchInstaller:
         assert len(popen_calls) == 1
         args = popen_calls[0][0][0]
         assert args == [str(dest), "/S", "/D=/opt/alpha-osk"]
+
+
+class TestRelauncherSpawnHasNoConsole:
+    """The update relauncher must not leave a console window behind.
+
+    `_spawn_relauncher` passed `DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP`
+    with a comment asserting "No new console", and that was wrong in a way
+    worth pinning: DETACHED_PROCESS detaches only the process it creates and
+    does not propagate, so the venv interpreter's re-exec into the base
+    interpreter allocated one anyway.  The symptom was an empty terminal per
+    relauncher, which is how the leaking-process bug above was noticed.
+    """
+
+    def _info(self):
+        return updater.UpdateInfo(
+            version="1.0.3",
+            download_url=(
+                "https://github.com/okstudio1/alpha-osk-releases/releases/"
+                "download/v1.0.3/Alpha-OSK-Setup-1.0.3.exe"
+            ),
+            asset_name="Alpha-OSK-Setup-1.0.3.exe",
+            notes="",
+        )
+
+    def test_create_no_window_is_set_on_windows(self, monkeypatch):
+        import subprocess as sp
+
+        if not hasattr(sp, "CREATE_NO_WINDOW"):
+            pytest.skip("CREATE_NO_WINDOW is Windows-only")
+
+        # The autouse guard in conftest stubs this out for every test, so
+        # restore the real one to inspect what it would launch.
+        monkeypatch.setattr(updater, "_spawn_relauncher", _REAL_SPAWN_RELAUNCHER)
+        monkeypatch.setattr(sys, "platform", "win32")
+        seen = {}
+
+        def fake_popen(cmd, **kwargs):
+            seen.update(kwargs)
+            return object()
+
+        monkeypatch.setattr(updater.subprocess, "Popen", fake_popen)
+        assert updater._spawn_relauncher("1.0.3") is True
+        flags = seen["creationflags"]
+        assert flags & sp.CREATE_NO_WINDOW, (
+            "the relauncher would allocate a console; DETACHED_PROCESS does "
+            "not cover the venv interpreter's re-exec"
+        )
+        # The half that makes the assertion above mean anything.  Windows
+        # documents CREATE_NO_WINDOW as *ignored* when combined with
+        # DETACHED_PROCESS, so a test that only checked the bit was
+        # present passed just as happily against the version where it did
+        # nothing at all.
+        assert not flags & sp.DETACHED_PROCESS, (
+            "DETACHED_PROCESS makes Windows ignore CREATE_NO_WINDOW, so the "
+            "console suppression above would be inert"
+        )
+        assert flags & sp.CREATE_NEW_PROCESS_GROUP, (
+            "it must stay out of our console group so the installer's taskkill cannot sweep it up"
+        )

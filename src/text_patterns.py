@@ -168,20 +168,26 @@ _ADDRESS_RE = re.compile(
 # ---------------------------------------------------------------------
 
 
-def _strip_trailing_punctuation(token: str) -> str:
+def strip_trailing_punctuation(token: str) -> str:
     """Drop sentence punctuation clinging to the end of a token.
 
     "owen@example.com." at the end of a sentence is still an email; the
     full stop belongs to the prose, not to the address.  Leading
     punctuation is left alone -- it is far rarer and stripping it would
     turn "(555" into something that looks like a number fragment.
+
+    Public because ``TokenPredictor.learn`` stores what this returns
+    while ``is_learnable_token`` validates it.  Those two have to be the
+    same string: a second copy of the character class would let the
+    store persist tokens that were never validated in the form they were
+    saved in.
     """
     return token.rstrip(".,;:!?)]}\"'")
 
 
 def is_email(token: str) -> bool:
     """True if *token* is shaped like an email address."""
-    token = _strip_trailing_punctuation(token.strip())
+    token = strip_trailing_punctuation(token.strip())
     if not token or len(token) > _MAX_TOKEN_LEN:
         return False
     return bool(_EMAIL_RE.match(token))
@@ -228,7 +234,7 @@ def is_phone(token: str) -> bool:
     to enumerate ("+44 20 7946 0958", "+1 555 123 4567"), so a "+" plus a
     plausible digit count is accepted on its own.
     """
-    token = _strip_trailing_punctuation(token.strip())
+    token = strip_trailing_punctuation(token.strip())
     if not token or len(token) > _MAX_TOKEN_LEN:
         return False
     if not _PHONE_ALLOWED_RE.match(token):
@@ -239,6 +245,96 @@ def is_phone(token: str) -> bool:
     if token.startswith("+"):
         return True
     return _digit_groups(token) in _PHONE_GROUPINGS
+
+
+# ---------------------------------------------------------------------
+#  Learnable tokens
+# ---------------------------------------------------------------------
+
+# The n-gram model tokenises on ``[a-zA-Z']+``, so every digit and every
+# symbol is discarded before it ever reaches the vocabulary.  That is the
+# right call for a *word* model -- but it means a house number, a zip, a
+# phone number and an email address are, to the prediction engine, things
+# the user has never typed.  ``TokenPredictor`` keeps them in a separate
+# prefix-matched store, and this is the gate on what gets in.
+#
+# It lives here rather than next to the store because it is the same
+# question the rest of this module answers ("does this text have a
+# recognisable shape"), and answering it in two places is how the two
+# copies start disagreeing about what an email looks like.
+
+_MIN_LEARNABLE_LEN = 3
+_MAX_LEARNABLE_LEN = 64
+
+# Above this many digits a token stops looking like something a person
+# retypes often and starts looking like something they would not want a
+# keyboard to remember: card numbers (16), IBANs, account and policy
+# numbers.  Eight is chosen to sit *below* a bare nine-digit US Social
+# Security number while still clearing every shape worth learning -- a
+# zip (5), a house number (1-6), a year (4), an IP (8), an ISO date (8).
+# Real phone numbers run longer than this and are admitted separately by
+# ``is_phone``, which vets their digit *grouping* first.
+_MAX_LEARNABLE_DIGITS = 8
+
+# Digit groupings that are never learned even when they clear the count.
+# (3, 2, 4) is a US Social Security number; ``is_phone`` already rejects
+# it, but this store would otherwise accept it through the generic
+# "has a digit" path below, and a keyboard that offers to complete an SSN
+# from its first three digits is the worst thing this feature could do.
+_NEVER_LEARNED_GROUPINGS = frozenset({(3, 2, 4)})
+
+
+def is_learnable_token(token: str) -> bool:
+    """True if *token* is a structured token worth remembering verbatim.
+
+    The bar is deliberately asymmetric.  A missed token costs one
+    suggestion the user never sees; a wrongly-learned one puts a slice of
+    something private into a store that is prefix-matched into the
+    suggestion bar and travels in the Data Backup archive.  So this
+    admits the shapes people genuinely retype (emails, phone numbers,
+    house numbers, zips, apartment numbers, versions, IPs) and rejects
+    long digit runs wholesale rather than trying to enumerate which kinds
+    of identifier are sensitive.
+
+    Plain alphabetic words are rejected: they are the n-gram model's job,
+    and duplicating them here would put a second, dumber vocabulary in
+    front of the one that does context.
+
+    **A mixed alphanumeric token is admitted, and that is a deliberate
+    call rather than an oversight.**  The digit cap does not look at how
+    letters and digits interleave, so "hunter2", "Tr0ub4dor" and
+    "AB1234567" all clear it, and password auto-detection fails open by
+    design (no AT-SPI on Linux, no TCC grant on macOS, any field UIA does
+    not mark).  Rejecting every letter-plus-digit token would close that,
+    at the cost of "Apt4B" and "v1.2" -- there is no rule that keeps one
+    and drops the other, because they are the same shape.  The project's
+    position is that the recall is worth more: a wrongly-learned token is
+    visible to the user and removable (``TokenPredictor.forget``, and
+    Clear Learned Data), where a missed one is silently never offered.
+    If that trade is ever revisited, the change is a single
+    ``any(ch.isalpha() ...)`` rejection below, and the tests that pin the
+    current behaviour name it explicitly.
+    """
+    token = strip_trailing_punctuation(token.strip())
+    if not (_MIN_LEARNABLE_LEN <= len(token) <= _MAX_LEARNABLE_LEN):
+        return False
+    if any(ch.isspace() for ch in token):
+        return False
+
+    digits = sum(1 for ch in token if ch.isdigit())
+    if "@" in token:
+        # An address or nothing.  "@owen" is a mention, not a token with a
+        # domain to complete, and is left to the word model.
+        return is_email(token)
+    if not digits:
+        return False
+
+    groups = _digit_groups(token)
+    if groups in _NEVER_LEARNED_GROUPINGS:
+        return False
+    if is_phone(token):
+        return True
+    return digits <= _MAX_LEARNABLE_DIGITS
 
 
 # There is deliberately no ``looks_like_url``.  Neither caller needs one:
@@ -401,7 +497,7 @@ def detect_snippet_candidate(text: str) -> Optional[Tuple[str, str]]:
 
     for token in tokens:
         if is_email(token):
-            return ("email", _strip_trailing_punctuation(token))
+            return ("email", strip_trailing_punctuation(token))
 
     phone = _find_phone(text)
     if phone is not None:
@@ -430,7 +526,7 @@ def _find_phone(text: str) -> Optional[str]:
             if start + size > len(tokens):
                 continue
             candidate = " ".join(tokens[start : start + size])
-            stripped = _strip_trailing_punctuation(candidate)
+            stripped = strip_trailing_punctuation(candidate)
             if is_phone(stripped):
                 return stripped
     return None

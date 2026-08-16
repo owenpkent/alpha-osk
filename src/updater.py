@@ -704,9 +704,35 @@ def _spawn_relauncher(new_version: str) -> bool:
 
         flags = 0
         if sys.platform == "win32":
-            # Detach: the helper survives our taskkill. No new console.
-            flags = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(
-                subprocess, "CREATE_NEW_PROCESS_GROUP", 0
+            # Detach so the helper survives our taskkill, and suppress the
+            # console explicitly.
+            #
+            # CREATE_NO_WINDOW *instead of* DETACHED_PROCESS, not
+            # alongside it.  Windows documents the two as mutually
+            # exclusive -- "CREATE_NO_WINDOW ... is ignored if it is used
+            # with either CREATE_NEW_CONSOLE or DETACHED_PROCESS" -- so
+            # OR-ing them, which is what this did first, silently left
+            # DETACHED_PROCESS winning and the console suppression inert.
+            #
+            # The console has to be suppressed rather than absent because
+            # the flags do not propagate: in dev mode `cmd` starts
+            # `venv\Scripts\python.exe`, that interpreter re-executes as
+            # the base interpreter, and the re-exec is a fresh
+            # CreateProcess carrying none of them.  Under DETACHED_PROCESS
+            # the parent has no console for that child to inherit, so the
+            # child allocates one -- observed as a live `venv python ->
+            # base python -> conhost.exe` tree, one empty console window
+            # per relauncher, titled with the working directory because
+            # the helper writes nothing to it.  Under CREATE_NO_WINDOW the
+            # parent has a console that is merely invisible, the re-exec
+            # inherits it, and nothing is drawn.
+            #
+            # Detachment is not lost with DETACHED_PROCESS gone: Windows
+            # has no parent-death signal, so the child already outlives
+            # us, and CREATE_NEW_PROCESS_GROUP keeps it out of our console
+            # group so the installer's taskkill cannot sweep it up.
+            flags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) | getattr(
+                subprocess, "CREATE_NO_WINDOW", 0
             )
         subprocess.Popen(
             cmd,

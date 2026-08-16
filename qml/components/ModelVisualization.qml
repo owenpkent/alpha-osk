@@ -28,8 +28,17 @@ Item {
     property int activePulse: 0
 
     // Refresh data from bridge
+    // Structured tokens the store has learned (numbers, phone numbers,
+    // email addresses).  Kept out of `vizData` deliberately: that payload
+    // feeds the word cloud and the flow graph, and a phone number has no
+    // place in either.  This is a flat list with its own removal path.
+    property var learnedTokens: []
+
     function refresh() {
-        if (keyboard) vizData = keyboard.getVisualizationData()
+        if (keyboard) {
+            vizData = keyboard.getVisualizationData()
+            learnedTokens = keyboard.getLearnedTokens()
+        }
     }
 
     function openDrillDown(word) {
@@ -977,6 +986,101 @@ Item {
                                                 cursorShape: Qt.PointingHandCursor
                                                 onClicked: {
                                                     if (keyboard) keyboard.undisprefer(modelData.word)
+                                                    vizPanel.refresh()
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // -- Saved Numbers & Addresses --
+                        //
+                        // The token store's only window onto itself.  Learned
+                        // *words* surface in the cloud, the flow graph and Top
+                        // Words; a phone number or an email deliberately
+                        // reaches none of those, so without this section the
+                        // only way to answer "what has it kept" was Clear
+                        // Learned Data, which throws away the vocabulary too.
+                        //
+                        // That matters because the admission rule is a shape
+                        // test rather than a judgement about sensitivity: it
+                        // accepts any short run carrying a digit, which is
+                        // also the shape of a password typed into a field
+                        // where auto-detection failed open.  Keeping the rule
+                        // permissive is a deliberate call for recall, and it
+                        // is only defensible while this section exists.
+                        Rectangle {
+                            Layout.fillWidth: true
+                            Layout.preferredHeight: tokenCol.implicitHeight + 28
+                            color: "#222244"
+                            radius: 8
+                            visible: vizPanel.learnedTokens && vizPanel.learnedTokens.length > 0
+
+                            ColumnLayout {
+                                id: tokenCol
+                                anchors.fill: parent
+                                anchors.margins: 14
+                                spacing: 6
+
+                                Text {
+                                    text: "Saved Numbers & Addresses"
+                                    color: "#ccc"
+                                    font.pixelSize: 14
+                                    font.weight: Font.DemiBold
+                                }
+
+                                Text {
+                                    text: "Offered as suggestions when you start typing them. Click to forget."
+                                    color: "#777"
+                                    font.pixelSize: 11
+                                    wrapMode: Text.WordWrap
+                                    Layout.fillWidth: true
+                                    Layout.bottomMargin: 2
+                                }
+
+                                Flow {
+                                    Layout.fillWidth: true
+                                    spacing: 6
+
+                                    Repeater {
+                                        model: vizPanel.learnedTokens
+                                        delegate: Rectangle {
+                                            width: tokRow.implicitWidth + 16
+                                            height: 26
+                                            radius: 4
+                                            color: tokMa.containsMouse ? "#204040" : "#203030"
+                                            border.color: tokMa.containsMouse ? "#4dd" : "#377"
+                                            border.width: 1
+
+                                            Row {
+                                                id: tokRow
+                                                anchors.centerIn: parent
+                                                spacing: 4
+                                                Text {
+                                                    // PlainText: this is verbatim typed content,
+                                                    // so AutoText would sniff it for markup.
+                                                    text: modelData.token
+                                                    textFormat: Text.PlainText
+                                                    color: "#8dd"
+                                                    font.pixelSize: 11
+                                                }
+                                                Text {
+                                                    text: "\u2715"
+                                                    color: "#6cc"
+                                                    font.pixelSize: 10
+                                                    visible: tokMa.containsMouse
+                                                }
+                                            }
+
+                                            MouseArea {
+                                                id: tokMa
+                                                anchors.fill: parent
+                                                hoverEnabled: true
+                                                cursorShape: Qt.PointingHandCursor
+                                                onClicked: {
+                                                    if (keyboard) keyboard.forgetToken(modelData.token)
                                                     vizPanel.refresh()
                                                 }
                                             }

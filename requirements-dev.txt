@@ -11,6 +11,14 @@
 pytest==9.1.1
 pytest-cov==7.1.0
 pytest-mock==3.15.1
+# Parallel test execution (`-n auto`), used by check.py and CI.  The
+# suite is CPU-bound on process-local setup rather than on any single
+# slow test: building a KeyboardBridge costs ~0.6 s (dictionary load +
+# SymSpell deletion index + PPM), the bridge fixture is function-scoped,
+# and there are ~1300 tests.  That is embarrassingly parallel, and
+# sharding it is the only change that touches the total rather than
+# trimming the tail.
+pytest-xdist==3.8.0
 # Property-based tests (tests/test_property_*.py).  Generates adversarial
 # inputs for the import-hardening paths and the prediction-engine
 # invariants, where hand-picked examples only cover the cases we thought

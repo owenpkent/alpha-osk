@@ -41,10 +41,15 @@ launches the keyboard. Subsequent runs reuse the venv.
 ### Running tests
 
 ```bash
-python -m pytest                    # full suite
+python -m pytest -n auto            # full suite, sharded (~50s; ~25min without -n)
 python -m pytest tests/test_keyboard_bridge.py
 python -m pytest -k "fuzzy"
 ```
+
+`-n auto` matters more here than it usually would: the suite's cost is
+per-process setup repeated per test rather than any single slow test, so
+running it in one process is roughly 25x slower. `python check.py` passes
+the flag for you.
 
 Two suites are property-based (`tests/test_property_*.py`, using
 [Hypothesis](https://hypothesis.readthedocs.io/)): they cover the archive
@@ -92,14 +97,32 @@ found only because someone re-ran the new test on the pre-fix tree.
 Before pushing, run the same gates CI runs:
 
 ```bash
-python check.py        # lint + format + type + tests, ~85s
-python check.py --full # adds coverage gate, ~3min
+python check.py              # lint + format + type + tests, ~60s
+python check.py --full       # adds coverage gate, ~110s
+python check.py --install-hook  # run it on `git push` instead of by hand
 ```
 
 This catches ruff / ruff-format / mypy / pytest failures locally instead
 of red Xs in CI. Formatting is checked separately from linting because
 `ruff check` does not look at layout; fix a format failure by running
 `ruff format src/ tests/`, not by hand.
+
+`--install-hook` writes `.git/hooks/pre-push`. Hooks are not version
+controlled, so run it once per clone; `git push --no-verify` skips it.
+
+The suite runs sharded via `pytest-xdist` (`-n auto`), which is what
+keeps it under a minute. The cost is per-process setup repeated per
+test (building a `KeyboardBridge` loads a 20k-word dictionary and builds
+a SymSpell index), not any single slow test. Two consequences for new
+tests:
+
+- **Anything machine-global has to be keyed per worker.** QSettings
+  scopes, registry keys, fixed temp paths, ports. The headless QML tests
+  do this via `tests/qt_settings_scope.py`; use `tmp_path` for files.
+  A test that shares such state with another worker fails as though the
+  code were broken, which is the most expensive kind of flake to read.
+- **`python check.py --serial` reproduces a failure in one process**, which
+  is the first thing to try when a test passes alone and fails in a run.
 
 ## Architecture orientation
 

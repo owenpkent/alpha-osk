@@ -19,7 +19,7 @@ Active design docs for the engine, the platform abstraction, and the user-facing
 - [`architecture/PPM.md`](architecture/PPM.md): variable-order character model with PPMD escape, used for next-character prediction inside a partial word.
 - [`architecture/FUZZY_RECOGNITION.md`](architecture/FUZZY_RECOGNITION.md): spatial error correction, tunable constants, the relationship to SymSpell.
 - [`architecture/SWIPE_TYPING.md`](architecture/SWIPE_TYPING.md): shape-matching gesture decoder (simplified SHARK²).
-- [`architecture/PREDICTION_NOTES.md`](architecture/PREDICTION_NOTES.md): the "unified system" framing across the predictors, fragment filter and repetition gate, autocorrect thresholds, reinforcement and backspace-as-negative-signal, prioritised future work.
+- [`architecture/PREDICTION_NOTES.md`](architecture/PREDICTION_NOTES.md): the "unified system" framing across the predictors, fragment filter and repetition gate, autocorrect thresholds, reinforcement and backspace-as-negative-signal, the structured-token store for numbers and email addresses, prioritised future work.
 - [`architecture/PLATFORM_ARCHITECTURE.md`](architecture/PLATFORM_ARCHITECTURE.md): cross-platform abstraction details (key synthesis, password-field detection, config paths).
 - [`architecture/COMPACT_VIEW.md`](architecture/COMPACT_VIEW.md): the denser 13x4 keyboard for small screens, its measurements, and the layer model behind `?123`.
 - [`architecture/MODULAR_LAYOUTS.md`](architecture/MODULAR_LAYOUTS.md): custom keyboard layouts inspired by Octavium / Nimbus.
@@ -36,7 +36,7 @@ Per-platform build pipelines and the auto-update path. Edit when the release pro
 - [`build/WINDOWS.md`](build/WINDOWS.md): Windows build, EV signing, NSIS installer, release checklist, troubleshooting.
 - [`build/LINUX.md`](build/LINUX.md): Linux build pipeline, AppImage internals, troubleshooting.
 - [`build/MACOS.md`](build/MACOS.md): macOS port plan, phase breakdown, TCC and SEI specifics.
-- [`build/AUTO_UPDATE.md`](build/AUTO_UPDATE.md): auto-update flow, threat model, signature verification.
+- [`build/AUTO_UPDATE.md`](build/AUTO_UPDATE.md): auto-update flow, threat model, signature verification, and the relauncher spawn (why it needs `CREATE_NO_WINDOW` on top of detaching, and why no test may reach it).
 - [`build/BRANDING.md`](build/BRANDING.md): asset regeneration (icons, installer images).
 
 ## `roadmap/`: planned, not-yet-built

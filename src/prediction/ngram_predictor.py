@@ -15,6 +15,8 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+from .token_predictor import TokenPredictor
+
 _logger = logging.getLogger("NgramPredictor")
 
 
@@ -79,6 +81,12 @@ class NgramPredictor:
 
         # Capitalization: lowercase → preferred form (e.g. "owen" → "Owen")
         self.capitalization: Dict[str, str] = {}
+        # Structured tokens (phone numbers, zips, house numbers, emails).
+        # `_tokenize` strips every digit and symbol, so these cannot live
+        # in the vocabulary above; the store is owned here purely so it
+        # rides along in this class's save/load and gets backed up with
+        # the rest of what the user taught us.  See token_predictor.py.
+        self.tokens = TokenPredictor()
         # Words that are ALWAYS capitalized regardless of position
         self._always_capitalize: Dict[str, str] = {
             "i": "I",
@@ -1174,6 +1182,7 @@ class NgramPredictor:
             "preferred": dict(self.preferred),
             "blacklist_type_count": dict(self._blacklist_type_count),
             "capitalization": dict(self.capitalization),
+            "tokens": self.tokens.to_dict(),
             "candidate_counts": dict(self._candidate_counts),
             "candidate_last_seen": dict(self._candidate_last_seen),
         }
@@ -1274,6 +1283,9 @@ class NgramPredictor:
             }
             # Merge saved capitalization with built-in proper nouns (user overrides win)
             self.capitalization.update(caps)
+            # Absent from every model saved before the token store existed,
+            # which from_dict reads as an empty store rather than an error.
+            self.tokens.from_dict(data.get("tokens", {}))
             _logger.info(
                 "Model loaded from %s (%d blacklisted, %d capitalizations)",
                 path,
@@ -1441,6 +1453,9 @@ class NgramPredictor:
         self._learn_count = 0
         # Clear learned capitalization so user-typed forms don't persist
         self.capitalization.clear()
+        # Learned phone numbers / addresses / emails are user data too,
+        # and "clear my learned data" has to mean all of it.
+        self.tokens.clear()
 
         # Rebuild base vocabulary from wordlists
         self._load_frequency_wordlist()

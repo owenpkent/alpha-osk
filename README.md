@@ -10,7 +10,7 @@ Type into any Windows or Linux app by clicking on-screen keys. Built for people 
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![CI](https://github.com/owenpkent/alpha-osk/actions/workflows/ci.yml/badge.svg)](https://github.com/owenpkent/alpha-osk/actions/workflows/ci.yml)
-[![Tests](https://img.shields.io/badge/tests-1341-brightgreen.svg)](tests/)
+[![Tests](https://img.shields.io/badge/tests-1421-brightgreen.svg)](tests/)
 [![Releases](https://img.shields.io/badge/releases-alpha--osk--releases-orange.svg)](https://github.com/okstudio1/alpha-osk-releases/releases)
 
 <img src="assets/screenshots/dark-theme-keyboard.png" alt="Alpha-OSK on-screen keyboard with function row, QWERTY block, navigation cluster, and numpad" width="900" />
@@ -190,7 +190,7 @@ Yes on Windows (Unicode keystroke injection covers anything in BMP and supplemen
 | Anonymous telemetry (opt-in) | Client + UI shipped, endpoint not yet deployed |
 | Analytics dashboard | Shipping |
 | Data backup (export / import) | Shipping |
-| Test suite | 1341 tests passing |
+| Test suite | 1421 tests passing |
 | macOS port | In progress |
 | Federated learning | Designed, not implemented |
 | Voice dictation | Lives in sibling project (MacroVox) |
@@ -213,6 +213,7 @@ Yes on Windows (Unicode keystroke injection covers anything in BMP and supplemen
 
 - Hybrid n-gram + PPM + fuzzy spatial recognition merged with one of four user-selectable strategies (rank, RRF, linear, log-linear)
 - Learns your vocabulary on-device, with backspace as a negative signal
+- Learns the things a word model can't hold: your phone number, zip, house number and email address, suggested back by prefix. Typing `@` offers common email domains, and the ones you actually use move to the front. Long digit runs are refused outright so card and Social Security numbers are never stored (see [Privacy](docs/PRIVACY.md))
 - Right-click any prediction pill to show more, show less, edit, or remove permanently
 - Auto-rehabilitation of suppressed words after 3 manual retypes
 - Custom vocabulary pack import for domain dictionaries (medical, programming, etc.)
@@ -239,7 +240,7 @@ Yes on Windows (Unicode keystroke injection covers anything in BMP and supplemen
 ### Reliability
 
 - Single-instance lock prevents accidental duplicates
-- 1341 tests covering prediction, platform abstraction, bridge, vocab packs, telemetry, data export,
+- 1421 tests covering prediction, platform abstraction, bridge, vocab packs, telemetry, data export,
   including property-based suites that generate adversarial inputs for the archive / pack import
   paths and the prediction-engine invariants
 - CI runs ruff + mypy + pytest + OSV CVE scan on every push and PR
@@ -283,9 +284,10 @@ The full index lives in [`docs/README.md`](docs/README.md).
 
 ```bash
 python run.py                               # Launch the keyboard
-python -m pytest                            # Run the test suite (1341 tests)
-python check.py                             # Pre-push gate: ruff + mypy + pytest (~85s)
-python check.py --full                      # Adds coverage gate (~3min, matches CI)
+python -m pytest                            # Run the test suite (1421 tests)
+python check.py                             # Pre-push gate: ruff + mypy + pytest (~60s)
+python check.py --full                      # Adds coverage gate (~110s, matches CI)
+python check.py --install-hook              # Run that gate on `git push` instead of by hand
 python build/windows/build.py               # Build signed Windows installer
 python build/linux/build.py --appimage      # Build Linux AppImage
 ```

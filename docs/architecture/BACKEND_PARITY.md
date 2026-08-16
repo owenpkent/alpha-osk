@@ -50,6 +50,7 @@ Python status columns reflect `main`; C++ columns reflect the `cpp-rewrite` bran
 | Fuzzy / autocorrect | ✅ | ✅ | ✅ | 🚧 ² | ❌ | ❌ |
 | Hybrid merge (rank default) | ✅ | ✅ | ✅ | 🚧 ² | ❌ | ❌ |
 | Swipe typing | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ |
+| Structured tokens (numbers / phones / email domains) ⁹ | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ |
 | **Features** | | | | | | |
 | Settings panel | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ |
 | Snippets | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ |
@@ -112,6 +113,17 @@ Python status columns reflect `main`; C++ columns reflect the `cpp-rewrite` bran
    unbuilt, so those platforms still carry stale context when the user clicks from
    one field to another in a single window. See the *Clearing stale context* section
    in `CLAUDE.md`.
+9. **Python-only, and it is a real gap rather than a platform one.** The token
+   store (`src/prediction/token_predictor.py`), its admission rule
+   (`text_patterns.is_learnable_token`) and the bridge's two-bar switch
+   (`_in_token_context` / `_token_pill_inserts` / `_insert_token_pill`) have no
+   C++ counterpart. Nothing about it is platform-specific: it is plain string
+   handling plus a `tokens` key in `ngram_model.json`, so it ports wholesale
+   whenever the C++ bridge is next worked on. Port the admission rule *first* and
+   test it against the same SSN / card near-misses. That half is what keeps the
+   feature from remembering things it should not, and it is the half that looks
+   most droppable when transcribing. See the *Structured Tokens* section in
+   `CLAUDE.md`.
 
 ## Keeping this current
 
