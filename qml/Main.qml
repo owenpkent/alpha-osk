@@ -801,6 +801,46 @@ Window {
         return lum > 0.5 ? "#111111" : "#ffffff"
     }
 
+    // Bounding box of every monitor, in virtual-desktop coordinates.
+    //
+    // `Screen` is the screen the *item* is on, and `Screen.virtualX/Y`
+    // describe that screen's origin, not the desktop's, so neither one can
+    // answer "is this saved position still somewhere a user can see". The
+    // union of Qt.application.screens can.
+    function desktopBounds() {
+        var screens = Qt.application.screens
+        if (!screens || screens.length === 0)
+            return { left: 0, top: 0, right: Screen.width, bottom: Screen.height }
+        var left = screens[0].virtualX
+        var top = screens[0].virtualY
+        var right = left + screens[0].width
+        var bottom = top + screens[0].height
+        for (var i = 1; i < screens.length; ++i) {
+            var s = screens[i]
+            left = Math.min(left, s.virtualX)
+            top = Math.min(top, s.virtualY)
+            right = Math.max(right, s.virtualX + s.width)
+            bottom = Math.max(bottom, s.virtualY + s.height)
+        }
+        return { left: left, top: top, right: right, bottom: bottom }
+    }
+
+    // Clamp a restored window position back onto the desktop, in case the
+    // display layout changed since it was saved.
+    //
+    // Clamping against the primary screen instead is worse than not
+    // persisting at all: a window saved at x=2400 on a second monitor came
+    // back at 1560 on the primary one every launch, nowhere near the
+    // keyboard it belongs to, and a monitor to the *left* of the primary
+    // has negative coordinates that collapse to 0 the same way.
+    function clampedWindowPos(savedX, savedY, w, h) {
+        var b = root.desktopBounds()
+        return {
+            x: Math.max(b.left, Math.min(savedX, b.right - w)),
+            y: Math.max(b.top, Math.min(savedY, b.bottom - h))
+        }
+    }
+
     // Key tint for the "accent" style: the editing keys a user reaches for
     // without looking (Esc, Tab, Shift, Backspace, Del) on the compact
     // layouts, where the grid is uniform and there are no size cues to tell
@@ -2720,14 +2760,32 @@ Window {
                 clampPage()
             }
 
+            // Identity of the snippet the sheet (or the editor) is about,
+            // so a list replaced underneath it can be noticed. A Data
+            // Backup import swaps the whole list while the sheet is open,
+            // and an index is not an identity: staying on it silently
+            // retargets Delete at whatever landed there, and an index past
+            // the new end opens a blank editor whose save is a no-op while
+            // the toast still says "Saved". Label and value only, so a
+            // colour set from the sheet itself does not read as a
+            // different snippet.
+            function identityOf(idx) {
+                var s = snippetList[idx]
+                return s ? s.label + " " + s.value : ""
+            }
+            property string menuIdentity: ""
+            property string editIdentity: ""
+
             function openMenu(idx) {
                 confirmingDelete = false
                 menuIndex = idx
+                menuIdentity = identityOf(idx)
             }
 
             function closeMenu() {
                 confirmingDelete = false
                 menuIndex = -1
+                menuIdentity = ""
             }
 
             // Left-click on a tile: copy it to the clipboard, or open the
@@ -2742,12 +2800,32 @@ Window {
             // synthetic keystrokes. The clipboard has no focus race, and a
             // toast is proof it worked: an insert into the wrong window is
             // silent and invisible.
+            // Which button did what. Kept out of the delegate so it can be
+            // driven directly by the headless tests: every other path in
+            // this window is a named function they can call, and this one
+            // -- the interaction the window is built around -- was the only
+            // logic reachable solely through a real mouse event.
+            function tileClicked(idx, button) {
+                if (button === Qt.RightButton)
+                    openMenu(idx)
+                else
+                    primaryTap(idx)
+            }
+
             function primaryTap(idx) {
                 var s = snippetList[idx]
                 if (s && s.value && s.value.length > 0) {
                     if (keyboard && keyboard.copySnippet(idx)) {
                         snippetCopiedToast.flash(s.label)
                         snippetsWindow.hide()
+                    } else {
+                        // A clipboard write is invisible, so the toast is
+                        // the only evidence it happened -- which makes the
+                        // failure branch the one that most needs its own.
+                        // Silently doing nothing here is indistinguishable
+                        // from a tap that did not register, so the user
+                        // taps again and again.
+                        snippetProblemToast.flash(qsTr("Could not copy to the clipboard"))
                     }
                 } else {
                     beginEdit(idx)
@@ -2756,14 +2834,19 @@ Window {
 
             function moveSnippet(dir) {
                 if (menuIndex < 0 || !keyboard) return
-                var target = menuIndex + dir
+                var from = menuIndex
+                var target = from + dir
                 if (target < 0 || target >= snippetList.length) return
-                keyboard.moveSnippet(menuIndex, dir)
                 // Follow the snippet rather than the slot: the sheet is
                 // about one snippet, and staying put would silently retarget
-                // it at whichever one swapped into this index.
+                // it at whichever one swapped into this index. Pointed at
+                // the destination *before* the mutation, because
+                // moveSnippet emits snippetsChanged synchronously and the
+                // handler reads menuIndex to check the sheet is still on
+                // the snippet it opened for.
                 menuIndex = target
                 page = Math.floor(target / pageSize)
+                keyboard.moveSnippet(from, dir)
             }
 
             function activeField() {
@@ -2783,10 +2866,12 @@ Window {
                 if (!_positioned) {
                     if (appSettings.savedSnippetsX > -1000000
                             && appSettings.savedSnippetsY > -1000000) {
-                        snippetsWindow.x = Math.max(0, Math.min(appSettings.savedSnippetsX,
-                                                                Screen.width - snippetsWindow.width))
-                        snippetsWindow.y = Math.max(0, Math.min(appSettings.savedSnippetsY,
-                                                                Screen.height - snippetsWindow.height))
+                        var pos = root.clampedWindowPos(appSettings.savedSnippetsX,
+                                                        appSettings.savedSnippetsY,
+                                                        snippetsWindow.width,
+                                                        snippetsWindow.height)
+                        snippetsWindow.x = pos.x
+                        snippetsWindow.y = pos.y
                     } else {
                         // Centred just above the keyboard on a fresh install.
                         snippetsWindow.x = root.x + (root.width - snippetsWindow.width) / 2
@@ -2810,6 +2895,7 @@ Window {
                 // less work than two.
                 closeMenu()
                 editingIndex = idx
+                editIdentity = identityOf(idx)
                 if (keyboard) keyboard.setEditMode(true)
                 snipValueField.forceActiveFocus()
             }
@@ -2817,12 +2903,23 @@ Window {
             function endEdit() {
                 if (keyboard) keyboard.setEditMode(false)
                 editingIndex = -1
+                editIdentity = ""
             }
 
             function saveEdit() {
                 if (editingIndex >= 0 && keyboard) {
-                    keyboard.setSnippet(editingIndex, snipLabelField.text.trim(), snipValueField.text)
-                    editSavedToast.flash()
+                    // Only claim it saved if it did. SnippetStore.set
+                    // refuses an out-of-range index and reports it by
+                    // returning False, and this editor is reachable from
+                    // the sheet, whose index an import can invalidate --
+                    // so the flash was capable of confirming a write that
+                    // never happened, the exact failure acceptSnippetOffer
+                    // was given a bool return for.
+                    if (keyboard.setSnippet(editingIndex, snipLabelField.text.trim(),
+                                            snipValueField.text))
+                        editSavedToast.flash()
+                    else
+                        snippetProblemToast.flash(qsTr("Could not save that snippet"))
                 }
                 endEdit()
             }
@@ -2846,6 +2943,19 @@ Window {
                     // exists, showing six empty cells and a pager that
                     // counts past its own end.
                     snippetsWindow.clampPage()
+                    // The sheet and the editor are each about one snippet.
+                    // If the list was replaced underneath them (a Data
+                    // Backup import is the case that bites) the index they
+                    // hold now points at a different snippet, or past the
+                    // end. Close rather than act on the wrong one.
+                    if (snippetsWindow.menuIndex >= 0
+                            && snippetsWindow.identityOf(snippetsWindow.menuIndex)
+                               !== snippetsWindow.menuIdentity)
+                        snippetsWindow.closeMenu()
+                    if (snippetsWindow.editingIndex >= 0
+                            && snippetsWindow.identityOf(snippetsWindow.editingIndex)
+                               !== snippetsWindow.editIdentity)
+                        snippetsWindow.endEdit()
                 }
 
                 function onEditKeyTyped(ch) {
@@ -3155,6 +3265,7 @@ Window {
 
                                     MouseArea {
                                         id: tileMa
+                                        objectName: "snippetTileMouse"
                                         anchors.fill: parent
                                         hoverEnabled: true
                                         cursorShape: Qt.PointingHandCursor
@@ -3165,11 +3276,15 @@ Window {
                                         // and it must never turn typing a
                                         // snippet into opening a menu.
                                         acceptedButtons: Qt.LeftButton | Qt.RightButton
+                                        // A one-line pass-through, because a
+                                        // synthetic click cannot be delivered
+                                        // to a delegate reliably in the
+                                        // headless tests: the branch itself
+                                        // lives in tileClicked, where it can
+                                        // be driven directly.
                                         onClicked: function(mouse) {
-                                            if (mouse.button === Qt.RightButton)
-                                                snippetsWindow.openMenu(snipCell.snipIndex)
-                                            else
-                                                snippetsWindow.primaryTap(snipCell.snipIndex)
+                                            snippetsWindow.tileClicked(snipCell.snipIndex,
+                                                                       mouse.button)
                                         }
                                     }
                                 }
@@ -3817,6 +3932,7 @@ Window {
                 id: copiedRow
                 spacing: 7
                 Comp.StrokeIcon {
+                    id: copiedIcon
                     width: 14; height: 14
                     anchors.verticalCenter: parent.verticalCenter
                     ink: root.themeAccent
@@ -3832,6 +3948,15 @@ Window {
                     textFormat: Text.PlainText
                     color: root.themeTextColor
                     font.pixelSize: 13
+                    // A Text only elides when it has a width, and inside a
+                    // Row it is laid out at its natural one -- so a
+                    // 40-character label (MAX_LABEL_LEN) rendered straight
+                    // past the toast's own background instead of eliding.
+                    // Derived from root.width rather than from the Row, so
+                    // the toast's implicit width does not depend on the
+                    // width it is handing back.
+                    width: Math.min(implicitWidth,
+                                    root.width - 24 - 28 - copiedIcon.width - copiedRow.spacing)
                     elide: Text.ElideRight
                     anchors.verticalCenter: parent.verticalCenter
                 }
@@ -4135,6 +4260,59 @@ Window {
             function flash() {
                 open()
                 snippetsFullToastTimer.restart()
+            }
+        }
+
+        // Shared "that did not work" toast for the snippets window.
+        //
+        // Both the things a tile tap can do are invisible when they fail:
+        // a clipboard write leaves nothing on screen, and a save that the
+        // store refused looks exactly like one it took. Saying nothing is
+        // indistinguishable from a tap that did not register, so the user
+        // taps again, which on an OSK driven by an imprecise pointer is
+        // the failure mode worth spending a toast on.
+        Popup {
+            id: snippetProblemToast
+            objectName: "snippetProblemToast"
+            parent: Overlay.overlay
+            x: (root.width - width) / 2
+            y: 36
+            width: Math.min(root.width - 24, problemText.implicitWidth + 28)
+            height: 32
+            modal: false
+            dim: false
+            // Every OSK key click is a press-outside.
+            closePolicy: Popup.NoAutoClose
+
+            property string message: ""
+
+            background: Rectangle {
+                color: "#3e2e1e"
+                border.color: "#e0a85a"
+                border.width: 1
+                radius: 8
+            }
+
+            contentItem: Text {
+                id: problemText
+                text: snippetProblemToast.message
+                color: "#f0d0a0"
+                font.pixelSize: 12
+                textFormat: Text.PlainText
+                elide: Text.ElideRight
+                verticalAlignment: Text.AlignVCenter
+            }
+
+            Timer {
+                id: snippetProblemToastTimer
+                interval: 2600
+                onTriggered: snippetProblemToast.close()
+            }
+
+            function flash(msg) {
+                snippetProblemToast.message = msg ? msg : qsTr("That did not work")
+                open()
+                snippetProblemToastTimer.restart()
             }
         }
 

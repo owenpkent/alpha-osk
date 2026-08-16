@@ -22,7 +22,6 @@ from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 from PySide6.QtCore import Property, QObject, QTimer, QUrl, Signal, Slot
-from PySide6.QtGui import QGuiApplication
 
 # Audio feedback — optional, gracefully degrades if QtMultimedia unavailable
 try:
@@ -2483,16 +2482,25 @@ class KeyboardBridge(QObject):
         """Enable/disable skipping the auto-space inside structured tokens."""
         self._intelligent_spacing = bool(enabled)
 
-    @Slot(int, str, str)
-    def setSnippet(self, index: int, label: str, value: str) -> None:
+    @Slot(int, str, str, result=bool)
+    def setSnippet(self, index: int, label: str, value: str) -> bool:
         """Replace the label + value of the snippet at *index*.
 
         The colour tag is deliberately not a parameter: the editor does
         not show one, and passing a default here would clear whatever the
         actions sheet had set (see ``SnippetStore.set``).
+
+        Returns whether anything was written, so the editor can stop
+        flashing "Saved" over a write the store refused: ``set`` rejects
+        an out-of-range index, and the editor is reachable from the
+        actions sheet, whose index a Data Backup import can invalidate
+        while it is open.  Same reason ``acceptSnippetOffer`` and
+        ``copySnippet`` report a bool.
         """
         if self._snippets.set(index, label, value):
             self.snippetsChanged.emit(self._snippets.get_all())
+            return True
+        return False
 
     @Slot(int, result=bool)
     def copySnippet(self, index: int) -> bool:
@@ -2523,8 +2531,24 @@ class KeyboardBridge(QObject):
         value = self._snippets.get_value(index)
         if not value:
             return False
-        app = QGuiApplication.instance()
-        if app is None:  # no GUI (headless tests): nothing to copy to
+        # Imported here rather than at module scope.  QtGui dlopens the
+        # host's libEGL / libGL when it is first imported, and this module
+        # is imported by most of the Python suite, so an unconditional
+        # import turns every one of those files into a pytest *collection
+        # error* on a host without them instead of a skip.  That is the
+        # same failure tests/test_qml_snippets.py wraps its own QtGui
+        # import in a try/except to avoid.  One slot needs it; nothing
+        # else in this module does.
+        try:
+            from PySide6.QtGui import QGuiApplication
+        except ImportError:  # no GUI stack on this host
+            return False
+        # isinstance, not `is not None`: instance() is inherited from
+        # QCoreApplication and hands back a plain QCoreApplication in a
+        # non-GUI process, so a null check does not answer the question it
+        # looks like it answers.  Falling through to clipboard() there
+        # warns "Must construct a QGuiApplication" and returns null.
+        if not isinstance(QGuiApplication.instance(), QGuiApplication):
             return False
         clipboard = QGuiApplication.clipboard()
         if clipboard is None:

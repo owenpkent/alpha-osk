@@ -29,7 +29,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 # libEGL / libGL at module scope, and an ImportError there aborts the whole
 # run as a collection error rather than failing this module.
 try:
-    from PySide6.QtCore import QCoreApplication, QObject, QSettings, QUrl  # noqa: E402
+    from PySide6.QtCore import QCoreApplication, QObject, QSettings, Qt, QUrl  # noqa: E402
     from PySide6.QtGui import QGuiApplication  # noqa: E402
     from PySide6.QtQml import QQmlApplicationEngine  # noqa: E402
 
@@ -455,3 +455,232 @@ class TestTheAddButton:
         window.setProperty("snippetList", [{"label": "x", "value": "y", "color": ""}] * 50)
         assert add.property("atCap") is True
         assert window.property("snippetLimit") == MAX_SNIPPETS
+
+
+def _qml_root(window):
+    """The Main.qml root Window.
+
+    ``parent()`` is null: a QML ``Window`` declared inside another
+    Window's body is still a top-level object.  Qt does set the outer one
+    as its *transient* parent, which is the only link back.
+    """
+    root = window.transientParent()
+    assert root is not None, "snippetsWindow has no transient parent"
+    return root
+
+
+class TestTheTileDispatchesOnMouseButton:
+    """Left copies, right opens the sheet, and neither had any coverage.
+
+    Every other test in this file calls ``openMenu()`` / ``primaryTap()``
+    on the window object directly, so none of them route through the
+    delegate's own handler: swapping the two branches of the tile's
+    ``onClicked``, or dropping ``Qt.RightButton`` from
+    ``acceptedButtons`` so right-click does nothing at all, left the
+    whole suite green.  That is the same shape as the
+    ``findChildren``-returns-nothing trap this file's docstring warns
+    about, and it was hiding the interaction the CHANGELOG leads with.
+
+    A synthetic click cannot be delivered to a Repeater delegate
+    reliably here (the offscreen window's layout has not settled, so
+    every tile maps to the same scene point), so the branch was lifted
+    into ``tileClicked`` and the delegate reduced to a pass-through.
+    What is left uncovered is that one line, and ``acceptedButtons``
+    covers the half of it that can silently break.
+    """
+
+    def test_right_click_opens_the_actions_sheet_for_that_tile(self, snippets_window):
+        window, bridge, _w = snippets_window
+        _fill(bridge, window, 3)
+        window.openList()
+        window.tileClicked(0, Qt.MouseButton.RightButton)
+        assert window.property("menuIndex") == 0
+
+    def test_left_click_does_not_open_the_sheet(self, snippets_window):
+        """The inverse half: it is what catches the two branches swapped."""
+        window, bridge, _w = snippets_window
+        _fill(bridge, window, 3)
+        window.openList()
+        window.tileClicked(0, Qt.MouseButton.LeftButton)
+        assert window.property("menuIndex") == -1
+
+    def test_left_click_on_a_filled_tile_hides_the_window(self, snippets_window):
+        """Copy is invisible, so the hide is its observable half."""
+        window, bridge, _w = snippets_window
+        _fill(bridge, window, 3)
+        window.openList()
+        assert window.property("visible")
+        window.tileClicked(0, Qt.MouseButton.LeftButton)
+        assert not window.property("visible")
+
+    def test_left_click_on_an_empty_slot_opens_the_editor(self, snippets_window):
+        """An empty seeded slot is never a dead tap."""
+        window, bridge, _w = snippets_window
+        _fill(bridge, window, 2)
+        bridge.setSnippet(0, "blank", "")
+        window.refresh()
+        window.tileClicked(0, Qt.MouseButton.LeftButton)
+        assert window.property("editingIndex") == 0
+
+    def test_the_tile_still_accepts_the_right_button(self, snippets_window):
+        """The half the pass-through cannot state on its own.
+
+        Drop ``Qt.RightButton`` from ``acceptedButtons`` and the sheet
+        becomes unreachable while every other assertion here still
+        passes, since they call the function the event would have.
+        """
+        window, bridge, _w = snippets_window
+        _fill(bridge, window, 3)
+        window.openList()
+        area = _find_named(window, "snippetTileMouse")
+        assert area is not None, "no tile MouseArea rendered"
+        accepted = area.property("acceptedButtons")
+        assert accepted & Qt.MouseButton.RightButton
+        assert accepted & Qt.MouseButton.LeftButton
+
+
+class TestTheSheetTracksItsOwnSnippet:
+    """An index is not an identity.
+
+    A Data Backup import replaces the whole list underneath an open
+    sheet (``importUserData`` reloads the store and emits
+    ``snippetsChanged``), and the sheet used to keep its index: Delete,
+    Edit and the colour swatches then acted on whatever the import had
+    put there, and an index past the new end opened a blank editor whose
+    save was a silent no-op behind a green "Saved".
+    """
+
+    def _replace_the_store(self, bridge, tmp_path, labels):
+        """What importUserData does: swap the file, reload, announce."""
+        store = SnippetStore(tmp_path / "imported.json")
+        store.load()
+        while len(store.get_all()) > 0:
+            store.delete(0)
+        for i, label in enumerate(labels):
+            store.add()
+            store.set(i, label, "imported %s" % label)
+        bridge._snippets = store
+        bridge.snippetsChanged.emit(store.get_all())
+
+    def test_an_import_closes_a_sheet_pointing_at_a_different_snippet(
+        self, snippets_window, tmp_path
+    ):
+        window, bridge, _w = snippets_window
+        _fill(bridge, window, 4)
+        window.openMenu(3)
+        assert window.property("menuIndex") == 3
+        self._replace_the_store(bridge, tmp_path, ["a", "b", "c", "d"])
+        assert window.property("menuIndex") == -1
+
+    def test_an_import_ends_an_edit_pointing_at_a_different_snippet(
+        self, snippets_window, tmp_path
+    ):
+        window, bridge, _w = snippets_window
+        _fill(bridge, window, 4)
+        window.beginEdit(3)
+        assert window.property("editingIndex") == 3
+        self._replace_the_store(bridge, tmp_path, ["a", "b", "c", "d"])
+        assert window.property("editingIndex") == -1
+
+    def test_setting_a_colour_keeps_the_sheet_open(self, snippets_window):
+        """The inverse: the sheet's own mutations must not close it.
+
+        Recolouring is meant to leave the sheet up, so an identity that
+        included the colour would close it on every swatch tap.
+        """
+        window, bridge, _w = snippets_window
+        _fill(bridge, window, 3)
+        window.openMenu(1)
+        bridge.setSnippetColor(1, "red")
+        assert window.property("menuIndex") == 1
+
+    def test_moving_follows_the_snippet_and_keeps_the_sheet_open(self, snippets_window):
+        window, bridge, _w = snippets_window
+        _fill(bridge, window, 3)
+        window.openMenu(0)
+        window.moveSnippet(1)
+        assert window.property("menuIndex") == 1
+        assert bridge.getSnippets()[1]["label"] == "s0"
+
+
+class TestSavingReportsWhetherItSaved:
+    """``setSnippet`` returned nothing, so the editor always said "Saved".
+
+    The same failure ``acceptSnippetOffer`` was given a bool return for:
+    the store refuses and the interface confirms anyway, which is the one
+    kind of feedback worse than none.
+    """
+
+    def test_an_out_of_range_index_reports_failure(self, snippets_window):
+        _window, bridge, _w = snippets_window
+        assert bridge.setSnippet(99, "nope", "nope") is False
+
+    def test_a_real_index_reports_success(self, snippets_window):
+        window, bridge, _w = snippets_window
+        _fill(bridge, window, 2)
+        assert bridge.setSnippet(0, "hello", "world") is True
+        assert bridge.getSnippets()[0]["value"] == "world"
+
+
+class TestTheRestoredPositionIsClampedToTheWholeDesktop:
+    """The clamp used the primary screen's 0-origin dimensions.
+
+    A window saved at x=2400 on a second monitor came back at 1560 on the
+    primary one every launch, and a monitor to the *left* of the primary
+    has negative coordinates that collapsed to 0 the same way.  That is
+    worse than not persisting at all, because the window lands nowhere
+    near the keyboard it belongs to.
+
+    **The multi-monitor case cannot be exercised here**: the offscreen
+    platform plugin gives exactly one screen.  What these pin is that the
+    clamp reads the union of ``Qt.application.screens`` rather than
+    ``Screen.width``, and that a position already on-screen survives
+    untouched.  The second-monitor arithmetic follows by construction
+    once the bounds come from the screen list.
+    """
+
+    @staticmethod
+    def _js(value, *keys):
+        """Read numbers out of a QJSValue.
+
+        A QML function returning a JS object hands back a QJSValue, which
+        is not subscriptable from Python.
+        """
+        return tuple(value.property(k).toNumber() for k in keys)
+
+    def _bounds(self, window):
+        b = _qml_root(window).desktopBounds()
+        left, top, right, bottom = self._js(b, "left", "top", "right", "bottom")
+        return {"left": left, "top": top, "right": right, "bottom": bottom}
+
+    def test_the_bounds_are_the_union_of_every_screen(self, snippets_window, qapp):
+        window, _bridge, _w = snippets_window
+        geometries = [s.geometry() for s in qapp.screens()]
+        bounds = self._bounds(window)
+        assert bounds["left"] == min(g.x() for g in geometries)
+        assert bounds["top"] == min(g.y() for g in geometries)
+        assert bounds["right"] == max(g.x() + g.width() for g in geometries)
+        assert bounds["bottom"] == max(g.y() + g.height() for g in geometries)
+
+    def test_a_position_already_on_screen_is_returned_unchanged(self, snippets_window):
+        window, _bridge, _w = snippets_window
+        root = _qml_root(window)
+        b = self._bounds(window)
+        x, y = self._js(root.clampedWindowPos(b["left"] + 20, b["top"] + 30, 360, 400), "x", "y")
+        assert x == b["left"] + 20
+        assert y == b["top"] + 30
+
+    def test_a_position_past_the_right_edge_is_pulled_fully_back_on(self, snippets_window):
+        window, _bridge, _w = snippets_window
+        root = _qml_root(window)
+        b = self._bounds(window)
+        (x,) = self._js(root.clampedWindowPos(b["right"] + 5000, b["top"], 360, 400), "x")
+        assert x == b["right"] - 360
+
+    def test_the_left_edge_is_the_desktop_origin_not_zero(self, snippets_window):
+        """With one screen at x=0 these agree; the point is which is read."""
+        window, _bridge, _w = snippets_window
+        root = _qml_root(window)
+        b = self._bounds(window)
+        (x,) = self._js(root.clampedWindowPos(b["left"] - 5000, b["top"], 360, 400), "x")
+        assert x == b["left"]
