@@ -13,6 +13,22 @@ on:
 permissions:
   contents: read
 
+# One run per ref, and a new push cancels the one it supersedes.
+#
+# Without this, pushing four commits in quick succession starts four full
+# runs, and the three that are already out of date keep a runner for their
+# full length before reporting a failure that was fixed two commits ago.
+# That happened: three consecutive red notifications, all for the same
+# assertion, all already fixed on main by the time they arrived, which is
+# worse than slow because it trains you to ignore the red.
+#
+# Grouped by ref rather than by commit, so this cancels superseded runs of
+# the *same* branch and never one of another. A cancelled intermediate
+# commit is the intended outcome: what needs to be green is the tip.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   lint:
     name: Lint
@@ -91,11 +107,15 @@ jobs:
       # makes the prediction bar's width arithmetic self-consistent and its
       # 260-configuration no-elide sweep incapable of failing. Those tests
       # detect that and skip themselves rather than report a meaningless
-      # pass, so this job is where they actually run: the Windows runner has
-      # no matching font and skips them, and a real eliding bug already
-      # shipped once because the only machine it was checked on could not see
-      # it. Pinned here so an image change cannot silently take the sweep
-      # away everywhere at once.
+      # pass, and a real eliding bug already shipped once because the only
+      # machine it was checked on could not see it. Pinned here so an image
+      # change cannot silently take the sweep away everywhere at once.
+      #
+      # The Windows runner and Windows dev machines now run the sweep too:
+      # tests/conftest.py points QT_QPA_FONTDIR at the system fonts there.
+      # Until that landed this job was the only place it ran anywhere, so a
+      # geometry change could pass a developer's full local gate and come
+      # back red from here twenty minutes later, which it did.
       - name: Install Qt runtime libraries
         if: runner.os == 'Linux'
         run: |
@@ -109,8 +129,28 @@ jobs:
             libxcb-xkb1
       - name: Install dependencies
         run: pip install -r requirements-dev.txt
+      # `-n auto`, matching check.py.
+      #
+      # This job was serial on the argument that it is the release gate and
+      # its runners have far fewer cores than a dev box. The cores are real
+      # (4 here against 16 there) but the argument was wrong about where the
+      # time goes: building a KeyboardBridge costs about a second, the
+      # fixture is function-scoped, and there are ~1550 tests, so the run is
+      # dominated by per-test setup repeated 1550 times. That shards almost
+      # linearly whatever the core count, which is why the same change took
+      # the local gate from 25 minutes to under one.
+      #
+      # Sharding safely needed one property that is already established:
+      # anything process-external must be keyed per worker. QSettings goes
+      # through tests/qt_settings_scope.py, which suffixes the scope with
+      # PYTEST_XDIST_WORKER, and Hypothesis is derandomized with no example
+      # database. A new test touching the registry, a fixed path or a port
+      # has to do the same.
+      #
+      # pytest-cov combines the workers' data before --cov-fail-under is
+      # evaluated, so the coverage gate is unaffected.
       - name: Run tests
-        run: python -m pytest --cov=src --cov-report=term-missing --cov-fail-under=60
+        run: python -m pytest -n auto --cov=src --cov-report=term-missing --cov-fail-under=60
 
   # Reads the committed lockfiles (requirements-dev.txt for Python,
   # backend/cf-worker/package-lock.json for the worker) and queries

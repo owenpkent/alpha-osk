@@ -683,10 +683,22 @@ with `PYTEST_XDIST_WORKER`. Any new test touching QSettings, the
 registry, a fixed temp path, or any other machine-global resource has to
 key it per worker the same way.
 
-CI is deliberately left serial for now: it is the release gate, its
-runners have far fewer cores, and the local iteration loop was the
-problem being solved. Turning `-n auto` on there is a reasonable
-follow-up once this has some mileage.
+**CI shards too now** (`-n auto` in `.github/workflows/ci.yml`). It was
+left serial on the argument that it is the release gate and its runners
+have far fewer cores. The cores are real, 4 against 16, but the argument
+was wrong about where the time goes: the run is dominated by per-test
+setup repeated ~1550 times, which shards almost linearly whatever the
+core count. Serial it took **26 minutes**, which is long enough that
+pushing a few commits in a row starts several runs at once, and the
+stale ones each hold a runner for their full length before reporting a
+failure that was fixed two commits earlier. `pytest-cov` combines the
+workers' data before `--cov-fail-under` is evaluated, so the coverage
+gate is unaffected.
+
+The workflow also sets `concurrency: group: ci-${{ github.ref }}` with
+`cancel-in-progress: true`, so a new push supersedes the run it replaces
+rather than both finishing. A cancelled intermediate commit is the
+intended outcome: what has to be green is the tip.
 
 `mypy` runs **twice**, under `--platform linux` and `--platform win32`,
 and CI mirrors both.  Neither covers the other: linux is the runner's
