@@ -318,6 +318,17 @@ def _scene_left(item) -> float:
     return item.mapToScene(item.boundingRect().topLeft()).x()
 
 
+def _first_button_left(root, clear_button) -> float:
+    """The left edge of the leftmost button parked at the bar's right end.
+
+    There are two now, Snippets then clear-context, so the strip the pills
+    must stay out of starts at the Snippets one. Written as a min rather
+    than by naming it, so adding a third button cannot quietly make this
+    measure the wrong edge.
+    """
+    return min(_scene_left(clear_button), _scene_left(_child(root, "snippetsBarButton")))
+
+
 class TestClearButtonNeverCoversPills:
     """The buttons parked at the right end own a strip the pills may not
     enter. There are two of them now (Snippets, then clear-context), so
@@ -333,7 +344,7 @@ class TestClearButtonNeverCoversPills:
         row, button = _show(root, predictions)
 
         row_right = _scene_left(row) + row.property("width")
-        first_button = min(_scene_left(button), _scene_left(_child(root, "snippetsBarButton")))
+        first_button = _first_button_left(root, button)
         assert row_right <= first_button, (
             f"pill row runs to {row_right}px but the buttons start at "
             f"{first_button}px — the last pill is under a button"
@@ -355,7 +366,7 @@ class TestClearButtonNeverCoversPills:
         QCoreApplication.processEvents()
 
         row_right = _scene_left(row) + row.property("width")
-        first_button = min(_scene_left(button), _scene_left(_child(root, "snippetsBarButton")))
+        first_button = _first_button_left(root, button)
         assert row_right <= first_button
 
     def test_short_words_keep_their_natural_width(self, qml_root):
@@ -579,7 +590,7 @@ class TestNoPillIsEverTruncated:
     def test_survivors_still_clear_the_button(self, qml_root):
         root, _, _ = qml_root
         row, button = _show(root, self.CROWDED)
-        assert row.property("x") + row.property("width") <= button.property("x")
+        assert _scene_left(row) + row.property("width") <= _first_button_left(root, button)
 
     def test_narrow_window_drops_more_rather_than_eliding(self, qml_root):
         root, _, _ = qml_root
@@ -600,7 +611,7 @@ class TestNoPillIsEverTruncated:
         row, button = _show(root, ["pneumonoultramicroscopicsilicovolcanoconiosis" * 3])
         words, _ = _fit(row)
         assert len(words) == 1
-        assert row.property("x") + row.property("width") <= button.property("x")
+        assert _scene_left(row) + row.property("width") <= _first_button_left(root, button)
 
 
 class TestNumberRowPanel:

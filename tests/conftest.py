@@ -2,9 +2,32 @@
 
 from __future__ import annotations
 
+import os
+import sys
 from pathlib import Path
 
 import pytest
+
+# Point Qt's offscreen plugin at the system fonts on Windows.
+#
+# Without this it resolves a fixed-width placeholder where every glyph has
+# the same advance, which makes the prediction bar's width arithmetic
+# trivially self-consistent. `requires_real_font` in
+# tests/test_qml_prediction_bar.py detects that and skips, honestly, so
+# seven pill-fitting tests ran on CI and nowhere else.
+#
+# That is a hole in the promise `check.py` makes, which is that passing it
+# locally means passing CI: those seven cover the no-elide guarantee, they
+# are the ones a bar-geometry change is most likely to break, and a change
+# that broke them went out green from this machine and came back red from
+# CI twenty minutes later. Set here rather than per module because it has
+# to be in place before any QGuiApplication is constructed, and four test
+# modules construct one.
+#
+# `setdefault`, so a contributor who has aimed Qt at their own font
+# directory keeps it.
+if sys.platform == "win32":
+    os.environ.setdefault("QT_QPA_FONTDIR", r"C:\Windows\Fonts")
 
 try:
     from hypothesis import HealthCheck, Verbosity, settings
