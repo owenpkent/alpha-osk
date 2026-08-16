@@ -88,6 +88,13 @@ class TestPrediction:
         assert store.predict("12")[0] == "1250"
 
     def test_matching_ignores_case_but_the_stored_form_comes_back(self):
+        """Case-insensitive lookup, stored casing preserved in the result.
+
+        This is exactly why ``_insert_token_pill`` has to check the case
+        before taking its suffix-only path: the pill here reads "Apt4B"
+        while "apt" is on screen, so appending the tail alone would
+        leave "apt4B", which is neither.
+        """
         assert _store("Apt4B").predict("apt") == ["Apt4B"]
 
     def test_an_unrelated_prefix_offers_nothing(self):

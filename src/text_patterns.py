@@ -168,20 +168,26 @@ _ADDRESS_RE = re.compile(
 # ---------------------------------------------------------------------
 
 
-def _strip_trailing_punctuation(token: str) -> str:
+def strip_trailing_punctuation(token: str) -> str:
     """Drop sentence punctuation clinging to the end of a token.
 
     "owen@example.com." at the end of a sentence is still an email; the
     full stop belongs to the prose, not to the address.  Leading
     punctuation is left alone -- it is far rarer and stripping it would
     turn "(555" into something that looks like a number fragment.
+
+    Public because ``TokenPredictor.learn`` stores what this returns
+    while ``is_learnable_token`` validates it.  Those two have to be the
+    same string: a second copy of the character class would let the
+    store persist tokens that were never validated in the form they were
+    saved in.
     """
     return token.rstrip(".,;:!?)]}\"'")
 
 
 def is_email(token: str) -> bool:
     """True if *token* is shaped like an email address."""
-    token = _strip_trailing_punctuation(token.strip())
+    token = strip_trailing_punctuation(token.strip())
     if not token or len(token) > _MAX_TOKEN_LEN:
         return False
     return bool(_EMAIL_RE.match(token))
@@ -228,7 +234,7 @@ def is_phone(token: str) -> bool:
     to enumerate ("+44 20 7946 0958", "+1 555 123 4567"), so a "+" plus a
     plausible digit count is accepted on its own.
     """
-    token = _strip_trailing_punctuation(token.strip())
+    token = strip_trailing_punctuation(token.strip())
     if not token or len(token) > _MAX_TOKEN_LEN:
         return False
     if not _PHONE_ALLOWED_RE.match(token):
@@ -293,8 +299,23 @@ def is_learnable_token(token: str) -> bool:
     Plain alphabetic words are rejected: they are the n-gram model's job,
     and duplicating them here would put a second, dumber vocabulary in
     front of the one that does context.
+
+    **A mixed alphanumeric token is admitted, and that is a deliberate
+    call rather than an oversight.**  The digit cap does not look at how
+    letters and digits interleave, so "hunter2", "Tr0ub4dor" and
+    "AB1234567" all clear it, and password auto-detection fails open by
+    design (no AT-SPI on Linux, no TCC grant on macOS, any field UIA does
+    not mark).  Rejecting every letter-plus-digit token would close that,
+    at the cost of "Apt4B" and "v1.2" -- there is no rule that keeps one
+    and drops the other, because they are the same shape.  The project's
+    position is that the recall is worth more: a wrongly-learned token is
+    visible to the user and removable (``TokenPredictor.forget``, and
+    Clear Learned Data), where a missed one is silently never offered.
+    If that trade is ever revisited, the change is a single
+    ``any(ch.isalpha() ...)`` rejection below, and the tests that pin the
+    current behaviour name it explicitly.
     """
-    token = _strip_trailing_punctuation(token.strip())
+    token = strip_trailing_punctuation(token.strip())
     if not (_MIN_LEARNABLE_LEN <= len(token) <= _MAX_LEARNABLE_LEN):
         return False
     if any(ch.isspace() for ch in token):
@@ -476,7 +497,7 @@ def detect_snippet_candidate(text: str) -> Optional[Tuple[str, str]]:
 
     for token in tokens:
         if is_email(token):
-            return ("email", _strip_trailing_punctuation(token))
+            return ("email", strip_trailing_punctuation(token))
 
     phone = _find_phone(text)
     if phone is not None:
@@ -505,7 +526,7 @@ def _find_phone(text: str) -> Optional[str]:
             if start + size > len(tokens):
                 continue
             candidate = " ".join(tokens[start : start + size])
-            stripped = _strip_trailing_punctuation(candidate)
+            stripped = strip_trailing_punctuation(candidate)
             if is_phone(stripped):
                 return stripped
     return None

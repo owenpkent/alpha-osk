@@ -39,7 +39,7 @@ from __future__ import annotations
 import logging
 from typing import Dict, List, Tuple
 
-from ..text_patterns import is_email, is_learnable_token
+from ..text_patterns import is_email, is_learnable_token, strip_trailing_punctuation
 
 _logger = logging.getLogger("TokenPredictor")
 
@@ -94,8 +94,10 @@ class TokenPredictor:
             return False
         # Strip the sentence punctuation the shape rule already ignored,
         # so "555-123-4567." and "555-123-4567" are one entry rather
-        # than two.
-        token = token.rstrip(".,;:!?)]}\"'")
+        # than two.  Called rather than re-spelled: `is_learnable_token`
+        # validates what this returns, so a second copy of the character
+        # class would let the store persist a form that was never vetted.
+        token = strip_trailing_punctuation(token)
         self.tokens[token] = self.tokens.get(token, 0) + 1
         self._domains_dirty = True
         if len(self.tokens) > self.MAX_TOKENS:
