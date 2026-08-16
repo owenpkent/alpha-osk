@@ -331,23 +331,22 @@ class TypingAnalytics(QObject):
     def record_token_prediction_selected(self, rank: int, keystrokes_saved: int = 0) -> None:
         """Record selection of a structured-token pill (phone, email, number).
 
-        Identical to :meth:`record_prediction_selected` except that the
-        value itself is never passed in, so it cannot reach ``word_freq``.
-        That table is persisted, surfaced as "Top Words" on the dashboard
-        and carried in the Data Backup archive; a phone number or an email
-        address has no business in any of the three, and a dashboard the
-        user might screen-share is the last place one should turn up.
+        Delegates to :meth:`record_prediction_selected` with an empty
+        word rather than duplicating its five counter updates:
+        ``record_word_completed`` already no-ops on a falsy word, so ""
+        gets every one of those updates except the one this method must
+        never make. That matters because the value itself must never
+        reach ``word_freq``: that table is persisted, surfaced as "Top
+        Words" on the dashboard and carried in the Data Backup archive,
+        and a phone number or an email address has no business in any
+        of the three, least of all on a dashboard the user might
+        screen-share.
 
         The word counter is skipped for the same reason it should be: a
         zip code is not a word, and counting it as one would quietly
         inflate the words-per-minute figure.
         """
-        self._prediction_hits += 1
-        self._prediction_rank_sum += rank
-        self._prediction_rank_count += 1
-        if rank == 1:
-            self._top_pick_count += 1
-        self._keystrokes_saved += keystrokes_saved
+        self.record_prediction_selected("", rank, keystrokes_saved)
 
     def record_prediction_offered(self) -> None:
         """Record when predictions are shown to the user."""

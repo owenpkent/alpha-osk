@@ -45,6 +45,36 @@ class TestTopPickCount:
         assert stats["topPickRate"] == 0.0
 
 
+class TestTokenPredictionSelected:
+    """record_token_prediction_selected delegates to record_prediction_selected
+    with an empty word, so it must update every shared counter that method
+    updates while never letting the token's value reach word_freq/words."""
+
+    def test_updates_the_same_counters_as_a_word_pick(self, analytics: TypingAnalytics) -> None:
+        analytics.record_token_prediction_selected(rank=1, keystrokes_saved=7)
+        stats = analytics.get_session_stats()
+        assert stats["predictionHits"] == 1
+        assert stats["topPickRate"] == 100.0
+        assert stats["keystrokesSaved"] == 7
+
+    def test_rank_above_one_does_not_count_as_a_top_pick(self, analytics: TypingAnalytics) -> None:
+        analytics.record_token_prediction_selected(rank=2, keystrokes_saved=3)
+        stats = analytics.get_session_stats()
+        assert stats["predictionHits"] == 1
+        assert stats["topPickRate"] == 0.0
+
+    def test_never_reaches_word_freq_or_the_word_count(self, analytics: TypingAnalytics) -> None:
+        """The whole reason this method exists rather than just calling
+        record_prediction_selected(token, ...) directly: a phone number or
+        an email is persisted, shown as "Top Words" and carried in the Data
+        Backup archive if it ever lands in word_freq."""
+        analytics.record_token_prediction_selected(rank=1, keystrokes_saved=12)
+        stats = analytics.get_session_stats()
+        assert stats["totalWords"] == 0
+        assert stats["topWords"] == []
+        assert analytics._word_freq == {}
+
+
 class TestTimeSaved:
     """Time saved uses the user's own keystroke pace, not a constant."""
 

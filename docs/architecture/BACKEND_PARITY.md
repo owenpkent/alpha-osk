@@ -116,7 +116,7 @@ Python status columns reflect `main`; C++ columns reflect the `cpp-rewrite` bran
 9. **Python-only, and it is a real gap rather than a platform one.** The token
    store (`src/prediction/token_predictor.py`), its admission rule
    (`text_patterns.is_learnable_token`) and the bridge's two-bar switch
-   (`_in_token_context` / `_token_pill_inserts` / `_insert_token_pill`) have no
+   (`_in_token_context` / `_token_pill_words` / `_insert_token_pill`) have no
    C++ counterpart. Nothing about it is platform-specific: it is plain string
    handling plus a `tokens` key in `ngram_model.json`, so it ports wholesale
    whenever the C++ bridge is next worked on. Port the admission rule *first* and

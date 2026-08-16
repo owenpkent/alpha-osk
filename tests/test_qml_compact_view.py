@@ -125,6 +125,48 @@ def qml_root(qapp):
         del engine
 
 
+@pytest.fixture
+def qml_root_factory(qapp):
+    """Like `qml_root`, but lets each test seed QSettings before the engine
+    loads Main.qml.
+
+    Needed for anything read inside `Component.onCompleted` -- the saved
+    window position restore, here -- since `qml_root` only hands back the
+    root object *after* load, by which point the restore has already run
+    against whatever `savedWindowX`/`savedWindowY` were already on disk.
+    """
+    engines: list[QQmlApplicationEngine] = []
+
+    def _load(pre_settings: dict | None = None):
+        warnings: list[str] = []
+        QSettings(TEST_ORG, TEST_APP).clear()
+
+        settings = QSettings(TEST_ORG, TEST_APP)
+        settings.setValue("ui/savedAutoCheckUpdates", False)
+        for key, value in (pre_settings or {}).items():
+            settings.setValue(key, value)
+        settings.sync()
+
+        with patch("src.keyboard_bridge.create_key_synthesizer") as factory:
+            synth = MagicMock()
+            synth.is_available.return_value = True
+            synth.backend_name.return_value = "MockSynth"
+            factory.return_value = synth
+            bridge = KeyboardBridge()
+
+        engine = QQmlApplicationEngine()
+        engine.warnings.connect(lambda errs: warnings.extend(e.toString() for e in errs))
+        engine.rootContext().setContextProperty("keyboard", bridge)
+        engine.load(QUrl.fromLocalFile(str(QML_MAIN)))
+        assert engine.rootObjects(), "qml/Main.qml failed to load:\n  " + "\n  ".join(warnings)
+        engines.append(engine)
+        return engine.rootObjects()[0], warnings, bridge
+
+    yield _load
+    for engine in engines:
+        del engine
+
+
 # One processEvents() pass does not reliably flush Qt Quick's delegate
 # creation for a Repeater, and anything that re-resolves the layout (toggling
 # compactView, switching layer) tears the rows down and rebuilds them. A
@@ -1007,3 +1049,94 @@ class TestAccentKeysStayReadable:
                 "longer marks anything"
             )
         assert _real_warnings(warnings) == []
+
+
+class TestTheMainWindowRestoreClampsToTheWholeDesktop:
+    """The main window's own saved-position restore used to clamp against
+    Screen.width/Screen.height (the primary screen), the exact bug PR #31
+    fixed for the snippets window: a position saved on a second monitor
+    snaps back to the primary display on every launch, and a monitor to
+    the left of the primary has negative coordinates that collapse to 0.
+    It now reuses root.clampedWindowPos()/root.desktopBounds(), the same
+    helper the snippets window's own restore uses.
+
+    The offscreen platform plugin only ever reports one screen, so this
+    cannot exercise the multi-monitor arithmetic directly -- the same
+    caveat TestTheRestoredPositionIsClampedToTheWholeDesktop documents for
+    the snippets window (that class covers the left-edge-collapses-to-
+    origin case directly against clampedWindowPos(), so it isn't repeated
+    here). What these pin instead: the restored x on the *live* window is
+    exactly what clampedWindowPos() computes (not some other value a
+    hand-rolled Screen.width formula would also happen to produce), and
+    the -1000000 "never positioned" sentinel still takes the centered
+    default path rather than being run through the clamp.
+
+    Every case below pins `ui/savedWindowWidth` to a value comfortably
+    smaller than the offscreen platform's single 800x800 screen. Left at
+    its fresh-install default the window is wider than that screen
+    (~1160px), which pushes every position toward or past x=0 -- and the
+    offscreen QPA plugin snaps an actual window position of exactly 0 to
+    2px in from the edge (verified directly: assigning root.x = 0 reads
+    back as 2). That snap is a property of the headless platform, not of
+    clampedWindowPos() itself, which is a pure function and unaffected;
+    picking a width that keeps every assertion here clear of the edge
+    sidesteps it entirely.
+    """
+
+    _FITS_ON_SCREEN_WIDTH = 500
+
+    def test_a_position_already_on_screen_survives_the_restore_unchanged(
+        self, qml_root_factory
+    ) -> None:
+        root, warnings, _bridge = qml_root_factory(
+            {
+                "ui/savedWindowWidth": self._FITS_ON_SCREEN_WIDTH,
+                "ui/savedWindowX": 50,
+                "ui/savedWindowY": 60,
+            }
+        )
+        assert _real_warnings(warnings) == []
+        assert root.property("x") == pytest.approx(50)
+        assert root.property("y") == pytest.approx(60)
+
+    def test_a_saved_x_past_the_right_edge_is_pulled_back_by_the_shared_clamp(
+        self, qml_root_factory
+    ) -> None:
+        root, _warnings, _bridge = qml_root_factory(
+            {
+                "ui/savedWindowWidth": self._FITS_ON_SCREEN_WIDTH,
+                "ui/savedWindowX": 999999,
+                "ui/savedWindowY": 60,
+            }
+        )
+        bounds = root.desktopBounds()
+        right = bounds.property("right").toNumber()
+        width = root.property("width")
+        # On this single-screen offscreen run, Screen.width and
+        # desktopBounds().right agree, so this alone can't tell "reused
+        # the shared helper" apart from "kept the old Screen.width
+        # formula" by value -- the same caveat the snippets-window
+        # version of this test documents. What it does pin is that the
+        # pulled-back x is exactly right-edge-minus-width, the formula
+        # clampedWindowPos() uses, and not some other value (0, a stale
+        # width, ...).
+        assert root.property("x") == pytest.approx(right - width)
+        assert root.property("y") == pytest.approx(60)
+
+    def test_the_never_positioned_sentinel_still_centers_instead_of_clamping(
+        self, qml_root_factory
+    ) -> None:
+        # No pre-set savedWindowX/Y: QSettings falls back to the
+        # -1000000 sentinel default, which must still take the
+        # centered/bottom path. If the sentinel were accidentally run
+        # through clampedWindowPos(-1000000, ...), x would land at the
+        # desktop's left edge instead of the centered value asserted
+        # here.
+        root, warnings, _bridge = qml_root_factory(
+            {"ui/savedWindowWidth": self._FITS_ON_SCREEN_WIDTH}
+        )
+        bounds = root.desktopBounds()
+        right = bounds.property("right").toNumber()
+        width = root.property("width")
+        assert _real_warnings(warnings) == []
+        assert root.property("x") == pytest.approx((right - width) / 2)

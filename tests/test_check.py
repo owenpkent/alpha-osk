@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -116,3 +117,97 @@ class TestChildProcessConsoleWindows:
         ok, _ = check.run("ruff", [sys.executable, "--version"], creationflags=0x08000000)
         assert ok is True
         assert seen["creationflags"] == 0x08000000
+
+
+class TestGitHooksDirResolution:
+    """`_git_hooks_dir()` must ask git, not assemble REPO_ROOT/".git"/"hooks".
+
+    In a linked worktree or a submodule, ".git" is a *file* holding a
+    "gitdir:" pointer, not a directory, so the assembled path never
+    exists even inside a perfectly valid checkout. Both `install_hook()`
+    and the end-of-run tip (`_hook_tip_needed()`) share this resolution
+    so they can never disagree about where the hook lives.
+    """
+
+    def test_resolves_a_worktree_style_gitdir_the_assembled_path_would_miss(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        # Simulate what "git rev-parse --git-path hooks" prints for a
+        # linked worktree: a path entirely outside REPO_ROOT/.git.
+        worktree_hooks = tmp_path / "main-checkout" / ".git" / "worktrees" / "feature" / "hooks"
+
+        class _Result:
+            stdout = str(worktree_hooks) + "\n"
+
+        monkeypatch.setattr(
+            check.subprocess,
+            "run",
+            lambda *a, **k: _Result(),  # noqa: ARG005
+        )
+        assert check._git_hooks_dir() == worktree_hooks
+
+    def test_a_relative_git_path_is_resolved_against_repo_root(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        class _Result:
+            stdout = ".git/hooks\n"
+
+        monkeypatch.setattr(
+            check.subprocess,
+            "run",
+            lambda *a, **k: _Result(),  # noqa: ARG005
+        )
+        assert check._git_hooks_dir() == check.REPO_ROOT / ".git" / "hooks"
+
+    def test_not_a_git_checkout_returns_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        def boom(*_a, **_k):
+            raise subprocess.CalledProcessError(128, ["git"])
+
+        monkeypatch.setattr(check.subprocess, "run", boom)
+        assert check._git_hooks_dir() is None
+
+
+class TestHookTipNeeded:
+    """The end-of-run tip must track the *real* hooks directory.
+
+    This is the regression the assembled-path version could not catch:
+    the hook could be installed via `--install-hook` (which already used
+    `--git-path`) in a worktree, and the tip would still fire on every
+    run afterwards because it checked a path that structurally cannot
+    exist in that layout.
+    """
+
+    def test_prints_when_the_real_hooks_dir_has_no_pre_push_hook(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        empty_hooks_dir = tmp_path / "hooks"
+        empty_hooks_dir.mkdir()
+        monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+        monkeypatch.setattr(check, "_git_hooks_dir", lambda: empty_hooks_dir)
+        assert check._hook_tip_needed() is True
+
+    def test_silent_once_the_hook_is_installed_at_the_real_path(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        # A worktree-style hooks dir that is NOT REPO_ROOT/.git/hooks --
+        # the case the assembled-path version got wrong.
+        hooks_dir = tmp_path / "worktrees" / "feature" / "hooks"
+        hooks_dir.mkdir(parents=True)
+        (hooks_dir / "pre-push").write_text("#!/bin/sh\n")
+        monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+        monkeypatch.setattr(check, "_git_hooks_dir", lambda: hooks_dir)
+        assert check._hook_tip_needed() is False
+
+    def test_silent_on_ci_regardless_of_hook_state(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        monkeypatch.setenv("GITHUB_ACTIONS", "true")
+        monkeypatch.setattr(check, "_git_hooks_dir", lambda: tmp_path / "nonexistent")
+        assert check._hook_tip_needed() is False
+
+    def test_fails_open_when_git_cannot_be_asked(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Not a git checkout at all: still tip, same as the old behaviour
+        of treating a missing REPO_ROOT/.git as "no hook installed"."""
+        monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+        monkeypatch.setattr(check, "_git_hooks_dir", lambda: None)
+        assert check._hook_tip_needed() is True

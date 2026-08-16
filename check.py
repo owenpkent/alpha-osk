@@ -213,13 +213,20 @@ def _have_xdist() -> bool:
     return True
 
 
-def install_hook() -> int:
-    """Write .git/hooks/pre-push so the gate runs on push, not by hand."""
-    # Asked of git rather than assembled as REPO_ROOT/".git"/"hooks":
-    # in a linked worktree (and in a submodule) ".git" is a *file*
-    # holding a "gitdir:" pointer, so the assembled path does not exist
-    # and this used to report "not a git checkout?" inside a perfectly
-    # valid one.  `--git-path` resolves correctly in all three layouts.
+def _git_hooks_dir() -> Path | None:
+    """Resolve where git actually keeps its hooks, or None if it can't be asked.
+
+    Asked of git rather than assembled as REPO_ROOT/".git"/"hooks":
+    in a linked worktree (and in a submodule) ".git" is a *file*
+    holding a "gitdir:" pointer, so the assembled path does not exist
+    and that used to report "not a git checkout?" inside a perfectly
+    valid one.  `--git-path` resolves correctly in all three layouts.
+    Shared by `install_hook()` and the end-of-run "install the hook"
+    tip, which used to check the assembled path directly and so never
+    saw an already-installed hook in a worktree or submodule -- it
+    printed the tip on every run no matter how many times the hook had
+    been installed.
+    """
     try:
         hooks_dir = Path(
             subprocess.run(
@@ -232,10 +239,35 @@ def install_hook() -> int:
             ).stdout.strip()
         )
     except (OSError, subprocess.CalledProcessError):
-        print(_safe(f"{C.FAIL}Could not ask git where its hooks live: not a git checkout?{C.END}"))
-        return 1
+        return None
     if not hooks_dir.is_absolute():
         hooks_dir = REPO_ROOT / hooks_dir
+    return hooks_dir
+
+
+def _hook_tip_needed() -> bool:
+    """Should the end-of-run "install the hook" tip print?
+
+    Resolves the hooks directory the same way `install_hook()` does,
+    not the assembled REPO_ROOT/".git"/"hooks" path: in a linked
+    worktree or a submodule ".git" is a file, not a directory, so the
+    assembled path never exists and the tip used to print on every run
+    regardless of whether the hook was installed. Fails open (True) if
+    git can't be asked at all, matching the pre-refactor behaviour of
+    treating a missing ".git" as "no hook installed".
+    """
+    if os.environ.get("GITHUB_ACTIONS") is not None:
+        return False
+    hooks_dir = _git_hooks_dir()
+    return hooks_dir is None or not (hooks_dir / "pre-push").exists()
+
+
+def install_hook() -> int:
+    """Write .git/hooks/pre-push so the gate runs on push, not by hand."""
+    hooks_dir = _git_hooks_dir()
+    if hooks_dir is None:
+        print(_safe(f"{C.FAIL}Could not ask git where its hooks live: not a git checkout?{C.END}"))
+        return 1
     hooks_dir.mkdir(parents=True, exist_ok=True)
     hook = hooks_dir / "pre-push"
     if hook.exists() and "Alpha-OSK pre-push gate" not in hook.read_text(encoding="utf-8"):
@@ -335,10 +367,7 @@ def main() -> int:
 
     if all_ok:
         print(_safe(f"\n{C.OK}{C.BOLD}All checks passed.{C.END} Safe to push."))
-        if (
-            not (REPO_ROOT / ".git" / "hooks" / "pre-push").exists()
-            and os.environ.get("GITHUB_ACTIONS") is None
-        ):
+        if _hook_tip_needed():
             print(
                 _safe(
                     f"{C.DIM}Tip: `python check.py --install-hook` runs this "
