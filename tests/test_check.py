@@ -69,7 +69,18 @@ class TestChildProcessConsoleWindows:
         "nothing but 0 to assert against elsewhere",
     )
     def test_flag_set_when_there_is_no_console(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # stdout is stubbed explicitly, like its two siblings.  Left
+        # unstubbed this passed only because pytest had replaced
+        # sys.stdout with a non-tty capture object: under `pytest -s`
+        # from a Windows terminal the real stdout is a tty,
+        # `_child_creationflags` short-circuits to 0, and the assertion
+        # failed inside a test that was never about ttys.
+        class _NotATty:
+            def isatty(self) -> bool:
+                return False
+
         monkeypatch.setattr(sys, "platform", "win32")
+        monkeypatch.setattr(sys, "stdout", _NotATty())
         monkeypatch.setattr(check, "_get_console_window", lambda: 0)
         assert check._child_creationflags() == subprocess.CREATE_NO_WINDOW
 

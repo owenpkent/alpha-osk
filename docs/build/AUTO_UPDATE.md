@@ -267,11 +267,28 @@ console. Observed as a live `venv python -> base python -> conhost.exe`
 tree: one empty terminal window per relauncher, titled with the working
 directory, because the helper writes nothing to it.
 
-The spawn now ORs `CREATE_NO_WINDOW` in alongside the detach flags rather
-than relying on detachment to imply it. Pinned by
-`tests/test_updater.py::TestRelauncherSpawnHasNoConsole`, which asserts both
-bits: dropping the detach flag would break the relaunch, and dropping the
-window flag would bring the terminals back.
+The spawn now passes `CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP` and
+**drops `DETACHED_PROCESS` entirely**. OR-ing `CREATE_NO_WINDOW` in alongside
+the detach flags was the first attempt and it did nothing: Windows documents
+`CREATE_NO_WINDOW` as *ignored* when combined with `CREATE_NEW_CONSOLE` or
+`DETACHED_PROCESS`, so the detach flag kept winning and the suppression never
+applied.
+
+The distinction is what the console *is*, not whether there is one.
+`DETACHED_PROCESS` leaves the helper with no console, so the re-exec allocates
+a fresh one and draws it. `CREATE_NO_WINDOW` leaves it with a console that is
+merely invisible, which the re-exec inherits and never draws.
+
+Detachment is not lost along with the flag. Windows has no parent-death
+signal, so the child outlives us whether or not it is formally detached, and
+`CREATE_NEW_PROCESS_GROUP` is the part that actually keeps it clear of the
+installer's `taskkill`.
+
+Pinned by `tests/test_updater.py::TestRelauncherSpawnHasNoConsole`, which
+asserts `DETACHED_PROCESS` is **absent** as well as that `CREATE_NO_WINDOW` is
+present. The absence assertion is the load-bearing one: a test that only
+checked the `CREATE_NO_WINDOW` bit was set passed just as happily against the
+version where Windows ignored it.
 
 The general lesson, also recorded in `docs/architecture/GOTCHAS.md`: when
 auditing a spawn on Windows, check the whole process tree it produces, not

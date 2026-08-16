@@ -3179,3 +3179,180 @@ class TestEmailDomainSuggestions:
         _type(bridge, "owen@outl")
         bridge.pressSpecialKey("backspace")
         assert bridge._predictions == ["outlook.com"]
+
+
+class TestTheTokenBarSurvivesEveryWayTheBarIsRepopulated:
+    """One property, five paths, and two of them used to break it.
+
+    The word bar and the token bar are mutually exclusive, so *every*
+    path that repopulates suggestions has to make the same choice.
+    Written out inline at each site it was missed twice, which is why
+    they all now route through ``_refresh_prediction_bar``.  These tests
+    name the paths rather than the helper, so they still describe the
+    property if the helper is ever restructured.
+    """
+
+    def test_backspacing_over_a_separator_keeps_the_token_bar(self, bridge: KeyboardBridge):
+        """The branch the sibling test above could not reach.
+
+        After any "-", ".", "/", "(" or "@" the current word is empty, so
+        "555-" then Backspace lands in the `elif self._context_buffer`
+        branch, not the one with the guard.  That branch called
+        `_update_predictions` unconditionally.
+        """
+        _type(bridge, "555-123-4567 ")
+        _type(bridge, "555-")
+        assert bridge._predictions == ["555-123-4567"]
+        bridge.pressSpecialKey("backspace")
+        assert bridge._predictions == ["555-123-4567"]
+        assert bridge._token_pill_inserts
+
+    def test_tapping_shift_does_not_throw_the_token_bar_away(self, bridge: KeyboardBridge):
+        """Reaching for a shifted symbol mid-number must not cost the pill."""
+        _type(bridge, "555-123-4567 ")
+        _type(bridge, "555-")
+        bridge.toggleShift()
+        assert bridge._predictions == ["555-123-4567"]
+        assert bridge._token_pill_inserts
+
+    def test_caps_lock_does_not_either(self, bridge: KeyboardBridge):
+        _type(bridge, "owen@")
+        assert "gmail.com" in bridge._predictions
+        bridge.toggleCapsLock()
+        assert "gmail.com" in bridge._predictions
+
+    def test_shift_does_not_double_count_the_offer(self, bridge: KeyboardBridge):
+        """Re-emitting an unchanged bar would inflate the acceptance rate."""
+        _type(bridge, "owen@")
+        offers = bridge._analytics._prediction_offers
+        bridge.toggleShift()
+        assert bridge._analytics._prediction_offers == offers
+
+    def test_a_caret_move_takes_the_pills_with_it(self, bridge: KeyboardBridge):
+        """A pill continues `_raw_token`; an arrow key invalidates it.
+
+        Left alone, the pill stayed on the bar *and* in the insert map,
+        so tapping it typed a whole domain wherever the caret had gone.
+        The "is it on the bar right now" check in `pressPrediction`
+        cannot catch this: the bar was never touched.
+        """
+        _type(bridge, "owen@")
+        assert bridge._token_pill_inserts
+        bridge.pressSpecialKey("right")
+        assert bridge._token_pill_inserts == {}
+        assert "gmail.com" not in bridge._predictions
+
+    def test_a_stale_pill_is_no_longer_a_continuation_of_the_abandoned_run(
+        self, bridge: KeyboardBridge
+    ) -> None:
+        """The consequence, stated separately from the mechanism.
+
+        Deliberately *not* asserting on what was typed.  Once the pill
+        leaves the token map, `pressPrediction` treats it as an ordinary
+        word, and typing a word the caller named is that path's job
+        rather than a defect -- QML only ever offers what is on the bar,
+        which the sibling test above covers.  The synthesizer mock has no
+        caret either, so both paths produce the same string here and an
+        output assertion could not tell them apart.
+
+        What must not survive is the *token* path's stale-prefix
+        arithmetic: it rebuilds `_raw_token` as the abandoned prefix plus
+        the pill, and that reconstruction is the thing that used to land
+        a whole address wherever the caret had gone.
+        """
+        _type(bridge, "owen@")
+        bridge.pressSpecialKey("right")
+        bridge.pressPrediction("gmail.com")
+        assert bridge._raw_token != "owen@gmail.com"
+
+    def test_a_held_arrow_does_not_fire_a_query_per_repeat(self, bridge: KeyboardBridge):
+        """The refresh is guarded on there being pills to invalidate.
+
+        Auto-repeat is how a slow-motor user moves the caret, so an
+        unconditional refresh here would run a prediction round trip per
+        repeat.
+        """
+        _type(bridge, "hel")
+        bridge._predictions = []
+        for _ in range(5):
+            bridge.pressSpecialKey("right")
+        assert bridge._predictions == []
+
+
+class TestLearnedTokensCanBeSeenAndRemoved:
+    """The store's only window onto itself.
+
+    The admission rule is a shape test rather than a judgement about
+    sensitivity, so it accepts any short run with a digit in it -- which
+    is also the shape of a password typed into a field where detection
+    failed open.  Keeping it permissive is a deliberate call for recall,
+    and it rests entirely on the user being able to see what was kept and
+    drop entries one at a time.  Clear Learned Data is not that: it
+    throws the whole vocabulary away too.
+    """
+
+    def test_a_learned_token_is_listed(self, bridge: KeyboardBridge):
+        _type(bridge, "555-123-4567 ")
+        assert [t["token"] for t in bridge.getLearnedTokens()] == ["555-123-4567"]
+
+    def test_the_count_comes_with_it(self, bridge: KeyboardBridge):
+        _type(bridge, "02134 ")
+        _type(bridge, "02134 ")
+        assert bridge.getLearnedTokens()[0]["count"] == 2
+
+    def test_the_most_typed_is_listed_first(self, bridge: KeyboardBridge):
+        _type(bridge, "1247 ")
+        for _ in range(3):
+            _type(bridge, "90210 ")
+        assert bridge.getLearnedTokens()[0]["token"] == "90210"
+
+    def test_forgetting_one_removes_it(self, bridge: KeyboardBridge):
+        _type(bridge, "555-123-4567 ")
+        assert bridge.forgetToken("555-123-4567") is True
+        assert bridge.getLearnedTokens() == []
+
+    def test_a_forgotten_token_stops_being_offered(self, bridge: KeyboardBridge):
+        """Removing it from the list has to remove it from the bar."""
+        _type(bridge, "555-123-4567 ")
+        bridge.forgetToken("555-123-4567")
+        _type(bridge, "555-")
+        assert bridge._predictions == []
+
+    def test_forgetting_something_absent_is_not_an_error(self, bridge: KeyboardBridge):
+        assert bridge.forgetToken("nothing-here") is False
+
+    def test_an_empty_store_lists_nothing(self, bridge: KeyboardBridge):
+        assert bridge.getLearnedTokens() == []
+
+
+class TestTokenPillsInsertWhatTheyDisplay:
+    """The pill is a promise about what will be on screen afterwards.
+
+    The store matches case-insensitively, so the pill and the typed
+    characters can disagree; a suffix-only insert then leaves a third
+    string that is neither.
+    """
+
+    def test_caps_lock_does_not_corrupt_the_completed_address(self, bridge: KeyboardBridge):
+        """`OWEN@GM` + `gmail.com` used to land as `OWEN@GMail.com`."""
+        bridge.toggleCapsLock()
+        _type(bridge, "owen@gm")
+        assert "gmail.com" in bridge._predictions
+        bridge.pressPrediction("gmail.com")
+        assert bridge._raw_token.endswith("gmail.com")
+        assert "GMail" not in bridge._raw_token
+
+    def test_the_corrupted_form_is_never_learned(self, bridge: KeyboardBridge):
+        bridge.toggleCapsLock()
+        _type(bridge, "owen@gm")
+        bridge.pressPrediction("gmail.com")
+        assert not any("GMail" in t for t in bridge._predictor._ngram.tokens.tokens)
+
+    def test_a_matching_prefix_still_takes_the_cheap_suffix_path(
+        self, bridge: KeyboardBridge
+    ) -> None:
+        """The replace path is the fallback, not the new default."""
+        _type(bridge, "owen@gm")
+        bridge.pressPrediction("gmail.com")
+        assert "".join(_typed(bridge)) == "owen@gmail.com"
+        bridge._synth.replace_text.assert_not_called()

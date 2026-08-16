@@ -459,6 +459,7 @@ class TestLearnableToken:
             "apt4b",  # alphanumeric mix
             "192.168.1.1",  # eight digits, four groups
             "v2.1.4",
+            "2026",  # a year
         ],
     )
     def test_worth_remembering(self, token: str) -> None:

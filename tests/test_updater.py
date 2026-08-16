@@ -837,4 +837,15 @@ class TestRelauncherSpawnHasNoConsole:
             "the relauncher would allocate a console; DETACHED_PROCESS does "
             "not cover the venv interpreter's re-exec"
         )
-        assert flags & sp.DETACHED_PROCESS, "it must still outlive the app it replaces"
+        # The half that makes the assertion above mean anything.  Windows
+        # documents CREATE_NO_WINDOW as *ignored* when combined with
+        # DETACHED_PROCESS, so a test that only checked the bit was
+        # present passed just as happily against the version where it did
+        # nothing at all.
+        assert not flags & sp.DETACHED_PROCESS, (
+            "DETACHED_PROCESS makes Windows ignore CREATE_NO_WINDOW, so the "
+            "console suppression above would be inert"
+        )
+        assert flags & sp.CREATE_NEW_PROCESS_GROUP, (
+            "it must stay out of our console group so the installer's taskkill cannot sweep it up"
+        )

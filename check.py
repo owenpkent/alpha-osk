@@ -215,10 +215,28 @@ def _have_xdist() -> bool:
 
 def install_hook() -> int:
     """Write .git/hooks/pre-push so the gate runs on push, not by hand."""
-    hooks_dir = REPO_ROOT / ".git" / "hooks"
-    if not hooks_dir.is_dir():
-        print(_safe(f"{C.FAIL}No .git/hooks directory: not a git checkout?{C.END}"))
+    # Asked of git rather than assembled as REPO_ROOT/".git"/"hooks":
+    # in a linked worktree (and in a submodule) ".git" is a *file*
+    # holding a "gitdir:" pointer, so the assembled path does not exist
+    # and this used to report "not a git checkout?" inside a perfectly
+    # valid one.  `--git-path` resolves correctly in all three layouts.
+    try:
+        hooks_dir = Path(
+            subprocess.run(
+                ["git", "rev-parse", "--git-path", "hooks"],
+                cwd=REPO_ROOT,
+                capture_output=True,
+                text=True,
+                check=True,
+                creationflags=_child_creationflags(),
+            ).stdout.strip()
+        )
+    except (OSError, subprocess.CalledProcessError):
+        print(_safe(f"{C.FAIL}Could not ask git where its hooks live: not a git checkout?{C.END}"))
         return 1
+    if not hooks_dir.is_absolute():
+        hooks_dir = REPO_ROOT / hooks_dir
+    hooks_dir.mkdir(parents=True, exist_ok=True)
     hook = hooks_dir / "pre-push"
     if hook.exists() and "Alpha-OSK pre-push gate" not in hook.read_text(encoding="utf-8"):
         print(
