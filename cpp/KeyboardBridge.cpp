@@ -8,8 +8,10 @@
 #include "platform/PasswordDetect.h"
 #include "prediction/HybridPredictor.h"
 
+#include <QClipboard>
 #include <QDateTime>
 #include <QDir>
+#include <QGuiApplication>
 #include <QJsonArray>
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
@@ -1321,8 +1323,61 @@ QVariantList KeyboardBridge::getSnippets()
 
 void KeyboardBridge::setSnippet(int index, const QString &label, const QString &value)
 {
+    // Three arguments, not four: the colour argument defaults to null,
+    // which SnippetStore::set reads as "keep the existing tag". The editor
+    // edits label and value only, so passing a tag here would clear one set
+    // from the actions sheet.
     m_snippetStore.set(index, label, value);
     emit snippetsChanged(m_snippetStore.getAll());
+}
+
+bool KeyboardBridge::copySnippet(int index)
+{
+    // What a tile tap does, in preference to typing the value in. Typing is
+    // one click against a paste's two, but it only lands correctly when the
+    // caret is already in the right field and the app does not intercept
+    // synthetic keystrokes (the whole reason compat mode exists), a long
+    // address arrives one character at a time, and when it misses it misses
+    // *silently*, into whichever window happened to be focused. A clipboard
+    // write has no focus race.
+    //
+    // Not gated on privacy mode, the same rule as insertSnippet: privacy is
+    // about not *learning* from typing, and the user may need their own
+    // address in a sensitive form. Nothing here learns or logs.
+    const QString value = m_snippetStore.getValue(index);
+    if (value.isEmpty())
+        return false; // Out of range or an empty slot. Copying "nothing"
+                      // would silently wipe whatever the user had already
+                      // put on the clipboard, which is the one way this
+                      // feature can destroy something.
+    QClipboard *clipboard = QGuiApplication::clipboard();
+    if (!clipboard)
+        return false; // no GUI (headless tests): nothing to copy to
+    clipboard->setText(value);
+    return true;
+}
+
+void KeyboardBridge::setSnippetColor(int index, const QString &color)
+{
+    // Deliberately silent when the tag is unchanged: QML rebuilds the whole
+    // tile grid on snippetsChanged, and setColor returns false in that case.
+    if (m_snippetStore.setColor(index, color))
+        emit snippetsChanged(m_snippetStore.getAll());
+}
+
+QStringList KeyboardBridge::getSnippetColors()
+{
+    // Handed to QML so a swatch can never offer a tag the store would
+    // silently drop. QML owns the hexes (they have to stay legible on nine
+    // themes, which the store cannot know); the store owns which names exist.
+    return SnippetStore::colorNames();
+}
+
+int KeyboardBridge::getSnippetLimit()
+{
+    // Read rather than hardcoded in QML, so the Add button goes inert at the
+    // same number the store refuses at.
+    return SnippetStore::maxSnippets();
 }
 
 void KeyboardBridge::addSnippet()

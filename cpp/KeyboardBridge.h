@@ -136,6 +136,10 @@ public:
     Q_INVOKABLE void deleteSnippet(int index);
     Q_INVOKABLE void addSnippet();
     Q_INVOKABLE void moveSnippet(int index, int direction);
+    Q_INVOKABLE bool copySnippet(int index);
+    Q_INVOKABLE void setSnippetColor(int index, const QString &color);
+    Q_INVOKABLE QStringList getSnippetColors();
+    Q_INVOKABLE int getSnippetLimit();
 
     Q_INVOKABLE QVariant getAnalytics() const;
     Q_INVOKABLE QVariant getVisualizationData() const;

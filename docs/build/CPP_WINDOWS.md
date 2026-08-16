@@ -36,7 +36,7 @@ Ordered by the commits that landed them on `cpp-rewrite`:
 | Swipe typing | done | SHARK² shape decoder; `setSwipeEnabled`/`setSwipeLayout`/`processSwipe` wired against the unigram vocabulary. |
 | Key-click audio | done | Win32 `PlaySound` (winmm) instead of pulling in the QtMultimedia module. |
 | Settings | done | Persisted by the QML `Settings` element (org/app names set); the bridge setter slots (layout / merge-strategy / auto-space / auto-cap / prediction-count / compat / privacy) are functional. |
-| Snippets | done | `SnippetStore` reads/writes `snippets.json`; insert sends the value verbatim. Reads the user's existing file. |
+| Snippets | done | `SnippetStore` reads/writes `snippets.json` (schema 2, colour tags). A tile tap **copies to the clipboard** (`copySnippet`); `insertSnippet` still types verbatim but nothing in QML calls it. Reads the user's existing file. |
 | Vocab packs | done | Import-only `PackManager` (discover / enable / disable / import via the hardened path); enabled packs inject vocab into the n-gram tables. |
 | Password detection + privacy | done | UIA (+ Win32 fallback) auto-pauses learning on password fields; manual privacy toggle layers on top. |
 | Analytics tracking | done | Session + lifetime counters in `analytics.json`; the dashboard tiles (keystrokes/time/effort saved, acceptance) compute from real data. |

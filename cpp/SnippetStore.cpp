@@ -13,6 +13,13 @@
 
 namespace {
 const char *kDefaultLabels[] = {"Name", "Email", "Phone", "Address"};
+
+// The tag names this store recognises. "" is the untagged default and is
+// deliberately first: the UI shows it as a plain grey circle, drawn from the
+// theme's own key colour rather than from an ink of its own. There is no grey
+// *in* the list for the same reason a blue-grey "slate" was dropped from it --
+// a tag that reads as the default is a tag that cannot be seen.
+const char *kColorNames[] = {"", "red", "amber", "green", "blue", "purple"};
 }
 
 SnippetStore::SnippetStore(const QString &path)
@@ -33,11 +40,33 @@ QString SnippetStore::cleanValue(const QString &value)
     return value.left(kMaxValueLen); // keep newlines; only bound length
 }
 
+QString SnippetStore::cleanColor(const QString &color)
+{
+    // Anything not on the list becomes untagged rather than being kept or
+    // rejecting the whole file. snippets.json is replace-on-import from an
+    // archive the user picked and this string ends up in a QML `color`
+    // property, so an unrecognised value must never reach it verbatim.
+    const QString name = color.trimmed().toLower();
+    for (const char *known : kColorNames) {
+        if (name == QString::fromLatin1(known))
+            return name;
+    }
+    return QString();
+}
+
+QStringList SnippetStore::colorNames()
+{
+    QStringList out;
+    for (const char *name : kColorNames)
+        out.append(QString::fromLatin1(name));
+    return out;
+}
+
 QVector<SnippetStore::Entry> SnippetStore::defaultSnippets()
 {
     QVector<Entry> out;
     for (const char *lbl : kDefaultLabels)
-        out.append({QString::fromLatin1(lbl), QString()});
+        out.append({QString::fromLatin1(lbl), QString(), QString()});
     return out;
 }
 
@@ -90,9 +119,10 @@ void SnippetStore::load()
         const QJsonObject o = v.toObject();
         const QString label = cleanLabel(o.value("label").toString());
         const QString value = cleanValue(o.value("value").toString());
+        const QString color = cleanColor(o.value("color").toString());
         if (label.isEmpty() && value.isEmpty())
             continue;
-        cleaned.append({label, value});
+        cleaned.append({label, value, color});
         if (cleaned.size() >= kMaxSnippets)
             break;
     }
@@ -106,6 +136,7 @@ void SnippetStore::save()
         QJsonObject o;
         o.insert("label", e.label);
         o.insert("value", e.value);
+        o.insert("color", e.color);
         arr.append(o);
     }
     QJsonObject payload;
@@ -137,6 +168,7 @@ QVariantList SnippetStore::getAll()
         QVariantMap m;
         m.insert("label", e.label);
         m.insert("value", e.value);
+        m.insert("color", e.color);
         out.append(m);
     }
     return out;
@@ -156,22 +188,41 @@ int SnippetStore::count()
     return m_snippets.size();
 }
 
-bool SnippetStore::set(int index, const QString &label, const QString &value)
+bool SnippetStore::set(int index, const QString &label, const QString &value,
+                       const QString &color)
 {
     ensureLoaded();
     if (index < 0 || index >= m_snippets.size())
         return false;
-    m_snippets[index] = {cleanLabel(label), cleanValue(value)};
+    // A null (not merely empty) colour means "keep what is there". The
+    // editor only edits label and value, so replacing the whole record
+    // would silently clear a tag set from the actions sheet -- and "" is a
+    // real tag value here (untagged), so it cannot double as "unset".
+    const QString tag = color.isNull() ? m_snippets[index].color : cleanColor(color);
+    m_snippets[index] = {cleanLabel(label), cleanValue(value), tag};
     save();
     return true;
 }
 
-bool SnippetStore::add(const QString &label, const QString &value)
+bool SnippetStore::setColor(int index, const QString &color)
+{
+    ensureLoaded();
+    if (index < 0 || index >= m_snippets.size())
+        return false;
+    const QString cleaned = cleanColor(color);
+    if (m_snippets[index].color == cleaned)
+        return false; // unchanged: the caller must not re-emit
+    m_snippets[index].color = cleaned;
+    save();
+    return true;
+}
+
+bool SnippetStore::add(const QString &label, const QString &value, const QString &color)
 {
     ensureLoaded();
     if (m_snippets.size() >= kMaxSnippets)
         return false;
-    m_snippets.append({cleanLabel(label), cleanValue(value)});
+    m_snippets.append({cleanLabel(label), cleanValue(value), cleanColor(color)});
     save();
     return true;
 }
