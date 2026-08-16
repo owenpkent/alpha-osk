@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import time
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -17,11 +18,18 @@ PySide6 = pytest.importorskip("PySide6")
 
 from src.keyboard_bridge import KeyboardBridge
 from src.prediction.token_predictor import TokenPredictor
+from src.snippets import SnippetStore
 
 
 @pytest.fixture
-def bridge() -> KeyboardBridge:
-    """Create a KeyboardBridge with mocked synthesizer."""
+def bridge(tmp_path: Path) -> KeyboardBridge:
+    """Create a KeyboardBridge with mocked synthesizer.
+
+    ``KeyboardBridge`` reads the developer's own config directory on
+    construction, so two of its stores are unplugged here before any test
+    touches them.  Both failures below are machine-dependent, which means
+    they are invisible on CI and reproduce for one person.
+    """
     with patch("src.keyboard_bridge.create_key_synthesizer") as mock_factory:
         mock_synth = MagicMock()
         mock_synth.is_available.return_value = True
@@ -29,17 +37,22 @@ def bridge() -> KeyboardBridge:
         mock_factory.return_value = mock_synth
         b = KeyboardBridge()
         b._synth = mock_synth
-        # The bridge loads the developer's real ngram_model.json from
-        # get_model_dir() on construction, and that file now carries a
-        # "tokens" key.  A structured token the developer typed for real
-        # is prefix-matched and count-ranked exactly like one a test
-        # teaches, so a single "owenpkent@gmail.com" in there outranks the
-        # domain these tests learn and TestEmailDomainSuggestions fails on
-        # that machine alone.  CI never has the file, so it stays green,
-        # which is the worst shape a failure can take.  The word model is
+        # **The snippet store is swapped before anything can write to it.**
+        # SnippetStore saves synchronously on every mutation, and the
+        # auto-detection tests below call acceptSnippetOffer() and
+        # _snippets.set(), so without this the suite edits the developer's
+        # own saved snippets: their email and phone number, replaced by
+        # this file's example values, with no undo and no backup.
+        b._snippets = SnippetStore(tmp_path / "snippets.json")
+        b._snippets.load()
+        # The real ngram_model.json carries a "tokens" key since the
+        # structured-token work.  A token typed for real is prefix-matched
+        # and count-ranked exactly like one a test teaches, so one address
+        # in the developer's own model outranks the domain
+        # TestEmailDomainSuggestions just learned.  The word model is
         # worked around per-test with synthetic zzq*/zephyrish tokens; the
-        # token store has no such escape, since its whole matching rule is
-        # "any prefix of anything typed", so it is emptied instead.
+        # token store has no such escape, because its whole matching rule
+        # is "any prefix of anything typed", so it is emptied instead.
         b._predictor._ngram.tokens = TokenPredictor()
         return b
 
