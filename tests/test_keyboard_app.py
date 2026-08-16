@@ -1,16 +1,25 @@
 """Tests for app-level wiring in ``src/keyboard_app.py``.
 
-Currently covers the one-time purge of diagnostic logs written before
-the typed-content fix.  Those files could hold a transcript of what the
-user typed (including a password typed while privacy mode was active),
-so removing them on upgrade is part of that fix rather than cleanup.
+Covers the one-time purge of diagnostic logs written before the
+typed-content fix (those files could hold a transcript of what the user
+typed, including a password typed while privacy mode was active, so
+removing them on upgrade is part of that fix rather than cleanup), and
+how the Windows window styles are applied.
 """
 
 from __future__ import annotations
 
+import types
 from pathlib import Path
+from unittest.mock import MagicMock
 
-from src.keyboard_app import _LOG_PURGE_SENTINEL, _purge_pre_fix_logs
+import pytest
+
+from src.keyboard_app import (
+    _LOG_PURGE_SENTINEL,
+    _apply_windows_extended_styles,
+    _purge_pre_fix_logs,
+)
 
 
 def _seed_logs(config_dir: Path) -> None:
@@ -74,3 +83,89 @@ class TestPurgePreFixLogs:
         removed = _purge_pre_fix_logs(missing)
 
         assert removed == 0
+
+
+class TestAlwaysOnTopIsAppliedAsAZOrderChange:
+    """Reported as "always on top isn't working", and the cause was that
+    the code asked for it the one way that does not work.
+
+    ``WS_EX_TOPMOST`` and the topmost Z-order *band* are separate pieces
+    of state. MSDN says the style is added and removed with
+    ``SetWindowPos``; writing the bit into the style word with
+    ``SetWindowLongW`` sets the first and leaves the second alone, which
+    produces a window that reports itself as topmost and is not. A
+    Z-order walk on the live keyboard found it **fifteenth**, below a
+    dozen ordinary windows, with the bit reading true throughout, while
+    Windows' own on-screen keyboard sat first.
+
+    These assert the two halves of the call that actually moves it, so a
+    future "tidy the flags into one SetWindowLong" reads as the change it
+    would be. The Win32 layer is faked because this code is Windows-only
+    and the suite runs on Linux too.
+    """
+
+    SWP_NOZORDER = 0x0004
+    SWP_FRAMECHANGED = 0x0020
+    HWND_TOPMOST = -1
+    WS_EX_TOPMOST = 0x00000008
+    WS_EX_NOACTIVATE = 0x08000000
+
+    @pytest.fixture
+    def win32(self, monkeypatch: pytest.MonkeyPatch):
+        """A stand-in ctypes.windll that records what it was asked to do."""
+        user32 = MagicMock()
+        user32.GetWindowLongW.return_value = 0x00000100  # some pre-existing style
+        user32.SetWindowLongW.return_value = 0x00000100
+        user32.SetWindowPos.return_value = 1
+        kernel32 = MagicMock()
+        kernel32.GetLastError.return_value = 0
+
+        import ctypes
+
+        monkeypatch.setattr(
+            ctypes, "windll", types.SimpleNamespace(user32=user32, kernel32=kernel32), raising=False
+        )
+        return user32
+
+    @staticmethod
+    def _root() -> MagicMock:
+        root = MagicMock()
+        root.winId.return_value = 0x1234
+        return root
+
+    def test_the_window_is_put_in_the_topmost_band(self, win32) -> None:
+        _apply_windows_extended_styles(self._root())
+
+        win32.SetWindowPos.assert_called_once()
+        args = win32.SetWindowPos.call_args[0]
+        assert args[1] == self.HWND_TOPMOST, (
+            f"hWndInsertAfter was {args[1]}, not HWND_TOPMOST; the window keeps "
+            "whatever Z-order it already had"
+        )
+
+    def test_the_call_does_not_decline_to_reorder(self, win32) -> None:
+        """SWP_NOZORDER asks the system to leave the Z-order alone, which
+        is the opposite of the point and is what the old code passed."""
+        _apply_windows_extended_styles(self._root())
+
+        flags = win32.SetWindowPos.call_args[0][6]
+        assert not flags & self.SWP_NOZORDER, "SWP_NOZORDER cancels the whole call"
+        assert flags & self.SWP_FRAMECHANGED, (
+            "SWP_FRAMECHANGED is what makes the system re-read WS_EX_NOACTIVATE"
+        )
+
+    def test_noactivate_still_goes_through_the_style_word(self, win32) -> None:
+        """The inverse: this one *is* settable that way, and must stay,
+        or every key click steals focus from the app being typed into."""
+        _apply_windows_extended_styles(self._root())
+
+        style = win32.SetWindowLongW.call_args[0][2]
+        assert style & self.WS_EX_NOACTIVATE
+
+    def test_topmost_is_not_written_into_the_style_word(self, win32) -> None:
+        """Writing it there is what knocked the window out of the band:
+        Qt's WindowStaysOnTopHint had already put it in."""
+        _apply_windows_extended_styles(self._root())
+
+        style = win32.SetWindowLongW.call_args[0][2]
+        assert not style & self.WS_EX_TOPMOST
