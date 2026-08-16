@@ -29,6 +29,15 @@ This is worth being precise about, because it means the keyboard is pattern-matc
 
 Turn the toggle off and no detection runs at all. Your existing snippets are untouched either way.
 
+## Snippets and the clipboard
+
+Tapping a snippet **copies it to the system clipboard**; it is not typed into the app. That is worth knowing, because the clipboard is shared with everything running on your machine, and clipboard managers, sync tools and some remote-desktop clients read it.
+
+- **Alpha-OSK does not clear the clipboard afterwards.** Whatever you copied stays there until you or another app replaces it. If you have just copied something you would rather not leave lying around, copy something harmless over it.
+- **Copying is not learning.** Nothing about a snippet you copy is added to your prediction model or counted anywhere, and the value is never written to the log.
+- **It works while learning is paused.** Pausing learning stops Alpha-OSK studying your typing; it does not stop you putting your own address into a form.
+- **Nothing leaves your machine.** The clipboard is local. If you have your operating system's clipboard sync turned on (Windows "Clipboard history across devices", for instance), that is your setting and it applies to everything you copy, not just Alpha-OSK.
+
 ## Numbers, phone numbers and email addresses in your suggestions
 
 Alpha-OSK learns the words you type so it can suggest them back to you. It now does the same for a small set of things that are *not* words: your phone number, your zip code, a house number, an email address. These are among the most tedious things to type on a keyboard you drive with a mouse, and the word model literally cannot hold them (it throws away every digit and symbol before storing anything), so they lived in a blind spot where the keyboard could never help.

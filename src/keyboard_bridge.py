@@ -44,7 +44,7 @@ from .platform.password_detect import (
 from .platform.pointer import external_click_detected
 from .prediction import HybridPredictor, SwipeRecognizer
 from .prediction.token_predictor import TokenPredictor
-from .snippets import SnippetStore
+from .snippets import MAX_SNIPPETS, SNIPPET_COLORS, SnippetStore
 from .telemetry import TelemetryClient
 from .text_patterns import (
     detect_snippet_candidate,
@@ -2482,11 +2482,107 @@ class KeyboardBridge(QObject):
         """Enable/disable skipping the auto-space inside structured tokens."""
         self._intelligent_spacing = bool(enabled)
 
-    @Slot(int, str, str)
-    def setSnippet(self, index: int, label: str, value: str) -> None:
-        """Replace the label + value of the snippet at *index*."""
+    @Slot(int, str, str, result=bool)
+    def setSnippet(self, index: int, label: str, value: str) -> bool:
+        """Replace the label + value of the snippet at *index*.
+
+        The colour tag is deliberately not a parameter: the editor does
+        not show one, and passing a default here would clear whatever the
+        actions sheet had set (see ``SnippetStore.set``).
+
+        Returns whether anything was written, so the editor can stop
+        flashing "Saved" over a write the store refused: ``set`` rejects
+        an out-of-range index, and the editor is reachable from the
+        actions sheet, whose index a Data Backup import can invalidate
+        while it is open.  Same reason ``acceptSnippetOffer`` and
+        ``copySnippet`` report a bool.
+        """
         if self._snippets.set(index, label, value):
             self.snippetsChanged.emit(self._snippets.get_all())
+            return True
+        return False
+
+    @Slot(int, result=bool)
+    def copySnippet(self, index: int) -> bool:
+        """Put the snippet at *index* on the system clipboard.
+
+        This is what a tile tap does, in preference to typing the value in.
+        Typing it is one click, but it only lands correctly if the caret is
+        already in the right field and the app does not intercept synthetic
+        keystrokes (the whole reason Compatibility Mode exists); a long
+        address also arrives one character at a time, and when it misses it
+        misses silently, into whichever window happened to be focused. The
+        clipboard has no focus race and no per-character path, at the cost
+        of a paste.
+
+        There is deliberately **no** "type it" control anywhere in the UI,
+        not even in the actions sheet. ``insertSnippet`` still exists and
+        still works, but nothing in QML calls it; it is kept as the
+        reference for how a verbatim insert has to behave.
+
+        Returns False without touching the clipboard for an out-of-range
+        index and for an empty snippet: copying "nothing" would silently
+        wipe whatever the user had already put there, which is the one way
+        this can destroy something.
+
+        Not gated on privacy mode, for the same reason inserting is not: the
+        user asked for their own text. Nothing here is learned or logged.
+        """
+        value = self._snippets.get_value(index)
+        if not value:
+            return False
+        # Imported here rather than at module scope.  QtGui dlopens the
+        # host's libEGL / libGL when it is first imported, and this module
+        # is imported by most of the Python suite, so an unconditional
+        # import turns every one of those files into a pytest *collection
+        # error* on a host without them instead of a skip.  That is the
+        # same failure tests/test_qml_snippets.py wraps its own QtGui
+        # import in a try/except to avoid.  One slot needs it; nothing
+        # else in this module does.
+        try:
+            from PySide6.QtGui import QGuiApplication
+        except ImportError:  # no GUI stack on this host
+            return False
+        # isinstance, not `is not None`: instance() is inherited from
+        # QCoreApplication and hands back a plain QCoreApplication in a
+        # non-GUI process, so a null check does not answer the question it
+        # looks like it answers.  Falling through to clipboard() there
+        # warns "Must construct a QGuiApplication" and returns null.
+        if not isinstance(QGuiApplication.instance(), QGuiApplication):
+            return False
+        clipboard = QGuiApplication.clipboard()
+        if clipboard is None:
+            return False
+        clipboard.setText(value)
+        return True
+
+    @Slot(int, str)
+    def setSnippetColor(self, index: int, color: str) -> None:
+        """Tag the snippet at *index* with a colour (empty name clears it)."""
+        if self._snippets.set_color(index, color):
+            self.snippetsChanged.emit(self._snippets.get_all())
+
+    @Slot(result="QStringList")
+    def getSnippetColors(self) -> List[str]:
+        """Return the allowed colour-tag names, untagged ("") first.
+
+        QML builds its swatch row from this rather than from a list of
+        its own, so a swatch can never offer a name the store would
+        reject and silently drop back to untagged.
+        """
+        return list(SNIPPET_COLORS)
+
+    @Slot(result=int)
+    def getSnippetLimit(self) -> int:
+        """Return the maximum number of snippets the store will hold.
+
+        QML needs it to disable Add at the cap. ``SnippetStore.add``
+        refuses past it by returning False and the list simply does not
+        grow, which the old button could not tell from success: it opened
+        the editor on "the last snippet" either way, which at the cap is
+        an existing snippet the user never asked to edit.
+        """
+        return MAX_SNIPPETS
 
     @Slot()
     def addSnippet(self) -> None:

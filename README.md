@@ -135,9 +135,9 @@ That covers ~90% of day-to-day use. The rest of this README and the [white paper
 </tr>
 </table>
 
-<img src="assets/screenshots/snippets-window.png" alt="Snippets window listing Name, Email, Phone, and Address entries, each with edit and delete buttons" width="360" />
+<img src="assets/screenshots/snippets-window.png" alt="Snippets window: six colour-tagged tiles in two columns for Name, Email, Phone, Address, Work email and Sign-off, above an Add snippet button" width="360" />
 
-*Snippets: text you type constantly, one tap away. It floats as its own window so you can drag it anywhere, and Alpha-OSK can offer to fill these in for you when it spots an email, phone number or address as you type.*
+*Snippets: text you type constantly, one tap from the clipboard. Tap a tile to copy it and paste it wherever you need; right-click one to edit it, tag it a colour, reorder it or delete it. It floats as its own window so you can drag it anywhere, and Alpha-OSK can offer to fill these in for you when it spots an email, phone number or address as you type.*
 
 </div>
 

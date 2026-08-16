@@ -38,6 +38,8 @@ build/__pycache__/
 build/linux/__pycache__/
 build/windows/__pycache__/
 build-cache/
+# C++/Qt6 rewrite build output (cpp-rewrite branch); never commit it.
+/build-cpp/
 *.spec.bak
 
 # Test / coverage

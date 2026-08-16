@@ -14,6 +14,7 @@ from src.snippets import (  # noqa: E402
     MAX_LABEL_LEN,
     MAX_SNIPPETS,
     MAX_VALUE_LEN,
+    SNIPPET_COLORS,
     SnippetStore,
 )
 
@@ -51,7 +52,11 @@ def test_save_load_round_trip(tmp_path):
 def test_set_updates_entry(store):
     store.load()
     assert store.set(1, "Work email", "work@example.com") is True
-    assert store.get_all()[1] == {"label": "Work email", "value": "work@example.com"}
+    assert store.get_all()[1] == {
+        "label": "Work email",
+        "value": "work@example.com",
+        "color": "",
+    }
 
 
 def test_set_out_of_range_returns_false(store):
@@ -65,7 +70,7 @@ def test_add_appends(store):
     assert store.add("Signature", "Best, Owen") is True
     after = store.get_all()
     assert len(after) == before + 1
-    assert after[-1] == {"label": "Signature", "value": "Best, Owen"}
+    assert after[-1] == {"label": "Signature", "value": "Best, Owen", "color": ""}
 
 
 def test_add_respects_cap(tmp_path):
@@ -292,3 +297,174 @@ def test_get_snippets_slot_returns_list(bridge, tmp_path):
     result = bridge.getSnippets()
     assert isinstance(result, list)
     assert [s["label"] for s in result] == list(_DEFAULT_LABELS)
+
+
+# --------------------------------------------------------------------------
+#  Colour tags
+#
+#  Tags exist so a grid of a dozen snippets can be scanned by colour
+#  instead of read.  They are stored as *names* from an allow-list rather
+#  than as the hex the UI draws, because snippets.json is replace-on-import
+#  from an archive the user picked and the stored string ends up in a QML
+#  `color` property.  Every positive case below is paired with the near-miss
+#  it has to reject.
+# --------------------------------------------------------------------------
+
+
+def test_seeded_snippets_are_untagged(store):
+    store.load()
+    assert [s["color"] for s in store.get_all()] == [""] * len(_DEFAULT_LABELS)
+
+
+def test_set_color_tags_and_persists(tmp_path):
+    path = tmp_path / "snippets.json"
+    store = SnippetStore(path)
+    store.load()
+    assert store.set_color(1, "blue") is True
+
+    reopened = SnippetStore(path)
+    reopened.load()
+    assert reopened.get_all()[1]["color"] == "blue"
+
+
+def test_set_color_rejects_a_name_outside_the_allow_list(store):
+    """A tag the store does not know degrades to untagged, never verbatim.
+
+    The inverse of the test above: without this, a hand-edited or imported
+    archive could put an arbitrary string into a QML `color` property.
+    """
+    store.load()
+    store.set_color(1, "blue")
+    store.set_color(1, "#ff0000")
+    assert store.get_all()[1]["color"] == ""
+
+
+def test_set_color_is_a_noop_for_the_tag_already_set(store):
+    """Returns False so the bridge does not emit, and QML does not rebuild."""
+    store.load()
+    assert store.set_color(1, "green") is True
+    assert store.set_color(1, "green") is False
+
+
+def test_set_color_out_of_range_returns_false(store):
+    store.load()
+    assert store.set_color(999, "red") is False
+
+
+def test_editing_a_snippet_keeps_its_tag(store):
+    """The editor edits label + value only; a save must not clear the tag."""
+    store.load()
+    store.set_color(1, "purple")
+    store.set(1, "Work email", "work@example.com")
+    assert store.get_all()[1]["color"] == "purple"
+
+
+def test_set_can_clear_the_tag_explicitly(store):
+    store.load()
+    store.set_color(1, "purple")
+    store.set(1, "Work email", "work@example.com", color="")
+    assert store.get_all()[1]["color"] == ""
+
+
+def test_a_tag_moves_with_its_snippet(store):
+    store.load()
+    store.set_color(0, "amber")
+    store.move(0, 1)
+    assert store.get_all()[1]["color"] == "amber"
+    assert store.get_all()[0]["color"] == ""
+
+
+@pytest.mark.parametrize(
+    "hostile", ["#ff0000", "red;background:url(x)", "reddish", 5, None, {}, []]
+)
+def test_a_colour_from_an_untrusted_file_never_survives_load(tmp_path, hostile):
+    """snippets.json is replace-on-import, so its colours are attacker-chosen."""
+    path = tmp_path / "snippets.json"
+    payload = {
+        "version": 2,
+        "snippets": [{"label": "Email", "value": "a@b.com", "color": hostile}],
+    }
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    store = SnippetStore(path)
+    store.load()
+    assert store.get_all()[0]["color"] == ""
+    # The snippet itself is kept: a bad tag is not a reason to lose data.
+    assert store.get_all()[0]["value"] == "a@b.com"
+
+
+def test_a_tag_is_normalised_into_the_allow_list(store):
+    """Case and surrounding whitespace are normalised, not rejected.
+
+    The property is about the *output*: whatever goes in, what is stored is
+    a member of the allow-list or the empty string, so QML is never handed a
+    string the store did not choose.
+    """
+    store.load()
+    assert store.set_color(1, "  BLUE  ") is True
+    assert store.get_all()[1]["color"] == "blue"
+
+
+def test_a_known_tag_from_a_file_is_kept(tmp_path):
+    """The inverse of the case above: an allow-list that rejected
+    everything would satisfy it while making tags a no-op."""
+    path = tmp_path / "snippets.json"
+    payload = {
+        "version": 2,
+        "snippets": [{"label": "Email", "value": "a@b.com", "color": "green"}],
+    }
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    store = SnippetStore(path)
+    store.load()
+    assert store.get_all()[0]["color"] == "green"
+
+
+def test_a_file_written_before_tags_existed_loads_untagged(tmp_path):
+    path = tmp_path / "snippets.json"
+    payload = {"version": 1, "snippets": [{"label": "Email", "value": "a@b.com"}]}
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    store = SnippetStore(path)
+    store.load()
+    assert store.get_all()[0] == {"label": "Email", "value": "a@b.com", "color": ""}
+
+
+# --------------------------------------------------------------------------
+#  Bridge slots: colour tags and the cap
+# --------------------------------------------------------------------------
+
+
+def test_get_snippet_colors_matches_the_store_allow_list(bridge):
+    colors = bridge.getSnippetColors()
+    assert colors == list(SNIPPET_COLORS)
+    # QML draws the first entry as the "no tag" swatch.
+    assert colors[0] == ""
+
+
+def test_set_snippet_color_emits_snippets_changed(bridge, tmp_path):
+    _attach_temp_store(bridge, tmp_path)
+    seen = []
+    bridge.snippetsChanged.connect(seen.append)
+
+    bridge.setSnippetColor(1, "blue")
+    assert len(seen) == 1
+    assert seen[0][1]["color"] == "blue"
+
+    # An unchanged tag must not emit: QML rebuilds the whole grid on it.
+    bridge.setSnippetColor(1, "blue")
+    assert len(seen) == 1
+
+
+def test_bridge_set_snippet_keeps_the_colour_tag(bridge, tmp_path):
+    """The editor's save path. Regression: it used to replace the record."""
+    _attach_temp_store(bridge, tmp_path)
+    bridge.setSnippetColor(1, "amber")
+    bridge.setSnippet(1, "Work email", "work@example.com")
+    assert bridge.getSnippets()[1]["color"] == "amber"
+
+
+def test_get_snippet_limit_matches_the_store_cap(bridge):
+    """QML disables Add against this; a drift would make Add silently inert
+    one snippet early, or open the editor on somebody else's snippet."""
+    assert bridge.getSnippetLimit() == MAX_SNIPPETS
