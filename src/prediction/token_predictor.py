@@ -215,9 +215,19 @@ class TokenPredictor:
                 break
             if not isinstance(tok, str) or not isinstance(count, int) or isinstance(count, bool):
                 continue
+            # Strip before validating, exactly as ``learn`` does.  Doing
+            # it the other way round -- validating the stripped form and
+            # storing the raw one -- let a file written by an older
+            # build, hand-edited, or arriving in an imported archive keep
+            # "555-1234.", admitted on the strength of "555-1234" and
+            # then offered as a pill that types a stray full stop into
+            # the user's number.  Counts are merged rather than
+            # overwritten so a file carrying both forms keeps both
+            # sightings instead of whichever iterated last.
+            tok = strip_trailing_punctuation(tok)
             if count <= 0 or not is_learnable_token(tok):
                 continue
-            kept[tok] = count
+            kept[tok] = kept.get(tok, 0) + count
         self.tokens = kept
         self._domains_dirty = True
         _logger.info("Token store loaded (%d entries)", len(kept))

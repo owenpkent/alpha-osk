@@ -2051,6 +2051,24 @@ def _type(bridge: KeyboardBridge, text: str) -> None:
             bridge.pressKeyLiteral(ch)
 
 
+def _type_cased(bridge: KeyboardBridge, text: str) -> None:
+    """Drive the bridge through *text* via ``pressKey``, the casing path.
+
+    ``_type`` uses ``pressKeyLiteral``, which is what QML calls once it
+    has already resolved the character (a right-clicked shifted
+    variant), so Shift and Caps Lock do not touch it.  A test about what
+    Caps Lock does to the typed run therefore has to come in through
+    this entry point instead, or it is quietly asserting against
+    lowercase input and passes whether or not the code under test is
+    correct.
+    """
+    for ch in text:
+        if ch == " ":
+            bridge.pressSpecialKey("space")
+        else:
+            bridge.pressKey(ch)
+
+
 class TestShiftCapitalizesSuggestions:
     """Shift capitalises the suggestion pills, the way Caps Lock already did.
 
@@ -3336,15 +3354,37 @@ class TestTokenPillsInsertWhatTheyDisplay:
     def test_caps_lock_does_not_corrupt_the_completed_address(self, bridge: KeyboardBridge):
         """`OWEN@GM` + `gmail.com` used to land as `OWEN@GMail.com`."""
         bridge.toggleCapsLock()
-        _type(bridge, "owen@gm")
+        _type_cased(bridge, "owen@gm")
+        # The point of the test: the run really is uppercase, so the pill
+        # cannot case-sensitively continue it and the replace path is the
+        # one under test.  Driven through pressKeyLiteral this read
+        # "owen@gm" and the suffix path answered, which made both
+        # assertions below pass against the pre-fix code.
+        assert bridge._raw_token == "OWEN@GM"
         assert "gmail.com" in bridge._predictions
         bridge.pressPrediction("gmail.com")
+        bridge._synth.replace_text.assert_called_once()
         assert bridge._raw_token.endswith("gmail.com")
         assert "GMail" not in bridge._raw_token
 
+    def test_the_replace_path_leaves_the_buffer_mirroring_the_screen(
+        self, bridge: KeyboardBridge
+    ) -> None:
+        """The replace path used to chop real characters out of the buffer.
+
+        It subtracted ``len(typed)`` from ``_context_buffer`` alone, but
+        the typed run straddles the buffer and ``_current_word``, so
+        "OWEN@" lost two characters it never had to give.
+        """
+        bridge.toggleCapsLock()
+        _type_cased(bridge, "owen@gm")
+        bridge.pressPrediction("gmail.com")
+        assert bridge._context_buffer == "OWEN@gmail.com"
+
     def test_the_corrupted_form_is_never_learned(self, bridge: KeyboardBridge):
         bridge.toggleCapsLock()
-        _type(bridge, "owen@gm")
+        _type_cased(bridge, "owen@gm")
+        assert bridge._raw_token == "OWEN@GM"
         bridge.pressPrediction("gmail.com")
         assert not any("GMail" in t for t in bridge._predictor._ngram.tokens.tokens)
 
@@ -3356,3 +3396,159 @@ class TestTokenPillsInsertWhatTheyDisplay:
         bridge.pressPrediction("gmail.com")
         assert "".join(_typed(bridge)) == "owen@gmail.com"
         bridge._synth.replace_text.assert_not_called()
+
+    def test_the_suffix_path_leaves_the_buffer_mirroring_the_screen(
+        self, bridge: KeyboardBridge
+    ) -> None:
+        """The buffer used to record only the part the pill added.
+
+        The rest of the run was sitting in ``_current_word``, which is
+        never committed, so "555-12" + the "555-123-4567" pill recorded
+        "555-3-4567" for a screen reading "555-123-4567".
+        """
+        _type(bridge, "555-123-4567 ")
+        _type(bridge, "555-12")
+        assert "555-123-4567" in bridge._predictions
+        bridge.pressPrediction("555-123-4567")
+        assert bridge._context_buffer == "555-123-4567 555-123-4567"
+
+    def test_a_backspace_afterwards_does_not_delete_real_text(self, bridge: KeyboardBridge) -> None:
+        """The cascade the buffer corruption caused, stated directly.
+
+        A corrupted tail is rehydrated into ``_current_word`` by the next
+        Backspace, and the tap after that replaces however many
+        characters that tail claims to be worth.
+        """
+        _type(bridge, "555-123-4567 ")
+        _type(bridge, "555-12")
+        bridge.pressPrediction("555-123-4567")
+        bridge.pressSpecialKey("backspace")
+        # What is on screen after the backspace, and so what a following
+        # replace may consume, is exactly the run minus one character.
+        assert bridge._current_word == "555-123-456"
+
+
+class TestTokenPillsInCompatibilityMode:
+    """Compat mode rewires the insert, and the token path had missed it.
+
+    Suffix-only insertion and replace_text's Shift+Left selection are
+    both unsafe inside an IDE or a remote-desktop client -- the whole
+    reason ``pressPrediction`` branches here.
+    """
+
+    def test_the_typed_run_is_backspaced_and_the_pill_retyped(
+        self, bridge: KeyboardBridge, monkeypatch
+    ) -> None:
+        _type(bridge, "owen@gm")
+        monkeypatch.setattr(bridge, "_in_compat_mode", lambda: True)
+        bridge.pressPrediction("gmail.com")
+        backspaces = [
+            call for call in bridge._synth.send_key.call_args_list if call[0][0] == "BackSpace"
+        ]
+        assert len(backspaces) == 2
+        assert "".join(_typed(bridge)).endswith("gmail.com")
+        bridge._synth.replace_text.assert_not_called()
+
+    def test_the_buffer_still_mirrors_the_screen(self, bridge: KeyboardBridge, monkeypatch) -> None:
+        _type(bridge, "owen@gm")
+        monkeypatch.setattr(bridge, "_in_compat_mode", lambda: True)
+        bridge.pressPrediction("gmail.com")
+        assert bridge._context_buffer == "owen@gmail.com"
+
+
+class TestATappedTokenPillIsOneSighting:
+    """One user action must not count as two.
+
+    Emails and phone numbers deliberately withhold the trailing space,
+    so ``_raw_token`` is still holding the completed token when the
+    user's own space retires it again.  Count is the sort key in the
+    store, so a doubled one puts pill-accepted tokens (including a
+    built-in domain nobody typed) ahead of hand-typed ones.
+    """
+
+    def _tokens(self, bridge: KeyboardBridge) -> dict:
+        return bridge._predictor._ngram.tokens.tokens
+
+    def test_the_space_after_a_tapped_address_does_not_relearn_it(
+        self, bridge: KeyboardBridge
+    ) -> None:
+        _type(bridge, "owen@")
+        assert "gmail.com" in bridge._predictions
+        bridge.pressPrediction("gmail.com")
+        assert self._tokens(bridge).get("owen@gmail.com") == 1
+        bridge.pressSpecialKey("space")
+        assert self._tokens(bridge).get("owen@gmail.com") == 1
+
+    def test_typing_the_same_address_again_still_counts(self, bridge: KeyboardBridge) -> None:
+        """The inverse: the guard must not suppress a genuine sighting."""
+        _type(bridge, "owen@")
+        bridge.pressPrediction("gmail.com")
+        bridge.pressSpecialKey("space")
+        _type(bridge, "owen@gmail.com ")
+        assert self._tokens(bridge).get("owen@gmail.com") == 2
+
+
+class TestTokenPillsAreNotWordModelObjects:
+    """The pill context menu's four actions are all word-model writes.
+
+    ``unigrams`` and ``preferred`` feed the word cloud, Top Words and
+    the dashboard's boosted tags; ``capitalization`` is persisted; all
+    of them travel in the Data Backup archive.  A phone number belongs
+    in none of them, which is the same rule
+    ``record_token_prediction_selected`` exists to keep.
+    """
+
+    def _live_phone_pill(self, bridge: KeyboardBridge) -> str:
+        _type(bridge, "555-123-4567 ")
+        _type(bridge, "555-12")
+        assert "555-123-4567" in bridge._predictions
+        return "555-123-4567"
+
+    def test_a_token_pill_is_reported_as_one(self, bridge: KeyboardBridge) -> None:
+        _type(bridge, "owen@")
+        assert bridge.isTokenPill("gmail.com")
+
+    def test_a_word_pill_is_not(self, bridge: KeyboardBridge) -> None:
+        """The inverse, so "always True" cannot pass as a fix."""
+        _type(bridge, "hel")
+        assert bridge._predictions
+        assert not bridge.isTokenPill(bridge._predictions[0])
+
+    def test_show_more_cannot_boost_a_phone_number(self, bridge: KeyboardBridge) -> None:
+        word = self._live_phone_pill(bridge)
+        bridge.markGoodSuggestion(word)
+        ngram = bridge._predictor._ngram
+        assert word not in ngram.preferred
+        assert word not in ngram.unigrams
+
+    def test_show_less_cannot_dispreference_one(self, bridge: KeyboardBridge) -> None:
+        word = self._live_phone_pill(bridge)
+        bridge.markBadSuggestion(word)
+        assert word not in bridge._predictor._ngram.dispreference
+
+    def test_remove_cannot_blacklist_one(self, bridge: KeyboardBridge) -> None:
+        word = self._live_phone_pill(bridge)
+        bridge.blacklistWord(word)
+        assert word not in bridge._predictor._ngram.blacklist
+
+    def test_edit_cannot_persist_one_into_the_capitalization_table(
+        self, bridge: KeyboardBridge
+    ) -> None:
+        word = self._live_phone_pill(bridge)
+        bridge.editPrediction(word, "555-123-9999")
+        assert "555-123-9999" not in bridge._predictor._ngram.capitalization
+
+    def test_a_real_word_can_still_be_boosted(self, bridge: KeyboardBridge) -> None:
+        """The inverse again: the guard must not disarm the word menu."""
+        _type(bridge, "hel")
+        word = bridge._predictions[0]
+        bridge.markGoodSuggestion(word)
+        assert word.lower() in bridge._predictor._ngram.preferred
+
+    def test_reset_context_drops_the_token_pill_map(self, bridge: KeyboardBridge) -> None:
+        """Every other reset path clears it; this one used not to."""
+        _type(bridge, "owen@")
+        assert bridge._token_pill_inserts
+        bridge.resetContext()
+        assert bridge._token_pill_inserts == {}
+        assert bridge._token_pill_typed == ""
