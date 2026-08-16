@@ -1551,6 +1551,98 @@ class TestEditModeIntercept:
         assert bridge._edit_mode_active is False
 
 
+class TestEditModeChords:
+    """Ctrl chords in an edit field act on the field, and never leak.
+
+    Ctrl/Alt/Win were documented as "ignored inside the field so stray
+    chords cannot leak to the app behind us". The leak half held; the
+    other half did not. The modifier was simply skipped and the *letter*
+    inserted, so Ctrl+A in the snippets editor typed "a" and Ctrl+B typed
+    "b".
+
+    The clipboard set is the reason this is worth wiring rather than
+    merely swallowing: every character of a long address costs a click on
+    this keyboard, so pasting one in from somewhere else is the
+    difference between a snippet being worth making and not.
+    """
+
+    @staticmethod
+    def _collect(signal) -> list:
+        seen: list = []
+        signal.connect(lambda *args: seen.append(args))
+        return seen
+
+    @pytest.mark.parametrize(
+        ("letter", "action"),
+        [("a", "selectall"), ("c", "copy"), ("v", "paste"), ("x", "cut"), ("z", "undo")],
+    )
+    def test_a_ctrl_chord_becomes_an_edit_action(
+        self, bridge: KeyboardBridge, letter: str, action: str
+    ):
+        specials = self._collect(bridge.editSpecialPressed)
+        typed = self._collect(bridge.editKeyTyped)
+        bridge.setEditMode(True)
+        bridge.toggleCtrl()
+
+        bridge.pressKey(letter)
+
+        assert specials == [(action,)]
+        assert typed == [], "the chord was typed as a letter as well"
+
+    def test_an_unknown_ctrl_chord_types_nothing(self, bridge: KeyboardBridge):
+        """Ctrl+B used to insert "b"."""
+        typed = self._collect(bridge.editKeyTyped)
+        specials = self._collect(bridge.editSpecialPressed)
+        bridge.setEditMode(True)
+        bridge.toggleCtrl()
+
+        bridge.pressKey("b")
+
+        assert typed == []
+        assert specials == []
+
+    def test_a_chord_never_reaches_the_app_behind_us(self, bridge: KeyboardBridge):
+        bridge.setEditMode(True)
+        bridge.toggleCtrl()
+        bridge._synth.send_text.reset_mock()
+        bridge._synth.send_key.reset_mock()
+
+        bridge.pressKey("v")
+
+        bridge._synth.send_text.assert_not_called()
+        bridge._synth.send_key.assert_not_called()
+
+    def test_the_modifier_is_released_after_the_chord(self, bridge: KeyboardBridge):
+        """Same one-keystroke release every other path does, or the next
+        plain letter in the field would be eaten as another chord."""
+        bridge.setEditMode(True)
+        bridge.toggleCtrl()
+        assert bridge._ctrl_active is True
+
+        bridge.pressKey("a")
+
+        assert bridge._ctrl_active is False
+        bridge._synth.release_modifier.assert_any_call("ctrl")
+
+    def test_a_locked_modifier_survives_the_chord(self, bridge: KeyboardBridge):
+        """Right-click lock outranks the auto-release here as everywhere."""
+        bridge.setEditMode(True)
+        bridge.lockModifier("ctrl")
+
+        bridge.pressKey("c")
+
+        assert bridge._ctrl_active is True
+        assert bridge._ctrl_locked is True
+
+    def test_a_plain_letter_is_unaffected(self, bridge: KeyboardBridge):
+        typed = self._collect(bridge.editKeyTyped)
+        bridge.setEditMode(True)
+
+        bridge.pressKey("a")
+
+        assert typed == [("a",)]
+
+
 class TestDebugLog:
     """Debug logging."""
 

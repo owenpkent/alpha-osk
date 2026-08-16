@@ -833,6 +833,50 @@ class TestTheEditorSupportsOrdinaryTextEditing:
             "Shift with an arrow key moved the caret instead of selecting"
         )
 
+    def test_ctrl_a_selects_everything(self, snippets_window):
+        """Ctrl+A used to insert the letter "a"."""
+        window, bridge, _w = snippets_window
+        field = self._editor(window, bridge)
+
+        bridge.toggleCtrl()
+        bridge.pressKey("a")
+        QCoreApplication.processEvents()
+
+        assert field.property("selectedText") == "hello world here"
+        assert field.property("text") == "hello world here", (
+            "the chord was typed into the field as well as acted on"
+        )
+
+    def test_ctrl_v_pastes_the_clipboard(self, snippets_window):
+        """The one that earns the feature: a long address costs a click
+        per character to type, and nothing per character to paste."""
+        window, bridge, _w = snippets_window
+        field = self._editor(window, bridge, value="")
+        QGuiApplication.clipboard().setText("128 Juniper Lane")
+
+        bridge.toggleCtrl()
+        bridge.pressKey("v")
+        QCoreApplication.processEvents()
+
+        assert field.property("text") == "128 Juniper Lane"
+
+    def test_ctrl_c_then_ctrl_v_round_trips(self, snippets_window):
+        window, bridge, _w = snippets_window
+        field = self._editor(window, bridge, value="repeat")
+        QGuiApplication.clipboard().setText("")
+
+        bridge.toggleCtrl()
+        bridge.pressKey("a")
+        bridge.toggleCtrl()
+        bridge.pressKey("c")
+        QCoreApplication.processEvents()
+        field.setProperty("cursorPosition", field.property("length"))
+        bridge.toggleCtrl()
+        bridge.pressKey("v")
+        QCoreApplication.processEvents()
+
+        assert field.property("text") == "repeatrepeat"
+
     def test_an_arrow_without_shift_still_just_moves(self, snippets_window):
         """The inverse half: selection must not become the default."""
         window, bridge, _w = snippets_window

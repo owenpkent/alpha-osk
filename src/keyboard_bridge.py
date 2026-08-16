@@ -462,6 +462,19 @@ _MAX_RAW_TOKEN_LEN = 128
 # the run we can follow exactly, by popping a character.
 _TOKEN_BREAKING_KEYS = _NAV_KEYS | frozenset({"tab", "escape", "delete"})
 
+# Ctrl chords an edit field handles itself, letter -> the name emitted on
+# ``editSpecialPressed``.  Deliberately the clipboard set and undo, and
+# nothing that would need to reach the OS: a chord in edit mode is for the
+# field in front of the user, never for the application behind it.
+_EDIT_CHORDS = {
+    "a": "selectall",
+    "c": "copy",
+    "v": "paste",
+    "x": "cut",
+    "z": "undo",
+    "y": "redo",
+}
+
 # How far back through ``_context_buffer`` snippet detection looks for a
 # shape that spans whitespace (an address, a spaced-out phone number).
 # Bounded so something typed a paragraph ago doesn't surface as an offer
@@ -1140,6 +1153,25 @@ class KeyboardBridge(QObject):
         # predictions) — the user is editing a word, not typing.
         if self._edit_mode_active:
             self._play_click()
+            # A chord is not a character.  Ctrl/Alt/Win were documented as
+            # "ignored inside the field so stray chords cannot leak to the
+            # app behind us", and the leak half was true, but the other half
+            # was not: the modifier was dropped and the *letter* inserted, so
+            # Ctrl+A in the snippets editor typed "a" and Ctrl+B typed "b".
+            #
+            # The clipboard four are the reason this matters rather than a
+            # tidiness point.  Every character of a long address costs a
+            # click here, so being able to copy one from somewhere else and
+            # paste it in is the difference between a snippet being worth
+            # making and not.  They are handled locally and never reach the
+            # OS, which is what the original rule was protecting.
+            if self._ctrl_active or self._alt_active or self._win_active:
+                action = _EDIT_CHORDS.get(key.lower()) if self._ctrl_active else None
+                if action:
+                    self.editSpecialPressed.emit(action)
+                # Anything else is swallowed rather than typed as a letter.
+                self._release_edit_chord_modifiers()
+                return
             # _pending_auto_cap is deliberately not consulted here.  It is
             # owed to the *app behind us* -- the period that armed it was
             # typed there, and nothing typed inside an edit field can arm
@@ -1425,6 +1457,29 @@ class KeyboardBridge(QObject):
             self.shiftActiveChanged.emit(self._shift_active)
 
         # Auto-release ctrl/alt/win after one keypress unless locked
+        if self._ctrl_active and not self._ctrl_locked:
+            self._synth.release_modifier("ctrl")
+            self._ctrl_active = False
+            self.ctrlActiveChanged.emit(self._ctrl_active)
+        if self._alt_active and not self._alt_locked:
+            self._synth.release_modifier("alt")
+            self._alt_active = False
+            self.altActiveChanged.emit(self._alt_active)
+        if self._win_active and not self._win_locked:
+            self._synth.release_modifier("win")
+            self._win_active = False
+            self.winActiveChanged.emit(self._win_active)
+
+    def _release_edit_chord_modifiers(self) -> None:
+        """Drop Ctrl/Alt/Win after a chord consumed inside an edit field.
+
+        The fifth copy of the auto-release block, and it exists rather
+        than being written inline for the reason this file gives for the
+        other four: they are parallel blocks that have to stay in step,
+        and a keystroke path that forgets one leaves a modifier the
+        bridge believes is held.  A right-click lock still wins, exactly
+        as it does everywhere else.
+        """
         if self._ctrl_active and not self._ctrl_locked:
             self._synth.release_modifier("ctrl")
             self._ctrl_active = False

@@ -299,13 +299,20 @@ Window {
         // Restore the saved position if we have one, else center
         // horizontally and anchor near the bottom of the screen.
         // Clamp back on-screen in case the display layout changed
-        // (monitor unplugged, resolution drop) since the last run.
+        // (monitor unplugged, resolution drop) since the last run,
+        // via the same desktop-wide clampedWindowPos() the snippets
+        // window uses, not Screen.width/height (the primary screen
+        // alone): a window saved at x=2400 on a second monitor came
+        // back at 1560 on the primary one on every launch, and a
+        // monitor to the *left* of the primary has negative
+        // coordinates that collapsed to 0 the same way.
         if (appSettings.savedWindowX > -1000000
                 && appSettings.savedWindowY > -1000000) {
-            root.x = Math.max(0, Math.min(appSettings.savedWindowX,
-                                          Screen.width - root.width))
-            root.y = Math.max(0, Math.min(appSettings.savedWindowY,
-                                          Screen.height - root.height))
+            var restoredPos = root.clampedWindowPos(appSettings.savedWindowX,
+                                                      appSettings.savedWindowY,
+                                                      root.width, root.height)
+            root.x = restoredPos.x
+            root.y = restoredPos.y
         } else {
             root.x = (Screen.width - root.width) / 2
             root.y = Screen.height - root.height - 40
@@ -789,6 +796,15 @@ Window {
     property color themeTextColor: activeTheme.textColor
     property color themeAccent: activeTheme.accent
 
+    // Perceived luminance of an opaque colour (Rec. 601 weights). The one
+    // definition every "is this light or dark" decision in this file
+    // shares: inkOn() below and snippetsWindow.lightTheme both used to
+    // carry their own copy, alongside KeyButton._onFillColor's, and three
+    // independent copies is three chances for the weights to drift apart.
+    function luminance(c) {
+        return c.r * 0.299 + c.g * 0.587 + c.b * 0.114
+    }
+
     // Ink for text drawn ON TOP of an accent-coloured fill.  Same
     // luminance rule as KeyButton._onFillColor, and it exists for the
     // same reason: several themes ship a pale accent (Blackboard,
@@ -797,8 +813,28 @@ Window {
     // fill — a semi-transparent one reports its own channels rather than
     // the blend the eye sees, so the luminance would be a lie.
     function inkOn(fill) {
-        var lum = fill.r * 0.299 + fill.g * 0.587 + fill.b * 0.114
-        return lum > 0.5 ? "#111111" : "#ffffff"
+        return root.luminance(fill) > 0.5 ? "#111111" : "#ffffff"
+    }
+
+    // Apply a Ctrl chord the bridge resolved for us to `field`, returning
+    // true if it was one.  Shared by the two edit surfaces (the
+    // prediction-edit popup and the snippets editor) because they are
+    // exactly the parallel blocks this project keeps getting bitten by:
+    // the same six names would otherwise be spelled out twice, and the
+    // one that got them would be whichever was edited last.
+    //
+    // Paste is the reason any of this exists.  Every character of a long
+    // address is a click here, so pasting one in from somewhere else is
+    // the difference between a snippet being worth making and not.
+    function applyEditChord(field, name) {
+        if (name === "selectall") field.selectAll()
+        else if (name === "copy") field.copy()
+        else if (name === "cut") field.cut()
+        else if (name === "paste") field.paste()
+        else if (name === "undo") field.undo()
+        else if (name === "redo") field.redo()
+        else return false
+        return true
     }
 
     // Bounding box of every monitor, in virtual-desktop coordinates.
@@ -2564,6 +2600,10 @@ Window {
                 function onEditSpecialPressed(name) {
                     var pos = predEditField.cursorPosition
                     var len = predEditField.length
+                    // The Ctrl chords the bridge resolves for us (see
+                    // _EDIT_CHORDS): they act on this field and are never
+                    // passed to the app behind the keyboard.
+                    if (root.applyEditChord(predEditField, name)) return
                     if (name === "backspace") {
                         if (predEditField.selectedText)
                             predEditField.remove(predEditField.selectionStart, predEditField.selectionEnd)
@@ -2702,8 +2742,12 @@ Window {
             }
         }
 
-        // Snippets popup: a tap-to-insert list of the user's saved
-        // quick text (name, email, phone, address, canned phrases).
+        // Snippets popup: the user's saved quick text (name, email, phone,
+        // address, canned phrases). Tapping a tile copies it to the
+        // clipboard -- see the "Three views share the window" comment
+        // below for the grid / actions sheet / editor split, and
+        // KeyboardBridge.copySnippet for why a tap copies rather than
+        // types.
         //
         // This is a SEPARATE top-level Window, not a Popup. A Popup is
         // clipped to its parent window's overlay, so it can't be dragged
@@ -2712,13 +2756,8 @@ Window {
         // window (frameless, stays-on-top, does-not-accept-focus) so it
         // never steals focus from the app the user is typing into; the
         // Python side applies WS_EX_NOACTIVATE to it too (see
-        // _apply_window_flags / the snippetsWindowReady signal).
-        //
-        // Two views share the window (an editingIndex switch: -1 list,
-        // >= 0 editor). Edit mode is only turned on while the editor is
-        // showing, so tapping a snippet in the list still synthesises to
-        // the OS via the bridge's insertSnippet slot. The header is a
-        // drag handle.
+        // _apply_window_flags / the snippetsWindowReady signal). The
+        // header is a drag handle.
         Window {
             id: snippetsWindow
             // objectName lets the Python side find this window to apply
@@ -2761,8 +2800,16 @@ Window {
             readonly property int pageSize: 6
             readonly property int pageCount: Math.max(1, Math.ceil(snippetList.length / pageSize))
             readonly property int snippetLimit: keyboard ? keyboard.getSnippetLimit() : 50
-            // Two columns inside the 12 px window margins, 6 px apart.
-            readonly property real cellW: (width - 24 - 6) / 2
+            // Derived from the actual layout properties rather than
+            // restated as literals: it used to hardcode 24 (2x
+            // snipContent's 12 px anchors.margins) and 6 (the Grid's own
+            // spacing), so the tiles sat flush only because those numbers
+            // happened to still agree with the properties they were
+            // copied from. A future margin or spacing change would have
+            // overhung the window or left a gap, silently.
+            readonly property real cellW:
+                (width - 2 * snipContent.anchors.margins
+                 - (snipGrid.columns - 1) * snipGrid.spacing) / snipGrid.columns
 
             readonly property var menuSnip: menuIndex >= 0 ? snippetList[menuIndex] : undefined
             readonly property bool menuHasValue:
@@ -2779,9 +2826,7 @@ Window {
             readonly property color txt: root.themeTextColor
             readonly property color muted: Qt.rgba(txt.r, txt.g, txt.b, 0.58)
             readonly property color faint: Qt.rgba(txt.r, txt.g, txt.b, 0.42)
-            readonly property bool lightTheme:
-                (0.299 * root.themeBackground.r + 0.587 * root.themeBackground.g
-                 + 0.114 * root.themeBackground.b) > 0.5
+            readonly property bool lightTheme: root.luminance(root.themeBackground) > 0.5
             // One destructive colour, picked per theme rather than fixed:
             // a dark red is illegible on Typewriter's cream and a bright
             // one glares on Spaceship's near-black.
@@ -3084,6 +3129,7 @@ Window {
                 function onEditSpecialPressed(name) {
                     if (snippetsWindow.editingIndex < 0) return
                     var f = snippetsWindow.activeField()
+                    if (root.applyEditChord(f, name)) return
                     var pos = f.cursorPosition
                     var len = f.length
                     if (name === "backspace") {
@@ -3336,6 +3382,7 @@ Window {
                     visible: snippetsWindow.editingIndex < 0 && snippetsWindow.menuIndex < 0
 
                     Grid {
+                        id: snipGrid
                         Layout.alignment: Qt.AlignHCenter
                         columns: 2
                         spacing: 6
