@@ -48,6 +48,7 @@ Item {
     property bool rightClickShift: true
     // Flash a preview bubble above a key showing the typed character.
     property bool keyPreviewEnabled: true
+    property bool characterRepeat: false
     // Hold-to-repeat timing (ms).  Defaults must match KeyButton.qml.
     property int repeatDelay: 500
     property int repeatInterval: 120
@@ -847,6 +848,24 @@ Item {
                                     text: "Show Key Preview Popup"
                                     checked: unifiedSettings.keyPreviewEnabled
                                     onToggled: function(c) { unifiedSettings.settingChanged("keyPreview", c) }
+                                }
+
+                                // Off by default, and the default is the
+                                // considered position rather than caution:
+                                // holding a letter is how a physical
+                                // keyboard behaves, but a mouse-driven key
+                                // is held by *not letting go* of a button,
+                                // and a slow release is ordinary here. The
+                                // repeat only starts after a deliberate
+                                // hold (the delay plus a warm-up grace
+                                // below), so this is safe to switch on; it
+                                // stays off for people who would only ever
+                                // meet it by accident.
+                                SettingsToggle {
+                                    Layout.fillWidth: true
+                                    text: "Hold a Letter to Repeat It"
+                                    checked: unifiedSettings.characterRepeat
+                                    onToggled: function(c) { unifiedSettings.settingChanged("characterRepeat", c) }
                                 }
 
                                 // Compatibility Mode has three meaningful

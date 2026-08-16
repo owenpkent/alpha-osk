@@ -43,6 +43,10 @@ Window {
         // Flash a small bubble above a key showing the character it just
         // typed (left- or right-click).  Mobile-keyboard "key preview".
         property bool savedKeyPreview: true
+        // Hold a letter or digit to repeat it. Off by default; see the
+        // `characterRepeat` property for why that default is a decision
+        // rather than caution.
+        property bool savedCharacterRepeat: false
         property bool savedAutoCheckUpdates: true
         // Hold-to-repeat timing (Backspace, arrow keys, Delete, PgUp/PgDn).
         // Defaults match KeyButton.qml's hardcoded values.  Exposed in
@@ -462,6 +466,19 @@ Window {
     // When on, every key press (left- or right-click) flashes a brief
     // preview bubble above the key showing the character that was typed.
     property bool keyPreviewEnabled: appSettings.savedKeyPreview
+
+    // Hold a letter or digit to repeat it, the way a physical keyboard
+    // does.  Off by default, and the reason it is a setting rather than
+    // simply on is the shape of the gesture here: a mouse-driven key is
+    // held by *not letting go* of the button, and a slow release is
+    // ordinary on this keyboard rather than a mistake.  Backspace and the
+    // arrows have always repeated, because there the worst case is one
+    // extra deletion the user can see; an extra "a" mid-word is a typo
+    // that the prediction engine then learns from.  The warm-up grace in
+    // KeyButton means the repeat only starts after a deliberate hold, so
+    // switching this on is safe; leaving it off means people who would
+    // only ever meet it by accident never do.
+    property bool characterRepeat: appSettings.savedCharacterRepeat
 
     // Two registries, both populated by each KeyButton on creation. They are
     // deliberately NOT the same list, and the split is load-bearing:
@@ -2084,6 +2101,9 @@ Window {
                         shiftOn: root.shiftOn
                         rightClickShift: root.rightClickShift
                         keyPreviewEnabled: root.keyPreviewEnabled
+                        characterRepeat: root.characterRepeat
+                        repeatDelay: root.repeatDelay
+                        repeatInterval: root.repeatInterval
                         registerFn: root.registerCharKey
                         unregisterFn: root.unregisterCharKey
                         previewFn: root.showKeyPreview
@@ -2190,15 +2210,17 @@ Window {
                                 borderColor: (kd.style || "default") === "accent"
                                              ? root.accentKeyBorder : root.themeBorder
 
-                                // Repeat-worthy specials only.  Character keys
-                                // must never repeat (see KeyButton.qml for the
-                                // rationale).  Same set the Navigation panel
-                                // repeats: the compact layouts put Del and
-                                // the arrows in the main grid, so holding them
-                                // has to behave the same there as it does in
-                                // the side panel.
-                                enableRepeat: kd.type === "special"
-                                              && root.repeatableActions.indexOf(kd.action) !== -1
+                                // Repeat-worthy specials always; character
+                                // keys only when the user asked for it (see
+                                // `characterRepeat`).  The special set is the
+                                // same one the Navigation panel repeats,
+                                // because the compact layouts put Del and the
+                                // arrows in the main grid and holding them has
+                                // to behave the same in both places.
+                                enableRepeat: kd.type === "char"
+                                              ? root.characterRepeat
+                                              : (kd.type === "special"
+                                                 && root.repeatableActions.indexOf(kd.action) !== -1)
                                 repeatDelay: root.repeatDelay
                                 repeatInterval: root.repeatInterval
 
@@ -4838,6 +4860,7 @@ Window {
             windowOpacity: root.windowOpacity
             currentLayout: root.currentLayout
             compactView: root.compactView
+            characterRepeat: root.characterRepeat
             audioEnabled: root.audioEnabled
             suggestionsEnabled: root.suggestionsEnabled
             predictionCount: keyboard ? keyboard.predictionCount : 8
@@ -4928,6 +4951,9 @@ Window {
                 } else if (setting === "keyPreview") {
                     root.keyPreviewEnabled = value
                     appSettings.savedKeyPreview = value
+                } else if (setting === "characterRepeat") {
+                    root.characterRepeat = value
+                    appSettings.savedCharacterRepeat = value
                 } else if (setting === "repeatDelay") {
                     root.repeatDelay = value
                     appSettings.savedRepeatDelay = value

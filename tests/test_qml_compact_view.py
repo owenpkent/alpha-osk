@@ -731,6 +731,71 @@ class TestSecondSymbolPage:
             assert "shift" not in actions, f"{target} still renders a Shift key"
 
 
+class TestHoldingALetterRepeatsOnlyWhenAskedFor:
+    """Requested: holding a letter did nothing but type it once.
+
+    That was deliberate, not broken. A mouse-driven key is held by *not
+    letting go* of the button, and a slow release is ordinary on a
+    keyboard built for slow motor input, so a repeating letter turns one
+    intended character into several. Backspace and the arrows have always
+    repeated because there the worst case is an extra deletion the user
+    can see happen; an extra "a" mid-word is a typo the prediction engine
+    then learns from.
+
+    So it is a setting rather than a flip, and these pin both directions
+    plus the keys that must not follow it either way.
+    """
+
+    @staticmethod
+    def _repeat_flags(root) -> dict:
+        out: dict = {}
+        for item in TestSecondSymbolPage._key_items(root):
+            kd = item.property("kd")
+            if hasattr(kd, "toVariant"):
+                kd = kd.toVariant()
+            if not isinstance(kd, dict):
+                continue
+            name = kd.get("key") if kd.get("type") == "char" else kd.get("action")
+            if name:
+                out.setdefault(str(name), item.property("enableRepeat"))
+        return out
+
+    def test_off_by_default_a_letter_does_not_repeat(self, qml_root) -> None:
+        root, warnings, _ = qml_root
+        _pump_until(lambda: len(self._repeat_flags(root)) > 0)
+
+        flags = self._repeat_flags(root)
+        assert flags.get("a") is False, "a letter armed the repeat timer by default"
+        assert _real_warnings(warnings) == []
+
+    def test_turning_it_on_arms_the_letters(self, qml_root) -> None:
+        root, _, _ = qml_root
+        root.setProperty("characterRepeat", True)
+        _pump_until(lambda: len(self._repeat_flags(root)) > 0)
+
+        assert self._repeat_flags(root).get("a") is True
+
+    @pytest.mark.parametrize("setting", [False, True])
+    def test_backspace_repeats_either_way(self, qml_root, setting: bool) -> None:
+        """The inverse half. This setting is about *letters*, and must not
+        become the switch that governs the keys that always repeated."""
+        root, _, _ = qml_root
+        root.setProperty("characterRepeat", setting)
+        _pump_until(lambda: len(self._repeat_flags(root)) > 0)
+
+        assert self._repeat_flags(root).get("backspace") is True
+
+    @pytest.mark.parametrize("setting", [False, True])
+    def test_tab_never_repeats(self, qml_root, setting: bool) -> None:
+        """Tab is not in the repeatable set and is not a character, so it
+        is unaffected from both sides."""
+        root, _, _ = qml_root
+        root.setProperty("characterRepeat", setting)
+        _pump_until(lambda: len(self._repeat_flags(root)) > 0)
+
+        assert self._repeat_flags(root).get("tab") is False
+
+
 class TestPanelsSitFlushWithTheGrid:
     """The Number Row and Function Row panels must consume the window exactly
     the way a keyboard row does.
