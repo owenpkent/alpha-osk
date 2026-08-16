@@ -1762,6 +1762,18 @@ Window {
                                 cursorShape: Qt.PointingHandCursor
                                 onClicked: function(mouse) {
                                     if (mouse.button === Qt.RightButton) {
+                                        // Every action in this menu is a
+                                        // word-model operation, and a
+                                        // structured token is not a word:
+                                        // "Show more" would push a phone
+                                        // number into the vocabulary and
+                                        // onto the dashboard, while "Show
+                                        // less" and "Remove" write tables
+                                        // the token store never reads.
+                                        // Forgetting one is the dashboard's
+                                        // Saved Numbers & Addresses.
+                                        if (keyboard && keyboard.isTokenPill(modelData))
+                                            return
                                         var pos = mapToItem(root.contentItem, mouse.x, mouse.y)
                                         predContextMenu.showAt(modelData, pos.x, pos.y)
                                     } else {

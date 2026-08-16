@@ -201,3 +201,37 @@ class TestForgettingIsPossible:
 
     def test_forgetting_an_absent_token_reports_it(self):
         assert _store("02134").forget("90210") is False
+
+
+class TestALoadedEntryIsStoredInTheFormThatWasValidated:
+    """`from_dict` validated the stripped form and stored the raw one.
+
+    `is_learnable_token` strips trailing sentence punctuation before it
+    judges, exactly as `learn` does before it stores, so validating one
+    string and keeping another let a store hold a token `learn` would
+    never have written -- and then offer it as a pill that types the
+    stray punctuation into the user's number.  The file this rides in
+    can be hand-edited or arrive in an imported archive, so an older or
+    tampered-with model is not a reason to relax the rule.
+    """
+
+    def test_trailing_punctuation_is_stripped_on_load(self):
+        store = TokenPredictor()
+        store.from_dict({"555-123-4567.": 3})
+        assert store.tokens == {"555-123-4567": 3}
+
+    def test_the_stripped_form_is_what_gets_offered(self):
+        store = TokenPredictor()
+        store.from_dict({"555-123-4567.": 3})
+        assert store.predict("555") == ["555-123-4567"]
+
+    def test_both_written_forms_merge_into_one_entry(self):
+        """Otherwise whichever iterated last silently won."""
+        store = TokenPredictor()
+        store.from_dict({"02134": 2, "02134.": 3})
+        assert store.tokens == {"02134": 5}
+
+    def test_a_token_that_is_only_punctuation_is_still_dropped(self):
+        store = TokenPredictor()
+        store.from_dict({"...": 4})
+        assert store.tokens == {}

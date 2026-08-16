@@ -734,6 +734,9 @@ class KeyboardBridge(QObject):
         # backspace.  Only maintained outside privacy mode, same as
         # _current_word: it holds typed characters.
         self._raw_token = ""
+        # The last run handed to the token store, so one user action
+        # cannot count as two sightings.  See _learn_raw_token.
+        self._learned_raw_token = ""
         # Structured-token pills: displayed text -> the text a tap should
         # type.  These two differ, which is the whole reason for the map:
         # a domain pill reads "gmail.com" while the run before the cursor
@@ -1279,6 +1282,9 @@ class KeyboardBridge(QObject):
             # the punctuation landed, not including the punctuation.
             token_before = self._raw_token
             self._raw_token = (self._raw_token + char)[-_MAX_RAW_TOKEN_LEN:]
+            # The run changed, so whatever was learned last no longer
+            # describes it: typing the same number again must count again.
+            self._learned_raw_token = ""
 
             # Sentence-ending punctuation triggers sentence learning
             if char in (".", "!", "?"):
@@ -1590,6 +1596,7 @@ class KeyboardBridge(QObject):
         elif key_name == "backspace":
             self._analytics.record_backspace()
             self._raw_token = self._raw_token[:-1]
+            self._learned_raw_token = ""
             if self._current_word:
                 self._current_word = self._current_word[:-1]
                 if not self._current_word:
@@ -2209,6 +2216,11 @@ class KeyboardBridge(QObject):
         self._predictions = []
         self._current_word = ""
         self._raw_token = ""
+        self._learned_raw_token = ""
+        # Every other reset path clears these; leaving one that does not
+        # is exactly the parallel-blocks drift _refresh_prediction_bar
+        # exists to prevent.
+        self._clear_token_pills()
         self._deferred_auto_space = ""
         self._word_typed_under_caps_lock = False
         self._sentence_buffer = ""
@@ -2665,6 +2677,37 @@ class KeyboardBridge(QObject):
         self._token_pill_inserts = {}
         self._token_pill_typed = ""
 
+    def _is_live_token_pill(self, word: str) -> bool:
+        """Is *word* a structured-token pill on the bar right now?
+
+        The same two-part test ``_insert_token_pill`` dispatches on, and
+        for the same reason: membership in the map alone can go stale,
+        while "on the bar right now" cannot.
+
+        Every word-model operation is gated on this.  A structured token
+        is not a word, and the tables those operations write to are the
+        ones a phone number must never reach: ``unigrams`` and
+        ``preferred`` feed the word cloud, Top Words and the dashboard's
+        boosted tags, ``capitalization`` is persisted, and all of them
+        travel in the Data Backup archive.  The gate lives here as well
+        as in QML because there are four call sites and QML is free to
+        drift; the reverse operations (``dispreference``, ``blacklist``)
+        would not work anyway, since ``TokenPredictor.predict`` never
+        consults them.  Forgetting a learned token is ``forgetToken``,
+        surfaced in the dashboard's Saved Numbers & Addresses.
+        """
+        return word in self._token_pill_inserts and word in self._predictions
+
+    @Slot(str, result=bool)
+    def isTokenPill(self, word: str) -> bool:
+        """QML: is this pill a structured token rather than a word?
+
+        Used to suppress the pill context menu, whose four actions are
+        all word-model operations.  Deliberately not logged: the
+        argument is typed content.
+        """
+        return self._is_live_token_pill(word)
+
     def _refresh_prediction_bar(self) -> None:
         """Repopulate the suggestion bar with whichever bar the caret is in.
 
@@ -2774,19 +2817,33 @@ class KeyboardBridge(QObject):
         # standing hold would turn the selection into something else
         # entirely (see the verbatim-insert note in CLAUDE.md).
         with self._without_held_modifiers():
-            if suffix_only:
+            if self._in_compat_mode() and typed:
+                # Same rewiring pressPrediction does, for the same reason:
+                # inside an IDE or a remote-desktop client both a
+                # suffix-only insert and replace_text's Shift+Left
+                # selection are unsafe, so the typed run is removed a
+                # character at a time and the pill retyped whole.
+                for _ in range(len(typed)):
+                    self._synth.send_key("BackSpace")
+                self._send_text(word + trailing)
+            elif suffix_only:
                 self._send_text(added + trailing)
             else:
                 self._replace_text(len(typed), word + trailing)
 
         if not self._privacy_mode:
-            # The buffer mirrors the screen, so it follows what actually
-            # landed there: the replace path overwrote the typed run.
-            if not suffix_only:
-                self._context_buffer = self._context_buffer[
-                    : len(self._context_buffer) - len(typed)
-                ]
-            self._context_buffer += added + trailing if suffix_only else word + trailing
+            # The buffer mirrors the screen, and all three branches above
+            # leave the same thing there: the typed run replaced by the
+            # pill.  The arithmetic has to be done on the *join* of the
+            # two halves of that mirror, because the run spans them --
+            # part of it sits in `_context_buffer` and part in
+            # `_current_word`, which was never committed.  Doing it on
+            # the buffer alone left "555-3-4567" recorded for a screen
+            # reading "555-123-4567"; one Backspace then rehydrated that
+            # corrupted tail, and the next tap replaced nine characters
+            # of real text.
+            screen = self._context_buffer + self._current_word
+            self._context_buffer = screen[: len(screen) - len(typed)] + word + trailing
             if len(self._context_buffer) > 200:
                 self._context_buffer = self._context_buffer[-200:]
         self._raw_token = completed[-_MAX_RAW_TOKEN_LEN:]
@@ -2820,6 +2877,19 @@ class KeyboardBridge(QObject):
         """
         if self._privacy_mode or not token:
             return
+        # One user action must not count as two sightings.  Tapping an
+        # email or phone pill completes the run and learns it here, and
+        # those two shapes deliberately withhold the trailing space, so
+        # `_raw_token` is still holding the same string when the user's
+        # own space retires it again.  Left unguarded that doubled the
+        # count, which is the sort key in TokenPredictor.predict, so
+        # pill-accepted tokens (including a built-in domain the user
+        # never typed) outranked hand-typed ones at twice the rate.
+        # Typing or backspacing clears the marker, so re-typing the same
+        # number later still counts.
+        if token == self._learned_raw_token:
+            return
+        self._learned_raw_token = token
         self._predictor.learn_token(token)
 
     def _rehydrate_current_word_from_context(self) -> None:
@@ -4093,6 +4163,8 @@ class KeyboardBridge(QObject):
     @Slot(str)
     def blacklistWord(self, word: str) -> None:
         """Remove a word from all future predictions."""
+        if self._is_live_token_pill(word):
+            return
         self._predictor.blacklist_word(word)
         # Refresh predictions to remove it immediately
         self._predictions = [w for w in self._predictions if w.lower() != word.lower()]
@@ -4102,6 +4174,8 @@ class KeyboardBridge(QObject):
     @Slot(str)
     def markBadSuggestion(self, word: str) -> None:
         """Downweight a word in future predictions."""
+        if self._is_live_token_pill(word):
+            return
         self._predictor.mark_bad_suggestion(word)
         self._add_debug_log(f"Marked bad: {word}")
 
@@ -4112,6 +4186,8 @@ class KeyboardBridge(QObject):
         reinforcement and records the boost so the dashboard can show it
         and the user can undo it later.
         """
+        if self._is_live_token_pill(word):
+            return
         self._predictor.mark_good_suggestion(word)
         self._add_debug_log(f"Marked good: {word}")
 
@@ -4202,6 +4278,16 @@ class KeyboardBridge(QObject):
         # Close the same 200 ms race _press_char guards against, mirroring
         # pressPrediction.
         self._check_password_field_sync()
+        # A structured token is not a word, and this path is word-shaped
+        # throughout: it replaces `len(_current_word)` characters, which
+        # is only part of the typed run (leaving "555-555-123-9999" on
+        # screen), always appends the space the phone/email shapes
+        # deliberately withhold, and persists the result into
+        # `capitalization`.  Editing a token is `forgetToken` plus
+        # retyping it; the pill's context menu is suppressed for the same
+        # reason (see _is_live_token_pill).
+        if self._is_live_token_pill(original):
+            return
         edited = self._sanitize_edit(edited)
         if not edited:
             return
