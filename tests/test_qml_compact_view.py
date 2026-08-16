@@ -862,8 +862,7 @@ class TestPanelsSitFlushWithTheGrid:
             )
         assert _real_warnings(warnings) == []
 
-    @pytest.mark.parametrize("compact", [True, False])
-    def test_function_row_matches_the_widest_keyboard_row(self, qml_root, compact: bool) -> None:
+    def test_function_row_matches_the_widest_keyboard_row_in_compact(self, qml_root) -> None:
         """The F-row must span the grid, not float inset inside it.
 
         This assertion used to be ``panel.width() <= width - 16``, which is
@@ -877,11 +876,16 @@ class TestPanelsSitFlushWithTheGrid:
         into the two gaps between the F-key groups, which keeps every F-key
         exactly as wide as the keys above it. Both halves matter: same total
         width as the grid, and unchanged individual key width.
+
+        **Compact only.** A full-size grid is 15.5 columns against the same
+        12 keys, and spending three and a half keys of leftover on two gaps
+        produced 108 px chasms with the keys in islands, which was itself
+        reported as a broken layout. See the sibling test below.
         """
         root, warnings, _ = qml_root
         root.setProperty("showNavigation", False)
         root.setProperty("showNumpad", False)
-        root.setProperty("compactView", compact)
+        root.setProperty("compactView", True)
         root.setProperty("showFunctionRow", True)
         _pump_until(lambda: self._panel(root, "functionRowPanel").width() > 0)
 
@@ -894,13 +898,43 @@ class TestPanelsSitFlushWithTheGrid:
             assert panel.width() == pytest.approx(grid, abs=1.0), (
                 f"function row is {panel.width() - grid:+.0f} px off the "
                 f"keyboard grid at window width {width} "
-                f"(compact={compact}, {panel.width():.0f} vs {grid:.0f})"
+                f"({panel.width():.0f} vs {grid:.0f})"
             )
             assert panel.width() <= width - 16 + self.SLOP_PX, (
                 f"function row overhangs by {panel.width() - (width - 16):.0f} px "
                 f"at window width {width}"
             )
         assert _real_warnings(warnings) == []
+
+    def test_full_size_gaps_stay_the_size_of_a_key(self, qml_root) -> None:
+        """The other half of the same reported bug.
+
+        Filling a 15.5-column grid with 12 keys means three and a half keys
+        of leftover, and putting all of it into the two group gaps bunched
+        the F-keys into islands with 108 px of nothing between them. The gap
+        is capped at one key width, past which the row stops growing and
+        stays centred, so this asserts the row is *narrower* than the grid
+        here, which is the opposite of what compact requires and is why the
+        two cases are separate tests rather than one parametrised one.
+        """
+        root, _, _ = qml_root
+        root.setProperty("showNavigation", False)
+        root.setProperty("showNumpad", False)
+        root.setProperty("compactView", False)
+        root.setProperty("showFunctionRow", True)
+        _pump_until(lambda: self._panel(root, "functionRowPanel").width() > 0)
+
+        panel = self._panel(root, "functionRowPanel")
+        grid = self._widest_layout_row(root)
+        key_w = root.property("keyW")
+
+        # 12 keys, 9 inner gaps, 2 group gaps: solve for the group gap.
+        gap = (panel.width() - 12 * key_w - 9 * root.property("keySpacing")) / 2
+        assert gap <= key_w + 1, (
+            f"group gap is {gap:.0f} px against a {key_w:.0f} px key; the "
+            "F-keys read as three islands rather than a row"
+        )
+        assert panel.width() <= grid + self.SLOP_PX
 
     def test_function_keys_are_the_same_width_as_the_keys_above_them(self, qml_root) -> None:
         """The inverse half of the test above.

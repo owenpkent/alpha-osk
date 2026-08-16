@@ -45,11 +45,22 @@ Item {
     ]
 
     // 12 keys in 3 groups: 9 gaps of keySpacing inside the groups, and the
-    // 2 gaps between them absorb whatever is left of the target width.
+    // 2 gaps between them absorb what is left of the target width.
+    //
+    // **Capped at one key width, and the cap is the point.** How much is
+    // left over depends entirely on the layout: a compact grid is 13
+    // columns against these 12 keys, so the leftover is about one key and
+    // the gaps land near 34 px, which reads as the grouping a function row
+    // has on any keyboard. A full-size grid is 15.5 columns, so the
+    // leftover is three and a half keys, and splitting that in two gave
+    // two 108 px chasms with the keys bunched into islands. Past the cap
+    // the row simply stops growing and stays centred, which is what it did
+    // before it filled the width at all.
+    //
     // Floored at keySpacing so a window narrow enough to make the leftover
     // negative degrades to a normal gap instead of overlapping keys.
     readonly property real groupGap: rowWidth > 0
-        ? Math.max(keySpacing, (rowWidth - 12 * keyW - 9 * keySpacing) / 2)
+        ? Math.min(keyW, Math.max(keySpacing, (rowWidth - 12 * keyW - 9 * keySpacing) / 2))
         : keySpacing * 3
 
     implicitWidth: fnLayout.implicitWidth
