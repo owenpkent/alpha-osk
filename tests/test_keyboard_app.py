@@ -169,3 +169,78 @@ class TestAlwaysOnTopIsAppliedAsAZOrderChange:
 
         style = win32.SetWindowLongW.call_args[0][2]
         assert not style & self.WS_EX_TOPMOST
+
+
+class TestTheKeyboardKeepsItsTaskbarButton:
+    """Reported as the keyboard having no taskbar entry, so the minimise
+    button had nowhere to go and clicking the pinned icon did nothing.
+
+    Qt adds ``WS_EX_TOOLWINDOW`` on its own. QML declares ``visible:
+    true``, so the window is already shown when ``_apply_window_flags``
+    calls ``setFlags``, and applying a non-activating, frameless,
+    always-on-top flag set to an *already shown* window is the case where
+    Qt decides it does not belong in the taskbar. Applying the same flags
+    before the first show does not, which is why this went unseen: the
+    comments in that module claimed the style "was removed" for a long
+    time while every shipped window carried it.
+
+    Measured rather than reasoned about. A window shown and then given
+    those flags came out ``0x08000088``, matching the live keyboard's
+    ``0x08080088`` bit for bit apart from the LAYERED bit that window
+    opacity adds.
+    """
+
+    WS_EX_TOOLWINDOW = 0x00000080
+    WS_EX_APPWINDOW = 0x00040000
+
+    @pytest.fixture
+    def win32(self, monkeypatch: pytest.MonkeyPatch):
+        user32 = MagicMock()
+        # Qt has already added TOOLWINDOW by the time this runs, which is
+        # the whole point: the fix has to *clear* it, not just not add it.
+        user32.GetWindowLongW.return_value = 0x08000088
+        user32.SetWindowLongW.return_value = 0x08000088
+        user32.SetWindowPos.return_value = 1
+        kernel32 = MagicMock()
+        kernel32.GetLastError.return_value = 0
+
+        import ctypes
+
+        monkeypatch.setattr(
+            ctypes, "windll", types.SimpleNamespace(user32=user32, kernel32=kernel32), raising=False
+        )
+        return user32
+
+    @staticmethod
+    def _root() -> MagicMock:
+        root = MagicMock()
+        root.winId.return_value = 0x1234
+        return root
+
+    def test_toolwindow_is_cleared(self, win32) -> None:
+        _apply_windows_extended_styles(self._root())
+
+        style = win32.SetWindowLongW.call_args[0][2]
+        assert not style & self.WS_EX_TOOLWINDOW, (
+            "WS_EX_TOOLWINDOW survived, so the keyboard has no taskbar button "
+            "and the minimise button has nowhere to put it"
+        )
+
+    def test_appwindow_is_asserted(self, win32) -> None:
+        """Belt and braces: clearing TOOLWINDOW asks Qt not to have opted
+        us out, setting APPWINDOW says we want in regardless."""
+        _apply_windows_extended_styles(self._root())
+
+        style = win32.SetWindowLongW.call_args[0][2]
+        assert style & self.WS_EX_APPWINDOW
+
+    def test_the_rest_of_the_style_word_survives(self, win32) -> None:
+        """The inverse: this must clear one bit, not rewrite the word.
+
+        Qt puts real state in there, LAYERED among it, which is what
+        window opacity rides on.
+        """
+        _apply_windows_extended_styles(self._root())
+
+        style = win32.SetWindowLongW.call_args[0][2]
+        assert style & 0x08000000, "NOACTIVATE was dropped"

@@ -325,11 +325,19 @@ def _apply_windows_extended_styles(root) -> None:
     that re-applies window flags later has to re-assert this, because
     ``setFlags`` on Windows can recreate the native window.
 
-    ``WS_EX_TOOLWINDOW`` was *removed* because it suppressed the
-    taskbar entry, leaving minimize with nowhere to go — the user
-    expects standard Windows behaviour (click the taskbar to
-    restore).  The trade-off is that the OSK now appears in Alt+Tab,
-    which is acceptable.
+    **``WS_EX_TOOLWINDOW`` is actively cleared here, not merely left
+    unset.**  It suppresses the taskbar entry, which leaves the minimise
+    button with nowhere to go and the tray icon as the only way back.
+    Qt adds it on its own: QML declares ``visible: true``, so the window
+    is already shown when :func:`_apply_window_flags` calls ``setFlags``,
+    and applying a non-activating, frameless, always-on-top flag set to
+    an *already shown* window is the case where Qt decides the window
+    does not belong in the taskbar.  Applying the same flags before the
+    first show does not do it, which is why the comments here claimed for
+    a long time that the style "was removed" while the shipped window
+    carried it.  ``WS_EX_APPWINDOW`` is set too, so the taskbar entry
+    does not depend on Qt leaving the rest of the style word alone.  The
+    trade-off is that the OSK appears in Alt+Tab, which is acceptable.
 
     Requires the window to have a valid ``winId()`` (i.e. the native
     window handle has been created).
@@ -340,6 +348,8 @@ def _apply_windows_extended_styles(root) -> None:
 
         GWL_EXSTYLE = -20
         WS_EX_NOACTIVATE = 0x08000000
+        WS_EX_TOOLWINDOW = 0x00000080
+        WS_EX_APPWINDOW = 0x00040000
 
         user32 = ctypes.windll.user32
         kernel32 = ctypes.windll.kernel32
@@ -367,7 +377,23 @@ def _apply_windows_extended_styles(root) -> None:
         # WS_EX_TOPMOST is deliberately NOT in this write.  See the
         # docstring: the style word is not where always-on-top lives, and
         # writing it here is what broke it.
-        new_style = current | WS_EX_NOACTIVATE
+        #
+        # WS_EX_TOOLWINDOW is cleared and WS_EX_APPWINDOW set, because Qt
+        # adds the former behind our back and it is what removes a window
+        # from the taskbar.  QML declares `visible: true`, so the window
+        # is already on screen when `_apply_window_flags` calls setFlags,
+        # and applying these flags to a *shown* window is the case where
+        # Qt decides a non-activating window does not belong in the
+        # taskbar.  Setting the same flags before the first show does not
+        # do it, which is why this went unnoticed and why the comments
+        # here have claimed for a long time that the style "was removed":
+        # that was the intent, and the intent was not what shipped.
+        #
+        # Reported as the keyboard having no taskbar button, so the
+        # minimise button had nowhere to go and clicking the pinned icon
+        # did nothing.  APPWINDOW is set as well as TOOLWINDOW cleared,
+        # so the answer does not depend on Qt leaving the rest alone.
+        new_style = (current | WS_EX_NOACTIVATE | WS_EX_APPWINDOW) & ~WS_EX_TOOLWINDOW
         kernel32.SetLastError(0)
         prev = user32.SetWindowLongW(hwnd, GWL_EXSTYLE, new_style)
         if prev == 0 and kernel32.GetLastError() != 0:
