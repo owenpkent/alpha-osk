@@ -522,6 +522,82 @@ class TestTheTileDispatchesOnMouseButton:
         window.tileClicked(0, Qt.MouseButton.LeftButton)
         assert window.property("editingIndex") == 0
 
+    def test_manage_mode_makes_a_left_click_open_the_sheet(self, snippets_window):
+        """The left-click-only route to editing, recolouring and deleting.
+
+        Right-click is the only other way in and press-and-hold
+        deliberately is not one, so without this a pointer that can emit
+        only left clicks could copy a snippet and nothing else: never
+        edit, recolour, reorder or delete one, and never free a slot at
+        the cap.
+        """
+        window, bridge, _w = snippets_window
+        _fill(bridge, window, 3)
+        window.openList()
+        window.toggleManage()
+        assert window.property("manageMode")
+        window.tileClicked(0, Qt.MouseButton.LeftButton)
+        assert window.property("menuIndex") == 0
+
+    def test_manage_mode_does_not_copy_or_hide_the_window(self, snippets_window):
+        """Copy is unreachable in the mode, so a mis-tap destroys nothing."""
+        window, bridge, _w = snippets_window
+        _fill(bridge, window, 3)
+        window.openList()
+        window.toggleManage()
+        window.tileClicked(0, Qt.MouseButton.LeftButton)
+        assert window.property("visible")
+
+    def test_it_is_off_by_default_and_toggles_back(self, snippets_window):
+        """The inverse: copying is what the window is for."""
+        window, bridge, _w = snippets_window
+        _fill(bridge, window, 3)
+        window.openList()
+        assert not window.property("manageMode")
+        window.toggleManage()
+        window.toggleManage()
+        assert not window.property("manageMode")
+        window.tileClicked(0, Qt.MouseButton.LeftButton)
+        assert window.property("menuIndex") == -1
+
+    def test_reopening_the_window_leaves_manage_mode(self, snippets_window):
+        """It is an errand, not a preference."""
+        window, bridge, _w = snippets_window
+        _fill(bridge, window, 3)
+        window.toggleManage()
+        window.openList()
+        assert not window.property("manageMode")
+
+    def test_the_toggle_does_not_resize_when_it_flips(self, snippets_window):
+        """A shrinking button slides the close ✕ under a moving pointer.
+
+        Sized to the live label it went from "Manage" to the 24 px
+        narrower "Done", which drags every control to its right along the
+        header at the moment the user is most likely to be reaching for
+        one of them.
+        """
+        window, bridge, _w = snippets_window
+        _fill(bridge, window, 3)
+        window.openList()
+        button = _find_named(window, "snipManageButton")
+        assert button is not None
+        before = button.width()
+        window.toggleManage()
+        assert button.width() == before
+
+    def test_the_toggle_is_hidden_outside_the_grid(self, snippets_window):
+        """Nothing to manage from inside the sheet or the editor."""
+        window, bridge, _w = snippets_window
+        _fill(bridge, window, 3)
+        window.openList()
+        button = _find_named(window, "snipManageButton")
+        assert button is not None and button.property("visible")
+        window.openMenu(0)
+        assert not button.property("visible")
+        window.closeMenu()
+        window.beginEdit(0)
+        assert not button.property("visible")
+
     def test_the_tile_still_accepts_the_right_button(self, snippets_window):
         """The half the pass-through cannot state on its own.
 

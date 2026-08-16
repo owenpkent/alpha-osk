@@ -2806,10 +2806,33 @@ Window {
             // -- the interaction the window is built around -- was the only
             // logic reachable solely through a real mouse event.
             function tileClicked(idx, button) {
-                if (button === Qt.RightButton)
+                if (button === Qt.RightButton || manageMode)
                     openMenu(idx)
                 else
                     primaryTap(idx)
+            }
+
+            // Left-click-only route to the management actions.
+            //
+            // Right-click opens the actions sheet and press-and-hold
+            // deliberately does not (see the tile's MouseArea), so without
+            // this a pointer that can only left-click could copy a snippet
+            // and nothing else: never edit, recolour, reorder or delete
+            // one, and never free a slot once at the 50 cap. Dwell-click,
+            // switch access and head/eye trackers are exactly the software
+            // this keyboard is run alongside, and the previous list at
+            // least put a pencil and a cross on every row.
+            //
+            // A *mode* rather than a per-tile control, for the reason the
+            // grid exists at all: a second target on a 165x58 tile sits a
+            // few pixels from the one pressed every day, which is the
+            // arrangement this window was rebuilt to remove. In manage
+            // mode the whole tile is the target and copy is unreachable,
+            // so the worst a mis-tap can do is open a sheet.
+            property bool manageMode: false
+
+            function toggleManage() {
+                manageMode = !manageMode
             }
 
             function primaryTap(idx) {
@@ -2857,6 +2880,9 @@ Window {
                 editingIndex = -1
                 closeMenu()
                 page = 0
+                // Copying is what this window is for, so every open starts
+                // there; manage mode is an errand, not a preference.
+                manageMode = false
                 if (keyboard) keyboard.setEditMode(false)
                 refresh()
                 // Restore where the user last left it, clamped back
@@ -3082,7 +3108,10 @@ Window {
                                 font.pixelSize: 14
                                 font.weight: Font.DemiBold
                                 elide: Text.ElideRight
-                                width: Math.min(implicitWidth, snippetsWindow.width - 130)
+                                width: Math.min(implicitWidth,
+                                                snippetsWindow.width - 130
+                                                - (snipManageBtn.visible
+                                                   ? snipManageBtn.width + 6 : 0))
                             }
                         }
 
@@ -3119,6 +3148,60 @@ Window {
                                 appSettings.savedSnippetsX = Math.round(snippetsWindow.x)
                                 appSettings.savedSnippetsY = Math.round(snippetsWindow.y)
                             }
+                        }
+                    }
+
+                    // Manage-mode toggle. A word, not an icon: this window
+                    // typesets no glyphs (Segoe UI Emoji renders them in
+                    // colour and ignores the colour they are given), and a
+                    // drawn icon for "manage" is a guess the user has to
+                    // decode, which is what the sheet's word-only rows
+                    // already avoid.
+                    Rectangle {
+                        id: snipManageBtn
+                        objectName: "snipManageButton"
+                        visible: snippetsWindow.editingIndex < 0
+                                 && snippetsWindow.menuIndex < 0
+                        // Sized to the wider of the two labels, not to the
+                        // current one. Driven by the live text it shrank by
+                        // 24 px on entering manage mode, which slides the
+                        // close button along the header and under a pointer
+                        // that may already be travelling toward it. Same
+                        // rule as the pager: the controls being aimed at do
+                        // not move.
+                        TextMetrics {
+                            id: snipManageMetrics
+                            font: snipManageLabel.font
+                            text: qsTr("Manage")
+                        }
+                        Layout.preferredWidth: Math.ceil(snipManageMetrics.width) + 16
+                        Layout.preferredHeight: 28
+                        radius: 4
+                        color: snippetsWindow.manageMode
+                               ? Qt.rgba(root.themeAccent.r, root.themeAccent.g,
+                                         root.themeAccent.b, 0.22)
+                               : (snipManageMa.containsMouse
+                                  ? snippetsWindow.surfaceHi : "transparent")
+                        border.width: 1
+                        border.color: snippetsWindow.manageMode
+                                      ? root.themeAccent : "transparent"
+
+                        Text {
+                            id: snipManageLabel
+                            anchors.centerIn: parent
+                            text: snippetsWindow.manageMode ? qsTr("Done") : qsTr("Manage")
+                            textFormat: Text.PlainText
+                            color: snippetsWindow.manageMode
+                                   ? root.themeTextColor : snippetsWindow.muted
+                            font.pixelSize: 12
+                        }
+
+                        MouseArea {
+                            id: snipManageMa
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: snippetsWindow.toggleManage()
                         }
                     }
 
@@ -3209,7 +3292,17 @@ Window {
                                                         Qt.rgba(tag.r, tag.g, tag.b, 0.18))
                                               : snippetsWindow.surface)
                                     border.width: 1
-                                    border.color: tileMa.containsMouse
+                                    // Accented in manage mode as well as on
+                                    // hover: the mode changes what a tap
+                                    // does, so it has to be visible on the
+                                    // thing being tapped and not only in the
+                                    // header. A border rather than a fill,
+                                    // for the reason the compact accent keys
+                                    // use one: it sits beside the label
+                                    // instead of behind it, so it costs no
+                                    // contrast on any of the nine themes.
+                                    border.color: (tileMa.containsMouse
+                                                   || snippetsWindow.manageMode)
                                                   ? root.themeAccent : root.themeBorder
 
                                     // Inset rather than full-bleed: `clip`
