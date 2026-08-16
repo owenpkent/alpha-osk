@@ -2490,9 +2490,15 @@ class KeyboardBridge(QObject):
         Typing it is one click, but it only lands correctly if the caret is
         already in the right field and the app does not intercept synthetic
         keystrokes (the whole reason Compatibility Mode exists); a long
-        address also arrives one character at a time. The clipboard has no
-        focus race and no per-character path, at the cost of a paste. Typing
-        is still one row away in the actions sheet.
+        address also arrives one character at a time, and when it misses it
+        misses silently, into whichever window happened to be focused. The
+        clipboard has no focus race and no per-character path, at the cost
+        of a paste.
+
+        There is deliberately **no** "type it" control anywhere in the UI,
+        not even in the actions sheet. ``insertSnippet`` still exists and
+        still works, but nothing in QML calls it; it is kept as the
+        reference for how a verbatim insert has to behave.
 
         Returns False without touching the clipboard for an out-of-range
         index and for an empty snippet: copying "nothing" would silently
@@ -2506,7 +2512,7 @@ class KeyboardBridge(QObject):
         if not value:
             return False
         app = QGuiApplication.instance()
-        if app is None:  # no GUI (headless tests) — nothing to copy to
+        if app is None:  # no GUI (headless tests): nothing to copy to
             return False
         clipboard = QGuiApplication.clipboard()
         if clipboard is None:

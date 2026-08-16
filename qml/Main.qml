@@ -2722,12 +2722,14 @@ Window {
             // editor when the slot is still empty so a seeded slot is never
             // a dead tap.
             //
-            // Copy rather than type. Typing is one click against a paste's
-            // two, and it is still offered in the actions sheet, but it only
-            // lands correctly when the caret is already in the right field
-            // and the app does not intercept synthetic keystrokes. The
-            // clipboard has no focus race, and a toast is proof it worked:
-            // an insert into the wrong window is silent and invisible.
+            // Copy rather than type, and typing is not offered anywhere in
+            // this window (the sheet carries Copy / Edit / colours / Move /
+            // Delete and no Type row). Typing is one click against a
+            // paste's two, but it only lands correctly when the caret is
+            // already in the right field and the app does not intercept
+            // synthetic keystrokes. The clipboard has no focus race, and a
+            // toast is proof it worked: an insert into the wrong window is
+            // silent and invisible.
             function primaryTap(idx) {
                 var s = snippetList[idx]
                 if (s && s.value && s.value.length > 0) {

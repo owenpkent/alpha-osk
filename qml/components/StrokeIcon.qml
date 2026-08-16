@@ -33,9 +33,14 @@ Canvas {
     implicitHeight: 18
     antialiasing: true
 
+    // Every property `onPaint` reads has to invalidate, or the canvas keeps
+    // rendering the old frame until some unrelated change happens to
+    // repaint it. `boxFraction` was the one missed: three of the four were
+    // wired, which reads as a decision rather than the oversight it was.
     onInkChanged: requestPaint()
     onPathsChanged: requestPaint()
     onStrokeWidthChanged: requestPaint()
+    onBoxFractionChanged: requestPaint()
 
     onPaint: {
         var ctx = getContext("2d")
