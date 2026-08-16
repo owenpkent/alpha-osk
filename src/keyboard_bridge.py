@@ -19,7 +19,7 @@ import logging
 import time
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Optional, Tuple
+from typing import Any, Dict, Iterator, List, Optional, Set, Tuple
 
 from PySide6.QtCore import Property, QObject, QTimer, QUrl, Signal, Slot
 
@@ -744,7 +744,7 @@ class KeyboardBridge(QObject):
         # pressPrediction what to insert.  Rebuilt on every token-pill
         # emit and emptied whenever the bar goes back to words, so a
         # stale entry can never be tapped.
-        self._token_pill_inserts: Dict[str, str] = {}
+        self._token_pill_words: Set[str] = set()
         # The run the pills currently on the bar continue: the tail after
         # the "@" for domain pills, the whole run otherwise.  Kept beside
         # the map because the insert path cannot recover it from a pair,
@@ -1703,7 +1703,7 @@ class KeyboardBridge(QObject):
             # Guarded on there being pills to invalidate rather than
             # refreshing unconditionally: these keys auto-repeat, and a
             # held arrow must not fire a prediction query per repeat.
-            if self._token_pill_inserts:
+            if self._token_pill_words:
                 self._refresh_prediction_bar()
 
         # Auto-release shift/ctrl/alt/win after special key too. Without
@@ -2038,7 +2038,7 @@ class KeyboardBridge(QObject):
         # one would leave a stale entry tappable.  Requiring the pill to
         # be *on the bar right now* makes that impossible without
         # touching any of them.
-        if word in self._token_pill_inserts and word in self._predictions:
+        if word in self._token_pill_words and word in self._predictions:
             self._insert_token_pill(word)
             return
         _logger.info(
@@ -2713,45 +2713,53 @@ class KeyboardBridge(QObject):
             return True
         return tok.find("@") > 0
 
-    def _token_suggestions(self) -> Tuple[str, List[Tuple[str, str]]]:
-        """``(typed prefix, [(pill text, text a tap should type), ...])``.
+    def _token_suggestions(self) -> Tuple[str, List[str]]:
+        """``(the typed run these pills continue, [pill text, ...])``.
 
-        The two halves of each pair differ for domain pills and that is
-        the point: the pill reads ``gmail.com`` while the user has typed
-        ``owen@``, so a tap types only ``gmail.com``.  Showing the whole
-        address instead would be consistent with how word pills render,
-        and worse -- at 20-odd characters a pill, the fitter would drop
-        the row to two suggestions (it drops rather than elides, see the
-        prediction-bar notes), and the local part is already on screen a
-        centimetre away.  Full learned tokens *do* show whole, because
-        there the pill is the answer rather than half of it.
+        A domain pill reads ``gmail.com`` while the user has typed
+        ``owen@``, so the pill text is not the whole of what ends up on
+        screen.  Showing the whole address would be consistent with how
+        word pills render, and worse: at 20-odd characters a pill the
+        fitter would drop the row to two suggestions (it drops rather
+        than elides, see the prediction-bar notes), and the local part is
+        already on screen a centimetre away.  Full learned tokens *do*
+        show whole, because there the pill is the answer rather than half
+        of it.
 
-        The typed prefix is returned alongside because the insert path
-        needs it and cannot recover it: for a domain pill it is the tail
-        of ``_raw_token`` after the "@", for a full token it is the whole
-        run, and the two are indistinguishable from the pair alone.  It
-        is also what makes the case check in ``_insert_token_pill``
-        possible -- the store matches case-insensitively, so the pill and
-        the typed characters can disagree.
+        The typed run is returned alongside because the insert path needs
+        it and cannot recover it from the pill: for a domain pill it is
+        the tail of ``_raw_token`` after the "@", for a full token it is
+        the whole run, and the two are indistinguishable from the pill
+        alone.  It is also what makes the case check in
+        ``_insert_token_pill`` possible, since the store matches
+        case-insensitively, so the pill and the typed characters can
+        disagree.
+
+        **Every pill is strictly longer than the run it continues**, and
+        ``_insert_token_pill`` relies on that: a pill equal to what is
+        already typed would insert nothing and select the run to replace
+        it with itself.  Enforced on both branches below, and by
+        ``TokenPredictor.predict`` for its own half.
         """
         tok = self._raw_token
         at = tok.rfind("@")
         if at > 0:
             typed = tok[at + 1 :]
             return typed, [
-                (domain, domain[len(typed) :])
+                domain
                 for domain in self._predictor.predict_email_domains(typed, self._prediction_count)
                 if len(domain) > len(typed)
             ]
         return tok, [
-            (full, full[len(tok) :])
+            full
             for full in self._predictor.predict_tokens(tok, self._prediction_count)
+            if len(full) > len(tok)
         ]
 
     def _emit_token_predictions(self) -> None:
         """Put structured-token pills on the bar (possibly none)."""
-        typed, pairs = self._token_suggestions()
-        self._token_pill_inserts = dict(pairs)
+        typed, pills = self._token_suggestions()
+        self._token_pill_words = set(pills)
         self._token_pill_typed = typed
         # Deliberately not routed through _display_cased, and the reason
         # is that these pills insert *verbatim* rather than continuing
@@ -2763,14 +2771,14 @@ class KeyboardBridge(QObject):
         # Running _display_cased over it would show "GMAIL.COM" under
         # Caps Lock and then insert lowercase, which is precisely the
         # display/insert mismatch that function exists to prevent.
-        self._predictions = [display for display, _ in pairs]
+        self._predictions = list(pills)
         if self._predictions:
             self._analytics.record_prediction_offered()
         self.predictionsChanged.emit(self._predictions)
 
     def _clear_token_pills(self) -> None:
-        """Forget the token-pill insert map (the bar is showing words now)."""
-        self._token_pill_inserts = {}
+        """Forget which pills were tokens (the bar is showing words now)."""
+        self._token_pill_words = set()
         self._token_pill_typed = ""
 
     def _is_live_token_pill(self, word: str) -> bool:
@@ -2792,7 +2800,7 @@ class KeyboardBridge(QObject):
         consults them.  Forgetting a learned token is ``forgetToken``,
         surfaced in the dashboard's Saved Numbers & Addresses.
         """
-        return word in self._token_pill_inserts and word in self._predictions
+        return word in self._token_pill_words and word in self._predictions
 
     @Slot(str, result=bool)
     def isTokenPill(self, word: str) -> bool:
@@ -2865,7 +2873,7 @@ class KeyboardBridge(QObject):
         ``replace_text``.  Either way what is left on screen is the text
         the pill displayed.
         """
-        if word not in self._token_pill_inserts or word == self._token_pill_typed:
+        if word not in self._token_pill_words:
             return
         typed = self._token_pill_typed
         # The pill replaces the run it continues, so what is left on

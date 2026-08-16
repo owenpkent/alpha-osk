@@ -3209,14 +3209,14 @@ class TestEmailDomainSuggestions:
     def test_a_mention_still_gets_word_predictions(self, bridge: KeyboardBridge):
         """ "@owen" is a handle, and the word model can complete a name."""
         _type(bridge, "@ow")
-        assert bridge._token_pill_inserts == {}
+        assert bridge._token_pill_words == set()
 
     def test_the_pill_map_is_dropped_when_words_come_back(self, bridge: KeyboardBridge):
         """A pill can only ever be inserted the way it was emitted."""
         _type(bridge, "owen@")
-        assert bridge._token_pill_inserts
+        assert bridge._token_pill_words
         _type(bridge, "gmail.com ")
-        assert bridge._token_pill_inserts == {}
+        assert bridge._token_pill_words == set()
 
     def test_backspacing_inside_an_address_keeps_the_domain_bar(self, bridge: KeyboardBridge):
         """`_current_word` is "out" here, which reads as an ordinary word."""
@@ -3249,7 +3249,7 @@ class TestTheTokenBarSurvivesEveryWayTheBarIsRepopulated:
         assert bridge._predictions == ["555-123-4567"]
         bridge.pressSpecialKey("backspace")
         assert bridge._predictions == ["555-123-4567"]
-        assert bridge._token_pill_inserts
+        assert bridge._token_pill_words
 
     def test_tapping_shift_does_not_throw_the_token_bar_away(self, bridge: KeyboardBridge):
         """Reaching for a shifted symbol mid-number must not cost the pill."""
@@ -3257,7 +3257,7 @@ class TestTheTokenBarSurvivesEveryWayTheBarIsRepopulated:
         _type(bridge, "555-")
         bridge.toggleShift()
         assert bridge._predictions == ["555-123-4567"]
-        assert bridge._token_pill_inserts
+        assert bridge._token_pill_words
 
     def test_caps_lock_does_not_either(self, bridge: KeyboardBridge):
         _type(bridge, "owen@")
@@ -3281,9 +3281,9 @@ class TestTheTokenBarSurvivesEveryWayTheBarIsRepopulated:
         cannot catch this: the bar was never touched.
         """
         _type(bridge, "owen@")
-        assert bridge._token_pill_inserts
+        assert bridge._token_pill_words
         bridge.pressSpecialKey("right")
-        assert bridge._token_pill_inserts == {}
+        assert bridge._token_pill_words == set()
         assert "gmail.com" not in bridge._predictions
 
     def test_a_stale_pill_is_no_longer_a_continuation_of_the_abandoned_run(
@@ -3574,7 +3574,7 @@ class TestTokenPillsAreNotWordModelObjects:
     def test_reset_context_drops_the_token_pill_map(self, bridge: KeyboardBridge) -> None:
         """Every other reset path clears it; this one used not to."""
         _type(bridge, "owen@")
-        assert bridge._token_pill_inserts
+        assert bridge._token_pill_words
         bridge.resetContext()
-        assert bridge._token_pill_inserts == {}
+        assert bridge._token_pill_words == set()
         assert bridge._token_pill_typed == ""
