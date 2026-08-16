@@ -862,30 +862,28 @@ class TestPanelsSitFlushWithTheGrid:
             )
         assert _real_warnings(warnings) == []
 
-    def test_function_row_matches_the_widest_keyboard_row_in_compact(self, qml_root) -> None:
-        """The F-row must span the grid, not float inset inside it.
+    @pytest.mark.parametrize("compact", [True, False])
+    def test_function_row_matches_the_widest_keyboard_row(self, qml_root, compact: bool) -> None:
+        """The F-row spans the grid, in both view modes.
 
-        This assertion used to be ``panel.width() <= width - 16``, which is
-        the trap this file warns about elsewhere: it was true of the broken
-        version at every width ever tested, because a row that is too *narrow*
-        fits trivially. Reported with a screenshot, where the row sat visibly
-        inset on both sides with the grid extending past it at each end.
+        Reported twice. First it sat inset with the grid extending past
+        both ends; the fix for that spent the leftover on two group gaps,
+        which on the full-size layout is three and a half keys of leftover
+        and produced 108 px chasms with the keys in islands. Reported
+        again, as the row still not lining up.
 
-        The row is 12 keys against a 13-unit grid, so unlike the Number Row it
-        cannot line up by having one key per column. The leftover column goes
-        into the two gaps between the F-key groups, which keeps every F-key
-        exactly as wide as the keys above it. Both halves matter: same total
-        width as the grid, and unchanged individual key width.
-
-        **Compact only.** A full-size grid is 15.5 columns against the same
-        12 keys, and spending three and a half keys of leftover on two gaps
-        produced 108 px chasms with the keys in islands, which was itself
-        reported as a broken layout. See the sibling test below.
+        Both attempts insisted each F-key stay exactly one grid column
+        wide, and there is no remainder-free way to do that: 12 keys
+        against 13 columns compact, 15.5 full-size. The keyboard's own
+        convention settles it, since every row here spans the width and
+        varies its key widths to manage it (a 1.5-unit Tab, a 5-unit
+        space bar). So the F-keys are simply wider than a letter, and the
+        row runs edge to edge like the rest.
         """
         root, warnings, _ = qml_root
         root.setProperty("showNavigation", False)
         root.setProperty("showNumpad", False)
-        root.setProperty("compactView", True)
+        root.setProperty("compactView", compact)
         root.setProperty("showFunctionRow", True)
         _pump_until(lambda: self._panel(root, "functionRowPanel").width() > 0)
 
@@ -898,78 +896,54 @@ class TestPanelsSitFlushWithTheGrid:
             assert panel.width() == pytest.approx(grid, abs=1.0), (
                 f"function row is {panel.width() - grid:+.0f} px off the "
                 f"keyboard grid at window width {width} "
-                f"({panel.width():.0f} vs {grid:.0f})"
-            )
-            assert panel.width() <= width - 16 + self.SLOP_PX, (
-                f"function row overhangs by {panel.width() - (width - 16):.0f} px "
-                f"at window width {width}"
+                f"(compact={compact}, {panel.width():.0f} vs {grid:.0f})"
             )
         assert _real_warnings(warnings) == []
 
-    def test_full_size_gaps_stay_the_size_of_a_key(self, qml_root) -> None:
-        """The other half of the same reported bug.
+    def test_every_function_key_is_the_same_width(self, qml_root) -> None:
+        """The inverse of the span test, and the one that caught the worst
+        version of this.
 
-        Filling a 15.5-column grid with 12 keys means three and a half keys
-        of leftover, and putting all of it into the two group gaps bunched
-        the F-keys into islands with 108 px of nothing between them. The gap
-        is capped at one key width, past which the row stops growing and
-        stays centred, so this asserts the row is *narrower* than the grid
-        here, which is the opposite of what compact requires and is why the
-        two cases are separate tests rather than one parametrised one.
-        """
-        root, _, _ = qml_root
-        root.setProperty("showNavigation", False)
-        root.setProperty("showNumpad", False)
-        root.setProperty("compactView", False)
-        root.setProperty("showFunctionRow", True)
-        _pump_until(lambda: self._panel(root, "functionRowPanel").width() > 0)
-
-        panel = self._panel(root, "functionRowPanel")
-        grid = self._widest_layout_row(root)
-        key_w = root.property("keyW")
-
-        # 12 keys, 9 inner gaps, 2 group gaps: solve for the group gap.
-        gap = (panel.width() - 12 * key_w - 9 * root.property("keySpacing")) / 2
-        assert gap <= key_w + 1, (
-            f"group gap is {gap:.0f} px against a {key_w:.0f} px key; the "
-            "F-keys read as three islands rather than a row"
-        )
-        assert panel.width() <= grid + self.SLOP_PX
-
-    def test_function_keys_are_the_same_width_as_the_keys_above_them(self, qml_root) -> None:
-        """The inverse half of the test above.
-
-        Stretching 12 keys across 13 columns would satisfy the width
-        assertion exactly while making this the one row whose keys do not
-        line up with anything, so the fix has to be checked from both ends.
+        A row can span the grid exactly while looking wrong, which is what
+        happened when the leftover width was spent on two group gaps: the
+        total was right to the pixel and the keys sat in three islands
+        with 108 px of nothing between them. Equal widths is the property
+        that rules that out, and it holds in both view modes.
         """
         root, warnings, _ = qml_root
         root.setProperty("showNavigation", False)
         root.setProperty("showNumpad", False)
-        root.setProperty("compactView", True)
         root.setProperty("showFunctionRow", True)
-        _pump_until(lambda: self._panel(root, "functionRowPanel").width() > 0)
 
-        # Via the VISUAL tree: findChildren cannot see a Repeater's delegates
-        # (their QObject parent is the delegate model), and these keys are two
-        # Repeaters deep.
-        def action_of(item) -> str:
-            kd = item.property("kd")
-            if hasattr(kd, "toVariant"):
-                kd = kd.toVariant()
-            return str((kd or {}).get("action", "")) if isinstance(kd, dict) else ""
+        for compact in (True, False):
+            root.setProperty("compactView", compact)
+            _pump_until(lambda: self._panel(root, "functionRowPanel").width() > 0)
 
-        fn_keys = [
-            item
-            for item in TestSecondSymbolPage._key_items(root)
-            if action_of(item).startswith("f") and item.width() > 0
-        ]
-        assert len(fn_keys) == 12, f"expected 12 F-keys, found {len(fn_keys)}"
+            def action_of(item) -> str:
+                kd = item.property("kd")
+                if hasattr(kd, "toVariant"):
+                    kd = kd.toVariant()
+                return str((kd or {}).get("action", "")) if isinstance(kd, dict) else ""
 
-        key_w = root.property("keyW")
-        for key in fn_keys:
-            assert key.width() == pytest.approx(key_w, abs=1.0), (
-                f"an F-key is {key.width():.0f} px wide against a grid key of {key_w:.0f} px"
+            # Via the VISUAL tree: findChildren cannot see a Repeater's
+            # delegates, since their QObject parent is the delegate model.
+            fn_keys = [
+                item
+                for item in TestSecondSymbolPage._key_items(root)
+                if action_of(item).startswith("f") and item.width() > 0
+            ]
+            assert len(fn_keys) == 12, f"expected 12 F-keys, found {len(fn_keys)}"
+
+            widths = {round(key.width(), 1) for key in fn_keys}
+            assert len(widths) == 1, (
+                f"F-keys have {len(widths)} different widths in compact={compact}: {sorted(widths)}"
+            )
+
+            # Wider than a letter is expected and fine (12 keys spanning a
+            # 15.5-column grid). Narrower would mean a cramped row.
+            assert fn_keys[0].width() >= root.property("keyW") - 1.0, (
+                f"an F-key is {fn_keys[0].width():.0f} px against a "
+                f"{root.property('keyW'):.0f} px grid key"
             )
         assert _real_warnings(warnings) == []
 

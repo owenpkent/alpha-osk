@@ -38,30 +38,34 @@ Item {
     property var registerFn: null
     property var unregisterFn: null
 
-    readonly property var keyGroups: [
-        ["F1", "F2", "F3", "F4"],
-        ["F5", "F6", "F7", "F8"],
-        ["F9", "F10", "F11", "F12"]
+    readonly property var keyNames: [
+        "F1", "F2", "F3", "F4", "F5", "F6",
+        "F7", "F8", "F9", "F10", "F11", "F12"
     ]
 
-    // 12 keys in 3 groups: 9 gaps of keySpacing inside the groups, and the
-    // 2 gaps between them absorb what is left of the target width.
+    // **Twelve equal keys spanning the row, like every other row here.**
     //
-    // **Capped at one key width, and the cap is the point.** How much is
-    // left over depends entirely on the layout: a compact grid is 13
-    // columns against these 12 keys, so the leftover is about one key and
-    // the gaps land near 34 px, which reads as the grouping a function row
-    // has on any keyboard. A full-size grid is 15.5 columns, so the
-    // leftover is three and a half keys, and splitting that in two gave
-    // two 108 px chasms with the keys bunched into islands. Past the cap
-    // the row simply stops growing and stays centred, which is what it did
-    // before it filled the width at all.
+    // This went through two wrong answers first, and both were wrong the
+    // same way: they tried to keep each F-key exactly one grid column wide
+    // and then find somewhere to put the leftover. A compact grid is 13
+    // columns against these 12 keys and a full-size one is 15.5, so there
+    // is always a remainder, and there is nowhere good to put it. Spending
+    // it all on two group gaps gave 108 px chasms with the keys in
+    // islands; capping the gap left the row centred and visibly inset
+    // while every other row ran edge to edge, which is what it was
+    // reported as the second time.
     //
-    // Floored at keySpacing so a window narrow enough to make the leftover
-    // negative degrades to a normal gap instead of overlapping keys.
-    readonly property real groupGap: rowWidth > 0
-        ? Math.min(keyW, Math.max(keySpacing, (rowWidth - 12 * keyW - 9 * keySpacing) / 2))
-        : keySpacing * 3
+    // The keyboard's actual convention is the answer: *rows span the
+    // width, and key widths vary per row to make that work*. The Tab row
+    // has a 1.5-unit Tab, the bottom row has a 5-unit space bar. So these
+    // keys are simply (row - gaps) / 12 wide, which is about 72 px on
+    // full-size against 56 px letters, and within a pixel of the letters
+    // on compact. The 4-4-4 grouping is gone with it: no other row on this
+    // keyboard groups, and grouping is what forced the remainder to pile
+    // up in one place.
+    readonly property real fnKeyW: rowWidth > 0
+        ? Math.max(keyW, (rowWidth - 11 * keySpacing) / 12)
+        : keyW
 
     implicitWidth: fnLayout.implicitWidth
     implicitHeight: fnLayout.implicitHeight
@@ -71,48 +75,40 @@ Item {
     // has to sit flush with. Full rationale in NumberRow.qml.
     Row {
         id: fnLayout
-        spacing: fnRow.groupGap
+        spacing: fnRow.keySpacing
 
         Repeater {
-            model: fnRow.keyGroups
+            model: fnRow.keyNames
 
-            Row {
-                spacing: fnRow.keySpacing
+            KeyButton {
+                id: fnKey
 
-                Repeater {
-                    model: modelData
+                // Same shape the layout-driven keys and the Number Row
+                // carry, so the registry and the tests that read it see one
+                // kind of key description, not two.
+                readonly property var kd: ({
+                    type: "special",
+                    action: modelData.toLowerCase()
+                })
 
-                    KeyButton {
-                        id: fnKey
+                Component.onCompleted: if (fnRow.registerFn)
+                    fnRow.registerFn(fnKey, fnKey.kd)
+                Component.onDestruction: if (fnRow.unregisterFn)
+                    fnRow.unregisterFn(fnKey)
 
-                        // Same shape the layout-driven keys and the Number
-                        // Row carry, so the registry and the tests that read
-                        // it see one kind of key description, not two.
-                        readonly property var kd: ({
-                            type: "special",
-                            action: modelData.toLowerCase()
-                        })
-
-                        Component.onCompleted: if (fnRow.registerFn)
-                            fnRow.registerFn(fnKey, fnKey.kd)
-                        Component.onDestruction: if (fnRow.unregisterFn)
-                            fnRow.unregisterFn(fnKey)
-
-                        keyText: modelData.toLowerCase()
-                        displayText: modelData
-                        keyWidth: fnRow.keyW
-                        keyHeight: fnRow.keyH
-                        fontSize: 10
-                        isSpecial: true
-                        enableRepeat: false
-                        keyColor: fnRow.keyColor
-                        keyPressedColor: fnRow.keyPressedColor
-                        keyTextColor: fnRow.keyTextColor
-                        accentColor: fnRow.accentColor
-                        borderColor: fnRow.borderColor
-                        onKeyPressed: keyboard.pressSpecialKey(modelData.toLowerCase())
-                    }
-                }
+                keyText: modelData.toLowerCase()
+                displayText: modelData
+                keyWidth: fnRow.fnKeyW
+                keyHeight: fnRow.keyH
+                fontSize: 10
+                isSpecial: true
+                enableRepeat: false
+                keyColor: fnRow.keyColor
+                keyPressedColor: fnRow.keyPressedColor
+                keyTextColor: fnRow.keyTextColor
+                accentColor: fnRow.accentColor
+                borderColor: fnRow.borderColor
+                onKeyPressed: keyboard.pressSpecialKey(modelData.toLowerCase())
             }
         }
     }
