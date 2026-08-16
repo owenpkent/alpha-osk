@@ -16,6 +16,7 @@ import pytest
 PySide6 = pytest.importorskip("PySide6")
 
 from src.keyboard_bridge import KeyboardBridge
+from src.prediction.token_predictor import TokenPredictor
 
 
 @pytest.fixture
@@ -28,6 +29,18 @@ def bridge() -> KeyboardBridge:
         mock_factory.return_value = mock_synth
         b = KeyboardBridge()
         b._synth = mock_synth
+        # The bridge loads the developer's real ngram_model.json from
+        # get_model_dir() on construction, and that file now carries a
+        # "tokens" key.  A structured token the developer typed for real
+        # is prefix-matched and count-ranked exactly like one a test
+        # teaches, so a single "owenpkent@gmail.com" in there outranks the
+        # domain these tests learn and TestEmailDomainSuggestions fails on
+        # that machine alone.  CI never has the file, so it stays green,
+        # which is the worst shape a failure can take.  The word model is
+        # worked around per-test with synthetic zzq*/zephyrish tokens; the
+        # token store has no such escape, since its whole matching rule is
+        # "any prefix of anything typed", so it is emptied instead.
+        b._predictor._ngram.tokens = TokenPredictor()
         return b
 
 
