@@ -307,20 +307,36 @@ def _truncated(root) -> list[str]:
     return [t.property("text") for t in expect_pills(root) if t.property("truncated")]
 
 
+def _scene_left(item) -> float:
+    """An item's left edge in scene coordinates.
+
+    Not `item.x`: the bar's buttons sit inside a Row, so their `x` is
+    relative to that Row and comparing it against a sibling's `x` compares
+    two different origins. That reads as "the pill row starts 500 px past
+    the button", which is what this returned when a second button arrived.
+    """
+    return item.mapToScene(item.boundingRect().topLeft()).x()
+
+
 class TestClearButtonNeverCoversPills:
+    """The buttons parked at the right end own a strip the pills may not
+    enter. There are two of them now (Snippets, then clear-context), so
+    the leftmost is the one the row must stay clear of."""
+
     @pytest.mark.parametrize(
         "predictions",
         [LONG_PREDICTIONS, ["a", "the", "I"], ["hello"], LONG_PREDICTIONS[:2]],
         ids=["four-long", "three-short", "one", "two-long"],
     )
-    def test_pill_row_stays_left_of_the_button(self, qml_root, predictions):
+    def test_pill_row_stays_left_of_the_buttons(self, qml_root, predictions):
         root, warnings, _ = qml_root
         row, button = _show(root, predictions)
 
-        row_right = row.property("x") + row.property("width")
-        assert row_right <= button.property("x"), (
-            f"pill row runs to {row_right}px but the clear button starts at "
-            f"{button.property('x')}px — the last pill is under the button"
+        row_right = _scene_left(row) + row.property("width")
+        first_button = min(_scene_left(button), _scene_left(_child(root, "snippetsBarButton")))
+        assert row_right <= first_button, (
+            f"pill row runs to {row_right}px but the buttons start at "
+            f"{first_button}px — the last pill is under a button"
         )
         assert _real_warnings(warnings) == []
 
@@ -338,8 +354,9 @@ class TestClearButtonNeverCoversPills:
         root.setProperty("width", root.property("minimumWidth"))
         QCoreApplication.processEvents()
 
-        row_right = row.property("x") + row.property("width")
-        assert row_right <= button.property("x")
+        row_right = _scene_left(row) + row.property("width")
+        first_button = min(_scene_left(button), _scene_left(_child(root, "snippetsBarButton")))
+        assert row_right <= first_button
 
     def test_short_words_keep_their_natural_width(self, qml_root):
         """Max-min fairness, not an equal split — the anti-elide guarantee."""

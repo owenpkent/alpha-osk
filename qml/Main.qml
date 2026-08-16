@@ -1336,24 +1336,41 @@ Window {
                     }
                 }
 
-                // Snippets button: opens the quick-insert popup of
-                // saved personal info / phrases the user taps to type
-                // in one click. Sits next to Learning for discoverability.
+                // Snippets, the fallback copy.  The button now lives beside
+                // the clear-context ring in the suggestion bar, which is a
+                // far bigger target than a 28x24 patch of title bar, and this
+                // one is hidden whenever that one is showing.
+                //
+                // It is not dead weight: the suggestion bar collapses to zero
+                // height when suggestions are switched off, taking everything
+                // in it with it, and Snippets is a feature rather than a
+                // suggestion-adjacent control, so losing the only way in
+                // because of an unrelated setting is not acceptable.  The
+                // clear-context button has always had that hole; this one
+                // does not get to inherit it.
                 Rectangle {
-                    width: 28
+                    objectName: "snippetsTitleBarButton"
+                    visible: !root.suggestionsEnabled
+                    width: visible ? 28 : 0
                     height: 24
                     radius: 4
                     color: snippetsBtn.containsMouse ? "#444" : "transparent"
 
                     ToolTip.visible: snippetsBtn.containsMouse
-                    ToolTip.text: qsTr("Snippets: saved text you tap to type")
+                    ToolTip.text: qsTr("Snippets: saved text you tap to copy")
                     ToolTip.delay: 400
 
-                    Text {
+                    // Feather's "bookmark", the same icon as the bar button,
+                    // drawn rather than typeset.  It used to be "☰" in a
+                    // Text, which on Windows resolves through Segoe UI Emoji
+                    // and ignores the colour it is given, the trap this file
+                    // documents twice already.
+                    Comp.StrokeIcon {
                         anchors.centerIn: parent
-                        text: "☰"
-                        font.pixelSize: 15
-                        color: snippetsWindow.visible ? root.themeAccent : "#999"
+                        width: 16
+                        height: 16
+                        paths: ["M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"]
+                        ink: snippetsWindow.visible ? root.themeAccent : "#999"
                     }
 
                     MouseArea {
@@ -1545,7 +1562,15 @@ Window {
                 // ⟲.  Reserved on the right only: taking the same bite out of
                 // the left as well would centre the row in the window but cost
                 // twice the width, and long words would start eliding sooner.
-                property real clearCtxReserve: root.suggestionsEnabled ? predPillHeight + 16 : 0
+                // Gap between the two buttons parked at the right end.
+                property real predButtonGap: 6
+                // Width the pills must keep clear so the row can never render
+                // underneath the buttons.  Two buttons now, not one: derived
+                // from the same numbers the Row is laid out from, because a
+                // reserve that is merely *near* the truth puts a pill under a
+                // control, which is the bug this property exists to prevent.
+                property real clearCtxReserve: root.suggestionsEnabled
+                    ? predPillHeight * 2 + predButtonGap + 16 : 0
                 Layout.preferredHeight: root.suggestionsEnabled ? predPillHeight + 4 : 0
                 Layout.bottomMargin: root.suggestionsEnabled ? 4 : 0
                 clip: true
@@ -1853,13 +1878,66 @@ Window {
                 // or a focus change to a child window with the same hwnd, so
                 // this is the manual escape hatch. Hidden when suggestions are
                 // off (the bar collapses to zero height anyway).
-                Rectangle {
-                    id: clearCtxPill
-                    objectName: "clearContextButton"
-                    visible: root.suggestionsEnabled
+                // Both bar buttons live in one Row anchored to the right, so
+                // the reserve `computeFit` subtracts is the width of a thing
+                // that exists rather than a number kept in step by hand.
+                // Snippets sits to the LEFT of the clear-context ring, which
+                // leaves the ring exactly where it has always been: it is
+                // pressed by muscle memory, and the new control should be the
+                // one that has to be found.
+                Row {
+                    id: predBarButtons
                     anchors.right: parent.right
                     anchors.rightMargin: 8
                     anchors.verticalCenter: parent.verticalCenter
+                    spacing: predBar.predButtonGap
+                    visible: root.suggestionsEnabled
+
+                Rectangle {
+                    id: snippetsPill
+                    objectName: "snippetsBarButton"
+                    width: predBar.predPillHeight
+                    height: predBar.predPillHeight
+                    radius: width / 2
+                    color: snippetsBarBtn.containsMouse ? Qt.lighter(root.themeKeyColor, 1.3)
+                                                        : Qt.rgba(0, 0, 0, 0.18)
+                    border.color: snippetsWindow.visible || snippetsBarBtn.containsMouse
+                                  ? root.themeAccent : Qt.rgba(1, 1, 1, 0.18)
+                    border.width: 1
+
+                    ToolTip.visible: snippetsBarBtn.containsMouse
+                    ToolTip.text: qsTr("Snippets: saved text you tap to copy")
+                    ToolTip.delay: 400
+
+                    // Feather's "bookmark", MIT, (c) 2013-2023 Cole Bemis.
+                    // See THIRD_PARTY_NOTICES.md.  Verbatim from the 24x24
+                    // source so it can be diffed against upstream.  Its ink
+                    // is centred in its own box, so no inkOffsetX.
+                    Comp.StrokeIcon {
+                        anchors.fill: parent
+                        paths: ["M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"]
+                        boxFraction: 0.62
+                        ink: snippetsWindow.visible ? root.themeAccent
+                             : (snippetsBarBtn.containsMouse ? root.themeTextColor : "#bbb")
+                    }
+
+                    MouseArea {
+                        id: snippetsBarBtn
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: {
+                            if (snippetsWindow.visible) snippetsWindow.hide()
+                            else snippetsWindow.openList()
+                        }
+                    }
+
+                    Behavior on color { ColorAnimation { duration: 100 } }
+                }
+
+                Rectangle {
+                    id: clearCtxPill
+                    objectName: "clearContextButton"
                     width: predBar.predPillHeight
                     height: predBar.predPillHeight
                     radius: width / 2
@@ -1885,61 +1963,36 @@ Window {
                     // the keycaps -- any glyph small enough to be an icon is
                     // at the mercy of the host font.
                     //
-                    // Fed to the Canvas already here via ctx.path, which
-                    // takes SVG path data directly.  That is deliberate:
-                    // QtQuick.Shapes or QtSvg would render it just as well
-                    // and would each add a QML module the frozen build has
-                    // to carry, where a missing module does not degrade --
-                    // it fails Main.qml and ships as a blank keyboard.
-                    Canvas {
-                        id: clearCtxIcon
+                    // Drawn on a Canvas via ctx.path, which takes SVG path
+                    // data directly.  That is deliberate: QtQuick.Shapes or
+                    // QtSvg would render it just as well and would each add
+                    // a QML module the frozen build has to carry, where a
+                    // missing module does not degrade -- it fails Main.qml
+                    // and ships as a blank keyboard.
+                    //
+                    // Feather rotate-ccw, MIT, (c) 2013-2023 Cole Bemis.
+                    // See THIRD_PARTY_NOTICES.md.  Verbatim from the 24x24
+                    // source, with the polyline written as an equivalent
+                    // path; keep them that way so the icon can be diffed
+                    // against upstream.
+                    //
+                    // Drawn through the shared StrokeIcon rather than a
+                    // Canvas of its own.  That component was written for the
+                    // snippets window as a generalisation of exactly this
+                    // routine and then this copy was left behind, so the
+                    // invalidation bug StrokeIcon's own comment records
+                    // could have happened twice.
+                    Comp.StrokeIcon {
                         anchors.fill: parent
-                        antialiasing: true
-
-                        // Feather rotate-ccw, MIT, (c) 2013-2023 Cole Bemis.
-                        // See THIRD_PARTY_NOTICES.md.  Verbatim from the
-                        // 24x24 source, with the polyline written as an
-                        // equivalent path; keep them that way so the icon
-                        // can be diffed against upstream.
-                        readonly property string arrowPath: "M1 4 L1 10 L7 10"
-                        readonly property string ringPath:
-                            "M3.51 15a9 9 0 1 0 2.13-9.36L1 10"
-                        readonly property real viewBox: 24
-                        readonly property real strokeWidth: 2
-                        // Fraction of the button the 24-unit box spans.
-                        readonly property real boxFraction: 0.70
+                        paths: ["M1 4 L1 10 L7 10",
+                                "M3.51 15a9 9 0 1 0 2.13-9.36L1 10"]
+                        boxFraction: 0.70
                         // The composition is not centred in its own viewBox:
                         // the corner arrow sits outside the ring at the top
                         // left, which puts the ink's centre one unit to the
-                        // left of the box's.  Measured, not guessed, and
-                        // corrected here so the icon is centred by *ink*,
-                        // which is what the eye reads, rather than by a box
-                        // it cannot see.
-                        readonly property real inkOffsetX: 1
-
-                        property color inkColor: clearCtxBtn.containsMouse
-                                                 ? root.themeTextColor : "#bbb"
-                        onInkColorChanged: requestPaint()
-
-                        onPaint: {
-                            var ctx = getContext("2d")
-                            ctx.reset()
-                            var box = width * boxFraction
-                            var scale = box / viewBox
-                            ctx.save()
-                            ctx.translate((width - box) / 2 + inkOffsetX * scale,
-                                          (height - box) / 2)
-                            ctx.scale(scale, scale)
-                            ctx.strokeStyle = inkColor
-                            ctx.lineWidth = strokeWidth
-                            ctx.lineCap = "round"
-                            ctx.lineJoin = "round"
-                            ctx.path = arrowPath
-                            ctx.stroke()
-                            ctx.path = ringPath
-                            ctx.stroke()
-                            ctx.restore()
-                        }
+                        // left of the box's.  Measured, not guessed.
+                        inkOffsetX: 1
+                        ink: clearCtxBtn.containsMouse ? root.themeTextColor : "#bbb"
                     }
 
                     MouseArea {
@@ -1955,6 +2008,7 @@ Window {
 
                     Behavior on color { ColorAnimation { duration: 100 } }
                     Behavior on border.color { ColorAnimation { duration: 100 } }
+                }
                 }
 
             }
@@ -2780,7 +2834,7 @@ Window {
             // different snippet.
             function identityOf(idx) {
                 var s = snippetList[idx]
-                return s ? s.label + " " + s.value : ""
+                return s ? s.label + "\u0000" + s.value : ""
             }
             property string menuIdentity: ""
             property string editIdentity: ""
@@ -2883,6 +2937,32 @@ Window {
 
             function activeField() {
                 return editTarget === "label" ? snipLabelField : snipValueField
+            }
+
+            // Tab between the two fields, selecting what is there.  Selecting
+            // matches every other form on this OS, and it earns its keep here
+            // specifically: replacing a value wholesale is the common edit,
+            // and the alternative is holding Backspace over an address.
+            // `onEditKeyTyped` already replaces a selection on the next
+            // character, so nothing else has to know about this.
+            function focusOtherField() {
+                editTarget = (editTarget === "label") ? "value" : "label"
+                var f = activeField()
+                f.forceActiveFocus()
+                f.selectAll()
+            }
+
+            // Arrow / Home / End with Shift held extends the selection
+            // instead of dropping it, the way it does in any text box.  The
+            // caller passes where the caret is going; whether that is a move
+            // or a selection is this one decision, made once.
+            //
+            // `root.shiftOn` is still true here: the bridge's edit-mode
+            // intercept emits and returns before the auto-release block that
+            // ordinarily clears a sticky modifier after a keystroke.
+            function moveCaret(f, to) {
+                if (root.shiftOn) f.moveCursorSelection(to)
+                else f.cursorPosition = to
             }
 
             function openList() {
@@ -3012,14 +3092,21 @@ Window {
                     } else if (name === "delete") {
                         if (f.selectedText) f.remove(f.selectionStart, f.selectionEnd)
                         else if (pos < len) f.remove(pos, pos + 1)
+                    } else if (name === "tab") {
+                        // Tab moves between the two fields. Without this it
+                        // did nothing at all, which on a keyboard whose
+                        // window cannot hold OS focus means there was no
+                        // key-driven way to change field: the only route was
+                        // landing a click on the other box.
+                        snippetsWindow.focusOtherField()
                     } else if (name === "left") {
-                        f.cursorPosition = Math.max(0, pos - 1)
+                        snippetsWindow.moveCaret(f, Math.max(0, pos - 1))
                     } else if (name === "right") {
-                        f.cursorPosition = Math.min(len, pos + 1)
+                        snippetsWindow.moveCaret(f, Math.min(len, pos + 1))
                     } else if (name === "home") {
-                        f.cursorPosition = 0
+                        snippetsWindow.moveCaret(f, 0)
                     } else if (name === "end") {
-                        f.cursorPosition = len
+                        snippetsWindow.moveCaret(f, len)
                     } else if (name === "space") {
                         if (f.selectedText) f.remove(f.selectionStart, f.selectionEnd)
                         f.insert(f.cursorPosition, " ")
@@ -3730,6 +3817,7 @@ Window {
                     }
                     TextField {
                         id: snipLabelField
+                        objectName: "snipLabelField"
                         Layout.fillWidth: true
                         Layout.preferredHeight: 36
                         color: snippetsWindow.txt; font.pixelSize: 14
@@ -3742,10 +3830,24 @@ Window {
                                           ? root.themeAccent : root.themeBorder
                             border.width: snippetsWindow.editTarget === "label" ? 2 : 1
                         }
+                        // Records which field the OSK types into, then gets
+                        // out of the way.  Accepting the press swallowed it,
+                        // and the field underneath is what places the caret,
+                        // selects a word on a double click, selects a line on
+                        // a triple click and drag-selects.  All four were
+                        // dead: the whole point of a MouseArea is that it
+                        // takes the event, and this one covered the text.
+                        // `selectByMouse` was true the entire time and
+                        // `selectWord()` worked when called directly, so
+                        // nothing was missing except the events themselves.
                         MouseArea {
                             anchors.fill: parent
                             cursorShape: Qt.IBeamCursor
-                            onClicked: { snippetsWindow.editTarget = "label"; snipLabelField.forceActiveFocus() }
+                            onPressed: function(mouse) {
+                                snippetsWindow.editTarget = "label"
+                                snipLabelField.forceActiveFocus()
+                                mouse.accepted = false
+                            }
                         }
                     }
 
@@ -3755,6 +3857,7 @@ Window {
                     }
                     TextField {
                         id: snipValueField
+                        objectName: "snipValueField"
                         Layout.fillWidth: true
                         Layout.preferredHeight: 36
                         color: snippetsWindow.txt; font.pixelSize: 14
@@ -3767,16 +3870,21 @@ Window {
                                           ? root.themeAccent : root.themeBorder
                             border.width: snippetsWindow.editTarget === "value" ? 2 : 1
                         }
+                        // Pass-through, exactly as on the label field above.
                         MouseArea {
                             anchors.fill: parent
                             cursorShape: Qt.IBeamCursor
-                            onClicked: { snippetsWindow.editTarget = "value"; snipValueField.forceActiveFocus() }
+                            onPressed: function(mouse) {
+                                snippetsWindow.editTarget = "value"
+                                snipValueField.forceActiveFocus()
+                                mouse.accepted = false
+                            }
                         }
                     }
 
                     Text {
                         Layout.fillWidth: true
-                        text: qsTr("Type with the keyboard below. The highlighted box is where text goes. Tap the other box to switch.")
+                        text: qsTr("Type with the keyboard below. The highlighted box is where text goes. Tab or tap the other box to switch. Double-click a word to select it.")
                         color: snippetsWindow.faint; font.pixelSize: 10
                         wrapMode: Text.WordWrap
                     }

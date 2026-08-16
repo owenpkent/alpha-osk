@@ -26,6 +26,14 @@ Canvas {
     property var paths: []
     // Fraction of the item's smaller side the 24-unit box spans.
     property real boxFraction: 1.0
+    // Optical correction, in viewBox units, for a composition whose ink is
+    // not centred in its own 24-unit box. Feather's rotate-ccw is the case
+    // this exists for: it puts the corner arrow outside the ring, which
+    // leaves the ink's centre one unit left of the box's, so centring by
+    // the box leaves the icon looking off-centre. Measure it from a render
+    // rather than guessing, and leave it at 0 for an icon that is already
+    // centred in its box, which most are.
+    property real inkOffsetX: 0
 
     readonly property real viewBox: 24
 
@@ -41,6 +49,7 @@ Canvas {
     onPathsChanged: requestPaint()
     onStrokeWidthChanged: requestPaint()
     onBoxFractionChanged: requestPaint()
+    onInkOffsetXChanged: requestPaint()
 
     onPaint: {
         var ctx = getContext("2d")
@@ -48,7 +57,8 @@ Canvas {
         var box = Math.min(width, height) * boxFraction
         var scale = box / viewBox
         ctx.save()
-        ctx.translate((width - box) / 2, (height - box) / 2)
+        ctx.translate((width - box) / 2 + icon.inkOffsetX * scale,
+                      (height - box) / 2)
         ctx.scale(scale, scale)
         ctx.strokeStyle = icon.ink
         ctx.lineWidth = icon.strokeWidth

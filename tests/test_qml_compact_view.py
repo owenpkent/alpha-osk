@@ -828,8 +828,7 @@ class TestPanelsSitFlushWithTheGrid:
         key_w = root.property("keyW")
         for key in fn_keys:
             assert key.width() == pytest.approx(key_w, abs=1.0), (
-                f"an F-key is {key.width():.0f} px wide against a grid key of "
-                f"{key_w:.0f} px"
+                f"an F-key is {key.width():.0f} px wide against a grid key of {key_w:.0f} px"
             )
         assert _real_warnings(warnings) == []
 

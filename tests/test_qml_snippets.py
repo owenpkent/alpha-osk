@@ -29,7 +29,14 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 # libEGL / libGL at module scope, and an ImportError there aborts the whole
 # run as a collection error rather than failing this module.
 try:
-    from PySide6.QtCore import QCoreApplication, QObject, QSettings, Qt, QUrl  # noqa: E402
+    from PySide6.QtCore import (  # noqa: E402
+        QCoreApplication,
+        QObject,
+        QPointF,
+        QSettings,
+        Qt,
+        QUrl,
+    )
     from PySide6.QtGui import QGuiApplication  # noqa: E402
     from PySide6.QtQml import QQmlApplicationEngine  # noqa: E402
 
@@ -38,6 +45,7 @@ try:
     # for 'QQuickItem*'". Walking the visual tree is the only way to reach a
     # Repeater's delegates.
     from PySide6.QtQuick import QQuickItem  # noqa: E402,F401
+    from PySide6.QtTest import QTest  # noqa: E402
 except ImportError as exc:  # pragma: no cover - environment-dependent
     pytest.skip(
         f"Qt GUI libraries unavailable ({exc}); install libegl1/libgl1 to run "
@@ -696,6 +704,146 @@ class TestSavingReportsWhetherItSaved:
         _fill(bridge, window, 2)
         assert bridge.setSnippet(0, "hello", "world") is True
         assert bridge.getSnippets()[0]["value"] == "world"
+
+
+class TestTheEditorSupportsOrdinaryTextEditing:
+    """Reported: double-click does not select, and Tab does nothing.
+
+    This window cannot hold OS focus (``WindowDoesNotAcceptFocus``), so
+    every text interaction is either routed through the edit-mode signals
+    or handled by the field itself, and both halves had a hole.
+
+    The mouse half is the one worth remembering. ``selectByMouse`` was
+    true the whole time and ``selectWord()`` worked when invoked
+    directly, so nothing was missing except the events: each field
+    carried a ``MouseArea`` filling it, whose entire job is to take the
+    press. Caret placement, double-click word selection, triple-click
+    and drag-select were all dead behind it, and no test noticed because
+    the suite drove the fields through their QML API.
+    """
+
+    @staticmethod
+    def _editor(window, bridge, value: str = "hello world here"):
+        _fill(bridge, window, 3)
+        bridge.setSnippet(1, "Email", value)
+        window.refresh()
+        window.beginEdit(1)
+        QCoreApplication.processEvents()
+        field = _find_named(window, "snipValueField")
+        assert field is not None, "snipValueField not found in the editor"
+        return field
+
+    def test_a_double_click_selects_a_word(self, snippets_window):
+        window, bridge, warnings = snippets_window
+        field = self._editor(window, bridge)
+
+        # Over the first word rather than the middle of the box: the text
+        # is left-aligned, so the centre of a 300-odd px field is past
+        # the end of a short value and would select nothing even when
+        # this works.
+        point = field.mapToScene(QPointF(24.0, field.height() / 2)).toPoint()
+        QTest.mouseDClick(window, Qt.LeftButton, Qt.NoModifier, point)
+        QCoreApplication.processEvents()
+
+        assert field.property("selectedText") == "hello", (
+            "double-click selected "
+            f"{field.property('selectedText')!r}; the MouseArea over the "
+            "field is taking the press before the text input sees it"
+        )
+        assert _real_warnings(warnings) == []
+
+    def test_a_single_click_places_the_caret(self, snippets_window):
+        """The same swallowed press, in its quieter form.
+
+        Clicking into the middle of a value to fix one character put the
+        caret nowhere: it stayed wherever it happened to be.
+        """
+        window, bridge, _w = snippets_window
+        field = self._editor(window, bridge)
+        field.setProperty("cursorPosition", 0)
+
+        point = field.mapToScene(QPointF(60.0, field.height() / 2)).toPoint()
+        QTest.mouseClick(window, Qt.LeftButton, Qt.NoModifier, point)
+        QCoreApplication.processEvents()
+
+        assert field.property("cursorPosition") > 0, "the caret did not move to the click"
+
+    def test_clicking_a_field_still_aims_the_keyboard_at_it(self, snippets_window):
+        """The inverse of the fix: passing the press through must not lose
+        the bookkeeping the press was there for in the first place."""
+        window, bridge, _w = snippets_window
+        self._editor(window, bridge)
+        window.setProperty("editTarget", "value")
+
+        label = _find_named(window, "snipLabelField")
+        point = label.mapToScene(QPointF(24.0, label.height() / 2)).toPoint()
+        QTest.mouseClick(window, Qt.LeftButton, Qt.NoModifier, point)
+        QCoreApplication.processEvents()
+
+        assert window.property("editTarget") == "label"
+
+    def test_tab_moves_to_the_other_field(self, snippets_window):
+        window, bridge, _w = snippets_window
+        self._editor(window, bridge)
+        assert window.property("editTarget") == "value"
+
+        bridge.pressSpecialKey("tab")
+        QCoreApplication.processEvents()
+        assert window.property("editTarget") == "label"
+
+        bridge.pressSpecialKey("tab")
+        QCoreApplication.processEvents()
+        assert window.property("editTarget") == "value", "Tab does not cycle back"
+
+    def test_tab_selects_the_field_it_lands_on(self, snippets_window):
+        """So the common edit, replacing a value outright, is one gesture
+        rather than holding Backspace over an address."""
+        window, bridge, _w = snippets_window
+        self._editor(window, bridge)
+
+        bridge.pressSpecialKey("tab")
+        QCoreApplication.processEvents()
+        label = _find_named(window, "snipLabelField")
+        assert label.property("selectedText") == "Email"
+
+    def test_typing_after_tab_replaces_the_selection(self, snippets_window):
+        """The end-to-end reason the selection matters."""
+        window, bridge, _w = snippets_window
+        self._editor(window, bridge)
+
+        bridge.pressSpecialKey("tab")
+        QCoreApplication.processEvents()
+        bridge.pressKey("x")
+        QCoreApplication.processEvents()
+
+        label = _find_named(window, "snipLabelField")
+        assert label.property("text") == "x"
+
+    def test_shift_and_arrow_extends_the_selection(self, snippets_window):
+        window, bridge, _w = snippets_window
+        field = self._editor(window, bridge)
+        field.setProperty("cursorPosition", 0)
+
+        bridge.toggleShift()
+        for _ in range(5):
+            bridge.pressSpecialKey("right")
+        QCoreApplication.processEvents()
+
+        assert field.property("selectedText") == "hello", (
+            "Shift with an arrow key moved the caret instead of selecting"
+        )
+
+    def test_an_arrow_without_shift_still_just_moves(self, snippets_window):
+        """The inverse half: selection must not become the default."""
+        window, bridge, _w = snippets_window
+        field = self._editor(window, bridge)
+        field.setProperty("cursorPosition", 0)
+
+        bridge.pressSpecialKey("right")
+        QCoreApplication.processEvents()
+
+        assert field.property("selectedText") == ""
+        assert field.property("cursorPosition") == 1
 
 
 class TestTheRestoredPositionIsClampedToTheWholeDesktop:
