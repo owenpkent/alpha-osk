@@ -73,7 +73,28 @@ class TestFactory:
 
 
 class TestConfigPaths:
-    """Configuration directory helpers."""
+    """Configuration directory helpers.
+
+    This class exists to test ``get_config_dir`` / ``get_model_dir``
+    themselves, so it opts out of ``tests/conftest.py``'s autouse
+    ``_stay_off_the_real_config_dir`` fixture by restoring the real
+    function for the duration of every test here: the module-level
+    import above (``from src.platform import ... get_config_dir,
+    get_model_dir``) captured the pristine function object before that
+    fixture ever runs, so re-assigning it back onto ``src.platform`` is
+    just handing the module its own original attribute again, not
+    reaching into another test's private state.  Without this,
+    ``get_model_dir()`` (which looks up ``get_config_dir()`` unqualified
+    from inside ``src/platform``, so it always resolves through whatever
+    the module attribute currently is) would return a path under the
+    fake directory while a direct ``get_config_dir()`` call in the same
+    test -- bound straight to the original object -- returns the real
+    one, and the two stop agreeing on which directory nests inside which.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _use_the_real_config_dir(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr("src.platform.get_config_dir", get_config_dir)
 
     def test_get_config_dir_returns_path(self):
         result = get_config_dir()

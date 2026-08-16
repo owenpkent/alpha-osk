@@ -89,6 +89,57 @@ def _no_real_update_relauncher(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(updater, "_spawn_relauncher", lambda *a, **kw: True)
 
 
+@pytest.fixture(autouse=True)
+def _stay_off_the_real_config_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Stop the suite reading or writing the developer's real config directory.
+
+    ``KeyboardBridge()`` and ``HybridPredictor()`` are constructed for real
+    across several test modules (``tests/test_layouts.py``,
+    ``tests/test_snippets.py``, the QML fuzz/property suites, and more),
+    and both resolve their storage through ``get_config_dir()`` /
+    ``get_model_dir()`` in ``src/platform``, which on a dev box is the real
+    ``%APPDATA%/alpha-osk``.  That has already produced two defects: a word
+    the developer had genuinely typed and learned outranked a candidate a
+    test had just taught the engine (green on CI, which has no such file,
+    red on the one machine that does), and the snippet auto-detection
+    tests were overwriting the developer's real saved email and phone
+    number with no undo.  ``tests/test_keyboard_bridge.py::bridge`` already
+    works around both by hand, for the one fixture it covers; this closes
+    the same hole for every other place a bridge or predictor gets built.
+
+    ``get_model_dir()`` looks up ``get_config_dir()`` unqualified from
+    inside ``src/platform``, so patching the one name there covers both.
+    Most other callers import ``get_config_dir`` *inside* the function that
+    uses it, which resolves against ``src.platform`` at call time and is
+    covered by the same patch.  Two modules bind their own copy at import
+    time instead (``from .platform import get_config_dir`` at module
+    scope) and need patching directly, or they keep reading the real path
+    through their own reference: ``src.snippets`` (``SnippetStore()``'s
+    default constructor) and ``src.keyboard_app``.
+
+    A test that wants the real function needs no opt-out: it just has to
+    import ``get_config_dir`` by name, the way ``tests/test_platform.py``
+    does at module load, before this fixture ever runs. That captures the
+    original function object directly, which this fixture's
+    ``monkeypatch.setattr`` calls (module *attribute* assignments) never
+    touch. A test that wants a different fake path patches the same
+    dotted name and wins, same as the other autouse guards here.
+    """
+    fake_config_dir = tmp_path / "fake-appdata" / "alpha-osk"
+
+    def _fake_get_config_dir() -> Path:
+        fake_config_dir.mkdir(parents=True, exist_ok=True)
+        return fake_config_dir
+
+    monkeypatch.setattr("src.platform.get_config_dir", _fake_get_config_dir)
+    monkeypatch.setattr("src.snippets.get_config_dir", _fake_get_config_dir)
+    try:
+        import src.keyboard_app  # noqa: F401  -- needs PySide6 to import at all
+    except ImportError:  # pragma: no cover - PySide6 missing in this environment
+        return
+    monkeypatch.setattr("src.keyboard_app.get_config_dir", _fake_get_config_dir)
+
+
 @pytest.fixture
 def tmp_model_dir(tmp_path: Path) -> Path:
     """Temporary directory for model files."""
