@@ -12,6 +12,7 @@
 #include <QAction>
 #include <QApplication>
 #include <QDir>
+#include <QFile>
 #include <QIcon>
 #include <QMenu>
 #include <QQmlApplicationEngine>
@@ -80,6 +81,34 @@ int main(int argc, char *argv[])
         for (const QVariant &s : snippets.getAll())
             labels << s.toMap().value("label").toString();
         out << "snippets -> " << labels.join(", ") << "\n";
+
+        // Colour tags, against a scratch file rather than the user's own:
+        // every call below mutates and saves, so pointing this at the real
+        // snippets.json would rewrite it.
+        //
+        // What is being checked is the pair of rules the tag model rests on.
+        // An unrecognised name must become untagged rather than reaching a
+        // QML `color` property verbatim (snippets.json is replace-on-import
+        // from an archive the user picked). And set() must leave an existing
+        // tag alone, because the editor saves label and value only and would
+        // otherwise silently clear a tag set from the actions sheet.
+        {
+            const QString tmpSnips = QDir::temp().filePath("alpha-osk-selftest-snippets.json");
+            QFile::remove(tmpSnips);
+            SnippetStore s(tmpSnips);
+            s.setColor(0, QStringLiteral("  BLUE "));   // normalised
+            s.setColor(1, QStringLiteral("#ff0000"));   // off-list -> untagged
+            s.set(0, QStringLiteral("Work"), QStringLiteral("owen@alphaosk.dev"));
+
+            SnippetStore reloaded(tmpSnips);
+            const QVariantList all = reloaded.getAll();
+            out << "snippet colours -> kept=" << all.at(0).toMap().value("color").toString()
+                << " rejected=\"" << all.at(1).toMap().value("color").toString() << "\""
+                << " unchanged-returns-false=" << (s.setColor(0, QStringLiteral("blue")) ? 0 : 1)
+                << " names=" << SnippetStore::colorNames().join(QStringLiteral("|"))
+                << " limit=" << SnippetStore::maxSnippets() << "\n";
+            QFile::remove(tmpSnips);
+        }
 
         TypingAnalytics analytics;
         for (int i = 0; i < 10; ++i)

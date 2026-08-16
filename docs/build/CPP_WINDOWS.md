@@ -52,16 +52,34 @@ hits a missing-member error at runtime.
 
 ## Toolchain (one-time)
 
-CMake, Ninja, Qt 6.5 (msvc2019_64), and the MSVC compiler (Visual Studio 2019
-Build Tools). The pip route needs no Qt account:
+CMake, Qt 6.8 LTS (msvc2022_64), and the MSVC compiler. The pip route needs no
+Qt account:
 
 ```powershell
 pip install cmake ninja aqtinstall
-python -m aqt install-qt windows desktop 6.5.3 win64_msvc2019_64 --outputdir C:\Qt
+python -m aqt install-qt windows desktop 6.8.3 win64_msvc2022_64 --outputdir C:\Qt ^
+    --archives qtbase qtdeclarative qtshadertools qtsvg qttools ^
+    --modules qtmultimedia qtimageformats
 ```
 
-Qt 6.5 LTS is chosen because its prebuilt binaries are `win64_msvc2019_64`,
-exactly matching the VS2019 Build Tools (zero ABI risk, no compiler upgrade).
+**Match the Qt build to the compiler you actually have.** Qt's prebuilt
+binaries are named for the MSVC version they were built with, and the pairing
+is what keeps the ABI risk at zero: `win64_msvc2019_64` for the VS2019 Build
+Tools, `win64_msvc2022_64` for VS2022 or newer. Qt 6.5 LTS (the version this
+document originally specified) only ships `msvc2019_64`, so on a machine with
+VS2022 and no VS2019 the right move is to move Qt forward rather than install
+an older compiler. Verified end to end on Qt 6.8.3 / `msvc2022_64` /
+VS2022 17.14 (MSVC 19.44) / CMake 4.3.4: configure, build, and `--selftest` all
+clean, no warnings.
+
+The `--archives` list is the minimum that satisfies the `find_package` line in
+`CMakeLists.txt`: `qtbase` carries Core / Gui / Widgets / Network, `qtdeclarative`
+carries Qml / Quick / QuickControls2, and `qtshadertools` is what `qtdeclarative`
+needs at build time. Omitting them installs the full default set instead, which
+works and is several GB larger. `qtmultimedia` is **not** required (key-click
+audio goes through Win32 `PlaySound`); it is listed only because it is cheap and
+saves a reinstall if that ever changes.
+
 `cmake` and `ninja` install as pip wheels into the Python `Scripts` directory;
 add that directory to `PATH` for the build commands if it isn't already.
 
@@ -71,9 +89,24 @@ The Visual Studio generator locates the MSVC toolchain itself, so no `vcvars`
 sourcing is needed:
 
 ```powershell
-cmake -S . -B build-cpp -G "Visual Studio 16 2019" -A x64 -DCMAKE_PREFIX_PATH=C:/Qt/6.5.3/msvc2019_64
+cmake -S . -B build-cpp -G "Visual Studio 17 2022" -A x64 -DCMAKE_PREFIX_PATH=C:/Qt/6.8.3/msvc2022_64
 cmake --build build-cpp --config Release
 ```
+
+Running the result needs Qt's DLLs on `PATH` (`C:\Qt.8.3\msvc2022_64in`)
+unless you have run `windeployqt` against it. The headless engine check is the
+quickest way to confirm a build is sound without a window appearing:
+
+```powershell
+$env:PATH = "C:\Qt.8.3\msvc2022_64in;$env:PATH"
+.uild-cpp\Releaselpha-osk.exe --selftest
+```
+
+`--selftest` is deliberately **read-only against the user's real data**: it
+loads the live model and lists snippet labels, and the data-backup leg exports
+to a temp zip and inspects it rather than importing. The one part that mutates
+(the snippet colour-tag check) points at a scratch file in `%TEMP%`, because
+every call in it saves. Keep it that way when adding to it.
 
 Use a dedicated `build-cpp/` directory (gitignored). Do **not** build into
 `build/` — that holds the committed Python packaging pipeline
