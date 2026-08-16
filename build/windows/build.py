@@ -621,6 +621,22 @@ OutFile "{release_dir_nsis}\\{installer_name}.exe"
 ; prefers a present InstallDirRegKey value over the InstallDir default.
 InstallDir "${{INSTALL_DIR}}"
 RequestExecutionLevel admin
+
+; --- Version resource ---
+; Load-bearing, not metadata.  src/updater.py::_verify_signature reads
+; this installer's own embedded FileVersion and refuses to run it unless
+; it matches the release the updater asked for, precisely so a renamed
+; or re-uploaded asset cannot roll users back onto an older signed
+; build.  An installer with no version resource reports an empty string,
+; which fails that check closed: it is rejected exactly like a forgery.
+; NSIS requires VIProductVersion to carry all four components.
+VIProductVersion "{version}.0"
+VIAddVersionKey /LANG=1033 "ProductName" "${{APP_NAME}}"
+VIAddVersionKey /LANG=1033 "FileVersion" "{version}.0"
+VIAddVersionKey /LANG=1033 "ProductVersion" "{version}.0"
+VIAddVersionKey /LANG=1033 "CompanyName" "${{APP_PUBLISHER}}"
+VIAddVersionKey /LANG=1033 "LegalCopyright" "Copyright (C) ${{APP_PUBLISHER}}"
+VIAddVersionKey /LANG=1033 "FileDescription" "${{APP_NAME}} Setup"
 {icon_line}
 {unicon_line}
 
@@ -814,6 +830,60 @@ def sign_installer(installer_path: Path, signtool_path: str) -> bool:
         return False
 
 
+def verify_installer_version() -> bool:
+    """Check the installer embeds the version the auto-updater expects.
+
+    ``src/updater.py::_verify_signature`` reads the downloaded
+    installer's own embedded ``FileVersion`` and refuses to run it unless
+    the first three components match the release it asked for.  An
+    installer built without a version resource reports an empty string
+    and is rejected exactly like a forged one, which does not fail here
+    at build time or there at download time in any visible way: the
+    update simply never installs, for every user, with one line in a log
+    file to say why.  So it is checked here, on the artefact, rather than
+    trusted to the NSIS script having been right.
+
+    Read through PowerShell deliberately, because that is how the
+    updater reads it.  A check that agrees with the code it guards only
+    by construction is a check that can drift away from it.
+    """
+    step("Checking embedded installer version...")
+    from src.__version__ import __version__ as version
+
+    installer = RELEASE_DIR / f"Alpha-OSK-Setup-{version}.exe"
+    if not installer.exists():
+        warning(f"Installer not found, skipping version check: {installer.name}")
+        return True
+
+    escaped = str(installer).replace("'", "''")
+    try:
+        # CREATE_NO_WINDOW: powershell is console-mode + we suppress its
+        # output via capture_output, so without this flag a build started
+        # from a GUI shell pops an empty console.
+        result = subprocess.run(
+            [
+                "powershell", "-NoProfile", "-NonInteractive", "-Command",
+                f"(Get-Item -LiteralPath '{escaped}').VersionInfo.FileVersion",
+            ],
+            capture_output=True, text=True, timeout=60,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        error(f"Could not read embedded version: {exc}")
+        return False
+
+    embedded = result.stdout.strip()
+    if embedded.split(".")[:3] != version.split(".")[:3]:
+        error(
+            f"Installer embeds FileVersion {embedded!r}, expected {version!r}. "
+            "The auto-updater will refuse this installer."
+        )
+        return False
+
+    success(f"Installer embeds FileVersion {embedded}")
+    return True
+
+
 def verify_build(signtool_path: str) -> bool:
     """Verify signatures on the main exe and installer."""
     header("Verifying Signatures")
@@ -821,7 +891,7 @@ def verify_build(signtool_path: str) -> bool:
     sys.path.insert(0, str(SCRIPT_DIR))
     from sign import verify_file
 
-    all_ok = True
+    all_ok = verify_installer_version()
 
     # Verify main exe
     main_exe = DIST_DIR / "alpha-osk.exe"
