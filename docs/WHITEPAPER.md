@@ -369,6 +369,8 @@ Two properties make signal 4 tractable. Ownership is resolved by process id rath
 
 Signal 4 is coarser than the three it backs up: a click on a toolbar button or a scrollbar moves no caret, and resetting there costs a next-word suggestion. This is an asymmetric trade taken deliberately. A missed reset corrupts text; a spurious reset costs one suggestion. It also inherits the guard from (3) of never firing mid-word, since clearing `_current_word` while its characters remain on screen makes the next pill insertion duplicate them.
 
+Two further signals are not polled at all, because the keyboard is the thing causing the move and therefore already knows. **Tab** and **the cursor-motion keys** (the arrows, Home, End, PageUp, PageDown) each reset the mirror directly when the user presses them. These are the only two signals in the set that behave identically on every platform, since they require nothing from the host beyond the keystroke the user just asked for, and they cover the case the polled signals are weakest at: a caret move inside a single control, in an application exposing no accessibility information, performed without touching the mouse. Both clear the suggestion row in the same operation, which is what distinguishes them from signal 3's deliberate refusal to fire mid-word: that refusal exists because clearing the buffers while leaving a populated row on screen invites an insertion beside its own prefix, and clearing both together cannot produce that state. Delete is deliberately excluded, since it removes the character following the caret and leaves the run preceding it, which is the only thing the mirror describes, unchanged.
+
 ---
 
 ## 5. Privacy and Security

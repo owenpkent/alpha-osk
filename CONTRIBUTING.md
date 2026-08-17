@@ -124,6 +124,21 @@ tests:
 - **`python check.py --serial` reproduces a failure in one process**, which
   is the first thing to try when a test passes alone and fails in a run.
 
+CI shards the same way, so a green local run and a green CI run now cost
+about the same and mean the same thing. It also cancels a run that a
+newer push has superseded, so pushing a few commits in a row gives you
+one result for the tip rather than several stale ones arriving out of
+order.
+
+One asymmetry to know about, because it has bitten: a test that **skips**
+on your machine and runs on CI is a hole in that promise. The pill-width
+tests skip when Qt resolves a fixed-width placeholder font, which it does
+under the offscreen platform unless pointed at real fonts, and for a while
+that meant seven of them ran on Linux CI and nowhere else. `conftest.py`
+sets `QT_QPA_FONTDIR` on Windows to close that one. If you add a test that
+skips itself on a capability, check whether the capability can be supplied
+instead.
+
 ## Architecture orientation
 
 The single most useful file to read first is
