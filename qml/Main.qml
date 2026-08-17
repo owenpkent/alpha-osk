@@ -43,10 +43,9 @@ Window {
         // Flash a small bubble above a key showing the character it just
         // typed (left- or right-click).  Mobile-keyboard "key preview".
         property bool savedKeyPreview: true
-        // Hold a letter or digit to repeat it. Off by default; see the
-        // `characterRepeat` property for why that default is a decision
-        // rather than caution.
-        property bool savedCharacterRepeat: false
+        // Hold a letter or digit to repeat it. See the `characterRepeat`
+        // property for why the default moved to on.
+        property bool savedCharacterRepeat: true
         property bool savedAutoCheckUpdates: true
         // Hold-to-repeat timing (Backspace, arrow keys, Delete, PgUp/PgDn).
         // Defaults match KeyButton.qml's hardcoded values.  Exposed in
@@ -468,16 +467,22 @@ Window {
     property bool keyPreviewEnabled: appSettings.savedKeyPreview
 
     // Hold a letter or digit to repeat it, the way a physical keyboard
-    // does.  Off by default, and the reason it is a setting rather than
-    // simply on is the shape of the gesture here: a mouse-driven key is
+    // does.  **On by default**, which reverses the position KeyButton.qml
+    // argued for, and the reversal was the user's call rather than a
+    // change of mind about the risk.
+    //
+    // The risk is real and worth keeping in view: a mouse-driven key is
     // held by *not letting go* of the button, and a slow release is
-    // ordinary on this keyboard rather than a mistake.  Backspace and the
-    // arrows have always repeated, because there the worst case is one
-    // extra deletion the user can see; an extra "a" mid-word is a typo
-    // that the prediction engine then learns from.  The warm-up grace in
-    // KeyButton means the repeat only starts after a deliberate hold, so
-    // switching this on is safe; leaving it off means people who would
-    // only ever meet it by accident never do.
+    // ordinary on this keyboard rather than a mistake, so a repeating
+    // letter can turn one intended character into several.  What settles
+    // it is that the person it protects is the person who asked for the
+    // opposite, twice, having met the absence of it as a bug.  A setting
+    // they have to go and find is not a neutral default; it is the
+    // feature being off for everyone who does not know it exists.
+    //
+    // Still a setting, so it can be turned off by anyone the original
+    // argument does describe, and the warm-up grace in KeyButton keeps
+    // the repeat from starting until roughly 800 ms of deliberate hold.
     property bool characterRepeat: appSettings.savedCharacterRepeat
 
     // Two registries, both populated by each KeyButton on creation. They are

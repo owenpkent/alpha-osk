@@ -760,20 +760,26 @@ class TestHoldingALetterRepeatsOnlyWhenAskedFor:
                 out.setdefault(str(name), item.property("enableRepeat"))
         return out
 
-    def test_off_by_default_a_letter_does_not_repeat(self, qml_root) -> None:
+    def test_on_by_default_a_letter_repeats(self, qml_root) -> None:
+        """The default moved to on at the user's request, having met the
+        absence of it as a bug. A setting you have to go and find is not a
+        neutral default; it is the feature being off for everyone who does
+        not know it exists."""
         root, warnings, _ = qml_root
         _pump_until(lambda: len(self._repeat_flags(root)) > 0)
 
         flags = self._repeat_flags(root)
-        assert flags.get("a") is False, "a letter armed the repeat timer by default"
+        assert flags.get("a") is True, "a letter did not arm the repeat timer"
         assert _real_warnings(warnings) == []
 
-    def test_turning_it_on_arms_the_letters(self, qml_root) -> None:
+    def test_turning_it_off_disarms_the_letters(self, qml_root) -> None:
+        """Off is still reachable, for anyone the original argument does
+        describe: a grip that cannot release inside the warm-up grace."""
         root, _, _ = qml_root
-        root.setProperty("characterRepeat", True)
+        root.setProperty("characterRepeat", False)
         _pump_until(lambda: len(self._repeat_flags(root)) > 0)
 
-        assert self._repeat_flags(root).get("a") is True
+        assert self._repeat_flags(root).get("a") is False
 
     @pytest.mark.parametrize("setting", [False, True])
     def test_backspace_repeats_either_way(self, qml_root, setting: bool) -> None:
