@@ -868,21 +868,30 @@ class TestPanelsSitFlushWithTheGrid:
             )
         assert _real_warnings(warnings) == []
 
-    def test_function_keys_are_one_grid_column_wide(self, qml_root) -> None:
-        """The F-row's shape, chosen by rendering the alternatives.
+    def test_function_row_matches_the_widest_keyboard_row(self, qml_root) -> None:
+        """Real geometry, not the identity assertion this replaced.
 
-        The row is 12 keys against a grid of 15.5 columns (13 compact), so
-        it cannot both fill the width and keep its keys one column wide.
-        The inset was reported as a bug and three ways of filling it were
-        built and photographed: the leftover on two group gaps (108 px
-        chasms, keys in islands), that gap capped (still inset, so it fixed
-        nothing), and all twelve keys stretched (a third wider than the
-        number key below while staying 30% shorter, reading as flat bars).
+        `keyWidth: fnRow.keyW` binds straight through to `root.keyW`, and a
+        plain `Row` never resizes a child, so `key.width() == root.keyW` by
+        construction: reading that value from both sides and comparing them
+        cannot fail. This measures something that can: the row's rendered
+        total width against the width its own documented geometry implies,
+        built from the SAME `keyW`/`keySpacing` the keyboard grid below it
+        uses.
 
-        Side by side the original won, and this pins the half that matters:
-        an F-key is the same width as the key under it. The empty space at
-        the ends is the accepted cost. **Do not assert the row fills the
-        grid**, which is what the three attempts each tried to satisfy.
+        Unlike the Number Row, this panel is deliberately narrower than the
+        grid (12 keys against a 13/15.5-unit grid; see the design note in
+        FunctionRow.qml), so plain equality with the widest row is the wrong
+        assertion here - that is the property the three rejected redesigns
+        each tried to satisfy, and photographing them side by side is why
+        they were reverted. What has to hold instead is the row's own
+        formula: 12 keys, 9 ordinary gaps inside the three 4-key groups, and
+        two group gaps (the row's own spacing on both sides of a
+        keySpacing*2 spacer) worth 4*keySpacing each. A wrong key count, a
+        resized spacer, or a changed group gap all move the rendered width
+        off that formula, and the row must also stay strictly narrower than
+        the grid, since drifting up to (or past) it is exactly the shape the
+        rejected redesigns had.
         """
         root, warnings, _ = qml_root
         root.setProperty("showNavigation", False)
@@ -893,26 +902,29 @@ class TestPanelsSitFlushWithTheGrid:
             root.setProperty("compactView", compact)
             _pump_until(lambda: self._panel(root, "functionRowPanel").width() > 0)
 
-            def action_of(item) -> str:
-                kd = item.property("kd")
-                if hasattr(kd, "toVariant"):
-                    kd = kd.toVariant()
-                return str((kd or {}).get("action", "")) if isinstance(kd, dict) else ""
+            for width in self.WIDTHS:
+                root.setProperty("width", width)
+                _pump_until(lambda: self._panel(root, "functionRowPanel").width() > 0)
+                panel = self._panel(root, "functionRowPanel")
+                grid = self._widest_layout_row(root)
+                key_w = root.property("keyW")
+                key_spacing = root.property("keySpacing")
+                expected = 12 * key_w + 9 * key_spacing + 2 * (4 * key_spacing)
 
-            # Via the VISUAL tree: findChildren cannot see a Repeater's
-            # delegates, since their QObject parent is the delegate model.
-            fn_keys = [
-                item
-                for item in TestSecondSymbolPage._key_items(root)
-                if action_of(item).startswith("f") and item.width() > 0
-            ]
-            assert len(fn_keys) == 12, f"expected 12 F-keys, found {len(fn_keys)}"
-
-            key_w = root.property("keyW")
-            for key in fn_keys:
-                assert key.width() == pytest.approx(key_w, abs=1.0), (
-                    f"an F-key is {key.width():.0f} px against a {key_w:.0f} px "
-                    f"grid key (compact={compact})"
+                assert panel.width() == pytest.approx(expected, abs=1.0), (
+                    f"function row is {panel.width() - expected:+.1f} px off "
+                    f"its own geometry at window width {width} "
+                    f"(compact={compact}): {panel.width():.1f} vs "
+                    f"{expected:.1f} expected from 12 keys + 9 internal gaps + "
+                    "2 group gaps. Catches a wrong key count, a resized "
+                    "spacer or a changed group gap, none of which the "
+                    "identity assertion this replaced could see."
+                )
+                assert panel.width() < grid, (
+                    f"function row ({panel.width():.1f}) is not narrower "
+                    f"than the widest keyboard row ({grid:.1f}) at window "
+                    f"width {width} (compact={compact}); it was meant to "
+                    "stay inset, not fill the grid."
                 )
         assert _real_warnings(warnings) == []
 
@@ -920,7 +932,7 @@ class TestPanelsSitFlushWithTheGrid:
         """Weak on its own, which is why it is not the only F-row test:
         a row that is too narrow passes it trivially. It still catches the
         one direction that clips keys off the edge."""
-        root, _, _ = qml_root
+        root, warnings, _ = qml_root
         root.setProperty("showNavigation", False)
         root.setProperty("showNumpad", False)
         root.setProperty("compactView", True)
@@ -935,6 +947,7 @@ class TestPanelsSitFlushWithTheGrid:
                 f"function row overhangs by {panel.width() - (width - 16):.0f} px "
                 f"at window width {width}"
             )
+        assert _real_warnings(warnings) == []
 
     def test_side_panels_do_not_push_the_window_over(self, qml_root) -> None:
         """The Navigation and Numpad panels are subject to the same trap.

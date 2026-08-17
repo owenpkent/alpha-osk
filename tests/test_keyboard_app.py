@@ -192,15 +192,37 @@ class TestTheKeyboardKeepsItsTaskbarButton:
 
     WS_EX_TOOLWINDOW = 0x00000080
     WS_EX_APPWINDOW = 0x00040000
+    WS_EX_LAYERED = 0x00080000
+    WS_EX_TOPMOST = 0x00000008
 
     @pytest.fixture
     def win32(self, monkeypatch: pytest.MonkeyPatch):
         user32 = MagicMock()
         # Qt has already added TOOLWINDOW by the time this runs, which is
         # the whole point: the fix has to *clear* it, not just not add it.
-        user32.GetWindowLongW.return_value = 0x08000088
-        user32.SetWindowLongW.return_value = 0x08000088
-        user32.SetWindowPos.return_value = 1
+        # Seeded with the live keyboard's own value (see the class
+        # docstring, 0x08080088) rather than the bare pre-fix measurement,
+        # so LAYERED (what window opacity rides on) and Qt's own TOPMOST
+        # bit are both present for the style-word-survives test below to
+        # assert against.
+        user32.GetWindowLongW.return_value = 0x08080088
+
+        # A shared list recording which of SetWindowLongW / SetWindowPos
+        # ran first, in call order, for the frame-flush-ordering test
+        # below.  call_args_list already gives each mock's own calls in
+        # order; this is what lets a test compare order *across* the two.
+        user32.call_order = []
+
+        def _set_window_long(hwnd, index, value):
+            user32.call_order.append(("SetWindowLongW", index))
+            return 0x08080088
+
+        def _set_window_pos(*args, **kwargs):
+            user32.call_order.append(("SetWindowPos", None))
+            return 1
+
+        user32.SetWindowLongW.side_effect = _set_window_long
+        user32.SetWindowPos.side_effect = _set_window_pos
         kernel32 = MagicMock()
         kernel32.GetLastError.return_value = 0
 
@@ -270,10 +292,48 @@ class TestTheKeyboardKeepsItsTaskbarButton:
     def test_the_rest_of_the_style_word_survives(self, win32) -> None:
         """The inverse: this must clear one bit, not rewrite the word.
 
-        Qt puts real state in there, LAYERED among it, which is what
-        window opacity rides on.
+        Qt puts real state in there, LAYERED among it (what window
+        opacity rides on) and its own TOPMOST bit, and this function has
+        no business touching either. A `new_style = WS_EX_NOACTIVATE`
+        that dropped the `current |` would still set NOACTIVATE and would
+        still pass the other tests in this class, since they only check
+        which bits are set or cleared on the *new* ones; only reading back
+        a pre-existing bit that the write never touches proves the rest
+        of the word survived rather than being rebuilt from scratch.
         """
         _apply_windows_extended_styles(self._root(), taskbar_button=True)
 
         style = win32.SetWindowLongW.call_args_list[0][0][2]
         assert style & 0x08000000, "NOACTIVATE was dropped"
+        assert style & self.WS_EX_LAYERED, (
+            "WS_EX_LAYERED was dropped: the write rebuilt the style word "
+            "instead of OR-ing onto it, and window opacity would break"
+        )
+        assert style & self.WS_EX_TOPMOST, (
+            "the extended style's own TOPMOST bit was dropped: this "
+            "function must not rewrite bits it doesn't own"
+        )
+
+    def test_the_style_write_is_flushed_by_the_frame_changed_call(self, win32) -> None:
+        """MSDN: after a frame-style change via SetWindowLong, the cached
+        frame data isn't updated until SetWindowPos(SWP_FRAMECHANGED)
+        runs. WS_MINIMIZEBOX / WS_SYSMENU are frame styles like any other,
+        so the GWL_STYLE write has to land before the one
+        SWP_FRAMECHANGED call in this function, not after it.
+        """
+        _apply_windows_extended_styles(self._root(), taskbar_button=True)
+
+        order = win32.call_order
+        style_writes = [
+            i for i, (call, index) in enumerate(order) if call == "SetWindowLongW" and index == -16
+        ]
+        frame_changed_calls = [
+            i for i, (call, _index) in enumerate(order) if call == "SetWindowPos"
+        ]
+        assert style_writes, "GWL_STYLE was never written"
+        assert frame_changed_calls, "SetWindowPos was never called"
+        assert style_writes[0] < frame_changed_calls[0], (
+            "GWL_STYLE was written after SetWindowPos(SWP_FRAMECHANGED), so the "
+            "MINIMIZEBOX / SYSMENU bits just written are not guaranteed to have "
+            "been flushed into the cached frame data"
+        )

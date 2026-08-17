@@ -46,6 +46,24 @@ import QtQuick 2.15
  *
  * Character keys keep the deferred, activate-on-release behaviour, because
  * for them the press genuinely is ambiguous until the gesture ends.
+ *
+ * A STATIONARY CHARACTER PRESS CAN STILL BECOME A HOLD
+ * ------------------------------------------------------
+ * "Deferred" cannot mean "never repeats", or the character-repeat setting
+ * (Main.qml's ``characterRepeat``) is silently dead the moment swipe typing
+ * is on: a KeyButton only arms its own repeat timer from ``_activate()``,
+ * which the deferred path never calls. ``charHoldTimer`` bridges the gap by
+ * watching a character press that has not yet moved: it is armed on press
+ * for ``repeatArmDelay`` (read off the hit KeyButton, not re-derived here,
+ * so the overlay automatically matches whatever floor Main.qml gave that
+ * key - see KeyButton's ``repeatArmFloorMs``), and cancelled by anything
+ * that makes the gesture stop being stationary: leaving the key, or moving
+ * far enough to promote to a swipe. If it fires uninterrupted, the gesture
+ * is promoted into the same "held" state a special key gets on press
+ * (``_gestureIsHold`` / ``_heldKey``), via ``externalHoldPress`` rather than
+ * ``externalPress`` since the warm-up wait has already been paid; from
+ * there the ordinary held-key release path takes over and the release must
+ * NOT also fire a tap.
  */
 
 Item {
@@ -78,6 +96,17 @@ Item {
     // a swipe that began on Backspace. Dragging off must abort, fully.
     property bool _gestureIsHold: false
 
+    // A character-key press waiting to find out whether it is a hold: set on
+    // press when the key opts into repeat (see the header note above),
+    // cleared the moment the wait ends one way or another (charHoldTimer
+    // fires, the pointer leaves the key, the gesture promotes to a swipe, or
+    // the press is released/cancelled first). Coordinates are stashed in
+    // overlay-local space at press time because charHoldTimer fires well
+    // after the mouse event that started it is gone.
+    property var _pendingHoldKey: null
+    property real _pendingHoldX: 0
+    property real _pendingHoldY: 0
+
     signal swipeStarted()
     signal swipeEnded()
 
@@ -107,6 +136,29 @@ Item {
         }
     }
 
+    // Promotes a stationary character-key press into a key hold. Armed on
+    // press with its interval read straight off the hit KeyButton's
+    // ``repeatArmDelay`` (see the header note), so it always matches that
+    // key's own warm-up, floor included. Non-repeating: a hold either fires
+    // once and hands off to the ordinary held-key machinery, or is cancelled
+    // before it fires and never runs again for that gesture.
+    Timer {
+        id: charHoldTimer
+        interval: 800
+        repeat: false
+        onTriggered: {
+            var item = swipeRoot._pendingHoldKey
+            var px = swipeRoot._pendingHoldX
+            var py = swipeRoot._pendingHoldY
+            swipeRoot._pendingHoldKey = null
+            if (!item || !item.externalHoldPress) return
+            var local = item.mapFromItem(swipeRoot, px, py)
+            swipeRoot._gestureIsHold = true
+            if (item.externalHoldPress(local.x, local.y))
+                swipeRoot._heldKey = item
+        }
+    }
+
     MouseArea {
         id: ma
         anchors.fill: parent
@@ -124,6 +176,7 @@ Item {
             // to release. That is what gives Backspace and the arrows their
             // auto-repeat back.
             swipeRoot._gestureIsHold = false
+            swipeRoot._cancelPendingHold()
             var hit = swipeRoot._findKeyAt(mouse.x, mouse.y, swipeRoot.tapRegistry)
             if (hit && hit.item && !swipeRoot._isSwipeStart(mouse.x, mouse.y)
                 && hit.item.externalPress) {
@@ -135,6 +188,18 @@ Item {
                 swipeRoot._gestureIsHold = true
                 if (hit.item.externalPress(local.x, local.y))
                     swipeRoot._heldKey = hit.item
+            } else if (hit && hit.item && hit.item.enableRepeat
+                       && swipeRoot._isSwipeStart(mouse.x, mouse.y)) {
+                // A character key that opts into repeat: might still turn
+                // into a swipe, so it cannot activate yet, but if the
+                // pointer stays put for repeatArmDelay it becomes a hold
+                // instead. See the header note on why this cannot be
+                // "activate on press" the way a special key is.
+                swipeRoot._pendingHoldKey = hit.item
+                swipeRoot._pendingHoldX = mouse.x
+                swipeRoot._pendingHoldY = mouse.y
+                charHoldTimer.interval = hit.item.repeatArmDelay
+                charHoldTimer.restart()
             }
         }
 
@@ -150,6 +215,15 @@ Item {
                 return
             }
 
+            // A hold is stationary by definition, so a pending one is
+            // cancelled the moment the pointer leaves the key it started on
+            // - this check must run before the swipe-promotion one below,
+            // since leaving the key can happen well under swipeThreshold.
+            if (swipeRoot._pendingHoldKey
+                && !swipeRoot._isOver(swipeRoot._pendingHoldKey, mouse.x, mouse.y)) {
+                swipeRoot._cancelPendingHold()
+            }
+
             swipeRoot._points.push({ x: mouse.x, y: mouse.y })
             // Promote to swipe once total movement exceeds the threshold.
             if (!swipeRoot._isSwipe) {
@@ -159,6 +233,10 @@ Item {
                 if (Math.sqrt(dx * dx + dy * dy) > swipeRoot.swipeThreshold) {
                     swipeRoot._isSwipe = true
                     swipeRoot.swipeStarted()
+                    // Movement enough to read as a swipe also cancels a
+                    // pending hold even if it never left the starting key
+                    // (e.g. a diagonal drag that re-crosses it).
+                    swipeRoot._cancelPendingHold()
                 }
             }
             if (swipeRoot._isSwipe) {
@@ -168,6 +246,12 @@ Item {
         }
 
         onReleased: function(mouse) {
+            // Always, whether or not the wait ever fired: a release before
+            // charHoldTimer triggers must stay an ordinary tap (exactly one
+            // character on release, via the fall-through below), and the
+            // timer must not go on to fire against a gesture that already
+            // ended.
+            swipeRoot._cancelPendingHold()
             if (swipeRoot._gestureIsHold) {
                 // Either the key is still held (release it, normal case) or
                 // the pointer already dragged off it (already released, and
@@ -197,6 +281,7 @@ Item {
         }
 
         onCanceled: {
+            swipeRoot._cancelPendingHold()
             swipeRoot._releaseHeld()
             swipeRoot._gestureIsHold = false
             swipeRoot._isSwipe = false
@@ -229,6 +314,13 @@ Item {
         if (swipeRoot._heldKey && swipeRoot._heldKey.externalRelease)
             swipeRoot._heldKey.externalRelease()
         swipeRoot._heldKey = null
+    }
+
+    // Stops the wait for a pending character hold without touching it -
+    // there is nothing to release, since externalHoldPress was never called.
+    function _cancelPendingHold() {
+        charHoldTimer.stop()
+        swipeRoot._pendingHoldKey = null
     }
 
     function _findKeyAt(x, y, registry) {

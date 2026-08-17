@@ -851,9 +851,17 @@ Item {
                                 }
 
                                 // On by default. The repeat only starts
-                                // after roughly 800 ms of deliberate hold
-                                // (the delay plus a warm-up grace), so a
-                                // slow release does not double a letter.
+                                // after at least 800 ms of deliberate hold,
+                                // so a slow release does not double a
+                                // letter. That 800 ms is a *floor*
+                                // (`repeatArmFloorMs` on the character
+                                // keys), not the repeat delay plus the
+                                // warm-up grace: the delay below is a user
+                                // setting that goes down to 300 ms, and
+                                // read as arithmetic this comment was only
+                                // true at the default. The floor applies to
+                                // letters and digits alone, so lowering the
+                                // delay still makes Backspace responsive.
                                 // Off is still here for anyone whose grip
                                 // makes even that a hazard.
                                 SettingsToggle {

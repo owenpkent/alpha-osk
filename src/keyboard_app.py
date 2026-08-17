@@ -13,11 +13,17 @@ Cross-Platform Behaviour
 - **Windows**: Uses the same Qt flags.  When the binary is EV code-signed
   with a ``UIAccess="true"`` manifest, the keyboard can also appear above
   UAC prompts and elevated windows.  Additionally, on Windows we call
-  ``SetWindowLong`` to apply ``WS_EX_NOACTIVATE`` (focus-suppression)
-  and ``WS_EX_TOPMOST`` (defence-in-depth on the always-on-top behaviour).
-  ``WS_EX_TOOLWINDOW`` and ``Qt.Tool`` are deliberately *not* applied —
-  they suppressed the taskbar entry, leaving the standard minimize
-  button with nowhere to go.
+  ``SetWindowLong`` to apply ``WS_EX_NOACTIVATE`` (focus-suppression).
+  ``WS_EX_TOPMOST`` is deliberately *not* written into the style word:
+  always-on-top is applied separately with
+  ``SetWindowPos(HWND_TOPMOST)``, because writing the style bit directly
+  leaves the Z-order band untouched and the window reads as topmost
+  without behaving like it.  ``WS_EX_TOOLWINDOW`` is actively cleared
+  (Qt adds it on its own once these flags reach an already-shown window)
+  and ``WS_EX_APPWINDOW`` is set, so the keyboard keeps a normal taskbar
+  entry for the standard minimize button to drop into; the accepted
+  trade-off is that the OSK also shows up in Alt+Tab.  ``Qt.Tool`` is
+  not applied on Windows either, for the same taskbar reason.
 
 - **macOS**: Same Qt flags (``WindowDoesNotAcceptFocus`` maps to
   ``-canBecomeKeyWindow`` returning NO).  On top of that, pyobjc is
@@ -408,13 +414,46 @@ def _apply_windows_extended_styles(root, *, taskbar_button: bool = False) -> Non
             )
             return
 
+        # A taskbar button can *restore* a window without this, which is
+        # why minimising and clicking the button both worked while a
+        # second click did nothing. The shell decides whether a button may
+        # minimise from WS_MINIMIZEBOX / WS_SYSMENU in the ordinary style
+        # word, and this window is a bare WS_POPUP.
+        #
+        # Windows' own on-screen keyboard is the proof that this composes
+        # with never taking focus: osk.exe runs TOPMOST | APPWINDOW |
+        # NOACTIVATE | LAYERED, an extended style identical to ours, and
+        # carries MINIMIZEBOX | SYSMENU in its style word.
+        #
+        # No frame comes with them, which is the thing to check when
+        # touching this on a frameless window: measured before and after
+        # on a real window, the window rect stays equal to the client rect
+        # and neither WS_CAPTION nor WS_THICKFRAME appears. Qt also leaves
+        # the bits alone across a resize.
+        #
+        # Written here, before the SetWindowPos(SWP_FRAMECHANGED) call
+        # below rather than after it: MSDN's guidance for SetWindowLong
+        # is that a frame style change needs a following
+        # SetWindowPos(SWP_FRAMECHANGED) before the cached frame data
+        # picks it up, and WS_MINIMIZEBOX / WS_SYSMENU are frame styles
+        # like any other. Writing this after the one SWP_FRAMECHANGED
+        # call in this function left it unflushed until whatever next
+        # touched the frame.
+        if taskbar_button:
+            kernel32.SetLastError(0)
+            style = user32.GetWindowLongW(hwnd, GWL_STYLE)
+            if style or kernel32.GetLastError() == 0:
+                user32.SetWindowLongW(hwnd, GWL_STYLE, style | WS_MINIMIZEBOX | WS_SYSMENU)
+
         # One call doing two jobs.
         #
         # HWND_TOPMOST puts the window in the topmost Z-order band, which
         # is the only way to get there and the thing that was missing.
-        # SWP_FRAMECHANGED forces the system to re-read the extended style
-        # just written; without it WS_EX_NOACTIVATE may not take effect and
-        # clicks on keys steal focus before SendInput fires.
+        # SWP_FRAMECHANGED forces the system to re-read the extended and
+        # ordinary style words just written above; without it
+        # WS_EX_NOACTIVATE may not take effect and clicks on keys steal
+        # focus before SendInput fires, and the MINIMIZEBOX / SYSMENU bits
+        # just added to the ordinary style word may not be honoured either.
         #
         # SWP_NOACTIVATE keeps us off the foreground while doing it, which
         # matters more here than usual: this window must never activate.
@@ -449,28 +488,6 @@ def _apply_windows_extended_styles(root, *, taskbar_button: bool = False) -> Non
                 "behind other windows",
                 kernel32.GetLastError(),
             )
-
-        # A taskbar button can *restore* a window without this, which is
-        # why minimising and clicking the button both worked while a
-        # second click did nothing. The shell decides whether a button may
-        # minimise from WS_MINIMIZEBOX / WS_SYSMENU in the ordinary style
-        # word, and this window is a bare WS_POPUP.
-        #
-        # Windows' own on-screen keyboard is the proof that this composes
-        # with never taking focus: osk.exe runs TOPMOST | APPWINDOW |
-        # NOACTIVATE | LAYERED, an extended style identical to ours, and
-        # carries MINIMIZEBOX | SYSMENU in its style word.
-        #
-        # No frame comes with them, which is the thing to check when
-        # touching this on a frameless window: measured before and after
-        # on a real window, the window rect stays equal to the client rect
-        # and neither WS_CAPTION nor WS_THICKFRAME appears. Qt also leaves
-        # the bits alone across a resize.
-        if taskbar_button:
-            kernel32.SetLastError(0)
-            style = user32.GetWindowLongW(hwnd, GWL_STYLE)
-            if style or kernel32.GetLastError() == 0:
-                user32.SetWindowLongW(hwnd, GWL_STYLE, style | WS_MINIMIZEBOX | WS_SYSMENU)
 
         _logger.info("Applied WS_EX_NOACTIVATE and placed the window in the topmost band")
     except Exception as e:
@@ -558,7 +575,9 @@ def _apply_macos_window_flags(root) -> None:
     1. **Level = NSFloatingWindowLevel** (3) — float above ordinary
        windows.  Qt's ``WindowStaysOnTopHint`` already requests this
        on macOS, but we restate it for defence-in-depth and to match
-       the Windows path (``WS_EX_TOPMOST``).
+       the Windows path, which places the window in the topmost
+       Z-order band via ``SetWindowPos(HWND_TOPMOST)`` rather than a
+       style bit (see :func:`_apply_windows_extended_styles`).
     2. **Collection behavior** — join all Spaces so the keyboard
        follows the user when they switch desktops, mark it transient
        so Mission Control won't try to tile it as a real window, and
@@ -894,12 +913,13 @@ def _toggle_keyboard_window(root, platform_name: str = CURRENT_PLATFORM) -> None
     """Put the keyboard away, or bring it back.  One click each way.
 
     On Windows and Linux "away" means **minimized**, not hidden.  The OSK
-    carries a normal taskbar entry (``WS_EX_TOOLWINDOW`` is deliberately
-    not applied — see :func:`_apply_windows_extended_styles`), so a
-    minimized keyboard is still visibly parked somewhere the user can get
-    at it, and the tray icon and the taskbar entry agree about where the
-    window went.  Hiding it outright threw that away: the window vanished
-    from the taskbar and the tray icon became the only route back.
+    carries a normal taskbar entry (``WS_EX_TOOLWINDOW`` is actively
+    cleared and ``WS_EX_APPWINDOW`` set, see
+    :func:`_apply_windows_extended_styles`), so a minimized keyboard is
+    still visibly parked somewhere the user can get at it, and the tray
+    icon and the taskbar entry agree about where the window went.  Hiding
+    it outright threw that away: the window vanished from the taskbar and
+    the tray icon became the only route back.
 
     macOS keeps the hide/show pair because it has no taskbar or Dock entry
     to minimize *into* (the app runs under the Accessory activation policy
