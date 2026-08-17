@@ -4,7 +4,7 @@ Usage:
     python scripts/downloads.py
 
 Requires the `gh` CLI authenticated against an account with read access to
-okstudio1/alpha-osk-releases.
+owenpkent/alpha-osk-releases.
 """
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ import json
 import subprocess
 import sys
 
-REPO = "okstudio1/alpha-osk-releases"
+REPO = "owenpkent/alpha-osk-releases"
 
 
 def main() -> int:

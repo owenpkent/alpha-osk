@@ -373,7 +373,7 @@ SafeNet-eToken-bound signing). Mac update paths to consider:
 
 - **Sparkle framework** — the de-facto Mac auto-update library. Requires bundling `Sparkle.framework`, embedding an Ed25519 public key, hosting an `appcast.xml`. Mature, well-supported.
 - **Homebrew tap** — `brew tap owenpkent/alpha-osk && brew install --cask alpha-osk`. Users `brew upgrade` on their own cadence. Zero in-app code.
-- **Manual** — link to GitHub releases (the same `okstudio1/alpha-osk-releases` repo the Windows updater targets) from the title bar.
+- **Manual** — link to GitHub releases (the same `owenpkent/alpha-osk-releases` repo the Windows updater targets) from the title bar.
 
 Recommendation: **Homebrew tap** first (lowest implementation cost,
 fits the platform's expectations) → **Sparkle** if telemetry shows

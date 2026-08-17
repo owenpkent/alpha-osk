@@ -8,7 +8,19 @@ Code lives in `src/updater.py` (network + signature verification), `src/keyboard
 
 ### Source-vs-releases repo split
 
-Source code lives at `owenpkent/alpha-osk`; release binaries live in a separate repo at `okstudio1/alpha-osk-releases`. Both are public as of 2026-05-16. The split is preserved for two reasons: (1) the auto-updater's API URL is hard-pinned to the releases repo (`src/updater.py::GITHUB_API_URL`), so flipping which repo holds releases would break every existing user's updater, and (2) keeping binaries out of the source repo keeps clone time small. **Historical note:** the source repo used to be private. v1.0.3 and v1.0.4 shipped with the wrong endpoint hard-coded (pointing at the then-private source repo), so their updater always saw "no update available". v1.0.5 fixed the endpoint; v1.0.3 / v1.0.4 users needed one final manual install of v1.0.5 to get on the working updater path.
+Source code lives at `owenpkent/alpha-osk`; release binaries live in a separate repo at `owenpkent/alpha-osk-releases`. Both are public as of 2026-05-16. The split is preserved for two reasons: (1) the auto-updater's API URL is hard-pinned to the releases repo (`src/updater.py::GITHUB_API_URL`), so flipping which repo holds releases would break every existing user's updater, and (2) keeping binaries out of the source repo keeps clone time small. **Historical note:** the source repo used to be private. v1.0.3 and v1.0.4 shipped with the wrong endpoint hard-coded (pointing at the then-private source repo), so their updater always saw "no update available". v1.0.5 fixed the endpoint; v1.0.3 / v1.0.4 users needed one final manual install of v1.0.5 to get on the working updater path.
+
+### The 2026-08-17 owner move, and the redirect it now depends on
+
+The releases repo moved from the `okstudio1` organisation to `owenpkent`. Because the endpoint is pinned per build, **every install through v1.2.2 still requests the `okstudio1` path and always will**. They keep working on GitHub's transfer redirect: a transferred repo's old REST path answers `301 Moved Permanently` with `Location: https://api.github.com/repositories/<id>/releases/latest`, and `urllib.request.urlopen` (what `_fetch_latest_release` uses) follows it transparently on a GET. Verified before the move against `facebook/jest`, which was transferred to `jestjs/jest`: the old path returns the new owner's release JSON, status 200.
+
+Three things follow, and each is a way to break it:
+
+- **Never create a repo named `alpha-osk-releases` under `okstudio1` again.** Reclaiming the name takes the redirect down and strands every pre-v1.2.3 install with no in-app path forward.
+- **`_is_safe_download_url` must stay host-scoped.** It checks `github.com` plus the two release CDN hostnames and deliberately ignores the path, which is what lets an asset URL carrying the *new* owner satisfy a client pinned to the *old* one. Adding a path or owner check here would reject exactly the installs this redirect exists to serve.
+- **Ordering on any future move is transfer first, constant second.** Flipping `GITHUB_API_URL` before the repo exists at the new location ships a build whose updater 404s silently, which looks identical to "no update available".
+
+A move that cannot be done as a GitHub transfer (collapsing releases into the source repo, say) gets no redirect, and needs the old repo kept alive with duplicate uploads until the old install base has aged out.
 
 ## Threat model
 
@@ -27,7 +39,7 @@ The updater is the highest-value MITM target in the app — a successful attacke
 | Pre-release/garbage tag confusion (`v1.0.3-evil`)       | Regex `^\d+\.\d+\.\d+$` only — pre-release/+build refused                                              |
 | Misnamed asset                                          | Filename pattern locked to `Alpha-OSK-Setup-{version}.exe`                                             |
 | Attacker-writable install directory                     | `InstallDirRegKey HKCU` removed (it was a dangling read of a key nothing in the build ever wrote); `_install_target_dir()` computes the target explicitly and the install runs with `/S /D=<dir>` |
-| Tag confusion across repos                              | Endpoint hard-pinned to `https://api.github.com/repos/okstudio1/alpha-osk-releases/releases/latest` and the `api_url` prefix is checked at call time |
+| Tag confusion across repos                              | Endpoint hard-pinned to `https://api.github.com/repos/owenpkent/alpha-osk-releases/releases/latest` and the `api_url` prefix is checked at call time |
 | QML-side URL injection                                  | QML never sees the URL — it only triggers `installUpdate()`; the bridge holds `self._update_info`     |
 | Release-notes injection                                 | `_sanitize_notes` strips C0 controls and caps length to 4 KB                                          |
 
@@ -53,7 +65,7 @@ The simplest path that leverages existing infrastructure.
 
 1. On startup (3 s after launch, on a background thread), the app calls the GitHub Releases API:
    ```
-   GET https://api.github.com/repos/okstudio1/alpha-osk-releases/releases/latest
+   GET https://api.github.com/repos/owenpkent/alpha-osk-releases/releases/latest
    ```
    This is the **public release-binaries** repo. The source repo (`owenpkent/alpha-osk`) is also public as of 2026-05-16, but the split is preserved because every shipped client is hard-pinned to the releases-repo URL.
 2. Compare the release tag (e.g., `v1.0.2`) against the running version.
@@ -73,7 +85,7 @@ import tempfile
 import logging
 from pathlib import Path
 
-GITHUB_API = "https://api.github.com/repos/okstudio1/alpha-osk-releases/releases/latest"
+GITHUB_API = "https://api.github.com/repos/owenpkent/alpha-osk-releases/releases/latest"
 CURRENT_VERSION = "1.0.1"  # or read from a version file
 
 def check_for_update() -> dict | None:
@@ -159,7 +171,7 @@ PackageVersion: 1.0.1
 InstallerType: nsis
 Installers:
   - Architecture: x64
-    InstallerUrl: https://github.com/okstudio1/alpha-osk-releases/releases/download/v1.0.1/Alpha-OSK-Setup-1.0.1.exe
+    InstallerUrl: https://github.com/owenpkent/alpha-osk-releases/releases/download/v1.0.1/Alpha-OSK-Setup-1.0.1.exe
     InstallerSha256: <sha256>
     InstallerSwitches:
       Silent: /S

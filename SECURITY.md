@@ -6,7 +6,7 @@ If you believe you have found a security vulnerability in Alpha-OSK,
 please report it privately so it can be fixed before public disclosure.
 
 **Preferred:** use GitHub's
-[private vulnerability reporting](https://github.com/okstudio1/alpha-osk-releases/security/advisories/new)
+[private vulnerability reporting](https://github.com/owenpkent/alpha-osk-releases/security/advisories/new)
 on the releases repository.
 
 **Email fallback:** owenpkent@gmail.com with the subject line
@@ -21,7 +21,7 @@ Please include:
 
 You should expect an acknowledgement within 7 days. If a fix is
 warranted, a patched release will be published to
-`okstudio1/alpha-osk-releases` and the auto-updater will pick it up on
+`owenpkent/alpha-osk-releases` and the auto-updater will pick it up on
 the next launch.
 
 ## Scope
