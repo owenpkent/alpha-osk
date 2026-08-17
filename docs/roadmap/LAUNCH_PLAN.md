@@ -26,7 +26,7 @@ This is a meaningful enough scope to warrant a **minor version bump (1.1.0)** ra
 | Version bump to 1.1.0 | ✗ **pending** | one-line edit to `src/__version__.py` |
 | Release build (Windows) | ✗ **pending** | `python build/windows/build.py` from non-elevated shell, eToken plugged in |
 | Release build (Linux) | ✗ **pending** | `python build/linux/build.py --appimage --fetch-appimagetool` |
-| Tag + GitHub release | ✗ **pending** | `gh release create vX.Y.Z --repo okstudio1/alpha-osk-releases ...` |
+| Tag + GitHub release | ✗ **pending** | `gh release create vX.Y.Z --repo owenpkent/alpha-osk-releases ...` |
 | Public stats page | ✗ **deferred** | post-launch, after 4-8 weeks of real data |
 | Federated learning | ✗ **deferred** | separate feature; not in this release |
 
@@ -54,7 +54,7 @@ This is a meaningful enough scope to warrant a **minor version bump (1.1.0)** ra
 ### Week 3 (2026-05-22 → 2026-05-26): ship + launch posts
 
 - [ ] `git tag v1.1.0 && git push origin main && git push origin v1.1.0`.
-- [ ] `gh release create v1.1.0 release/Alpha-OSK-Setup-1.1.0.exe --repo okstudio1/alpha-osk-releases --title "v1.1.0 — Community impact + cleaner analytics" --notes-file release-notes-1.1.0.md`. Asset filename **must** match `Alpha-OSK-Setup-1.1.0.exe` exactly (the auto-updater rejects anything else).
+- [ ] `gh release create v1.1.0 release/Alpha-OSK-Setup-1.1.0.exe --repo owenpkent/alpha-osk-releases --title "v1.1.0 — Community impact + cleaner analytics" --notes-file release-notes-1.1.0.md`. Asset filename **must** match `Alpha-OSK-Setup-1.1.0.exe` exactly (the auto-updater rejects anything else).
 - [ ] Verify auto-update path: install 1.0.16 on a test machine, wait for or force the update check, confirm 1.1.0 lands, confirm Settings → Data & Privacy → Privacy section is present.
 - [ ] Watch `npx wrangler tail` for the first 24 hours to catch malformed payloads or unexpected spikes.
 - [ ] (Optional) Announcement / blog post / social.
