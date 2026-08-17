@@ -288,12 +288,12 @@ def _apply_window_flags(root) -> None:
 
     # Windows-specific: apply WS_EX_NOACTIVATE via Win32 API
     if CURRENT_PLATFORM == "windows":
-        _apply_windows_extended_styles(root)
+        _apply_windows_extended_styles(root, taskbar_button=True)
     elif CURRENT_PLATFORM == "macos":
         _apply_macos_window_flags(root)
 
 
-def _apply_windows_extended_styles(root) -> None:
+def _apply_windows_extended_styles(root, *, taskbar_button: bool = False) -> None:
     """
     Use Win32 ``SetWindowLongW`` to add extended window styles that Qt
     cannot express through its own flag system.
@@ -303,15 +303,41 @@ def _apply_windows_extended_styles(root) -> None:
     - **WS_EX_NOACTIVATE** (``0x08000000``): The window is never
       activated when clicked.  This is *critical* for an OSK — without
       it, clicking a key would move focus away from the user's text
-      editor.
-    - **WS_EX_TOPMOST** (``0x00000008``): Redundant with Qt's
-      ``WindowStaysOnTopHint`` but set explicitly for defence-in-depth.
+      editor.  This one is settable through ``SetWindowLongW``.
 
-    ``WS_EX_TOOLWINDOW`` was *removed* because it suppressed the
-    taskbar entry, leaving minimize with nowhere to go — the user
-    expects standard Windows behaviour (click the taskbar to
-    restore).  The trade-off is that the OSK now appears in Alt+Tab,
-    which is acceptable.
+    **Always-on-top is applied with ``SetWindowPos(HWND_TOPMOST)``, not
+    by writing ``WS_EX_TOPMOST`` into the style word, and that
+    distinction is the whole feature.**  MSDN is explicit that the style
+    is added and removed with ``SetWindowPos``; the bit and the Z-order
+    *band* are separate pieces of state, and writing the bit directly
+    sets the first while leaving the second alone.  The result is a
+    window that reports itself as topmost and is not: this was reported
+    as "always on top isn't working", and a Z-order walk found the
+    keyboard sitting **fifteenth**, below a dozen ordinary windows,
+    with ``WS_EX_TOPMOST`` reading true the whole time.  Qt's
+    ``WindowStaysOnTopHint`` does place the window in the band, so the
+    old code appeared to work; writing the style word afterwards is what
+    knocked it back out.
+
+    So the ``SetWindowPos`` call below carries ``HWND_TOPMOST`` and must
+    **not** carry ``SWP_NOZORDER``, which would ask the system to leave
+    the Z-order exactly as it found it, which was the bug.  Anything
+    that re-applies window flags later has to re-assert this, because
+    ``setFlags`` on Windows can recreate the native window.
+
+    **``WS_EX_TOOLWINDOW`` is actively cleared here, not merely left
+    unset.**  It suppresses the taskbar entry, which leaves the minimise
+    button with nowhere to go and the tray icon as the only way back.
+    Qt adds it on its own: QML declares ``visible: true``, so the window
+    is already shown when :func:`_apply_window_flags` calls ``setFlags``,
+    and applying a non-activating, frameless, always-on-top flag set to
+    an *already shown* window is the case where Qt decides the window
+    does not belong in the taskbar.  Applying the same flags before the
+    first show does not do it, which is why the comments here claimed for
+    a long time that the style "was removed" while the shipped window
+    carried it.  ``WS_EX_APPWINDOW`` is set too, so the taskbar entry
+    does not depend on Qt leaving the rest of the style word alone.  The
+    trade-off is that the OSK appears in Alt+Tab, which is acceptable.
 
     Requires the window to have a valid ``winId()`` (i.e. the native
     window handle has been created).
@@ -321,8 +347,12 @@ def _apply_windows_extended_styles(root) -> None:
         from ctypes import wintypes
 
         GWL_EXSTYLE = -20
+        GWL_STYLE = -16
         WS_EX_NOACTIVATE = 0x08000000
-        WS_EX_TOPMOST = 0x00000008
+        WS_EX_TOOLWINDOW = 0x00000080
+        WS_EX_APPWINDOW = 0x00040000
+        WS_MINIMIZEBOX = 0x00020000
+        WS_SYSMENU = 0x00080000
 
         user32 = ctypes.windll.user32
         kernel32 = ctypes.windll.kernel32
@@ -347,7 +377,28 @@ def _apply_windows_extended_styles(root) -> None:
             )
             return
 
-        new_style = current | WS_EX_NOACTIVATE | WS_EX_TOPMOST
+        # WS_EX_TOPMOST is deliberately NOT in this write.  See the
+        # docstring: the style word is not where always-on-top lives, and
+        # writing it here is what broke it.
+        #
+        # WS_EX_TOOLWINDOW is cleared and WS_EX_APPWINDOW set, because Qt
+        # adds the former behind our back and it is what removes a window
+        # from the taskbar.  QML declares `visible: true`, so the window
+        # is already on screen when `_apply_window_flags` calls setFlags,
+        # and applying these flags to a *shown* window is the case where
+        # Qt decides a non-activating window does not belong in the
+        # taskbar.  Setting the same flags before the first show does not
+        # do it, which is why this went unnoticed and why the comments
+        # here have claimed for a long time that the style "was removed":
+        # that was the intent, and the intent was not what shipped.
+        #
+        # Reported as the keyboard having no taskbar button, so the
+        # minimise button had nowhere to go and clicking the pinned icon
+        # did nothing.  APPWINDOW is set as well as TOOLWINDOW cleared,
+        # so the answer does not depend on Qt leaving the rest alone.
+        new_style = current | WS_EX_NOACTIVATE
+        if taskbar_button:
+            new_style = (new_style | WS_EX_APPWINDOW) & ~WS_EX_TOOLWINDOW
         kernel32.SetLastError(0)
         prev = user32.SetWindowLongW(hwnd, GWL_EXSTYLE, new_style)
         if prev == 0 and kernel32.GetLastError() != 0:
@@ -357,31 +408,71 @@ def _apply_windows_extended_styles(root) -> None:
             )
             return
 
-        # SetWindowPos with SWP_FRAMECHANGED forces the system to re-read the
-        # extended style we just set.  Without this, WS_EX_NOACTIVATE may not
-        # take effect and clicks on key buttons will steal focus before
-        # SendInput fires.
+        # One call doing two jobs.
+        #
+        # HWND_TOPMOST puts the window in the topmost Z-order band, which
+        # is the only way to get there and the thing that was missing.
+        # SWP_FRAMECHANGED forces the system to re-read the extended style
+        # just written; without it WS_EX_NOACTIVATE may not take effect and
+        # clicks on keys steal focus before SendInput fires.
+        #
+        # SWP_NOACTIVATE keeps us off the foreground while doing it, which
+        # matters more here than usual: this window must never activate.
+        HWND_TOPMOST = -1
         SWP_NOSIZE = 0x0001
         SWP_NOMOVE = 0x0002
-        SWP_NOZORDER = 0x0004
         SWP_NOACTIVATE = 0x0010
         SWP_FRAMECHANGED = 0x0020
+        user32.SetWindowPos.argtypes = [
+            wintypes.HWND,
+            wintypes.HWND,
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_int,
+            wintypes.UINT,
+        ]
+        user32.SetWindowPos.restype = wintypes.BOOL
+        kernel32.SetLastError(0)
         ok = user32.SetWindowPos(
             hwnd,
+            HWND_TOPMOST,
             0,
             0,
             0,
             0,
-            0,
-            SWP_NOSIZE | SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED,
+            SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE | SWP_FRAMECHANGED,
         )
         if not ok:
             _logger.warning(
-                "SetWindowPos refresh failed (err=%d); flags set but may not be live yet",
+                "SetWindowPos(HWND_TOPMOST) failed (err=%d); the keyboard may sit "
+                "behind other windows",
                 kernel32.GetLastError(),
             )
 
-        _logger.info("Applied Windows extended styles: WS_EX_NOACTIVATE | WS_EX_TOPMOST")
+        # A taskbar button can *restore* a window without this, which is
+        # why minimising and clicking the button both worked while a
+        # second click did nothing. The shell decides whether a button may
+        # minimise from WS_MINIMIZEBOX / WS_SYSMENU in the ordinary style
+        # word, and this window is a bare WS_POPUP.
+        #
+        # Windows' own on-screen keyboard is the proof that this composes
+        # with never taking focus: osk.exe runs TOPMOST | APPWINDOW |
+        # NOACTIVATE | LAYERED, an extended style identical to ours, and
+        # carries MINIMIZEBOX | SYSMENU in its style word.
+        #
+        # No frame comes with them, which is the thing to check when
+        # touching this on a frameless window: measured before and after
+        # on a real window, the window rect stays equal to the client rect
+        # and neither WS_CAPTION nor WS_THICKFRAME appears. Qt also leaves
+        # the bits alone across a resize.
+        if taskbar_button:
+            kernel32.SetLastError(0)
+            style = user32.GetWindowLongW(hwnd, GWL_STYLE)
+            if style or kernel32.GetLastError() == 0:
+                user32.SetWindowLongW(hwnd, GWL_STYLE, style | WS_MINIMIZEBOX | WS_SYSMENU)
+
+        _logger.info("Applied WS_EX_NOACTIVATE and placed the window in the topmost band")
     except Exception as e:
         _logger.warning("Failed to apply Windows extended styles: %s", e)
 

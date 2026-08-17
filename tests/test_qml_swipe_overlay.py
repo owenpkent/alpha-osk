@@ -678,24 +678,44 @@ class TestSwipeOffPathIsUnaffected:
             "Backspace kept repeating after release with swipe OFF"
         )
 
-    def test_character_keys_never_repeat_with_swipe_off(self, plain_root) -> None:
+    def test_character_key_repeat_follows_the_setting_with_swipe_off(self, plain_root) -> None:
+        """This file's concern is that the swipe-off path behaves like the
+        swipe-on one, not what the default happens to be.
+
+        It used to assert a held letter always produced exactly one
+        keystroke, which was the behaviour when character repeat did not
+        exist. It does now, and is on by default, so the property worth
+        pinning here is that the *setting* governs it on this path too: a
+        held letter follows it in both positions, and the overlay being
+        off changes nothing about that.
+        """
         root, _, synth = plain_root
         key = _find_key(root, type="char", key="a")
         point = key.mapToScene(key.boundingRect().center()).toPoint()
         root.setProperty("repeatDelay", 60)
         root.setProperty("repeatInterval", 20)
+
+        root.setProperty("characterRepeat", False)
         QCoreApplication.processEvents()
         synth.reset_mock()
-
         QTest.mousePress(root, Qt.LeftButton, Qt.NoModifier, point)
         QTest.qWait(_REPEAT_SETTLE_MS)
         QTest.mouseRelease(root, Qt.LeftButton, Qt.NoModifier, point)
         QCoreApplication.processEvents()
-
         # == 1, not <= 1: see the swipe-on version of this test.
         assert _typed(synth).count("a") == 1, (
-            f"expected exactly one 'a' from a held character key with swipe OFF, "
-            f"got {_typed(synth)!r}"
+            f"with the setting off, a held letter must type once; got {_typed(synth)!r}"
+        )
+
+        root.setProperty("characterRepeat", True)
+        QCoreApplication.processEvents()
+        synth.reset_mock()
+        QTest.mousePress(root, Qt.LeftButton, Qt.NoModifier, point)
+        QTest.qWait(_REPEAT_SETTLE_MS)
+        QTest.mouseRelease(root, Qt.LeftButton, Qt.NoModifier, point)
+        QCoreApplication.processEvents()
+        assert _typed(synth).count("a") > 1, (
+            f"with the setting on, a held letter must repeat; got {_typed(synth)!r}"
         )
 
     def test_right_click_types_the_shifted_variant_with_swipe_off(self, plain_root) -> None:

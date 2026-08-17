@@ -48,6 +48,11 @@ Item {
     property bool shiftOn: false
     property bool rightClickShift: true
     property bool keyPreviewEnabled: true
+    // Hold a digit to repeat it. Mirrors the main grid's letters; see
+    // `characterRepeat` in Main.qml for why it is a setting.
+    property bool characterRepeat: false
+    property int repeatDelay: 500
+    property int repeatInterval: 120
 
     // Wired to root.registerCharKey / unregisterCharKey / showKeyPreview /
     // hideKeyPreview in Main.qml.  Registration matters: the swipe overlay
@@ -120,10 +125,14 @@ Item {
                 keyHeight: numRow.keyH
                 fontSize: kd.special ? 11 : 14
                 isSpecial: !!kd.special
-                // Digits must not auto-repeat, same as every other char key.
-                // Esc opts out too: a repeating Esc on a slow release would
-                // close a dialog and then whatever is behind it.
-                enableRepeat: false
+                // Digits follow the same setting the letters do, so
+                // holding "0" behaves like holding "o". Esc opts out
+                // whatever the setting says: a repeating Esc on a slow
+                // release would close a dialog and then whatever is
+                // behind it.
+                enableRepeat: kd.special ? false : numRow.characterRepeat
+                repeatDelay: numRow.repeatDelay
+                repeatInterval: numRow.repeatInterval
                 // Esc is the only special key here, and it is one of the
                 // editing keys the compact grid accents.
                 keyColor: kd.special ? numRow.accentKeyColor : numRow.keyColor
