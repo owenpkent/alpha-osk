@@ -11,7 +11,7 @@ Type into any Windows or Linux app by clicking on-screen keys. Built for people 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![CI](https://github.com/owenpkent/alpha-osk/actions/workflows/ci.yml/badge.svg)](https://github.com/owenpkent/alpha-osk/actions/workflows/ci.yml)
 [![Tests](https://img.shields.io/badge/tests-1576-brightgreen.svg)](tests/)
-[![Releases](https://img.shields.io/badge/releases-alpha--osk--releases-orange.svg)](https://github.com/okstudio1/alpha-osk-releases/releases)
+[![Releases](https://img.shields.io/badge/releases-alpha--osk--releases-orange.svg)](https://github.com/owenpkent/alpha-osk-releases/releases)
 
 <img src="assets/screenshots/dark-theme-keyboard.png" alt="Alpha-OSK on-screen keyboard with function row, QWERTY block, navigation cluster, and numpad" width="900" />
 
@@ -67,7 +67,7 @@ As you click, the keyboard learns your vocabulary and surfaces predictions as cl
 
 Download the latest installer from the public releases repo:
 
-**[github.com/okstudio1/alpha-osk-releases](https://github.com/okstudio1/alpha-osk-releases/releases)**
+**[github.com/owenpkent/alpha-osk-releases](https://github.com/owenpkent/alpha-osk-releases/releases)**
 
 | Platform | File | Notes |
 |----------|------|-------|

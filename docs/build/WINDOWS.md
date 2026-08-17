@@ -608,14 +608,14 @@ gh release create vX.Y.Z \
   release/Alpha-OSK-Setup-X.Y.Z.exe \
   release/Alpha-OSK-Setup-X.Y.Z-requirements.lock.txt \
   release/Alpha-OSK-Setup-X.Y.Z-sbom.cyclonedx.json \
-  --repo okstudio1/alpha-osk-releases \
+  --repo owenpkent/alpha-osk-releases \
   --title "vX.Y.Z" \
   --notes "See https://github.com/owenpkent/alpha-osk/blob/main/CHANGELOG.md"
 ```
 
 The lockfile (~5-10 KB) is the human/pip-friendly answer; the SBOM (~100 KB) is the machine-friendly answer that compliance scanners ingest directly. See *Dependency Lockfile & SBOM* below for what each is for.
 
-> ⚠️ **The `--repo okstudio1/alpha-osk-releases` flag is mandatory.** The auto-updater's API URL is hard-pinned to the releases repo (`src/updater.py::GITHUB_API_URL`). Forgetting `--repo` will create the release in the source repo where end users' updaters won't look. Tag the source repo for changelog tracking; publish binaries in the releases repo.
+> ⚠️ **The `--repo owenpkent/alpha-osk-releases` flag is mandatory.** The auto-updater's API URL is hard-pinned to the releases repo (`src/updater.py::GITHUB_API_URL`). Forgetting `--repo` will create the release in the source repo where end users' updaters won't look. Tag the source repo for changelog tracking; publish binaries in the releases repo.
 
 **Add the SmartScreen note to the top of every release body.** Downloaders land on the releases page, not the README, so the install warning explanation belongs there too. Prepend this block above the changelog (em-dash-free, matches the README copy):
 
@@ -626,7 +626,7 @@ The lockfile (~5-10 KB) is the human/pip-friendly answer; the SBOM (~100 KB) is 
 ---
 ```
 
-To add it to an already-published release: `gh release view vX.Y.Z --repo okstudio1/alpha-osk-releases --json body --jq .body > body.md`, prepend the block, then `gh release edit vX.Y.Z --repo okstudio1/alpha-osk-releases --notes-file body.md`. See *SmartScreen warnings are NOT a signing failure* under Code Signing for why this is reputation, not a signing bug.
+To add it to an already-published release: `gh release view vX.Y.Z --repo owenpkent/alpha-osk-releases --json body --jq .body > body.md`, prepend the block, then `gh release edit vX.Y.Z --repo owenpkent/alpha-osk-releases --notes-file body.md`. See *SmartScreen warnings are NOT a signing failure* under Code Signing for why this is reputation, not a signing bug.
 
 ### Tracking downloads
 
@@ -636,7 +636,7 @@ GitHub stamps a `download_count` on every release asset. To see the per-release 
 python scripts/downloads.py
 ```
 
-The script just wraps `gh api repos/okstudio1/alpha-osk-releases/releases --paginate` and sums each release's asset counts. Requires `gh` to be authenticated against an account with read access to the releases repo.
+The script just wraps `gh api repos/owenpkent/alpha-osk-releases/releases --paginate` and sums each release's asset counts. Requires `gh` to be authenticated against an account with read access to the releases repo.
 
 Caveat: the count includes auto-updater fetches as well as manual clicks from the release page — GitHub doesn't distinguish. Treat it as a directional number (downloads, not unique installs). If you ever need true install / DAU numbers, that requires a separate telemetry endpoint (off by default, opt-in setting) — see the auto-update doc for the model.
 

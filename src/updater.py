@@ -82,7 +82,7 @@ _logger = logging.getLogger("Updater")
 #
 # Anything you change here weakens or relocates the trust anchor.  Treat
 # these constants the same way you'd treat a TLS pin.
-GITHUB_API_URL = "https://api.github.com/repos/okstudio1/alpha-osk-releases/releases/latest"
+GITHUB_API_URL = "https://api.github.com/repos/owenpkent/alpha-osk-releases/releases/latest"
 # The repo above hosts only release binaries.  The application source
 # lives in a separate public repo (``owenpkent/alpha-osk``).  The split
 # was originally a private/public boundary (source private until
@@ -90,6 +90,18 @@ GITHUB_API_URL = "https://api.github.com/repos/okstudio1/alpha-osk-releases/rele
 # hard-pinned to the releases-repo URL; moving release artefacts to a
 # different URL would orphan all existing installs until the user
 # manually upgraded.
+#
+# The releases repo moved from the ``okstudio1`` org to ``owenpkent`` on
+# 2026-08-17, and every build up to and including 1.2.2 is pinned to the
+# old URL.  Those installs keep updating **only** because GitHub answers
+# a transferred repo's old REST path with a 301 to
+# ``api.github.com/repositories/<id>/...``, which ``urlopen`` follows
+# transparently.  Two consequences, both load-bearing: a repo named
+# ``alpha-osk-releases`` must never be created under ``okstudio1`` again
+# (reclaiming the name kills the redirect and strands those installs),
+# and the download-URL check below stays host-scoped rather than
+# path-scoped, because assets served through the redirect carry the new
+# owner in their path.
 # SHA1 thumbprint of the OK Studio Inc. EV code-signing certificate.
 # Lowercase, no spaces.  Matches what ``signtool sign /sha1`` uses and
 # what ``Get-AuthenticodeSignature .Thumbprint`` returns (we normalise

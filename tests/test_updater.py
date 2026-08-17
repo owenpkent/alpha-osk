@@ -18,6 +18,7 @@ import pytest
 from src import updater
 from src.updater import (
     EV_CERT_SHA1_THUMBPRINT,
+    GITHUB_API_URL,
     UpdateInfo,
     _file_version_matches,
     _install_target_dir,
@@ -86,7 +87,7 @@ class TestDownloadUrlWhitelist:
 
     def test_github_com_allowed(self):
         assert _is_safe_download_url(
-            "https://github.com/okstudio1/alpha-osk-releases/releases/download/v1.0.3/Alpha-OSK-Setup-1.0.3.exe"
+            "https://github.com/owenpkent/alpha-osk-releases/releases/download/v1.0.3/Alpha-OSK-Setup-1.0.3.exe"
         )
 
     def test_github_cdn_allowed(self):
@@ -110,7 +111,7 @@ class TestDownloadUrlWhitelist:
     def test_http_rejected(self):
         # No plaintext, even to GitHub.
         assert not _is_safe_download_url(
-            "http://github.com/okstudio1/alpha-osk-releases/releases/download/v1.0.3/Alpha-OSK-Setup-1.0.3.exe"
+            "http://github.com/owenpkent/alpha-osk-releases/releases/download/v1.0.3/Alpha-OSK-Setup-1.0.3.exe"
         )
 
     def test_other_schemes_rejected(self):
@@ -120,6 +121,44 @@ class TestDownloadUrlWhitelist:
     def test_garbage_url_rejected(self):
         assert not _is_safe_download_url("not a url at all")
         assert not _is_safe_download_url("")
+
+
+class TestTheReleasesRepoOwnerMove:
+    """The releases repo moved from the ``okstudio1`` org to ``owenpkent``
+    on 2026-08-17, and every build through v1.2.2 is pinned to the old
+    URL for good.  Those installs survive on GitHub's transfer redirect,
+    which lands them on release JSON whose asset URLs carry the *new*
+    owner.  Both halves of that are asserted here because both are easy
+    to break while looking like a tightening.
+    """
+
+    def test_an_asset_under_a_different_owner_is_still_accepted(self):
+        # The property that keeps pre-v1.2.3 installs updating: the
+        # whitelist is host-scoped, so a client pinned to the okstudio1
+        # endpoint accepts the owenpkent asset it is redirected to.
+        # Growing a path or owner check here would reject exactly the
+        # installs the redirect exists to serve.
+        assert _is_safe_download_url(
+            "https://github.com/okstudio1/alpha-osk-releases/releases/download/v1.0.3/Alpha-OSK-Setup-1.0.3.exe"
+        )
+        assert _is_safe_download_url(
+            "https://github.com/owenpkent/alpha-osk-releases/releases/download/v1.2.3/Alpha-OSK-Setup-1.2.3.exe"
+        )
+
+    def test_the_host_check_is_what_does_the_rejecting(self):
+        # The inverse, so "accept any path" can't pass as the fix above:
+        # an attacker-owned path on an attacker-owned host is still out.
+        assert not _is_safe_download_url(
+            "https://evil.example.com/owenpkent/alpha-osk-releases/releases/download/v9.9.9/Alpha-OSK-Setup-9.9.9.exe"
+        )
+
+    def test_new_builds_point_at_the_current_owner(self):
+        # A revert to the org URL would still work (via the redirect)
+        # right up until the name is reclaimed, so nothing else in the
+        # suite would notice it.
+        assert GITHUB_API_URL == (
+            "https://api.github.com/repos/owenpkent/alpha-osk-releases/releases/latest"
+        )
 
 
 class TestNotesSanitisation:
@@ -178,7 +217,7 @@ class TestCheckForUpdate:
             _api_response(
                 tag="v1.0.3",
                 asset_name="Alpha-OSK-Setup-1.0.3.exe",
-                asset_url="https://github.com/okstudio1/alpha-osk-releases/releases/download/v1.0.3/Alpha-OSK-Setup-1.0.3.exe",
+                asset_url="https://github.com/owenpkent/alpha-osk-releases/releases/download/v1.0.3/Alpha-OSK-Setup-1.0.3.exe",
             )
         )
         info = check_for_update(current_version="1.0.2")
@@ -191,7 +230,7 @@ class TestCheckForUpdate:
             _api_response(
                 tag="v1.0.2",
                 asset_name="Alpha-OSK-Setup-1.0.2.exe",
-                asset_url="https://github.com/okstudio1/alpha-osk-releases/releases/download/v1.0.2/Alpha-OSK-Setup-1.0.2.exe",
+                asset_url="https://github.com/owenpkent/alpha-osk-releases/releases/download/v1.0.2/Alpha-OSK-Setup-1.0.2.exe",
             )
         )
         assert check_for_update(current_version="1.0.2") is None
@@ -202,7 +241,7 @@ class TestCheckForUpdate:
             _api_response(
                 tag="v1.0.0",
                 asset_name="Alpha-OSK-Setup-1.0.0.exe",
-                asset_url="https://github.com/okstudio1/alpha-osk-releases/releases/download/v1.0.0/Alpha-OSK-Setup-1.0.0.exe",
+                asset_url="https://github.com/owenpkent/alpha-osk-releases/releases/download/v1.0.0/Alpha-OSK-Setup-1.0.0.exe",
             )
         )
         assert check_for_update(current_version="1.0.2") is None
@@ -224,7 +263,7 @@ class TestCheckForUpdate:
             _api_response(
                 tag="v1.0.3",
                 asset_name="totally-legit.exe",
-                asset_url="https://github.com/okstudio1/alpha-osk-releases/releases/download/v1.0.3/totally-legit.exe",
+                asset_url="https://github.com/owenpkent/alpha-osk-releases/releases/download/v1.0.3/totally-legit.exe",
             )
         )
         assert check_for_update(current_version="1.0.2") is None
@@ -234,7 +273,7 @@ class TestCheckForUpdate:
             _api_response(
                 tag="v1.0.3-evil",
                 asset_name="Alpha-OSK-Setup-1.0.3.exe",
-                asset_url="https://github.com/okstudio1/alpha-osk-releases/releases/download/v1.0.3/Alpha-OSK-Setup-1.0.3.exe",
+                asset_url="https://github.com/owenpkent/alpha-osk-releases/releases/download/v1.0.3/Alpha-OSK-Setup-1.0.3.exe",
             )
         )
         assert check_for_update(current_version="1.0.2") is None
@@ -503,7 +542,7 @@ class TestDownloadAndInstall:
         # installer must NOT be launched.
         info = UpdateInfo(
             version="1.0.3",
-            download_url="https://github.com/okstudio1/alpha-osk-releases/releases/download/v1.0.3/Alpha-OSK-Setup-1.0.3.exe",
+            download_url="https://github.com/owenpkent/alpha-osk-releases/releases/download/v1.0.3/Alpha-OSK-Setup-1.0.3.exe",
             asset_name="Alpha-OSK-Setup-1.0.3.exe",
             notes="",
         )
@@ -528,7 +567,7 @@ class TestDownloadAndInstall:
     def test_launches_only_after_signature_passes(self, monkeypatch, tmp_path):
         info = UpdateInfo(
             version="1.0.3",
-            download_url="https://github.com/okstudio1/alpha-osk-releases/releases/download/v1.0.3/Alpha-OSK-Setup-1.0.3.exe",
+            download_url="https://github.com/owenpkent/alpha-osk-releases/releases/download/v1.0.3/Alpha-OSK-Setup-1.0.3.exe",
             asset_name="Alpha-OSK-Setup-1.0.3.exe",
             notes="",
         )
@@ -556,7 +595,7 @@ class TestDownloadAndInstall:
     def test_propagates_launch_failure(self, monkeypatch):
         info = UpdateInfo(
             version="1.0.3",
-            download_url="https://github.com/okstudio1/alpha-osk-releases/releases/download/v1.0.3/Alpha-OSK-Setup-1.0.3.exe",
+            download_url="https://github.com/owenpkent/alpha-osk-releases/releases/download/v1.0.3/Alpha-OSK-Setup-1.0.3.exe",
             asset_name="Alpha-OSK-Setup-1.0.3.exe",
             notes="",
         )
@@ -576,7 +615,7 @@ class TestDownloadAndInstall:
     def test_aborts_when_download_fails(self, monkeypatch):
         info = UpdateInfo(
             version="1.0.3",
-            download_url="https://github.com/okstudio1/alpha-osk-releases/releases/download/v1.0.3/Alpha-OSK-Setup-1.0.3.exe",
+            download_url="https://github.com/owenpkent/alpha-osk-releases/releases/download/v1.0.3/Alpha-OSK-Setup-1.0.3.exe",
             asset_name="Alpha-OSK-Setup-1.0.3.exe",
             notes="",
         )
@@ -606,7 +645,7 @@ class TestInstallerLaunchingCallback:
     def _info(self) -> UpdateInfo:
         return UpdateInfo(
             version="1.2.3",
-            download_url="https://github.com/okstudio1/alpha-osk-releases/releases/download/v1.2.3/Alpha-OSK-Setup-1.2.3.exe",
+            download_url="https://github.com/owenpkent/alpha-osk-releases/releases/download/v1.2.3/Alpha-OSK-Setup-1.2.3.exe",
             asset_name="Alpha-OSK-Setup-1.2.3.exe",
             notes="",
         )
@@ -807,7 +846,7 @@ class TestRelauncherSpawnHasNoConsole:
         return updater.UpdateInfo(
             version="1.0.3",
             download_url=(
-                "https://github.com/okstudio1/alpha-osk-releases/releases/"
+                "https://github.com/owenpkent/alpha-osk-releases/releases/"
                 "download/v1.0.3/Alpha-OSK-Setup-1.0.3.exe"
             ),
             asset_name="Alpha-OSK-Setup-1.0.3.exe",
