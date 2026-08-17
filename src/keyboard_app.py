@@ -288,12 +288,12 @@ def _apply_window_flags(root) -> None:
 
     # Windows-specific: apply WS_EX_NOACTIVATE via Win32 API
     if CURRENT_PLATFORM == "windows":
-        _apply_windows_extended_styles(root)
+        _apply_windows_extended_styles(root, taskbar_button=True)
     elif CURRENT_PLATFORM == "macos":
         _apply_macos_window_flags(root)
 
 
-def _apply_windows_extended_styles(root) -> None:
+def _apply_windows_extended_styles(root, *, taskbar_button: bool = False) -> None:
     """
     Use Win32 ``SetWindowLongW`` to add extended window styles that Qt
     cannot express through its own flag system.
@@ -347,9 +347,12 @@ def _apply_windows_extended_styles(root) -> None:
         from ctypes import wintypes
 
         GWL_EXSTYLE = -20
+        GWL_STYLE = -16
         WS_EX_NOACTIVATE = 0x08000000
         WS_EX_TOOLWINDOW = 0x00000080
         WS_EX_APPWINDOW = 0x00040000
+        WS_MINIMIZEBOX = 0x00020000
+        WS_SYSMENU = 0x00080000
 
         user32 = ctypes.windll.user32
         kernel32 = ctypes.windll.kernel32
@@ -393,7 +396,9 @@ def _apply_windows_extended_styles(root) -> None:
         # minimise button had nowhere to go and clicking the pinned icon
         # did nothing.  APPWINDOW is set as well as TOOLWINDOW cleared,
         # so the answer does not depend on Qt leaving the rest alone.
-        new_style = (current | WS_EX_NOACTIVATE | WS_EX_APPWINDOW) & ~WS_EX_TOOLWINDOW
+        new_style = current | WS_EX_NOACTIVATE
+        if taskbar_button:
+            new_style = (new_style | WS_EX_APPWINDOW) & ~WS_EX_TOOLWINDOW
         kernel32.SetLastError(0)
         prev = user32.SetWindowLongW(hwnd, GWL_EXSTYLE, new_style)
         if prev == 0 and kernel32.GetLastError() != 0:
@@ -444,6 +449,28 @@ def _apply_windows_extended_styles(root) -> None:
                 "behind other windows",
                 kernel32.GetLastError(),
             )
+
+        # A taskbar button can *restore* a window without this, which is
+        # why minimising and clicking the button both worked while a
+        # second click did nothing. The shell decides whether a button may
+        # minimise from WS_MINIMIZEBOX / WS_SYSMENU in the ordinary style
+        # word, and this window is a bare WS_POPUP.
+        #
+        # Windows' own on-screen keyboard is the proof that this composes
+        # with never taking focus: osk.exe runs TOPMOST | APPWINDOW |
+        # NOACTIVATE | LAYERED, an extended style identical to ours, and
+        # carries MINIMIZEBOX | SYSMENU in its style word.
+        #
+        # No frame comes with them, which is the thing to check when
+        # touching this on a frameless window: measured before and after
+        # on a real window, the window rect stays equal to the client rect
+        # and neither WS_CAPTION nor WS_THICKFRAME appears. Qt also leaves
+        # the bits alone across a resize.
+        if taskbar_button:
+            kernel32.SetLastError(0)
+            style = user32.GetWindowLongW(hwnd, GWL_STYLE)
+            if style or kernel32.GetLastError() == 0:
+                user32.SetWindowLongW(hwnd, GWL_STYLE, style | WS_MINIMIZEBOX | WS_SYSMENU)
 
         _logger.info("Applied WS_EX_NOACTIVATE and placed the window in the topmost band")
     except Exception as e:

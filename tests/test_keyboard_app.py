@@ -134,7 +134,7 @@ class TestAlwaysOnTopIsAppliedAsAZOrderChange:
         return root
 
     def test_the_window_is_put_in_the_topmost_band(self, win32) -> None:
-        _apply_windows_extended_styles(self._root())
+        _apply_windows_extended_styles(self._root(), taskbar_button=True)
 
         win32.SetWindowPos.assert_called_once()
         args = win32.SetWindowPos.call_args[0]
@@ -146,7 +146,7 @@ class TestAlwaysOnTopIsAppliedAsAZOrderChange:
     def test_the_call_does_not_decline_to_reorder(self, win32) -> None:
         """SWP_NOZORDER asks the system to leave the Z-order alone, which
         is the opposite of the point and is what the old code passed."""
-        _apply_windows_extended_styles(self._root())
+        _apply_windows_extended_styles(self._root(), taskbar_button=True)
 
         flags = win32.SetWindowPos.call_args[0][6]
         assert not flags & self.SWP_NOZORDER, "SWP_NOZORDER cancels the whole call"
@@ -157,17 +157,17 @@ class TestAlwaysOnTopIsAppliedAsAZOrderChange:
     def test_noactivate_still_goes_through_the_style_word(self, win32) -> None:
         """The inverse: this one *is* settable that way, and must stay,
         or every key click steals focus from the app being typed into."""
-        _apply_windows_extended_styles(self._root())
+        _apply_windows_extended_styles(self._root(), taskbar_button=True)
 
-        style = win32.SetWindowLongW.call_args[0][2]
+        style = win32.SetWindowLongW.call_args_list[0][0][2]
         assert style & self.WS_EX_NOACTIVATE
 
     def test_topmost_is_not_written_into_the_style_word(self, win32) -> None:
         """Writing it there is what knocked the window out of the band:
         Qt's WindowStaysOnTopHint had already put it in."""
-        _apply_windows_extended_styles(self._root())
+        _apply_windows_extended_styles(self._root(), taskbar_button=True)
 
-        style = win32.SetWindowLongW.call_args[0][2]
+        style = win32.SetWindowLongW.call_args_list[0][0][2]
         assert not style & self.WS_EX_TOPMOST
 
 
@@ -218,9 +218,9 @@ class TestTheKeyboardKeepsItsTaskbarButton:
         return root
 
     def test_toolwindow_is_cleared(self, win32) -> None:
-        _apply_windows_extended_styles(self._root())
+        _apply_windows_extended_styles(self._root(), taskbar_button=True)
 
-        style = win32.SetWindowLongW.call_args[0][2]
+        style = win32.SetWindowLongW.call_args_list[0][0][2]
         assert not style & self.WS_EX_TOOLWINDOW, (
             "WS_EX_TOOLWINDOW survived, so the keyboard has no taskbar button "
             "and the minimise button has nowhere to put it"
@@ -229,10 +229,43 @@ class TestTheKeyboardKeepsItsTaskbarButton:
     def test_appwindow_is_asserted(self, win32) -> None:
         """Belt and braces: clearing TOOLWINDOW asks Qt not to have opted
         us out, setting APPWINDOW says we want in regardless."""
+        _apply_windows_extended_styles(self._root(), taskbar_button=True)
+
+        style = win32.SetWindowLongW.call_args_list[0][0][2]
+        assert style & self.WS_EX_APPWINDOW
+
+    def test_the_taskbar_button_can_minimise(self, win32) -> None:
+        """A button can *restore* a window without this, which is why
+        minimising and clicking the button both worked while a second
+        click did nothing: the shell decides whether a button may minimise
+        from WS_MINIMIZEBOX / WS_SYSMENU in the ordinary style word, and
+        this window is a bare WS_POPUP.
+
+        Windows' own on-screen keyboard is the proof it composes with
+        never taking focus: osk.exe runs the identical extended style and
+        carries both of these.
+        """
+        _apply_windows_extended_styles(self._root(), taskbar_button=True)
+
+        writes = win32.SetWindowLongW.call_args_list
+        assert len(writes) == 2, "expected an extended-style write and a style write"
+        gwl_style, style = writes[1][0][1], writes[1][0][2]
+        assert gwl_style == -16, "the second write must target GWL_STYLE"
+        assert style & 0x00020000, "WS_MINIMIZEBOX missing"
+        assert style & 0x00080000, "WS_SYSMENU missing"
+
+    def test_a_subordinate_window_stays_out_of_the_taskbar(self, win32) -> None:
+        """The snippets window shares this function, and a floating palette
+        with its own taskbar button is clutter. It asks for focus
+        suppression only, so nothing here may touch its taskbar presence or
+        give it a minimise box."""
         _apply_windows_extended_styles(self._root())
 
-        style = win32.SetWindowLongW.call_args[0][2]
-        assert style & self.WS_EX_APPWINDOW
+        writes = win32.SetWindowLongW.call_args_list
+        assert len(writes) == 1, "a style write happened for a non-taskbar window"
+        style = writes[0][0][2]
+        assert style & 0x08000000, "NOACTIVATE is the one thing it does want"
+        assert not style & 0x00040000, "APPWINDOW was forced on"
 
     def test_the_rest_of_the_style_word_survives(self, win32) -> None:
         """The inverse: this must clear one bit, not rewrite the word.
@@ -240,7 +273,7 @@ class TestTheKeyboardKeepsItsTaskbarButton:
         Qt puts real state in there, LAYERED among it, which is what
         window opacity rides on.
         """
-        _apply_windows_extended_styles(self._root())
+        _apply_windows_extended_styles(self._root(), taskbar_button=True)
 
-        style = win32.SetWindowLongW.call_args[0][2]
+        style = win32.SetWindowLongW.call_args_list[0][0][2]
         assert style & 0x08000000, "NOACTIVATE was dropped"
