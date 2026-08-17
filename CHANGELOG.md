@@ -2,7 +2,9 @@
 
 All notable changes to Alpha-OSK are documented in this file.
 
-## [Unreleased]
+## [1.2.1] (2026-08-16)
+
+Headlines: the keyboard is genuinely always-on-top again and has a working taskbar button (both were broken in 1.2.0, and both turned out to be the window's styles not being what the code believed); the Snippets editor behaves like an ordinary text box, so double-click selects a word, Tab moves between the fields and Ctrl+C/V/X/A/Z work; holding a letter repeats it; and moving the caret with Home, End or the arrows now clears the suggestion context, which matters because that context is what a tapped suggestion measures against when it decides how much text to replace.
 
 ### Added
 - **Holding a letter or a digit now repeats it, the way a physical keyboard does.** Requested, after holding a key and getting exactly one character out of it. Backspace and the arrows have always repeated; letters deliberately did not, because a key here is held by not letting go of a mouse button, and a slow release is ordinary on this keyboard rather than a mistake, so a repeating letter can turn one intended character into several. That argument is about the people this keyboard is built for, which is also the reason the person it describes gets to overrule it. Repeat starts only after about 800 ms of deliberate holding, and *Settings -> Smart Typing -> Input -> Hold a Letter to Repeat It* turns it back off. Esc and Tab never repeat whatever the setting says: a repeating Esc on a slow release closes a dialog and then whatever was behind it.
