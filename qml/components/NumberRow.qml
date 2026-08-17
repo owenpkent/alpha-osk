@@ -49,8 +49,11 @@ Item {
     property bool rightClickShift: true
     property bool keyPreviewEnabled: true
     // Hold a digit to repeat it. Mirrors the main grid's letters; see
-    // `characterRepeat` in Main.qml for why it is a setting.
-    property bool characterRepeat: false
+    // `characterRepeat` in Main.qml for why it is a setting. Defaults to
+    // true to match Main.qml/UnifiedSettingsPanel/KeyButton's own default:
+    // a caller that forgets to pass this through must still land on the
+    // shipped behaviour, not silently revert to the pre-1.2.1 one.
+    property bool characterRepeat: true
     property int repeatDelay: 500
     property int repeatInterval: 120
 
@@ -133,6 +136,10 @@ Item {
                 enableRepeat: kd.special ? false : numRow.characterRepeat
                 repeatDelay: numRow.repeatDelay
                 repeatInterval: numRow.repeatInterval
+                // Same 800 ms hard floor as the main grid's letters (see
+                // KeyButton's `repeatArmFloorMs`); Esc is not a repeat
+                // target at all so it stays at the no-floor default.
+                repeatArmFloorMs: kd.special ? 0 : 800
                 // Esc is the only special key here, and it is one of the
                 // editing keys the compact grid accents.
                 keyColor: kd.special ? numRow.accentKeyColor : numRow.keyColor

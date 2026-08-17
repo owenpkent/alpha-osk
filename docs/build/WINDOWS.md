@@ -155,7 +155,9 @@ Alpha-OSK must behave differently from a normal application window:
 
 1. **Stay on top** of all other windows.
 2. **Never steal keyboard focus** from the user's active application.
-3. **Not appear in the taskbar** or Alt+Tab switcher.
+3. **Have a normal taskbar entry**, so the standard minimize button has
+   somewhere to drop the OSK into and clicking that entry restores it.
+   Accepted trade-off: the OSK also shows up in the Alt+Tab switcher.
 4. **Be draggable** by its custom title bar.
 
 ### How This Is Achieved on Windows
@@ -167,14 +169,22 @@ Alpha-OSK must behave differently from a normal application window:
 | Qt `FramelessWindowHint` | Removes the OS title bar (we draw our own in QML) |
 | Qt `WindowDoesNotAcceptFocus` | Qt-level focus prevention |
 | Win32 `WS_EX_NOACTIVATE` | OS-level: window is **never** activated on click |
-| Win32 `WS_EX_TOOLWINDOW` | Hidden from Alt+Tab and taskbar |
-| Win32 `WS_EX_TOPMOST` | Defence-in-depth topmost flag |
+| Win32 `WS_EX_TOOLWINDOW` | Actively *cleared* (Qt adds it on its own to an already-shown window); clearing it is what keeps the taskbar entry |
+| Win32 `WS_EX_APPWINDOW` | Set alongside the `WS_EX_TOOLWINDOW` clear, so the taskbar entry doesn't depend on Qt leaving the rest of the style word alone |
 
 The Win32 extended styles are applied in `src/keyboard_app.py` via
 `SetWindowLongW()` after the Qt window is created.  This is necessary
 because Qt's flag system doesn't expose `WS_EX_NOACTIVATE`, which is
 **critical** — without it, clicking a key on the OSK would steal focus
 from the user's text editor.
+
+`WS_EX_TOPMOST` is deliberately **not** part of this write. Always-on-top
+comes from a separate `SetWindowPos(HWND_TOPMOST)` call: the style bit
+and the topmost Z-order band are different pieces of state, and writing
+the bit alone leaves the band untouched, producing a window that reports
+itself as topmost while sitting behind ordinary ones. See
+`_apply_windows_extended_styles()` in `src/keyboard_app.py` for the full
+story.
 
 ---
 
@@ -793,7 +803,7 @@ higher-integrity windows) without granting broad admin access.  See the
 | Symptom | Cause | Fix |
 |---------|-------|-----|
 | Keyboard steals focus on click | `WS_EX_NOACTIVATE` not applied | Check logs for "Failed to apply Windows extended styles" |
-| Keyboard appears in Alt+Tab | `WS_EX_TOOLWINDOW` not applied | Same as above |
+| Keyboard has no taskbar entry / minimize button has nowhere to go | `WS_EX_TOOLWINDOW` clear or `WS_EX_APPWINDOW` set failed | Check logs for "Failed to apply Windows extended styles". Note: the keyboard appearing in Alt+Tab is expected, not a bug (see "How This Is Achieved on Windows" above); don't re-add `WS_EX_TOOLWINDOW` to "fix" it. |
 | Keyboard disappears behind other windows | Topmost not working | Try restarting Alpha-OSK |
 | **Window becomes massive after moving to a different monitor** | Qt's default DPI rounding multiplies logical window dimensions when crossing monitors with different scale factors | Fixed: `PassThrough` DPI rounding policy set in `keyboard_app.py`; `onScreenChanged` in `Main.qml` clamps width to the new screen's available width |
 

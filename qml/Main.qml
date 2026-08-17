@@ -481,8 +481,12 @@ Window {
     // feature being off for everyone who does not know it exists.
     //
     // Still a setting, so it can be turned off by anyone the original
-    // argument does describe, and the warm-up grace in KeyButton keeps
-    // the repeat from starting until roughly 800 ms of deliberate hold.
+    // argument does describe. The repeat is kept from starting until at
+    // least 800 ms of deliberate hold by KeyButton's `repeatArmFloorMs`,
+    // set on every character key below - a hard floor rather than
+    // `repeatDelay + warmUpGrace` arithmetic, because `repeatDelay` is
+    // itself a user setting clamped down to 300 ms, where the arithmetic
+    // alone would let the first repeat land at 600 ms.
     property bool characterRepeat: appSettings.savedCharacterRepeat
 
     // Two registries, both populated by each KeyButton on creation. They are
@@ -2225,6 +2229,14 @@ Window {
                                                  && root.repeatableActions.indexOf(kd.action) !== -1)
                                 repeatDelay: root.repeatDelay
                                 repeatInterval: root.repeatInterval
+                                // Character keys get the 800 ms hard floor
+                                // (see KeyButton's `repeatArmFloorMs`) so
+                                // the "won't fire on a slow release" promise
+                                // holds even when the user has turned
+                                // `repeatDelay` down for a snappier
+                                // Backspace. Del/arrows share that lowered
+                                // delay on purpose, so they stay at 0.
+                                repeatArmFloorMs: kd.type === "char" ? 800 : 0
 
                                 onKeyPressed: {
                                     if (kd.type === "char") {
@@ -2379,6 +2391,9 @@ Window {
                 enterKeyColor: "#2a5a2a"
                 accentColor: root.themeAccent
                 borderColor: root.themeBorder
+                characterRepeat: root.characterRepeat
+                repeatDelay: root.repeatDelay
+                repeatInterval: root.repeatInterval
             }
             }
         }

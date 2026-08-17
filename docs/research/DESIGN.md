@@ -268,8 +268,14 @@ For limited screen space or one-handed use:
 - **Platform Layer**: `src/platform/` abstracts OS-specific key synthesis
   - **Linux**: xdotool (X11) / ydotool (Wayland) via subprocess
   - **Windows**: Win32 SendInput API via ctypes (+ UIAccess for elevated windows)
-- **Window Flags**: WindowStaysOnTopHint, Tool, FramelessWindowHint, WindowDoesNotAcceptFocus
-  - **Windows extra**: WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW via SetWindowLongW
+- **Window Flags**: WindowStaysOnTopHint, FramelessWindowHint, WindowDoesNotAcceptFocus
+  - **Windows extra**: WS_EX_NOACTIVATE via SetWindowLongW, plus
+    `SetWindowPos(HWND_TOPMOST)` for the always-on-top Z-order band.
+    WS_EX_TOOLWINDOW is *cleared*, not applied: Qt adds it behind our
+    back, and it is what takes the taskbar button away. WS_EX_TOPMOST is
+    deliberately not written through SetWindowLongW, since the style bit
+    and the Z-order band are separate state and only SetWindowPos enters
+    the band.
 
 ### Implemented Features
 - ✅ QWERTY layout (adaptive, matches design spec)

@@ -266,7 +266,7 @@ The OSK must never take focus from the user's target application. On Windows thi
 
 - `Qt::WindowDoesNotAcceptFocus` and `Qt::Tool` on the QML window.
 - `WS_EX_NOACTIVATE` set via `SetWindowLong` after window creation. Qt does not expose this flag and will not set it on its own.
-- `WS_EX_TOOLWINDOW` to keep the window out of Alt-Tab and the taskbar.
+- `WS_EX_TOOLWINDOW` is actively *cleared* rather than applied (Qt adds it on its own once these flags reach an already-shown window), and `WS_EX_APPWINDOW` is set, so the keyboard keeps a normal taskbar entry for its minimize button. The accepted trade-off is that the OSK also appears in Alt-Tab; `WS_EX_NOACTIVATE` is what actually matters for the non-focus invariant, and neither taskbar nor Alt-Tab visibility affects it.
 
 On Linux, the equivalent is `Qt::Tool` plus `_NET_WM_STATE_ABOVE` and `_NET_WM_WINDOW_TYPE_UTILITY`.
 

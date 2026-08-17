@@ -14,6 +14,21 @@ Item {
     property color enterKeyColor: "#2a5a2a"
     property color accentColor: "#4a9eff"
     property color borderColor: "#505050"
+    // Hold-to-repeat. Two different populations share this grid depending on
+    // NumLock: with it on every key but Enter/NumLock types a character, so
+    // those follow `characterRepeat` exactly like the main grid's letters
+    // (operators included - "/", "*", "-", "+" are `pressKey` calls just
+    // like a digit is, so there is no reason to treat them differently).
+    // With it off, the digits become the navigation actions
+    // NavigationPanel already carries, and each one repeats exactly as it
+    // does over there, regardless of this setting: up/down/left/right,
+    // pageup/pagedown and delete repeat, Home and End do not (the caret
+    // cannot move past the line start or end, so every press after the
+    // first is a no-op). See each key's `enableRepeat` below. Enter and
+    // NumLock never repeat either way.
+    property bool characterRepeat: true
+    property int repeatDelay: 500
+    property int repeatInterval: 120
 
     implicitWidth: numGrid.implicitWidth
     implicitHeight: numGrid.implicitHeight
@@ -43,6 +58,13 @@ Item {
                 keyTextColor: numpadPanel.keyTextColor
                 accentColor: numpadPanel.accentColor
                 borderColor: numpadPanel.borderColor
+                // Home does not repeat with NumLock off, matching
+                // NavigationPanel: the caret is already at the line start
+                // after the first press, so every later one is a no-op.
+                enableRepeat: numpadPanel.numLockOn && numpadPanel.characterRepeat
+                repeatDelay: numpadPanel.repeatDelay
+                repeatInterval: numpadPanel.repeatInterval
+                repeatArmFloorMs: numpadPanel.numLockOn ? 800 : 0
                 onKeyPressed: numpadPanel.numLockOn ? keyboard.pressKey("7") : keyboard.pressSpecialKey("home")
             }
             KeyButton {
@@ -55,6 +77,10 @@ Item {
                 keyTextColor: numpadPanel.keyTextColor
                 accentColor: numpadPanel.accentColor
                 borderColor: numpadPanel.borderColor
+                enableRepeat: numpadPanel.numLockOn ? numpadPanel.characterRepeat : true
+                repeatDelay: numpadPanel.repeatDelay
+                repeatInterval: numpadPanel.repeatInterval
+                repeatArmFloorMs: numpadPanel.numLockOn ? 800 : 0
                 onKeyPressed: numpadPanel.numLockOn ? keyboard.pressKey("8") : keyboard.pressSpecialKey("up")
             }
             KeyButton {
@@ -67,6 +93,10 @@ Item {
                 keyTextColor: numpadPanel.keyTextColor
                 accentColor: numpadPanel.accentColor
                 borderColor: numpadPanel.borderColor
+                enableRepeat: numpadPanel.numLockOn ? numpadPanel.characterRepeat : true
+                repeatDelay: numpadPanel.repeatDelay
+                repeatInterval: numpadPanel.repeatInterval
+                repeatArmFloorMs: numpadPanel.numLockOn ? 800 : 0
                 onKeyPressed: numpadPanel.numLockOn ? keyboard.pressKey("9") : keyboard.pressSpecialKey("pageup")
             }
             KeyButton {
@@ -80,6 +110,10 @@ Item {
                 keyTextColor: numpadPanel.keyTextColor
                 accentColor: numpadPanel.accentColor
                 borderColor: numpadPanel.borderColor
+                enableRepeat: numpadPanel.characterRepeat
+                repeatDelay: numpadPanel.repeatDelay
+                repeatInterval: numpadPanel.repeatInterval
+                repeatArmFloorMs: 800
                 onKeyPressed: keyboard.pressKey("/")
             }
         }
@@ -97,6 +131,10 @@ Item {
                 keyTextColor: numpadPanel.keyTextColor
                 accentColor: numpadPanel.accentColor
                 borderColor: numpadPanel.borderColor
+                enableRepeat: numpadPanel.numLockOn ? numpadPanel.characterRepeat : true
+                repeatDelay: numpadPanel.repeatDelay
+                repeatInterval: numpadPanel.repeatInterval
+                repeatArmFloorMs: numpadPanel.numLockOn ? 800 : 0
                 onKeyPressed: numpadPanel.numLockOn ? keyboard.pressKey("4") : keyboard.pressSpecialKey("left")
             }
             KeyButton {
@@ -110,6 +148,11 @@ Item {
                 accentColor: numpadPanel.accentColor
                 borderColor: numpadPanel.borderColor
                 enabled: numpadPanel.numLockOn
+                // Blank and disabled with NumLock off, so nothing to repeat.
+                enableRepeat: numpadPanel.numLockOn && numpadPanel.characterRepeat
+                repeatDelay: numpadPanel.repeatDelay
+                repeatInterval: numpadPanel.repeatInterval
+                repeatArmFloorMs: numpadPanel.numLockOn ? 800 : 0
                 onKeyPressed: if (numpadPanel.numLockOn) keyboard.pressKey("5")
             }
             KeyButton {
@@ -122,6 +165,10 @@ Item {
                 keyTextColor: numpadPanel.keyTextColor
                 accentColor: numpadPanel.accentColor
                 borderColor: numpadPanel.borderColor
+                enableRepeat: numpadPanel.numLockOn ? numpadPanel.characterRepeat : true
+                repeatDelay: numpadPanel.repeatDelay
+                repeatInterval: numpadPanel.repeatInterval
+                repeatArmFloorMs: numpadPanel.numLockOn ? 800 : 0
                 onKeyPressed: numpadPanel.numLockOn ? keyboard.pressKey("6") : keyboard.pressSpecialKey("right")
             }
             KeyButton {
@@ -135,6 +182,10 @@ Item {
                 keyTextColor: numpadPanel.keyTextColor
                 accentColor: numpadPanel.accentColor
                 borderColor: numpadPanel.borderColor
+                enableRepeat: numpadPanel.characterRepeat
+                repeatDelay: numpadPanel.repeatDelay
+                repeatInterval: numpadPanel.repeatInterval
+                repeatArmFloorMs: 800
                 onKeyPressed: keyboard.pressKey("*")
             }
         }
@@ -152,6 +203,12 @@ Item {
                 keyTextColor: numpadPanel.keyTextColor
                 accentColor: numpadPanel.accentColor
                 borderColor: numpadPanel.borderColor
+                // End does not repeat with NumLock off, same reason as Home
+                // on the 7 key above.
+                enableRepeat: numpadPanel.numLockOn && numpadPanel.characterRepeat
+                repeatDelay: numpadPanel.repeatDelay
+                repeatInterval: numpadPanel.repeatInterval
+                repeatArmFloorMs: numpadPanel.numLockOn ? 800 : 0
                 onKeyPressed: numpadPanel.numLockOn ? keyboard.pressKey("1") : keyboard.pressSpecialKey("end")
             }
             KeyButton {
@@ -164,6 +221,10 @@ Item {
                 keyTextColor: numpadPanel.keyTextColor
                 accentColor: numpadPanel.accentColor
                 borderColor: numpadPanel.borderColor
+                enableRepeat: numpadPanel.numLockOn ? numpadPanel.characterRepeat : true
+                repeatDelay: numpadPanel.repeatDelay
+                repeatInterval: numpadPanel.repeatInterval
+                repeatArmFloorMs: numpadPanel.numLockOn ? 800 : 0
                 onKeyPressed: numpadPanel.numLockOn ? keyboard.pressKey("2") : keyboard.pressSpecialKey("down")
             }
             KeyButton {
@@ -176,6 +237,10 @@ Item {
                 keyTextColor: numpadPanel.keyTextColor
                 accentColor: numpadPanel.accentColor
                 borderColor: numpadPanel.borderColor
+                enableRepeat: numpadPanel.numLockOn ? numpadPanel.characterRepeat : true
+                repeatDelay: numpadPanel.repeatDelay
+                repeatInterval: numpadPanel.repeatInterval
+                repeatArmFloorMs: numpadPanel.numLockOn ? 800 : 0
                 onKeyPressed: numpadPanel.numLockOn ? keyboard.pressKey("3") : keyboard.pressSpecialKey("pagedown")
             }
             KeyButton {
@@ -189,6 +254,10 @@ Item {
                 keyTextColor: numpadPanel.keyTextColor
                 accentColor: numpadPanel.accentColor
                 borderColor: numpadPanel.borderColor
+                enableRepeat: numpadPanel.characterRepeat
+                repeatDelay: numpadPanel.repeatDelay
+                repeatInterval: numpadPanel.repeatInterval
+                repeatArmFloorMs: 800
                 onKeyPressed: keyboard.pressKey("-")
             }
         }
@@ -206,6 +275,13 @@ Item {
                 keyTextColor: numpadPanel.keyTextColor
                 accentColor: numpadPanel.accentColor
                 borderColor: numpadPanel.borderColor
+                // Insert is not in the repeat-worthy nav set (matches
+                // NavigationPanel's own Insert key, which has no
+                // enableRepeat either), so it stays off with NumLock off.
+                enableRepeat: numpadPanel.numLockOn ? numpadPanel.characterRepeat : false
+                repeatDelay: numpadPanel.repeatDelay
+                repeatInterval: numpadPanel.repeatInterval
+                repeatArmFloorMs: numpadPanel.numLockOn ? 800 : 0
                 onKeyPressed: numpadPanel.numLockOn ? keyboard.pressKey("0") : keyboard.pressSpecialKey("insert")
             }
             KeyButton {
@@ -218,6 +294,10 @@ Item {
                 keyTextColor: numpadPanel.keyTextColor
                 accentColor: numpadPanel.accentColor
                 borderColor: numpadPanel.borderColor
+                enableRepeat: numpadPanel.numLockOn ? numpadPanel.characterRepeat : true
+                repeatDelay: numpadPanel.repeatDelay
+                repeatInterval: numpadPanel.repeatInterval
+                repeatArmFloorMs: numpadPanel.numLockOn ? 800 : 0
                 onKeyPressed: numpadPanel.numLockOn ? keyboard.pressKey(".") : keyboard.pressSpecialKey("delete")
             }
             KeyButton {
@@ -230,6 +310,10 @@ Item {
                 keyTextColor: numpadPanel.keyTextColor
                 accentColor: numpadPanel.accentColor
                 borderColor: numpadPanel.borderColor
+                enableRepeat: numpadPanel.characterRepeat
+                repeatDelay: numpadPanel.repeatDelay
+                repeatInterval: numpadPanel.repeatInterval
+                repeatArmFloorMs: 800
                 onKeyPressed: keyboard.pressKey("+")
             }
         }
@@ -248,6 +332,9 @@ Item {
                 keyTextColor: numpadPanel.keyTextColor
                 accentColor: numpadPanel.accentColor
                 borderColor: numpadPanel.borderColor
+                // Never repeats: not in root.repeatableActions, and holding
+                // Enter/Return on a slow release firing twenty times is
+                // exactly the hostile case that list exists to exclude.
                 onKeyPressed: keyboard.pressSpecialKey("return")
             }
             KeyButton {
@@ -263,6 +350,9 @@ Item {
                 keyTextColor: numpadPanel.keyTextColor
                 accentColor: numpadPanel.accentColor
                 borderColor: numpadPanel.borderColor
+                // Never repeats: it toggles a mode on each activation, so a
+                // hold-driven repeat would just flip NumLock back and forth
+                // for as long as the button stayed down.
                 onKeyPressed: {
                     keyboard.pressSpecialKey("numlock")
                     numpadPanel.numLockOn = !numpadPanel.numLockOn

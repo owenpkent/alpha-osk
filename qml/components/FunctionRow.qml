@@ -23,6 +23,12 @@ Item {
     property var registerFn: null
     property var unregisterFn: null
 
+    readonly property var keyGroups: [
+        ["F1", "F2", "F3", "F4"],
+        ["F5", "F6", "F7", "F8"],
+        ["F9", "F10", "F11", "F12"]
+    ]
+
     // **The geometry here is deliberate and was chosen after trying the
     // alternatives on screen.**  Each F-key is exactly one grid column
     // wide and the row is centred, which leaves visible space at both ends
@@ -47,112 +53,60 @@ Item {
     // A plain Row, NOT a RowLayout: QtQuick.Layouts rounds every child up to
     // a whole pixel, which pushes the panel wider than the keyboard grid it
     // has to sit flush with. Full rationale in NumberRow.qml.
+    //
+    // The 4-4-4 grouping is expressed as one KeyButton delegate reused by a
+    // Repeater-of-Repeaters rather than three copies of the same ~30 lines:
+    // the outer Row lays out the three group Rows, and its own `spacing` IS
+    // the group gap, so there is no separate spacer Item to keep in sync
+    // with it. That spacing is keySpacing * 4, not keySpacing * 2, because
+    // the visible gap used to be the old spacer's own width (keySpacing * 2)
+    // plus the ordinary Row spacing on either side of it (keySpacing each) -
+    // the outer spacing here has to reproduce that whole width on its own,
+    // since nothing sits between the two group Rows to contribute the rest.
     Row {
         id: fnLayout
-        spacing: fnRow.keySpacing
+        spacing: fnRow.keySpacing * 4
 
-        // F1-F4
         Repeater {
-            model: ["F1", "F2", "F3", "F4"]
-            KeyButton {
-                id: fnKeyA
+            model: fnRow.keyGroups
 
-                // Same shape the layout-driven keys and the Number Row
-                // carry, so the registry and the tests that read it see one
-                // kind of key description, not two.
-                readonly property var kd: ({
-                    type: "special",
-                    action: modelData.toLowerCase()
-                })
+            Row {
+                spacing: fnRow.keySpacing
 
-                Component.onCompleted: if (fnRow.registerFn)
-                    fnRow.registerFn(fnKeyA, fnKeyA.kd)
-                Component.onDestruction: if (fnRow.unregisterFn)
-                    fnRow.unregisterFn(fnKeyA)
+                Repeater {
+                    model: modelData
 
-                keyText: modelData.toLowerCase()
-                displayText: modelData
-                keyWidth: fnRow.keyW
-                keyHeight: fnRow.keyH
-                fontSize: 10
-                isSpecial: true
-                enableRepeat: false
-                keyColor: fnRow.keyColor
-                keyPressedColor: fnRow.keyPressedColor
-                keyTextColor: fnRow.keyTextColor
-                accentColor: fnRow.accentColor
-                borderColor: fnRow.borderColor
-                onKeyPressed: keyboard.pressSpecialKey(modelData.toLowerCase())
-            }
-        }
+                    KeyButton {
+                        id: fnKey
 
-        // Spacer
-        Item { width: fnRow.keySpacing * 2; height: 1; implicitWidth: width; implicitHeight: height }
+                        // Same shape the layout-driven keys and the Number
+                        // Row carry, so the registry and the tests that read
+                        // it see one kind of key description, not two.
+                        readonly property var kd: ({
+                            type: "special",
+                            action: modelData.toLowerCase()
+                        })
 
-        // F5-F8
-        Repeater {
-            model: ["F5", "F6", "F7", "F8"]
-            KeyButton {
-                id: fnKeyB
+                        Component.onCompleted: if (fnRow.registerFn)
+                            fnRow.registerFn(fnKey, fnKey.kd)
+                        Component.onDestruction: if (fnRow.unregisterFn)
+                            fnRow.unregisterFn(fnKey)
 
-                readonly property var kd: ({
-                    type: "special",
-                    action: modelData.toLowerCase()
-                })
-
-                Component.onCompleted: if (fnRow.registerFn)
-                    fnRow.registerFn(fnKeyB, fnKeyB.kd)
-                Component.onDestruction: if (fnRow.unregisterFn)
-                    fnRow.unregisterFn(fnKeyB)
-
-                keyText: modelData.toLowerCase()
-                displayText: modelData
-                keyWidth: fnRow.keyW
-                keyHeight: fnRow.keyH
-                fontSize: 10
-                isSpecial: true
-                enableRepeat: false
-                keyColor: fnRow.keyColor
-                keyPressedColor: fnRow.keyPressedColor
-                keyTextColor: fnRow.keyTextColor
-                accentColor: fnRow.accentColor
-                borderColor: fnRow.borderColor
-                onKeyPressed: keyboard.pressSpecialKey(modelData.toLowerCase())
-            }
-        }
-
-        // Spacer
-        Item { width: fnRow.keySpacing * 2; height: 1; implicitWidth: width; implicitHeight: height }
-
-        // F9-F12
-        Repeater {
-            model: ["F9", "F10", "F11", "F12"]
-            KeyButton {
-                id: fnKeyC
-
-                readonly property var kd: ({
-                    type: "special",
-                    action: modelData.toLowerCase()
-                })
-
-                Component.onCompleted: if (fnRow.registerFn)
-                    fnRow.registerFn(fnKeyC, fnKeyC.kd)
-                Component.onDestruction: if (fnRow.unregisterFn)
-                    fnRow.unregisterFn(fnKeyC)
-
-                keyText: modelData.toLowerCase()
-                displayText: modelData
-                keyWidth: fnRow.keyW
-                keyHeight: fnRow.keyH
-                fontSize: 10
-                isSpecial: true
-                enableRepeat: false
-                keyColor: fnRow.keyColor
-                keyPressedColor: fnRow.keyPressedColor
-                keyTextColor: fnRow.keyTextColor
-                accentColor: fnRow.accentColor
-                borderColor: fnRow.borderColor
-                onKeyPressed: keyboard.pressSpecialKey(modelData.toLowerCase())
+                        keyText: modelData.toLowerCase()
+                        displayText: modelData
+                        keyWidth: fnRow.keyW
+                        keyHeight: fnRow.keyH
+                        fontSize: 10
+                        isSpecial: true
+                        enableRepeat: false
+                        keyColor: fnRow.keyColor
+                        keyPressedColor: fnRow.keyPressedColor
+                        keyTextColor: fnRow.keyTextColor
+                        accentColor: fnRow.accentColor
+                        borderColor: fnRow.borderColor
+                        onKeyPressed: keyboard.pressSpecialKey(modelData.toLowerCase())
+                    }
+                }
             }
         }
     }

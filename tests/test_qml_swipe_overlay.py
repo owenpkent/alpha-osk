@@ -258,6 +258,11 @@ def _wait_for_repeats(synth, keysym: str, minimum: int = 2, timeout_ms: int = 40
     Polls rather than sleeping a fixed budget, so a slow runner costs time
     instead of a false failure. Returns the count actually observed, so the
     caller still asserts and a genuinely dead repeat still fails.
+
+    Checks ``send_key`` only, which is right for the special-key keysyms
+    (``BackSpace`` and friends) this is used for. A repeated character goes
+    through ``send_text`` instead, so counting characters needs
+    ``_wait_for_typed`` below rather than this one.
     """
     waited = 0
     step = 50
@@ -267,6 +272,23 @@ def _wait_for_repeats(synth, keysym: str, minimum: int = 2, timeout_ms: int = 40
         if _sent_keys(synth).count(keysym) >= minimum:
             break
     return _sent_keys(synth).count(keysym)
+
+
+def _wait_for_typed(synth, ch: str, minimum: int = 2, timeout_ms: int = 4000) -> int:
+    """Same polling shape as `_wait_for_repeats`, for a repeated character.
+
+    A character reaches the synthesizer through `_typed` (send_text, or
+    send_key under the game-compat path), never through a keysym, so this
+    counts occurrences of `ch` there instead of in `_sent_keys`.
+    """
+    waited = 0
+    step = 50
+    while waited < timeout_ms:
+        QTest.qWait(step)
+        waited += step
+        if _typed(synth).count(ch) >= minimum:
+            break
+    return _typed(synth).count(ch)
 
 
 class TestOverlayIsActuallyInTheWay:
@@ -425,26 +447,109 @@ class TestHoldToRepeat:
             "Backspace kept repeating after release"
         )
 
-    def test_character_keys_never_repeat(self, swipe_root) -> None:
-        """Held letters must not repeat, overlay or no overlay."""
+    def test_held_character_key_repeats_under_the_overlay(self, swipe_root) -> None:
+        """Defect fix: a stationary held letter must repeat when swipe is on
+        and characterRepeat is on, the same as it does with swipe off.
+
+        Before the fix, `onPressed` only called `externalPress` for a
+        special key: a character key was always deferred to release, which
+        bypassed `KeyButton._activate()` entirely and left the setting
+        silently inert whenever swipe typing was enabled. `charHoldTimer`
+        promotes a stationary character press into a hold via
+        `externalHoldPress` once it has been held `repeatArmDelay`.
+        """
         root, _, synth = swipe_root
         key = _find_key(root, type="char", key="a")
         point = key.mapToScene(key.boundingRect().center()).toPoint()
+        root.setProperty("characterRepeat", True)
         root.setProperty("repeatDelay", 60)
         root.setProperty("repeatInterval", 20)
         QCoreApplication.processEvents()
         synth.reset_mock()
 
         QTest.mousePress(root, Qt.LeftButton, Qt.NoModifier, point)
-        QTest.qWait(_REPEAT_SETTLE_MS)
+        held = _wait_for_typed(synth, "a", minimum=2)
         QTest.mouseRelease(root, Qt.LeftButton, Qt.NoModifier, point)
         QCoreApplication.processEvents()
 
-        # == 1, not <= 1. "at most one" also passes when the key produced
-        # nothing at all, i.e. when the press never landed, so it cannot tell
-        # "does not repeat" from "does not work".
+        assert held > 1, (
+            f"holding 'a' under the swipe overlay produced {held} keystroke(s); "
+            "characterRepeat is dead under the overlay"
+        )
+        overlay = root.findChild(QQuickItem, "swipeOverlay")
+        assert overlay.property("_pendingHoldKey") is None, (
+            "the pending hold was never claimed or cleared"
+        )
+        # And it must stop on release rather than run away, same as
+        # Backspace above.
+        after_release = _typed(synth).count("a")
+        QTest.qWait(120)
+        assert _typed(synth).count("a") == after_release, "'a' kept repeating after release"
+
+    def test_character_key_released_before_the_arm_delay_types_once(self, swipe_root) -> None:
+        """The tap path must survive the fix: releasing before charHoldTimer
+        fires is an ordinary tap, not a hold, and must produce exactly one
+        character - not zero (the hold silently swallowing it) and not two
+        (the pending hold *and* the tap fall-through both firing)."""
+        root, _, synth = swipe_root
+        key = _find_key(root, type="char", key="a")
+        root.setProperty("characterRepeat", True)
+        # A long arm delay so the ordinary QTest press/release round trip
+        # below cannot possibly outlast it.
+        root.setProperty("repeatDelay", 5000)
+        root.setProperty("repeatInterval", 20)
+        QCoreApplication.processEvents()
+        synth.reset_mock()
+
+        _tap(root, key)
+
+        # == 1, not <= 1: see the note on the sibling assertions in this
+        # file, "at most one" also passes when the key produced nothing.
         assert _typed(synth).count("a") == 1, (
-            f"expected exactly one 'a' from a held character key, got {_typed(synth)!r}"
+            f"a tap released well before the arm delay produced {_typed(synth)!r}"
+        )
+
+    def test_character_key_drag_off_becomes_a_swipe_not_a_repeat(self, swipe_root) -> None:
+        """A press that moves enough to read as a swipe must cancel the
+        pending hold: a hold is stationary by definition, and letting the
+        timer fire anyway would both repeat a stray character *and* corrupt
+        the gesture the swipe recogniser is mid-way through decoding."""
+        root, _, synth = swipe_root
+        start = _find_key(root, type="char", key="q")
+        end = _find_key(root, type="char", key="p")
+        p0 = start.mapToScene(start.boundingRect().center()).toPoint()
+        p1 = end.mapToScene(end.boundingRect().center()).toPoint()
+        root.setProperty("characterRepeat", True)
+        # Long enough that the drag below finishes well inside the wait,
+        # so a surviving timer would still be pending when it should have
+        # been cancelled by the movement.
+        root.setProperty("repeatDelay", 5000)
+        root.setProperty("repeatInterval", 20)
+        QCoreApplication.processEvents()
+        synth.reset_mock()
+
+        QTest.mousePress(root, Qt.LeftButton, Qt.NoModifier, p0)
+        QCoreApplication.processEvents()
+        overlay = root.findChild(QQuickItem, "swipeOverlay")
+        assert overlay.property("_pendingHoldKey") is not None, (
+            "precondition failed: pressing a repeat-enabled character key "
+            "did not arm the pending hold"
+        )
+
+        steps = 12
+        for i in range(1, steps + 1):
+            QTest.mouseMove(root, _lerp(p0, p1, i / steps))
+        QCoreApplication.processEvents()
+
+        assert overlay.property("_isSwipe") is True, "the drag did not promote to a swipe"
+        assert overlay.property("_pendingHoldKey") is None, (
+            "the pending character hold survived the promotion to a swipe"
+        )
+        QTest.mouseRelease(root, Qt.LeftButton, Qt.NoModifier, p1)
+        QCoreApplication.processEvents()
+
+        assert "q" not in _typed(synth), (
+            f"a drag that became a swipe also typed a repeated character: {_typed(synth)!r}"
         )
 
 

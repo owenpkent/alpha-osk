@@ -46,15 +46,43 @@ Item {
                                      // Widens the "1 vs 2 keystrokes"
                                      // boundary from
                                      // ``repeatDelay + repeatInterval``
-                                     // (~620 ms) to
-                                     // ``repeatDelay + warmUpGrace``
-                                     // (~800 ms) so a slightly-too-long
-                                     // tap on backspace doesn't fire
-                                     // a second emit.  Once the user
-                                     // is genuinely holding past the
+                                     // to ``repeatArmDelay`` so a
+                                     // slightly-too-long tap on
+                                     // backspace doesn't fire a second
+                                     // emit.  Once the user is
+                                     // genuinely holding past the
                                      // grace, auto-repeat kicks in at
                                      // ``repeatInterval`` cadence as
-                                     // before.
+                                     // before.  See ``repeatArmFloorMs``
+                                     // below for why this alone is not
+                                     // a fixed ~800 ms at every setting.
+
+    // Minimum total hold time (ms) before the FIRST auto-repeat
+    // keystroke, for a caller that needs a hard floor rather than
+    // trusting ``repeatDelay + warmUpGrace``.  0 means no floor: use
+    // warmUpGrace as-is.  ``repeatDelay`` is a user setting the Settings
+    // page clamps to 300-1500 ms while ``warmUpGrace`` above is a fixed
+    // 300, so at the 300 ms minimum the arithmetic alone put the first
+    // repeat at 600 ms and every ``repeatInterval`` after that - well
+    // under the "roughly 800 ms" slow-motor-input guarantee three other
+    // comments in this codebase used to state as fact.  Character keys
+    // set this to 800 (see Main.qml's ``characterRepeat``), because a
+    // repeating letter turns one intended keystroke into several, which
+    // is exactly what holding a key down is supposed to avoid for slow,
+    // imprecise motor input.  Backspace/Delete/the arrows leave it at 0:
+    // a user who lowered ``repeatDelay`` to make Backspace snappier
+    // should get a snappier Backspace, not a re-imposed floor.
+    property int repeatArmFloorMs: 0
+
+    // The true total arm time - how long a press must be held before
+    // the first auto-repeat keystroke fires.  ``warmUpGrace`` unless
+    // ``repeatArmFloorMs`` demands more once ``repeatDelay`` is already
+    // subtracted from it, in which case the floor wins.  The repeat
+    // Timer's phase-1 interval reads this, not the raw ``warmUpGrace``,
+    // which is what makes the floor actually bite.
+    readonly property int effectiveWarmUp: Math.max(keyRoot.warmUpGrace,
+                                                      keyRoot.repeatArmFloorMs - keyRoot.repeatDelay)
+    readonly property int repeatArmDelay: keyRoot.repeatDelay + keyRoot.effectiveWarmUp
 
     // Debounce window (ms).  Consecutive MouseArea presses within this
     // window count as a single press — covers hardware button bounce
@@ -113,9 +141,12 @@ Item {
     //   phase 0 (pre-warmup): scheduled at ``repeatDelay``.  When it
     //                         fires, transition to phase 1.  Does NOT
     //                         emit a keystroke.
-    //   phase 1 (grace):      scheduled at ``warmUpGrace``.  When it
-    //                         fires, emit the first auto-repeat
-    //                         keystroke and transition to phase 2.
+    //   phase 1 (grace):      scheduled at ``effectiveWarmUp`` (the
+    //                         larger of ``warmUpGrace`` and whatever
+    //                         ``repeatArmFloorMs`` still demands after
+    //                         ``repeatDelay``).  When it fires, emit
+    //                         the first auto-repeat keystroke and
+    //                         transition to phase 2.
     //   phase 2 (repeating):  scheduled at ``repeatInterval`` cadence,
     //                         emit each tick.
     //
@@ -123,13 +154,18 @@ Item {
     // boundary between "one tap" and "tap that fires twice".  Slow-
     // motor users systematically tipped past it on backspace and felt
     // it as "Backspace sometimes sends 2".  Adding the grace widens
-    // the boundary from ``repeatDelay + repeatInterval`` (~620 ms) to
-    // ``repeatDelay + warmUpGrace`` (~800 ms) without slowing down
-    // bulk-delete once auto-repeat is genuinely engaged.
+    // the boundary from ``repeatDelay + repeatInterval`` to
+    // ``repeatArmDelay`` (``repeatDelay + effectiveWarmUp``) without
+    // slowing down bulk-delete once auto-repeat is genuinely engaged.
+    // At the defaults that lands around 800 ms, but ``repeatDelay`` is
+    // a user setting clamped down to 300 ms, where ``warmUpGrace``
+    // alone would let the first repeat land at 600 ms - a caller that
+    // sets ``repeatArmFloorMs`` is asking for a hard floor on the total
+    // instead of trusting the arithmetic to stay above it.
     //
-    // Any press shorter than ``repeatDelay + warmUpGrace`` gives
-    // exactly one keystroke.  ``phase`` must be reset to 0 wherever
-    // the timer is stopped (``onReleased``, ``onCanceled``,
+    // Any press shorter than ``repeatArmDelay`` gives exactly one
+    // keystroke.  ``phase`` must be reset to 0 wherever the timer is
+    // stopped (``onReleased``, ``onCanceled``,
     // ``onContainsMouseChanged``); otherwise a subsequent press would
     // skip the warm-up and resume mid-cycle.
     Timer {
@@ -140,7 +176,7 @@ Item {
         onTriggered: {
             if (phase === 0) {
                 phase = 1
-                interval = keyRoot.warmUpGrace
+                interval = keyRoot.effectiveWarmUp
                 repeat = false
                 start()
                 pressSafetyTimer.restart()
@@ -252,6 +288,29 @@ Item {
     function externalRelease() {
         if (keyRoot._visualPressed)
             keyRoot._endPress()
+    }
+
+    // Drive a press that has ALREADY served its full warm-up wait - the
+    // caller (SwipeOverlay's charHoldTimer) held off for ``repeatArmDelay``
+    // before calling this, so there is nothing left to warm up.  Shares
+    // the debounce/visual/ripple path with ``externalPress`` and emits
+    // ``keyPressed()`` once the same way ``_activate()`` does, but arms
+    // the repeat timer straight into phase 2 (repeating, at
+    // ``repeatInterval`` cadence) instead of replaying phase 0/1: doing
+    // that again here would double the wait the overlay already paid.
+    // Same false-on-debounce contract as ``externalPress``.
+    function externalHoldPress(localX, localY) {
+        if (!keyRoot._acceptPress())
+            return false
+        keyRoot._pressVisual(localX, localY)
+        keyRoot.keyPressed()
+        if (keyRoot.enableRepeat) {
+            repeatTimer.phase = 2
+            repeatTimer.interval = keyRoot.repeatInterval
+            repeatTimer.repeat = true
+            repeatTimer.start()
+        }
+        return true
     }
 
     Rectangle {

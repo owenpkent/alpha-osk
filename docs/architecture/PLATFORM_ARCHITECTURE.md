@@ -280,14 +280,21 @@ Applied in `keyboard_app.py` → `_apply_windows_extended_styles()`:
 | Extended Style | Hex | Purpose |
 |---------------|-----|---------|
 | `WS_EX_NOACTIVATE` | `0x08000000` | **Critical**: Never activated on click |
-| `WS_EX_TOOLWINDOW` | `0x00000080` | Hidden from Alt+Tab and taskbar |
-| `WS_EX_TOPMOST` | `0x00000008` | Defence-in-depth topmost |
+| `WS_EX_TOOLWINDOW` | `0x00000080` | Actively *cleared* (not written): Qt adds it on its own once these flags reach an already-shown window, and clearing it is what keeps the taskbar entry the minimise button needs. Accepted trade-off: the OSK also appears in Alt+Tab. |
+| `WS_EX_APPWINDOW` | `0x00040000` | Set alongside the `WS_EX_TOOLWINDOW` clear, so the taskbar entry doesn't depend on Qt leaving the rest of the style word alone |
 
 `WS_EX_NOACTIVATE` is the most important — without it, clicking any key
 on the OSK would steal focus from the user's text editor, making the
 keyboard useless.  Qt's `WindowDoesNotAcceptFocus` is a Qt-level hint that
 doesn't always work on Windows; `WS_EX_NOACTIVATE` is the OS-level
 enforcement.
+
+`WS_EX_TOPMOST` is deliberately **not** written into the style word here.
+Always-on-top is applied separately with `SetWindowPos(HWND_TOPMOST)`:
+the style bit and the topmost Z-order band are separate pieces of state,
+and writing the bit directly leaves the band untouched, producing a
+window that reports itself as topmost while sitting behind ordinary
+windows. See `_apply_windows_extended_styles()` for the full story.
 
 ---
 
