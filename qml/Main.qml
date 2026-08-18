@@ -38,7 +38,6 @@ Window {
         property bool savedSnippetDetection: true
         property bool savedAutoCapitalizeAfterPunctuation: false
         property bool savedAutoSaveOnExit: true
-        property bool savedSwipeEnabled: false
         property bool savedRightClickShift: true
         // Flash a small bubble above a key showing the character it just
         // typed (left- or right-click).  Mobile-keyboard "key preview".
@@ -195,8 +194,7 @@ Window {
     // (near line 301).  It calls saveGeometryTimer.restart() when
     // _geometryRestored is true, so width persistence flows through
     // that single seam.  Height isn't saved at all (see the Settings
-    // block above for why) and onHeightChanged only refreshes the
-    // swipe layout — no save call.
+    // block above for why).
 
     // Auto-update — bridge fills these in when checkForUpdate() finds
     // a signed newer release.  See src/updater.py for the security model.
@@ -269,7 +267,6 @@ Window {
             keyboard.setSnippetDetection(appSettings.savedSnippetDetection)
             keyboard.setAutoCapitalizeAfterPunctuation(appSettings.savedAutoCapitalizeAfterPunctuation)
             keyboard.setAutoSaveOnExit(appSettings.savedAutoSaveOnExit)
-            keyboard.setSwipeEnabled(appSettings.savedSwipeEnabled)
             keyboard.setCompatMode(appSettings.savedCompatMode)
             keyboard.setCompatAutoDetect(appSettings.savedCompatAutoDetect)
             keyboard.setMergeStrategy(appSettings.savedMergeStrategy)
@@ -397,21 +394,6 @@ Window {
         if (!active && keyboard) keyboard.clearPredictions()
     }
 
-    // Refresh the swipe-recognizer layout whenever the window is resized —
-    // key positions move with the layout.  (See the merged onWidthChanged
-    // handler further down which also handles minimumWidth clamping.)
-    // Height is not persisted (it's bound to content) so there's no
-    // save call here.
-    onHeightChanged: {
-        swipeLayoutPushTimer.restart()
-    }
-
-    onSwipeEnabledChanged: {
-        appSettings.savedSwipeEnabled = swipeEnabled
-        if (keyboard) keyboard.setSwipeEnabled(swipeEnabled)
-        if (swipeEnabled) pushSwipeLayout()
-    }
-
     // Window transparency (0.3 = very transparent, 1.0 = fully opaque)
     property real windowOpacity: appSettings.savedWindowOpacity
 
@@ -454,9 +436,6 @@ Window {
     // Prediction merge strategy — see savedMergeStrategy.
     property string mergeStrategy: appSettings.savedMergeStrategy
 
-    // Swipe / glide typing — when on, dragging across keys decodes a word.
-    property bool swipeEnabled: appSettings.savedSwipeEnabled
-
     // Right-click on a char key types its shifted variant (e.g. "1" → "!",
     // "a" → "A") without flipping the sticky shift state.  Purely additive
     // — left-click behaviour is unchanged whether this is on or off.
@@ -489,51 +468,6 @@ Window {
     // alone would let the first repeat land at 600 ms.
     property bool characterRepeat: appSettings.savedCharacterRepeat
 
-    // Two registries, both populated by each KeyButton on creation. They are
-    // deliberately NOT the same list, and the split is load-bearing:
-    //
-    //  • charKeyRegistry: single character keys only. Feeds
-    //    pushSwipeLayout(), i.e. the recogniser's key-centre map. A
-    //    "backspace" centre in there is a phantom letter in every shape
-    //    match, so this filter must stay exactly as strict as it is.
-    //  • tappableKeyRegistry: EVERY key under the swipe overlay. Feeds the
-    //    overlay's hit testing only.
-    //
-    // One list served both consumers until swipe typing was found to make
-    // Backspace, Enter, Tab, the arrows, the modifiers, ?123 and the Number
-    // Row's Esc dead taps: the overlay takes every press in its rectangle,
-    // then resolved it against a char-only list that could not contain them.
-    // Widening the char filter would have fixed the taps and corrupted swipe
-    // decoding; giving each consumer its own list fixes one without touching
-    // the other.
-    property var charKeyRegistry: []
-    property var tappableKeyRegistry: []
-
-    function registerCharKey(item, kd) {
-        // Registered first and unconditionally: the overlay must be able to
-        // hit-test every key it covers, whatever its type.
-        tappableKeyRegistry.push({ item: item, kd: kd })
-        if (!kd || kd.type !== "char" || !kd.key || kd.key.length !== 1) return
-        charKeyRegistry.push({ item: item, kd: kd })
-        swipeLayoutPushTimer.restart()
-    }
-
-    function unregisterCharKey(item) {
-        for (var t = 0; t < tappableKeyRegistry.length; t++) {
-            if (tappableKeyRegistry[t].item === item) {
-                tappableKeyRegistry.splice(t, 1)
-                break
-            }
-        }
-        for (var i = 0; i < charKeyRegistry.length; i++) {
-            if (charKeyRegistry[i].item === item) {
-                charKeyRegistry.splice(i, 1)
-                break
-            }
-        }
-        swipeLayoutPushTimer.restart()
-    }
-
     // Briefly float a preview bubble above a key showing the character it
     // just typed.  Right-click sends the shifted variant (e.g. "," → "<",
     // "a" → "A") without flipping sticky shift, and that glyph isn't
@@ -555,45 +489,6 @@ Window {
         keyPreviewBubble.hide()
     }
 
-
-    // Coalesce many register/unregister calls during a layout swap into one
-    // setSwipeLayout push to Python.
-    Timer {
-        id: swipeLayoutPushTimer
-        interval: 100
-        repeat: false
-        onTriggered: root.pushSwipeLayout()
-    }
-
-    function pushSwipeLayout() {
-        if (!keyboard) return
-        // Push key centres in the same coordinate frame the SwipeOverlay
-        // uses for its trace (overlay-local), so the recogniser sees both
-        // in matching units.
-        var overlay = (typeof swipeOverlay !== "undefined") ? swipeOverlay : null
-        if (!overlay) return
-        var centers = ({})
-        for (var i = 0; i < charKeyRegistry.length; i++) {
-            var entry = charKeyRegistry[i]
-            if (!entry.item || !entry.kd || !entry.kd.key) continue
-            // Skip keys that are not on screen. A KeyButton inside a hidden
-            // panel is still constructed and still registers, so with the
-            // Number Row switched off its keys contribute centres computed
-            // from stale geometry, and this map is keyed by character, so a
-            // hidden key silently overwrites the visible one of the same
-            // name. Inert today only because the Number Row holds nothing but
-            // digits and Esc, and SwipeRecognizer.set_layout drops every
-            // non-alphabetic key: the corruption cannot reach decoding until
-            // some future panel carries a letter. Cheap to be correct now
-            // rather than to debug then.
-            if (!entry.item.visible) continue
-            var p = overlay.mapFromItem(entry.item,
-                                        entry.item.width / 2,
-                                        entry.item.height / 2)
-            centers[entry.kd.key.toLowerCase()] = [p.x, p.y]
-        }
-        keyboard.setSwipeLayout(centers)
-    }
 
     // Keyboard state from Python bridge
     property bool shiftOn: keyboard ? keyboard.shiftActive : false
@@ -771,12 +666,9 @@ Window {
     property real keyH: Math.max(34, keyW * 0.89)
 
     // Safety net: if the window width ever drops below minimumWidth (e.g. via
-    // OS window-snap, DPI change, or panel toggle), clamp it back up.  Also
-    // refreshes the swipe-recognizer's key-centre map since the keys move
-    // when the window resizes.
+    // OS window-snap, DPI change, or panel toggle), clamp it back up.
     onWidthChanged: {
         if (width < minimumWidth) width = minimumWidth
-        swipeLayoutPushTimer.restart()
         if (_geometryRestored) saveGeometryTimer.restart()
     }
 
@@ -2113,8 +2005,6 @@ Window {
                         characterRepeat: root.characterRepeat
                         repeatDelay: root.repeatDelay
                         repeatInterval: root.repeatInterval
-                        registerFn: root.registerCharKey
-                        unregisterFn: root.unregisterCharKey
                         previewFn: root.showKeyPreview
                         hidePreviewFn: root.hideKeyPreview
                     }
@@ -2131,8 +2021,6 @@ Window {
                         // leaves visible space at both ends. That is the
                         // chosen shape, not an oversight: see the geometry
                         // note in FunctionRow.qml before changing it.
-                        registerFn: root.registerCharKey
-                        unregisterFn: root.unregisterCharKey
                         keyColor: Qt.darker(root.themeKeyColor, 1.15)
                         keyPressedColor: root.themeKeyPressed
                         keyTextColor: root.themeTextColor
@@ -2156,8 +2044,6 @@ Window {
                             Comp.KeyButton {
                                 id: keyBtn
                                 property var kd: modelData
-                                Component.onCompleted: root.registerCharKey(keyBtn, kd)
-                                Component.onDestruction: root.unregisterCharKey(keyBtn)
                                 keyText: kd.key || kd.action || ""
                                 displayText: {
                                     if (kd.type === "char") {
@@ -2396,32 +2282,6 @@ Window {
                 repeatInterval: root.repeatInterval
             }
             }
-        }
-
-        // Swipe overlay — covers the main keyboard area when swipe typing
-        // is on.  Sibling to mainLayout (NOT a child of mainKeyboard),
-        // because re-parenting into a QtQuick.Layouts ColumnLayout makes
-        // Qt warn about anchors-on-layout-managed-items even when we set
-        // the parent imperatively.  Geometry is bound to mainKeyboard's
-        // position/size through coordinate bindings instead.
-        Comp.SwipeOverlay {
-            id: swipeOverlay
-            // Lets tests/test_qml_swipe_overlay.py assert the overlay really
-            // is in the way, so a tap test cannot pass by the overlay simply
-            // not being there.
-            objectName: "swipeOverlay"
-            x: mainLayout.x + mainKeyboard.x
-            y: mainLayout.y + mainKeyboard.y
-            width: mainKeyboard.width
-            height: mainKeyboard.height
-            z: 50
-            enabled: root.swipeEnabled
-            keyboardBridge: keyboard
-            // Two lists on purpose: keyRegistry is the recogniser's
-            // key-centre map (characters only), tapRegistry is hit testing
-            // (everything). See registerCharKey.
-            keyRegistry: root.charKeyRegistry
-            tapRegistry: root.tappableKeyRegistry
         }
 
         // Custom styled context menu for prediction pills
@@ -4886,7 +4746,6 @@ Window {
             snippetDetection: root.snippetDetection
             autoCapitalizeAfterPunctuation: root.autoCapitalizeAfterPunctuation
             autoSaveOnExit: root.autoSaveOnExit
-            swipeEnabled: root.swipeEnabled
             rightClickShift: root.rightClickShift
             keyPreviewEnabled: root.keyPreviewEnabled
             repeatDelay: root.repeatDelay
@@ -4960,8 +4819,6 @@ Window {
                     root.autoSaveOnExit = value
                     appSettings.savedAutoSaveOnExit = value
                     if (keyboard) keyboard.setAutoSaveOnExit(value)
-                } else if (setting === "swipeEnabled") {
-                    root.swipeEnabled = value
                 } else if (setting === "rightClickShift") {
                     root.rightClickShift = value
                     appSettings.savedRightClickShift = value

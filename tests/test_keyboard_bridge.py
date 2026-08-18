@@ -3282,8 +3282,8 @@ class TestCaretMoveClearsContext:
 
         ``_keystroke_since_poll`` was set only by ``_press_char`` and
         ``pressSpecialKey``, so every path that types without going
-        through them -- a tapped pill, a snippet, a swiped word, the
-        autocorrect retype -- read to this poll as the user clicking
+        through them -- a tapped pill, a snippet, the autocorrect
+        retype -- read to this poll as the user clicking
         somewhere else.  The context and the freshly emitted next-word
         pills were then torn down within 250 ms of the insert that
         produced them.  It is set in the synthesizer wrappers now, so a

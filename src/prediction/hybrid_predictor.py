@@ -924,8 +924,8 @@ class HybridPredictor(QObject):
     def get_unigram_freqs(self) -> Dict[str, int]:
         """Merged unigram counts (base + user).
 
-        Public forwarder so callers (e.g. the swipe recogniser) don't
-        reach through the private ``_ngram`` attribute.
+        Public forwarder so callers don't reach through the private
+        ``_ngram`` attribute.
         """
         return self._ngram.unigrams
 

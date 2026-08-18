@@ -60,7 +60,7 @@ The process never elevates voluntarily. On Windows, the launcher (`run.py`) inte
 
 QML drives all rendering and gesture detection. Python owns all state and side effects. The boundary is a single `QObject` subclass (`KeyboardBridge`) exposed to QML via `setContextProperty("keyboard", bridge)` at startup. Every interaction follows the same pattern:
 
-1. QML invokes a `@Slot`-decorated method (`pressKey`, `pressSpecialKey`, `editPrediction`, `processSwipe`, …).
+1. QML invokes a `@Slot`-decorated method (`pressKey`, `pressSpecialKey`, `editPrediction`, …).
 2. The slot mutates Python state, calls into the platform synthesiser, and may invoke the prediction engine.
 3. The bridge emits a `Signal` (`predictionsChanged`, `capsLockActiveChanged`, `editKeyTyped`, …).
 4. QML bindings react and re-render.
@@ -73,7 +73,7 @@ The platform abstraction lives in `src/platform/` and consists of three concerns
 
 `src/platform/base.py` defines the abstract `KeyboardSynthesizer` interface:
 
-- `send_text(text)`: emit a stream of characters (used for prediction insertion, swipe results).
+- `send_text(text)`: emit a stream of characters (used for prediction insertion, snippets).
 - `send_key(name, modifiers=None)`: emit one named key, optionally chorded with modifiers.
 - `hold_modifier(name)` / `release_modifier(name)`: pin a modifier at the OS level. This is what enables Shift+drag in the target app, Ctrl+click on hyperlinks, and so on. Without it, sticky modifiers would only attach to the next synthesised key, not to the user's *physical* mouse interactions.
 - `replace_text(prefix_length, replacement)`: used only when a clicked prediction's casing diverges from the typed prefix.
@@ -123,10 +123,9 @@ The prediction engine is the most novel component of the system and the most sal
 | `token_predictor.py` | Verbatim completion for the strings the word model cannot represent at all: phone numbers, zips, house numbers, email addresses. See §3.1.2. |
 | `vocabulary_pack.py` | User-imported domain vocabulary packs that contribute weighted unigram/bigram/trigram counts into the n-gram tables. No built-in packs ship; the system is import-only (see CLAUDE.md *Vocabulary Packs* for the rationale). |
 | `symspell.py` | Precomputed-deletion edit-distance index used by the fuzzy recogniser. Built eagerly at startup; per-query lookup runs in well under 1 ms on a 10 K dictionary. See §3.6. |
-| `swipe_recognizer.py` | Shape-matching gesture decoder for glide typing. |
 | `transformer_predictor.py` | Optional LLM re-ranking pass. Disabled by default; not on the hot path. |
 
-For deep design treatments of each, see `architecture/PPM.md`, `architecture/FUZZY_RECOGNITION.md`, `architecture/HYBRID_MERGING.md`, and `architecture/SWIPE_TYPING.md`.
+For deep design treatments of each, see `architecture/PPM.md`, `architecture/FUZZY_RECOGNITION.md`, and `architecture/HYBRID_MERGING.md`.
 
 #### 3.1.1 Why layered
 
@@ -153,8 +152,6 @@ The system is **import-only as of 1.1.0+**. Earlier releases shipped six built-i
 Two omissions are load-bearing. It carries **no context model**: the signal that matters ("this is the number I always type") is already expressed by the count, and a bigram over tokens would be estimating a distribution from a handful of observations. And it does **no fuzzy matching**, which is the more interesting one, because the rest of §3 is largely about tolerating mis-taps. Correcting a mistyped *letter* is a favour to the user; "correcting" a *digit* silently substitutes a different number, and a phone number one digit out is strictly worse than no suggestion, because the error is invisible at the point it is made. Error tolerance is not a universally desirable property. It is desirable exactly where the space of valid outputs is dense and the cost of a wrong one is low, and neither holds here.
 
 Nor is it merged into the ranked candidate list. Mid-token (`owen@gm`, `555-123-`) no English word is a plausible continuation, so the two are mutually exclusive rather than competing, and `KeyboardBridge._in_token_context()` selects a bar rather than blending sources. Admission is gated by `text_patterns.is_learnable_token`, which shares a module with the intelligent-spacing and snippet-detection matchers so that "what does an email address look like" has a single answer in the codebase. That gate is deliberately asymmetric: a rejected token costs one suggestion the user never sees, while an accepted one is offered back in the UI and carried in the Data Backup archive, so any digit run longer than eight digits that is not shaped like a phone number is refused wholesale rather than by enumerating which classes of identifier are sensitive. See §5 for the privacy treatment.
-
-**`SwipeRecognizer` (`swipe_recognizer.py`).** Outside the normal predict path. The QML side intercepts a swipe gesture, forwards the raw point trace through `KeyboardBridge.processSwipe`, and the recogniser returns a ranked list of words by SHARK²-style shape matching. The top result is typed verbatim; the rest replace the prediction bar so the user can repick. The recogniser uses its own dictionary (the same unigrams the n-gram model has) but bypasses the merge layer entirely. Swipe is its own input modality, not a refinement of typed input.
 
 **`TransformerPredictor` (`transformer_predictor.py`).** Optional, disabled by default. When enabled, it operates as an asynchronous re-ranking pass over the merged candidate list (`predict_with_refinement` is the entry point, not `predict`). The async design is deliberate: the synchronous `predict` path must return in tens of milliseconds, but a small transformer pass can take 100–300 ms even on CPU. The path emits a second, refined `predictionsRefined` signal so the QML side can update the bar a beat later if the refinement produced a different ranking. In practice this is rarely on; the layered classical stack is good enough for the hardware target, and the transformer dependency drags in PyTorch which would inflate the bundle by ~600 MB.
 
@@ -236,19 +233,7 @@ This is the LatinIME / Gboard pattern in miniature: the literal typed word compe
 
 A fully unified scoring model (where the literal typed word has an explicit probability and competes against alternatives in a single ranked list) is the proper long-term fix and is described as Known Gap #1 in §8.
 
-### 3.8 Swipe / glide typing
-
-Swipe typing is still in development. The engine, the overlay, and the user-facing toggle are present in 1.1.0 so the feature is testable end-to-end, but recognition quality is not yet at a level where it would be a net win to turn on by default. It is off by default and toggled in *Settings → Smart Typing → Suggestions → Swipe Typing*. When on, a transparent overlay (`qml/components/SwipeOverlay.qml`) covers the keyboard rows and intercepts pointer gestures. A press → drag past 60 pixels → release is recognised as a swipe; press → release on a key falls through to a normal tap.
-
-The recogniser (`SwipeRecognizer`) is a simplified SHARK² shape-matcher. It pre-filters candidates by start-key and end-key, then scores remaining words by
-
-```
-score(word) = log(freq + 1) − 8 · mean_normalized_distance
-```
-
-where `mean_normalized_distance` is the average distance between the user's path and the ideal path through the word's key centres, normalised by key width. The top-ranked word is typed via `send_text` followed by a space; alternates appear in the prediction bar so the user can re-pick if the top result is wrong. Design rationale and the trade-offs against a full HMM-based gesture decoder are in `architecture/SWIPE_TYPING.md`.
-
-### 3.9 Word suppression and rehabilitation
+### 3.8 Word suppression and rehabilitation
 
 Users can right-click a prediction pill to *remove from vocabulary* (adds to a blacklist) or mark as *bad suggestion* (increments a dispreference counter that downweights the word by `1 / (1 + count · 0.5)`). Both lists persist in `ngram_model.json` and apply at merge time in `hybrid_predictor._merge_predictions`.
 
@@ -606,7 +591,6 @@ The accessibility-driven engineering decisions (the non-focus invariant, sticky 
 - `architecture/PPM.md`: variable-order character model with PPMD escape.
 - `architecture/FUZZY_RECOGNITION.md`: spatial model and tunable constants.
 - `architecture/HYBRID_MERGING.md`: merge weights, validation, capitalisation pipeline.
-- `architecture/SWIPE_TYPING.md`: shape-matching swipe decoder.
 - `build/AUTO_UPDATE.md`: update flow, threat model, defences.
 - `architecture/TELEMETRY.md`: opt-in usage stats. Payload schema, anon_id lifecycle, backend, deployment workflow.
 - `PRIVACY.md`: user-facing data policy.
@@ -622,7 +606,6 @@ The accessibility-driven engineering decisions (the non-focus invariant, sticky 
 - Cleary, J. G., Witten, I. H. (1984). *Data Compression Using Adaptive Coding and Partial String Matching*. IEEE Transactions on Communications, 32(4), 396–402. Original PPM paper.
 - Garbe, W. (2012). *1000× faster spelling correction algorithm*. github.com/wolfgarbe/SymSpell. Symmetric Delete approach; future-work reference.
 - AOSP LatinIME source. Reference implementation for trie-based dictionary, weighted edit distance, n-gram LM scoring.
-- Kristensson, P. O., Zhai, S. (2004). *SHARK²: A large vocabulary shorthand writing system for pen-based computers*. Proceedings of UIST '04, ACM. Inspired the swipe decoder.
 - Microsoft. *UI Automation overview*. learn.microsoft.com/en-us/windows/win32/winauto/. Used for password-field detection.
 - AT-SPI 2. *Accessibility Toolkit Service Provider Interface*. Used for Linux password-field detection.
 
