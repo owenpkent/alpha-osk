@@ -894,13 +894,6 @@ class KeyboardBridge(QObject):
         # because the check reads the pointer's *current* position, so the
         # closer the reading sits to the press, the less chance the pointer
         # has already travelled back onto the keyboard.
-        # A detected click that arrived mid-word, waiting for the word
-        # boundary to act on.  A click is an edge rather than a level, so
-        # unlike the caret and element tokens it cannot simply be
-        # re-observed at the next poll; dropping it drops the reset for
-        # good.  See _check_external_click.  Assigned before the timer
-        # starts, because the slot reads it.
-        self._external_click_pending = False
         self._click_timer = QTimer(self)
         self._click_timer.setInterval(_CLICK_POLL_MS)
         self._click_timer.timeout.connect(self._check_external_click)
@@ -3981,22 +3974,32 @@ class KeyboardBridge(QObject):
         context describing a field the caret has left produces pills that
         insert the wrong text into the field it is now in.
 
-        **Only between words**, the same guard ``_check_caret_moved``
-        carries and for the same reason: a reset mid-word clears
-        ``_current_word`` while the partial word is still on screen, so
-        the next pill tap inserts the whole word beside it (the
-        "backspacbackspaces" duplication).  Clicks that don't move the
-        caret are exactly where that would bite.
+        **It fires mid-word too, and that is a reversal.**  This used to
+        carry ``_check_caret_moved``'s "only between words" guard, which
+        withheld the reset at the moment it was most needed: a partial
+        word is exactly when the bar is full of completions for the field
+        the caret has just left.  Measured, with "hel" typed and the
+        caret clicked into another field, tapping the "hello" pill sent
+        "lo " into that field.  Deferring to the next word boundary (the
+        previous behaviour, held in an ``_external_click_pending`` flag)
+        did not rescue it either: that boundary only arrives once the
+        user finishes the word, by which point the wrong text is in.
 
-        Mid-word the click is **held, not dropped**.  A click is an
-        *edge*, unlike the caret and element tokens, which are levels
-        that can simply be compared again at the next poll: discarding it
-        discards it for good.  Type "hel", click into another field,
-        finish the word, and the stale context would then drive every
-        pill from there on with nothing left to notice it.  So the
-        detection keeps running every 50 ms (which is what keeps the
-        pointer position fresh enough to attribute the click) and the
-        reset waits for the word boundary.
+        The guard was protecting the opposite case, a click that does
+        *not* move the caret: clearing ``_current_word`` while its
+        characters are still on screen desyncs the mirror, so a later
+        pill completes against a prefix that is only part of what is
+        there ("hel", then a typed "lo", then a tapped "look", gives
+        "hellook").  That is real, and rarer than it looks -- mid-word
+        the pointer is on the keyboard, and own-window clicks are
+        filtered out by process id below, so reaching it means leaving
+        the keyboard, clicking something caret-neutral in another app,
+        and coming back mid-word.  Clicking into another field mid-word
+        is ordinary.  Both directions corrupt text; this one corrupts it
+        far less often.  **``_check_caret_moved`` keeps its own guard**,
+        because scrolling drags the caret rectangle without moving the
+        caret in the text, and that false positive lands mid-word
+        constantly.
 
         Clicks on our own window (a key, a pill, the title bar, the
         snippets window) are filtered out inside
@@ -4008,18 +4011,12 @@ class KeyboardBridge(QObject):
         user typed, not about where the caret is, and clicking the next
         field of the same form is the single most likely thing to happen
         right after typing an email address -- withdrawing here closed
-        the Save button before the user could travel to it.  The guard
-        above cannot protect it either: ``_maybe_offer_snippet`` runs at
-        word boundaries, *after* ``_current_word`` is cleared, so an
-        offer is only ever live while that guard is a no-op.  An app
+        the Save button before the user could travel to it.  An app
         switch and privacy mode still withdraw it, through their own
         calls to :meth:`_reset_typing_context`.
         """
-        if external_click_detected():
-            self._external_click_pending = True
-        if not self._external_click_pending or self._current_word:
+        if not external_click_detected():
             return
-        self._external_click_pending = False
         self._reset_typing_context(keep_snippet_offer=True)
         _logger.debug("Click outside the keyboard — predictions cleared")
 
@@ -4160,9 +4157,6 @@ class KeyboardBridge(QObject):
         # app is not a reason to close the Save button.
         if not keep_snippet_offer:
             self._withdraw_snippet_offer()
-        # Whatever the reason, the context is gone now, so a click still
-        # waiting for a word boundary has nothing left to clear.
-        self._external_click_pending = False
         self.predictionsChanged.emit([])
 
     def _enter_privacy_mode(self) -> None:

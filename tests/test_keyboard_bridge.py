@@ -2966,41 +2966,39 @@ class TestOutsideClickClearsContext:
         self._click(bridge, outside=False)
         assert bridge._context_buffer == "dear bob "
 
-    def test_never_mid_word(self, bridge: KeyboardBridge):
-        """Same guard ``_check_caret_moved`` carries, same reason: a reset
-        mid-word clears ``_current_word`` while the partial word is still
-        on screen, so the next pill tap inserts the whole word beside it.
-        Clicks that don't move the caret (a toolbar button, a scrollbar)
-        are exactly where that would bite."""
-        bridge._context_buffer = "hello "
-        bridge._current_word = "wor"
-        self._click(bridge, outside=True)
-        assert bridge._context_buffer == "hello "
-        assert bridge._current_word == "wor"
+    def test_a_mid_word_click_clears_immediately(self, bridge: KeyboardBridge):
+        """The reversal, and the case the old guard withheld.
 
-    def test_a_mid_word_click_is_held_not_dropped(self, bridge: KeyboardBridge):
-        """The click is an edge, so discarding it discards it for good.
-
-        The caret and element tokens are *levels* -- an unread change is
-        still there to compare at the next poll.  A press is not.  Type
-        "hel", click into another field, finish the word, and the stale
-        context would drive every pill from then on with nothing left to
-        notice it.  So the reset waits for the word boundary instead.
+        ``_check_caret_moved``'s "only between words" rule used to apply
+        here too, which meant the reset was suppressed at the moment it
+        was most needed: a partial word is exactly when the bar is full
+        of completions for the field the caret has just left.  Deferring
+        to the next word boundary did not help either, because that
+        boundary only arrives after the user finishes the word.
         """
         bridge._context_buffer = "hello "
         bridge._current_word = "wor"
         self._click(bridge, outside=True)
-        bridge._current_word = ""  # the user finished the word
-        self._click(bridge, outside=False)  # no new click, just the next poll
         assert bridge._context_buffer == ""
+        assert bridge._current_word == ""
+        assert bridge._predictions == []
 
-    def test_a_held_click_is_dropped_once_the_context_goes(self, bridge: KeyboardBridge):
-        """An app switch already cleared it; nothing is left to clear."""
-        bridge._context_buffer = "hello "
-        bridge._current_word = "wor"
+    def test_a_pill_after_a_mid_word_click_inserts_no_suffix(self, bridge: KeyboardBridge):
+        """The measured harm the old guard left in place.
+
+        With "hel" still in ``_current_word`` and the caret in another
+        field, the suffix-only insert path typed "lo " into that field:
+        the abandoned word's tail, in a box that never held its head.
+        Clearing on the click empties the bar, and a tap that arrives
+        anyway (QML is free to drift) can only be a whole word.
+        """
+        _type(bridge, "hel")
         self._click(bridge, outside=True)
-        bridge._reset_typing_context()
-        assert bridge._external_click_pending is False
+        assert bridge._predictions == []
+        bridge._synth.reset_mock()
+        bridge.pressPrediction("hello")
+        sent = [c[1][0] for c in bridge._synth.method_calls if c[0] == "send_text"]
+        assert sent == ["hello "], f"expected the whole word, got {sent}"
 
     def test_a_live_snippet_offer_survives(self, bridge: KeyboardBridge, tmp_path):
         """Clicking the next field of a form must not close the Save button.
@@ -3008,10 +3006,6 @@ class TestOutsideClickClearsContext:
         The offer is about a value the user typed, not about where the
         caret is, and typing an email then clicking the next field is the
         single most likely thing to happen right after one is raised.
-        The "only between words" guard cannot protect it either:
-        ``_maybe_offer_snippet`` runs at word boundaries, after
-        ``_current_word`` is cleared, so an offer is only ever live while
-        that guard is a no-op.
         """
         from src.snippets import SnippetStore
 
