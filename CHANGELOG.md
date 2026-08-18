@@ -2,6 +2,14 @@
 
 All notable changes to Alpha-OSK are documented in this file.
 
+## [Unreleased]
+
+### Fixed
+- **Clicking into another field now clears the suggestion context even when you are part-way through a word.** Reported as the context not clearing every time you click outside the keyboard, and that was right: the detection itself was working (verified live against the release, with clicks in Chrome, on the taskbar and on the keyboard's own keys each attributed correctly), but the reset was suppressed whenever a partial word was in progress. That is the case where it matters most, because a partial word is exactly when the suggestion row is full of completions for the field you have just left. With `hel` typed and the caret clicked into another box, tapping the `hello` pill sent `lo ` into that box: the abandoned word's tail, in a field that never held its head. Holding the click until the next word boundary, which is what the code did before, could not rescue it either, because that boundary only arrives once you finish the word and the wrong text is already in by then. The suppression existed to protect the opposite case, a click that moves no caret (a scrollbar, a toolbar button), where clearing the mirror while its characters are still on screen can make a later suggestion complete against half a word. That is still true, and it is the rarer of the two here: mid-word your pointer is on the keyboard, and the keyboard's own clicks are filtered out by process id, so reaching it means leaving the keyboard, clicking something caret-neutral in another app, and coming back mid-word. Caret-move detection keeps the guard, because scrolling drags the caret rectangle around without the caret moving in the text and that false positive lands mid-word constantly.
+
+### Internal
+- `docs/architecture/GOTCHAS.md` claimed the outside-click probe reads both `GetAsyncKeyState` bits. It reads only the high one, deliberately, and `tests/test_pointer.py` asserts the absence of the low-bit read, because that bit is cleared by whoever reads it first and polling it 20 times a second would steal every press from the dwell-click and switch-access tools an OSK user runs alongside this one. Corrected, along with the four places that documented the mid-word guard above as shared.
+
 ## [1.2.2] (2026-08-16)
 
 Headlines: the character-repeat setting 1.2.1 added now actually works everywhere it claimed to. It did nothing at all while Swipe Typing was on, it was never wired into the numpad, and the "repeat only starts after roughly 800 ms" promise held only at the default repeat delay. All three are fixed. A review of the 1.2.1 window-style change also found the taskbar-button half of it writing a style word that nothing flushed.
