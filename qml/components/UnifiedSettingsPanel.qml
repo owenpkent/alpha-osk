@@ -9,6 +9,7 @@ Item {
 
     // Layout properties
     property bool showFunctionRow: false
+    property bool showExtraFunctionRow: false
     property bool showNavigation: false
     property bool showNumpad: false
     property string currentTheme: "dark"
@@ -394,6 +395,23 @@ Item {
                                     text: "Function Keys (F1–F12)"
                                     checked: unifiedSettings.showFunctionRow
                                     onToggled: function(c) { unifiedSettings.settingChanged("functionRow", c) }
+                                }
+
+                                // Its own toggle rather than a second line
+                                // inside the row above: these twelve are the
+                                // macro keys, and someone who wants only
+                                // those should not have to spend the height
+                                // of the standard row to get them.
+                                SettingsToggle {
+                                    Layout.fillWidth: true
+                                    text: "Extra Function Keys (F13–F24)"
+                                    description: "Twelve keys nothing binds by "
+                                               + "default, so they are free to "
+                                               + "assign. Tap Edit on either row "
+                                               + "(or right-click a key) to give "
+                                               + "one a shortcut or a phrase."
+                                    checked: unifiedSettings.showExtraFunctionRow
+                                    onToggled: function(c) { unifiedSettings.settingChanged("extraFunctionRow", c) }
                                 }
 
                                 SettingsToggle {

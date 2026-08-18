@@ -511,6 +511,220 @@ Guarded by `tests/test_qml_prediction_bar.py::TestTheClearButtonIcon`, which is 
 
 **Parity**: mirrored 1:1 in C++ (`KeyboardBridge::lockModifier` / `clearLock`, the `m_*Locked` members, the guarded `releaseStickyAll()` + `pressSpecialKey` + edit-mode blocks, and the `*Locked` Q_PROPERTY/signals). Bridge behaviour is covered by `tests/test_keyboard_bridge.py::TestModifierLock` on the Python side.
 
+## Function Keys F13-F24 and Programmable Keys
+
+Two features that arrived together and answer different halves of the same
+request. **F13-F24** are more raw keys to bind *in other apps*;
+**programmable actions** turn a click here into a chord or a phrase that
+works everywhere immediately, with nothing to bind. Neither subsumes the
+other, which is why both shipped: an unbound F13 does nothing until the
+target app is taught to listen for it, and teaching every app is not
+something a mouse-driven user should have to do.
+
+### The extra keys are real keys
+`VK_F13`-`VK_F24` (0x7C-0x87) on Windows, the `F13`-`F24` X11 keysyms on
+Linux (which pass straight through `xdotool`, so `platform/linux.py` needed
+no change). **macOS stops at F20**: Carbon names `kVK_F13` through
+`kVK_F20` and there is no virtual keycode for F21-F24 at all, so they are
+deliberately absent from `_VK_SPECIAL` rather than guessed - an invented
+code would post some *other* key. A programmed action on F21-F24 still
+works there, because that path never reaches the map.
+
+They are worth having precisely because nothing binds them: no collision
+with an app's own F5 or Alt+F4, so a game, OBS or AutoHotkey can take one
+outright. `UNBOUND_FUNCTION_KEYS` is that set, surfaced to the editor so it
+can say which keys are free before the user commits (reassigning F5 costs
+them refresh in every app; reassigning F17 costs nothing).
+
+### Its own panel toggle, not a second line in the F1-F12 row
+*Settings -> Appearance -> Panels -> "Extra Function Keys (F13-F24)"*,
+independent of the F1-F12 toggle. Someone who wants only the twelve macro
+keys must not have to spend the height of the standard row to get them.
+The extra row renders **above** F1-F12 so toggling it never moves the row
+with muscle memory attached.
+
+### `src/key_actions.py` owns the whole action vocabulary
+The bridge switches on **nothing**. `KeyActionStore.execute` dispatches
+through a registry of `KeyActionType` records, each of which knows its own
+id, how to sanitise its payload, how to describe itself in one line, and
+how to execute itself against an `ActionExecutor` (a two-method surface the
+bridge implements: `send_chord`, `send_text`). Adding `launch` or `macro`
+from the `MODULAR_LAYOUTS.md` vocabulary is **one entry there plus one
+method on the executor**, with no branch in `pressSpecialKey` and no QML
+edit: the editor builds its picker from `getKeyActionTypes()`, and switches
+on the entry's `fields` to decide which inputs to show.
+
+Three types ship:
+- **`key`** - sends its own keystroke, and exists so a key can take a
+  *custom keycap label without changing what it does*. That is the case
+  for a key the user bound inside another app (Discord push-to-talk, an OBS
+  scene): they need to find it on screen, and swallowing the keystroke here
+  would silently break the very binding the label documents. Its `execute`
+  returns **False**, which is what lets it be a peer in the registry rather
+  than a special case the bridge has to know about.
+- **`hotkey`** - one click fires Ctrl+Shift+S.
+- **`text`** - inserts a stored phrase verbatim.
+
+**`execute` returning a bool ("did I handle this tap") is the whole
+interface.** False means the key falls through to its own keystroke.
+
+### Where the dispatch sits, and why
+Inside `pressSpecialKey`, at the point the keystroke would have been sent,
+**not** at the top of the slot with an early return. Everything downstream
+then still sees an ordinary special-key press: the sticky auto-release, the
+`_NAV_KEYS` exception and the context bookkeeping. Returning early would
+skip the auto-release, and a Shift the user tapped once would stay held at
+the OS level for every keystroke after it. Guarded by
+`tests/test_keyboard_bridge.py::TestProgrammableFunctionKeys::test_a_sticky_modifier_still_auto_releases_after_a_chord`,
+paired with the locked-modifier inverse.
+
+**A chord merges the user's held modifiers rather than replacing them**
+(`_send_key(..., extra_modifiers=...)`). A macro key bound to Ctrl+S,
+tapped while Shift is held, sends Ctrl+Shift+S, exactly as a physical macro
+key would. The merge happens inside `_send_key` so the
+`_keystroke_since_poll` bookkeeping stays in one place; setting that
+anywhere else is what once made the caret poll read our own inserts as the
+user clicking elsewhere.
+
+**A text action mirrors `insertSnippet` invariant for invariant**, and for
+the same reasons: `_release_sticky_modifiers()` **before** the insert (a
+held Shift would otherwise deliver the whole phrase in capitals, and
+`_make_char_scancode_events` cannot cancel a standing hold), the send
+inside `_without_held_modifiers()` via `_send_literal_text`, a deferred
+auto-space settled as prose, an armed auto-capital spent, and
+`_current_word` / `_raw_token` / the pill row cleared so the phrase's
+punctuation cannot corrupt the next prediction's prefix matching. Not gated
+on privacy mode: the user tapped the key, so the text must reach the app
+either way, and nothing on this path learns or logs its content.
+
+**`pressSpecialKey`'s name map is hoisted to the class**
+(`_SPECIAL_KEY_NAMES`) because a programmed chord resolves its action key
+through the same map, so `"return"` reaches the synth as `"Return"`. A
+second copy inside the slot would be one more pair of parallel blocks to
+keep in sync, which is the failure mode this file warns about for the
+sticky-modifier release.
+
+### Storage
+`key_actions.json` in the config dir, saved synchronously on every mutation
+(atomic tempfile-then-rename), same shape and same tolerance as
+`snippets.json`: a missing, oversized (256 KB cap), corrupt or partially
+invalid file leaves the affected keys unassigned rather than raising, and a
+bad entry is dropped **individually** so one unusable assignment does not
+cost the eleven the user got right. An unassigned function key still works,
+so this path is never allowed to block startup.
+
+**Sanitisation is allow-list, not deny-list**, for the usual reason: a
+chord's modifiers and action key are handed to the platform synthesiser,
+which on Linux turns them into argv for `xdotool`. Modifiers come from
+`MODIFIERS` and are stored in canonical order (so two spellings of one
+chord never read as two chords); an action key must be a name from
+`CHORD_SPECIAL_KEYS` or a single printable ASCII character, because the
+platform layers translate that range and have nothing to say about a
+control character or an emoji. A hotkey with **no** action key is refused
+outright rather than stored: it would leave a key that looks programmed and
+does nothing when tapped, which is indistinguishable from a tap that failed
+to register, so the user taps it again. Text follows
+`snippets._clean_value` exactly (newline and tab kept, every other C0
+control character and DEL stripped, capped).
+
+`setKeyAction` **returns a bool and QML honours it** - the editor flashes
+"Saved" only on True. A green confirmation over a write that never happened
+is the failure `setSnippet` and `acceptSnippetOffer` were both given bool
+returns for.
+
+**Deliberately NOT in the Data Backup archive.** Adding a fourth file to
+`_MODEL_FILES` means bumping `data_export.SCHEMA_VERSION` and writing the
+back-compatible import path, which this project requires alignment on
+before changing. Until then it is machine-local, like the Qt settings layer.
+
+### The editor, and the two routes into it
+`qml/components/KeyActionEditor.qml`, a Popup (not the floating Window the
+snippets editor uses: that window exists to be dragged clear of the field
+being filled in, and this one is not editing anything in the app behind
+us). It is kept **short and parked at the top** for the reason that does
+apply: the user clicks OSK keys to type a label, so the editor must not
+cover the letter grid it is being typed with.
+
+Same two invariants as the prediction-edit popup, both easy to undo:
+`modal: false` (a modal popup installs an event-blocking overlay, so no OSK
+key would fire and the field could never be typed into) and
+`closePolicy: Popup.CloseOnEscape` **only** (every OSK key click is a
+press-outside). Keystrokes arrive through the bridge's edit-mode intercept,
+never Qt focus. `closePolicyBits` is a plain-int mirror of `closePolicy`
+that exists only so the headless test can read it: PySide has no converter
+for `QFlags<QQuickPopup::ClosePolicyFlag>`, so an assertion on the real
+property errors instead of guarding anything.
+
+**Chord capture is a mode, not a field.** Tapping the "Key" slot sets
+`editTarget = "chord"`, and the next key pressed *on the OSK* becomes the
+chord's action key - which is the only way to name Enter or an arrow
+without a second picker listing every key we can send. The modifier chips
+are ordinary buttons in the popup.
+
+**Right-click an F-key opens its editor, and that must never be the only
+route.** A dwell-click, switch-access, head- or eye-tracker pointer, and a
+single-button adaptive mouse all have no right button, so right-click alone
+would let such a user press an F-key and never program one. The **Edit
+toggle at the end of every visible function row** is the left-click route:
+it flips both rows into assign mode, where a left-click on any F-key opens
+its editor. This mirrors the snippets grid's Manage mode rather than
+inventing a gesture, and it is on *every* visible row so it can neither
+vanish with a row nor move under a pointer already travelling toward it.
+
+**The toggle registers with the swipe overlay like every other key.** The
+overlay takes every press inside its bounds and resolves it against
+`tappableKeyRegistry`, so a control missing from it is a dead tap whenever
+Swipe Typing is on. That is issue #15, fixed for the main grid, the Number
+Row and the F-keys, and the one new key in this row is exactly the shape
+that reintroduces it. It registers as a **special**, so it never reaches
+the recogniser's key-centre map, where an "Edit" centre would be a phantom
+letter in every shape match. Guarded by
+`tests/test_qml_function_row.py::TestEveryKeyIsHitTestable`, whose inverse
+half asserts the absence from `charKeyRegistry`.
+
+### Geometry: the group gap gives, never a key width
+Adding the Edit toggle made the row **13 keys**, which is exactly the
+compact grid's 13 units. The keys fit; it was the 4-4-4 group gaps that
+pushed the panel past the keyboard underneath it. `FunctionRow._groupGap`
+is therefore derived from a `maxWidth` the caller passes (the keyboard grid
+width), clamped between one ordinary key gap and the historical
+`keySpacing * 4`. On compact it bottoms out and the row lands exactly flush
+with the grid, the way the Number Row does; on the full-size layouts the
+slack is most of a key width, the clamp never bites, and the 4-4-4 shape is
+byte-identical to what it was.
+
+**This is not one of the three rejected redesigns.** Those each tried to
+fill the grid width by *stretching keys*, and were reverted after being
+photographed side by side; the note in `FunctionRow.qml` still stands. The
+property that distinguishes this from them is that **no key ever grew** -
+an F-key is still exactly one grid column, the same width as the key under
+it. `tests/test_qml_compact_view.py::TestPanelsSitFlushWithTheGrid` was
+updated to assert that (and `<=` the grid rather than the old strict `<`,
+which was written when the row was 12 keys with nothing else in it).
+
+### Testing notes
+`tests/test_key_actions.py` (store, registry, sanitisers, dispatch against a
+five-line recording executor), `tests/test_keyboard_bridge.py::TestExtraFunctionKeys`
+/ `TestProgrammableFunctionKeys`, and `tests/test_qml_function_row.py`
+(headless Main.qml). Every positive case is paired with the near-miss it
+must reject, and the pairs that bite are the ones where a payload *looks*
+valid: a hotkey with no action key, a modifier name the synth layer has
+never heard of, a key name we cannot send.
+
+Two Qt-side traps worth knowing before adding an assertion here:
+- **The editor is a `Popup`, so `findChild(QQuickItem, ...)` returns None**
+  and every assertion after it silently never runs. `QQuickPopup` is not an
+  Item; search for `QObject`.
+- **A QML `var` holding a JS array or object arrives as a `QJSValue`**,
+  which Python cannot iterate or index. Call `.toVariant()`. This applies to
+  the two key registries and to the editor's `chordMods`.
+
+`KeyActionStore` binds `get_config_dir` at module scope, exactly like
+`src/snippets.py`, so `tests/conftest.py::_stay_off_the_real_config_dir`
+patches `src.key_actions.get_config_dir` by name. Without that line the
+suite rewrites the developer's own key assignments, which is the same
+failure the snippet store already had once.
+
 ## Settings Panel Structure
 
 `UnifiedSettingsPanel.qml` is a drill-down menu, not a long scrolling list. The home view shows four category cards; clicking a card swaps the body to that category's sub-view. The header swaps in a back arrow (<) and the category title; the close X stays put.
@@ -523,7 +737,7 @@ The parent (`Main.qml`'s settings popup window) calls `settingsPanel.resetToHome
 
 | Top-level | Section | What's inside |
 |-----------|---------|---------------|
-| **Appearance** | Panels | Compact View / Function row / Navigation / Numpad toggles. Compact View leads the section because it gates the two below it: it forces Navigation + Numpad off (restoring them on exit) and renders their toggles disabled. There is no Number Row toggle - `Main.qml::showNumberRow` derives from whether the active layout JSON already carries a `number` row, so the standalone panel appears exactly on the compact layouts, which lack one. |
+| **Appearance** | Panels | Compact View / Function row (F1-F12) / Extra function row (F13-F24) / Navigation / Numpad toggles. Compact View leads the section because it gates the two below it: it forces Navigation + Numpad off (restoring them on exit) and renders their toggles disabled. There is no Number Row toggle - `Main.qml::showNumberRow` derives from whether the active layout JSON already carries a `number` row, so the standalone panel appears exactly on the compact layouts, which lack one. |
 | | Keyboard Layout | qwerty / dvorak / colemak picker (compact variants are filtered out - see *Compact View*) |
 | | Theme | 9-theme color picker |
 | | Sound & Opacity | Key click sound, opacity slider |

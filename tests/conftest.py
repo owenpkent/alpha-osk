@@ -138,7 +138,9 @@ def _stay_off_the_real_config_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
     time instead (``from .platform import get_config_dir`` at module
     scope) and need patching directly, or they keep reading the real path
     through their own reference: ``src.snippets`` (``SnippetStore()``'s
-    default constructor) and ``src.keyboard_app``.
+    default constructor), ``src.key_actions``
+    (``KeyActionStore()``'s, constructed by every ``KeyboardBridge``)
+    and ``src.keyboard_app``.
 
     A test that wants the real function needs no opt-out: it just has to
     import ``get_config_dir`` by name, the way ``tests/test_platform.py``
@@ -156,6 +158,7 @@ def _stay_off_the_real_config_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
 
     monkeypatch.setattr("src.platform.get_config_dir", _fake_get_config_dir)
     monkeypatch.setattr("src.snippets.get_config_dir", _fake_get_config_dir)
+    monkeypatch.setattr("src.key_actions.get_config_dir", _fake_get_config_dir)
     try:
         import src.keyboard_app  # noqa: F401  -- needs PySide6 to import at all
     except ImportError:  # pragma: no cover - PySide6 missing in this environment

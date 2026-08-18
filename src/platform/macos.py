@@ -164,6 +164,20 @@ _VK_SPECIAL: Dict[str, int] = {
     "F10": 0x6D,
     "F11": 0x67,
     "F12": 0x6F,
+    # F13-F20 are the extent of what Carbon names (kVK_F13 through
+    # kVK_F20).  F21-F24 exist on Windows and X11 but have no macOS
+    # virtual keycode at all, so they are deliberately absent rather
+    # than guessed: an invented code would post *some* other key.  A
+    # programmed action on F21-F24 still works here, because that path
+    # never reaches this map.
+    "F13": 0x69,
+    "F14": 0x6B,
+    "F15": 0x71,
+    "F16": 0x6A,
+    "F17": 0x40,
+    "F18": 0x4F,
+    "F19": 0x50,
+    "F20": 0x5A,
 }
 
 # Modifier name (caller-facing) → (keycode, flag-mask)

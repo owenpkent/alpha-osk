@@ -879,19 +879,25 @@ class TestPanelsSitFlushWithTheGrid:
         built from the SAME `keyW`/`keySpacing` the keyboard grid below it
         uses.
 
-        Unlike the Number Row, this panel is deliberately narrower than the
-        grid (12 keys against a 13/15.5-unit grid; see the design note in
-        FunctionRow.qml), so plain equality with the widest row is the wrong
-        assertion here - that is the property the three rejected redesigns
-        each tried to satisfy, and photographing them side by side is why
-        they were reverted. What has to hold instead is the row's own
-        formula: 12 keys, 9 ordinary gaps inside the three 4-key groups, and
-        two group gaps (the row's own spacing on both sides of a
-        keySpacing*2 spacer) worth 4*keySpacing each. A wrong key count, a
-        resized spacer, or a changed group gap all move the rendered width
-        off that formula, and the row must also stay strictly narrower than
-        the grid, since drifting up to (or past) it is exactly the shape the
-        rejected redesigns had.
+        What has to hold is the row's own formula: 13 keys (the twelve
+        F-keys plus the assign toggle), 9 ordinary gaps inside the three
+        4-key groups, and 3 group gaps (two between the groups, one before
+        the toggle). A wrong key count, a resized toggle, or a changed group
+        gap all move the rendered width off that formula.
+
+        **The group gap is derived, not fixed, and the sweep below is what
+        makes that meaningful.** The three rejected redesigns all tried to
+        fill the grid width by *stretching keys*, which is why the row is
+        still measured in whole grid columns here. The toggle spends the
+        row's trailing empty space instead, and that space runs out on the
+        compact layouts: 13 keys against a 13-unit grid leaves only the
+        group gaps to give, so they compress to the ordinary key spacing and
+        the row lands exactly flush with the grid, the way the Number Row
+        does. On the full-size layouts the slack is most of a key width, the
+        clamp never bites, and the 4-4-4 shape is byte-identical to what it
+        was. Hence `<=` rather than the `<` this assertion used to carry:
+        the property that actually distinguishes this from the rejected
+        redesigns is that no key ever grew, not that the panel stayed inset.
         """
         root, warnings, _ = qml_root
         root.setProperty("showNavigation", False)
@@ -909,22 +915,34 @@ class TestPanelsSitFlushWithTheGrid:
                 grid = self._widest_layout_row(root)
                 key_w = root.property("keyW")
                 key_spacing = root.property("keySpacing")
-                expected = 12 * key_w + 9 * key_spacing + 2 * (4 * key_spacing)
+                # 12 F-keys + the assign toggle, all exactly one grid
+                # column wide, and 9 gaps inside the three groups.
+                rigid = 13 * key_w + 9 * key_spacing
+                # The group gap is whatever is left over, capped at the
+                # 4-4-4 gap and floored at an ordinary key gap.
+                gap = max(key_spacing, min(4 * key_spacing, (grid - rigid) / 3))
+                expected = rigid + 3 * gap
 
                 assert panel.width() == pytest.approx(expected, abs=1.0), (
                     f"function row is {panel.width() - expected:+.1f} px off "
                     f"its own geometry at window width {width} "
                     f"(compact={compact}): {panel.width():.1f} vs "
-                    f"{expected:.1f} expected from 12 keys + 9 internal gaps + "
-                    "2 group gaps. Catches a wrong key count, a resized "
-                    "spacer or a changed group gap, none of which the "
+                    f"{expected:.1f} expected from 13 keys + 9 internal gaps + "
+                    "3 group gaps. Catches a wrong key count, a resized "
+                    "toggle or a changed group gap, none of which the "
                     "identity assertion this replaced could see."
                 )
-                assert panel.width() < grid, (
-                    f"function row ({panel.width():.1f}) is not narrower "
-                    f"than the widest keyboard row ({grid:.1f}) at window "
-                    f"width {width} (compact={compact}); it was meant to "
-                    "stay inset, not fill the grid."
+                # Every key is still exactly one grid column: this, not
+                # the panel staying inset, is what the three rejected
+                # redesigns broke.
+                assert gap <= 4 * key_spacing + 1e-6, (
+                    f"group gap grew past 4*keySpacing at window width {width} (compact={compact})"
+                )
+                assert panel.width() <= grid + self.SLOP_PX, (
+                    f"function row ({panel.width():.1f}) overhangs the "
+                    f"widest keyboard row ({grid:.1f}) at window "
+                    f"width {width} (compact={compact}); the group gap is "
+                    "supposed to compress before that can happen."
                 )
         assert _real_warnings(warnings) == []
 

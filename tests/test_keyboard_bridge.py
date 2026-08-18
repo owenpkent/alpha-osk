@@ -16,6 +16,7 @@ import pytest
 
 PySide6 = pytest.importorskip("PySide6")
 
+from src.key_actions import KeyActionStore
 from src.keyboard_bridge import KeyboardBridge
 from src.prediction.token_predictor import TokenPredictor
 from src.snippets import SnippetStore
@@ -3761,3 +3762,176 @@ class TestTokenPillsAreNotWordModelObjects:
         bridge.resetContext()
         assert bridge._token_pill_words == set()
         assert bridge._token_pill_typed == ""
+
+
+class TestExtraFunctionKeys:
+    """F13-F24 reach the synthesiser under their own names."""
+
+    def test_every_extra_f_key_is_sent(self, bridge: KeyboardBridge):
+        for n in range(13, 25):
+            bridge._synth.reset_mock()
+            bridge.pressSpecialKey(f"f{n}")
+            assert bridge._synth.send_key.called, f"f{n} sent nothing"
+            assert bridge._synth.send_key.call_args[0][0] == f"F{n}"
+
+    def test_the_standard_f_keys_are_unchanged(self, bridge: KeyboardBridge):
+        """The inverse half: hoisting the map must not have moved F1-F12."""
+        for n in range(1, 13):
+            bridge._synth.reset_mock()
+            bridge.pressSpecialKey(f"f{n}")
+            assert bridge._synth.send_key.call_args[0][0] == f"F{n}"
+
+
+class TestProgrammableFunctionKeys:
+    """A programmed key runs its action *instead of* sending itself."""
+
+    @pytest.fixture
+    def actions(self, bridge: KeyboardBridge, tmp_path: Path):
+        """Swap in a temp store.
+
+        ``KeyActionStore`` saves synchronously on every mutation, exactly
+        like ``SnippetStore``, so this is the same precaution the module
+        fixture takes for snippets: without it these tests rewrite the
+        developer's own key assignments.
+        """
+        bridge._key_actions = KeyActionStore(tmp_path / "key_actions.json")
+        bridge._key_actions.load()
+        return bridge._key_actions
+
+    def test_a_hotkey_fires_the_chord_and_not_the_f_key(self, bridge, actions):
+        assert bridge.setKeyAction("f13", {"type": "hotkey", "key": "s", "modifiers": ["ctrl"]})
+        bridge._synth.reset_mock()
+        bridge.pressSpecialKey("f13")
+        bridge._synth.send_key.assert_called_once()
+        args, kwargs = bridge._synth.send_key.call_args
+        assert args[0] == "s"
+        assert kwargs["modifiers"] == ["ctrl"]
+
+    def test_a_chord_resolves_a_named_key_through_the_shared_map(self, bridge, actions):
+        """A chord on "return" must reach the synth as "Return".
+
+        The map is hoisted to the class for exactly this: a second copy
+        inside ``pressSpecialKey`` would be one more pair of parallel
+        blocks, and the copy that got the fix would be whichever was
+        edited last.
+        """
+        assert bridge.setKeyAction("f14", {"type": "hotkey", "key": "return", "modifiers": ["alt"]})
+        bridge._synth.reset_mock()
+        bridge.pressSpecialKey("f14")
+        assert bridge._synth.send_key.call_args[0][0] == "Return"
+
+    def test_a_held_modifier_is_added_to_the_chord_not_replaced(self, bridge, actions):
+        """A physical macro key pressed with Shift down sends Shift too."""
+        assert bridge.setKeyAction("f15", {"type": "hotkey", "key": "s", "modifiers": ["ctrl"]})
+        bridge.toggleShift()
+        bridge._synth.reset_mock()
+        bridge.pressSpecialKey("f15")
+        mods = bridge._synth.send_key.call_args[1]["modifiers"]
+        assert set(mods) == {"shift", "ctrl"}
+
+    def test_a_sticky_modifier_still_auto_releases_after_a_chord(self, bridge, actions):
+        """The dispatch sits *inside* pressSpecialKey so the tail block still runs.
+
+        Placing it at the top of the slot and returning early would skip
+        the auto-release, and a Shift the user tapped once would stay held
+        at the OS level for every keystroke after it.
+        """
+        assert bridge.setKeyAction("f16", {"type": "hotkey", "key": "s", "modifiers": ["ctrl"]})
+        bridge.toggleShift()
+        assert bridge._shift_active is True
+        bridge.pressSpecialKey("f16")
+        assert bridge._shift_active is False
+
+    def test_a_locked_modifier_survives_a_chord(self, bridge, actions):
+        """A right-click lock outranks the auto-release here as everywhere."""
+        assert bridge.setKeyAction("f17", {"type": "hotkey", "key": "s", "modifiers": []})
+        bridge.lockModifier("ctrl")
+        assert bridge._ctrl_locked is True
+        bridge.pressSpecialKey("f17")
+        assert bridge._ctrl_active is True
+        assert bridge._ctrl_locked is True
+
+    def test_a_text_action_types_verbatim(self, bridge, actions):
+        assert bridge.setKeyAction("f18", {"type": "text", "text": "Best, Owen"})
+        bridge._synth.reset_mock()
+        bridge.pressSpecialKey("f18")
+        bridge._synth.send_text.assert_called_once_with("Best, Owen")
+        assert not bridge._synth.send_key.called
+
+    def test_a_text_action_drops_a_held_shift_before_inserting(self, bridge, actions):
+        """Otherwise the whole phrase arrives in capitals.
+
+        ``_make_char_scancode_events`` only knows not to *add* a redundant
+        Shift wrap; it cannot cancel a standing hold, so the release has
+        to happen before the insert rather than after it.
+        """
+        assert bridge.setKeyAction("f19", {"type": "text", "text": "hello"})
+        bridge.toggleShift()
+        calls = []
+        bridge._synth.release_modifier.side_effect = lambda name: calls.append(("release", name))
+        bridge._synth.send_text.side_effect = lambda text: calls.append(("text", text))
+        bridge.pressSpecialKey("f19")
+        assert ("release", "shift") in calls
+        assert calls.index(("release", "shift")) < calls.index(("text", "hello"))
+
+    def test_a_text_action_clears_the_typing_context(self, bridge, actions):
+        """The phrase may carry punctuation, which would corrupt the next prefix."""
+        assert bridge.setKeyAction("f20", {"type": "text", "text": "hi."})
+        for ch in "wor":
+            bridge.pressKey(ch)
+        assert bridge._current_word == "wor"
+        bridge.pressSpecialKey("f20")
+        assert bridge._current_word == ""
+        assert bridge._raw_token == ""
+
+    def test_a_relabelled_key_still_sends_its_own_keystroke(self, bridge, actions):
+        """The label documents a binding made inside another app.
+
+        Swallowing the keystroke here would silently break the very
+        binding the label was added to describe.
+        """
+        assert bridge.setKeyAction("f21", {"type": "key", "label": "Talk"})
+        bridge._synth.reset_mock()
+        bridge.pressSpecialKey("f21")
+        assert bridge._synth.send_key.call_args[0][0] == "F21"
+
+    def test_an_invalid_assignment_is_reported_rather_than_stored(self, bridge, actions):
+        assert bridge.setKeyAction("f22", {"type": "hotkey", "modifiers": ["ctrl"]}) is False
+        assert bridge.getKeyActions() == {}
+
+    def test_clearing_restores_the_plain_keystroke(self, bridge, actions):
+        bridge.setKeyAction("f23", {"type": "hotkey", "key": "s", "modifiers": ["ctrl"]})
+        assert bridge.clearKeyAction("f23") is True
+        bridge._synth.reset_mock()
+        bridge.pressSpecialKey("f23")
+        assert bridge._synth.send_key.call_args[0][0] == "F23"
+
+    def test_a_change_is_announced_to_qml(self, bridge, actions):
+        seen = []
+        bridge.keyActionsChanged.connect(seen.append)
+        bridge.setKeyAction("f24", {"type": "text", "text": "hi"})
+        assert seen and seen[-1]["f24"] == {"type": "text", "text": "hi"}
+        bridge.clearKeyAction("f24")
+        assert seen[-1] == {}
+
+    def test_only_function_keys_can_be_programmed(self, bridge, actions):
+        """A char key or an editing key must never be reassignable here.
+
+        Backspace has behaviour the bridge's own bookkeeping depends on,
+        and a letter has a character to type; the function keys were
+        chosen because they have neither.
+        """
+        assert bridge.setKeyAction("backspace", {"type": "text", "text": "x"}) is False
+        bridge._synth.reset_mock()
+        bridge.pressSpecialKey("backspace")
+        assert bridge._synth.send_key.call_args[0][0] == "BackSpace"
+
+    def test_the_editor_is_told_which_keys_are_free(self, bridge, actions):
+        assert bridge.getUnboundFunctionKeys() == [f"f{n}" for n in range(13, 25)]
+        assert bridge.getProgrammableKeys()[:2] == ["f1", "f2"]
+        assert [t["id"] for t in bridge.getKeyActionTypes()] == ["key", "hotkey", "text"]
+
+    def test_a_key_describes_what_it_will_do(self, bridge, actions):
+        bridge.setKeyAction("f13", {"type": "hotkey", "key": "s", "modifiers": ["ctrl", "shift"]})
+        assert bridge.describeKeyAction("f13") == "Ctrl+Shift+S"
+        assert bridge.describeKeyAction("f14") == ""
