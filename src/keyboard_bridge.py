@@ -33,6 +33,7 @@ except ImportError:
 
 from .__version__ import __version__ as APP_VERSION
 from .analytics import TypingAnalytics
+from .dictation import DictationConfig, DictationController
 from .platform import CURRENT_PLATFORM, create_key_synthesizer
 from .platform.base import KeySynthesizerBase
 from .platform.password_detect import (
@@ -617,6 +618,24 @@ class KeyboardBridge(QObject):
     # toast; without it a Save button stays on screen doing nothing.
     snippetOfferWithdrawn = Signal()
 
+    # --- Dictation ---
+    # One of "idle" / "connecting" / "listening" / "finishing".  QML
+    # renders four visibly different mic buttons off this rather than a
+    # bool, because "connecting" and "finishing" both need to look busy
+    # without looking like they are recording.
+    dictationStateChanged = Signal(str)
+    # The revisable text for the phrase being spoken right now, shown
+    # live in the suggestion bar.  Empty whenever nothing is in flight.
+    # Finalised phrases leave this and are typed into the focused app,
+    # so it stays short by construction rather than by truncation.
+    dictationTranscriptChanged = Signal(str)
+    # Mic peak level, 0.0-1.0, for the button's live ring.  This is the
+    # only feedback that the microphone is actually open.
+    dictationLevelChanged = Signal(float)
+    # A user-facing sentence with a next step in it.  Always paired with
+    # a return to the idle state.
+    dictationError = Signal(str)
+
     def __init__(self, parent: Optional[QObject] = None) -> None:
         super().__init__(parent)
         self._shift_active = False
@@ -945,6 +964,16 @@ class KeyboardBridge(QObject):
         # back through Python (and so we never trust QML-supplied URLs).
         self._update_info: Optional[UpdateInfo] = None
         self._update_check_in_flight = False
+
+        # Dictation.  The *config* loads eagerly (a small JSON read, and
+        # the settings panel queries it on mount), but the *controller*
+        # is built on first use.  Nothing here needs it until the user
+        # clicks the mic, and building it eagerly would add a
+        # MicrophoneCapture plus two QTimers to every KeyboardBridge --
+        # of which the test suite constructs roughly 1300, one per
+        # function-scoped fixture.
+        self._dictation_config = DictationConfig.load()
+        self._dictation: Optional[DictationController] = None
 
     # --- Key synthesis (delegated to platform layer) ---
 
@@ -3738,6 +3767,252 @@ class KeyboardBridge(QObject):
             # is non-critical, so swallow rather than surface to the user.
             pass
 
+    # --- Dictation (voice input) ---------------------------------------
+    #
+    # The mic button lives at the left edge of the suggestion bar and the
+    # transcript renders in the bar itself, so the whole feature is one
+    # click away from where the user's pointer already is.  Everything
+    # below is a thin shell over `src.dictation`; the state machine and
+    # the transport live there.
+
+    def _dictation_controller(self) -> DictationController:
+        """Build the controller on first use, then reuse it.
+
+        Deferred rather than built in ``__init__`` so an ordinary typing
+        session, and every one of the ~1300 bridges the test suite
+        constructs, never pays for Qt objects nothing has asked for.  The
+        audio *device* is only touched later still, inside
+        :meth:`~src.dictation.controller.DictationController.start`.
+        """
+        if self._dictation is None:
+            controller = DictationController(self._dictation_config, self)
+            controller.stateChanged.connect(self.dictationStateChanged)
+            controller.interimChanged.connect(self.dictationTranscriptChanged)
+            controller.levelChanged.connect(self.dictationLevelChanged)
+            controller.errorRaised.connect(self.dictationError)
+            controller.finalReady.connect(self._insert_dictated_text)
+            self._dictation = controller
+        return self._dictation
+
+    def _insert_dictated_text(self, text: str) -> None:
+        """Type one finalised phrase into the focused app.
+
+        This is a verbatim insert and mirrors ``insertSnippet`` exactly,
+        including the two orderings that path documents: the sticky
+        modifiers are released *before* the send (a held Shift would
+        otherwise deliver the whole sentence in capitals, and a held Ctrl
+        would turn every character into a chord), and the send itself
+        runs inside ``_without_held_modifiers`` via ``_send_literal_text``
+        so a right-click *locked* modifier survives the insert.
+
+        Not gated on privacy mode, the same rule as every other insert
+        path: the user asked for this text, so it must reach the app.
+        What privacy mode does instead is stop the run outright, upstream
+        of here, because streaming microphone audio to a third party
+        while the caret sits in a password field is the thing worth
+        preventing, not the typing.
+        """
+        phrase = text.strip()
+        if not phrase:
+            return
+        if self._edit_mode_active:
+            # Dictating into our own edit popups would need an
+            # "insert this string" edit signal, which does not exist yet
+            # (the edit surfaces take one character at a time).  Dropping
+            # the phrase beats typing it into the app behind the popup,
+            # which is not where the user is looking.
+            return
+
+        self._release_sticky_modifiers()
+        deferred_space, _ = self._take_deferred_space(True)
+        self._consume_auto_cap()
+
+        # Deepgram hands back phrases with no surrounding whitespace, so
+        # consecutive finals would run together ("hello worldhow are
+        # you").  One space, decided from what is actually on screen
+        # rather than from a "have I inserted yet" flag, so a phrase
+        # following text the user typed by hand spaces correctly too.
+        lead = ""
+        screen = self._context_buffer + self._current_word
+        if screen and not screen[-1].isspace() and screen[-1] not in "([{\"'":
+            lead = " "
+        self._send_literal_text(deferred_space + lead + phrase)
+
+        # Mirror the insert into the on-screen model so the next-word
+        # predictions that come back after dictation are built on what is
+        # really in front of the caret.  Same 200-char window every other
+        # append uses.
+        #
+        # `deferred_space` is deliberately NOT re-added here:
+        # `_take_deferred_space` already mirrored it into the buffer
+        # itself.  Adding it again put two spaces in the buffer where the
+        # screen has one, which is precisely the buffer/screen divergence
+        # that later makes a pill tap select the wrong number of
+        # characters.
+        #
+        # Suppressed in privacy mode for the same reason `pressPrediction`
+        # suppresses its own append: the buffer feeds `predict()` and
+        # `learn_from_selection()` on the next call, so nothing spoken
+        # into a password field may linger in it.  The insert above still
+        # happens, because the user asked for the text; only the memory
+        # of it is withheld.
+        if not self._privacy_mode:
+            self._context_buffer = (self._context_buffer + lead + phrase)[-200:]
+            self._sentence_buffer = (self._sentence_buffer + lead + phrase)[-200:]
+        self._current_word = ""
+        self._raw_token = ""
+        self._word_typed_under_caps_lock = False
+        # The insert replaced the word outright, so a lost opening
+        # is no longer owed to anything.  Travels with the flag above.
+        self._word_prefix_lost = False
+        self._auto_space_pending = False
+        self._predictions = []
+        self.predictionsChanged.emit([])
+        _logger.debug("Dictated phrase inserted (%d chars)", len(phrase))
+
+    @Slot()
+    def toggleDictation(self) -> None:
+        """Start listening, or stop a run in progress."""
+        if self._privacy_mode:
+            self.dictationError.emit("Dictation is off while a password field is focused.")
+            return
+        self._dictation_controller().toggle()
+
+    @Slot(result="QVariantMap")
+    def getDictationSettings(self) -> Dict[str, Any]:
+        """Everything the Dictation settings view renders, in one call.
+
+        A single call rather than a property per field because the panel
+        reads them all on mount and none of them changes behind its back.
+        The key is never returned in the clear: ``maskedKey`` is a
+        preview, and ``hasKey`` is what the UI actually branches on.
+
+        **The device list is deliberately not in here.**  Enumerating
+        audio inputs walks the host's drivers, measured at ~29 ms on a
+        machine with an audio interface attached, and this call is on the
+        startup path (QML reads it to decide whether the mic button is
+        live).  Every user would pay that on every launch, including the
+        ones who never switch dictation on.  :meth:`getDictationDevices`
+        is the separate call, made only when the settings view opens,
+        which is also the only moment a fresh list is worth anything: a
+        microphone can be plugged in while the keyboard is running.
+        """
+        from .dictation import audio
+        from .dictation import config as dictation_config
+
+        cfg = self._dictation_config
+        return {
+            "available": audio.available(),
+            "enabled": cfg.enabled,
+            "hasKey": cfg.has_key,
+            "maskedKey": cfg.masked_key(),
+            "model": cfg.model,
+            "language": cfg.language,
+            "device": cfg.device,
+            "maxSeconds": cfg.max_seconds,
+            "silenceSeconds": cfg.silence_seconds,
+            "keyterms": "\n".join(cfg.keyterms),
+            "streamInserts": cfg.stream_inserts,
+            "models": [{"id": m, "label": label} for m, label in dictation_config.MODELS],
+            "languages": [{"id": c, "label": label} for c, label in dictation_config.LANGUAGES],
+        }
+
+    @Slot(result="QStringList")
+    def getDictationDevices(self) -> List[str]:
+        """Audio input descriptions, for the settings picker.
+
+        Split out of :meth:`getDictationSettings` because it touches the
+        drivers; see the note there.
+        """
+        from .dictation import audio
+
+        return audio.input_device_names()
+
+    @Slot(bool)
+    def setDictationEnabled(self, enabled: bool) -> None:
+        self._dictation_config.enabled = bool(enabled)
+        self._dictation_config.save()
+        if not enabled and self._dictation is not None:
+            # Turning the feature off while a run is live has to take the
+            # run with it, the same rule `setSnippetDetection(False)`
+            # learned: clearing only the Python side leaves a button on
+            # screen that no longer does anything.
+            self._dictation.cancel()
+        _logger.info("Dictation enabled: %s", bool(enabled))
+
+    @Slot(str, result=bool)
+    def setDictationApiKey(self, key: str) -> bool:
+        """Store the provider key.  Returns False if it could not be saved.
+
+        The key itself is never logged, and the return value is what the
+        settings panel flashes its confirmation on, so a failed write
+        cannot show as a green "Saved" (the same failure
+        ``acceptSnippetOffer`` and ``setSnippet`` were each given a bool
+        return for).
+        """
+        from .dictation.config import MAX_KEY_LEN
+
+        cleaned = "".join(key.split())[:MAX_KEY_LEN]
+        self._dictation_config.api_key = cleaned
+        ok = self._dictation_config.save()
+        _logger.info("Dictation key %s (%d chars)", "stored" if ok else "NOT stored", len(cleaned))
+        return ok
+
+    @Slot(result=bool)
+    def clearDictationApiKey(self) -> bool:
+        self._dictation_config.api_key = ""
+        if self._dictation is not None:
+            self._dictation.cancel()
+        return self._dictation_config.save()
+
+    @Slot(str)
+    def setDictationModel(self, model: str) -> None:
+        from .dictation.config import MODELS
+
+        if model in {m for m, _ in MODELS}:
+            self._dictation_config.model = model
+            self._dictation_config.save()
+
+    @Slot(str)
+    def setDictationLanguage(self, language: str) -> None:
+        from .dictation.config import LANGUAGES
+
+        if language in {c for c, _ in LANGUAGES}:
+            self._dictation_config.language = language
+            self._dictation_config.save()
+
+    @Slot(str)
+    def setDictationDevice(self, device: str) -> None:
+        self._dictation_config.device = device[:256]
+        self._dictation_config.save()
+
+    @Slot(int)
+    def setDictationMaxSeconds(self, seconds: int) -> None:
+        from .dictation.config import MAX_MAX_SECONDS, MIN_MAX_SECONDS
+
+        self._dictation_config.max_seconds = max(MIN_MAX_SECONDS, min(MAX_MAX_SECONDS, seconds))
+        self._dictation_config.save()
+
+    @Slot(int)
+    def setDictationSilenceSeconds(self, seconds: int) -> None:
+        from .dictation.config import MAX_SILENCE_SECONDS
+
+        self._dictation_config.silence_seconds = max(0, min(MAX_SILENCE_SECONDS, seconds))
+        self._dictation_config.save()
+
+    @Slot(bool)
+    def setDictationStreamInserts(self, stream: bool) -> None:
+        self._dictation_config.stream_inserts = bool(stream)
+        self._dictation_config.save()
+
+    @Slot(str)
+    def setDictationKeyterms(self, terms: str) -> None:
+        """Set the boosted-vocabulary list from a newline-separated block."""
+        from .dictation.config import _clean_keyterms
+
+        self._dictation_config.keyterms = _clean_keyterms(terms.splitlines())
+        self._dictation_config.save()
+
     def shutdown(self) -> None:
         """Stop background timers cleanly before the app tears down.
 
@@ -3791,6 +4066,16 @@ class KeyboardBridge(QObject):
             self._win_active = False
         self._shift_locked = self._ctrl_locked = False
         self._alt_locked = self._win_locked = False
+
+        # Close the microphone and the transcription socket.  Unlike the
+        # COM teardown below this is not merely tidy: an open capture
+        # device keeps the OS "microphone in use" indicator lit, and on a
+        # metered API an abandoned socket is still a billed session.
+        if self._dictation is not None:
+            try:
+                self._dictation.shutdown()
+            except Exception:
+                _logger.debug("Dictation shutdown failed", exc_info=True)
 
         # Release the password detector's COM interface + CoInitializeEx
         # token.  Negligible at process exit (the OS reaps it anyway) but
@@ -4425,6 +4710,17 @@ class KeyboardBridge(QObject):
     def _enter_privacy_mode(self) -> None:
         """Scrub all buffers to prevent sensitive data from leaking to the model."""
         self._reset_typing_context()
+        # A live dictation run is cancelled, not stopped: `cancel` drops
+        # whatever the provider still owes us, so a run that was under way
+        # when the caret landed on a password field cannot deliver one
+        # more sentence afterwards.  Streaming microphone audio to a
+        # third party while a password field is focused is the thing this
+        # has to stop, and it is a stronger reason than the buffer scrub
+        # above -- privacy mode has to mean "stop doing this", not "stop
+        # starting new ones", the same rule `_withdraw_snippet_offer`
+        # follows.
+        if self._dictation is not None:
+            self._dictation.cancel()
 
     @Slot(bool)
     def setPrivacyMode(self, enabled: bool) -> None:

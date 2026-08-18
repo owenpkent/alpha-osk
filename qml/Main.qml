@@ -99,6 +99,13 @@ Window {
         // clear of the field they are filling in.
         property int savedSnippetsX: -1000000
         property int savedSnippetsY: -1000000
+
+        // Whether the microphone appears in the suggestion bar at all.
+        // Mirrored here as well as in dictation.json because QML has to
+        // decide whether to reserve the bar's left edge before the bridge
+        // has been asked anything, and a button that pops in a frame late
+        // shifts every pill sideways under a pointer already moving.
+        property bool savedDictationEnabled: false
     }
 
     // Set when Component.onCompleted finishes restoring the saved
@@ -265,6 +272,14 @@ Window {
             keyboard.setAutoSpaceAfterPunctuation(appSettings.savedAutoSpaceAfterPunctuation)
             keyboard.setIntelligentSpacing(appSettings.savedIntelligentSpacing)
             keyboard.setSnippetDetection(appSettings.savedSnippetDetection)
+            // Push the QML mirror of the enable flag down, then read the
+            // whole record back: `savedDictationEnabled` is what decides
+            // whether the bar reserves room for the mic, so it has to be
+            // authoritative on this side, while everything else (the key,
+            // the model, the device) lives in dictation.json and is only
+            // ever read from there.
+            keyboard.setDictationEnabled(appSettings.savedDictationEnabled)
+            root.refreshDictation(false)
             keyboard.setAutoCapitalizeAfterPunctuation(appSettings.savedAutoCapitalizeAfterPunctuation)
             keyboard.setAutoSaveOnExit(appSettings.savedAutoSaveOnExit)
             keyboard.setCompatMode(appSettings.savedCompatMode)
@@ -589,6 +604,19 @@ Window {
     // etc). Defaults true so nothing warns before the bridge connects.
     property bool passwordDetectionAvailable: keyboard ? keyboard.passwordDetectionAvailable : true
 
+    // Dictation.  `dictationEnabled` is the user's setting (does the mic
+    // exist), `dictationConfigured` is whether pressing it could work (a
+    // key is stored and this host has audio), and `dictationState` is the
+    // run itself.  Three separate things: the button is present, greyed,
+    // or live, and collapsing any two of them loses a state the user can
+    // actually be in.
+    property bool dictationEnabled: appSettings.savedDictationEnabled
+    property bool dictationConfigured: false
+    property string dictationState: "idle"
+    readonly property bool dictationActive: root.dictationState !== "idle"
+    property string dictationTranscript: ""
+    property real dictationLevel: 0.0
+
     // Visualization
     property bool showVisualization: false
 
@@ -734,6 +762,45 @@ Window {
         return root.luminance(fill) > 0.5 ? "#111111" : "#ffffff"
     }
 
+    // Pull the dictation record out of the bridge and push it into the
+    // settings panel.
+    //
+    // One call rather than a property per field, and imperative rather
+    // than bound, because the record lives in dictation.json rather than
+    // in appSettings: the API key has to be there, and a record split
+    // across two stores is a record whose halves drift.  Nothing changes
+    // it behind the panel's back, so re-reading on open and after each
+    // write is sufficient and a notify signal per field would be noise.
+    // `withDevices` is false on the startup call and true when the
+    // settings window opens.  Enumerating audio inputs walks the host's
+    // drivers (~29 ms with an audio interface attached), and every user
+    // would pay that on every launch, including the ones who never switch
+    // dictation on.  Opening the settings view is also the only moment a
+    // fresh list is worth anything, since a microphone can be plugged in
+    // while the keyboard is running.
+    function refreshDictation(withDevices) {
+        if (!keyboard)
+            return
+        var d = keyboard.getDictationSettings()
+        root.dictationConfigured = d.available && d.enabled && d.hasKey
+        if (typeof settingsPanel === "undefined" || !settingsPanel)
+            return
+        if (withDevices)
+            settingsPanel.dictationDevices = keyboard.getDictationDevices()
+        settingsPanel.dictationAvailable = d.available
+        settingsPanel.dictationHasKey = d.hasKey
+        settingsPanel.dictationMaskedKey = d.maskedKey
+        settingsPanel.dictationModel = d.model
+        settingsPanel.dictationLanguage = d.language
+        settingsPanel.dictationDevice = d.device
+        settingsPanel.dictationModels = d.models
+        settingsPanel.dictationLanguages = d.languages
+        settingsPanel.dictationMaxSeconds = d.maxSeconds
+        settingsPanel.dictationSilenceSeconds = d.silenceSeconds
+        settingsPanel.dictationKeyterms = d.keyterms
+        settingsPanel.dictationStreamInserts = d.streamInserts
+    }
+
     // Apply a Ctrl chord the bridge resolved for us to `field`, returning
     // true if it was one.  Shared by the two edit surfaces (the
     // prediction-edit popup and the snippets editor) because they are
@@ -873,6 +940,22 @@ Window {
         function onLayoutDataChanged(rows) {
             root.layoutRows = rows
             root.activeLayer = "base"
+        }
+
+        // Dictation
+        function onDictationStateChanged(state) {
+            root.dictationState = state
+            if (state === "idle")
+                root.dictationLevel = 0.0
+        }
+        function onDictationTranscriptChanged(text) { root.dictationTranscript = text }
+        function onDictationLevelChanged(level) { root.dictationLevel = level }
+        function onDictationError(message) {
+            // The mic is in the suggestion bar, so a failure has to be
+            // reported somewhere the user is already looking rather than
+            // in a dialog they have to travel to and dismiss.
+            root.dictationTranscript = ""
+            dictationErrorToast.flash(message)
         }
 
         // Debug updates
@@ -1339,6 +1422,52 @@ Window {
                     }
                 }
 
+                // Dictation mirror, for exactly the reason the snippets one
+                // above exists: the suggestion bar collapses to zero height
+                // when suggestions are switched off, and dictation is a
+                // feature rather than a suggestion-adjacent control, so an
+                // unrelated setting must not be able to remove the only way
+                // into it.  Hidden whenever the bar button is showing, so
+                // there is never a choice of two.
+                Rectangle {
+                    objectName: "dictationTitleBarButton"
+                    visible: !root.suggestionsEnabled && root.dictationEnabled
+                    width: visible ? 28 : 0
+                    height: 24
+                    radius: 4
+                    color: root.dictationActive ? root.themeAccent
+                           : (micTitleBtn.containsMouse ? "#444" : "transparent")
+                    opacity: root.dictationConfigured ? 1.0 : 0.45
+
+                    ToolTip.visible: micTitleBtn.containsMouse
+                    ToolTip.text: root.dictationConfigured
+                                  ? (root.dictationActive ? qsTr("Stop dictating")
+                                     : qsTr("Dictate: click, speak, click again"))
+                                  : qsTr("Add a Deepgram API key in Settings to dictate")
+                    ToolTip.delay: 400
+
+                    Comp.StrokeIcon {
+                        anchors.centerIn: parent
+                        width: 16
+                        height: 16
+                        paths: [
+                            "M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z",
+                            "M19 10v2a7 7 0 0 1-14 0v-2",
+                            "M12 19 L12 23",
+                            "M8 23 L16 23"
+                        ]
+                        ink: root.dictationActive ? root.inkOn(root.themeAccent) : "#999"
+                    }
+
+                    MouseArea {
+                        id: micTitleBtn
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: keyboard.toggleDictation()
+                    }
+                }
+
                 // (Clear-context button moved into the prediction bar below —
                 // it's a bigger, easier target parked at the right end of the
                 // suggestion pills. See `clearCtxPill` in predBar.)
@@ -1525,6 +1654,15 @@ Window {
                 // control, which is the bug this property exists to prevent.
                 property real clearCtxReserve: root.suggestionsEnabled
                     ? predPillHeight * 2 + predButtonGap + 16 : 0
+                // The mirror of clearCtxReserve for the microphone parked at
+                // the left end (8 px left margin + the button + 8 px
+                // clearance).  Zero unless dictation is actually switched on,
+                // which is what keeps the row's geometry byte-identical to
+                // before for every user who never turns this on: the pills
+                // are centred in `width - micReserve - clearCtxReserve`, so a
+                // reserve of 0 collapses the expression to the original one.
+                property real micReserve: (root.suggestionsEnabled && root.dictationEnabled)
+                    ? predPillHeight + 16 : 0
                 Layout.preferredHeight: root.suggestionsEnabled ? predPillHeight + 4 : 0
                 Layout.bottomMargin: root.suggestionsEnabled ? 4 : 0
                 clip: true
@@ -1555,19 +1693,216 @@ Window {
                     }
                 }
 
+                // Dictation microphone.
+                //
+                // It sits at the LEFT end rather than joining the pair on the
+                // right for the reason the snippets button was put left of the
+                // ⟲ ring: the ring is pressed from muscle memory and must not
+                // move, and a third control in that Row would push it.  The
+                // left end is also the only edge of the bar with nothing on
+                // it, so this costs no existing target its position.
+                //
+                // Its own Row, mirroring predBarButtons, so `micReserve` is
+                // the width of a thing that exists rather than a number kept
+                // in step by hand.
+                Row {
+                    id: predBarMicRow
+                    anchors.left: parent.left
+                    anchors.leftMargin: 8
+                    anchors.verticalCenter: parent.verticalCenter
+                    visible: root.suggestionsEnabled && root.dictationEnabled
+
+                    Rectangle {
+                        id: micPill
+                        objectName: "dictationMicButton"
+                        width: predBar.predPillHeight
+                        height: predBar.predPillHeight
+                        radius: width / 2
+
+                        readonly property bool listening: root.dictationState === "listening"
+                        readonly property bool busy: root.dictationState === "connecting"
+                                                     || root.dictationState === "finishing"
+                        // "Enabled but unusable" is a real state (the toggle is
+                        // on and no API key has been entered yet) and it has to
+                        // read as unavailable rather than as broken, so the
+                        // button greys out and says why in its tooltip instead
+                        // of failing on click.
+                        readonly property bool ready: root.dictationConfigured
+                        // Driven by the busy pulse below, multiplied into
+                        // `opacity` rather than animated onto it.  See the
+                        // animation's own comment: this property exists so the
+                        // pulse has something to own that carries no binding.
+                        property real pulse: 1.0
+
+                        color: micPill.listening ? root.themeAccent
+                               : (micBtn.containsMouse && micPill.ready
+                                  ? Qt.lighter(root.themeKeyColor, 1.3)
+                                  : Qt.rgba(0, 0, 0, 0.18))
+                        border.color: (micPill.listening || micPill.busy)
+                                      ? root.themeAccent
+                                      : (micBtn.containsMouse && micPill.ready
+                                         ? root.themeAccent : Qt.rgba(1, 1, 1, 0.18))
+                        border.width: 1
+                        opacity: (micPill.ready ? 1.0 : 0.45) * micPill.pulse
+
+                        ToolTip.visible: micBtn.containsMouse
+                        ToolTip.text: micPill.ready
+                                      ? (root.dictationActive
+                                         ? qsTr("Stop dictating")
+                                         : qsTr("Dictate: click, speak, click again"))
+                                      : qsTr("Add a Deepgram API key in Settings to dictate")
+                        ToolTip.delay: 400
+
+                        // Live microphone level, drawn as a ring outside the
+                        // button.  This is the only feedback that the mic is
+                        // actually open and hearing something: everything else
+                        // on screen looks identical whether audio is arriving
+                        // or the device is muted at the OS.  Outside rather
+                        // than inside so it cannot fight the icon for contrast.
+                        Rectangle {
+                            anchors.centerIn: parent
+                            width: parent.width + 8 + 10 * root.dictationLevel
+                            height: width
+                            radius: width / 2
+                            color: "transparent"
+                            border.color: root.themeAccent
+                            border.width: 2
+                            opacity: micPill.listening ? 0.15 + 0.5 * root.dictationLevel : 0
+                            visible: opacity > 0
+                            Behavior on width { NumberAnimation { duration: 90 } }
+                            Behavior on opacity { NumberAnimation { duration: 90 } }
+                        }
+
+                        // Feather's "mic", MIT, (c) 2013-2023 Cole Bemis.
+                        // See THIRD_PARTY_NOTICES.md.  Verbatim from the 24x24
+                        // source, with its two <line> elements written as the
+                        // equivalent M/L paths, so it can be diffed against
+                        // upstream.  Centred in its own box, so no inkOffsetX.
+                        Comp.StrokeIcon {
+                            anchors.fill: parent
+                            paths: [
+                                "M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z",
+                                "M19 10v2a7 7 0 0 1-14 0v-2",
+                                "M12 19 L12 23",
+                                "M8 23 L16 23"
+                            ]
+                            boxFraction: 0.58
+                            // On the accent fill the label follows the shared
+                            // luminance rule, same as an active keycap: nine
+                            // themes ship and several have a pale accent, so a
+                            // fixed white is unreadable on about half of them.
+                            ink: micPill.listening ? root.inkOn(root.themeAccent)
+                                 : (micPill.busy ? root.themeAccent
+                                    : (micBtn.containsMouse && micPill.ready
+                                       ? root.themeTextColor : "#bbb"))
+                        }
+
+                        // Connecting and finishing are both short, and both
+                        // have to look like something is happening without
+                        // looking like recording, or the user clicks again and
+                        // starts a second run.
+                        //
+                        // Written as a standalone animation driving `pulse`,
+                        // NOT as `SequentialAnimation on opacity`.  The `on`
+                        // form takes ownership of the property it animates and
+                        // does not hand it back when it stops, so it would
+                        // destroy the `opacity` binding above on the first run
+                        // and leave the button parked at whatever value the
+                        // loop was passing through, which for half of each
+                        // cycle is nearly transparent.  A separate property
+                        // with no binding of its own is a thing the animation
+                        // can own safely, and `onRunningChanged` puts it back
+                        // to 1.0 rather than trusting where the loop stopped.
+                        SequentialAnimation {
+                            running: micPill.busy
+                            loops: Animation.Infinite
+                            onRunningChanged: if (!running) micPill.pulse = 1.0
+                            NumberAnimation {
+                                target: micPill; property: "pulse"
+                                to: 0.45; duration: 420
+                            }
+                            NumberAnimation {
+                                target: micPill; property: "pulse"
+                                to: 1.0; duration: 420
+                            }
+                        }
+
+                        MouseArea {
+                            id: micBtn
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: keyboard.toggleDictation()
+                        }
+
+                        Behavior on color { ColorAnimation { duration: 100 } }
+                    }
+                }
+
+                // Live transcript, in the space the pills normally occupy.
+                //
+                // Only the phrase currently being spoken is shown: a finalised
+                // phrase leaves this and is typed into the app, so the text
+                // here stays short by construction rather than by truncation,
+                // and what is on screen is exactly what has *not* been typed
+                // yet.  It elides on the LEFT so the newest words are the ones
+                // that survive, which is the opposite of every other elide in
+                // this file and is the whole point: while speaking, the tail is
+                // what you are checking.
+                Item {
+                    id: dictationBanner
+                    objectName: "dictationTranscript"
+                    anchors.verticalCenter: parent.verticalCenter
+                    x: predBar.micReserve
+                    width: Math.max(0, predBar.width - predBar.micReserve - predBar.clearCtxReserve)
+                    height: predBar.predPillHeight
+                    visible: root.suggestionsEnabled && root.dictationActive && !root.privacyMode
+
+                    Text {
+                        objectName: "dictationTranscriptText"
+                        anchors.fill: parent
+                        anchors.leftMargin: 10
+                        anchors.rightMargin: 10
+                        verticalAlignment: Text.AlignVCenter
+                        horizontalAlignment: root.dictationTranscript ? Text.AlignLeft
+                                                                      : Text.AlignHCenter
+                        elide: Text.ElideLeft
+                        // Transcript text is whatever the user said, so it is
+                        // exactly as untrusted as anything else displayed here:
+                        // AutoText would sniff it for markup.
+                        textFormat: Text.PlainText
+                        font.pixelSize: predBar.predFontSize
+                        font.italic: !root.dictationTranscript
+                        color: root.dictationTranscript ? root.themeTextColor
+                                                        : Qt.rgba(1, 1, 1, 0.55)
+                        text: root.dictationTranscript !== ""
+                              ? root.dictationTranscript
+                              : (root.dictationState === "connecting" ? qsTr("Connecting...")
+                                 : (root.dictationState === "finishing" ? qsTr("Finishing...")
+                                    : qsTr("Listening...")))
+                    }
+                }
+
                 Row {
                     id: predRow
                     // Named so tests/test_qml_prediction_bar.py can assert the
                     // row never overlaps clearContextButton.
                     objectName: "predictionRow"
                     anchors.verticalCenter: parent.verticalCenter
-                    // Centred in the bar minus the clear-button zone, floored
-                    // at the 8 px left margin.  Not anchors.centerIn: that
+                    // Centred in the bar minus the button zones at each end,
+                    // floored at the 8 px margin.  Not anchors.centerIn: that
                     // centres on the full bar and pushes the right-hand pill
-                    // under the ⟲ button.
-                    x: Math.max(8, (predBar.width - predBar.clearCtxReserve - width) / 2)
+                    // under the ⟲ button.  `micReserve` is 0 whenever the mic
+                    // is not on screen, which collapses this back to exactly
+                    // the single-reserve expression it grew from.
+                    x: predBar.micReserve + Math.max(
+                        8, (predBar.width - predBar.micReserve
+                            - predBar.clearCtxReserve - width) / 2)
                     spacing: 8
-                    visible: root.suggestionsEnabled && !root.privacyMode
+                    // A live transcript takes the whole bar: the pills would
+                    // be about a prefix the user is no longer typing, and the
+                    // two cannot share the row.
+                    visible: root.suggestionsEnabled && !root.privacyMode && !root.dictationActive
 
                     // Measures word widths in the same font the pills render
                     // so the fair-share allocation below can size every pill
@@ -1618,11 +1953,18 @@ Window {
                     // that physically fits, plus each one's pixel width. The
                     // binding reads predictions, window width and pill geometry
                     // so it re-evaluates whenever any of them change.
+                    // `reserve` is the total width both ends own, not just the
+                    // ⟲ end: the fitter has no notion of which side a reserve
+                    // sits on, it only needs to know how much of the bar the
+                    // pills may not have.  Passing the sum keeps the signature
+                    // and keeps the no-elide guarantee true once a mic button
+                    // is taking space off the left.
                     property var fit: predRow.computeFit(
                         root.predictions, root.width, predBar.predFontSize,
                         predBar.predHorizontalPad, predBar.predMinWidth,
                         predBar.predPillHeight, predRow.spacing,
-                        predBar.clearCtxReserve, predBar.predTextInset)
+                        predBar.clearCtxReserve + predBar.micReserve,
+                        predBar.predTextInset)
 
                     // Kept as the name the width tests read.
                     readonly property var pillWidthList: predRow.fit.widths
@@ -1732,7 +2074,8 @@ Window {
                     }
 
                     Repeater {
-                        model: root.suggestionsEnabled && !root.privacyMode ? predRow.fit.words : []
+                        model: (root.suggestionsEnabled && !root.privacyMode
+                                && !root.dictationActive) ? predRow.fit.words : []
                         delegate: Rectangle {
                             width: index < predRow.fit.widths.length
                                    ? predRow.fit.widths[index]
@@ -4472,6 +4815,57 @@ Window {
             }
         }
 
+        // Dictation failures.  Same argument as snippetProblemToast: the
+        // mic button is a control whose failure is silent (no transcript
+        // ever arrives, and the button returns to idle looking exactly as
+        // it did before the click), so without this the user clicks it
+        // again.  It dwells longer than the confirmation toasts because
+        // every message here names a next step the user has to read.
+        Popup {
+            id: dictationErrorToast
+            objectName: "dictationErrorToast"
+            parent: Overlay.overlay
+            x: (root.width - width) / 2
+            y: 36
+            width: Math.min(root.width - 24, dictationErrorText.implicitWidth + 28)
+            height: 32
+            modal: false
+            dim: false
+            // Every OSK key click is a press-outside.
+            closePolicy: Popup.NoAutoClose
+
+            property string message: ""
+
+            background: Rectangle {
+                color: "#3e2e1e"
+                border.color: "#e0a85a"
+                border.width: 1
+                radius: 8
+            }
+
+            contentItem: Text {
+                id: dictationErrorText
+                text: dictationErrorToast.message
+                color: "#f0d0a0"
+                font.pixelSize: 12
+                textFormat: Text.PlainText
+                elide: Text.ElideRight
+                verticalAlignment: Text.AlignVCenter
+            }
+
+            Timer {
+                id: dictationErrorToastTimer
+                interval: 4000
+                onTriggered: dictationErrorToast.close()
+            }
+
+            function flash(msg) {
+                dictationErrorToast.message = msg ? msg : qsTr("Dictation stopped")
+                open()
+                dictationErrorToastTimer.restart()
+            }
+        }
+
         Connections {
             target: keyboard
             function onSnippetOffered(kind, label, value) {
@@ -4717,6 +5111,7 @@ Window {
                 settingsWindow.x = Screen.width / 2 - settingsWindow.width / 2
                 settingsWindow.y = Screen.height / 2 - settingsWindow.height / 2
                 if (settingsPanel) settingsPanel.resetToHome()
+                root.refreshDictation(true)
             }
         }
 
@@ -4728,6 +5123,14 @@ Window {
         Comp.UnifiedSettingsPanel {
             id: settingsPanel
             anchors.fill: parent
+
+            // Dictation.  Everything except `dictationEnabled` is pulled
+            // from the bridge on open rather than mirrored into
+            // appSettings, because it lives in dictation.json (which is
+            // where the API key has to be, and splitting the record across
+            // two stores is how the two drift).  `refreshDictation()` is
+            // called from the popup's onVisibleChanged below.
+            dictationEnabled: root.dictationEnabled
 
             showFunctionRow: root.showFunctionRow
             showNavigation: root.showNavigation
@@ -4811,6 +5214,56 @@ Window {
                     root.intelligentSpacing = value
                     appSettings.savedIntelligentSpacing = value
                     if (keyboard) keyboard.setIntelligentSpacing(value)
+                } else if (setting === "dictationEnabled") {
+                    root.dictationEnabled = value
+                    appSettings.savedDictationEnabled = value
+                    if (keyboard) {
+                        keyboard.setDictationEnabled(value)
+                        root.refreshDictation(true)
+                    }
+                } else if (setting === "dictationApiKey") {
+                    // Honour the bool: the store can refuse the write, and a
+                    // green "Saved" over a key that never landed sends the
+                    // user away believing dictation is set up.  Same failure
+                    // acceptSnippetOffer and setSnippet were each given a
+                    // bool return for.
+                    if (keyboard) {
+                        if (keyboard.setDictationApiKey(value)) {
+                            editSavedToast.flash()
+                            root.refreshDictation(true)
+                        } else {
+                            dictationErrorToast.flash(qsTr("Could not save that key"))
+                        }
+                    }
+                } else if (setting === "dictationApiKeyCleared") {
+                    if (keyboard) {
+                        keyboard.clearDictationApiKey()
+                        root.refreshDictation(true)
+                    }
+                } else if (setting === "dictationModel") {
+                    if (keyboard) { keyboard.setDictationModel(value); root.refreshDictation(true) }
+                } else if (setting === "dictationLanguage") {
+                    if (keyboard) { keyboard.setDictationLanguage(value); root.refreshDictation(true) }
+                } else if (setting === "dictationDevice") {
+                    if (keyboard) { keyboard.setDictationDevice(value); root.refreshDictation(true) }
+                } else if (setting === "dictationMaxSeconds") {
+                    if (keyboard) { keyboard.setDictationMaxSeconds(value); root.refreshDictation(true) }
+                } else if (setting === "dictationSilenceSeconds") {
+                    if (keyboard) {
+                        keyboard.setDictationSilenceSeconds(value)
+                        root.refreshDictation(true)
+                    }
+                } else if (setting === "dictationStreamInserts") {
+                    if (keyboard) {
+                        keyboard.setDictationStreamInserts(value)
+                        root.refreshDictation(true)
+                    }
+                } else if (setting === "dictationKeyterms") {
+                    if (keyboard) {
+                        keyboard.setDictationKeyterms(value)
+                        root.refreshDictation(true)
+                        editSavedToast.flash()
+                    }
                 } else if (setting === "snippetDetection") {
                     root.snippetDetection = value
                     appSettings.savedSnippetDetection = value

@@ -23,8 +23,8 @@ Alpha-OSK is an AI-assisted, mouse-driven on-screen keyboard for Windows and Lin
 
 ## Stack & layout
 
-- Python 3.10+ backend (CI runs 3.11, mypy targets 3.10), PySide6 (Qt6) + QML UI. No LLM/GPU. Key synthesis: ctypes SendInput scancode mode (Windows), `xdotool`/`ydotool` subprocess (Linux, NOT bundled), Quartz CGEvent (macOS, WIP).
-- `src/keyboard_bridge.py` (central QML<->Python bridge: keys, modifiers, context, predictions), `src/keyboard_app.py` (launcher, window flags, auto-save on exit), `src/platform/` (OS abstraction + password detect), `src/prediction/` (hybrid engine), `qml/Main.qml` + `qml/components/`, `data/` (dictionaries/layouts/packs), `build/{windows,linux,macos}/`, `tests/` (pytest), `backend/cf-worker/` (Cloudflare telemetry worker).
+- Python 3.10+ backend (CI runs 3.11, mypy targets 3.10), PySide6 (Qt6) + QML UI. No LLM/GPU. Key synthesis: ctypes SendInput scancode mode (Windows), `xdotool`/`ydotool` subprocess (Linux, NOT bundled), Quartz CGEvent (macOS, WIP). Dictation adds two Qt modules to the load-bearing set, `QtMultimedia` (capture) and `QtWebSockets` (transport), both already in the PySide6 wheel; see *Dictation*.
+- `src/keyboard_bridge.py` (central QML<->Python bridge: keys, modifiers, context, predictions), `src/keyboard_app.py` (launcher, window flags, auto-save on exit), `src/platform/` (OS abstraction + password detect), `src/prediction/` (hybrid engine), `src/dictation/` (voice input), `qml/Main.qml` + `qml/components/`, `data/` (dictionaries/layouts/packs), `build/{windows,linux,macos}/`, `tests/` (pytest), `backend/cf-worker/` (Cloudflare telemetry worker).
 
 ## Build, run, test
 
@@ -59,7 +59,7 @@ Alpha-OSK is an AI-powered on-screen keyboard for Windows and Linux. Users click
 
 ```bash
 python run.py          # Creates venv, installs deps, launches keyboard
-python -m pytest       # Run tests (1576 tests)
+python -m pytest       # Run tests (1669 tests)
 ```
 
 ## Architecture Overview
@@ -83,6 +83,7 @@ User clicks key (QML)
 | `src/platform/` | OS abstraction - `linux.py` (xdotool/ydotool), `windows.py` (SendInput), `password_detect.py` |
 | `src/platform/__init__.py` | Platform detection, `get_config_dir()`, `get_model_dir()` |
 | `src/prediction/` | Prediction engines (see below) |
+| `src/dictation/` | Voice input - `config.py` (settings + API key), `audio.py` (mic capture), `providers.py` (Deepgram), `controller.py` (state machine) |
 | `qml/Main.qml` | Root UI - title bar, keyboard rows, prediction bar, resize handles |
 | `qml/components/` | Reusable QML components (KeyButton, settings panels, etc.) |
 | `data/` | Static data: dictionaries, training corpus, keyboard layouts, vocab packs |
@@ -145,6 +146,9 @@ Edit the `_always_capitalize` dict in `ngram_predictor.py`. Keep it tight - it's
   - Pack format: folder with `dictionary.txt` (required), optional `bigrams.txt`, `trigrams.txt`, `pack.json`
   - **Import hardening**: the source folder's name is sanitised to `[a-z0-9_-]{1,64}`; anything else (including `..`) is rejected. The resolved destination is verified to sit strictly under `user_packs_dir` before any `rmtree`/`copytree` runs, and symlinks inside the source tree are skipped rather than dereferenced. Don't loosen this without re-reading `PackManager.import_pack` and the regression tests in `tests/test_vocabulary_pack.py::TestImportPackSecurity`.
 - **Analytics** (lifetime typing stats): `analytics.json` sits directly in the config dir root (not under `models/`), same Windows/Linux paths as above. **Load-time cap**: rejected outright over `_MAX_STATS_FILE_BYTES` (5 MB, checked via `stat()` before the file is opened, the same before-you-open-it pattern as the n-gram/snippets loaders); word and key frequency tables are separately capped at 5000 entries each (top-N by count) on both load and save. Every **scalar** counter goes through `_as_count` / `_as_minutes` on load, which reject a non-number (including `bool`, since `True` is an `int`), reject NaN/inf, and clamp negatives to 0: the file is replaced wholesale by a Data Backup import, and a wrongly-typed field would not fail on load at all, it would fail later inside `save()`, where every value is fed into an addition. `save()` therefore builds its whole payload inside its own `try` too. See *Analytics* section below.
+- **Dictation settings**: `dictation.json` in the config dir root (same paths as above). Holds the enable flag, model, language, input device, timeouts, custom words, **and the recogniser API key**, which makes it the only file here carrying a credential. Written atomically on every mutation, so there is no on-quit save path. Load-time caps mirror the sibling loaders: rejected outright over 64 KB (checked via `stat()` before the file is opened), every scalar clamped, an unknown model or language falling back to the default rather than being stored.
+  - **The key is wrapped with DPAPI on Windows** (`CryptProtectData` via ctypes, no new dependency), which ties the ciphertext to the user account, so a copied file is inert elsewhere. Plaintext at mode 0600 on Linux/macOS, with `key_protected` recording which form is on disk so a file written on either platform still loads on the other. Never logged, never returned to QML in the clear, and never in the websocket URL (it rides in an `Authorization` header).
+  - **Deliberately excluded from the Data Backup archive** (do NOT add it to `_MODEL_FILES` in `src/data_export.py`): an archive is carried between machines and handed around, which is the last place a credential belongs. Same class of reason as `telemetry.json`. Asserted by `tests/test_dictation.py::TestTheKeyNeverLeavesTheMachine`, so re-adding it fails loudly.
 - **Diagnostic log**: `alpha-osk.log` in the config dir (`%APPDATA%/alpha-osk/` Windows, `~/.config/alpha-osk/` Linux), wired up in `keyboard_app.py::_configure_logging` as a `RotatingFileHandler` at 2 MB x 3 backups. The frozen build has no console, so this file is the only place updater errors and crash tracebacks land, which also makes it the file users attach to bug reports.
   - **It must never contain typed content.** No log record at INFO or above may interpolate a word, `_current_word`, `_context_buffer`, `_sentence_buffer`, or a prediction list. Log lengths and booleans instead. Anything that genuinely needs the content for local debugging goes at DEBUG *and* behind `if not self._privacy_mode:`. This is not a style preference: `_context_buffer` mirrors the on-screen text up to 200 chars, so a single careless `%s` turns the log into a plaintext transcript of the user's typing, and privacy mode does not gate the logging layer for free. Regression coverage lives with the prediction-path tests.
   - Deliberately **excluded** from the Data Backup archive (`_MODEL_FILES` in `src/data_export.py`), so the leak cannot compound through an export.
@@ -352,6 +356,24 @@ It is also the only window the store has onto itself. Learned *words* surface in
 
 Guarded by `tests/test_token_predictor.py`, `tests/test_text_patterns.py::TestLearnableToken`, and `tests/test_keyboard_bridge.py::TestStructuredTokenPredictions` / `TestEmailDomainSuggestions` / `TestLearnedTokensCanBeSeenAndRemoved` / `TestTheTokenBarSurvivesEveryWayTheBarIsRepopulated` / `TestTokenPillsInsertWhatTheyDisplay`. Every positive case is paired with the near-miss it must reject, and the pairs that bite are the SSN family, not the tidy ones.
 
+## Dictation (voice input)
+
+Click the mic at the **left end of the suggestion bar**, speak, click again. The live transcript renders in the bar itself; each finalised phrase is typed into the focused app through the verbatim-insert path. Off by default and inert without a Deepgram API key. Full write-up: `docs/architecture/DICTATION.md`. Code: `src/dictation/` (`config` / `audio` / `providers` / `controller`), `KeyboardBridge._insert_dictated_text` + the `setDictation*` slots, `qml/Main.qml` (mic button, transcript banner, `dictationErrorToast`), the Dictation category in `UnifiedSettingsPanel.qml`.
+
+- **Built entirely on Qt, and that is a constraint rather than a coincidence: zero new Python dependencies.** `QAudioSource` (QtMultimedia) captures and **resamples for us**, so the recogniser always sees 16 kHz mono signed-16-bit PCM whatever the device natively runs at, and `QWebSocket` (QtWebSockets) speaks to the provider on the Qt event loop, so there is no worker thread, no asyncio, and no queue between the audio callback and the socket. Both already ship in the PySide6 wheel the build bundles. `sounddevice` would drag PortAudio in as a binary for PyInstaller to carry and the EV cert to sign; MacroVox sends the device's native rate and declares it, which works but makes every recogniser parameter a variable. Don't "simplify" either back.
+- **`predBar.micReserve` must stay 0 whenever the mic is not on screen.** `predRow.x` centres the pills in `width - micReserve - clearCtxReserve`, so a zero reserve collapses that expression back to exactly the single-reserve one it grew from, and a user who never enables dictation gets byte-identical bar geometry. `computeFit` is passed `clearCtxReserve + micReserve` as its existing single `reserve` argument rather than gaining a tenth parameter: the fitter has no notion of which *side* a reserve sits on, only how much of the bar the pills may not have.
+- **There is a title-bar mirror** (`dictationTitleBarButton`), visible only when `suggestionsEnabled` is false, for the reason `snippetsTitleBarButton` exists: the bar collapses to zero height with that setting, and an unrelated setting must not remove the only way into a feature. Both mic icons are Feather's `mic` through `StrokeIcon`, never a glyph.
+- **The mic's busy pulse drives a `pulse` property, never `opacity` directly.** `SequentialAnimation on <property>` takes ownership of what it animates and never hands it back, so animating `opacity` destroyed the `ready ? 1.0 : 0.45` binding on the first connect and left the button parked wherever the loop was, which for half of each cycle is nearly transparent. A property with no binding of its own is what an animation can own safely; `opacity` multiplies it in and `onRunningChanged` resets it. Applies to any future animation on a bound property.
+- **Insertion mirrors `insertSnippet` exactly**, including the orderings that path documents: `_release_sticky_modifiers()` **before** the send, the send inside `_without_held_modifiers()` via `_send_literal_text` (so a right-click lock survives), `_consume_auto_cap()` (a dictated phrase is the next thing typed, so it takes the capital), a deferred auto-space settled with `prose=True`, and **the insert itself never gated on privacy mode**. One space is prepended between phrases, decided from what is on screen (`_context_buffer + _current_word`) rather than from a "have I inserted yet" flag, because Deepgram returns phrases with no surrounding whitespace.
+- `_context_buffer` / `_sentence_buffer` are appended to so dictation's own contribution is reflected: they are what the insert path *measures against*, so a buffer disagreeing with the screen is how a later pill tap eats real text. **The deferred auto-space is not re-added there** (`_take_deferred_space` already mirrored it, and appending it again put two spaces in the buffer where the screen has one), and the append is **suppressed in privacy mode**, exactly as `pressPrediction`'s own append is. The prediction model is deliberately **not** taught from dictated words (they came from Deepgram's vocabulary, not the user's typing).
+- **Privacy mode calls `cancel()`, not `stop()`**, and the difference is the point: `cancel` does not wait for the provider to flush, so a run under way when the caret landed on a password field cannot deliver one more sentence. **`cancel()` disconnects the controller's own handlers before aborting the stream, and the disconnect is the load-bearing half**: clearing `self._stream` only stops us *sending*, not the provider *telling us* things, and a websocket can have a `textMessageReceived` already queued at teardown. Without it a cancelled run typed one more phrase into whatever field the user had moved to. Found by `tests/test_dictation.py::TestTheRunLifecycle::test_cancelling_drops_what_is_in_flight`.
+- **`dictation.json` is deliberately absent from the Data Backup archive** (do NOT add it to `_MODEL_FILES`), because it holds an API key and the archive exists to be carried between machines. The key is DPAPI-wrapped on Windows via ctypes, plaintext at 0600 elsewhere, never logged, never returned to QML in the clear (`getDictationSettings` gives `hasKey` plus a masked preview), and never in the websocket URL (it rides in an `Authorization` header, so no proxy log captures it). `TestTheKeyNeverLeavesTheMachine` asserts the export exclusion.
+- **Toggle, not push-to-talk**, same argument as the swipe-typing removal: a sustained precise hold is the one gesture this user cannot reliably make. Two automatic stops sit behind it (a silence timeout the user notices, and a wall-clock ceiling that is the backstop for the silence detector itself failing in a noisy room), because a missed "off" click leaves the mic live and, on a metered API, billing.
+- **Four states, not a boolean** (`idle`/`connecting`/`listening`/`finishing`): `connecting` and `finishing` both have to look busy **without looking like recording**, or the user clicks again and starts a second run. `finishing` is not cosmetic: `stop()` closes the mic immediately but keeps the socket open for the `CloseStream` flush, because the final fragment for the last thing said arrives *after* that message.
+- **No automatic reconnect, on purpose.** Audio spoken during a gap is gone, so a silent reconnect yields a transcript with an invisible hole: words the user said, believes they said, and cannot see. A drop ends the run and says so. Errors are mapped to sentences naming a next step (`_friendly_error`); nobody can act on `QAbstractSocket::RemoteHostClosedError`.
+- **Nothing in `src/dictation/` logs transcript content**, same rule as the rest of the keystroke path.
+- Deepgram parameters were taken from MacroVox's production set: `model`/`punctuate`/`smart_format`/`interim_results`, with **`keyterm`** for custom vocabulary (nova-3 rejects the legacy `keywords`).
+
 ## Data Backup (Export / Import)
 
 User-facing "back up my data" feature so a user can move their model between machines. Lives in `src/data_export.py`; UI is *Settings -> Data & Privacy -> Data Backup* (above the Privacy section).
@@ -511,9 +533,9 @@ Guarded by `tests/test_qml_prediction_bar.py::TestTheClearButtonIcon`, which is 
 
 ## Settings Panel Structure
 
-`UnifiedSettingsPanel.qml` is a drill-down menu, not a long scrolling list. The home view shows four category cards; clicking a card swaps the body to that category's sub-view. The header swaps in a back arrow (<) and the category title; the close X stays put.
+`UnifiedSettingsPanel.qml` is a drill-down menu, not a long scrolling list. The home view shows five category cards; clicking a card swaps the body to that category's sub-view. The header swaps in a back arrow (<) and the category title; the close X stays put.
 
-State is held in a single string property: `currentView` is one of {`"home"`, `"appearance"`, `"typing"`, `"model"`, `"data"`}. The Flickable contains five sibling `ColumnLayout`s, each with `visible: unifiedSettings.currentView === "<id>"`; only one renders at a time. Scroll position is reset to the top on every view change (a `Connections` block on `currentView`) so a drilled-in view never opens mid-section.
+State is held in a single string property: `currentView` is one of {`"home"`, `"appearance"`, `"typing"`, `"dictation"`, `"model"`, `"data"`}. The Flickable contains six sibling `ColumnLayout`s, each with `visible: unifiedSettings.currentView === "<id>"`; only one renders at a time. Scroll position is reset to the top on every view change (a `Connections` block on `currentView`) so a drilled-in view never opens mid-section.
 
 The parent (`Main.qml`'s settings popup window) calls `settingsPanel.resetToHome()` in `onVisibleChanged` so re-opening Settings always lands on the home grid, not whatever sub-page the user last visited. Don't break that - landing on a deep page reads as "the menu changed."
 
@@ -528,6 +550,11 @@ The parent (`Main.qml`'s settings popup window) calls `settingsPanel.resetToHome
 | **Smart Typing** | Suggestions | Show suggestions, auto-space, intelligent spacing, auto-cap, max count |
 | | Suggestion Engine | Merge strategy 4-card picker (rank / rrf / linear / loglinear) |
 | | Input | Right-click shift, key preview popup, Compatibility Mode picker, repeat delay & interval |
+| **Dictation** | Voice Input | Enable Dictation, Type As You Speak |
+| | Transcription Service | Deepgram API key, model, language |
+| | Microphone | Input device picker |
+| | Stop Listening | Silence timeout, maximum run length |
+| | Custom Words | Boosted vocabulary (Deepgram `keyterm`) |
 | **Your Language Model** | (top button) | Open Dashboard -> opens ModelVisualization |
 | | Vocabulary Packs | Toggles for any imported packs + Import Custom Pack (no built-ins ship) |
 | | Prediction Model | Auto-save toggle, Save Now, Clear Learned Data |
@@ -539,6 +566,8 @@ The parent (`Main.qml`'s settings popup window) calls `settingsPanel.resetToHome
 Old labels and their new homes (for backwards-compat references in code comments / docs you might see): the standalone "Layout" section was renamed to "Panels" (the parent category is "Appearance", reusing the name was confusing); the standalone "Appearance" section was renamed to "Sound & Opacity" for the same reason; the old "Tools" section was split - its **Help & Shortcuts** button is now a standalone tile at the top of Data & Privacy, and its **Your Language Model** button moved to be the top-of-page tile in the Your Language Model view.
 
 ### Adding a New Setting
+
+**Step 0: does it hold a secret or a device identity?** If so it does not belong in `Settings {}` at all. Qt's settings layer is a registry key on Windows, it is not covered by the size caps and validation every other loader here has, and it is the wrong place for a credential. Dictation is the worked example: only `savedDictationEnabled` lives in `appSettings`, because QML has to decide whether to reserve the suggestion bar's left edge before it has asked the bridge anything, and everything else (key, model, language, device, timeouts, custom words) lives in `dictation.json` behind `DictationConfig`, read back through `Main.qml`'s `refreshDictation()`. Splitting a record across two stores is how the halves drift, so split only on that boundary and say why. The eight steps below are for an ordinary setting.
 
 1. Add `property bool savedFoo: defaultValue` to `Settings {}` in `Main.qml`
 2. Add `property bool foo: appSettings.savedFoo` to root in `Main.qml`
@@ -741,6 +770,21 @@ entries. `tests-passed` is a one-step job that asserts
 a skipped required check reads as pending rather than red: without it
 the gate goes quiet exactly when it should be loud. The required set is
 now Lint, Type Check, Tests, OSV Scanner.
+
+**A test module that constructs a Qt application must build a
+`QGuiApplication` under that same scope, never a bare
+`QCoreApplication`.** There is one application per *process*, it cannot
+be upgraded after construction, and `-n auto` puts unrelated modules in
+the same worker. `tests/test_dictation.py` shipped briefly with a fixture
+doing `QCoreApplication([])` with no organisation name, and the cost was
+not subtle: every headless QML test that happened to run after it in that
+worker failed at *setup*, because `QQmlApplicationEngine` needs a GUI
+application it could no longer get. The unnamed organisation is the worse
+half, since a QML `Settings` element resolves to a process-external store
+and an unnamed app points it at the **real user's** settings. That is why
+the QML modules assert their organisation in the `qapp` fixture rather
+than merely setting it; the assertion is what caught this, and any new
+`qapp` fixture should carry it too.
 
 The workflow also sets `concurrency: group: ci-${{ github.ref }}` with
 `cancel-in-progress: true`, so a new push supersedes the run it replaces

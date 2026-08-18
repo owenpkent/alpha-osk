@@ -74,6 +74,25 @@ Item {
     // warns before the bridge connects.
     property bool passwordDetectionAvailable: true
 
+    // Dictation (voice input) -- see src/dictation/.  Deepgram-backed;
+    // the API key and everything else here lives outside appSettings,
+    // same reasoning as the telemetry toggle: the parent owns the
+    // source of truth and hands the current values down.
+    property bool dictationEnabled: false
+    property bool dictationAvailable: true      // false = this build/host has no audio
+    property bool dictationHasKey: false
+    property string dictationMaskedKey: ""
+    property string dictationModel: "nova-3"
+    property string dictationLanguage: "en"
+    property string dictationDevice: ""          // "" = system default
+    property var dictationDevices: []            // list of device description strings
+    property var dictationModels: []             // [{id, label}]
+    property var dictationLanguages: []          // [{id, label}]
+    property int dictationMaxSeconds: 120
+    property int dictationSilenceSeconds: 4
+    property string dictationKeyterms: ""
+    property bool dictationStreamInserts: true
+
     // Drill-down navigation.  "home" shows the four category cards;
     // each other value shows that category's sub-view with a back
     // arrow.  The parent calls resetToHome() on window open so the
@@ -158,6 +177,7 @@ Item {
                             switch (unifiedSettings.currentView) {
                                 case "appearance": return qsTr("Appearance")
                                 case "typing": return qsTr("Smart Typing")
+                                case "dictation": return qsTr("Dictation")
                                 case "model": return qsTr("Your Language Model")
                                 case "data": return qsTr("Data & Privacy")
                                 default: return "⚙ " + qsTr("Settings")
@@ -269,6 +289,12 @@ Item {
                                     title: qsTr("Smart Typing"),
                                     subtitle: qsTr("Suggestions, prediction engine, input behaviour and timing"),
                                     accent: "#9eda6e"
+                                },
+                                {
+                                    id: "dictation",
+                                    title: qsTr("Dictation"),
+                                    subtitle: qsTr("Voice input, microphone, transcription service"),
+                                    accent: "#e8a13a"
                                 },
                                 {
                                     id: "model",
@@ -1903,6 +1929,549 @@ Item {
                                 text: "Debug Mode"
                                 checked: unifiedSettings.debugMode
                                 onToggled: function(c) { unifiedSettings.settingChanged("debugMode", c) }
+                            }
+                        }
+                    }
+
+                    // ============================================================
+                    // DICTATION view -- voice input, transcription service, mic
+                    // ============================================================
+                    ColumnLayout {
+                        Layout.fillWidth: true
+                        spacing: 16
+                        visible: unifiedSettings.currentView === "dictation"
+
+                        // -- Voice Input --
+                        SettingsSection {
+                            title: "Voice Input"
+                            Layout.fillWidth: true
+
+                            ColumnLayout {
+                                Layout.fillWidth: true
+                                spacing: 4
+
+                                SettingsToggle {
+                                    Layout.fillWidth: true
+                                    text: "Enable Dictation"
+                                    description: unifiedSettings.dictationAvailable
+                                               ? "Click the microphone in the suggestion bar to speak"
+                                               : "Audio input is not available on this system"
+                                    enabled: unifiedSettings.dictationAvailable
+                                    checked: unifiedSettings.dictationEnabled
+                                    onToggled: function(c) { unifiedSettings.settingChanged("dictationEnabled", c) }
+                                }
+
+                                SettingsToggle {
+                                    Layout.fillWidth: true
+                                    text: "Type As You Speak"
+                                    description: "Insert each phrase as it is recognised, instead of all at once when you stop"
+                                    enabled: unifiedSettings.dictationEnabled
+                                    checked: unifiedSettings.dictationStreamInserts
+                                    onToggled: function(c) { unifiedSettings.settingChanged("dictationStreamInserts", c) }
+                                }
+                            }
+                        }
+
+                        // -- Transcription Service --
+                        // Deepgram-backed.  The key is entered here rather than
+                        // in a config file so a non-technical user never has to
+                        // touch one; it's stored by the bridge, not appSettings
+                        // (same reasoning as the telemetry anon_id: this file
+                        // only ever sees a masked form of an already-saved key).
+                        SettingsSection {
+                            title: "Transcription Service"
+                            Layout.fillWidth: true
+
+                            ColumnLayout {
+                                Layout.fillWidth: true
+                                spacing: 8
+
+                                Text {
+                                    Layout.fillWidth: true
+                                    text: "Dictation uses Deepgram. Audio is streamed to their service while the microphone is on; nothing is sent at any other time. Get a key at console.deepgram.com."
+                                    textFormat: Text.PlainText
+                                    color: "#888"
+                                    font.pixelSize: 10
+                                    wrapMode: Text.WordWrap
+                                }
+
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    spacing: 6
+
+                                    TextField {
+                                        id: dictationKeyField
+                                        Layout.fillWidth: true
+                                        Layout.preferredHeight: 32
+                                        echoMode: TextInput.Password
+                                        selectByMouse: true
+                                        color: "#f0f0f0"
+                                        font.pixelSize: 13
+                                        selectionColor: "#4a9eff"
+                                        selectedTextColor: "#fff"
+                                        leftPadding: 10
+                                        rightPadding: 10
+                                        verticalAlignment: Text.AlignVCenter
+                                        placeholderText: unifiedSettings.dictationHasKey
+                                                       ? unifiedSettings.dictationMaskedKey
+                                                       : "Paste your Deepgram API key"
+
+                                        // This window can't hold OS focus (WS_EX_NOACTIVATE /
+                                        // WindowDoesNotAcceptFocus), so the OSK's own keys can't
+                                        // type into this field yet -- that needs the edit-mode
+                                        // signal plumbing the snippets editor uses, which is a
+                                        // follow-up. For now the key has to be pasted or typed
+                                        // from a physical keyboard.
+                                        background: Rectangle {
+                                            color: "#1a1a2a"
+                                            radius: 6
+                                            border.color: dictationKeyField.activeFocus ? "#4a9eff" : "#444"
+                                            border.width: 1
+                                        }
+                                    }
+
+                                    Rectangle {
+                                        Layout.preferredWidth: 60
+                                        Layout.preferredHeight: 32
+                                        radius: 5
+                                        color: dictSaveKeyArea.containsMouse ? "#3a5a3a" : "#2a3a2a"
+                                        border.color: "#4a6a4a"
+
+                                        Text {
+                                            anchors.centerIn: parent
+                                            text: "Save"
+                                            textFormat: Text.PlainText
+                                            color: "#aaffaa"
+                                            font.pixelSize: 12
+                                        }
+
+                                        MouseArea {
+                                            id: dictSaveKeyArea
+                                            anchors.fill: parent
+                                            hoverEnabled: true
+                                            cursorShape: Qt.PointingHandCursor
+                                            onClicked: {
+                                                unifiedSettings.settingChanged("dictationApiKey", dictationKeyField.text)
+                                                dictationKeyField.text = ""
+                                            }
+                                        }
+                                    }
+
+                                    Rectangle {
+                                        Layout.preferredWidth: 60
+                                        Layout.preferredHeight: 32
+                                        radius: 5
+                                        color: dictClearKeyArea.containsMouse ? "#3a3a3a" : "#2a2a2a"
+                                        border.color: "#4a4a4a"
+
+                                        Text {
+                                            anchors.centerIn: parent
+                                            text: "Clear"
+                                            textFormat: Text.PlainText
+                                            color: "#ccc"
+                                            font.pixelSize: 12
+                                        }
+
+                                        MouseArea {
+                                            id: dictClearKeyArea
+                                            anchors.fill: parent
+                                            hoverEnabled: true
+                                            cursorShape: Qt.PointingHandCursor
+                                            onClicked: unifiedSettings.settingChanged("dictationApiKeyCleared", true)
+                                        }
+                                    }
+                                }
+
+                                // -- Model picker --
+                                ColumnLayout {
+                                    Layout.fillWidth: true
+                                    spacing: 4
+                                    Layout.topMargin: 4
+
+                                    Text {
+                                        text: "Model"
+                                        textFormat: Text.PlainText
+                                        color: "#c0c0c0"
+                                        font.pixelSize: 12
+                                    }
+
+                                    Text {
+                                        Layout.fillWidth: true
+                                        visible: unifiedSettings.dictationModels.length === 0
+                                        text: "No transcription models available."
+                                        textFormat: Text.PlainText
+                                        color: "#888"
+                                        font.pixelSize: 10
+                                        wrapMode: Text.WordWrap
+                                    }
+
+                                    Row {
+                                        spacing: 6
+                                        visible: unifiedSettings.dictationModels.length > 0
+
+                                        Repeater {
+                                            model: unifiedSettings.dictationModels
+
+                                            Rectangle {
+                                                id: modelPill
+                                                implicitWidth: modelPillText.implicitWidth + 20
+                                                height: 28
+                                                radius: 5
+                                                property bool isCurrent: unifiedSettings.dictationModel === modelData.id
+                                                color: modelPill.isCurrent
+                                                       ? "#4a9eff" : (modelPillArea.containsMouse ? "#444" : "#333")
+                                                border.color: modelPill.isCurrent ? "#6ab4ff" : "#555"
+
+                                                Text {
+                                                    id: modelPillText
+                                                    anchors.centerIn: parent
+                                                    text: modelData.label
+                                                    textFormat: Text.PlainText
+                                                    color: modelPill.isCurrent ? "#fff" : "#ccc"
+                                                    font.pixelSize: 11
+                                                    font.weight: Font.DemiBold
+                                                }
+
+                                                MouseArea {
+                                                    id: modelPillArea
+                                                    anchors.fill: parent
+                                                    hoverEnabled: true
+                                                    cursorShape: Qt.PointingHandCursor
+                                                    onClicked: unifiedSettings.settingChanged("dictationModel", modelData.id)
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+
+                                // -- Language picker --
+                                ColumnLayout {
+                                    Layout.fillWidth: true
+                                    spacing: 4
+                                    Layout.topMargin: 4
+
+                                    Text {
+                                        text: "Language"
+                                        textFormat: Text.PlainText
+                                        color: "#c0c0c0"
+                                        font.pixelSize: 12
+                                    }
+
+                                    Flow {
+                                        Layout.fillWidth: true
+                                        spacing: 6
+
+                                        Repeater {
+                                            model: unifiedSettings.dictationLanguages
+
+                                            Rectangle {
+                                                id: langPill
+                                                implicitWidth: langPillText.implicitWidth + 20
+                                                height: 28
+                                                radius: 5
+                                                property bool isCurrent: unifiedSettings.dictationLanguage === modelData.id
+                                                color: langPill.isCurrent
+                                                       ? "#4a9eff" : (langPillArea.containsMouse ? "#444" : "#333")
+                                                border.color: langPill.isCurrent ? "#6ab4ff" : "#555"
+
+                                                Text {
+                                                    id: langPillText
+                                                    anchors.centerIn: parent
+                                                    text: modelData.label
+                                                    textFormat: Text.PlainText
+                                                    color: langPill.isCurrent ? "#fff" : "#ccc"
+                                                    font.pixelSize: 11
+                                                    font.weight: Font.DemiBold
+                                                }
+
+                                                MouseArea {
+                                                    id: langPillArea
+                                                    anchors.fill: parent
+                                                    hoverEnabled: true
+                                                    cursorShape: Qt.PointingHandCursor
+                                                    onClicked: unifiedSettings.settingChanged("dictationLanguage", modelData.id)
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // -- Microphone --
+                        // Long device names rule out a pill row (the layout /
+                        // model pills above), so this reuses the compat-mode
+                        // card shape instead: one full-width row per device,
+                        // elided rather than wrapped since a driver name can
+                        // run well past what two lines would still make readable.
+                        SettingsSection {
+                            title: "Microphone"
+                            Layout.fillWidth: true
+
+                            ColumnLayout {
+                                Layout.fillWidth: true
+                                spacing: 4
+
+                                Repeater {
+                                    model: [{ id: "", label: "System default" }].concat(
+                                        unifiedSettings.dictationDevices.map(function(d) { return { id: d, label: d } })
+                                    )
+
+                                    Rectangle {
+                                        id: devCard
+                                        Layout.fillWidth: true
+                                        implicitHeight: 30
+                                        radius: 5
+                                        property bool isCurrent: unifiedSettings.dictationDevice === modelData.id
+                                        color: devCard.isCurrent
+                                               ? "#2d4a7a" : (devArea.containsMouse ? "#3a3a3a" : "#2a2a2a")
+                                        border.color: devCard.isCurrent ? "#6ab4ff" : "#444"
+                                        border.width: devCard.isCurrent ? 2 : 1
+
+                                        Text {
+                                            anchors.left: parent.left
+                                            anchors.right: parent.right
+                                            anchors.verticalCenter: parent.verticalCenter
+                                            anchors.leftMargin: 10
+                                            anchors.rightMargin: 10
+                                            text: modelData.label
+                                            textFormat: Text.PlainText
+                                            color: devCard.isCurrent ? "#fff" : "#ccc"
+                                            font.pixelSize: 11
+                                            elide: Text.ElideRight
+                                        }
+
+                                        MouseArea {
+                                            id: devArea
+                                            anchors.fill: parent
+                                            hoverEnabled: true
+                                            cursorShape: Qt.PointingHandCursor
+                                            onClicked: unifiedSettings.settingChanged("dictationDevice", modelData.id)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // -- Stop Listening --
+                        SettingsSection {
+                            title: "Stop Listening"
+                            Layout.fillWidth: true
+
+                            ColumnLayout {
+                                Layout.fillWidth: true
+                                spacing: 10
+
+                                // Silence timeout -- 0 disables the auto-stop
+                                // entirely, so the label reads "Off" rather
+                                // than a confusing "0s".
+                                Item {
+                                    Layout.fillWidth: true
+                                    implicitHeight: 28
+
+                                    RowLayout {
+                                        anchors.fill: parent
+                                        anchors.leftMargin: 4
+                                        anchors.rightMargin: 4
+                                        spacing: 8
+
+                                        Text {
+                                            text: "Stop after silence"
+                                            textFormat: Text.PlainText
+                                            color: "#c0c0c0"
+                                            font.pixelSize: 12
+                                        }
+
+                                        Slider {
+                                            id: silenceSlider
+                                            Layout.fillWidth: true
+                                            from: 0
+                                            to: 30
+                                            stepSize: 1
+                                            value: unifiedSettings.dictationSilenceSeconds
+
+                                            background: Rectangle {
+                                                x: silenceSlider.leftPadding
+                                                y: silenceSlider.topPadding + silenceSlider.availableHeight / 2 - height / 2
+                                                width: silenceSlider.availableWidth
+                                                height: 4
+                                                radius: 2
+                                                color: "#333"
+
+                                                Rectangle {
+                                                    width: silenceSlider.visualPosition * parent.width
+                                                    height: parent.height
+                                                    radius: 2
+                                                    color: "#4a9eff"
+                                                }
+                                            }
+
+                                            handle: Rectangle {
+                                                x: silenceSlider.leftPadding + silenceSlider.visualPosition * (silenceSlider.availableWidth - width)
+                                                y: silenceSlider.topPadding + silenceSlider.availableHeight / 2 - height / 2
+                                                width: 14
+                                                height: 14
+                                                radius: 7
+                                                color: silenceSlider.pressed ? "#fff" : "#ddd"
+                                            }
+
+                                            onMoved: unifiedSettings.settingChanged("dictationSilenceSeconds", value)
+                                        }
+
+                                        Text {
+                                            text: silenceSlider.value === 0 ? "Off" : silenceSlider.value + "s"
+                                            textFormat: Text.PlainText
+                                            color: "#fff"
+                                            font.pixelSize: 11
+                                            Layout.preferredWidth: 32
+                                            horizontalAlignment: Text.AlignRight
+                                        }
+                                    }
+                                }
+
+                                // Maximum length -- hard cap on one utterance,
+                                // independent of the silence timeout above.
+                                Item {
+                                    Layout.fillWidth: true
+                                    implicitHeight: 28
+
+                                    RowLayout {
+                                        anchors.fill: parent
+                                        anchors.leftMargin: 4
+                                        anchors.rightMargin: 4
+                                        spacing: 8
+
+                                        Text {
+                                            text: "Maximum length"
+                                            textFormat: Text.PlainText
+                                            color: "#c0c0c0"
+                                            font.pixelSize: 12
+                                        }
+
+                                        Slider {
+                                            id: maxLenSlider
+                                            Layout.fillWidth: true
+                                            from: 15
+                                            to: 600
+                                            stepSize: 15
+                                            value: unifiedSettings.dictationMaxSeconds
+
+                                            background: Rectangle {
+                                                x: maxLenSlider.leftPadding
+                                                y: maxLenSlider.topPadding + maxLenSlider.availableHeight / 2 - height / 2
+                                                width: maxLenSlider.availableWidth
+                                                height: 4
+                                                radius: 2
+                                                color: "#333"
+
+                                                Rectangle {
+                                                    width: maxLenSlider.visualPosition * parent.width
+                                                    height: parent.height
+                                                    radius: 2
+                                                    color: "#4a9eff"
+                                                }
+                                            }
+
+                                            handle: Rectangle {
+                                                x: maxLenSlider.leftPadding + maxLenSlider.visualPosition * (maxLenSlider.availableWidth - width)
+                                                y: maxLenSlider.topPadding + maxLenSlider.availableHeight / 2 - height / 2
+                                                width: 14
+                                                height: 14
+                                                radius: 7
+                                                color: maxLenSlider.pressed ? "#fff" : "#ddd"
+                                            }
+
+                                            onMoved: unifiedSettings.settingChanged("dictationMaxSeconds", value)
+                                        }
+
+                                        Text {
+                                            text: {
+                                                var v = maxLenSlider.value
+                                                if (v < 60) return v + "s"
+                                                var m = Math.floor(v / 60)
+                                                var s = v % 60
+                                                return s === 0 ? (m + "m") : (m + "m " + s + "s")
+                                            }
+                                            textFormat: Text.PlainText
+                                            color: "#fff"
+                                            font.pixelSize: 11
+                                            Layout.preferredWidth: 46
+                                            horizontalAlignment: Text.AlignRight
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // -- Custom Words --
+                        SettingsSection {
+                            title: "Custom Words"
+                            Layout.fillWidth: true
+
+                            ColumnLayout {
+                                Layout.fillWidth: true
+                                spacing: 6
+
+                                Text {
+                                    Layout.fillWidth: true
+                                    text: "Names, jargon and acronyms to listen for, one per line."
+                                    textFormat: Text.PlainText
+                                    color: "#888"
+                                    font.pixelSize: 10
+                                    wrapMode: Text.WordWrap
+                                }
+
+                                ScrollView {
+                                    Layout.fillWidth: true
+                                    Layout.preferredHeight: 100
+                                    clip: true
+
+                                    TextArea {
+                                        id: dictationKeytermsField
+                                        text: unifiedSettings.dictationKeyterms
+                                        wrapMode: TextArea.Wrap
+                                        selectByMouse: true
+                                        color: "#f0f0f0"
+                                        font.pixelSize: 12
+                                        selectionColor: "#4a9eff"
+                                        selectedTextColor: "#fff"
+                                        leftPadding: 8
+                                        rightPadding: 8
+                                        topPadding: 6
+                                        bottomPadding: 6
+
+                                        background: Rectangle {
+                                            color: "#1a1a2a"
+                                            radius: 6
+                                            border.color: dictationKeytermsField.activeFocus ? "#4a9eff" : "#444"
+                                            border.width: 1
+                                        }
+                                    }
+                                }
+
+                                Rectangle {
+                                    Layout.fillWidth: true
+                                    implicitHeight: 30
+                                    radius: 5
+                                    color: dictKeytermsSaveArea.containsMouse ? "#3a5a3a" : "#2a3a2a"
+                                    border.color: "#4a6a4a"
+
+                                    Text {
+                                        anchors.centerIn: parent
+                                        text: "Save"
+                                        textFormat: Text.PlainText
+                                        color: "#aaffaa"
+                                        font.pixelSize: 12
+                                    }
+
+                                    MouseArea {
+                                        id: dictKeytermsSaveArea
+                                        anchors.fill: parent
+                                        hoverEnabled: true
+                                        cursorShape: Qt.PointingHandCursor
+                                        onClicked: unifiedSettings.settingChanged("dictationKeyterms", dictationKeytermsField.text)
+                                    }
+                                }
                             }
                         }
                     }

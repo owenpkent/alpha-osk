@@ -1,5 +1,15 @@
 # MacroVox + Alpha-OSK Integration Plan
 
+> **Status note (2026-08-18):** Alpha-OSK now has **native dictation** of its
+> own, streaming to Deepgram directly from the keyboard. See
+> `docs/architecture/DICTATION.md`. That supersedes **Phase 1** and **Phase 2**
+> below, which existed to get dictated text into Alpha-OSK by launching and
+> then listening to MacroVox; there is no longer anything to launch. It does
+> **not** supersede Phase 3 or 4, which are about the things MacroVox does that
+> the keyboard deliberately does not attempt: Claude transcript cleanup,
+> agentic writing, and a shared profile/settings layer. Read the phases below
+> with that split in mind rather than as a live plan.
+
 ## Overview
 
 **MacroVox** (`C:\Users\Owen\dev\MacroVox`) is a managed Windows voice dictation app. **Alpha-OSK** is an AI-powered on-screen keyboard. Both are accessibility tools for motor-impaired users built by the same developer. Together they form a complete text input suite: type when you can, dictate when you can't.

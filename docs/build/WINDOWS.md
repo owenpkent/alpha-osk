@@ -590,6 +590,7 @@ The script: checks prereqs → runs PyInstaller → signs all `.exe` in `dist/al
 6. **Test UIAccess**: open an elevated Command Prompt (Run as Admin) and verify keystrokes reach it.
 7. Verify `Settings → Data & Privacy → Updates` shows the new version.
 8. **(If updater changed)** Manually trigger an auto-update from a prior version: confirm the download popup shows live MB/% progress, the pre-install toast appears, the relauncher splash shows the marquee progress bar settling on Done, and the post-install ✓ toast confirms the new version.
+9. **(If dictation is in scope)** Enter a Deepgram key in `Settings → Dictation`, then complete one run against a real microphone. Launching the exe is not enough on its own: naming `PySide6.QtMultimedia` in the spec bundles the *module*, while opening a device also needs Qt's `multimedia` **plugin** directory, and a missing plugin surfaces as the message "The microphone could not be opened." rather than as a crash, so it will not show up in any other step. Check the device picker lists your inputs too, since it goes through the same backend.
 
 ### 6. Tag
 

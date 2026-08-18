@@ -53,6 +53,7 @@ Python status columns reflect `main`; C++ columns reflect the `cpp-rewrite` bran
 | **Features** | | | | | | |
 | Settings panel | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ |
 | Snippets | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ |
+| Dictation (voice input, off by default) ¹⁰ | ✅ | ✅ | 🚧 ¹⁰ | ❌ | ❌ | ❌ |
 | Vocab packs (import-only) | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ |
 | Data backup (export / import) | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ |
 | Analytics (session + lifetime) | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ |
@@ -123,6 +124,23 @@ Python status columns reflect `main`; C++ columns reflect the `cpp-rewrite` bran
    feature from remembering things it should not, and it is the half that looks
    most droppable when transcribing. See the *Structured Tokens* section in
    `CLAUDE.md`.
+10. **Python-only, and platform-neutral by construction.** `src/dictation/`
+    plus the bridge slots and the Dictation settings category have no C++
+    counterpart. Nothing in it is per-OS: capture is `QAudioSource` and the
+    provider is `QWebSocket`, both from the PySide6 wheel, so the same code
+    runs on all three platforms. The key storage differs per platform without
+    being a parity gap: DPAPI-wrapped on Windows, plaintext at mode 0600
+    elsewhere, with `key_protected` recording which, so a file written on
+    either loads on the other.
+
+    **macOS is 🚧 rather than ✅ despite the code being shared.** Opening a
+    microphone there needs the `com.apple.security.device.audio-input`
+    entitlement and `NSMicrophoneUsageDescription`, both of which sit in the
+    unstarted signing phase (`docs/build/MACOS.md`), and without them the
+    capture fails silently at runtime. Nothing has been run on macOS yet, so
+    "the same code compiles" is not the same claim as "done", which is what
+    ✅ means in the legend above. Flip it once a mac build has completed one
+    dictation run. See [`DICTATION.md`](DICTATION.md).
 
 ## Keeping this current
 

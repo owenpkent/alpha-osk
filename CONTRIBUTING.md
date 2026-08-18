@@ -153,8 +153,13 @@ Other useful docs in `docs/`:
 - `docs/architecture/HYBRID_MERGING.md` — prediction merging strategies
 - `docs/architecture/FUZZY_RECOGNITION.md` — spatial error correction
 - `docs/architecture/PPM.md` — character-level prediction
+- `docs/architecture/DICTATION.md` (voice input, Deepgram-backed)
 - `docs/build/WINDOWS.md`, `docs/build/LINUX.md`, `docs/build/MACOS.md` — per-platform build
   and packaging notes
+
+The dictation tests need neither a Deepgram API key nor a microphone. They
+drive a fake provider and stub the audio capture, so `tests/test_dictation.py`
+runs on any machine with nothing to set up first.
 
 ## Coding conventions
 

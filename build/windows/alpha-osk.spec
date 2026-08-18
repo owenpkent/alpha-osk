@@ -73,6 +73,16 @@ a = Analysis(
         'PySide6.QtQml',
         'PySide6.QtQuick',
         'PySide6.QtQuickControls2',
+        # Dictation: capture (QAudioSource) and transport (QWebSocket).
+        # Both are imported lazily, inside the functions that use them, so
+        # they are named here rather than left to static analysis.  Listing
+        # a module is not the same as bundling its Qt *plugins*: QtMultimedia
+        # needs its `multimedia` plugin directory to open a device at all, so
+        # a release build has to be smoke-tested with a real microphone (see
+        # docs/architecture/DICTATION.md), not just launched.
+        'PySide6.QtMultimedia',
+        'PySide6.QtNetwork',
+        'PySide6.QtWebSockets',
         # Our modules
         'src',
         'src.keyboard_app',
@@ -90,6 +100,11 @@ a = Analysis(
         'src.prediction.hybrid_predictor',
         # transformer_predictor excluded — requires torch (optional, not bundled)
         'src.prediction.vocabulary_pack',
+        'src.dictation',
+        'src.dictation.audio',
+        'src.dictation.config',
+        'src.dictation.controller',
+        'src.dictation.providers',
     ],
 
     hookspath=[],

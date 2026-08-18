@@ -2,6 +2,8 @@
 
 The short version: by default, **nothing leaves your computer**. Alpha-OSK predicts and learns entirely on your machine. Your typed text, vocabulary, keystroke history, and prediction model never touch a server.
 
+Two optional features can send something, and both are off until you switch them on: **dictation** (below) and **usage telemetry** (further down). Neither can be switched on by accident, and dictation additionally does nothing until you supply your own API key.
+
 ## Diagnostic log
 
 Separately from telemetry, Alpha-OSK writes an operational log to `alpha-osk.log` in your config directory (`%APPDATA%\alpha-osk\` on Windows, `~/.config/alpha-osk/` on Linux). It's local only: nothing in it is ever uploaded, and it is not included in Data Backup exports. It rotates automatically (capped at 2 MB, keeping the 3 most recent files), so it can't grow without bound.
@@ -133,9 +135,28 @@ What the export contains:
 What the export does **not** contain:
 
 - **Your telemetry contributor ID.** `telemetry.json` is intentionally excluded. Carrying the `anon_id` to a new machine would link your contributions across machines, which the "Opting out" section above promises won't happen. When you turn telemetry back on after import, the new machine generates a fresh `anon_id`.
+- **Your dictation API key.** `dictation.json` is intentionally excluded, for the same reason: an export is a file you carry between machines and hand around, which is the last place a credential belongs. Re-enter the key on the new machine (see "Dictation" below).
 - Settings (theme, layout, toggles, window size). Those live in the OS settings layer (Windows registry / Linux config) and are quick to reconfigure on the new machine.
 
 Importing replaces your current data on that machine. Before any overwrite, Alpha-OSK saves your existing state as a timestamped **rescue export** in `<config>/exports/rescue-<timestamp>.zip` so you can roll back by importing that file.
+
+## Dictation
+
+**Off by default, and inert until you supply your own API key.** With it off, nothing on this page changes: no microphone is opened, no audio is captured, and no network connection is made.
+
+When you switch it on and click the microphone in the suggestion bar, Alpha-OSK opens your microphone and streams the audio to **Deepgram** over an encrypted websocket, which transcribes it and sends the text back. That is what dictation is; there is no version of this feature that recognises speech without the audio going somewhere, short of shipping a local model, which is a different feature.
+
+What is true about it:
+
+- **Audio is streamed only while the microphone is on**, that is, between the click that starts a run and the click (or the silence timeout, or the length ceiling) that ends it. Nothing is sent at any other time, and nothing is recorded to disk at any point.
+- **The microphone closes the moment a run ends.** It is not held open between runs.
+- **Nothing else goes with the audio.** Not your vocabulary, not your prediction model, not your typed context, not an identifier of any kind. The only thing that identifies the request is your own Deepgram API key.
+- **The transcript is not learned.** Dictated words update the on-screen context so the next suggestion is sensible, but they are not added to your vocabulary and are not written into your prediction model.
+- **Nothing about a run reaches the diagnostic log.** The log records that a phrase of N characters was inserted, never the phrase.
+- **Dictation stops itself when a password field is focused.** If privacy mode turns on mid-run (automatically, because the caret landed on a password field, or because you tapped the Learning switch), the run is cancelled outright rather than allowed to finish: the connection is dropped and anything the service still owed is discarded rather than typed. Streaming a spoken password to a third party is the specific thing this prevents.
+- **Your relationship for the audio is with Deepgram, not with us.** You use your own key and your own account; we neither see nor proxy the audio. Their handling of it is governed by their terms, which are worth reading if the content of what you dictate is sensitive.
+
+Your API key is stored in `dictation.json` in your config directory. On Windows it is encrypted with DPAPI, which ties it to your Windows account, so a copy of the file is useless on another machine or under another login. On Linux and macOS it is stored in plaintext with the file readable only by you. **It is deliberately excluded from Data Backup exports**, for the same reason the telemetry identifier is: an export is a file you carry between machines and hand around, which is the last place a credential should be. If you move to a new computer, re-enter the key there.
 
 ## Federated learning
 

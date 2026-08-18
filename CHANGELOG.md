@@ -4,6 +4,17 @@ All notable changes to Alpha-OSK are documented in this file.
 
 ## [Unreleased]
 
+### Added
+- **Dictation.** A microphone at the left end of the suggestion bar: click it, speak, click again. The live transcript renders in the suggestion bar itself, and each phrase is typed into whatever app has focus as soon as the recogniser finalises it, through the same verbatim-insert path a snippet uses. Settings live under a new **Dictation** category (enable, API key, model, language, input device, silence and length limits, and a custom-words list for names and jargon).
+
+  **Off by default and inert without a key.** Transcription is Deepgram, using your own API key; nothing is captured or sent until you switch it on and click the microphone. `docs/PRIVACY.md` has a section on exactly what leaves the machine and when.
+
+  **It stops itself when a password field is focused.** Privacy mode cancels a run outright rather than letting it finish, dropping the connection and discarding anything the service still owed instead of typing it. Streaming a spoken password to a third party is the specific thing that prevents.
+
+  **It costs no new dependencies.** Capture is `QAudioSource` and transport is `QWebSocket`, both already inside the PySide6 wheel the build bundles, so there is no new binary for the installer to carry or the certificate to sign. Qt also resamples for us, so the recogniser sees a fixed 16 kHz mono stream whatever the microphone natively runs at, and there is no worker thread anywhere in the feature.
+
+  Design notes, including why it is a toggle rather than push-to-talk and why there is deliberately no automatic reconnect, are in `docs/architecture/DICTATION.md`.
+
 ### Fixed
 - **Clicking into another field now clears the suggestion context even when you are part-way through a word.** Reported as the context not clearing every time you click outside the keyboard, and that was right: the detection itself was working (verified live against the release, with clicks in Chrome, on the taskbar and on the keyboard's own keys each attributed correctly), but the reset was suppressed whenever a partial word was in progress. That is the case where it matters most, because a partial word is exactly when the suggestion row is full of completions for the field you have just left. With `hel` typed and the caret clicked into another box, tapping the `hello` pill sent `lo ` into that box: the abandoned word's tail, in a field that never held its head. Holding the click until the next word boundary, which is what the code did before, could not rescue it either, because that boundary only arrives once you finish the word and the wrong text is already in by then. The suppression existed to protect the opposite case, a click that moves no caret (a scrollbar, a toolbar button), where clearing the mirror while its characters are still on screen can make a later suggestion complete against half a word. That is still true, and it is the rarer of the two here: mid-word your pointer is on the keyboard, and the keyboard's own clicks are filtered out by process id, so reaching it means leaving the keyboard, clicking something caret-neutral in another app, and coming back mid-word. Caret-move detection keeps the guard, because scrolling drags the caret rectangle around without the caret moving in the text and that false positive lands mid-word constantly.
 
