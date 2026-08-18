@@ -185,7 +185,6 @@ Yes on Windows (Unicode keystroke injection covers anything in BMP and supplemen
 | Core keyboard (Windows + Linux) | Shipping |
 | Hybrid prediction engine | Shipping |
 | Custom vocabulary import | Shipping |
-| Swipe / glide typing | In development (off by default) |
 | Auto-update (Windows) | Shipping |
 | Anonymous telemetry (opt-in) | Client + UI shipped, endpoint not yet deployed |
 | Analytics dashboard | Shipping |
@@ -204,7 +203,6 @@ Yes on Windows (Unicode keystroke injection covers anything in BMP and supplemen
 - Sticky modifiers (Shift, Ctrl, Alt, Win) with auto-release after the next key, or right-click one to lock it held
 - Multi-modifier chords (Win+Shift+S, Ctrl+Alt+Del, etc.)
 - Right-click a character key for its shifted variant without flipping sticky shift
-- Optional swipe / glide typing (Gboard-style shape matching)
 - Numpad panel with NumLock toggle between digits and navigation keys
 - Intelligent spacing: the auto-space after punctuation stands down inside an email, a link, a decimal, a time, or a file path, instead of breaking it in half
 - Snippets for text you type constantly (name, email, address, canned replies), inserted with one tap. Alpha-OSK can spot an email, phone number or address as you type it and offer to save it for you, on your machine only and never while learning is paused
@@ -255,7 +253,7 @@ src/
   keyboard_app.py      QML engine, window flags, OS focus handling
   keyboard_bridge.py   Python <-> QML bridge: keys, modifiers, predictions, context
   platform/            OS abstraction (Linux xdotool/ydotool, Windows SendInput, macOS Quartz)
-  prediction/          Hybrid engine: n-gram, PPM, fuzzy, swipe, hybrid orchestrator
+  prediction/          Hybrid engine: n-gram, PPM, fuzzy, hybrid orchestrator
   analytics.py         Session + lifetime stats
   telemetry.py         Opt-in anonymous metrics client
   data_export.py       Export / import of model, stats, and packs to a portable .zip
@@ -273,7 +271,7 @@ For a guided tour, read [`CLAUDE.md`](CLAUDE.md). It's primarily an AI-onboardin
 
 - [`docs/WHITEPAPER.md`](docs/WHITEPAPER.md): the canonical reference paper.
 - [`docs/PRIVACY.md`](docs/PRIVACY.md): user-facing data policy.
-- [`docs/architecture/`](docs/architecture/): how the running system works (hybrid merging, PPM, fuzzy, swipe, platform abstraction, telemetry design, layouts).
+- [`docs/architecture/`](docs/architecture/): how the running system works (hybrid merging, PPM, fuzzy, platform abstraction, telemetry design, layouts).
 - [`docs/build/`](docs/build/): packaging, signing, releases, auto-update (Windows, Linux, macOS, branding).
 - [`docs/roadmap/`](docs/roadmap/): planned, not-yet-built (launch plan, federated learning, ecosystem, MacroVox integration, document import).
 - [`docs/research/`](docs/research/): background material, philosophy, audits, brainstorms.

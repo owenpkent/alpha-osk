@@ -202,21 +202,6 @@ Item {
                         }
                     }
 
-                    // -- SWIPE TYPING --
-                    SettingsSection {
-                        title: "Swipe Typing"
-                        Layout.fillWidth: true
-
-                        ColumnLayout {
-                            Layout.fillWidth: true
-                            spacing: 6
-
-                            HelpText { text: "Drag the mouse across letters to type a whole word in one gesture (like Gboard). Press, drag past about 60 pixels, release. Alternates appear in the prediction bar so you can pick a different word." }
-                            HelpText { text: "Off by default. Enable in <b>Settings → Smart Typing → Suggestions → Swipe Typing</b>." }
-                            HelpText { text: "Tap-through still works · a normal click on a key types that key as usual." }
-                        }
-                    }
-
                     // -- ANALYTICS & DASHBOARD --
                     SettingsSection {
                         title: "Analytics & Dashboard"

@@ -12,17 +12,6 @@ Item {
     property color accentColor: "#4a9eff"
     property color borderColor: "#505050"
 
-    // Wired to root.registerCharKey / unregisterCharKey in Main.qml.  Not
-    // optional decoration: the swipe overlay covers this panel too and
-    // hit-tests the registry to pass taps through, so before these were
-    // wired up every F-key was a dead tap whenever Swipe Typing was on.
-    // Same failure as issue #15, which was fixed for the main grid and the
-    // Number Row and missed here.  They register as *specials*, so they
-    // never reach the recogniser's key-centre map: an "F7" centre would be
-    // a phantom letter in every shape match.
-    property var registerFn: null
-    property var unregisterFn: null
-
     readonly property var keyGroups: [
         ["F1", "F2", "F3", "F4"],
         ["F5", "F6", "F7", "F8"],
@@ -86,11 +75,6 @@ Item {
                             type: "special",
                             action: modelData.toLowerCase()
                         })
-
-                        Component.onCompleted: if (fnRow.registerFn)
-                            fnRow.registerFn(fnKey, fnKey.kd)
-                        Component.onDestruction: if (fnRow.unregisterFn)
-                            fnRow.unregisterFn(fnKey)
 
                         keyText: modelData.toLowerCase()
                         displayText: modelData

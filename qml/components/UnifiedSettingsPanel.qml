@@ -44,7 +44,6 @@ Item {
     property bool autoSaveOnExit: true
 
     // Input methods
-    property bool swipeEnabled: false
     property bool rightClickShift: true
     // Flash a preview bubble above a key showing the typed character.
     property bool keyPreviewEnabled: true
@@ -657,13 +656,6 @@ Item {
                                     text: "Auto-Capitalize After Punctuation"
                                     checked: unifiedSettings.autoCapitalizeAfterPunctuation
                                     onToggled: function(c) { unifiedSettings.settingChanged("autoCapitalizeAfterPunctuation", c) }
-                                }
-
-                                SettingsToggle {
-                                    Layout.fillWidth: true
-                                    text: "Swipe Typing (drag across keys)"
-                                    checked: unifiedSettings.swipeEnabled
-                                    onToggled: function(c) { unifiedSettings.settingChanged("swipeEnabled", c) }
                                 }
 
                                 // Prediction count

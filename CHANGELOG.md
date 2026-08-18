@@ -2,6 +2,15 @@
 
 All notable changes to Alpha-OSK are documented in this file.
 
+## [Unreleased]
+
+### Removed
+- **Swipe typing is gone** (issue #39). Dragging across letters to type a whole word was the one input path here that is not a click, and a sustained precise drag is exactly what a mouse-driven user with imprecise motor control cannot reliably make, so the feature's premise did not survive contact with the person it was built for. Recognition was also not accurate enough to pay for itself: when the decode was wrong, fixing it cost more clicks than typing the word would have.
+
+  Removing it takes a standing hazard with it. The transparent overlay covered the keyboard rows and took *every* press inside its bounds, then resolved it against a registry of keys, so any key missing from that registry was a dead tap while the feature was on. That was issue #15 (Backspace, Delete, Tab, Enter, the arrows, the modifiers and `?123` all dead), and the same bill came due again for the Number Row's Esc and again for every F-key. It was a trap every new control near the keyboard had to remember, and it is now structurally impossible rather than documented.
+
+  Gone with it: the shape-matching recogniser, the overlay, the settings toggle and its saved value, the three bridge slots, both key registries and their registration plumbing, the `KeyButton` external press/release/hold entry points that existed only so the overlay could drive a key, and the design doc. Nothing else changes: no other feature used any of it, and every key on every panel now receives its own presses directly, as it did with swipe switched off. `CLAUDE.md` keeps a short note on what was removed and what to re-read before attempting any future gesture feature.
+
 ## [1.2.2] (2026-08-16)
 
 Headlines: the character-repeat setting 1.2.1 added now actually works everywhere it claimed to. It did nothing at all while Swipe Typing was on, it was never wired into the numpad, and the "repeat only starts after roughly 800 ms" promise held only at the default repeat delay. All three are fixed. A review of the 1.2.1 window-style change also found the taskbar-button half of it writing a style word that nothing flushed.
