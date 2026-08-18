@@ -653,20 +653,26 @@ paired with the locked-modifier inverse.
 (`_send_key(..., extra_modifiers=...)`). A macro key bound to Ctrl+S,
 tapped while Shift is held, sends Ctrl+Shift+S, exactly as a physical macro
 key would. The merge happens inside `_send_key` so the
-`_keystroke_since_poll` bookkeeping stays in one place; setting that
-anywhere else is what once made the caret poll read our own inserts as the
+`_note_own_keystroke` bookkeeping stays in one place; setting those flags
+anywhere else is what once made the caret polls read our own inserts as the
 user clicking elsewhere.
 
-**A text action mirrors `insertSnippet` invariant for invariant**, and for
-the same reasons: `_release_sticky_modifiers()` **before** the insert (a
-held Shift would otherwise deliver the whole phrase in capitals, and
-`_make_char_scancode_events` cannot cancel a standing hold), the send
-inside `_without_held_modifiers()` via `_send_literal_text`, a deferred
-auto-space settled as prose, an armed auto-capital spent, and
-`_current_word` / `_raw_token` / the pill row cleared so the phrase's
-punctuation cannot corrupt the next prediction's prefix matching. Not gated
-on privacy mode: the user tapped the key, so the text must reach the app
-either way, and nothing on this path learns or logs its content.
+**A text action *is* `_commit_verbatim_insert`, not a copy of it.**
+`_send_text_action` is a one-line call, because a programmed phrase is a
+purely literal insert with nothing to add on either end, which is exactly
+what that helper is for and what `insertSnippet` and `insertGlyph` already
+call. So it inherits the whole prologue rather than restating it:
+`_release_sticky_modifiers()` **before** the insert (a held Shift would
+otherwise deliver the phrase in capitals, and `_make_char_scancode_events`
+cannot cancel a standing hold), the send inside `_without_held_modifiers()`
+via `_send_literal_text`, a deferred auto-space settled as prose, an armed
+auto-capital spent, and the seven fields both other callers reset. It was
+written out inline first, before the helper existed, and the copy was
+already one field behind (`_word_prefix_lost`, which arrived with the
+helper): parallel blocks drifting is the failure this file warns about for
+sticky-modifier release, and this is the same shape. Not gated on privacy
+mode: the user tapped the key, so the text must reach the app either way,
+and nothing on this path learns or logs its content.
 
 **`pressSpecialKey`'s name map is hoisted to the class**
 (`_SPECIAL_KEY_NAMES`) because a programmed chord resolves its action key
@@ -726,6 +732,22 @@ that exists only so the headless test can read it: PySide has no converter
 for `QFlags<QQuickPopup::ClosePolicyFlag>`, so an assertion on the real
 property errors instead of guarding anything.
 
+**It has to supply the text-box behaviour the window flags take away, and
+that is the same three things the snippets editor lists.** Clicks reach the
+fields (the `MouseArea` recording which box is being typed into sets
+`mouse.accepted = false` and passes the press down, so caret placement,
+double-click-for-a-word and drag-select all still work), Tab changes field,
+and **Shift with an arrow selects rather than moving the caret**
+(`_moveCaret`, reading the injected `shiftOn`). None of the three come for
+free: this window never holds OS focus, so Qt's own key handling never sees
+the modifier, and without the third there is no way at all to select a range
+in a 500-character phrase with an imprecise pointer. `shiftOn` is still true
+at that point because the bridge's edit-mode intercept emits and returns
+*before* its auto-release block. Guarded by
+`tests/test_qml_function_row.py::TestTheEditor`, where the Shift case is
+paired with the inverse that a bare arrow still just moves the caret: an
+unconditional `moveCursorSelection` would satisfy the first on its own.
+
 **Chord capture is a mode, not a field.** Tapping the "Key" slot sets
 `editTarget = "chord"`, and the next key pressed *on the OSK* becomes the
 chord's action key - which is the only way to name Enter or an arrow
@@ -742,16 +764,17 @@ its editor. This mirrors the snippets grid's Manage mode rather than
 inventing a gesture, and it is on *every* visible row so it can neither
 vanish with a row nor move under a pointer already travelling toward it.
 
-**The toggle registers with the swipe overlay like every other key.** The
-overlay takes every press inside its bounds and resolves it against
-`tappableKeyRegistry`, so a control missing from it is a dead tap whenever
-Swipe Typing is on. That is issue #15, fixed for the main grid, the Number
-Row and the F-keys, and the one new key in this row is exactly the shape
-that reintroduces it. It registers as a **special**, so it never reaches
-the recogniser's key-centre map, where an "Edit" centre would be a phantom
-letter in every shape match. Guarded by
-`tests/test_qml_function_row.py::TestEveryKeyIsHitTestable`, whose inverse
-half asserts the absence from `charKeyRegistry`.
+**The toggle takes its share of the gap around it, like every other key.**
+`FunctionRow`'s `hitMarginH` / `hitMarginV` default to 0 and there is no
+cascade, so a `KeyButton` whose caller forgets to pass them leaves the
+strip between it and its neighbour dead (see *Dead space between keys*).
+A new key added to an existing row is the likeliest place for that to be
+missed, because the row around it already works. The same applies to the
+whole F13-F24 panel, which is a second instance of this component and so
+needs its own bindings from `Main.qml`. Guarded by
+`tests/test_qml_compact_view.py::TestNoDeadStripBetweenKeys::test_every_key_in_every_panel_takes_a_share_too`,
+which walks the tree with both function rows switched on and fails on any
+key holding a zero margin.
 
 ### Geometry: the group gap gives, never a key width
 Adding the Edit toggle made the row **13 keys**, which is exactly the
