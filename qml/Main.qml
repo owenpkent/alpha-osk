@@ -31,6 +31,11 @@ Window {
         property bool savedShowNavigation: true
         property bool savedShowNumpad: false
         property bool savedShowFunctionRow: false
+        // F13-F24, their own toggle rather than a second line inside the
+        // F1-F12 row: the twelve macro keys are the ones worth showing
+        // on their own, and yoking them to the standard row would cost
+        // a user who only wants macros the vertical space of both.
+        property bool savedShowExtraFunctionRow: false
         property string savedTheme: "dark"
         property bool savedSuggestionsEnabled: true
         property real savedWindowOpacity: 1.0
@@ -295,6 +300,8 @@ Window {
         root.showNavigation = appSettings.savedShowNavigation && !root.compactView
         root.showNumpad = appSettings.savedShowNumpad && !root.compactView
         root.showFunctionRow = appSettings.savedShowFunctionRow
+        root.showExtraFunctionRow = appSettings.savedShowExtraFunctionRow
+        root.refreshKeyActions()
         root.currentTheme = appSettings.savedTheme
         root.suggestionsEnabled = appSettings.savedSuggestionsEnabled
 
@@ -634,6 +641,7 @@ Window {
         return true
     }
     property bool showFunctionRow: false
+    property bool showExtraFunctionRow: false
     property bool showNavigation: false
     property bool showNumpad: false
     property bool showSettings: false
@@ -891,6 +899,39 @@ Window {
         else if (name === "redo") field.redo()
         else return false
         return true
+    }
+
+    // --- Programmable function keys -----------------------------------
+    //
+    // The bridge's assignment map, held here rather than queried per key
+    // so both function rows read one value and re-render together when it
+    // changes.  Reassigning the whole map (rather than mutating it) is
+    // what makes the keycap bindings in FunctionRow.qml re-evaluate.
+    property var keyActions: ({})
+    property var keyActionTypes: []
+    property var unboundFunctionKeys: []
+    // One assign mode across both rows: the toggle at the end of either
+    // row puts every function key into "tap to program" until it is
+    // turned off, which is the left-click route into the editor for a
+    // pointer that cannot right-click.
+    property bool fkeyAssignMode: false
+
+    function refreshKeyActions() {
+        if (!keyboard) return
+        root.keyActions = keyboard.getKeyActions()
+        root.keyActionTypes = keyboard.getKeyActionTypes()
+        root.unboundFunctionKeys = keyboard.getUnboundFunctionKeys()
+    }
+
+    function openKeyActionEditor(keyId) {
+        if (!keyboard) return
+        var existing = root.keyActions ? root.keyActions[keyId] : null
+        keyActionEditor.loadFor(keyId, existing ? existing : null)
+    }
+
+    Connections {
+        target: keyboard
+        function onKeyActionsChanged(actions) { root.keyActions = actions }
     }
 
     // Bounding box of every monitor, in virtual-desktop coordinates.
@@ -2547,6 +2588,41 @@ Window {
                         hidePreviewFn: root.hideKeyPreview
                     }
 
+                    // ===== Extra Function Row (F13-F24) =====
+                    //
+                    // Above F1-F12 rather than below it, so it lands where
+                    // a physical keyboard's extra row would and never
+                    // pushes the standard row (the one with muscle memory
+                    // attached) to a different height when it is toggled.
+                    Comp.FunctionRow {
+                        objectName: "extraFunctionRowPanel"
+                        visible: root.showExtraFunctionRow
+                        Layout.alignment: Qt.AlignHCenter
+                        keyGroups: [
+                            ["F13", "F14", "F15", "F16"],
+                            ["F17", "F18", "F19", "F20"],
+                            ["F21", "F22", "F23", "F24"]
+                        ]
+                        keyW: root.keyW
+                        keyH: root.keyH * 0.7
+                        keySpacing: root.keySpacing
+                        hitMarginH: root.keyHitMarginH
+                        hitMarginV: root.keyHitMarginV
+                        // The keyboard grid this row sits above: the row
+                        // compresses its group gaps rather than overhang it.
+                        maxWidth: root._widestRow.units * root.keyW
+                                  + root._widestRow.gaps * root.keySpacing
+                        actions: root.keyActions
+                        editFn: root.openKeyActionEditor
+                        assignMode: root.fkeyAssignMode
+                        onAssignToggled: root.fkeyAssignMode = !root.fkeyAssignMode
+                        keyColor: Qt.darker(root.themeKeyColor, 1.15)
+                        keyPressedColor: root.themeKeyPressed
+                        keyTextColor: root.themeTextColor
+                        accentColor: root.themeAccent
+                        borderColor: root.themeBorder
+                    }
+
                     // ===== Function Row (F1-F12) =====
                     Comp.FunctionRow {
                         objectName: "functionRowPanel"
@@ -2561,6 +2637,14 @@ Window {
                         // leaves visible space at both ends. That is the
                         // chosen shape, not an oversight: see the geometry
                         // note in FunctionRow.qml before changing it.
+                        // The keyboard grid this row sits above: the row
+                        // compresses its group gaps rather than overhang it.
+                        maxWidth: root._widestRow.units * root.keyW
+                                  + root._widestRow.gaps * root.keySpacing
+                        actions: root.keyActions
+                        editFn: root.openKeyActionEditor
+                        assignMode: root.fkeyAssignMode
+                        onAssignToggled: root.fkeyAssignMode = !root.fkeyAssignMode
                         keyColor: Qt.darker(root.themeKeyColor, 1.15)
                         keyPressedColor: root.themeKeyPressed
                         keyTextColor: root.themeTextColor
@@ -3462,6 +3546,30 @@ Window {
                     }
                 }
             }
+        }
+
+        // Editor for one programmable function key. Opened by right-
+        // clicking an F-key, or by left-clicking one while the row's
+        // Edit toggle is on -- the second route is not a duplicate, it is
+        // the only one a dwell-click / switch-access / eye-tracker
+        // pointer has (see the assignMode note in FunctionRow.qml).
+        Comp.KeyActionEditor {
+            id: keyActionEditor
+            objectName: "keyActionEditor"
+            actionTypes: root.keyActionTypes
+            unboundKeys: root.unboundFunctionKeys
+            chordFn: root.applyEditChord
+            shiftOn: root.shiftOn
+            inkOnFn: root.inkOn
+            savedFn: function() { editSavedToast.flash() }
+            problemFn: function() {
+                snippetProblemToast.flash(qsTr("That key action could not be saved"))
+            }
+            bgColor: Qt.darker(root.themeBackground, 1.08)
+            fieldColor: Qt.darker(root.themeKeyColor, 1.25)
+            inkColor: root.themeTextColor
+            accentColor: root.themeAccent
+            borderColor: root.themeBorder
         }
 
         // Snippets: the user's saved quick text (name, email, phone,
@@ -4426,6 +4534,7 @@ Window {
             dictationEnabled: root.dictationEnabled
 
             showFunctionRow: root.showFunctionRow
+            showExtraFunctionRow: root.showExtraFunctionRow
             showNavigation: root.showNavigation
             showNumpad: root.showNumpad
             currentTheme: root.currentTheme
@@ -4461,6 +4570,9 @@ Window {
                 if (setting === "functionRow") {
                     root.showFunctionRow = value
                     appSettings.savedShowFunctionRow = value
+                } else if (setting === "extraFunctionRow") {
+                    root.showExtraFunctionRow = value
+                    appSettings.savedShowExtraFunctionRow = value
                 } else if (setting === "navigation") {
                     // Compact forbids the side panels, and it enforces that
                     // only at the moment it is switched on.  The Settings
