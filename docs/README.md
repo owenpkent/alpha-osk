@@ -18,7 +18,6 @@ Active design docs for the engine, the platform abstraction, and the user-facing
 - [`architecture/HYBRID_MERGING.md`](architecture/HYBRID_MERGING.md): how the n-gram, PPM, and fuzzy predictors are combined, the four merge strategies, capitalisation pipeline, validation.
 - [`architecture/PPM.md`](architecture/PPM.md): variable-order character model with PPMD escape, used for next-character prediction inside a partial word.
 - [`architecture/FUZZY_RECOGNITION.md`](architecture/FUZZY_RECOGNITION.md): spatial error correction, tunable constants, the relationship to SymSpell.
-- [`architecture/SWIPE_TYPING.md`](architecture/SWIPE_TYPING.md): shape-matching gesture decoder (simplified SHARK²).
 - [`architecture/PREDICTION_NOTES.md`](architecture/PREDICTION_NOTES.md): the "unified system" framing across the predictors, fragment filter and repetition gate, autocorrect thresholds, reinforcement and backspace-as-negative-signal, the structured-token store for numbers and email addresses, prioritised future work.
 - [`architecture/PLATFORM_ARCHITECTURE.md`](architecture/PLATFORM_ARCHITECTURE.md): cross-platform abstraction details (key synthesis, password-field detection, config paths).
 - [`architecture/COMPACT_VIEW.md`](architecture/COMPACT_VIEW.md): the denser 13x4 keyboard for small screens, its measurements, and the layer model behind `?123`.

@@ -2,7 +2,7 @@
 
 Commercial keyboards (Gboard/LatinIME, Presage) treat prediction and spell-check as **one unified system**, not two. During a single dictionary trie traversal, they generate both completions and corrections scored together. The literal typed word competes against alternatives — autocorrect only fires if a correction scores 1.5–2x higher.
 
-Deep-dive design docs for each algorithm: `FUZZY_RECOGNITION.md` (spatial model + tunable constants), `PPM.md` (variable-order character model + PPMD escape), `HYBRID_MERGING.md` (merge weights + validation + capitalization), `SWIPE_TYPING.md` (shape-matching swipe decoder).
+Deep-dive design docs for each algorithm: `FUZZY_RECOGNITION.md` (spatial model + tunable constants), `PPM.md` (variable-order character model + PPMD escape), `HYBRID_MERGING.md` (merge weights + validation + capitalization).
 
 ## What Alpha-OSK does now
 - **Hybrid prediction**: n-gram + PPM + fuzzy (same layered approach as Presage)

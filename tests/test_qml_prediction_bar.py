@@ -636,22 +636,6 @@ class TestNumberRowPanel:
         QCoreApplication.processEvents()
         assert _real_warnings(warnings) == []
 
-    def test_digits_register_as_char_keys(self, qml_root):
-        """Unregistered keys are dead taps while the swipe overlay is on."""
-        root, _, _ = qml_root
-        root.setProperty("compactView", True)
-        QCoreApplication.processEvents()
-
-        registry = root.property("charKeyRegistry")
-        keys = {
-            entry["kd"]["key"]
-            for entry in (registry.toVariant() if hasattr(registry, "toVariant") else registry)
-        }
-        assert set("1234567890") <= keys, (
-            "number-row digits missing from charKeyRegistry — taps on them "
-            "would be swallowed by the swipe overlay"
-        )
-
 
 class TestPillTextNeverAutoDetectsHtml:
     """Prediction pill text must render as plain text.
