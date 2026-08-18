@@ -116,7 +116,7 @@ That covers ~90% of day-to-day use. The rest of this README and the [white paper
 <tr>
 <td width="50%" align="center">
 <img src="assets/screenshots/settings-appearance.png" alt="Appearance settings: panel toggles, layout picker, theme picker, opacity slider" width="100%" />
-<br /><em>Appearance: Compact View plus the function row, navigation, and numpad panel toggles; pick QWERTY / Dvorak / Colemak; pick a theme; adjust opacity.</em>
+<br /><em>Appearance: Compact View plus the function row, extra function row, navigation, and numpad panel toggles; pick QWERTY / Dvorak / Colemak; pick a theme; adjust opacity.</em>
 </td>
 <td width="50%" align="center">
 <img src="assets/screenshots/settings-data-privacy.png" alt="Data and Privacy settings: data backup export and import, telemetry opt-in, auto-update toggle" width="100%" />
@@ -206,6 +206,7 @@ Yes on Windows (Unicode keystroke injection covers anything in BMP and supplemen
 - Right-click a character key for its shifted variant without flipping sticky shift
 - Optional swipe / glide typing (Gboard-style shape matching)
 - Numpad panel with NumLock toggle between digits and navigation keys
+- Function keys F1-F12 plus an optional F13-F24 panel, and any of them can be programmed: one click fires a shortcut like Ctrl+Shift+S, types a stored phrase, or just relabels the keycap for a key you bound inside another app. F13-F24 are the ones worth reassigning, because nothing binds them by default
 - Intelligent spacing: the auto-space after punctuation stands down inside an email, a link, a decimal, a time, or a file path, instead of breaking it in half
 - Snippets for text you type constantly (name, email, address, canned replies), inserted with one tap. Alpha-OSK can spot an email, phone number or address as you type it and offer to save it for you, on your machine only and never while learning is paused
 

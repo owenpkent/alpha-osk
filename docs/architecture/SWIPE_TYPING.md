@@ -67,6 +67,17 @@ imprecise typist needs most, with nothing on screen to say why. **Do not
 "fix" a future variant of this by admitting specials into `charKeyRegistry`;
 split the consumers instead.**
 
+**Every new control placed under the overlay has to register, including ones
+that are not keys.** The rule is "is it inside the overlay's bounds", not "is
+it a keyboard key": the overlay takes the press either way. The function
+rows' assign toggle (`fnAssignToggle`, see the *Function Keys F13-F24 and
+Programmable Keys* section of `CLAUDE.md`) is the case that makes this worth
+stating, because it is a UI control rather than a key and so reads as exempt.
+It registers as a `special`, which is what keeps an "Edit" centre out of the
+shape-matching map. Guarded by
+`tests/test_qml_function_row.py::TestEveryKeyIsHitTestable`, whose inverse
+half asserts its absence from `charKeyRegistry`.
+
 Hit testing also skips items whose `visible` is false. A `KeyButton` inside a
 hidden panel is still constructed and still registers, so the Number Row's
 keys sit in the registry with stale geometry whenever that panel is off.

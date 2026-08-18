@@ -79,6 +79,19 @@ A layout is a JSON file that defines rows of keys with actions:
 
 ### Action Types
 
+> **Partly shipped.** `src/key_actions.py` implements this vocabulary for the
+> function keys today: `key` (send the key itself, relabel the cap only),
+> `hotkey` and `text`. It is a **registry**, so `macro`, `launch`, `layout`
+> and `midi` land as one entry there plus one method on `ActionExecutor`,
+> with no change in `keyboard_bridge.py` and none in QML (the editor builds
+> its picker from `getKeyActionTypes()` and switches on each entry's
+> `fields`). The payload shapes below are the design sketch, not what the
+> store writes: a hotkey is stored as `{key, modifiers}` rather than a flat
+> `keys` list, because the modifiers are validated against an allow-list and
+> held in canonical order so two spellings of one chord cannot read as two
+> chords. See the *Function Keys F13-F24 and Programmable Keys* section of
+> `CLAUDE.md`.
+
 | Type | Description | Example |
 |------|------------|---------|
 | `char` | Type a character (current behavior) | `{"type": "char", "key": "a"}` |
@@ -221,7 +234,7 @@ Since both apps use PySide6 and share the same signing cert, embedding is techni
 |-------|------|--------|
 | **1** | JSON layout format + 3-4 built-in packs | Low — extend `getLayoutRows()` |
 | **2** | Layout switcher in title bar / tray menu | Low — dropdown + reload |
-| **3** | `hotkey` and `text` action types in bridge | Medium — extend `pressKey` |
+| **3** | `hotkey` and `text` action types in bridge | **Done** for the function keys (`src/key_actions.py`); widening `FUNCTION_KEYS` is what extends it to other keys |
 | **4** | User layout editor (QML grid editor) | Medium-High |
 | **5** | Panel composition system | High |
 | **6** | App-aware auto-switching | Medium — extend foreground monitor |

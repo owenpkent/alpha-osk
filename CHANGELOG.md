@@ -2,6 +2,16 @@
 
 All notable changes to Alpha-OSK are documented in this file.
 
+## [Unreleased]
+
+### Added
+- **Twelve more function keys, F13 to F24, on their own panel.** Turn them on in *Settings -> Appearance -> Panels -> Extra Function Keys*. These are real keys that every operating system understands, and almost nothing binds them: no program is already using F17 for something, so you can hand one to a game, to OBS, or to a macro tool and know it will not collide with that program's own F5 or Alt+F4. They get their own switch rather than being bolted onto the F1-F12 row, so if the twelve spare keys are all you want, you do not have to give up the height of the standard row to get them.
+- **Any function key can be programmed.** F13 on its own does nothing until whatever you are typing into has been taught to listen for it, and teaching every program one at a time is not a reasonable thing to ask. So a function key can instead be given a job that works everywhere immediately, with nothing to set up on the other end. Three kinds: fire a shortcut (one click sends Ctrl+Shift+S), type a stored phrase, or keep the key exactly as it is and only change what the keycap says. That last one sounds like nothing and is not: if you have bound F17 inside Discord or OBS, the keyboard shows you twelve identical keys and no way to tell which is which, so being able to write "Push to talk" on it is the difference between the key being usable and not.
+- **Two ways into the key editor, deliberately.** Right-click any function key to program it, or tap **Edit** at the end of either function row to put the whole row into edit mode and then left-click the key you want. The second route is not a convenience: a dwell-click, switch access, a head or eye tracker, and a single-button adaptive mouse all have no right button, and with right-click as the only way in, anyone using one of those could press a function key and never program one.
+
+### Changed
+- **The function rows now end with an Edit key.** It sits in the empty space at the right-hand end of the row and no key changed width, so the F-keys still line up with the keys underneath them. On Compact View there is no empty space to spend, so the gaps between the three groups of four close up instead and the row sits flush against the grid, the way the number row already does.
+
 ## [1.2.2] (2026-08-16)
 
 Headlines: the character-repeat setting 1.2.1 added now actually works everywhere it claimed to. It did nothing at all while Swipe Typing was on, it was never wired into the numpad, and the "repeat only starts after roughly 800 ms" promise held only at the default repeat delay. All three are fixed. A review of the 1.2.1 window-style change also found the taskbar-button half of it writing a style word that nothing flushed.

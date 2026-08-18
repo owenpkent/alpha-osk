@@ -2,7 +2,14 @@
 
 Design exploration. Brainstorm of features that go past a literal keyboard, prioritised through the lens of accessibility for a wheelchair user with limited motor control. Captured 2026-05-16 so we can come back to it.
 
-**Owner:** Owen. **Status:** not implemented, options menu only.
+**Owner:** Owen. **Status:** mostly not implemented, options menu only. Two items
+have since shipped: the snippet / phrase system (see the *Snippets* section of
+`CLAUDE.md`), and the **common chords** under Tier 3, which no longer need
+dedicated buttons because any function key can be programmed to fire one
+(`src/key_actions.py`). The cursor-and-selection chords under Tier 1 are
+reachable the same way now, user-assigned rather than shipped as presets, which
+also sidesteps the open question there about editor-specific chords: the user
+binds the one their editor actually uses.
 
 ## Framing
 
@@ -96,7 +103,7 @@ A small row whose buttons change based on what the foreground app is, what's sel
 - **Media.** Play/Pause, Next, Prev, Vol Up/Down, Mute. `VK_MEDIA_*` on Windows, `XF86AudioPlay` etc. on Linux.
 - **Browser.** Back, Forward, Refresh. `VK_BROWSER_*`.
 - **Launch.** Calculator, Mail (mostly outdated, skip).
-- **Common chords.** Cut, Copy, Paste, Undo, Redo, Select All, Find, Save. One-click versions of the Ctrl-key chords.
+- **Common chords.** Cut, Copy, Paste, Undo, Redo, Select All, Find, Save. One-click versions of the Ctrl-key chords. **Available now** by programming a function key with a `hotkey` action; shipping them as a preset panel is still open.
 - **OS shortcuts.** Win+D (show desktop), Win+L (lock), Win+. (emoji picker), Win+Shift+S (snipping tool), Win+V (clipboard history), Alt+Tab.
 
 **Effort:** low. Each is a single VK or keysym, or a fixed chord, dispatched through the existing send path. Could ship as a "Media Panel" toggle in Settings → Appearance → Panels.
