@@ -13,14 +13,19 @@ alongside every installer, and retain their own licences.
 
 ## Feather
 
-The clear-context (circle-arrow) button in the suggestion bar draws Feather's
-`rotate-ccw` icon. Its path data is embedded verbatim in
-[`qml/Main.qml`](qml/Main.qml) (`clearCtxIcon`) rather than bundled as an asset,
-because it is fed to an existing `Canvas` via `ctx.path`.
+Several controls draw Feather icons. Their path data is embedded verbatim in
+the QML rather than bundled as assets, because it is fed to a `Canvas` via
+`ctx.path` (see `qml/components/StrokeIcon.qml`), and keeping it verbatim is
+what lets each icon be diffed against upstream.
 
 - Project: https://github.com/feathericons/feather
-- Icon: `rotate-ccw`
 - Licence: MIT
+- Icons in use, all in [`qml/Main.qml`](qml/Main.qml):
+  - `rotate-ccw`, the clear-context button in the suggestion bar
+  - `bookmark`, the Snippets buttons in the suggestion bar and the title bar
+  - `mic`, the dictation buttons in the suggestion bar and the title bar
+  - `chevron-left` / `chevron-right`, the Snippets window's back control and
+    its page pager
 
 ```
 The MIT License (MIT)

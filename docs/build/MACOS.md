@@ -245,7 +245,7 @@ downsample cleanly at every size — sharper small icons.
 - Notarize: `xcrun notarytool submit … --apple-id … --team-id … --wait`, then `xcrun stapler staple Alpha-OSK.app` and `xcrun stapler staple Alpha-OSK-X.Y.Z.dmg`.
 - **Hardened Runtime entitlements file** (`build/macos/entitlements.plist`):
   - `com.apple.security.cs.allow-jit` — PySide6/QML uses Qt's V4 JIT.
-  - `com.apple.security.device.audio-input` — only if voice features ever ship.
+  - `com.apple.security.device.audio-input`: **required**. Voice features have shipped (see [DICTATION.md](../architecture/DICTATION.md)). `Info.plist` needs an `NSMicrophoneUsageDescription` string alongside it, or the microphone silently fails to open under the hardened runtime.
   - `com.apple.security.automation.apple-events` — false unless we script other apps directly.
   - Accessibility itself is a TCC user grant, not an entitlement.
 - Update `MACOS.md` § *Release checklist* with the codesign + notarize commands once they're verified end-to-end.

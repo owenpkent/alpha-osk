@@ -126,7 +126,7 @@ Item {
 
                             HelpText { text: "Alpha-OSK is an AI-powered on-screen keyboard designed for accessibility. Click keys to type into any application." }
                             HelpText { text: "<b>Drag</b> the title bar to move the keyboard. <b>Drag the left or right edge</b> to resize. Keys scale automatically, height follows content." }
-                            HelpText { text: "Click <b>⚙</b> in the title bar to open Settings: Appearance, Smart Typing, Your Language Model, and Data & Privacy." }
+                            HelpText { text: "Click <b>⚙</b> in the title bar to open Settings: Appearance, Smart Typing, Dictation, Your Language Model, and Data & Privacy." }
                         }
                     }
 
@@ -163,6 +163,24 @@ Item {
                             HelpText { text: "The more you type, the better predictions get. Toggle suggestions on or off in <b>Settings → Smart Typing → Suggestions</b>." }
                             HelpText { text: "<b>Right-click a suggestion</b> to <b>Show more</b> (boost it), <b>Show less</b> (downweight), <b>Remove</b> (blacklist), or <b>Edit</b> (fix casing or spelling, e.g. <code>iphone</code> → <code>iPhone</code>). Removed words come back automatically if you type them three times manually." }
                             HelpText { text: "Only <b>I</b>, <b>I'm</b>, <b>I'll</b>, <b>I'd</b>, <b>I've</b> auto-capitalize. Everything else follows what you typed · use Shift or Caps Lock to capitalize anything else." }
+                        }
+                    }
+
+                    // -- DICTATION --
+                    SettingsSection {
+                        title: "Dictation"
+                        Layout.fillWidth: true
+
+                        ColumnLayout {
+                            Layout.fillWidth: true
+                            spacing: 6
+
+                            HelpText { text: "Speak instead of clicking. Turn it on at <b>Settings → Dictation</b>, then use the <b>microphone at the left end of the suggestion bar</b>: click it, speak, click it again. There is nothing to hold down." }
+                            HelpText { text: "While you speak, what you have said so far appears in the suggestion bar. Each finished phrase is typed into whatever app you were using, so the words land where you were already working." }
+                            HelpText { text: "It stops on its own after a few seconds of silence, so a click that does not register cannot leave the microphone on. Both that delay and a maximum length are adjustable." }
+                            HelpText { text: "<b>It needs your own Deepgram API key</b>, entered in the same settings page. Until you add one, the microphone stays greyed out and explains why. The key is stored on this machine only and is deliberately left out of Data Backup exports, so move it across yourself if you set up a new computer." }
+                            HelpText { text: "<b>Audio is sent to Deepgram only while the microphone is on</b>, and nothing is recorded to disk. Dictation stops itself the moment a password field is focused, and what you dictate is never added to your learned vocabulary." }
+                            HelpText { text: "If suggestions are switched off, the microphone moves to the title bar so the feature is still reachable." }
                         }
                     }
 
@@ -239,7 +257,7 @@ Item {
                                 text: "  • Linux: <code>~/.config/alpha-osk/models/</code>"
                             }
                             HelpText {
-                                text: "Files: <code>ngram_model.json</code> (word frequencies, bigrams, blacklist, boosts) and <code>ppm_model.json</code> (character patterns). Analytics live next to them in <code>analytics.json</code>."
+                                text: "Files: <code>ngram_model.json</code> (word frequencies, bigrams, blacklist, boosts) and <code>ppm_model.json</code> (character patterns). Analytics live next to them in <code>analytics.json</code>, snippets in <code>snippets.json</code>, and dictation settings in <code>dictation.json</code>."
                                 color: "#888"
                             }
                             HelpText { text: "<b>Telemetry is off by default.</b> Opt in at <b>Settings → Data & Privacy → Privacy</b> to share nine anonymous integers (no content, no word lists) once a week. <b>Delete my contributed data</b> in the same panel removes anything you've sent." }

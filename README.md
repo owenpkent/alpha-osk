@@ -6,11 +6,11 @@
 
 **The smartest keyboard you'll never touch.**
 
-Type into any Windows or Linux app by clicking on-screen keys. Built for people who can't comfortably use a physical keyboard. Prediction that learns as you go, with no LLM, no GPU, and no data leaving your machine.
+Type into any Windows or Linux app by clicking on-screen keys. Built for people who can't comfortably use a physical keyboard. Prediction that learns as you go, with no LLM, no GPU, and nothing leaving your machine. Optional voice dictation is the one exception, and it is off until you turn it on.
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![CI](https://github.com/owenpkent/alpha-osk/actions/workflows/ci.yml/badge.svg)](https://github.com/owenpkent/alpha-osk/actions/workflows/ci.yml)
-[![Tests](https://img.shields.io/badge/tests-1576-brightgreen.svg)](tests/)
+[![Tests](https://img.shields.io/badge/tests-1669-brightgreen.svg)](tests/)
 [![Releases](https://img.shields.io/badge/releases-alpha--osk--releases-orange.svg)](https://github.com/okstudio1/alpha-osk-releases/releases)
 
 <img src="assets/screenshots/dark-theme-keyboard.png" alt="Alpha-OSK on-screen keyboard with function row, QWERTY block, navigation cluster, and numpad" width="900" />
@@ -59,7 +59,7 @@ You're a hiring manager, reviewer, or accessibility researcher checking the rigo
 
 Alpha-OSK is an on-screen keyboard for Windows and Linux. You click keys in the keyboard window to type into whatever other application has focus: editor, browser, terminal, chat client, even a game or a remote-desktop session. The keyboard never steals focus from the app you're typing into, stays above other windows, and remembers its size and position between sessions.
 
-As you click, the keyboard learns your vocabulary and surfaces predictions as clickable pills above the keys. Accept a pill to skip the rest of the word. Right-click a pill to teach the keyboard your preferences. Everything runs on your machine. No model upload, no cloud round-trip, no LLM. The project exists because the author is a wheelchair user with muscular dystrophy and the keyboards shipped with Windows and Linux are inadequate for daily use. Every design decision in here is grounded in that constraint.
+As you click, the keyboard learns your vocabulary and surfaces predictions as clickable pills above the keys. Accept a pill to skip the rest of the word. Right-click a pill to teach the keyboard your preferences. Prediction and learning run entirely on your machine: no model upload, no cloud round-trip, no LLM. Optional voice dictation is the single feature that sends anything out, it is off by default, and it needs a recogniser API key of your own before it does anything at all. The project exists because the author is a wheelchair user with muscular dystrophy and the keyboards shipped with Windows and Linux are inadequate for daily use. Every design decision in here is grounded in that constraint.
 
 ## Install
 
@@ -167,10 +167,12 @@ Settings ⚙ → Appearance → Theme. Nine choices including Blackboard for hig
 Settings ⚙ → Appearance → Sound & Opacity → Opacity slider.
 
 **Where does my data live?**
-Windows: `%APPDATA%\alpha-osk\`. Linux: `~/.config/alpha-osk/`. The model files are `models/ngram_model.json` and `models/ppm_model.json`. Lifetime stats are in `analytics.json`. Settings → Data & Privacy → Data Backup writes all of it (plus any imported vocabulary packs) to a single `.zip` you can move between machines.
+Windows: `%APPDATA%\alpha-osk\`. Linux: `~/.config/alpha-osk/`. The model files are `models/ngram_model.json` and `models/ppm_model.json`. Lifetime stats are in `analytics.json`, saved snippets in `snippets.json`, and dictation settings in `dictation.json`. Settings → Data & Privacy → Data Backup writes all of it (plus any imported vocabulary packs) to a single `.zip` you can move between machines.
 
 **Does any of this send my typing to a server?**
-No. The opt-in anonymous-stats client is wired into the app but `DEFAULT_ENDPOINT` is currently the empty string, so the client silently no-ops every submission attempt regardless of the toggle. When the endpoint is deployed in a future release, opting in would send nine integer counters per week (lifetime keystroke count, words typed, predictions used, etc.) plus a random UUID. Never content, word frequencies, key frequencies, IP, or hostname. See [`docs/PRIVACY.md`](docs/PRIVACY.md).
+Your typing, no. Your voice, only if you switch on Dictation and supply your own Deepgram API key: while the microphone is open that audio goes to Deepgram to be transcribed, and at no other time. Dictation is off by default and inert without a key. See [`docs/PRIVACY.md`](docs/PRIVACY.md).
+
+Nothing else leaves the machine on its own. The opt-in anonymous-stats client is wired into the app but `DEFAULT_ENDPOINT` is currently the empty string, so the client silently no-ops every submission attempt regardless of the toggle. When the endpoint is deployed in a future release, opting in would send nine integer counters per week (lifetime keystroke count, words typed, predictions used, etc.) plus a random UUID. Never content, word frequencies, key frequencies, IP, or hostname. See [`docs/PRIVACY.md`](docs/PRIVACY.md).
 
 **Can I import my own vocabulary?**
 Yes. Settings → Your Language Model → Vocabulary Packs → Import Custom Pack. A pack is a folder containing `dictionary.txt` (one word per line) and optionally `bigrams.txt`, `trigrams.txt`, and `pack.json`. No built-in packs ship; the rationale is in the white paper.
@@ -189,10 +191,10 @@ Yes on Windows (Unicode keystroke injection covers anything in BMP and supplemen
 | Anonymous telemetry (opt-in) | Client + UI shipped, endpoint not yet deployed |
 | Analytics dashboard | Shipping |
 | Data backup (export / import) | Shipping |
-| Test suite | 1576 tests passing |
+| Test suite | 1669 tests passing |
 | macOS port | In progress |
 | Federated learning | Designed, not implemented |
-| Voice dictation | Lives in sibling project (MacroVox) |
+| Voice dictation (opt-in, bring your own Deepgram key) | Shipping |
 
 ## Features
 
@@ -206,6 +208,13 @@ Yes on Windows (Unicode keystroke injection covers anything in BMP and supplemen
 - Numpad panel with NumLock toggle between digits and navigation keys
 - Intelligent spacing: the auto-space after punctuation stands down inside an email, a link, a decimal, a time, or a file path, instead of breaking it in half
 - Snippets for text you type constantly (name, email, address, canned replies), inserted with one tap. Alpha-OSK can spot an email, phone number or address as you type it and offer to save it for you, on your machine only and never while learning is paused
+
+### Voice
+
+- Dictation: click the microphone at the left of the suggestion bar, speak, click again. There is nothing to hold down, which matters if a sustained press is exactly the gesture you cannot make
+- What you have said so far shows in the suggestion bar; each finished phrase is typed into whatever app you were already using
+- Stops itself after a few seconds of silence, so a click that misses cannot leave the microphone open. Both that delay and a maximum run length are adjustable
+- Off by default and inert until you add your own Deepgram API key. Audio is sent only while the microphone is open, never recorded to disk, and a focused password field cancels a run outright (see [Privacy](docs/PRIVACY.md))
 
 ### Prediction
 
@@ -238,7 +247,7 @@ Yes on Windows (Unicode keystroke injection covers anything in BMP and supplemen
 ### Reliability
 
 - Single-instance lock prevents accidental duplicates
-- 1576 tests covering prediction, platform abstraction, bridge, vocab packs, telemetry, data export,
+- 1669 tests covering prediction, platform abstraction, bridge, vocab packs, dictation, telemetry, data export,
   including property-based suites that generate adversarial inputs for the archive / pack import
   paths and the prediction-engine invariants
 - CI runs ruff + mypy + pytest + OSV CVE scan on every push and PR
@@ -254,6 +263,7 @@ src/
   keyboard_bridge.py   Python <-> QML bridge: keys, modifiers, predictions, context
   platform/            OS abstraction (Linux xdotool/ydotool, Windows SendInput, macOS Quartz)
   prediction/          Hybrid engine: n-gram, PPM, fuzzy, hybrid orchestrator
+  dictation/           Voice input: settings + key storage, mic capture, provider, state machine
   analytics.py         Session + lifetime stats
   telemetry.py         Opt-in anonymous metrics client
   data_export.py       Export / import of model, stats, and packs to a portable .zip
@@ -282,7 +292,7 @@ The full index lives in [`docs/README.md`](docs/README.md).
 
 ```bash
 python run.py                               # Launch the keyboard
-python -m pytest                            # Run the test suite (1576 tests)
+python -m pytest                            # Run the test suite (1669 tests)
 python check.py                             # Pre-push gate: ruff + mypy + pytest (~60s)
 python check.py --full                      # Adds coverage gate (~110s, matches CI)
 python check.py --install-hook              # Run that gate on `git push` instead of by hand
@@ -301,6 +311,7 @@ For security issues, follow [`SECURITY.md`](SECURITY.md). Do not file public iss
 ## Privacy
 
 - Learning is on-device only. Your typing never leaves your computer unless you opt into telemetry.
+- Dictation is the one feature that sends content rather than counters, and it is off until you enable it and add your own Deepgram API key. Audio goes to Deepgram only while the microphone is open, is never written to disk, and what you dictate is not added to your learned vocabulary. A focused password field cancels a run outright rather than letting it finish. Your key is stored on this machine (encrypted with DPAPI on Windows) and is **excluded** from Data Backup exports.
 - Password fields are auto-detected (Windows UI Automation, Linux AT-SPI) and pause learning automatically. There's also a manual **Learning** switch in the title bar.
 - To know when its suggestions have gone stale, the keyboard watches which app is in front, which control has focus, where the caret is, and whether you clicked outside the keyboard. All of it is read locally, used once, and discarded: nothing is logged, stored, or sent. See [`docs/PRIVACY.md`](docs/PRIVACY.md).
 - Telemetry is opt-in and off by default. The client and the consent toggle are in the build, but the submission endpoint isn't deployed yet, so opting in is currently a no-op. When the endpoint goes live, opting in would send nine integer counters per week and never any content. See [`docs/PRIVACY.md`](docs/PRIVACY.md) and [`docs/architecture/TELEMETRY.md`](docs/architecture/TELEMETRY.md).
@@ -311,7 +322,7 @@ For security issues, follow [`SECURITY.md`](SECURITY.md). Do not file public iss
 
 [MIT License](LICENSE). Free for personal and commercial use.
 
-Third-party material embedded in the tree (currently one Feather icon) is listed with its notice in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
+Third-party material embedded in the tree (currently several Feather icons) is listed with its notice in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
 
 ### Why MIT
 

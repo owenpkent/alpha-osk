@@ -4,6 +4,17 @@ All notable changes to Alpha-OSK are documented in this file.
 
 ## [Unreleased]
 
+### Added
+- **Dictation.** A microphone at the left end of the suggestion bar: click it, speak, click again. The live transcript renders in the suggestion bar itself, and each phrase is typed into whatever app has focus as soon as the recogniser finalises it, through the same verbatim-insert path a snippet uses. Settings live under a new **Dictation** category (enable, API key, model, language, input device, silence and length limits, and a custom-words list for names and jargon).
+
+  **Off by default and inert without a key.** Transcription is Deepgram, using your own API key; nothing is captured or sent until you switch it on and click the microphone. `docs/PRIVACY.md` has a section on exactly what leaves the machine and when.
+
+  **It stops itself when a password field is focused.** Privacy mode cancels a run outright rather than letting it finish, dropping the connection and discarding anything the service still owed instead of typing it. Streaming a spoken password to a third party is the specific thing that prevents.
+
+  **It costs no new dependencies.** Capture is `QAudioSource` and transport is `QWebSocket`, both already inside the PySide6 wheel the build bundles, so there is no new binary for the installer to carry or the certificate to sign. Qt also resamples for us, so the recogniser sees a fixed 16 kHz mono stream whatever the microphone natively runs at, and there is no worker thread anywhere in the feature.
+
+  Design notes, including why it is a toggle rather than push-to-talk and why there is deliberately no automatic reconnect, are in `docs/architecture/DICTATION.md`.
+
 ### Removed
 - **Swipe typing is gone** (issue #39). Dragging across letters to type a whole word was the one input path here that is not a click, and a sustained precise drag is exactly what a mouse-driven user with imprecise motor control cannot reliably make, so the feature's premise did not survive contact with the person it was built for. Recognition was also not accurate enough to pay for itself: when the decode was wrong, fixing it cost more clicks than typing the word would have.
 
