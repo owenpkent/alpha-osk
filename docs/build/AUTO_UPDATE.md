@@ -112,7 +112,7 @@ def download_and_install(url: str, filename: str) -> None:
 
 **Version tracking:**
 - Add `VERSION = "1.0.1"` to a `src/__version__.py` file
-- Read it in the updater and in `build_windows.py` (single source of truth)
+- Read it in the updater and in `build/windows/build.py` (single source of truth)
 - The NSIS installer already writes `DisplayVersion` to the registry
 
 ### Pros
