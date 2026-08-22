@@ -1919,6 +1919,145 @@ Item {
                             }
                         }
 
+                        // -- Diagnostics --
+                        // The log is the only artefact a user can hand
+                        // over when something goes wrong: the frozen
+                        // build has no console, so a crash leaves no
+                        // other trace.  Its path used to be announced
+                        // only *inside* the log itself at startup, which
+                        // is no help to anyone who cannot already find
+                        // it, so the two buttons below are the whole
+                        // point of this section.
+                        SettingsSection {
+                            title: "Diagnostics"
+                            Layout.fillWidth: true
+
+                            ColumnLayout {
+                                id: diagnosticsCol
+                                Layout.fillWidth: true
+                                spacing: 6
+
+                                // Read once: the path is fixed for the
+                                // life of the process.
+                                property string logPath: keyboard ? keyboard.getLogPath() : ""
+                                property string statusMessage: ""
+
+                                Text {
+                                    Layout.fillWidth: true
+                                    text: "Alpha-OSK writes errors and crashes to a log file on this computer. It records what went wrong, never what you type. Attach it when you report a bug."
+                                    textFormat: Text.PlainText
+                                    color: "#aaa"
+                                    font.pixelSize: 10
+                                    wrapMode: Text.WordWrap
+                                }
+
+                                Text {
+                                    Layout.fillWidth: true
+                                    visible: diagnosticsCol.logPath !== ""
+                                    text: diagnosticsCol.logPath
+                                    textFormat: Text.PlainText
+                                    color: "#888"
+                                    font.pixelSize: 10
+                                    elide: Text.ElideMiddle
+                                }
+
+                                // Rectangle + MouseArea rather than a
+                                // Controls Button, matching the Data
+                                // Backup buttons directly above: a
+                                // full-width 30 px target is what this
+                                // keyboard's own accessibility rule asks
+                                // for, and the default control is neither
+                                // full width nor themed.  Neutral greys,
+                                // not Export's green or Import's blue,
+                                // because nothing here moves data.
+                                Rectangle {
+                                    Layout.fillWidth: true
+                                    Layout.topMargin: 2
+                                    visible: diagnosticsCol.logPath !== ""
+                                    implicitHeight: 30
+                                    radius: 5
+                                    color: openLogArea.containsMouse ? "#3a3a3a" : "#2a2a2a"
+                                    border.color: "#4a4a4a"
+
+                                    Text {
+                                        anchors.centerIn: parent
+                                        text: "Open Log Folder"
+                                        textFormat: Text.PlainText
+                                        color: "#dddddd"
+                                        font.pixelSize: 12
+                                    }
+
+                                    MouseArea {
+                                        id: openLogArea
+                                        anchors.fill: parent
+                                        hoverEnabled: true
+                                        cursorShape: Qt.PointingHandCursor
+                                        onClicked: {
+                                            var ok = keyboard ? keyboard.openLogFolder() : false
+                                            // Silent on success: the folder
+                                            // opening is its own feedback.
+                                            diagnosticsCol.statusMessage = ok
+                                                ? ""
+                                                : "Could not open the folder. Copy the path instead."
+                                            diagnosticsStatusTimer.restart()
+                                        }
+                                    }
+                                }
+
+                                // The fallback for a session with no file
+                                // manager (remote desktop), and for
+                                // pasting the path into a bug report.
+                                Rectangle {
+                                    Layout.fillWidth: true
+                                    visible: diagnosticsCol.logPath !== ""
+                                    implicitHeight: 30
+                                    radius: 5
+                                    color: copyLogArea.containsMouse ? "#3a3a3a" : "#2a2a2a"
+                                    border.color: "#4a4a4a"
+
+                                    Text {
+                                        anchors.centerIn: parent
+                                        text: "Copy Path"
+                                        textFormat: Text.PlainText
+                                        color: "#dddddd"
+                                        font.pixelSize: 12
+                                    }
+
+                                    MouseArea {
+                                        id: copyLogArea
+                                        anchors.fill: parent
+                                        hoverEnabled: true
+                                        cursorShape: Qt.PointingHandCursor
+                                        onClicked: {
+                                            var ok = keyboard ? keyboard.copyLogPath() : false
+                                            // A clipboard write is invisible,
+                                            // so both outcomes have to say so.
+                                            diagnosticsCol.statusMessage = ok
+                                                ? "Path copied."
+                                                : "Could not copy the path."
+                                            diagnosticsStatusTimer.restart()
+                                        }
+                                    }
+                                }
+
+                                Text {
+                                    Layout.fillWidth: true
+                                    visible: diagnosticsCol.statusMessage !== ""
+                                    text: diagnosticsCol.statusMessage
+                                    textFormat: Text.PlainText
+                                    color: "#bbbbbb"
+                                    font.pixelSize: 11
+                                    wrapMode: Text.WordWrap
+                                }
+
+                                Timer {
+                                    id: diagnosticsStatusTimer
+                                    interval: 3000
+                                    onTriggered: diagnosticsCol.statusMessage = ""
+                                }
+                            }
+                        }
+
                         // -- Developer --
                         SettingsSection {
                             title: "Developer"

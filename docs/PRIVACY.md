@@ -10,7 +10,9 @@ Separately from telemetry, Alpha-OSK writes an operational log to `alpha-osk.log
 
 **Until this was fixed, the log recorded more than it should have.** Several logging call sites in `keyboard_bridge.py` wrote your actual typed text (up to 200 characters of in-progress context) to this file on every prediction tap, and did so even while privacy mode was paused. That defeated the point of privacy mode for anything written to disk. This is now fixed: those sites log lengths and booleans only (for example "42 chars of context," never the 42 characters themselves). Nothing the app writes at its normal logging level may contain anything you typed.
 
-If you're attaching the log to a bug report, it's safe: it now contains only operational details like platform info, model load paths, and prediction-pipeline timing, never content.
+If you're attaching the log to a bug report, it's safe: it now contains only operational details like platform info, model load paths, and prediction-pipeline timing, never content. It also captures the full traceback when something crashes, which is what makes it worth attaching at all: the installed build runs without a console, so a crash otherwise leaves no trace anywhere. A traceback names files, functions and line numbers in Alpha-OSK's own code, not your text.
+
+**To find it:** *Settings > Data & Privacy > Diagnostics* shows the path, with **Open Log Folder** and **Copy Path** beside it. Nothing sends it for you, and nothing asks to. Whether any of it leaves your machine is your decision, made by attaching the file to a report you chose to file.
 
 Logs written *before* this fix could contain fragments of what you typed, so they are deleted for you. The first time you launch the fixed version, Alpha-OSK removes any existing `alpha-osk.log` and its rotated `.1` / `.2` / `.3` files, then notes in the new log how many it removed. This runs exactly once, so logs written after the fix are kept normally and you are not fighting the app to retain them. If you had copied an old log somewhere else (into a bug report, a support email, or a backup) that copy is outside our reach and is worth deleting yourself.
 

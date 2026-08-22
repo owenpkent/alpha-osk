@@ -4549,3 +4549,68 @@ class TestTypingAGlyphFromThePicker:
         layer), the bridge owns its bound, so there is one number rather than
         one per side."""
         assert bridge.getRecentGlyphLimit() > 0
+
+
+class TestTheLogIsReachableFromTheUI:
+    """Settings -> Data & Privacy -> Diagnostics.
+
+    The log's path used to be announced only *inside* the log itself at
+    startup, which is no help to anyone who cannot already find it, and
+    the bug-report template asked for console output a frozen build
+    cannot produce.  These three slots are what the panel drives.
+    """
+
+    def test_the_path_is_the_file_the_handler_writes(self, bridge: KeyboardBridge) -> None:
+        from src.platform import LOG_FILENAME, get_config_dir
+
+        assert bridge.getLogPath() == str(get_config_dir() / LOG_FILENAME)
+
+    def test_copy_puts_the_displayed_path_on_the_clipboard(self, bridge: KeyboardBridge) -> None:
+        """The panel shows a path and the button copies one.  Same string.
+
+        Recomputing it in the copy path is how the two drift: a user
+        pastes a location into a bug report that is not the file they
+        were looking at.
+        """
+        copied: list[str] = []
+        bridge._copy_to_clipboard = lambda text: (copied.append(text), True)[1]
+
+        assert bridge.copyLogPath() is True
+        assert copied == [bridge.getLogPath()]
+
+    def test_open_asks_the_desktop_for_the_folder_not_the_file(
+        self, bridge: KeyboardBridge, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A .log has no registered handler on a stock Windows install.
+
+        Opening the file itself is a "how do you want to open this?"
+        dialog; the folder is also where the .1 / .2 / .3 rotations are.
+        """
+        from src.platform import get_config_dir
+
+        opened: list[str] = []
+
+        class _FakeDesktopServices:
+            @staticmethod
+            def openUrl(url) -> bool:
+                opened.append(url.toLocalFile())
+                return True
+
+        monkeypatch.setattr("PySide6.QtGui.QDesktopServices", _FakeDesktopServices, raising=True)
+
+        assert bridge.openLogFolder() is True
+        assert opened == [str(get_config_dir()).replace("\\", "/")]
+
+    def test_open_reports_a_failure_rather_than_claiming_success(
+        self, bridge: KeyboardBridge, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """No file manager (a remote session) is why Copy Path exists."""
+
+        class _FakeDesktopServices:
+            @staticmethod
+            def openUrl(url) -> bool:
+                return False
+
+        monkeypatch.setattr("PySide6.QtGui.QDesktopServices", _FakeDesktopServices, raising=True)
+
+        assert bridge.openLogFolder() is False
