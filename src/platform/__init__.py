@@ -191,6 +191,31 @@ def get_model_dir() -> Path:
     return model_dir
 
 
+#: Filename of the diagnostic log inside the config dir.  Shared rather
+#: than spelled out at each site: the handler that writes it, the
+#: one-time pre-fix purge that globs for it, and the Settings panel that
+#: tells the user where it is all have to name the same file, and a
+#: panel pointing at a path nothing writes is worse than no panel.
+LOG_FILENAME = "alpha-osk.log"
+
+
+def get_log_path() -> Path:
+    """
+    Return the path of the diagnostic log.
+
+    - **Windows**: ``%APPDATA%/alpha-osk/alpha-osk.log``
+    - **Linux**:   ``~/.config/alpha-osk/alpha-osk.log``
+    - **macOS**:   ``~/Library/Application Support/alpha-osk/alpha-osk.log``
+
+    The file itself may not exist yet (the handler creates it on the
+    first record); the directory always does.
+
+    Returns:
+        pathlib.Path to ``alpha-osk.log``.
+    """
+    return get_config_dir() / LOG_FILENAME
+
+
 def _check_ui_access() -> bool:
     """
     Check whether the current process has UIAccess privileges on Windows.
@@ -265,8 +290,10 @@ def _check_macos_accessibility() -> bool:
 
 __all__ = [
     "CURRENT_PLATFORM",
+    "LOG_FILENAME",
     "create_key_synthesizer",
     "get_platform_info",
     "get_config_dir",
+    "get_log_path",
     "get_model_dir",
 ]

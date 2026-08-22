@@ -47,9 +47,11 @@ import logging
 import logging.handlers
 import os
 import sys
+import threading
 import time
 from collections.abc import Callable
 from pathlib import Path
+from types import TracebackType
 
 from PySide6.QtCore import QSettings, QSharedMemory, Qt, QUrl
 from PySide6.QtGui import QIcon, QWindow
@@ -58,7 +60,12 @@ from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
 from .__version__ import __version__
 from .keyboard_bridge import KeyboardBridge
-from .platform import CURRENT_PLATFORM, get_config_dir, get_platform_info
+from .platform import (
+    CURRENT_PLATFORM,
+    LOG_FILENAME,
+    get_config_dir,
+    get_platform_info,
+)
 
 _logger = logging.getLogger("KeyboardApp")
 
@@ -805,7 +812,7 @@ def _purge_pre_fix_logs(config_dir: Path) -> int:
     removed = 0
     try:
         # Matches "alpha-osk.log" plus RotatingFileHandler's .1 / .2 / .3.
-        for stale in sorted(config_dir.glob("alpha-osk.log*")):
+        for stale in sorted(config_dir.glob(f"{LOG_FILENAME}*")):
             try:
                 stale.unlink()
                 removed += 1
@@ -849,7 +856,7 @@ def _configure_logging() -> Path | None:
         # Must happen before the handler opens the file: on Windows the
         # active log cannot be unlinked while the handler holds it.
         purged = _purge_pre_fix_logs(config_dir)
-        log_path = config_dir / "alpha-osk.log"
+        log_path = config_dir / LOG_FILENAME
         file_handler = logging.handlers.RotatingFileHandler(
             log_path,
             maxBytes=2 * 1024 * 1024,
@@ -874,6 +881,73 @@ def _configure_logging() -> Path | None:
         )
 
     return log_path
+
+
+#: Guards ``_install_exception_hooks`` against chaining onto itself if
+#: ``main()`` is ever re-entered in one process (the test suite does it
+#: deliberately).  Two copies of the hook would log every traceback twice.
+_exception_hooks_installed = False
+
+
+def _install_exception_hooks() -> None:
+    """Route uncaught tracebacks into the diagnostic log.
+
+    Without this the log only ever holds the failures somebody
+    remembered to wrap in ``try`` / ``except`` + ``_logger.exception``.
+    Everything else goes to ``sys.excepthook``, which writes to stderr,
+    and a windowed PyInstaller build has no stderr: ``sys.stderr`` is
+    ``None``, so the traceback for an actual crash is discarded at the
+    exact moment it is worth the most.  That is the file we ask users to
+    attach to a bug report, so it has to contain the crash.
+
+    Both hooks chain to whatever was there before, so stderr still gets
+    the traceback in a dev run and PySide's own handling is untouched.
+    ``KeyboardInterrupt`` is passed straight through unlogged (Ctrl-C is
+    a user action, not a fault), and the log call is wrapped because a
+    hook that raises replaces the crash being reported with its own.
+
+    Threads get the same treatment via ``threading.excepthook``: the
+    dictation capture, the updater's download worker and Linux's AT-SPI
+    listener all run off the main thread, and an exception there never
+    reaches ``sys.excepthook`` at all.
+    """
+    global _exception_hooks_installed
+    if _exception_hooks_installed:
+        return
+
+    previous_hook = sys.excepthook
+
+    def _log_uncaught(
+        exc_type: type[BaseException],
+        exc: BaseException,
+        tb: TracebackType | None,
+    ) -> None:
+        if not issubclass(exc_type, KeyboardInterrupt):
+            try:
+                _logger.critical("Uncaught exception", exc_info=(exc_type, exc, tb))
+            except Exception:  # pragma: no cover - logging itself failed
+                pass
+        previous_hook(exc_type, exc, tb)
+
+    previous_thread_hook = threading.excepthook
+
+    def _log_uncaught_in_thread(args: threading.ExceptHookArgs) -> None:
+        # SystemExit in a thread is how a worker asks to stop; it is not
+        # a fault and the default hook already ignores it.
+        if args.exc_type is not None and not issubclass(args.exc_type, SystemExit):
+            try:
+                _logger.critical(
+                    "Uncaught exception in thread %s",
+                    args.thread.name if args.thread is not None else "<unknown>",
+                    exc_info=(args.exc_type, args.exc_value, args.exc_traceback),
+                )
+            except Exception:  # pragma: no cover - logging itself failed
+                pass
+        previous_thread_hook(args)
+
+    sys.excepthook = _log_uncaught
+    threading.excepthook = _log_uncaught_in_thread
+    _exception_hooks_installed = True
 
 
 # Stable per-application identity for the Windows taskbar.  Must match the
@@ -1014,6 +1088,9 @@ def main() -> int:
         return run_relauncher(sys.argv)
 
     log_path = _configure_logging()
+    # Must follow _configure_logging: the hook is only worth anything
+    # once there is a file handler for it to write into.
+    _install_exception_hooks()
     if log_path is not None:
         _logger.info("Log file: %s", log_path)
     # Enable debug logging for prediction to see sources

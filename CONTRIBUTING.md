@@ -17,10 +17,10 @@ welcome, especially from users of adaptive technology.
 
 ## Ways to contribute
 
-- **Report bugs** using the bug report template.
+- **Report bugs** using the bug report template. Attach the diagnostic log if you have one: *Settings > Data & Privacy > Diagnostics > Open Log Folder*, or `alpha-osk.log` in the config directory. It carries crash tracebacks and never carries typed content.
 - **Request features** using the feature request template.
 - **Improve docs** — typos, clearer wording, missing context.
-- **Add tests**: the suite is large (842) but coverage gaps exist.
+- **Add tests**: the suite is large (1679) but coverage gaps exist.
 - **Code changes** — see "Development setup" below.
 
 If you are unsure whether a change is wanted, open an issue first to
