@@ -397,6 +397,8 @@ install step changes.
 
 ## Troubleshooting
 
+**Where the log is.** `~/Library/Application Support/alpha-osk/alpha-osk.log` (rotating, 2 MB x 3), reachable from the app at *Settings -> Data & Privacy -> Diagnostics -> Open Log Folder*. A `.app` launched from Finder has no console, so that file is the only place errors and crash tracebacks land, including a crash during startup.
+
 **The OSK runs but nothing types.** Two distinct failure modes look
 identical from the user side:
 

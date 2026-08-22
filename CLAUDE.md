@@ -59,7 +59,7 @@ Alpha-OSK is an AI-powered on-screen keyboard for Windows and Linux. Users click
 
 ```bash
 python run.py          # Creates venv, installs deps, launches keyboard
-python -m pytest       # Run tests (1669 tests)
+python -m pytest       # Run tests (1679 tests)
 ```
 
 ## Architecture Overview
