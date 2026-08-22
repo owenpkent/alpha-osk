@@ -15,6 +15,13 @@ All notable changes to Alpha-OSK are documented in this file.
 
   Design notes, including why it is a toggle rather than push-to-talk and why there is deliberately no automatic reconnect, are in `docs/architecture/DICTATION.md`.
 
+- **Somewhere to find the log.** *Settings -> Data & Privacy -> Diagnostics* now shows where the diagnostic log lives, with **Open Log Folder** and **Copy Path** beside it, and Help & Shortcuts has a *Reporting a Problem* section saying what is in the file (errors and crashes, never what you type) and what to do with it. The path was previously announced only *inside* the log itself at startup, which is no help to anyone who could not already find it, and the bug-report template asked for console output that a frozen build, which has no console, cannot produce. The template now names the file on all three platforms.
+
+
+### Fixed
+- **A crash now leaves a trace.** The diagnostic log's entire reason for existing is that the frozen build has no console, so updater errors and crash tracebacks have nowhere else to land. It only ever held the failures somebody had wrapped in a `try` / `except` and logged by hand: everything else went to `sys.excepthook`, which writes to stderr, and in a windowed PyInstaller build `sys.stderr` is `None`. The traceback was discarded at the moment it was worth the most, in the one file users are asked to attach to a bug report. Uncaught exceptions on the main thread and in worker threads (dictation capture, the updater's download, Linux's accessibility listener) are now logged with their full traceback, and still chain to the previous hook so a run from a terminal keeps printing them. Ctrl-C is passed through unlogged, since it is a user action rather than a fault.
+- **A failure to start says where the details are.** The frozen launcher catches a startup crash and shows a dialog, which is the one crash the hook above cannot see. It reported a single line of exception text and re-raised into that same absent stderr, so the traceback was lost. It now writes the traceback to the log first, wiring up logging itself if the crash happened before the app got that far, and the dialog points at the file.
+
 ### Removed
 - **Swipe typing is gone** (issue #39). Dragging across letters to type a whole word was the one input path here that is not a click, and a sustained precise drag is exactly what a mouse-driven user with imprecise motor control cannot reliably make, so the feature's premise did not survive contact with the person it was built for. Recognition was also not accurate enough to pay for itself: when the decode was wrong, fixing it cost more clicks than typing the word would have.
 

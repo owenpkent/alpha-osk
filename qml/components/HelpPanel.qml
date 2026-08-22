@@ -264,6 +264,26 @@ Item {
                         }
                     }
 
+                    // -- REPORTING A PROBLEM --
+                    SettingsSection {
+                        title: "Reporting a Problem"
+                        Layout.fillWidth: true
+
+                        ColumnLayout {
+                            Layout.fillWidth: true
+                            spacing: 6
+
+                            HelpText { text: "Alpha-OSK writes errors and crashes to a <b>log file</b> on this computer. It records what went wrong, never what you type." }
+                            HelpText { text: "<b>To find it:</b> <b>Settings → Data & Privacy → Diagnostics → Open Log Folder</b>. <b>Copy Path</b> next to it puts the location on the clipboard." }
+                            HelpText { text: "  • Windows: <code>%APPDATA%\\alpha-osk\\alpha-osk.log</code>" }
+                            HelpText { text: "  • Linux: <code>~/.config/alpha-osk/alpha-osk.log</code>" }
+                            HelpText {
+                                text: "Report bugs at <code>github.com/owenpkent/alpha-osk/issues</code> and attach the log. Older copies are kept alongside it as <code>.1</code>, <code>.2</code> and <code>.3</code>."
+                                color: "#888"
+                            }
+                        }
+                    }
+
                     // -- VOCABULARY PACKS --
                     SettingsSection {
                         title: "Vocabulary Packs"

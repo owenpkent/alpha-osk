@@ -174,6 +174,9 @@ Your typing, no. Your voice, only if you switch on Dictation and supply your own
 
 Nothing else leaves the machine on its own. The opt-in anonymous-stats client is wired into the app but `DEFAULT_ENDPOINT` is currently the empty string, so the client silently no-ops every submission attempt regardless of the toggle. When the endpoint is deployed in a future release, opting in would send nine integer counters per week (lifetime keystroke count, words typed, predictions used, etc.) plus a random UUID. Never content, word frequencies, key frequencies, IP, or hostname. See [`docs/PRIVACY.md`](docs/PRIVACY.md).
 
+**Something went wrong. What should I send with the bug report?**
+The diagnostic log. **Settings > Data & Privacy > Diagnostics** has **Open Log Folder** and **Copy Path**; the file is `alpha-osk.log` in your config directory. It records errors and crashes, including the full traceback if the app falls over, and never records what you type.
+
 **Can I import my own vocabulary?**
 Yes. Settings → Your Language Model → Vocabulary Packs → Import Custom Pack. A pack is a folder containing `dictionary.txt` (one word per line) and optionally `bigrams.txt`, `trigrams.txt`, and `pack.json`. No built-in packs ship; the rationale is in the white paper.
 
