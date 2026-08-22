@@ -430,7 +430,7 @@ Uses the **same EV certificate and signing workflow** as
 
 ### What Gets Signed
 
-`build_windows.py` signs **every** `.exe` and `.dll` in the `dist/alpha-osk/`
+`build/windows/build.py` signs **every** `.exe` and `.dll` in the `dist/alpha-osk/`
 directory — including the bundled Python DLLs, PySide6 DLLs, and the main
 `alpha-osk.exe`.  It also signs the final NSIS installer `.exe`.
 

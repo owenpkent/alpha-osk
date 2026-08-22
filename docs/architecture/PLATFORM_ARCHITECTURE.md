@@ -112,12 +112,17 @@ src/platform/
 └── pointer.py         # Was the last click ours, or somebody else's window
 
 build/
-├── alpha-osk.spec            # PyInstaller build specification
-├── alpha-osk.exe.manifest    # UIAccess manifest for EV signing
-├── alpha-osk.ico             # Application icon
-├── sign.py                   # Code signing with retry logic (matches gitconnect)
-├── build_windows.py          # Full pipeline: PyInstaller → Sign → NSIS → Verify
-└── installer.nsh             # NSIS installer customizations (shortcuts, cleanup)
+├── launcher.py               # Frozen-mode entry point, shared by every platform
+├── windows/
+│   ├── build.py              # Full pipeline: PyInstaller → Sign → NSIS → Verify
+│   ├── sign.py               # Code signing with retry logic (matches gitconnect)
+│   ├── alpha-osk.spec        # PyInstaller build specification
+│   ├── alpha-osk.exe.manifest  # UIAccess manifest for EV signing
+│   ├── alpha-osk.ico         # Application icon
+│   ├── installer.nsh         # NSIS installer customizations (shortcuts, cleanup)
+│   └── LICENSE.rtf           # Clickwrap EULA shown by the installer
+├── linux/                    # PyInstaller + optional AppImage (see build/LINUX.md)
+└── macos/                    # PyInstaller BUNDLE + optional .dmg (in progress)
 ```
 
 ### `__init__.py` — The Public API
@@ -586,7 +591,7 @@ before creating `QGuiApplication` on all platforms.
   reuse (`installer.nsh` macros, shortcut creation, old-version cleanup).
 - Free and open source.
 - Widely supported — users trust NSIS installers.
-- Easily automated from `build_windows.py` by generating `.nsi` scripts
+- Easily automated from `build/windows/build.py` by generating `.nsi` scripts
   programmatically.
 
 ### Why a Python Signing Script Instead of Inline Commands?
@@ -601,7 +606,7 @@ retry logic (matching gitconnect's `build/sign.js`).
 - Encapsulating certificate thumbprint, timestamp server, and signtool
   discovery in one file avoids duplication and mistakes.
 - The same script works standalone (`python build/windows/sign.py file.exe`) and
-  as a library imported by `build_windows.py`.
+  as a library imported by `build/windows/build.py`.
 
 ---
 
@@ -618,6 +623,7 @@ retry logic (matching gitconnect's `build/sign.js`).
 | `src/platform/macos.py` | macOS: Quartz CGEvent backend (phase 1) |
 | `src/platform/password_detect.py` | Password fields + `focused_element_token` / `caret_position_token` |
 | `src/platform/pointer.py` | `external_click_detected()`: did the last click land outside our process |
+| `src/platform/x11_window.py` | X11 window-type control (`_NET_WM_WINDOW_TYPE_DOCK`) so the window can park off-screen for "Tuck away" |
 
 ### Modified for Cross-Platform (Phase 7)
 
@@ -648,4 +654,4 @@ retry logic (matching gitconnect's `build/sign.js`).
 
 ---
 
-*Last updated: April 2026*
+*Last updated: August 2026*
