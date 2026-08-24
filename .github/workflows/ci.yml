@@ -247,6 +247,41 @@ jobs:
           coverage combine coverage-data
           coverage report --show-missing --fail-under=60
 
+  # One stable check name for branch protection to require.
+  #
+  # Required status checks are configured by *name*, in the repo's
+  # settings rather than in this file, so a sharded matrix would
+  # otherwise mean listing all eight shards there and re-configuring
+  # protection on every change to the shard count. A stale entry does
+  # not fail loudly: the named check simply never reports, and every PR
+  # blocks for ever on something that cannot go green. That is exactly
+  # what sharding did to `Test (ubuntu-latest)` and
+  # `Test (windows-latest)`, which are the names this job replaces.
+  #
+  # `needs` alone is not sufficient, and the reason is the part worth
+  # remembering: a job whose dependency fails or is cancelled is
+  # *skipped*, and a skipped check is not a failed one. Required checks
+  # treat it as still-pending rather than red, so without `if: always()`
+  # plus the explicit assertions below, the gate would go quiet at
+  # precisely the moment it is supposed to be loud.
+  #
+  # `needs.<job>.result` for a matrix job is the aggregate: success only
+  # when every shard succeeded.
+  tests-passed:
+    name: Tests
+    needs: [test, coverage]
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Check the shard and coverage results
+        run: |
+          echo "test shards: ${{ needs.test.result }}"
+          echo "coverage:    ${{ needs.coverage.result }}"
+          [ "${{ needs.test.result }}" = "success" ] || exit 1
+          [ "${{ needs.coverage.result }}" = "success" ] || exit 1
+
   # Reads the committed lockfiles (requirements-dev.txt for Python,
   # backend/cf-worker/package-lock.json for the worker) and queries
   # the OSV database for known CVEs.  Pinned to the v2.3.8 SHA per

@@ -732,6 +732,20 @@ on the first red, so one flaky ubuntu test took the windows job down
 with it and the run reported two failures where there was one, with
 nothing to say whether windows would have passed.
 
+**Branch protection requires the `Tests` job, not the shards.** Required
+status checks are configured by *name*, in the repo settings rather
+than in the workflow file, so naming the shards there would mean
+re-configuring protection on every change to the shard count. A stale
+entry does not fail loudly: the named check never reports and every PR
+blocks for ever on something that cannot go green, which is what
+sharding did to the old `Test (ubuntu-latest)` / `Test (windows-latest)`
+entries. `tests-passed` is a one-step job that asserts
+`needs.test.result` and `needs.coverage.result`, and it carries
+`if: always()` because a job whose dependency failed is *skipped*, and
+a skipped required check reads as pending rather than red: without it
+the gate goes quiet exactly when it should be loud. The required set is
+now Lint, Type Check, Tests, OSV Scanner.
+
 The workflow also sets `concurrency: group: ci-${{ github.ref }}` with
 `cancel-in-progress: true`, so a new push supersedes the run it replaces
 rather than both finishing. A cancelled intermediate commit is the
