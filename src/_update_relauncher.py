@@ -74,6 +74,13 @@ _INSTALLER_GRACE_S = 5  # after parent dies, wait for installer file copy
 # This process is *detached* and has no console, so anything it fails to
 # bound is invisible until someone opens a process list. There is no
 # supervisor to notice, and no user-visible surface to complain into.
+#
+# It covers every *wait*, on both paths: the splash path's installer
+# grace used to sit outside it as a bare QTimer, so the ceiling bound
+# only the path the tests exercise and not the one production runs.
+# The dwells below are deliberately outside it -- they are display time
+# after the outcome is already decided, and clamping them would cut the
+# message the user is meant to read rather than shorten any waiting.
 _MAX_TOTAL_RUNTIME_S = 300
 
 # Splash-window dwell times. The "Done!" pause hides the brief gap
@@ -155,19 +162,42 @@ def _remaining(overall_deadline: float, phase_timeout: float) -> float:
 
     Never negative: a phase that starts with nothing left gets 0, which
     every wait here treats as "check once, then give up" rather than as
-    "wait forever".
+    "wait forever".  That is a property of the waits, not of this
+    arithmetic: see the do-while in :func:`_wait_for_parent_exit`.
     """
     return max(0.0, min(phase_timeout, overall_deadline - time.monotonic()))
 
 
+def _installer_grace_s(overall_deadline: float) -> float:
+    """The post-parent-death pause, clipped to the run's remaining budget.
+
+    A named helper rather than an inline ``_remaining`` call because
+    both paths have to apply it and only one did: the splash path's
+    grace was a bare ``QTimer.singleShot(_INSTALLER_GRACE_S * 1000)``
+    outside the ceiling, so raising that constant would have extended
+    the total on the path production runs while the path the tests
+    exercise stayed inside it.
+    """
+    return _remaining(overall_deadline, _INSTALLER_GRACE_S)
+
+
 def _wait_for_parent_exit(pid: int, timeout_s: float) -> bool:
-    """Block until the parent OSK process has exited or we time out."""
+    """Block until the parent OSK process has exited or we time out.
+
+    The check comes before the clock, so a zero budget still gets one
+    look.  Written as ``while time.monotonic() < deadline`` it skipped
+    the body outright whenever ``_remaining`` had clamped the budget to
+    0, which reports a parent that is already dead as still alive and
+    aborts the relaunch: the user is left with no keyboard at the one
+    moment there is nothing to fall back on.
+    """
     deadline = time.monotonic() + timeout_s
-    while time.monotonic() < deadline:
+    while True:
         if not _process_alive(pid):
             return True
+        if time.monotonic() >= deadline:
+            return False
         time.sleep(_POLL_INTERVAL_S)
-    return False
 
 
 def _wait_for_new_exe(
@@ -182,9 +212,15 @@ def _wait_for_new_exe(
     for ``mtime > after_mtime`` is a much stronger signal than just
     "file exists." If we don't have a death time, fall back to the
     weaker existence-and-non-empty check.
+
+    Checks before the clock for the same reason as
+    ``_wait_for_parent_exit``: a budget already clamped to 0 must still
+    stat the file once.  An installer that finished while an earlier
+    phase overran is exactly the case where the answer is "yes, it is
+    there", and skipping the look reports it as never having arrived.
     """
     deadline = time.monotonic() + timeout_s
-    while time.monotonic() < deadline:
+    while True:
         try:
             if target.is_file():
                 stat = target.stat()
@@ -195,8 +231,9 @@ def _wait_for_new_exe(
             # Transient stat race against the installer mid-write; retry
             # on the next poll tick rather than aborting the wait.
             pass
+        if time.monotonic() >= deadline:
+            return False
         time.sleep(_POLL_INTERVAL_S)
-    return False
 
 
 def _launch_new_osk(exe_path: Path) -> bool:
@@ -291,25 +328,48 @@ def run_relauncher(argv: list[str]) -> int:
         args.show_splash,
     )
 
-    if args.show_splash and not _is_dev_target(args.target_exe):
+    # The whole-run ceiling is taken once, here, and handed to whichever
+    # path runs. Derived inside each path instead, a splash that raised
+    # after four minutes of waiting handed the headless fallback a fresh
+    # 300 s, and the documented ceiling was quietly a 600 s one.
+    overall_deadline = time.monotonic() + _MAX_TOTAL_RUNTIME_S
+
+    # Nothing is going to arrive, so do not wait to find that out. A
+    # dev-mode spawn points --target-exe at the python interpreter
+    # running the OSK (see _is_dev_target), which means there is no
+    # installer, no new exe, and no mtime that can ever advance past the
+    # parent's death. Left to run, the new-exe wait burned its full
+    # _NEW_EXE_TIMEOUT_S every time and *then* reported failure, leaving
+    # a detached, console-less process alive for ~185 s after every
+    # dev-mode update attempt: the stranded processes TODO.md recorded.
+    #
+    # Decided here, before either path starts, because it depends only
+    # on argv, which is fixed by the time we are called. Tested after
+    # the parent-exit wait, as it first was, a parent slow to die still
+    # bought a 60 s stranded process for a target we already knew we
+    # would never relaunch.
+    #
+    # It returns without launching, deliberately. The launch would be
+    # `python.exe` with no arguments, which is not the keyboard and is
+    # its own stranded-process risk. 0 rather than an error code
+    # because "there was nothing here to relaunch" is the correct
+    # outcome for a dev target, not a failure.
+    if _is_dev_target(args.target_exe):
+        _logger.info("Dev-mode target (%s); no installer to wait for, exiting", args.target_exe)
+        return 0
+
+    if args.show_splash:
         try:
-            return _run_with_splash(args)
+            return _run_with_splash(args, overall_deadline)
         except Exception as exc:  # noqa: BLE001
             _logger.warning(
                 "Splash path raised (%s); falling back to headless",
                 exc,
             )
             # Fall through to the headless path. Better to relaunch
-            # the OSK silently than to leave the user with nothing.
-    elif args.show_splash:
-        # Dev mode (target is the python interpreter, not a real
-        # alpha-osk.exe install path). The splash would sit at
-        # "Installing files…" until _NEW_EXE_TIMEOUT_S because
-        # python.exe never gets a fresh mtime, leaving a stuck window
-        # the dev has to find and kill manually. Skip straight to
-        # headless, which times out the same way but invisibly.
-        _logger.info("Dev-mode target (%s); skipping splash", args.target_exe)
-    return _run_headless(args)
+            # the OSK silently than to leave the user with nothing. It
+            # continues the ceiling above rather than starting one.
+    return _run_headless(args, overall_deadline)
 
 
 def _is_dev_target(target_exe: str) -> bool:
@@ -334,46 +394,39 @@ def _is_dev_target(target_exe: str) -> bool:
     return name.startswith("python") or name.startswith("pythonw")
 
 
-def _run_headless(args: argparse.Namespace) -> int:
+def _run_headless(args: argparse.Namespace, overall_deadline: Optional[float] = None) -> int:
     """Original blocking-poll relauncher. Used by tests and as the
-    splash-path fallback. See ``run_relauncher`` for the contract."""
-    config_dir = Path(args.config_dir)
-    overall_deadline = time.monotonic() + _MAX_TOTAL_RUNTIME_S
+    splash-path fallback. See ``run_relauncher`` for the contract.
 
-    if not _wait_for_parent_exit(
-        args.parent_pid, _remaining(overall_deadline, _PARENT_EXIT_TIMEOUT_S)
-    ):
-        _logger.error("Parent OSK still alive after %.0fs — giving up", _PARENT_EXIT_TIMEOUT_S)
+    ``overall_deadline`` is the whole-run ceiling, passed in so that a
+    splash which raised part way through does not hand this path a
+    fresh one. Defaulted only for direct callers (the tests); the real
+    dispatch always supplies it.
+    """
+    config_dir = Path(args.config_dir)
+    if overall_deadline is None:
+        overall_deadline = time.monotonic() + _MAX_TOTAL_RUNTIME_S
+
+    # Log the budget actually waited, never the nominal constant. With
+    # the ceiling engaged the two differ, and this log is the only
+    # post-mortem surface a detached, console-less process has: "still
+    # alive after 60s" for a 12 s wait sends the next reader looking for
+    # a hang that never happened.
+    parent_budget = _remaining(overall_deadline, _PARENT_EXIT_TIMEOUT_S)
+    if not _wait_for_parent_exit(args.parent_pid, parent_budget):
+        _logger.error("Parent OSK still alive after %.0fs, giving up", parent_budget)
         return 2
 
     parent_death_time = time.time()
 
-    # Nothing is going to arrive, so do not spend three minutes finding
-    # that out.  See _is_dev_target: the target is a python interpreter,
-    # which means there is no installer, no new exe, and no mtime that
-    # can ever advance past the parent's death.  The wait below would
-    # therefore run its full _NEW_EXE_TIMEOUT_S every time and *then*
-    # report failure, leaving a detached, console-less process alive for
-    # ~185 s after every dev-mode update attempt.  That is what was
-    # showing up in process lists as a relauncher outliving its parent.
-    #
-    # It returns without launching, deliberately.  The launch would be
-    # `python.exe` with no arguments, which is not the keyboard and is
-    # its own stranded-process risk.  0 rather than an error code
-    # because "there was nothing here to relaunch" is the correct
-    # outcome for a dev target, not a failure.
-    if _is_dev_target(args.target_exe):
-        _logger.info("Dev-mode target (%s); no installer to wait for, exiting", args.target_exe)
-        return 0
-
-    _logger.info("Parent OSK exited; waiting %.0fs for installer file copy", _INSTALLER_GRACE_S)
-    time.sleep(min(_INSTALLER_GRACE_S, max(0.0, overall_deadline - time.monotonic())))
+    grace_s = _installer_grace_s(overall_deadline)
+    _logger.info("Parent OSK exited; waiting %.0fs for installer file copy", grace_s)
+    time.sleep(grace_s)
 
     target_exe = Path(args.target_exe)
-    if not _wait_for_new_exe(
-        target_exe, parent_death_time, _remaining(overall_deadline, _NEW_EXE_TIMEOUT_S)
-    ):
-        _logger.error("New exe never appeared at %s within %.0fs", target_exe, _NEW_EXE_TIMEOUT_S)
+    new_exe_budget = _remaining(overall_deadline, _NEW_EXE_TIMEOUT_S)
+    if not _wait_for_new_exe(target_exe, parent_death_time, new_exe_budget):
+        _logger.error("New exe never appeared at %s within %.0fs", target_exe, new_exe_budget)
         return 3
 
     _logger.info("New exe ready at %s — launching", target_exe)
@@ -402,10 +455,19 @@ def _new_exe_ready(target: Path, after_mtime: Optional[float]) -> bool:
         return False
 
 
-def _run_with_splash(args: argparse.Namespace) -> int:
+def _run_with_splash(args: argparse.Namespace, overall_deadline: Optional[float] = None) -> int:
     """Splash-window implementation. Drives the same waits as the
     headless path but via QTimer ticks so the window can repaint and
-    show phase-aware progress text."""
+    show phase-aware progress text.
+
+    ``overall_deadline`` is the whole-run ceiling; see ``_run_headless``
+    for why it is passed in rather than derived here. Bound to a local
+    because the QTimer closures below read it, and narrowing an
+    ``Optional`` does not reach into a nested function.
+    """
+    ceiling = (
+        time.monotonic() + _MAX_TOTAL_RUNTIME_S if overall_deadline is None else overall_deadline
+    )
     # Lazy-import Qt so the headless path stays import-clean and
     # tests don't accidentally drag PySide6 into a fresh interpreter.
     from PySide6.QtCore import Qt, QTimer
@@ -462,6 +524,12 @@ def _run_with_splash(args: argparse.Namespace) -> int:
         exit_code: int = 0
         parent_death_time: Optional[float] = None
         deadline: float = 0.0
+        # What each phase was actually given, which is the nominal
+        # timeout only while the ceiling has room. The give-up logs
+        # report these rather than the constants: this process has no
+        # console, so the log is the only post-mortem there is.
+        parent_budget: float = 0.0
+        new_exe_budget: float = 0.0
 
     state = _SplashState()
 
@@ -497,16 +565,17 @@ def _run_with_splash(args: argparse.Namespace) -> int:
         if not _process_alive(args.parent_pid):
             state.parent_death_time = time.time()
             _set_message("Installing files…")
-            QTimer.singleShot(int(_INSTALLER_GRACE_S * 1000), _start_new_exe_phase)
+            QTimer.singleShot(int(_installer_grace_s(ceiling) * 1000), _start_new_exe_phase)
             return
         if time.monotonic() >= state.deadline:
-            _logger.error("Parent OSK still alive after %.0fs — giving up", _PARENT_EXIT_TIMEOUT_S)
+            _logger.error("Parent OSK still alive after %.0fs, giving up", state.parent_budget)
             _finish(2)
             return
         QTimer.singleShot(int(_POLL_INTERVAL_S * 1000), _poll_parent)
 
     def _start_new_exe_phase() -> None:
-        state.deadline = time.monotonic() + _remaining(overall_deadline, _NEW_EXE_TIMEOUT_S)
+        state.new_exe_budget = _remaining(ceiling, _NEW_EXE_TIMEOUT_S)
+        state.deadline = time.monotonic() + state.new_exe_budget
         QTimer.singleShot(0, _poll_new_exe)
 
     def _poll_new_exe() -> None:
@@ -515,7 +584,7 @@ def _run_with_splash(args: argparse.Namespace) -> int:
             return
         if time.monotonic() >= state.deadline:
             _logger.error(
-                "New exe never appeared at %s within %.0fs", target_exe, _NEW_EXE_TIMEOUT_S
+                "New exe never appeared at %s within %.0fs", target_exe, state.new_exe_budget
             )
             _set_message(
                 "Update finished, but the keyboard didn't appear.\n"
@@ -542,8 +611,8 @@ def _run_with_splash(args: argparse.Namespace) -> int:
         _settle_progress(full=True)
         QTimer.singleShot(_DONE_DWELL_MS, lambda: _finish(0))
 
-    overall_deadline = time.monotonic() + _MAX_TOTAL_RUNTIME_S
-    state.deadline = time.monotonic() + _remaining(overall_deadline, _PARENT_EXIT_TIMEOUT_S)
+    state.parent_budget = _remaining(ceiling, _PARENT_EXIT_TIMEOUT_S)
+    state.deadline = time.monotonic() + state.parent_budget
     _set_message("Waiting for the installer to finish…")
     QTimer.singleShot(0, _poll_parent)
 

@@ -16,6 +16,7 @@ import pytest
 
 PySide6 = pytest.importorskip("PySide6")
 
+from src import keyboard_bridge as kb
 from src.keyboard_bridge import KeyboardBridge
 from src.prediction.token_predictor import TokenPredictor
 from src.snippets import SnippetStore
@@ -3157,7 +3158,14 @@ class TestAnOutsideClickThatMovesNoCaretIsLeftAlone:
             bridge._check_external_click()
 
     def _expire(self, bridge: KeyboardBridge, caret) -> None:
-        """Run the settle window out without the caret ever moving."""
+        """Run the settle window out without the caret ever moving.
+
+        Writes a past deadline rather than sleeping, which is why the
+        length of the window is asserted separately in
+        ``test_the_window_lasts_as_long_as_it_says_it_does`` -- on this
+        helper alone, ``_CLICK_SETTLE_MS`` could be any number at all
+        and every test here would still pass.
+        """
         bridge._click_settle = (time.monotonic() - 1, caret)
         self._tick(bridge, caret)
 
@@ -3232,6 +3240,85 @@ class TestAnOutsideClickThatMovesNoCaretIsLeftAlone:
         assert bridge._click_settle is not None
         self._expire(bridge, "A,10,20")
         assert bridge._click_settle is None
+
+    def test_typing_inside_the_window_is_not_a_caret_move(self, bridge: KeyboardBridge):
+        """Our own inserts move the caret, and this poll runs between them.
+
+        The sibling path carries exactly this guard (see
+        ``TestCaretMoveClearsContext::test_typing_does_not_trigger_it``)
+        and treats it as load-bearing.  Without it, a keystroke landing
+        inside the window reads as the user clicking away and tears down
+        the context -- and the next-word pills -- that the keystroke had
+        just produced.  A settle only opens on a click that did *not*
+        move the caret, so a keystroke inside it is evidence about our
+        own insert and none at all about the click.
+        """
+        self._tick(bridge, "A,10,20")
+        _type(bridge, "hello wor")
+        self._tick(bridge, "A,10,20", clicked=True)  # caret-neutral so far
+        _type(bridge, "l")  # our own insert moves the caret
+        self._tick(bridge, "A,70,20")
+        assert bridge._current_word == "worl"
+        assert bridge._context_buffer == "hello "
+
+    def test_a_late_move_is_still_caught_after_we_typed(self, bridge: KeyboardBridge):
+        """The inverse: re-baselining must not blind the rest of the window.
+
+        Ignoring our own keystroke cannot mean abandoning the decision,
+        or an app slow to process the click would keep a context that
+        belongs to the field the caret has left -- the failure the whole
+        signal exists to prevent.
+        """
+        self._tick(bridge, "A,10,20")
+        _type(bridge, "hello wor")
+        self._tick(bridge, "A,10,20", clicked=True)
+        _type(bridge, "l")
+        self._tick(bridge, "A,70,20")  # ours
+        self._tick(bridge, "A,400,90")  # the app finally catches up
+        assert bridge._context_buffer == ""
+        assert bridge._current_word == ""
+
+    def test_the_window_lasts_as_long_as_it_says_it_does(self, bridge: KeyboardBridge):
+        """``_CLICK_SETTLE_MS`` is otherwise pinned by nothing.
+
+        Every other test here expires the window by writing a past
+        deadline straight into ``_click_settle``, which skips the
+        arithmetic entirely: set the constant to 200 *seconds* and they
+        all stay green while a stale prediction bar survives more than
+        three minutes after a caret-neutral click.  The argument for the
+        window is that it is short enough to be unreachable, so its
+        length is part of the behaviour.
+        """
+        assert kb._CLICK_SETTLE_MS <= 1000, (
+            "the case for holding the context through a settle is that the "
+            "window is too short to reach; a longer one needs its own argument"
+        )
+        before = time.monotonic()
+        self._tick(bridge, "A,10,20")
+        self._tick(bridge, "A,10,20", clicked=True)
+        assert bridge._click_settle is not None
+        deadline, _ = bridge._click_settle
+        expected = kb._CLICK_SETTLE_MS / 1000.0
+        assert expected - 0.05 <= deadline - before <= expected + 0.5
+
+    def test_a_settle_does_not_outlive_the_context_it_was_reasoning_about(
+        self, bridge: KeyboardBridge
+    ):
+        """An app switch resolves nothing against the app it left.
+
+        The settle holds one app's caret token.  Left standing across a
+        reset, the next tick compares the *new* app's caret against it,
+        calls the difference a move, and resets again through
+        ``_reset_after_outside_click`` -- which passes
+        ``keep_snippet_offer=True`` and so quietly re-opens a decision
+        the app switch had already made the other way.
+        """
+        self._tick(bridge, "A,10,20")
+        self._tick(bridge, "A,10,20", clicked=True)
+        assert bridge._click_settle is not None
+        bridge._reset_typing_context()  # what an app switch calls
+        assert bridge._click_settle is None
+        assert bridge._caret_before_click is None
 
     def test_the_baseline_is_the_previous_tick_not_the_foreground_poll(
         self, bridge: KeyboardBridge

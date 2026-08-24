@@ -932,6 +932,12 @@ class KeyboardBridge(QObject):
         # 250 ms), and when it does it has already been overwritten with
         # the post-click value.
         self._caret_before_click: Optional[str] = None
+        # Whether we synthesized anything since the previous *click*
+        # poll.  A separate flag from `_keystroke_since_poll` rather
+        # than a shared one: the two polls run at 4 Hz and 20 Hz and
+        # each consumes the flag it reads, so one flag would mean
+        # whichever fired first ate the evidence the other needed.
+        self._keystroke_since_click_poll = False
         # Set while an outside click is waiting to see whether the caret
         # moves: (deadline, the caret token to compare against).
         self._click_settle: Optional[Tuple[float, str]] = None
@@ -947,6 +953,23 @@ class KeyboardBridge(QObject):
         self._update_check_in_flight = False
 
     # --- Key synthesis (delegated to platform layer) ---
+
+    def _note_own_keystroke(self) -> None:
+        """Record that *we* just moved the caret, for both caret polls.
+
+        Two polls compare a caret token across their own ticks, and both
+        have to tell our own insert from the user clicking somewhere
+        else: ``_check_caret_moved`` at 4 Hz and ``_check_external_click``
+        at 20 Hz.  Each consumes the flag it reads, so they cannot share
+        one -- whichever ran first would eat the evidence the other
+        needed.  Setting them happens here, once, so a future insert
+        path gets both by construction rather than by whoever adds it
+        remembering: parallel blocks that must be kept in sync are the
+        failure this file warns about elsewhere, and the click poll was
+        already an instance of it.
+        """
+        self._keystroke_since_poll = True
+        self._keystroke_since_click_poll = True
 
     def _send_key(self, key_name: str, hold_seconds: float = 0.0) -> None:
         """
@@ -970,7 +993,7 @@ class KeyboardBridge(QObject):
             modifiers.append("win")
 
         mods = modifiers if modifiers else None
-        self._keystroke_since_poll = True
+        self._note_own_keystroke()
         # Only thread hold_seconds through when actually holding (game mode) so
         # the common zero-hold call keeps its original two-arg signature.
         if hold_seconds > 0:
@@ -980,12 +1003,12 @@ class KeyboardBridge(QObject):
 
     def _send_text(self, text: str) -> None:
         """Send a string of text via the platform synthesizer."""
-        self._keystroke_since_poll = True
+        self._note_own_keystroke()
         self._synth.send_text(text)
 
     def _replace_text(self, backspaces: int, text: str) -> None:
         """Select the last *backspaces* characters and overwrite with *text*."""
-        self._keystroke_since_poll = True
+        self._note_own_keystroke()
         self._synth.replace_text(backspaces, text)
 
     def _suppress_auto_space(self, token_before: str, punct: str) -> bool:
@@ -1261,7 +1284,7 @@ class KeyboardBridge(QObject):
         # password field, flip privacy mode *before* we touch any
         # prediction state with this keystroke.
         self._check_password_field_sync()
-        self._keystroke_since_poll = True
+        self._note_own_keystroke()
         self._play_click()
         if not self._privacy_mode:
             self._analytics.record_keystroke(key)
@@ -1580,7 +1603,7 @@ class KeyboardBridge(QObject):
             return
 
         self._check_password_field_sync()
-        self._keystroke_since_poll = True
+        self._note_own_keystroke()
         self._play_click()
         # Any user-driven special key invalidates the auto-space window —
         # they pressed space themselves, or they're backspacing, or
@@ -4096,11 +4119,12 @@ class KeyboardBridge(QObject):
         A click is observable in all of them.
 
         It is coarser than the signals it backs up: a click on a toolbar
-        button or a scrollbar doesn't move the caret, and resetting there
-        costs the next-word prediction the user would have got.  That is
-        the deliberate trade, because the failure it replaces is worse:
-        context describing a field the caret has left produces pills that
-        insert the wrong text into the field it is now in.
+        button or a scrollbar doesn't move the caret in the text, and
+        resetting there costs the next-word prediction the user would
+        have got.  That is the deliberate trade, because the failure it
+        replaces is worse: context describing a field the caret has left
+        produces pills that insert the wrong text into the field it is
+        now in.
 
         **It fires mid-word too, and that is a reversal.**  This used to
         carry ``_check_caret_moved``'s "only between words" guard, which
@@ -4144,18 +4168,18 @@ class KeyboardBridge(QObject):
         calls to :meth:`_reset_typing_context`.
 
         **Where the caret is readable, the two kinds of click are told
-        apart rather than treated alike.**  A press on a scrollbar or a
-        toolbar button moves no caret, and resetting there costs the
-        next-word suggestion for nothing.  ``caret_position_token`` can
-        answer that, but not at the instant the press is seen: the poll
-        is up to ``_CLICK_POLL_MS`` behind it and the target app may not
-        have handled the click yet, so an immediate read reports the old
-        position for a click that is about to move the caret, which
-        would suppress exactly the reset this signal exists to perform.
-        The decision is therefore settled over ``_CLICK_SETTLE_MS``
-        against a baseline from the *previous* poll (see
-        ``_caret_before_click``), and any change inside that window is a
-        move.
+        apart rather than treated alike.**  A press on a toolbar button,
+        a window title or empty chrome moves no caret, and resetting
+        there costs the next-word suggestion for nothing.
+        ``caret_position_token`` can answer that, but not at the instant
+        the press is seen: the poll is up to ``_CLICK_POLL_MS`` behind
+        it and the target app may not have handled the click yet, so an
+        immediate read reports the old position for a click that is
+        about to move the caret, which would suppress exactly the reset
+        this signal exists to perform.  The decision is therefore
+        settled over ``_CLICK_SETTLE_MS`` against a baseline from the
+        *previous* poll (see ``_caret_before_click``), and any change
+        inside that window is a move.
 
         **Unreadable means reset, and that is what keeps the original
         fix intact.**  Browsers and Electron apps publish no caret at
@@ -4163,14 +4187,27 @@ class KeyboardBridge(QObject):
         there the behaviour is byte-identical to resetting on every
         press.  The refinement only ever applies where Windows will say
         plainly whether the caret moved.
+
+        **A scrollbar is not among the clicks this rescues**, and the
+        reason is the token rather than the timing: ``rcCaret`` is a
+        client-relative rectangle, so scrolling the view drags it while
+        the caret stays exactly where it was in the text, and the click
+        reads as a move.  That is the same false positive
+        ``_check_caret_moved`` carries its only-between-words guard for,
+        and taking that guard here was tried and reversed for a stronger
+        reason (see above), so a scroll keeps the coarse behaviour and
+        resets.  Closing it needs a caret identity that survives a
+        scroll, which Windows does not publish.
         """
         caret_now = caret_position_token()
         caret_before, self._caret_before_click = self._caret_before_click, caret_now
+        ours = self._keystroke_since_click_poll
+        self._keystroke_since_click_poll = False
 
         if external_click_detected():
             self._begin_click_settle(caret_before, caret_now)
         elif self._click_settle is not None:
-            self._continue_click_settle(caret_now)
+            self._continue_click_settle(caret_now, ours)
 
     def _begin_click_settle(self, caret_before: Optional[str], caret_now: Optional[str]) -> None:
         """Decide, or start waiting to decide, about a fresh outside click."""
@@ -4181,17 +4218,40 @@ class KeyboardBridge(QObject):
             self._reset_after_outside_click("no caret published")
             return
         if caret_now != caret_before:
-            # The app was quick: the caret has already moved.
+            # The app was quick: the caret has already moved.  Not
+            # qualified on whether we typed in the same tick, unlike the
+            # window below, and the asymmetry is deliberate: here the
+            # caret has *already* changed by the time the click is seen,
+            # so believing our own keystroke did it would mean keeping a
+            # context that may belong to the field the click just left,
+            # which is the direction that corrupts text.  Failing closed
+            # costs one suggestion, on a tick where the user both typed
+            # and clicked elsewhere within 50 ms.
             self._clear_click_settle()
             self._reset_after_outside_click("caret moved")
             return
         # Unchanged so far, which is not yet an answer.
         self._click_settle = (time.monotonic() + _CLICK_SETTLE_MS / 1000.0, caret_now)
 
-    def _continue_click_settle(self, caret_now: Optional[str]) -> None:
-        """Watch a pending click until the caret moves or the window ends."""
+    def _continue_click_settle(self, caret_now: Optional[str], ours: bool) -> None:
+        """Watch a pending click until the caret moves or the window ends.
+
+        ``ours`` says we synthesized something since the previous tick,
+        which is the same guard ``_check_caret_moved`` carries and for
+        the same reason: typing moves the caret, so reading our own
+        insert as the user clicking away tears down the context -- and
+        the next-word pills that insert had just produced -- 200 ms
+        after producing them.  The settle only opens on a click that had
+        *not* moved the caret, so a keystroke landing inside the window
+        is evidence about our own insert and none at all about the
+        click.  Re-baselining rather than concluding keeps whatever is
+        left of the window watching for a move the app makes late.
+        """
         assert self._click_settle is not None
         deadline, baseline = self._click_settle
+        if ours and caret_now is not None:
+            baseline = caret_now
+            self._click_settle = (deadline, baseline)
         if caret_now is None or caret_now != baseline:
             self._clear_click_settle()
             self._reset_after_outside_click("caret moved")
@@ -4339,6 +4399,16 @@ class KeyboardBridge(QObject):
         # of reset state `resetContext` cleared and this did not.
         self._learned_raw_token = ""
         self._clear_token_pills()
+        # A pending outside-click settle was reasoning about a caret in
+        # the context that just went away, so it cannot outlive it: on
+        # an app switch the next click tick would compare the new app's
+        # caret against the old app's baseline and "detect" a move,
+        # which passes keep_snippet_offer=True and quietly re-opens a
+        # decision the switch had already made.  The baseline goes with
+        # it; the cost is that the next click fails closed, and with the
+        # context already cleared there is nothing left for it to clear.
+        self._clear_click_settle()
+        self._caret_before_click = None
         self._pending_auto_cap = False
         # Dropped, not delivered: the punctuation that withheld this
         # space is no longer where the caret is, so typing one now would

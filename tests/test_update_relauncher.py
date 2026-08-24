@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import time
@@ -329,6 +330,163 @@ class TestTheRunIsBounded:
         assert launched == [target_exe]
 
 
+class TestAnExhaustedBudgetStillLooksOnce:
+    """Zero left means "check once", never "skip the check".
+
+    ``_remaining`` clamps a phase to what is left of the run, and an
+    overrun earlier in the run hands the next phase 0.  Written as
+    ``while time.monotonic() < deadline`` the waits then ran *no*
+    iterations, which is not a shorter wait but a different answer: a
+    parent that is already dead reported as still alive (exit 2, and the
+    user is left with no keyboard), and an installer that finished while
+    an earlier phase overran reported as never having arrived.
+    """
+
+    def test_a_dead_parent_is_seen_even_with_no_budget_left(self):
+        seen: list[int] = []
+
+        def dead(pid):
+            seen.append(pid)
+            return False
+
+        with patch.object(relauncher, "_process_alive", dead):
+            assert relauncher._wait_for_parent_exit(1234, 0.0) is True
+        assert seen == [1234], "the check was skipped, not merely cut short"
+
+    def test_a_live_parent_with_no_budget_left_gives_up_after_looking(self):
+        seen: list[int] = []
+
+        def alive(pid):
+            seen.append(pid)
+            return True
+
+        with patch.object(relauncher, "_process_alive", alive):
+            assert relauncher._wait_for_parent_exit(1234, 0.0) is False
+        assert seen == [1234]
+
+    def test_an_exe_already_in_place_is_seen_with_no_budget_left(self, tmp_path):
+        target = tmp_path / "alpha-osk.exe"
+        target.write_bytes(b"x")
+        assert relauncher._wait_for_new_exe(target, None, 0.0) is True
+
+    def test_a_missing_exe_with_no_budget_left_still_reports_missing(self, tmp_path):
+        target = tmp_path / "alpha-osk.exe"
+        assert relauncher._wait_for_new_exe(target, None, 0.0) is False
+
+    def test_an_exhausted_ceiling_gives_up_promptly_rather_than_waiting(self, tmp_path):
+        """The clamp reaching the wait, not just the arithmetic.
+
+        A live pid (our own) and a ceiling that expired 30 s ago: the
+        run must end on one look rather than sit out the nominal 60 s.
+        """
+        args = argparse.Namespace(
+            parent_pid=os.getpid(),
+            new_version="1.0.18",
+            previous_version="1.0.17",
+            target_exe=str(tmp_path / "alpha-osk.exe"),
+            config_dir=str(tmp_path / "config"),
+        )
+        started = time.monotonic()
+        rc = relauncher._run_headless(args, overall_deadline=time.monotonic() - 30)
+        assert rc == 2
+        assert time.monotonic() - started < 2.0
+
+    def test_the_give_up_log_names_the_budget_it_waited_not_the_constant(self, tmp_path, caplog):
+        """The only post-mortem surface this process has.
+
+        It is detached and has no console, so relauncher.log is where a
+        failure is read.  Reporting the nominal 60 s for a wait that was
+        clamped to nothing sends the next reader looking for a hang that
+        never happened.
+        """
+        args = argparse.Namespace(
+            parent_pid=os.getpid(),
+            new_version="1.0.18",
+            previous_version="1.0.17",
+            target_exe=str(tmp_path / "alpha-osk.exe"),
+            config_dir=str(tmp_path / "config"),
+        )
+        with caplog.at_level("ERROR", logger="UpdateRelauncher"):
+            relauncher._run_headless(args, overall_deadline=time.monotonic() - 30)
+        assert any("after 0s" in r.getMessage() for r in caplog.records), caplog.text
+
+    def test_the_fallback_continues_the_ceiling_it_was_given(self, tmp_path):
+        """A splash that raises must not hand headless a fresh 300 s.
+
+        Derived per path, the two ceilings ran back to back and the
+        documented one silently became double.  ``run_relauncher`` takes
+        it once and passes it down; here the splash raises immediately
+        and the headless fallback inherits an already-expired one, so it
+        gives up rather than starting its own budget.
+        """
+        target_exe = tmp_path / "alpha-osk.exe"
+        target_exe.write_bytes(b"x")
+        argv = [
+            "alpha-osk.exe",
+            "--update-relauncher",
+            "--parent-pid",
+            str(os.getpid()),
+            "--new-version",
+            "1.0.18",
+            "--previous-version",
+            "1.0.17",
+            "--target-exe",
+            str(target_exe),
+            "--config-dir",
+            str(tmp_path / "config"),
+            "--show-splash",
+        ]
+
+        def boom(args, ceiling):
+            raise RuntimeError("no display server")
+
+        started = time.monotonic()
+        with (
+            patch.object(relauncher, "_MAX_TOTAL_RUNTIME_S", 0),
+            patch.object(relauncher, "_run_with_splash", boom),
+        ):
+            rc = relauncher.run_relauncher(argv)
+        assert rc == 2
+        assert time.monotonic() - started < 2.0, "the fallback started a fresh ceiling"
+
+
+class TestTheDevTargetIsDecidedBeforeAnyWaiting:
+    """It depends only on argv, so nothing may be waited on first.
+
+    Tested after the parent-exit wait, as it first was, a parent slow to
+    die still bought a 60 s detached, console-less process for a target
+    the code already knew it would never relaunch -- a shorter version of
+    the very thing being fixed.
+    """
+
+    def test_no_wait_is_entered_for_a_dev_target(self, tmp_path):
+        target_exe = tmp_path / "python.exe"
+        target_exe.write_bytes(b"x")
+        argv = [
+            "alpha-osk.exe",
+            "--update-relauncher",
+            "--parent-pid",
+            str(os.getpid()),  # alive, so any wait would run its full budget
+            "--new-version",
+            "1.0.18",
+            "--previous-version",
+            "1.0.17",
+            "--target-exe",
+            str(target_exe),
+            "--config-dir",
+            str(tmp_path / "config"),
+        ]
+
+        def never(*a, **kw):
+            raise AssertionError("a dev target must not wait for anything")
+
+        with (
+            patch.object(relauncher, "_wait_for_parent_exit", never),
+            patch.object(relauncher, "_wait_for_new_exe", never),
+        ):
+            assert relauncher.run_relauncher(argv) == 0
+
+
 class TestRemaining:
     """The clamp that keeps the phases summing to the ceiling."""
 
@@ -346,11 +504,25 @@ class TestRemaining:
         Every wait here compares against ``time.monotonic() + timeout``,
         so a negative budget still works out as "already expired"; but a
         caller that ever multiplies or sums these would silently get time
-        back. Zero means "check once and give up", which is what an
-        exhausted budget should do.
+        back. Zero means "check once and give up" -- which is a property
+        of the waits rather than of this arithmetic, and is asserted
+        against them in ``TestAnExhaustedBudgetStillLooksOnce``.
         """
         deadline = time.monotonic() - 30
         assert relauncher._remaining(deadline, 60) == 0.0
+
+    def test_the_installer_grace_is_clamped_by_the_same_ceiling(self):
+        """Both paths take it from here, which is why it has a name.
+
+        The splash path's grace was a bare
+        ``QTimer.singleShot(_INSTALLER_GRACE_S * 1000)`` outside the
+        budget, so the ceiling bound the path the tests exercise and not
+        the one production runs.
+        """
+        assert relauncher._installer_grace_s(time.monotonic() + 1000) == pytest.approx(
+            relauncher._INSTALLER_GRACE_S, abs=0.1
+        )
+        assert relauncher._installer_grace_s(time.monotonic() - 30) == 0.0
 
 
 class TestIsDevTarget:
@@ -452,7 +624,9 @@ class TestShowSplashFlag:
         with (
             patch.object(relauncher, "_INSTALLER_GRACE_S", 0),
             patch.object(relauncher, "_NEW_EXE_TIMEOUT_S", 2),
-            patch.object(relauncher, "_run_with_splash", lambda args: called.append(True) or 0),
+            patch.object(
+                relauncher, "_run_with_splash", lambda args, ceiling: called.append(True) or 0
+            ),
             patch.object(relauncher, "_launch_new_osk", return_value=True),
         ):
             rc = relauncher.run_relauncher(argv)
@@ -480,7 +654,9 @@ class TestShowSplashFlag:
 
         observed: list[object] = []
         with patch.object(
-            relauncher, "_run_with_splash", lambda args: observed.append(args.show_splash) or 0
+            relauncher,
+            "_run_with_splash",
+            lambda args, ceiling: observed.append(args.show_splash) or 0,
         ):
             rc = relauncher.run_relauncher(argv)
 
@@ -522,7 +698,9 @@ class TestShowSplashFlag:
             patch.object(relauncher, "_INSTALLER_GRACE_S", 0),
             patch.object(relauncher, "_NEW_EXE_TIMEOUT_S", 2),
             patch.object(
-                relauncher, "_run_with_splash", lambda args: splash_called.append(True) or 0
+                relauncher,
+                "_run_with_splash",
+                lambda args, ceiling: splash_called.append(True) or 0,
             ),
             patch.object(relauncher, "_launch_new_osk", return_value=True),
         ):
@@ -562,7 +740,7 @@ class TestShowSplashFlag:
             "--show-splash",
         ]
 
-        def boom(args):
+        def boom(args, ceiling):
             raise RuntimeError("no display server")
 
         launch_calls: list[object] = []
