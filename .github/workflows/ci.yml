@@ -212,6 +212,15 @@ jobs:
   # kept in step with two runner images. Per OS, the workspace path is
   # identical across shards and no remapping is involved.
   #
+  # **Which is why this runs on `matrix.os`, not on ubuntu.** Same
+  # reason, one step further, and it is easy to miss because the job
+  # only reads files: combining is not path-neutral either. Written as
+  # `runs-on: ubuntu-latest` it fed the windows shards' data to a linux
+  # box, which joined the recorded absolute paths onto its own workspace
+  # and reported a `No source for code` error naming a windows
+  # workspace path joined onto a linux one. The combine has to happen
+  # where the data was produced.
+  #
   # Gating per OS also preserves exactly what the unsharded jobs
   # promised: each platform's own run had to clear 60% on its own, and
   # each still does. That matters because the `if sys.platform ==
@@ -219,7 +228,7 @@ jobs:
   coverage:
     name: Coverage (${{ matrix.os }})
     needs: test
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     permissions:
       contents: read
     strategy:
@@ -242,7 +251,14 @@ jobs:
           pattern: coverage-${{ matrix.os }}-*
           path: coverage-data
           merge-multiple: true
+      # `shell: bash` explicitly, because this now runs on windows too
+      # and the default there is pwsh, which does not stop on the first
+      # failing command: GitHub only checks the *last* exit code, so a
+      # failed `combine` followed by a `report` that happens to succeed
+      # would pass the step. bash is present on both runners and `-e`
+      # is what makes the two lines a gate rather than a suggestion.
       - name: Combine and check
+        shell: bash
         run: |
           coverage combine coverage-data
           coverage report --show-missing --fail-under=60
