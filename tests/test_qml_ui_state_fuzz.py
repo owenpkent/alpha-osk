@@ -72,11 +72,17 @@ _LAYOUT_WAIT_MS = 20
 _LAYOUT_WAIT_TRIES = 50
 
 # QtQuick.Labs `Settings` batches property writes behind a ~100 ms timer
-# rather than hitting the store on every assignment.  Waited out in full
-# (with headroom) by _flush_settings, because a restart test that reads
-# the store before that timer fires is testing the debounce, not the
-# persistence.
+# rather than hitting the store on every assignment.  Waited out by
+# _flush_settings, because a restart test that reads the store before
+# that timer fires is testing the debounce, not the persistence.
+#
+# _SETTINGS_DEBOUNCE_MS is the *step* between checks rather than the
+# whole wait: see _flush_settings for why a fixed sleep here is a coin
+# flip and not a fix.  _SETTINGS_FLUSH_TRIES bounds the total at 3 s, so
+# a store that genuinely never receives the write still fails the test
+# rather than hanging the run.
 _SETTINGS_DEBOUNCE_MS = 300
+_SETTINGS_FLUSH_TRIES = 10
 
 
 def _wait_until(predicate) -> bool:
@@ -662,7 +668,9 @@ class TestRestartPersistence:
         root1.setProperty("compactView", True)
         _settle()
         assert root1.property("showNavigation") is False
-        _flush_settings()
+        # Name both keys session 2 reads back, so this returns when the
+        # write has landed rather than when a timer guess has expired.
+        _flush_settings("savedCompactView", "savedShowNavigation")
         del engine1, bridge1
 
         # Session 2: cold start.
@@ -693,7 +701,7 @@ class TestRestartPersistence:
         for _ in range(3):
             engine, root, bridge = self._boot(warnings)
             widths.append(root.property("width"))
-            _flush_settings()
+            _flush_settings("savedWindowWidth")
             del engine, bridge
             _settle()
 
@@ -703,19 +711,42 @@ class TestRestartPersistence:
         assert _real_warnings(warnings) == []
 
 
-def _flush_settings() -> None:
-    """Wait out the QML `Settings` write debounce, then sync the store.
+def _flush_settings(*expected_keys: str) -> None:
+    """Wait for the QML `Settings` write to reach the store, bounded.
 
     ``QTest.qWait``, not ``processEvents``, for the same reason
     ``_wait_until`` gives above: the debounce is a *timer*, and
     ``processEvents`` dispatches what is already due without advancing
     the clock.  Six passes of it therefore complete well inside the
-    ~100 ms window and return with the write still pending, so whether
-    the setting reached disk before the session was torn down came down
-    to how much wall time the surrounding test happened to take.  That
-    is a coin flip, and it landed the wrong way on the ubuntu runner as
-    "compact view did not persist" while passing everywhere else.
+    ~100 ms window and return with the write still pending.
+
+    **Waiting a fixed length of time is the part that had to go.**  This
+    was a flat 300 ms, chosen as "the ~100 ms debounce with headroom",
+    and it still lost on the ubuntu runner: the debounce is one timer
+    among many on a 4-core box running a dozen pytest workers, so the
+    headroom is not headroom, it is a bet on how loaded the machine is.
+    It failed as "compact view did not persist", which reads as the
+    persistence bug these tests exist to catch, and it failed on
+    branches that touched nothing but a workflow SHA.
+
+    So the wait is a *condition* now: name the keys the write is
+    expected to produce and this returns as soon as the store has them,
+    or after ``_SETTINGS_FLUSH_TRIES`` steps if it never does, leaving
+    the caller's own assertion to report the failure.  Passing no keys
+    keeps the old fixed single wait, which is right for a caller that
+    only needs the queue drained rather than a particular value in it.
+
+    Keys are the plain names under the ``Settings`` element's ``ui``
+    category (e.g. ``savedCompactView``); the ``ui/`` prefix is added
+    here so no caller has to remember it.
     """
-    QTest.qWait(_SETTINGS_DEBOUNCE_MS)
-    QCoreApplication.processEvents()
-    QSettings(TEST_ORG, TEST_APP).sync()
+    for attempt in range(_SETTINGS_FLUSH_TRIES):
+        QTest.qWait(_SETTINGS_DEBOUNCE_MS)
+        QCoreApplication.processEvents()
+        settings = QSettings(TEST_ORG, TEST_APP)
+        settings.sync()
+        if not expected_keys:
+            return
+        if all(settings.value(f"ui/{key}") is not None for key in expected_keys):
+            return
+        del settings, attempt

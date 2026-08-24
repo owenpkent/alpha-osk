@@ -685,17 +685,52 @@ with `PYTEST_XDIST_WORKER`. Any new test touching QSettings, the
 registry, a fixed temp path, or any other machine-global resource has to
 key it per worker the same way.
 
-**CI shards too now** (`-n auto` in `.github/workflows/ci.yml`). It was
-left serial on the argument that it is the release gate and its runners
-have far fewer cores. The cores are real, 4 against 16, but the argument
-was wrong about where the time goes: the run is dominated by per-test
-setup repeated ~1550 times, which shards almost linearly whatever the
-core count. Serial it took **26 minutes**, which is long enough that
-pushing a few commits in a row starts several runs at once, and the
-stale ones each hold a runner for their full length before reporting a
-failure that was fixed two commits earlier. `pytest-cov` combines the
-workers' data before `--cov-fail-under` is evaluated, so the coverage
-gate is unaffected.
+**CI shards on two axes, and they are different axes.** `-n auto`
+spreads the suite over one machine's cores; `--shard-id N
+--shard-count M` spreads it over several machines. CI does both.
+
+Across cores came first, and the argument for leaving it serial was
+that CI is the release gate and its runners have far fewer cores. The
+cores are real, 4 against 16, but the argument was wrong about where
+the time goes: the run is dominated by per-test setup repeated ~1600
+times, which shards almost linearly whatever the core count. Serial it
+took **26 minutes**.
+
+Across machines came second, because 4 cores is still 4 cores: after
+`-n auto`, ubuntu took **14m30s** and windows **19m05s**, with every
+push waiting on the slower. Dependency install was 15 s and 52 s
+respectively and lint / typecheck / OSV are all under 30 s, so there
+was nothing else to cut. The matrix is now `os x shard[0..3]`, eight
+jobs, each still `-n auto` over its own cores.
+
+The split lives in `tests/conftest.py::pytest_collection_modifyitems`:
+a test belongs to shard `crc32(nodeid) % count`. Deliberately not
+`pytest-split`, which wants a recorded-durations file that goes stale
+silently and is one more exactly-pinned, CVE-scanned dependency; at
+1600 tests over 4 shards a hash balances to within about 6% (measured:
+377 / 389 / 421 / 421) with no moving parts. **The hash cannot be
+`hash()`**: CPython salts string hashing per process, every xdist
+worker inside a shard is its own process, and workers disagreeing about
+which tests are theirs does not fail loudly, it runs some tests twice
+and others never.
+
+**`--cov-fail-under` moved out of the test jobs**, because a shard
+measures roughly a quarter of the lines and every shard would fail the
+gate. Each shard uploads its `.coverage.<os>.<shard>` and a separate
+`coverage` job combines and applies the threshold. Two things about it
+are load-bearing: `include-hidden-files: true` on the upload (the file
+starts with a dot, and upload-artifact has excluded hidden files since
+v4.4, so without it every upload is empty and the gate silently stops
+gating), and the combine is **per OS**, since a coverage data file
+records absolute source paths and the two runners disagree about
+those. Per OS also preserves what the unsharded jobs promised: each
+platform had to clear 60% on its own, and the `if sys.platform ==
+"win32"` bodies are measured on exactly one of the two.
+
+`fail-fast: false` on the matrix: the default cancelled every sibling
+on the first red, so one flaky ubuntu test took the windows job down
+with it and the run reported two failures where there was one, with
+nothing to say whether windows would have passed.
 
 The workflow also sets `concurrency: group: ci-${{ github.ref }}` with
 `cancel-in-progress: true`, so a new push supersedes the run it replaces
