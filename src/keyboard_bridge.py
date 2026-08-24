@@ -711,6 +711,17 @@ class KeyboardBridge(QObject):
         # be learned, the former is incidental and would pollute the
         # capitalisation table.  Reset on every word boundary.
         self._word_typed_under_caps_lock = False
+        # True iff a context reset emptied _current_word while the user
+        # was part-way through a word, so what accumulates from here is
+        # the *tail* of a word whose head is still on screen.  Travels
+        # with _word_typed_under_caps_lock above: same per-word lifetime,
+        # cleared at the same boundaries.  Its one consumer is the word-
+        # completion learning gate, because learning "mentation" from an
+        # interrupted "documentation" writes a fragment into user_vocab,
+        # the analytics word table, the dashboard's Top Words and the
+        # Data Backup archive, and then prefix-matches to the top of the
+        # pill bar for ever after.  See _take_lost_prefix.
+        self._word_prefix_lost = False
         self._sentence_buffer = ""  # Accumulates words for sentence-level learning
         self._predictions: List[str] = []
         self._auto_space_after_punctuation = True
@@ -990,6 +1001,32 @@ class KeyboardBridge(QObject):
             return
         self._pending_auto_cap = False
         self._update_layer()
+
+    def _take_lost_prefix(self) -> bool:
+        """True iff the word just completed had its opening cut away.
+
+        A context reset that lands mid-word empties ``_current_word``
+        while its characters are still on screen, so everything typed
+        from there to the next boundary is the tail of a word the bridge
+        never saw the start of.  Type "docu", take an outside click on a
+        scrollbar (the caret-neutral false positive
+        :meth:`_check_external_click` deliberately accepts), finish
+        "mentation ", and the space branch would otherwise learn
+        "mentation" as a word: it reaches ``user_vocab``, the analytics
+        word table, the dashboard's Top Words and the Data Backup
+        archive, and prefix-matches to rank 1 for every later "ment".
+        That is persistent, exported corruption, where the desynced
+        mirror the reset also causes is transient.
+
+        Consumed at each of the three sites that learn from
+        ``_current_word`` (space, sentence punctuation, Return), so the
+        suppression covers exactly one word.  Missing a learn is the
+        cheap direction; the codebase takes that trade everywhere else
+        it decides what may enter the model.
+        """
+        lost = self._word_prefix_lost
+        self._word_prefix_lost = False
+        return lost
 
     def _take_deferred_space(self, prose: bool) -> Tuple[str, bool]:
         """Settle a deferred auto-space: ``(text to type, capital owed)``.
@@ -1313,7 +1350,12 @@ class KeyboardBridge(QObject):
 
             # Sentence-ending punctuation triggers sentence learning
             if char in (".", "!", "?"):
-                sentence = self._sentence_buffer + self._current_word
+                # A word whose opening a reset cut away ends the sentence
+                # without joining it: it is a tail, not a word.  See
+                # _take_lost_prefix.
+                sentence = self._sentence_buffer
+                if not self._take_lost_prefix():
+                    sentence += self._current_word
                 if sentence.strip():
                     new_words = self._predictor.learn(sentence.strip())
                     if new_words:
@@ -1363,8 +1405,14 @@ class KeyboardBridge(QObject):
                 # Preserve the word before the comma in the sentence buffer
                 # (_current_word includes the comma at this point, strip it)
                 word_before = self._current_word[:-1]
+                # A fragment still mirrors into _context_buffer, which
+                # has to match the screen, but never into
+                # _sentence_buffer, which is what the next boundary
+                # hands to the learner.  See _take_lost_prefix.
+                lost_prefix = self._take_lost_prefix()
                 if word_before:
-                    self._sentence_buffer += word_before + char + trailing
+                    if not lost_prefix:
+                        self._sentence_buffer += word_before + char + trailing
                     self._context_buffer += word_before + char + trailing
                 else:
                     self._context_buffer += char + trailing
@@ -1407,8 +1455,12 @@ class KeyboardBridge(QObject):
             # are single tokens) and the underscore (snake_case identifiers).
             elif not (char.isalnum() or char in ("'", "_")):
                 word_before = self._current_word[:-1]
+                # Mirror but do not learn a fragment, same rule as the
+                # comma branch above.  See _take_lost_prefix.
+                lost_prefix = self._take_lost_prefix()
                 if word_before:
-                    self._sentence_buffer += word_before + char
+                    if not lost_prefix:
+                        self._sentence_buffer += word_before + char
                     self._context_buffer += word_before + char
                 else:
                     self._context_buffer += char
@@ -1599,7 +1651,17 @@ class KeyboardBridge(QObject):
             pass
         elif key_name == "space":
             # Word completed - learn it and add to sentence
-            if self._current_word:
+            lost_prefix = self._take_lost_prefix()
+            if self._current_word and lost_prefix:
+                # A context reset landed mid-word, so this is the tail of
+                # a word whose head is still on screen.  It mirrors into
+                # _context_buffer, because that has to match what was
+                # typed, and reaches nothing that persists.  See
+                # _take_lost_prefix for what learning it would cost.
+                self._context_buffer += self._current_word + " "
+                if len(self._context_buffer) > 200:
+                    self._context_buffer = self._context_buffer[-200:]
+            elif self._current_word:
                 self._add_debug_log(f'Word completed: "{self._current_word}"')
                 # Auto-rehabilitate blacklisted words typed repeatedly
                 rehabilitated = self._predictor.record_typed_word(self._current_word)
@@ -1684,7 +1746,8 @@ class KeyboardBridge(QObject):
                 self._refresh_prediction_bar()
         elif key_name == "return":
             # Sentence boundary - learn full sentence, then reset sentence buffer
-            if self._current_word:
+            lost_prefix = self._take_lost_prefix()
+            if self._current_word and not lost_prefix:
                 self._add_debug_log(f'Word completed: "{self._current_word}"')
                 self._analytics.record_word_completed(self._current_word)
                 self._sentence_buffer += self._current_word
@@ -2266,6 +2329,9 @@ class KeyboardBridge(QObject):
         self._current_word = ""
         self._raw_token = ""
         self._word_typed_under_caps_lock = False
+        # The insert replaced the word outright, so a lost opening
+        # is no longer owed to anything.  Travels with the flag above.
+        self._word_prefix_lost = False
 
         # IMPORTANT: Clear predictions first, then get next-word predictions
         self._predictions = []
@@ -2304,20 +2370,19 @@ class KeyboardBridge(QObject):
 
     @Slot()
     def resetContext(self) -> None:
-        """Full reset of typing state — for explicit user action only."""
-        self._predictions = []
-        self._current_word = ""
-        self._raw_token = ""
-        self._learned_raw_token = ""
-        # Every other reset path clears these; leaving one that does not
-        # is exactly the parallel-blocks drift _refresh_prediction_bar
-        # exists to prevent.
-        self._clear_token_pills()
-        self._deferred_auto_space = ""
-        self._word_typed_under_caps_lock = False
-        self._sentence_buffer = ""
-        self._context_buffer = ""
-        self.predictionsChanged.emit([])
+        """Full reset of typing state, for explicit user action only.
+
+        The clear-context ring.  It **delegates** rather than clearing
+        the same fields itself, because the hand-written copy is exactly
+        the parallel-blocks drift this file warns about for sticky
+        modifiers, and it had already drifted in both directions: this
+        one cleared ``_learned_raw_token`` and :meth:`_reset_typing_context`
+        did not, while that one cleared ``_pending_auto_cap`` and this
+        did not -- so typing "hello." and then tapping the ring left a
+        capital owed, and the next character in a context the user had
+        just told the keyboard to forget came out uppercase.
+        """
+        self._reset_typing_context()
 
     # ------------------------------------------------------------------
     #  Off-screen "Tuck away" — see src/platform/x11_window.py and the
@@ -2404,6 +2469,9 @@ class KeyboardBridge(QObject):
         self._current_word = ""
         self._raw_token = ""
         self._word_typed_under_caps_lock = False
+        # The insert replaced the word outright, so a lost opening
+        # is no longer owed to anything.  Travels with the flag above.
+        self._word_prefix_lost = False
         self._auto_space_pending = False
         self._predictions = []
         self.predictionsChanged.emit([])
@@ -2459,12 +2527,21 @@ class KeyboardBridge(QObject):
             return
 
         self._pending_snippet_offer = (kind, value)
-        self._remember_offered(value)
+        # The ledger is written when the user *answers* the offer, not
+        # here.  Recording it at raise time meant any withdrawal -- a
+        # caret poll, an app switch, privacy mode -- burned the value for
+        # the session, so the Save button never came back for an address
+        # the user never got to see, let alone decline.
         _logger.info("Snippet offer raised (kind=%s, value_len=%d)", kind, len(value))
         self.snippetOffered.emit(kind, label_for_kind(kind), value)
 
     def _remember_offered(self, value: str) -> None:
-        """Record *value* as already-offered, keeping the set bounded.
+        """Record *value* as answered, keeping the set bounded.
+
+        Called from :meth:`acceptSnippetOffer` and
+        :meth:`dismissSnippetOffer` only.  The ledger suppresses offers
+        the user *saw and decided about*; an offer withdrawn by a poll
+        was never answered, so it must stay offerable.
 
         This is the "don't nag" ledger, and it holds values the user
         typed, so it is not allowed to grow for the life of the session:
@@ -2486,6 +2563,10 @@ class KeyboardBridge(QObject):
         withdrawal matters: the toast lives in QML on its own 8 s timer,
         so clearing only the Python side would leave a Save button on
         screen that silently does nothing.
+
+        Deliberately does **not** write ``_offered_snippet_values``: the
+        user never answered this one, so retyping the same address later
+        must be able to raise it again.
         """
         if self._pending_snippet_offer is None:
             return
@@ -2515,6 +2596,7 @@ class KeyboardBridge(QObject):
         if offer is None:
             return False
         kind, value = offer
+        self._remember_offered(value)
         label = label_for_kind(kind)
         existing = self._snippets.get_all()
 
@@ -2546,14 +2628,20 @@ class KeyboardBridge(QObject):
     def dismissSnippetOffer(self) -> None:
         """Drop the offer without saving.
 
-        The value stays in ``_offered_snippet_values``, so dismissing is
+        The value goes into ``_offered_snippet_values`` here, which is
         what makes it stop asking -- otherwise the next word boundary
         would re-detect the same address still sitting in the sentence
-        buffer and put the toast straight back.
+        buffer and put the toast straight back.  The toast's own 8 s
+        timeout comes through this slot too, because ignoring an offer
+        is an answer.  A *withdrawal* is not, and deliberately does not
+        write the ledger: see :meth:`_withdraw_snippet_offer`.
         """
-        if self._pending_snippet_offer is not None:
-            _logger.info("Snippet offer dismissed")
+        offer = self._pending_snippet_offer
         self._pending_snippet_offer = None
+        if offer is None:
+            return
+        self._remember_offered(offer[1])
+        _logger.info("Snippet offer dismissed")
 
     @Slot(bool)
     def setSnippetDetection(self, enabled: bool) -> None:
@@ -3045,6 +3133,9 @@ class KeyboardBridge(QObject):
         self._raw_token = completed[-_MAX_RAW_TOKEN_LEN:]
         self._current_word = ""
         self._word_typed_under_caps_lock = False
+        # The insert replaced the word outright, so a lost opening
+        # is no longer owed to anything.  Travels with the flag above.
+        self._word_prefix_lost = False
         # The tap finished the token either way, so this is a word
         # boundary in the sense both of these care about: learn it, and
         # let an address the user just completed raise a Snippets offer,
@@ -3873,7 +3964,11 @@ class KeyboardBridge(QObject):
                 and self._last_focus_token is not None
                 and token != self._last_focus_token
             ):
-                self._reset_typing_context()
+                # Same window, so the user is still in the form they were
+                # filling in: a live snippet offer survives, exactly as it
+                # does for the outside click.  Only `window_switched`
+                # above takes the default and withdraws it.
+                self._reset_typing_context(keep_snippet_offer=True)
                 _logger.debug("Focused element changed — predictions cleared")
             self._last_focus_token = token
         elif window_switched:
@@ -3954,7 +4049,10 @@ class KeyboardBridge(QObject):
             return
         if typed_since_last_poll or self._current_word:
             return
-        self._reset_typing_context()
+        # This branch is unreachable on an app switch (it returns above),
+        # so the move was within one window and the offer stays -- see
+        # _reset_typing_context.
+        self._reset_typing_context(keep_snippet_offer=True)
         _logger.debug("Caret moved without typing — predictions cleared")
 
     def _check_external_click(self) -> None:
@@ -4131,14 +4229,26 @@ class KeyboardBridge(QObject):
         ``_enter_privacy_mode`` (which scrubs for the different reason of
         keeping sensitive input out of the model).
 
-        ``keep_snippet_offer`` is for the outside-click path alone, where
-        the caret moved but the *user* did not go anywhere -- see
-        :meth:`_check_external_click`.  Every other caller wants the
-        default, and privacy mode in particular must keep it.
+        ``keep_snippet_offer`` belongs to the three *within-window*
+        signals -- the outside click, the focused-element change and the
+        caret move -- where the caret moved but the user did not leave
+        the form they are filling in.  All three had to take it, not just
+        the click: they poll on their own timers, so a click that kept
+        the offer was followed 250 ms later by a caret or element poll
+        that withdrew it, and the Save button vanished anyway.  An app
+        switch and privacy mode take the default and still withdraw.
         """
         self._predictions = []
+        # A reset that lands mid-word leaves the word's opening on screen
+        # with nothing tracking it, so what the user types next is a
+        # tail.  See _take_lost_prefix for what learning it would cost.
+        self._word_prefix_lost = bool(self._current_word)
         self._current_word = ""
         self._raw_token = ""
+        # Goes with _raw_token: it names the run last handed to the token
+        # store, and that run is gone.  Left behind, it was the one piece
+        # of reset state `resetContext` cleared and this did not.
+        self._learned_raw_token = ""
         self._clear_token_pills()
         self._pending_auto_cap = False
         # Dropped, not delivered: the punctuation that withheld this
@@ -4510,6 +4620,9 @@ class KeyboardBridge(QObject):
         self._current_word = ""
         self._raw_token = ""
         self._word_typed_under_caps_lock = False
+        # The insert replaced the word outright, so a lost opening
+        # is no longer owed to anything.  Travels with the flag above.
+        self._word_prefix_lost = False
 
         # Refresh predictions
         self._predictions = []
@@ -4650,6 +4763,9 @@ class KeyboardBridge(QObject):
         self._current_word = ""
         self._raw_token = ""
         self._word_typed_under_caps_lock = False
+        # The insert replaced the word outright, so a lost opening
+        # is no longer owed to anything.  Travels with the flag above.
+        self._word_prefix_lost = False
 
         # Show the rest as alternative predictions in case the top guess is wrong.
         self._predictions = display
