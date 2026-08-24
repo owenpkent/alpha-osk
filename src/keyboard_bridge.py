@@ -257,8 +257,19 @@ _GAME_PROCESS_NAMES = frozenset(
         "age2_x2.exe",  # AoE II HD: Forgotten Empires
         "aoe2hd.exe",  # Age of Empires II: HD Edition
         "empires2.exe",  # Age of Empires II (original)
+        # Unreal Editor: play-in-editor polls input like any game, and the
+        # editor runs windowed, so the fullscreen heuristic never catches it.
+        # Deliberate trade-off: the editor's text fields (asset rename, search)
+        # also get the 50 ms hold, which is acceptable latency, while without
+        # it viewport and PIE keys are dropped entirely.
+        "unrealeditor.exe",
     }
 )
+
+# Whole engine families matched by exe suffix rather than by listing titles:
+# every packaged Unreal game ships a "<Project>-Win64-Shipping.exe", so the
+# suffix catches any UE title (windowed included) without naming each one.
+_GAME_EXE_SUFFIXES = ("-win64-shipping.exe",)
 
 
 def _owning_exe_name(hwnd: int) -> Optional[str]:
@@ -408,7 +419,7 @@ def _window_is_game(hwnd: int) -> bool:
         return False
     exe = _owning_exe_name(hwnd)
     if exe is not None:
-        if exe in _GAME_PROCESS_NAMES:
+        if exe in _GAME_PROCESS_NAMES or exe.endswith(_GAME_EXE_SUFFIXES):
             return True
         if exe in _COMPAT_PROCESS_NAMES:
             return False

@@ -640,6 +640,32 @@ class TestGameKeyHold:
         monkeypatch.setattr(keyboard_bridge, "_window_is_borderless_fullscreen", lambda h: True)
         assert keyboard_bridge._window_is_game(999) is True
 
+    def test_unreal_editor_windowed_is_game(self, monkeypatch):
+        # The windowed Unreal Editor must hit the held path (PIE polls input);
+        # the fullscreen heuristic must not be needed.
+        import sys
+
+        from src import keyboard_bridge
+
+        monkeypatch.setattr(sys, "platform", "win32")
+        monkeypatch.setattr(keyboard_bridge, "_owning_exe_name", lambda h: "unrealeditor.exe")
+        monkeypatch.setattr(keyboard_bridge, "_window_is_borderless_fullscreen", lambda h: False)
+        assert keyboard_bridge._window_is_game(999) is True
+
+    def test_unreal_shipping_suffix_is_game(self, monkeypatch):
+        # Any packaged UE title matches by the -Win64-Shipping.exe suffix,
+        # even windowed.
+        import sys
+
+        from src import keyboard_bridge
+
+        monkeypatch.setattr(sys, "platform", "win32")
+        monkeypatch.setattr(
+            keyboard_bridge, "_owning_exe_name", lambda h: "ramms-win64-shipping.exe"
+        )
+        monkeypatch.setattr(keyboard_bridge, "_window_is_borderless_fullscreen", lambda h: False)
+        assert keyboard_bridge._window_is_game(999) is True
+
 
 class TestContextTracking:
     """Context buffer for prediction."""

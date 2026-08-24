@@ -92,7 +92,8 @@ Python status columns reflect `main`; C++ columns reflect the `cpp-rewrite` bran
 6. Compat auto-detect matches on Windows `.exe` basenames (VS Code / JetBrains /
    RDP). The mechanism is Windows-specific today; the Linux/macOS equivalent is
    unbuilt, so it reads as N/A rather than missing. Game key-hold compat shares
-   both halves of that reasoning: it keys off the same exe list plus a Win32
+   both halves of that reasoning: it keys off the same exe list (plus an exe-suffix rule
+   for whole engine families, e.g. Unreal's `-Win64-Shipping.exe`) and a Win32
    borderless-fullscreen probe, and the reason it exists (a key-down+up injected
    in one batch lands between two of the game's input polls) is a `SendInput`
    property, so there is nothing to port to `xdotool` as-is.
