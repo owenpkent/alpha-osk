@@ -429,6 +429,23 @@ _GAME_KEY_HOLD_SECONDS = 0.05
 # to the 200 ms password poll.
 _CLICK_POLL_MS = 50
 
+# How long an outside click is given to prove it moved the caret.
+#
+# The click poll sees the press up to _CLICK_POLL_MS after it happened,
+# and the app it landed in may not have processed it yet, so a caret read
+# taken at that instant can still show the old position.  Deciding there
+# and then would answer "did the caret move" with "not yet", which is the
+# wrong answer to a different question.  So the decision is settled over
+# a short window instead: any change inside it means the caret moved.
+#
+# 200 ms is four poll ticks, generous for a Win32 app to move a caret in
+# response to a click it has already been handed.  The cost of the window
+# is that a genuinely stale bar stays up for that long, which is not
+# reachable in practice: taking it means moving the pointer off whatever
+# was just clicked, back onto a pill, and clicking again, and no hand
+# does that in 200 ms.
+_CLICK_SETTLE_MS = 200
+
 
 # Cursor-movement keys. When a sticky modifier is held, pressing one of
 # these should KEEP Shift/Ctrl held (extend selection / word-jump across
@@ -905,6 +922,19 @@ class KeyboardBridge(QObject):
         # because the check reads the pointer's *current* position, so the
         # closer the reading sits to the press, the less chance the pointer
         # has already travelled back onto the keyboard.
+        # The caret token as of the *previous* click poll, which is the
+        # only baseline that reliably predates a press: the press is
+        # detected as a transition against the previous poll, so the
+        # previous poll's reading is necessarily from before it.
+        # `_last_caret_token` cannot serve here -- it is maintained by
+        # the 4 Hz foreground poll, which lands between a click and its
+        # detection often enough to matter (a 50 ms window in every
+        # 250 ms), and when it does it has already been overwritten with
+        # the post-click value.
+        self._caret_before_click: Optional[str] = None
+        # Set while an outside click is waiting to see whether the caret
+        # moves: (deadline, the caret token to compare against).
+        self._click_settle: Optional[Tuple[float, str]] = None
         self._click_timer = QTimer(self)
         self._click_timer.setInterval(_CLICK_POLL_MS)
         self._click_timer.timeout.connect(self._check_external_click)
@@ -4112,11 +4142,70 @@ class KeyboardBridge(QObject):
         the Save button before the user could travel to it.  An app
         switch and privacy mode still withdraw it, through their own
         calls to :meth:`_reset_typing_context`.
+
+        **Where the caret is readable, the two kinds of click are told
+        apart rather than treated alike.**  A press on a scrollbar or a
+        toolbar button moves no caret, and resetting there costs the
+        next-word suggestion for nothing.  ``caret_position_token`` can
+        answer that, but not at the instant the press is seen: the poll
+        is up to ``_CLICK_POLL_MS`` behind it and the target app may not
+        have handled the click yet, so an immediate read reports the old
+        position for a click that is about to move the caret, which
+        would suppress exactly the reset this signal exists to perform.
+        The decision is therefore settled over ``_CLICK_SETTLE_MS``
+        against a baseline from the *previous* poll (see
+        ``_caret_before_click``), and any change inside that window is a
+        move.
+
+        **Unreadable means reset, and that is what keeps the original
+        fix intact.**  Browsers and Electron apps publish no caret at
+        all, which is the case the click signal was invented for, so
+        there the behaviour is byte-identical to resetting on every
+        press.  The refinement only ever applies where Windows will say
+        plainly whether the caret moved.
         """
-        if not external_click_detected():
+        caret_now = caret_position_token()
+        caret_before, self._caret_before_click = self._caret_before_click, caret_now
+
+        if external_click_detected():
+            self._begin_click_settle(caret_before, caret_now)
+        elif self._click_settle is not None:
+            self._continue_click_settle(caret_now)
+
+    def _begin_click_settle(self, caret_before: Optional[str], caret_now: Optional[str]) -> None:
+        """Decide, or start waiting to decide, about a fresh outside click."""
+        if caret_before is None or caret_now is None:
+            # No caret to reason about: fail closed, the pre-existing
+            # behaviour and the one the browser case depends on.
+            self._clear_click_settle()
+            self._reset_after_outside_click("no caret published")
             return
+        if caret_now != caret_before:
+            # The app was quick: the caret has already moved.
+            self._clear_click_settle()
+            self._reset_after_outside_click("caret moved")
+            return
+        # Unchanged so far, which is not yet an answer.
+        self._click_settle = (time.monotonic() + _CLICK_SETTLE_MS / 1000.0, caret_now)
+
+    def _continue_click_settle(self, caret_now: Optional[str]) -> None:
+        """Watch a pending click until the caret moves or the window ends."""
+        assert self._click_settle is not None
+        deadline, baseline = self._click_settle
+        if caret_now is None or caret_now != baseline:
+            self._clear_click_settle()
+            self._reset_after_outside_click("caret moved")
+            return
+        if time.monotonic() >= deadline:
+            self._clear_click_settle()
+            _logger.debug("Click outside the keyboard left the caret alone: context kept")
+
+    def _clear_click_settle(self) -> None:
+        self._click_settle = None
+
+    def _reset_after_outside_click(self, why: str) -> None:
         self._reset_typing_context(keep_snippet_offer=True)
-        _logger.debug("Click outside the keyboard — predictions cleared")
+        _logger.debug("Click outside the keyboard (%s): predictions cleared", why)
 
     def _get_foreground_window_id(self) -> int:
         """Return the focused-window ID, or 0 if unavailable.

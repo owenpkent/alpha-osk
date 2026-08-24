@@ -3127,6 +3127,131 @@ class TestOutsideClickClearsContext:
         assert bridge._pending_snippet_offer is None
 
 
+class TestAnOutsideClickThatMovesNoCaretIsLeftAlone:
+    """Telling a caret-moving click from a caret-neutral one.
+
+    The click signal is deliberately coarse: it fires on any press
+    outside the keyboard, so a scrollbar or a toolbar button clears the
+    context alongside a click into another field.  Where Windows will
+    say plainly whether the caret moved, it is now asked.
+
+    **The timing is the whole difficulty.**  The poll sees the press up
+    to 50 ms late and the target app may not have handled it yet, so a
+    caret read taken right then reports the old position for a click
+    that is about to move the caret.  Deciding on that read would
+    suppress the very reset this signal exists for, which is why the
+    decision is settled over a window against a baseline from the
+    *previous* poll.
+
+    Every test drives the poll tick by tick, because a version that
+    decides immediately passes any test that only looks at the end
+    state.
+    """
+
+    def _tick(self, bridge: KeyboardBridge, caret, clicked: bool = False) -> None:
+        """One 50 ms poll: *caret* is what the desktop reports this tick."""
+        with (
+            patch("src.keyboard_bridge.caret_position_token", return_value=caret),
+            patch("src.keyboard_bridge.external_click_detected", return_value=clicked),
+        ):
+            bridge._check_external_click()
+
+    def _expire(self, bridge: KeyboardBridge, caret) -> None:
+        """Run the settle window out without the caret ever moving."""
+        bridge._click_settle = (time.monotonic() - 1, caret)
+        self._tick(bridge, caret)
+
+    def test_a_click_that_moves_the_caret_still_clears(self, bridge: KeyboardBridge):
+        """The behaviour the whole signal exists for."""
+        self._tick(bridge, "A,10,20")  # seed the baseline
+        _type(bridge, "hello wor")
+        self._tick(bridge, "A,400,90", clicked=True)  # app was quick
+        assert bridge._context_buffer == ""
+        assert bridge._current_word == ""
+
+    def test_a_click_the_app_has_not_processed_yet_still_clears(self, bridge: KeyboardBridge):
+        """The race, and the reason for the window.
+
+        The app reports the old caret on the tick the press is seen, and
+        moves it a tick later.  Deciding on that first read would keep a
+        context describing a field the caret has left, which is the bug
+        the click signal was added to fix.
+        """
+        self._tick(bridge, "A,10,20")
+        _type(bridge, "hello wor")
+        self._tick(bridge, "A,10,20", clicked=True)  # not moved *yet*
+        assert bridge._context_buffer != "", "decided too early"
+        self._tick(bridge, "A,400,90")  # the app catches up
+        assert bridge._context_buffer == ""
+        assert bridge._current_word == ""
+
+    def test_a_click_that_moves_no_caret_keeps_the_context(self, bridge: KeyboardBridge):
+        """A scrollbar or a toolbar button: the case being rescued."""
+        self._tick(bridge, "A,10,20")
+        _type(bridge, "hello wor")
+        self._tick(bridge, "A,10,20", clicked=True)
+        self._expire(bridge, "A,10,20")
+        assert bridge._context_buffer == "hello "
+        assert bridge._current_word == "wor"
+
+    def test_no_caret_published_clears_exactly_as_before(self, bridge: KeyboardBridge):
+        """Browsers and Electron, which is where this signal earns its keep.
+
+        They publish no caret at all, so there is nothing to reason
+        about and the behaviour has to stay byte-identical to resetting
+        on every press.  If this ever stops holding, the original bug is
+        back in the one place it was actually reported.
+        """
+        self._tick(bridge, None)
+        _type(bridge, "hello wor")
+        self._tick(bridge, None, clicked=True)
+        assert bridge._context_buffer == ""
+        assert bridge._current_word == ""
+
+    def test_a_caret_that_becomes_unreadable_mid_window_clears(self, bridge: KeyboardBridge):
+        """Fail closed on the way out too, not just on the way in.
+
+        Focus landing somewhere with no caret is a move, and treating an
+        unreadable token as "unchanged" would hold the context open on
+        the strength of not knowing.
+        """
+        self._tick(bridge, "A,10,20")
+        _type(bridge, "hello wor")
+        self._tick(bridge, "A,10,20", clicked=True)
+        self._tick(bridge, None)
+        assert bridge._context_buffer == ""
+
+    def test_the_window_does_not_outlive_its_click(self, bridge: KeyboardBridge):
+        """A settled click leaves nothing pending.
+
+        Left behind, the next unrelated tick would be judged against a
+        stale baseline and reset a context nobody clicked away from.
+        """
+        self._tick(bridge, "A,10,20")
+        self._tick(bridge, "A,10,20", clicked=True)
+        assert bridge._click_settle is not None
+        self._expire(bridge, "A,10,20")
+        assert bridge._click_settle is None
+
+    def test_the_baseline_is_the_previous_tick_not_the_foreground_poll(
+        self, bridge: KeyboardBridge
+    ):
+        """`_last_caret_token` cannot serve as the baseline.
+
+        It is maintained by the 4 Hz foreground poll, which lands between
+        a press and its detection often enough to matter, and when it
+        does it already holds the *post*-click value.  Comparing against
+        it would read a genuine move as "unchanged".  Here it is set to
+        the post-click position before the click is even seen, and the
+        reset must still happen.
+        """
+        self._tick(bridge, "A,10,20")  # pre-click baseline, from this poll
+        _type(bridge, "hello wor")
+        bridge._last_caret_token = "A,400,90"  # foreground poll got there first
+        self._tick(bridge, "A,400,90", clicked=True)
+        assert bridge._context_buffer == "", "compared against the wrong baseline"
+
+
 class TestAnInterruptedWordIsNotLearned:
     """A reset mid-word makes the rest of that word a tail, not a word.
 

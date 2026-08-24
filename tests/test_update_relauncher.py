@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import json
+import os
 import time
 from unittest.mock import patch
+
+import pytest
 
 from src import _update_relauncher as relauncher
 
@@ -246,6 +249,108 @@ class TestRunRelauncherIntegration:
         # Handoff should NOT be written if launch failed — would be
         # misleading on the next manual launch.
         assert not (config_dir / "update_handoff.json").is_file()
+
+
+class TestTheRunIsBounded:
+    """Nothing here may outlive its usefulness unnoticed.
+
+    This process is detached and has no console, so an unbounded wait is
+    not a hang anyone sees: it is a process sitting in a task list that
+    nobody opens.  TODO.md used to claim the cause was a missing exit
+    path for an already-dead parent.  That was wrong, and measurably so
+    (``_wait_for_parent_exit`` returns in 0.00 s for a dead pid, and the
+    phases have always summed to a bounded 245 s).  The real waste was
+    narrower: a dev-mode target waits the full new-exe timeout for an
+    mtime that cannot advance.
+    """
+
+    def _argv(self, target_exe, config_dir, parent_pid="999999999"):
+        return [
+            "alpha-osk.exe",
+            "--update-relauncher",
+            "--parent-pid",
+            parent_pid,
+            "--new-version",
+            "1.0.18",
+            "--previous-version",
+            "1.0.17",
+            "--target-exe",
+            str(target_exe),
+            "--config-dir",
+            str(config_dir),
+        ]
+
+    def test_a_dev_target_does_not_wait_for_an_installer(self, tmp_path):
+        """The 185 seconds, measured against the real timeouts.
+
+        Deliberately does *not* patch the timeouts down: patching them
+        would make this pass just as happily against the version that
+        waits, which is the whole thing being tested.
+        """
+        target_exe = tmp_path / "python.exe"
+        target_exe.write_bytes(b"x")
+        started = time.monotonic()
+        rc = relauncher.run_relauncher(self._argv(target_exe, tmp_path / "config"))
+        elapsed = time.monotonic() - started
+        assert rc == 0
+        assert elapsed < 2.0, f"dev target still waited {elapsed:.1f}s"
+
+    def test_a_dev_target_launches_nothing(self, tmp_path):
+        """`python.exe` with no arguments is not the keyboard.
+
+        Launching it would swap one stranded process for another, so the
+        dev-mode path returns without launching at all.
+        """
+        target_exe = tmp_path / "python.exe"
+        target_exe.write_bytes(b"x")
+        launched: list[object] = []
+        with patch.object(relauncher, "_launch_new_osk", lambda t: launched.append(t) or True):
+            relauncher.run_relauncher(self._argv(target_exe, tmp_path / "config"))
+        assert launched == []
+
+    def test_a_real_target_still_waits_and_launches(self, tmp_path):
+        """The inverse, so "always exit early" cannot pass as the fix.
+
+        A real install is `alpha-osk.exe`, which `_is_dev_target` cannot
+        match, and it must still go through the whole flow.
+        """
+        target_exe = tmp_path / "alpha-osk.exe"
+        target_exe.write_bytes(b"x")
+        future = time.time() + 3600
+        os.utime(target_exe, (future, future))
+        launched: list[object] = []
+        with (
+            patch.object(relauncher, "_INSTALLER_GRACE_S", 0),
+            patch.object(relauncher, "_NEW_EXE_TIMEOUT_S", 2),
+            patch.object(relauncher, "_launch_new_osk", lambda t: launched.append(t) or True),
+        ):
+            rc = relauncher.run_relauncher(self._argv(target_exe, tmp_path / "config"))
+        assert rc == 0
+        assert launched == [target_exe]
+
+
+class TestRemaining:
+    """The clamp that keeps the phases summing to the ceiling."""
+
+    def test_a_phase_gets_its_own_budget_when_there_is_room(self):
+        deadline = time.monotonic() + 1000
+        assert relauncher._remaining(deadline, 60) == pytest.approx(60, abs=0.1)
+
+    def test_a_phase_is_clipped_to_what_is_left(self):
+        deadline = time.monotonic() + 5
+        assert relauncher._remaining(deadline, 60) == pytest.approx(5, abs=0.5)
+
+    def test_an_expired_budget_is_zero_not_negative(self):
+        """Negative would be worse than useless.
+
+        Every wait here compares against ``time.monotonic() + timeout``,
+        so a negative budget still works out as "already expired"; but a
+        caller that ever multiplies or sums these would silently get time
+        back. Zero means "check once and give up", which is what an
+        exhausted budget should do.
+        """
+        deadline = time.monotonic() - 30
+        assert relauncher._remaining(deadline, 60) == 0.0
 
 
 class TestIsDevTarget:

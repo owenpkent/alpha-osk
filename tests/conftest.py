@@ -155,11 +155,23 @@ def _unplug_the_live_desktop(monkeypatch: pytest.MonkeyPatch) -> None:
     suite is flaky", passes on re-run, and passes on CI (Linux has no
     detector at all), which is the worst shape a failure can take.
 
-    Both stubs are plain module attributes, so any test that wants the
-    other answer patches the same name and wins.
+    ``caret_position_token()`` is the third, and it reads the same
+    desktop: the click poll now compares it across ticks to tell a click
+    that moved the caret from one that did not.  Stubbed to ``None``,
+    which is the fail-closed answer (no caret published) and therefore
+    the *conservative* one -- a test that does not care about the caret
+    gets the reset-on-every-click behaviour, which is what every test
+    written before that refinement assumed.  Left live, whether the
+    developer happened to have a text cursor blinking somewhere decided
+    whether the reset fired, and the assertions about it would pass or
+    fail per machine.
+
+    All three stubs are plain module attributes, so any test that wants
+    another answer patches the same name and wins.
     """
     monkeypatch.setattr("src.keyboard_bridge.is_password_field", lambda: False)
     monkeypatch.setattr("src.keyboard_bridge.external_click_detected", lambda: False)
+    monkeypatch.setattr("src.keyboard_bridge.caret_position_token", lambda: None)
 
 
 @pytest.fixture(autouse=True)
@@ -173,13 +185,15 @@ def _no_real_update_relauncher(monkeypatch: pytest.MonkeyPatch) -> None:
     to reach it while stubbing only ``_launch_installer``, so every run
     of ``tests/test_updater.py`` left four of these behind.
 
-    They do not clean themselves up.  The helper waits on a
-    ``--parent-pid`` that is gone the moment the pytest worker exits, and
-    it has no exit path for that, so each one sits there forever holding
-    a console window (see ``TODO.md``).  Running the suite a few times
-    leaves a row of empty terminals on screen and a pile of stranded
-    processes -- which is how this was found: they were mistaken for the
-    pre-push hook popping windows.
+    They outlive the run.  The helper is bounded (it always was: a dead
+    ``--parent-pid`` returns from the parent wait immediately, and the
+    phases sum to a ceiling), but "bounded" meant minutes of a detached,
+    console-less process per spawn, and the suite spawned four per run.
+    That is how this was found: a row of empty terminals on screen,
+    mistaken for the pre-push hook popping windows.  The dev-mode path
+    exits promptly now rather than waiting out an installer that does
+    not exist, so the cost is smaller than it was; the guard stays,
+    because a test has no business spawning a detached process at all.
 
     Autouse rather than per-test because the property wanted is "no test
     spawns a real OS process", and that has to hold for tests nobody has
