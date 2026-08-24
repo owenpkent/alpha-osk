@@ -4,9 +4,90 @@ from __future__ import annotations
 
 import os
 import sys
+import zlib
 from pathlib import Path
 
 import pytest
+
+# ----------------------------------------------------------------------
+#  Sharding across machines (--shard-id / --shard-count)
+# ----------------------------------------------------------------------
+#
+# `-n auto` spreads the suite over the cores of ONE machine.  This spreads
+# it over several machines, which is a different axis and the one CI was
+# short of: the runners have 4 cores against a dev box's 16, so the same
+# suite that takes a minute locally took 14 minutes on ubuntu and 19 on
+# windows, and every push waited on the slower of the two.  Both are
+# needed together -- each shard still runs `-n auto` over its own cores.
+#
+# Deliberately not `pytest-split`: it is a fine library, but it wants a
+# recorded durations file to balance well, that file is a build artefact
+# that goes stale silently, and this repo pins every dependency exactly
+# and CVE-scans the lockfiles, so a new one has a real ongoing cost.
+# Assigning by a hash of the node id balances well enough at this size
+# (1600 tests over 4 shards) and has no moving parts.
+#
+# **The hash must be stable across processes, so it cannot be `hash()`.**
+# CPython salts string hashing per process unless PYTHONHASHSEED is set,
+# and every xdist worker inside a shard is its own process: with the
+# builtin, workers would disagree about which tests belong to the shard,
+# which does not fail loudly, it just runs some tests twice and others
+# never.  `zlib.crc32` is stable by definition.
+
+
+def pytest_addoption(parser: pytest.Parser) -> None:
+    group = parser.getgroup("sharding")
+    group.addoption(
+        "--shard-id",
+        type=int,
+        default=None,
+        help="Run only the tests belonging to this shard (0-based). Requires --shard-count.",
+    )
+    group.addoption(
+        "--shard-count",
+        type=int,
+        default=None,
+        help="Total number of shards the suite is split into.",
+    )
+
+
+def shard_bucket(nodeid: str, shard_count: int) -> int:
+    """Which shard *nodeid* belongs to.  Stable across processes.
+
+    Module level and named without a leading underscore so
+    ``tests/test_sharding.py`` can assert the partition property against
+    it: the one way this can fail is silently, by dropping a test from
+    every shard at once, and a suite that quietly runs fewer tests than
+    it collected still reports green.
+    """
+    return zlib.crc32(nodeid.encode("utf-8")) % shard_count
+
+
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    """Keep only this shard's tests, by a stable hash of the node id.
+
+    Deselecting rather than dropping, so the run reports how many tests
+    the shard skipped and a shard that accidentally matches nothing is
+    visible instead of reading as a fast green run.
+    """
+    shard_id = config.getoption("--shard-id")
+    shard_count = config.getoption("--shard-count")
+    if shard_id is None and shard_count is None:
+        return
+    if shard_id is None or shard_count is None:
+        raise pytest.UsageError("--shard-id and --shard-count must be given together")
+    if shard_count < 1:
+        raise pytest.UsageError("--shard-count must be at least 1")
+    if not 0 <= shard_id < shard_count:
+        raise pytest.UsageError(f"--shard-id must be in [0, {shard_count})")
+
+    keep, drop = [], []
+    for item in items:
+        bucket = shard_bucket(item.nodeid, shard_count)
+        (keep if bucket == shard_id else drop).append(item)
+    items[:] = keep
+    config.hook.pytest_deselected(items=drop)
+
 
 # Point Qt's offscreen plugin at the system fonts on Windows.
 #

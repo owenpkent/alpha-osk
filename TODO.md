@@ -11,6 +11,10 @@
 
 - [ ] **The update relauncher never exits when its parent PID is gone.** Its whole job is to wait for a parent to die and then relaunch, but there is no exit path for "the parent is already gone", so it waits indefinitely. Found live: `python -m src.keyboard_app --update-relauncher --parent-pid N` process trees still running with their parent PIDs long dead. The two things that made this *visible* are fixed (each was holding a console window, and the test suite was spawning four of them per run), so what is left is stranded processes nobody sees. Fix is an early exit when the parent PID does not resolve, plus a bounded overall timeout. See the detached-spawn paragraph in `docs/architecture/GOTCHAS.md`.
 
+## Possible improvements
+
+- [ ] **Tell a caret-moving outside click from a caret-neutral one, instead of resetting on both.** `_check_external_click` fires on any press outside the keyboard, so a click on a scrollbar or a toolbar button clears the context along with a click into another field. `caret_position_token()` and `focused_element_token()` are already imported and polled in `keyboard_bridge.py` and answer exactly that question, so in principle the reset could be skipped when a readable token says the caret did not move. **Not done deliberately**, because it has a race that can silently undo the fix the click signal exists for: the click poll reads the pointer within 50 ms of the press, and an app that has not yet processed the click still reports the old caret, which reads as "did not move" and suppresses the reset. Any attempt needs to settle that first (a one-poll deferral is the obvious shape, and is still a guess). The residual cost of the coarse version is now one desynced mirror until the next word boundary, since the tail is no longer learned, so this is an improvement rather than a bug fix.
+
 ## Phase 2: Accessibility Core
 
 - [ ] **Dwell-click support** — Trigger keys by hovering

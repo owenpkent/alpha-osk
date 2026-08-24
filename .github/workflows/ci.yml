@@ -78,13 +78,36 @@ jobs:
       - run: mypy src/ --ignore-missing-imports --platform win32
 
   test:
-    name: Test (${{ matrix.os }})
+    name: Test (${{ matrix.os }} ${{ matrix.shard }}/4)
     runs-on: ${{ matrix.os }}
     permissions:
       contents: read
     strategy:
+      # One shard failing must not cancel its siblings. The default
+      # (fail-fast: true) cancelled the whole matrix on the first red,
+      # which cost real signal: a single flaky ubuntu test took the
+      # windows job down with it and the run reported two failures when
+      # there was one, with nothing to say whether windows would have
+      # passed. Every shard runs to completion now.
+      fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
+        # Sharded across machines, on top of `-n auto` sharding across
+        # each machine's cores. The two axes are different and both are
+        # needed: the runners have 4 cores against a dev box's 16, so a
+        # suite that takes a minute locally took 14 minutes here on
+        # ubuntu and 19 on windows, and every push waited on the slower
+        # of the two. The split is by a stable hash of the test node id
+        # (tests/conftest.py::pytest_collection_modifyitems), so it needs
+        # no recorded-durations artefact to stay balanced and no new
+        # dependency to maintain.
+        #
+        # Raising this number is the lever if the suite grows: 4 was
+        # measured, not guessed. Below about 4 the per-shard fixed cost
+        # (runner start, checkout, pip install: roughly 40 s with the
+        # cache warm) is lost in the noise; far above it that cost starts
+        # to dominate what each shard actually runs.
+        shard: [0, 1, 2, 3]
         python-version: ["3.11"]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -93,6 +116,12 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: ${{ matrix.python-version }}
+          # Sharding multiplies the number of times this job installs its
+          # dependencies by four, so the install stops being a rounding
+          # error and starts being per-shard overhead. PySide6 alone is a
+          # ~100 MB wheel and took 52 s on the windows runner.
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
       # PySide6 ships its own Qt, but Qt still dlopens the host's GL/EGL and
       # xkb libraries, which the runner image does not carry. Without these
       # `from PySide6.QtGui import ...` raises ImportError: libEGL.so.1 at
@@ -149,8 +178,125 @@ jobs:
       #
       # pytest-cov combines the workers' data before --cov-fail-under is
       # evaluated, so the coverage gate is unaffected.
+      #
+      # `--cov-fail-under` cannot live here any more: each shard only
+      # runs a quarter of the suite, so each would measure roughly a
+      # quarter of the lines and every shard would fail the gate. The
+      # data files are uploaded instead and the `coverage` job below
+      # combines them per OS and applies the threshold to the whole.
       - name: Run tests
-        run: python -m pytest -n auto --cov=src --cov-report=term-missing --cov-fail-under=60
+        run: >-
+          python -m pytest -n auto
+          --shard-id ${{ matrix.shard }} --shard-count 4
+          --cov=src --cov-report=
+      # Named for combine's benefit: `coverage combine` only picks up
+      # files matching `.coverage.*`.
+      - name: Name the coverage data for this shard
+        run: python -c "import os; os.replace('.coverage', '.coverage.${{ matrix.os }}.${{ matrix.shard }}')"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: coverage-${{ matrix.os }}-${{ matrix.shard }}
+          path: .coverage.${{ matrix.os }}.${{ matrix.shard }}
+          # Not optional: the file starts with a dot, and upload-artifact
+          # has excluded hidden files by default since v4.4. Without this
+          # every upload here is empty, the combine job below finds no
+          # data, and the coverage gate silently stops gating.
+          include-hidden-files: true
+          retention-days: 1
+
+  # The coverage gate, which the sharded test jobs can no longer apply
+  # themselves. Matrixed per OS rather than combining both, because a
+  # coverage data file records absolute source paths: the two runners
+  # disagree about those, and combining across them either drops one
+  # side's measurements or needs a `[paths]` remap that would have to be
+  # kept in step with two runner images. Per OS, the workspace path is
+  # identical across shards and no remapping is involved.
+  #
+  # **Which is why this runs on `matrix.os`, not on ubuntu.** Same
+  # reason, one step further, and it is easy to miss because the job
+  # only reads files: combining is not path-neutral either. Written as
+  # `runs-on: ubuntu-latest` it fed the windows shards' data to a linux
+  # box, which joined the recorded absolute paths onto its own workspace
+  # and reported a `No source for code` error naming a windows
+  # workspace path joined onto a linux one. The combine has to happen
+  # where the data was produced.
+  #
+  # Gating per OS also preserves exactly what the unsharded jobs
+  # promised: each platform's own run had to clear 60% on its own, and
+  # each still does. That matters because the `if sys.platform ==
+  # "win32"` bodies are measured on precisely one of the two.
+  coverage:
+    name: Coverage (${{ matrix.os }})
+    needs: test
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+      # Pinned like every other tool version here, and kept in step with
+      # what pytest-cov==7.1.0 resolves to, so a coverage release cannot
+      # turn this red on a tree nobody touched.
+      - run: pip install coverage==7.15.1
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: coverage-${{ matrix.os }}-*
+          path: coverage-data
+          merge-multiple: true
+      # `shell: bash` explicitly, because this now runs on windows too
+      # and the default there is pwsh, which does not stop on the first
+      # failing command: GitHub only checks the *last* exit code, so a
+      # failed `combine` followed by a `report` that happens to succeed
+      # would pass the step. bash is present on both runners and `-e`
+      # is what makes the two lines a gate rather than a suggestion.
+      - name: Combine and check
+        shell: bash
+        run: |
+          coverage combine coverage-data
+          coverage report --show-missing --fail-under=60
+
+  # One stable check name for branch protection to require.
+  #
+  # Required status checks are configured by *name*, in the repo's
+  # settings rather than in this file, so a sharded matrix would
+  # otherwise mean listing all eight shards there and re-configuring
+  # protection on every change to the shard count. A stale entry does
+  # not fail loudly: the named check simply never reports, and every PR
+  # blocks for ever on something that cannot go green. That is exactly
+  # what sharding did to `Test (ubuntu-latest)` and
+  # `Test (windows-latest)`, which are the names this job replaces.
+  #
+  # `needs` alone is not sufficient, and the reason is the part worth
+  # remembering: a job whose dependency fails or is cancelled is
+  # *skipped*, and a skipped check is not a failed one. Required checks
+  # treat it as still-pending rather than red, so without `if: always()`
+  # plus the explicit assertions below, the gate would go quiet at
+  # precisely the moment it is supposed to be loud.
+  #
+  # `needs.<job>.result` for a matrix job is the aggregate: success only
+  # when every shard succeeded.
+  tests-passed:
+    name: Tests
+    needs: [test, coverage]
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Check the shard and coverage results
+        run: |
+          echo "test shards: ${{ needs.test.result }}"
+          echo "coverage:    ${{ needs.coverage.result }}"
+          [ "${{ needs.test.result }}" = "success" ] || exit 1
+          [ "${{ needs.coverage.result }}" = "success" ] || exit 1
 
   # Reads the committed lockfiles (requirements-dev.txt for Python,
   # backend/cf-worker/package-lock.json for the worker) and queries

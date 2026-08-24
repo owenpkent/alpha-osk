@@ -2966,41 +2966,45 @@ class TestOutsideClickClearsContext:
         self._click(bridge, outside=False)
         assert bridge._context_buffer == "dear bob "
 
-    def test_never_mid_word(self, bridge: KeyboardBridge):
-        """Same guard ``_check_caret_moved`` carries, same reason: a reset
-        mid-word clears ``_current_word`` while the partial word is still
-        on screen, so the next pill tap inserts the whole word beside it.
-        Clicks that don't move the caret (a toolbar button, a scrollbar)
-        are exactly where that would bite."""
-        bridge._context_buffer = "hello "
-        bridge._current_word = "wor"
-        self._click(bridge, outside=True)
-        assert bridge._context_buffer == "hello "
-        assert bridge._current_word == "wor"
+    def test_a_mid_word_click_clears_immediately(self, bridge: KeyboardBridge):
+        """The reversal, and the case the old guard withheld.
 
-    def test_a_mid_word_click_is_held_not_dropped(self, bridge: KeyboardBridge):
-        """The click is an edge, so discarding it discards it for good.
+        ``_check_caret_moved``'s "only between words" rule used to apply
+        here too, which meant the reset was suppressed at the moment it
+        was most needed: a partial word is exactly when the bar is full
+        of completions for the field the caret has just left.  Deferring
+        to the next word boundary did not help either, because that
+        boundary only arrives after the user finishes the word.
 
-        The caret and element tokens are *levels* -- an unread change is
-        still there to compare at the next poll.  A press is not.  Type
-        "hel", click into another field, finish the word, and the stale
-        context would drive every pill from then on with nothing left to
-        notice it.  So the reset waits for the word boundary instead.
+        The bar is driven by typing rather than assigned, because
+        ``_predictions`` starts out ``[]``: asserting it is empty after a
+        reset that was never given anything to clear is the unfalsifiable
+        shape this file's own notes warn about, and passes with the emit
+        deleted.
         """
-        bridge._context_buffer = "hello "
-        bridge._current_word = "wor"
+        _type(bridge, "hello wor")
+        assert bridge._predictions, "the bar has to be full for the clear to mean anything"
         self._click(bridge, outside=True)
-        bridge._current_word = ""  # the user finished the word
-        self._click(bridge, outside=False)  # no new click, just the next poll
         assert bridge._context_buffer == ""
+        assert bridge._current_word == ""
+        assert bridge._predictions == []
 
-    def test_a_held_click_is_dropped_once_the_context_goes(self, bridge: KeyboardBridge):
-        """An app switch already cleared it; nothing is left to clear."""
-        bridge._context_buffer = "hello "
-        bridge._current_word = "wor"
+    def test_a_pill_after_a_mid_word_click_inserts_no_suffix(self, bridge: KeyboardBridge):
+        """The measured harm the old guard left in place.
+
+        With "hel" still in ``_current_word`` and the caret in another
+        field, the suffix-only insert path typed "lo " into that field:
+        the abandoned word's tail, in a box that never held its head.
+        Clearing on the click empties the bar, and a tap that arrives
+        anyway (QML is free to drift) can only be a whole word.
+        """
+        _type(bridge, "hel")
         self._click(bridge, outside=True)
-        bridge._reset_typing_context()
-        assert bridge._external_click_pending is False
+        assert bridge._predictions == []
+        bridge._synth.reset_mock()
+        bridge.pressPrediction("hello")
+        sent = [c[1][0] for c in bridge._synth.method_calls if c[0] == "send_text"]
+        assert sent == ["hello "], f"expected the whole word, got {sent}"
 
     def test_a_live_snippet_offer_survives(self, bridge: KeyboardBridge, tmp_path):
         """Clicking the next field of a form must not close the Save button.
@@ -3008,10 +3012,6 @@ class TestOutsideClickClearsContext:
         The offer is about a value the user typed, not about where the
         caret is, and typing an email then clicking the next field is the
         single most likely thing to happen right after one is raised.
-        The "only between words" guard cannot protect it either:
-        ``_maybe_offer_snippet`` runs at word boundaries, after
-        ``_current_word`` is cleared, so an offer is only ever live while
-        that guard is a no-op.
         """
         from src.snippets import SnippetStore
 
@@ -3039,6 +3039,219 @@ class TestOutsideClickClearsContext:
         _type(bridge, "write to owen@example.com ")
         bridge._reset_typing_context()
         assert bridge._pending_snippet_offer is None
+
+    def test_the_offer_survives_the_caret_poll_that_follows(self, bridge: KeyboardBridge, tmp_path):
+        """The click keeps the offer; the poll 250 ms later has to as well.
+
+        Four signals watch for a moved caret and each runs on its own
+        timer, so driving one in isolation says nothing about what the
+        user ends up seeing.  Clearing ``_current_word`` on the click is
+        precisely what unlocks ``_check_caret_moved``'s "only between
+        words" guard, so the very next caret poll reset again with the
+        default ``keep_snippet_offer=False`` and closed the Save button
+        the click path had just gone out of its way to keep open.
+        """
+        from src.snippets import SnippetStore
+
+        bridge._snippets = SnippetStore(tmp_path / "snippets.json")
+        bridge._snippets.load()
+        withdrawn: list[bool] = []
+        bridge.snippetOfferWithdrawn.connect(lambda: withdrawn.append(True))
+        _type(bridge, "write to owen@example.com ")
+        _type(bridge, "than")  # the click lands mid-word, as it usually does
+        assert bridge._pending_snippet_offer is not None
+        with patch("src.keyboard_bridge.caret_position_token", return_value="A,10,20"):
+            bridge._check_caret_moved(False)  # seed the baseline
+        self._click(bridge, outside=True)
+        with patch("src.keyboard_bridge.caret_position_token", return_value="A,400,90"):
+            bridge._check_caret_moved(False)
+        assert bridge._pending_snippet_offer is not None
+        assert withdrawn == []
+
+    def test_the_offer_survives_a_focused_element_change(
+        self, bridge: KeyboardBridge, tmp_path, monkeypatch
+    ):
+        """The Chrome case, and the same rule: one window, one form.
+
+        The element token moves from the email box to the next input
+        while ``GetForegroundWindow`` never changes, which is the single
+        most likely thing to happen right after an address is typed.
+        """
+        from src.snippets import SnippetStore
+
+        bridge._snippets = SnippetStore(tmp_path / "snippets.json")
+        bridge._snippets.load()
+        _type(bridge, "write to owen@example.com ")
+        assert bridge._pending_snippet_offer is not None
+        bridge._last_foreground_hwnd = 100
+        bridge._last_focus_token = "A"
+        monkeypatch.setattr(bridge, "_get_foreground_window_id", lambda: 100)
+        monkeypatch.setattr("src.keyboard_bridge.focused_element_token", lambda: "B")
+        bridge._check_foreground_window()
+        assert bridge._context_buffer == ""  # the reset did run
+        assert bridge._pending_snippet_offer is not None
+
+    def test_a_withdrawn_offer_can_be_raised_again(self, bridge: KeyboardBridge, tmp_path):
+        """A withdrawal is not an answer, so it must not burn the value.
+
+        ``_offered_snippet_values`` is the don't-nag ledger and it used
+        to be written the moment the toast went up.  Anything that took
+        the toast away before the user could reach it -- a poll, an app
+        switch, privacy mode -- therefore made that address unofferable
+        for the rest of the session.
+        """
+        from src.snippets import SnippetStore
+
+        bridge._snippets = SnippetStore(tmp_path / "snippets.json")
+        bridge._snippets.load()
+        _type(bridge, "write to owen@example.com ")
+        assert bridge._pending_snippet_offer is not None
+        bridge._withdraw_snippet_offer()
+        _type(bridge, "again owen@example.com ")
+        assert bridge._pending_snippet_offer is not None
+
+    def test_a_dismissed_offer_stays_dismissed(self, bridge: KeyboardBridge, tmp_path):
+        """The inverse, so "never remember" cannot pass as the fix.
+
+        Dismissing is an answer, and the toast's own 8 s timeout comes
+        through the same slot, so without the ledger the next word
+        boundary would put the same toast straight back.
+        """
+        from src.snippets import SnippetStore
+
+        bridge._snippets = SnippetStore(tmp_path / "snippets.json")
+        bridge._snippets.load()
+        _type(bridge, "write to owen@example.com ")
+        bridge.dismissSnippetOffer()
+        _type(bridge, "again owen@example.com ")
+        assert bridge._pending_snippet_offer is None
+
+
+class TestAnInterruptedWordIsNotLearned:
+    """A reset mid-word makes the rest of that word a tail, not a word.
+
+    The outside-click reset accepts a false positive: a click that does
+    not move the caret (a scrollbar, a toolbar button) clears
+    ``_current_word`` while its characters are still on screen.  The
+    documented cost of that is a desynced mirror, which is transient.
+    Learning the tail is not: it reaches ``user_vocab``, the analytics
+    word table, the dashboard's Top Words and the Data Backup archive,
+    and prefix-matches to the top of the pill bar for ever after.
+
+    Every case here types its word **three** times, because an unknown
+    word only promotes into ``user_vocab`` on its third sighting: a
+    one-shot version of these assertions passes whether or not the gate
+    exists, which is the unfalsifiable shape this file's own notes warn
+    about.
+    """
+
+    SIGHTINGS = 3
+
+    def _interrupt(self, bridge: KeyboardBridge) -> None:
+        with patch("src.keyboard_bridge.external_click_detected", return_value=True):
+            bridge._check_external_click()
+
+    def _interrupted(self, bridge: KeyboardBridge, head: str, tail: str) -> None:
+        """Type *head*, take a caret-neutral outside click, finish *tail*."""
+        for _ in range(self.SIGHTINGS):
+            _type(bridge, head)
+            self._interrupt(bridge)
+            _type(bridge, tail)
+
+    def test_the_tail_after_a_space_is_not_learned(self, bridge: KeyboardBridge):
+        self._interrupted(bridge, "docu", "mentation ")
+        ngram = bridge._predictor._ngram
+        assert "mentation" not in ngram.user_vocab
+        assert ngram.unigrams.get("mentation", 0) == 0
+        assert bridge._analytics._word_freq.get("mentation", 0) == 0
+
+    def test_the_tail_is_not_offered_as_a_pill(self, bridge: KeyboardBridge):
+        """What the user actually sees when a fragment gets in.
+
+        The measured symptom was "mentation" arriving at rank 1 for
+        every later "ment", which is the point at which model pollution
+        stops being an abstraction.
+        """
+        self._interrupted(bridge, "docu", "mentation ")
+        _type(bridge, "ment")
+        assert "mentation" not in bridge._predictions
+
+    def test_the_tail_after_a_full_stop_is_not_learned(self, bridge: KeyboardBridge):
+        """The second learning boundary: "." hands the sentence to learn()."""
+        self._interrupted(bridge, "docu", "mentation.")
+        assert "mentation" not in bridge._predictor._ngram.user_vocab
+
+    def test_the_tail_before_return_is_not_learned(self, bridge: KeyboardBridge):
+        """The third: Return learns the sentence buffer the same way."""
+        for _ in range(self.SIGHTINGS):
+            _type(bridge, "docu")
+            self._interrupt(bridge)
+            _type(bridge, "mentation")
+            bridge.pressSpecialKey("return")
+        assert "mentation" not in bridge._predictor._ngram.user_vocab
+
+    def test_a_comma_does_not_smuggle_the_tail_into_the_sentence(self, bridge: KeyboardBridge):
+        """A comma ends the word without learning, but banks it for later.
+
+        ``_sentence_buffer`` is what the *next* boundary hands to
+        ``learn()``, so a fragment parked there arrives one keystroke
+        late rather than not at all.
+        """
+        self._interrupted(bridge, "docu", "mentation, yes ")
+        assert "mentation" not in bridge._predictor._ngram.user_vocab
+
+    def test_a_hyphen_does_not_smuggle_the_tail_into_the_sentence(self, bridge: KeyboardBridge):
+        """Same for the word-internal boundaries, which bank it too."""
+        self._interrupted(bridge, "docu", "mentation-heavy ")
+        assert "mentation" not in bridge._predictor._ngram.user_vocab
+
+    def test_the_tail_still_reaches_the_context_buffer(self, bridge: KeyboardBridge):
+        """It is suppressed from the model, not from the screen mirror.
+
+        ``_context_buffer`` has to match what was typed or backspace pops
+        characters that are not there and a pill inserts against a prefix
+        that is not on screen.
+        """
+        _type(bridge, "docu")
+        self._interrupt(bridge)
+        _type(bridge, "mentation ")
+        assert bridge._context_buffer == "mentation "
+
+    def test_the_same_tail_typed_whole_is_learned(self, bridge: KeyboardBridge):
+        """The inverse that makes the cases above falsifiable.
+
+        "mentation" is an ordinary unknown-but-plausible word: typed
+        without the interruption it promotes on its third sighting, so
+        every assertion above is testing the gate rather than the
+        promotion rule.
+        """
+        for _ in range(self.SIGHTINGS):
+            _type(bridge, "mentation ")
+        assert "mentation" in bridge._predictor._ngram.user_vocab
+
+    def test_the_next_word_is_learned_normally(self, bridge: KeyboardBridge):
+        """The suppression covers exactly one word.
+
+        Left armed it would quietly stop the model learning anything
+        after the first outside click of the session.
+        """
+        for _ in range(self.SIGHTINGS):
+            _type(bridge, "docu")
+            self._interrupt(bridge)
+            _type(bridge, "mentation flurgen ")
+        assert "flurgen" in bridge._predictor._ngram.user_vocab
+
+    def test_a_word_typed_after_a_between_words_click_is_learned(self, bridge: KeyboardBridge):
+        """A click that lands *between* words interrupts nothing.
+
+        The flag is armed off ``_current_word`` being non-empty, so the
+        common case -- a click while no word is in progress -- must not
+        cost the next word its learning.
+        """
+        for _ in range(self.SIGHTINGS):
+            self._interrupt(bridge)
+            _type(bridge, "flurgen ")
+        assert "flurgen" in bridge._predictor._ngram.user_vocab
 
 
 class TestCursorMotionClearsContext:
@@ -3761,3 +3974,54 @@ class TestTokenPillsAreNotWordModelObjects:
         bridge.resetContext()
         assert bridge._token_pill_words == set()
         assert bridge._token_pill_typed == ""
+
+
+class TestTheClearContextRingClearsEverything:
+    """``resetContext`` and ``_reset_typing_context`` are one block now.
+
+    They were two hand-written copies of the same field list, and they
+    had drifted in both directions: the ring cleared
+    ``_learned_raw_token`` and the shared reset did not, while the shared
+    reset cleared ``_pending_auto_cap`` and the ring did not.  That is
+    the parallel-blocks failure this codebase documents for sticky
+    modifiers, so the fix is the one it prescribes: one method, every
+    caller through it.
+    """
+
+    def test_the_ring_drops_a_pending_capital(self, bridge: KeyboardBridge) -> None:
+        """The user-visible half of the drift.
+
+        Type "hello." with auto-capitalize on and a capital is owed to
+        the next character.  Tapping the ring says "forget where I am",
+        and the capital used to survive it: the next letter came out
+        uppercase in a context the user had just cleared.
+        """
+        bridge.setAutoCapitalizeAfterPunctuation(True)
+        _type(bridge, "hello.")
+        assert bridge._pending_auto_cap is True
+        bridge.resetContext()
+        assert bridge._pending_auto_cap is False
+
+    def test_the_shared_reset_drops_the_learned_token_marker(self, bridge: KeyboardBridge) -> None:
+        """The other half, in the other direction.
+
+        ``_learned_raw_token`` names the run last handed to the token
+        store so one user action cannot count as two sightings.  It goes
+        with ``_raw_token``, which this reset already cleared, and the
+        reset now fires on every outside click.
+        """
+        _type(bridge, "555-1234 ")
+        assert bridge._learned_raw_token == "555-1234"
+        bridge._reset_typing_context()
+        assert bridge._learned_raw_token == ""
+
+    def test_the_ring_still_clears_what_it_always_did(self, bridge: KeyboardBridge) -> None:
+        """The inverse: delegating must not quietly drop a field."""
+        _type(bridge, "hello wor")
+        bridge.resetContext()
+        assert bridge._current_word == ""
+        assert bridge._context_buffer == ""
+        assert bridge._sentence_buffer == ""
+        assert bridge._raw_token == ""
+        assert bridge._learned_raw_token == ""
+        assert bridge._predictions == []

@@ -262,7 +262,9 @@ Six guards, all of which exist because the failure mode is offering to store the
 
 `_offered_snippet_values` is the don't-nag ledger. It is a dict used as an ordered set so `_remember_offered` can bound it at `_MAX_REMEMBERED_OFFERS` (64): it holds emails, phone numbers and addresses the user typed, so it is not allowed to accumulate for a whole session. Overflowing costs at most a re-offer of something dismissed long ago.
 
-`_withdraw_snippet_offer` fires from `_reset_typing_context`, so an app switch, a focused-element change and entering privacy mode all drop a pending offer. It is also what `setSnippetDetection(False)` calls: turning the feature off while a toast is up must take the toast with it, and clearing only the Python side left a Save button that reported **"Snippets are full"** when tapped, because `acceptSnippetOffer` returns False for "no offer pending" and for the cap alike. It **emits `snippetOfferWithdrawn`** rather than only clearing the Python side, because the toast lives in QML on its own timer and would otherwise sit there with a Save button that silently does nothing. This is also what stops an offer raised just before focus landed on a password field from remaining savable: privacy mode has to mean "stop doing this", not "stop starting new ones".
+**It is written when the user *answers* an offer (`acceptSnippetOffer` / `dismissSnippetOffer`), never when one is raised.** Recording it at raise time made every withdrawal permanent: a caret poll, an app switch or privacy mode took the toast away and the address became unofferable for the rest of the session, so retyping it never brought the Save button back. A withdrawal is not an answer. The toast's own 8 s timeout does come through `dismissSnippetOffer`, because ignoring an offer is one. Guarded by the pair `test_a_withdrawn_offer_can_be_raised_again` / `test_a_dismissed_offer_stays_dismissed`.
+
+`_withdraw_snippet_offer` fires from `_reset_typing_context` whenever `keep_snippet_offer` is not set, so an app switch and entering privacy mode drop a pending offer (the three within-window signals deliberately do not; see *Clearing stale context* above). It never writes the don't-nag ledger, because the user did not answer. It is also what `setSnippetDetection(False)` calls: turning the feature off while a toast is up must take the toast with it, and clearing only the Python side left a Save button that reported **"Snippets are full"** when tapped, because `acceptSnippetOffer` returns False for "no offer pending" and for the cap alike. It **emits `snippetOfferWithdrawn`** rather than only clearing the Python side, because the toast lives in QML on its own timer and would otherwise sit there with a Save button that silently does nothing. This is also what stops an offer raised just before focus landed on a password field from remaining savable: privacy mode has to mean "stop doing this", not "stop starting new ones".
 
 **`acceptSnippetOffer` returns a bool and QML must honour it.** `SnippetStore.add` refuses past `MAX_SNIPPETS` (50) and reports it by returning False, so at the cap the save used to do nothing at all while the UI flashed "Saved" and the user walked away believing their email was stored. QML now flashes the confirmation only on True, and shows `snippetsFullToast` otherwise.
 
@@ -683,17 +685,66 @@ with `PYTEST_XDIST_WORKER`. Any new test touching QSettings, the
 registry, a fixed temp path, or any other machine-global resource has to
 key it per worker the same way.
 
-**CI shards too now** (`-n auto` in `.github/workflows/ci.yml`). It was
-left serial on the argument that it is the release gate and its runners
-have far fewer cores. The cores are real, 4 against 16, but the argument
-was wrong about where the time goes: the run is dominated by per-test
-setup repeated ~1550 times, which shards almost linearly whatever the
-core count. Serial it took **26 minutes**, which is long enough that
-pushing a few commits in a row starts several runs at once, and the
-stale ones each hold a runner for their full length before reporting a
-failure that was fixed two commits earlier. `pytest-cov` combines the
-workers' data before `--cov-fail-under` is evaluated, so the coverage
-gate is unaffected.
+**CI shards on two axes, and they are different axes.** `-n auto`
+spreads the suite over one machine's cores; `--shard-id N
+--shard-count M` spreads it over several machines. CI does both.
+
+Across cores came first, and the argument for leaving it serial was
+that CI is the release gate and its runners have far fewer cores. The
+cores are real, 4 against 16, but the argument was wrong about where
+the time goes: the run is dominated by per-test setup repeated ~1600
+times, which shards almost linearly whatever the core count. Serial it
+took **26 minutes**.
+
+Across machines came second, because 4 cores is still 4 cores: after
+`-n auto`, ubuntu took **14m30s** and windows **19m05s**, with every
+push waiting on the slower. Dependency install was 15 s and 52 s
+respectively and lint / typecheck / OSV are all under 30 s, so there
+was nothing else to cut. The matrix is now `os x shard[0..3]`, eight
+jobs, each still `-n auto` over its own cores.
+
+The split lives in `tests/conftest.py::pytest_collection_modifyitems`:
+a test belongs to shard `crc32(nodeid) % count`. Deliberately not
+`pytest-split`, which wants a recorded-durations file that goes stale
+silently and is one more exactly-pinned, CVE-scanned dependency; at
+1600 tests over 4 shards a hash balances to within about 6% (measured:
+377 / 389 / 421 / 421) with no moving parts. **The hash cannot be
+`hash()`**: CPython salts string hashing per process, every xdist
+worker inside a shard is its own process, and workers disagreeing about
+which tests are theirs does not fail loudly, it runs some tests twice
+and others never.
+
+**`--cov-fail-under` moved out of the test jobs**, because a shard
+measures roughly a quarter of the lines and every shard would fail the
+gate. Each shard uploads its `.coverage.<os>.<shard>` and a separate
+`coverage` job combines and applies the threshold. Two things about it
+are load-bearing: `include-hidden-files: true` on the upload (the file
+starts with a dot, and upload-artifact has excluded hidden files since
+v4.4, so without it every upload is empty and the gate silently stops
+gating), and the combine is **per OS**, since a coverage data file
+records absolute source paths and the two runners disagree about
+those. Per OS also preserves what the unsharded jobs promised: each
+platform had to clear 60% on its own, and the `if sys.platform ==
+"win32"` bodies are measured on exactly one of the two.
+
+`fail-fast: false` on the matrix: the default cancelled every sibling
+on the first red, so one flaky ubuntu test took the windows job down
+with it and the run reported two failures where there was one, with
+nothing to say whether windows would have passed.
+
+**Branch protection requires the `Tests` job, not the shards.** Required
+status checks are configured by *name*, in the repo settings rather
+than in the workflow file, so naming the shards there would mean
+re-configuring protection on every change to the shard count. A stale
+entry does not fail loudly: the named check never reports and every PR
+blocks for ever on something that cannot go green, which is what
+sharding did to the old `Test (ubuntu-latest)` / `Test (windows-latest)`
+entries. `tests-passed` is a one-step job that asserts
+`needs.test.result` and `needs.coverage.result`, and it carries
+`if: always()` because a job whose dependency failed is *skipped*, and
+a skipped required check reads as pending rather than red: without it
+the gate goes quiet exactly when it should be loud. The required set is
+now Lint, Type Check, Tests, OSV Scanner.
 
 The workflow also sets `concurrency: group: ci-${{ github.ref }}` with
 `cancel-in-progress: true`, so a new push supersedes the run it replaces
@@ -785,18 +836,26 @@ Six independent signals, each catching what the ones before it cannot. The first
 
 Both (2) and (3) treat `None` as "don't know" and leave state untouched, so a transient failure never wipes context. That is correct in isolation and adds up to a hole: browsers and Electron apps expose one UIA element for a whole document *and* publish no caret, so both fail closed at once and clicking from one field to another in a single window had no signal at all. That is exactly the case (4) exists for, and it is why the fallback is a click rather than a better token: a click is observable in every app, no accessibility cooperation required.
 
-(4) is deliberately coarser than the signals it backs up. A click on a toolbar button or a scrollbar does not move the caret, and resetting there costs the next-word prediction the user would have got. That trade is worth taking because the failure it replaces is worse: context describing a field the caret has left produces pills that insert the wrong text into the field it is now in. It carries the same **only between words** guard as `_check_caret_moved`, and for the same reason (see below); clicks that don't move the caret are exactly where the mid-word duplication would bite.
+(4) is deliberately coarser than the signals it backs up. A click on a toolbar button or a scrollbar does not move the caret, and resetting there costs the next-word prediction the user would have got. That trade is worth taking because the failure it replaces is worse: context describing a field the caret has left produces pills that insert the wrong text into the field it is now in. It deliberately does **not** carry `_check_caret_moved`'s **only between words** guard; see the paragraph below for why that was reversed.
 
-**Mid-word the click is held, not dropped** (`_external_click_pending`). This is the one place (4) cannot copy (2) and (3): those are *levels*, so an unread change is still there to compare at the next poll, while a press is an *edge* and discarding it discards the reset for good. Type `hel`, click into another field, finish the word, and the stale context would drive every pill from then on with nothing left to notice it. Detection keeps running every 50 ms (which is what keeps the pointer position fresh enough to attribute the click); only the reset waits for the word boundary. `_reset_typing_context` clears the flag, so a reset from any other signal leaves nothing pending.
+**(4) fires mid-word, and that is a reversal of the original design.** It used to carry `_check_caret_moved`'s only-between-words guard, and mid-word clicks were held in an `_external_click_pending` flag to be acted on at the next word boundary. Both are gone. The guard suppressed the reset at the moment it was most needed, because a partial word is exactly when the bar is full of completions for the field the caret has just left: with `hel` typed and the caret clicked into another field, tapping the `hello` pill sent `lo ` into that field (measured, not theorised). Deferring to the word boundary did not rescue it either, since that boundary only arrives once the user finishes the word, by which point the wrong text is in. The flag is deleted rather than left inert: a reset that always happens immediately has nothing to hold.
 
-**A live snippet offer survives this reset alone.** `_check_external_click` passes `keep_snippet_offer=True`; every other caller takes the default, and privacy mode in particular must. The offer describes a value the user typed rather than a caret position, and clicking the next field of the same form is the single most likely thing to happen right after an email address is typed, so withdrawing here closed the Save button before the user could travel to it. The "only between words" guard cannot protect it either: `_maybe_offer_snippet` runs at word boundaries, *after* `_current_word` is cleared, so an offer is only ever live while that guard is a no-op. An app switch still withdraws it through `_check_foreground_window`'s own reset.
+What the guard protected is real but rare **here specifically**: a click that does *not* move the caret desyncs `_current_word` from the screen, so a later pill completes against a prefix that is only part of what is there (`hel`, then a typed `lo`, then a tapped `look`, gives `hellook`). Reaching that costs leaving the keyboard, clicking something caret-neutral in another app, and returning mid-word, because mid-word the pointer is on the keyboard and own-window clicks are filtered by process id. Clicking into another field mid-word is ordinary. Both directions corrupt text; this one corrupts it far less often. **`_check_caret_moved` keeps its own guard** (see below), because scrolling drags the caret rectangle without moving the caret in the text and that false positive lands mid-word constantly.
+
+**A live snippet offer survives every *within-window* reset.** `keep_snippet_offer=True` is passed by all three of the outside click, the focused-element change and the caret move; the app switch and privacy mode take the default and still withdraw. The offer describes a value the user typed rather than a caret position, and clicking the next field of the same form is the single most likely thing to happen right after an email address is typed, so withdrawing there closed the Save button before the user could travel to it.
+
+**It has to be all three, and that follows from the reversal above rather than being an independent choice.** Clearing `_current_word` on the click is exactly what unlocks `_check_caret_moved`'s only-between-words guard, so a click that kept the offer was followed within 250 ms by a caret poll that reset again on the default and withdrew it anyway; the focused-element branch had no `_current_word` guard at all, which is the Chrome case. Each of these polls is testable in isolation and proves nothing that way, so `TestOutsideClickClearsContext::test_the_offer_survives_the_caret_poll_that_follows` drives two signals in sequence, which is the shape any future test here needs.
+
+**The tail of an interrupted word is never learned** (`_word_prefix_lost`, taken by `_take_lost_prefix`). This is the second cost of dropping the guard and the one that lasts. A reset landing mid-word leaves the word's opening on screen with nothing tracking it, so `docu` plus a caret-neutral click plus `mentation ` handed `mentation` to `_predictor.learn` as a whole word: measured after three such cycles it sat in `user_vocab`, in the analytics word table, and at rank 1 for every later `ment`, and from there it travels into `ngram_model.json`, the dashboard's Top Words and the Data Backup archive. The desync the paragraph above weighs is transient; this is not. The flag travels with `_word_typed_under_caps_lock` (same per-word lifetime, cleared at the same boundaries) and is consumed at the three sites that learn from `_current_word`: space, sentence punctuation and Return. The two mid-word punctuation branches gate the `_sentence_buffer` append instead, because that buffer is what the *next* boundary hands to the learner, so a fragment parked there arrives one keystroke late rather than not at all. The tail still reaches `_context_buffer`, which has to mirror the screen. Guarded by `tests/test_keyboard_bridge.py::TestAnInterruptedWordIsNotLearned`, where every case types its word **three** times, because an unknown word only promotes into `user_vocab` on its third sighting and a one-shot version of those assertions passes whether or not the gate exists.
 
 Two implementation notes on (4), both load-bearing. **Clicks on our own window are filtered by process id**, not by geometry: `WindowFromPoint` -> `GetWindowThreadProcessId` compared against `os.getpid()`, which covers the keyboard, the snippets window and every popup in one check, and is what stops the keyboard clearing its own context on every key tap. And **it polls rather than hooking**: `WS_EX_NOACTIVATE` keeps our window off the focus path so Qt never sees the event, and a `WH_MOUSE_LL` hook would put this process on the input path of every mouse event on the desktop, which is a latency and antivirus-heuristic cost out of proportion to a signal this coarse. Polling reads the pointer's *current* position, so the 50 ms interval is part of the correctness argument, not a tuning knob: the longer the gap, the more chance the pointer has already travelled back onto a key and reads as ours. **Only `GetAsyncKeyState`'s high bit is read** (`_left_button_pressed_since_last_call`), as a transition against the previous poll. The low bit ("pressed since the last call") would catch a click shorter than one poll interval, which the high bit structurally misses, and reading it is still the wrong trade: that bit is system-wide and **the read clears it**, so polling 20x a second silently steals every press from anything else watching the same way. Dwell-click and switch-access utilities are exactly the software an on-screen keyboard user runs alongside this one, and degrading another assistive tool to sharpen a signal this coarse is not worth it. A missed click costs one next-word suggestion, and the next click resets anyway. `tests/test_pointer.py::TestPressDetection::test_the_pressed_since_last_call_bit_is_ignored` asserts the *absence* of that detection, so restoring the bit fails loudly.
 
 `_check_caret_moved` carries two guards, and both matter:
 
 - **Typing moves the caret too.** `_keystroke_since_poll` is cleared on each poll, so a move we caused is never mistaken for one the user made. It is set in the bridge's synthesizer wrappers (`_send_key` / `_send_text` / `_replace_text`), **not** at the keystroke entry points: a tapped pill, a snippet and a swiped word all type without going through `_press_char`, so keying it off the entry points made this poll read our own insert as the user clicking elsewhere and tear down the context, and the freshly emitted next-word pills, within 250 ms of producing them. Setting it at the synth layer covers any future insert path by construction. Guarded by `TestCaretMoveClearsContext::test_our_own_inserts_do_not_trigger_it`.
-- **Only between words** (`_current_word` must be empty). A reset mid-word is the dangerous direction: it clears `_current_word` while the partial word is still on screen, so the next pill tap inserts the whole word beside it, which is the "backspacbackspaces" duplication the rehydrate logic exists to prevent. Scrolling also drags the caret rectangle across the screen without the caret moving in the text, and that is the false positive most likely to land mid-word. Waiting for a word boundary costs the mid-word case, where a stale context matters least because the user is about to finish the word anyway.
+- **Only between words** (`_current_word` must be empty). A reset mid-word is the dangerous direction: it clears `_current_word` while the partial word is still on screen, so the next pill tap inserts the whole word beside it, which is the "backspacbackspaces" duplication the rehydrate logic exists to prevent. Scrolling also drags the caret rectangle across the screen without the caret moving in the text, and that is the false positive most likely to land mid-word. Waiting for a word boundary costs the mid-word case, where a stale context matters least because the user is about to finish the word anyway. **The outside-click signal (4) no longer shares this guard**: there the mid-word case is the common one and the caret-neutral false positive is rare, so the trade lands the other way round. Don't re-unify them.
+
+**`resetContext` (the clear-context ring) delegates to `_reset_typing_context` rather than clearing the same fields itself.** They were two hand-written copies of one field list and had drifted in *both* directions: the ring cleared `_learned_raw_token` and the shared reset did not, while the shared reset cleared `_pending_auto_cap` and the ring did not, so typing `hello.` and tapping the ring left a capital owed and the next character came out uppercase in a context the user had just told the keyboard to forget. That is the parallel-blocks failure this file documents for sticky-modifier release, and the fix is the one prescribed there: one method, every caller through it. Guarded by `TestTheClearContextRingClearsEverything`.
 
 ### Key files
 - `src/platform/password_detect.py` - platform-specific detection (UIA COM via ctypes), plus `focused_element_token` / `caret_position_token`
