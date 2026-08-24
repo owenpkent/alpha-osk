@@ -142,6 +142,40 @@ def focused_element_token() -> Optional[str]:
     return result if isinstance(result, str) else None
 
 
+# The GUITHREADINFO layout, built on first use and kept.  It cannot be
+# declared at module scope: importing ``ctypes.wintypes`` raises on
+# Linux, where the tests run.  Declared inside ``caret_position_token``,
+# as it was, the metaclass re-processed ``_fields_`` on every call --
+# and the click poll now reads the caret 20 times a second, on the same
+# thread that synthesizes keystrokes and runs prediction queries.
+_gui_thread_info_type: Any = None
+
+
+def _gui_thread_info_struct() -> Any:
+    """The GUITHREADINFO ctypes Structure, defined once per process."""
+    global _gui_thread_info_type
+    if sys.platform != "win32":
+        return None
+    if _gui_thread_info_type is None:
+        import ctypes.wintypes as wintypes
+
+        class _GTI(ctypes.Structure):
+            _fields_ = [
+                ("cbSize", wintypes.DWORD),
+                ("flags", wintypes.DWORD),
+                ("hwndActive", wintypes.HWND),
+                ("hwndFocus", wintypes.HWND),
+                ("hwndCapture", wintypes.HWND),
+                ("hwndMenuOwner", wintypes.HWND),
+                ("hwndMoveSize", wintypes.HWND),
+                ("hwndCaret", wintypes.HWND),
+                ("rcCaret", wintypes.RECT),
+            ]
+
+        _gui_thread_info_type = _GTI
+    return _gui_thread_info_type
+
+
 def caret_position_token() -> Optional[str]:
     """Return a token identifying where the caret currently sits, or None.
 
@@ -158,25 +192,23 @@ def caret_position_token() -> Optional[str]:
     caret -- which is most of the browser and Electron world.  That makes
     the whole thing fail closed: no caret means no token means callers
     leave the context alone, exactly as they do for a UIA hiccup.
+
+    **It is a position on screen, not a position in the text**, and the
+    difference decides what a caller may conclude from it.  ``rcCaret``
+    is client-relative, so scrolling the view changes the token while
+    the caret has not moved a character: a scroll is indistinguishable
+    from a click into another paragraph.  Both callers know this --
+    ``_check_caret_moved`` guards it by only acting between words, and
+    ``_check_external_click`` accepts a scroll as a reset it would
+    rather not do.  Do not read a changed token as "the caret moved in
+    the text".
     """
     if sys.platform != "win32":
         return None
     try:
-        import ctypes
-        import ctypes.wintypes as wintypes
-
-        class _GTI(ctypes.Structure):
-            _fields_ = [
-                ("cbSize", wintypes.DWORD),
-                ("flags", wintypes.DWORD),
-                ("hwndActive", wintypes.HWND),
-                ("hwndFocus", wintypes.HWND),
-                ("hwndCapture", wintypes.HWND),
-                ("hwndMenuOwner", wintypes.HWND),
-                ("hwndMoveSize", wintypes.HWND),
-                ("hwndCaret", wintypes.HWND),
-                ("rcCaret", wintypes.RECT),
-            ]
+        gti_type = _gui_thread_info_struct()
+        if gti_type is None:
+            return None
 
         user32 = ctypes.windll.user32
         hwnd = user32.GetForegroundWindow()
@@ -185,7 +217,7 @@ def caret_position_token() -> Optional[str]:
         tid = user32.GetWindowThreadProcessId(hwnd, None)
         if not tid:
             return None
-        info = _GTI()
+        info = gti_type()
         info.cbSize = ctypes.sizeof(info)
         if not user32.GetGUIThreadInfo(tid, ctypes.byref(info)):
             return None
