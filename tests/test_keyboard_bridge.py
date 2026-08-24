@@ -3157,6 +3157,27 @@ class TestAnOutsideClickThatMovesNoCaretIsLeftAlone:
         ):
             bridge._check_external_click()
 
+    def _hold_open(self, bridge: KeyboardBridge) -> None:
+        """Push the settle's deadline out of reach for the rest of a test.
+
+        Every test that ticks more than once *inside* the window has to
+        do this, and the reason is not tidiness.  The window is a real
+        200 ms of wall clock, and a keystroke here is not free: `_type`
+        drives the whole prediction path per character.  On a loaded
+        4-core CI runner the window closed between two ticks, which does
+        not fail loudly -- the settle clears itself and every later tick
+        becomes a no-op, so an assertion that a *later* move still
+        resets failed outright (it did, on both runners) and one that a
+        keystroke is ignored passed while measuring nothing at all.
+
+        The window's actual length is asserted in exactly one place,
+        ``test_the_window_lasts_as_long_as_it_says_it_does``, which is
+        the only test here that should depend on the clock.
+        """
+        assert bridge._click_settle is not None
+        _, baseline = bridge._click_settle
+        bridge._click_settle = (time.monotonic() + 3600, baseline)
+
     def _expire(self, bridge: KeyboardBridge, caret) -> None:
         """Run the settle window out without the caret ever moving.
 
@@ -3189,6 +3210,7 @@ class TestAnOutsideClickThatMovesNoCaretIsLeftAlone:
         _type(bridge, "hello wor")
         self._tick(bridge, "A,10,20", clicked=True)  # not moved *yet*
         assert bridge._context_buffer != "", "decided too early"
+        self._hold_open(bridge)
         self._tick(bridge, "A,400,90")  # the app catches up
         assert bridge._context_buffer == ""
         assert bridge._current_word == ""
@@ -3226,6 +3248,7 @@ class TestAnOutsideClickThatMovesNoCaretIsLeftAlone:
         self._tick(bridge, "A,10,20")
         _type(bridge, "hello wor")
         self._tick(bridge, "A,10,20", clicked=True)
+        self._hold_open(bridge)
         self._tick(bridge, None)
         assert bridge._context_buffer == ""
 
@@ -3256,7 +3279,14 @@ class TestAnOutsideClickThatMovesNoCaretIsLeftAlone:
         self._tick(bridge, "A,10,20")
         _type(bridge, "hello wor")
         self._tick(bridge, "A,10,20", clicked=True)  # caret-neutral so far
+        self._hold_open(bridge)
         _type(bridge, "l")  # our own insert moves the caret
+        self._tick(bridge, "A,70,20")
+        # A second, quiet tick at the same place, because ignoring the
+        # keystroke is not enough on its own: leaving the pre-typing
+        # baseline in place only postpones the reset by one tick, and
+        # the next tick reads the caret our own insert moved as the
+        # user clicking away.
         self._tick(bridge, "A,70,20")
         assert bridge._current_word == "worl"
         assert bridge._context_buffer == "hello "
@@ -3272,6 +3302,7 @@ class TestAnOutsideClickThatMovesNoCaretIsLeftAlone:
         self._tick(bridge, "A,10,20")
         _type(bridge, "hello wor")
         self._tick(bridge, "A,10,20", clicked=True)
+        self._hold_open(bridge)
         _type(bridge, "l")
         self._tick(bridge, "A,70,20")  # ours
         self._tick(bridge, "A,400,90")  # the app finally catches up
