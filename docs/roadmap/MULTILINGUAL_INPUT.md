@@ -113,7 +113,7 @@ prerequisite for the other two.
 | `ngram_predictor.py:740` `_is_plausible_word` | `c in "aeiou"`, `_VOWELS = "aeiouy"` | `é`, `è`, `à`, `ù`, `î` are not vowels, so `été` and `à` fail the shape filter and never enter `user_vocab`. Meaningless for CJK, where the whole filter must be bypassed. |
 | `ngram_predictor.py:91` `_always_capitalize` | The English "I" family | French has no equivalent (`je` is lowercase mid-sentence). Needs to be per-language and empty for French, Chinese and Japanese. |
 | `ngram_predictor.py:365`, `:1316` | Hardcoded paths to the two English wordlists | Needs to resolve per active language. |
-| `fuzzy_recognizer.py:29`, `:105` | `QWERTY_POSITIONS`, and `positions or QWERTY_POSITIONS` with nothing ever passing `positions` | **The spatial model is QWERTY even when the user is on Dvorak or Colemak today.** This is an existing latent bug, not a multilingual one, and AZERTY makes it visible. Fixing it is a prerequisite. |
+| `fuzzy_recognizer.py` key positions | Was hardcoded to `QWERTY_POSITIONS` with nothing ever passing `positions`, so Dvorak and Colemak users were corrected against a QWERTY board | **Fixed.** `positions_from_layout` derives the grid from the layout JSON and the bridge pushes it on every `setLayout`. AZERTY inherits it for free. |
 | `fuzzy_recognizer.py:528`, `ppm_predictor.py:613`, `transformer_predictor.py:138` | `c.isalpha() or c == "'"` filters | Unicode-safe for French by accident (`é`.isalpha() is True), but the apostrophe rule is English contraction logic, not French elision logic. |
 | `swipe_recognizer.py:99` | `k.isalpha()` over single characters | Fine for French. Structurally meaningless for a kana or pinyin layout. |
 | `symspell.py` | `.lower()` and a character-agnostic deletion index | Actually works for French unmodified, but accent-insensitive lookup needs the index built on the folded form. Meaningless for CJK. |
@@ -145,12 +145,18 @@ class LanguageProfile:
     always_capitalize: Mapping[str, str]
     dictionary: Path
     frequency: Path | None
-    key_positions: Mapping[str, tuple[float, float]]   # fuzzy spatial model
     spacing: SpacingRules           # which marks auto-space, which side
     phone_groupings: frozenset[tuple[int, ...]]
     address_re: re.Pattern | None
     ime: IMEEngine | None           # None for alphabetic languages
 ```
+
+Note what is *not* in it. Key positions were in the first draft of this
+list and came out again: Dvorak-English is a real combination, so the
+spatial model is a property of the layout and not of the language, and it
+is now derived from the layout JSON instead (see the *fuzzy spatial
+model* section in `CLAUDE.md`). Anything else that turns out to vary with
+layout rather than language belongs there too.
 
 Two properties make this worth doing rather than threading a language
 string through 40 call sites. The profile is **resolved once and passed
@@ -429,8 +435,11 @@ speaker can build and tune) rather than a first-party one.
 ## Recommended phasing
 
 1. **Profile refactor.** English expressed as a `LanguageProfile`, no
-   behaviour change, whole suite green. Includes fixing the
-   `QWERTY_POSITIONS` bug that already affects Dvorak and Colemak users.
+   behaviour change, whole suite green. The `QWERTY_POSITIONS` bug that
+   already affected Dvorak and Colemak users is done, separately: key
+   positions turned out to belong to the *layout* rather than the
+   language, so they are derived from the layout JSON and stay out of
+   the profile.
 2. **French.** Layout, profile, accent folding, elision, data. Ship it.
    Reassess.
 3. **Candidate paging in the bar.** Needed by both CJK languages and

@@ -919,6 +919,16 @@ class HybridPredictor(QObject):
         _logger.info("Merge strategy set to %r", strategy)
         return True
 
+    def set_key_positions(self, positions: Dict[str, Tuple[float, float]]) -> None:
+        """Tell the fuzzy recogniser which physical key grid is on screen.
+
+        Public forwarder so the bridge doesn't reach through the
+        private ``_fuzzy`` attribute, matching ``get_unigram_freqs``
+        below.  Derive the argument with
+        ``fuzzy_recognizer.positions_from_layout``.
+        """
+        self._fuzzy.set_key_positions(positions)
+
     # --- Public API for callers that previously reached through to _ngram ---
 
     def get_unigram_freqs(self) -> Dict[str, int]:

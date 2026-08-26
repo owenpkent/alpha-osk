@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import logging
 import math
-from typing import Dict, List, Mapping, Optional, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from .symspell import SymSpell
 
@@ -64,6 +64,92 @@ QWERTY_POSITIONS: Dict[str, Tuple[float, float]] = {
     "n": (2, 5.75),
     "m": (2, 6.75),
 }
+
+
+# Column offset of each letter row's first key, i.e. the physical
+# stagger.  Read straight off QWERTY_POSITIONS above, which is the
+# table this derivation has to keep reproducing exactly.
+_ROW_STAGGER: Tuple[float, ...] = (0.0, 0.25, 0.75)
+
+
+def positions_from_layout(
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    layer: str = "base",
+) -> Dict[str, Tuple[float, float]]:
+    """Derive a spatial key model from a layout JSON's ``rows``.
+
+    Dvorak, Colemak and AZERTY are letter *remappings* of the same
+    physical board, so the model that matters is which physical slot a
+    character sits in, not how many pixels wide the layout draws its
+    Tab key.  Slots are therefore assigned by a key's index within its
+    row rather than by accumulating widths, which is also the only
+    formulation that reproduces ``QWERTY_POSITIONS`` byte-for-byte
+    (asserted in ``tests/test_fuzzy_recognizer.py``), so switching the
+    QWERTY user onto this path is a no-op for them.
+
+    Punctuation is dropped from the *result* but still consumes a slot,
+    which is load-bearing for anything other than QWERTY: Dvorak's top
+    row is ``' , . p y f g c r l``, so ``p`` is the fourth key and
+    belongs at column 3.  Counting only the letters would put it at 0
+    and hand every Dvorak user a spatial model that is wrong in a
+    different way than the QWERTY one it replaces.
+
+    **The digit row is the one exception, and it is aligned by digit
+    index rather than key index.**  That is the rule
+    ``QWERTY_POSITIONS`` already encodes deliberately (see its comment:
+    no horizontal stagger, ``5`` directly above ``t``), and the leading
+    backtick would otherwise push every digit one column right of the
+    letter it is supposed to sit above.
+
+    Args:
+        rows: The layout's ``rows`` list, as loaded from its JSON.
+        layer: Which layer to read.  Rows carrying a different
+            ``layer`` are skipped; rows with no ``layer`` field at all
+            always count, which is what keeps the full-size layouts
+            (no layers) working.
+
+    Returns:
+        ``{char: (row, col)}`` in the same units as
+        ``QWERTY_POSITIONS``, or an empty dict if the layout has no
+        alphanumeric character keys at all.
+    """
+    # Every char key of every row on this layer, in order, for the rows
+    # that carry at least one alphanumeric.
+    harvested: List[List[str]] = []
+    for row in rows:
+        row_layer = row.get("layer")
+        if row_layer is not None and row_layer != layer:
+            continue
+        chars = [
+            key.get("key", "").lower()
+            for key in row.get("keys", ())
+            if key.get("type") == "char" and len(key.get("key", "")) == 1
+        ]
+        if any(c.isalnum() for c in chars):
+            harvested.append(chars)
+
+    if not harvested:
+        return {}
+
+    positions: Dict[str, Tuple[float, float]] = {}
+
+    # A leading row whose alphanumerics are *all* digits is the number
+    # row.  Testing the alphanumerics rather than the whole row is what
+    # lets it carry ` - = without being mistaken for a letter row.
+    digits = [c for c in harvested[0] if c.isalnum()]
+    if all(c.isdigit() for c in digits):
+        for col, char in enumerate(digits):
+            positions[char] = (-1.0, float(col))
+        harvested = harvested[1:]
+
+    for row_index, chars in enumerate(harvested):
+        stagger = _ROW_STAGGER[min(row_index, len(_ROW_STAGGER) - 1)]
+        for col, char in enumerate(chars):
+            if char.isalnum():
+                positions[char] = (float(row_index), stagger + col)
+
+    return positions
 
 
 # Tuned so a press one key off-center still has its true neighbours
@@ -426,14 +512,47 @@ class FuzzyRecognizer:
     prediction_weight: float = DEFAULT_PREDICTION_WEIGHT
     autocorrect_margin: float = DEFAULT_AUTOCORRECT_MARGIN
 
-    def __init__(self, dictionary: Optional[Dict[str, float]] = None):
+    def __init__(
+        self,
+        dictionary: Optional[Dict[str, float]] = None,
+        positions: Optional[Dict[str, Tuple[float, float]]] = None,
+    ):
         self.spatial_model = SpatialKeyModel(
+            positions=positions,
             uncertainty_radius=self.spatial_uncertainty,
         )
         self.word_generator = FuzzyWordGenerator(
             spatial_model=self.spatial_model,
             dictionary=dictionary,
         )
+
+    def set_key_positions(self, positions: Dict[str, Tuple[float, float]]) -> None:
+        """Re-point the spatial model at a different layout's key grid.
+
+        Called when the user switches layout.  The whole model is
+        rebuilt rather than mutated because the neighbour cache is
+        derived from the positions, and it is ~36 keys, so rebuilding
+        costs less than keeping the two consistent by hand.
+
+        ``word_generator`` holds its own reference to the model, so it
+        has to be re-pointed in the same breath.  It was the reason the
+        first version of this looked like it worked and did not: the
+        recogniser reported the new positions while candidate
+        generation went on using the old ones.
+
+        An empty mapping is ignored.  A layout with no alphanumeric
+        keys at all is a layout the fuzzy model has nothing to say
+        about, and blanking the grid would silently disable
+        autocorrect rather than leaving it on the previous layout.
+        """
+        if not positions:
+            return
+        self.spatial_model = SpatialKeyModel(
+            positions=dict(positions),
+            uncertainty_radius=self.spatial_uncertainty,
+        )
+        self.word_generator.spatial_model = self.spatial_model
+        _logger.info("Spatial key model rebuilt: %d keys", len(positions))
 
     def get_fuzzy_predictions(
         self,

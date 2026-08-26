@@ -18,6 +18,7 @@ PySide6 = pytest.importorskip("PySide6")
 
 from src import keyboard_bridge as kb
 from src.keyboard_bridge import KeyboardBridge
+from src.prediction.fuzzy_recognizer import QWERTY_POSITIONS
 from src.prediction.token_predictor import TokenPredictor
 from src.snippets import SnippetStore
 
@@ -4268,3 +4269,34 @@ class TestTheClearContextRingClearsEverything:
         assert bridge._raw_token == ""
         assert bridge._learned_raw_token == ""
         assert bridge._predictions == []
+
+
+class TestTheSpatialModelFollowsTheLayout:
+    """The fuzzy recogniser must be told which keyboard is on screen.
+
+    Before this, ``SpatialKeyModel`` fell back to ``QWERTY_POSITIONS``
+    and no caller anywhere passed it anything else, so switching to
+    Dvorak or Colemak changed every keycap and none of the autocorrect.
+    The unit tests in ``test_fuzzy_recognizer.py`` cover the derivation;
+    these two cover the half that was actually missing, which is that
+    somebody calls it.
+    """
+
+    @staticmethod
+    def _positions(bridge: KeyboardBridge) -> dict:
+        return bridge._predictor._fuzzy.spatial_model.positions
+
+    def test_the_default_layout_is_wired_up_on_construction(self, bridge: KeyboardBridge):
+        assert self._positions(bridge) == QWERTY_POSITIONS
+
+    def test_switching_layout_moves_the_keys(self, bridge: KeyboardBridge):
+        bridge.setLayout("dvorak")
+        moved = self._positions(bridge)
+        # p is the fourth key of Dvorak's top row, where QWERTY has r.
+        assert moved["p"] == QWERTY_POSITIONS["r"]
+        assert moved != QWERTY_POSITIONS
+
+    def test_switching_back_restores_qwerty(self, bridge: KeyboardBridge):
+        bridge.setLayout("colemak")
+        bridge.setLayout("qwerty")
+        assert self._positions(bridge) == QWERTY_POSITIONS
