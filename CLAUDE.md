@@ -1111,6 +1111,10 @@ See also: `docs/roadmap/MACROVOX_INTEGRATION.md` (voice dictation), `docs/archit
 
 Design doc at `docs/roadmap/FEDERATED_LEARNING.md`. Not yet implemented - Phase 1 (local delta computation) is the next step.
 
+## Multilingual Input (French, Pinyin, Kanji)
+
+Research notes at `docs/roadmap/MULTILINGUAL_INPUT.md`. Not implemented. Two findings worth knowing even if none of it ships: Unicode output already works end to end on all three platforms (`send_text` falls through to `KEYEVENTF_UNICODE` above `U+0080`, macOS uses `CGEventKeyboardSetUnicodeString`), so no synthesis work is needed for any language; and `FuzzyRecognizer` is hardcoded to `QWERTY_POSITIONS` with nothing ever passing `positions`, so **Dvorak and Colemak users get a QWERTY spatial model today**. That last one is an existing bug, not a multilingual one.
+
 ## Opt-in Telemetry
 
 Design: `docs/architecture/TELEMETRY.md`. User-facing privacy: `docs/PRIVACY.md`. Backend: `backend/cf-worker/` (Cloudflare Worker + D1).
