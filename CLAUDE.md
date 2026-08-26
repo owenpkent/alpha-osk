@@ -371,12 +371,7 @@ Regression coverage: `tests/test_data_export.py::TestInspect::test_zip_slip_reje
 
 ## QML <-> Python Bridge Pattern
 
-QML calls Python via `@Slot` methods on `KeyboardBridge`. Python emits `Signal`s back to QML. Example flow:
-
-1. QML: `keyboard.pressKey("a")` -> calls `KeyboardBridge.pressKey()`
-2. Python: synthesizes keystroke, updates context, runs prediction
-3. Python: `self.predictionsChanged.emit(predictions)` -> Signal
-4. QML: binds to `keyboard.predictions` property, updates UI
+QML calls Python via `@Slot` methods on `KeyboardBridge`; Python emits `Signal`s back. The keystroke round trip is the one diagrammed under *Architecture Overview*, and it ends with `self.predictionsChanged.emit(predictions)`, which QML picks up as a binding on the `keyboard.predictions` property rather than as a callback.
 
 ## Caps Lock vs. Shift
 
@@ -823,9 +818,7 @@ The `StatBox` component grows its background Rectangle from `contentCol.implicit
 
 The earlier composite Prediction Quality Score (0-100, weighted savings + hit rate + rank + low-correction) was removed because the number wasn't actionable: a user can act on "you've saved 4.2 hours" but a "73/100" composite hides which lever moved. Don't reintroduce the composite as a primary surface; if you need a single internal scoring number for ranking strategy comparisons, compute it ad-hoc in tests rather than baking it back into `get_session_stats`.
 
-`top_pick_count` is still computed and persisted (incremented inside `record_prediction_selected` only when `rank == 1`) and surfaced as `alltimeTopPickRate` for the Model Visualization Dashboard. It was briefly the subtext on the Predictions Used tile but reads "0%" for any user upgrading from a prior build (the counter didn't exist then), which masked real usage.
-
-`top_pick_count` is incremented inside `record_prediction_selected` only when `rank == 1`. The bridge already passes a 1-based rank in `pressPrediction`, so no caller-side change is needed when adding new prediction surfaces. They just need to call `record_prediction_selected` with the right rank.
+`top_pick_count` is still computed and persisted, incremented inside `record_prediction_selected` only when `rank == 1`, and surfaced as `alltimeTopPickRate` for the Model Visualization Dashboard. It was briefly the subtext on the Predictions Used tile but reads "0%" for any user upgrading from a prior build (the counter didn't exist then), which masked real usage. The bridge already passes a 1-based rank in `pressPrediction`, so a new prediction surface needs no caller-side change: it just has to call `record_prediction_selected` with the right rank.
 
 ## Prediction & Autocorrect - Architecture Notes
 
