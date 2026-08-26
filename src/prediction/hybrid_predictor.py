@@ -22,6 +22,7 @@ from PySide6.QtCore import QObject, Signal
 
 from .autocorrect import CommonMisspellings
 from .fuzzy_recognizer import FuzzyRecognizer
+from .language import ENGLISH, LanguageProfile
 from .ngram_predictor import NgramPredictor
 from .ppm_predictor import PPMPredictor, PPMWordPredictor
 from .transformer_predictor import TransformerPredictor
@@ -30,12 +31,12 @@ from .vocabulary_pack import PackManager
 _logger = logging.getLogger("HybridPredictor")
 
 
-def _short_word_allowed(word: str) -> bool:
+def _short_word_allowed(word: str, profile: LanguageProfile = ENGLISH) -> bool:
     """True if *word* may be offered as a next-word prediction.
 
     Anything three characters or longer passes untouched; shorter words
-    have to be real, which is decided by ``NgramPredictor``'s existing
-    short-word whitelist rather than by a second list living here.
+    have to be real, which is decided by the language profile's existing
+    short-word allow-list rather than by a second list living here.
 
     This filter used to be a blanket ``len(word) <= 2`` with "i" as the
     only exception, which discarded most of what next-word prediction is
@@ -50,18 +51,19 @@ def _short_word_allowed(word: str) -> bool:
     in the model, and a bare length change would let every one of them
     compete for a pill.  Words, not lengths.
 
-    Reusing ``_SHORT_WORD_WHITELIST`` is deliberate.  It is already the
-    project's answer to "is this short string a real word or a keyboard
-    slip" (it gates the dictionary-load fragment filter), so a second
-    copy here would be one more list to keep in sync and one more place
-    for the two to disagree.  Extend that set to extend this filter.
+    Reusing the profile's ``short_words`` is deliberate.  It is already
+    the project's answer to "is this short string a real word or a
+    keyboard slip" (it gates the dictionary-load fragment filter), so a
+    second copy here would be one more list to keep in sync and one more
+    place for the two to disagree.  Extend that set to extend this
+    filter.
 
     Case-insensitive, so a capitalised "To" at a sentence start is judged
     on the word rather than on its casing.
     """
     if len(word) > 2:
         return True
-    return word.lower() in NgramPredictor._SHORT_WORD_WHITELIST
+    return profile.is_short_word(word)
 
 
 class HybridPredictor(QObject):
@@ -89,6 +91,7 @@ class HybridPredictor(QObject):
         model_dir: Optional[Path] = None,
         enable_llm: bool = True,
         parent: Optional[QObject] = None,
+        profile: LanguageProfile = ENGLISH,
     ):
         """
         Initialize the hybrid predictor.
@@ -97,6 +100,8 @@ class HybridPredictor(QObject):
             model_dir: Directory for storing model files
             enable_llm: Whether to enable LLM re-ranking (can disable for speed)
             parent: Qt parent object
+            profile: Language profile driving tokenization, word shapes
+                and which wordlists load.  See language.py.
         """
         super().__init__(parent)
 
@@ -110,7 +115,7 @@ class HybridPredictor(QObject):
 
         # Initialize n-gram predictor (always available)
         ngram_path = self._model_dir / "ngram_model.json"
-        self._ngram = NgramPredictor(ngram_path if ngram_path.exists() else None)
+        self._ngram = NgramPredictor(ngram_path if ngram_path.exists() else None, profile)
 
         # Load base dictionary for better initial predictions
         self._ngram.load_base_dictionary()
@@ -129,7 +134,7 @@ class HybridPredictor(QObject):
         # Initialize fuzzy recognizer (spatial error correction)
         self._fuzzy = FuzzyRecognizer()
         data_dir = Path(__file__).parent.parent.parent / "data"
-        self._fuzzy.load_dictionary(data_dir / "base_dictionary.txt")
+        self._fuzzy.load_dictionary(profile.dictionary)
         # Load common-misspellings fast-path table for autocorrect.
         self._misspellings = CommonMisspellings()
         self._misspellings.load(data_dir / "common_misspellings.txt")
@@ -582,7 +587,7 @@ class HybridPredictor(QObject):
         adding a word to ``scores``.  Used by every strategy that
         iterates per-source predictions before merging.
         """
-        if is_next_word and not _short_word_allowed(word):
+        if is_next_word and not _short_word_allowed(word, self._ngram.profile):
             return False
         return self._is_valid_word(word)
 
@@ -646,7 +651,7 @@ class HybridPredictor(QObject):
             # Final short-word guard — catches any short word that
             # slipped past the per-source filter (e.g. fuzzy, which
             # the rank strategy historically didn't filter).
-            if is_next_word and not _short_word_allowed(word):
+            if is_next_word and not _short_word_allowed(word, self._ngram.profile):
                 continue
             capped = self._ngram.get_capitalized(word, sentence_start)
             results.append(capped)

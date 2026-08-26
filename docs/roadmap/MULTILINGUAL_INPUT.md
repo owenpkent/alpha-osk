@@ -108,11 +108,11 @@ prerequisite for the other two.
 
 | Where | What it assumes | Breaks on |
 |---|---|---|
-| `ngram_predictor.py:681` `_tokenize` | `re.findall(r"[a-zA-Z']+", ...)` | Every accented character and every CJK character is discarded before a word reaches the vocabulary. `hôpital` learns as `h` + `pital`. This is the single biggest blocker. |
-| `ngram_predictor.py:692` `_SHORT_WORD_WHITELIST` | English 1- and 2-letter words | French `à`, `y`, `où`, `ce`, `ne`, `du`, `en` are treated as typing fragments and gated out of next-word predictions. |
-| `ngram_predictor.py:740` `_is_plausible_word` | `c in "aeiou"`, `_VOWELS = "aeiouy"` | `é`, `è`, `à`, `ù`, `î` are not vowels, so `été` and `à` fail the shape filter and never enter `user_vocab`. Meaningless for CJK, where the whole filter must be bypassed. |
-| `ngram_predictor.py:91` `_always_capitalize` | The English "I" family | French has no equivalent (`je` is lowercase mid-sentence). Needs to be per-language and empty for French, Chinese and Japanese. |
-| `ngram_predictor.py:365`, `:1316` | Hardcoded paths to the two English wordlists | Needs to resolve per active language. |
+| `_tokenize` | `re.findall(r"[a-zA-Z']+", ...)` | Every accented character and every CJK character is discarded before a word reaches the vocabulary. `hôpital` learns as `h` + `pital`. This was the single biggest blocker. **Now `profile.word_re`.** |
+| `_SHORT_WORD_WHITELIST` | English 1- and 2-letter words | French `à`, `y`, `où`, `ce`, `ne`, `du`, `en` are treated as typing fragments and gated out of next-word predictions. **Now `profile.short_words`**, read by both consumers. |
+| `_is_plausible_word` | `c in "aeiou"`, plus a `_VOWELS` constant that turned out to be dead | `é`, `è`, `à`, `ù`, `î` are not vowels, so `été` and `à` fail the shape filter and never enter `user_vocab`. **Now `profile.vowels` / `profile.semivowels`**, the split that lets `y` count on both sides. |
+| `_always_capitalize` | The English "I" family | French has no equivalent (`je` is lowercase mid-sentence). **Now `profile.always_capitalize`**, and empty is a valid value. |
+| Wordlist paths | Hardcoded `data/base_dictionary.txt` and `data/google-10000-...` | **Now `profile.dictionary` / `profile.frequency`**, the latter optional for a language whose dictionary already carries counts. |
 | `fuzzy_recognizer.py` key positions | Was hardcoded to `QWERTY_POSITIONS` with nothing ever passing `positions`, so Dvorak and Colemak users were corrected against a QWERTY board | **Fixed.** `positions_from_layout` derives the grid from the layout JSON and the bridge pushes it on every `setLayout`. AZERTY inherits it for free. |
 | `fuzzy_recognizer.py:528`, `ppm_predictor.py:613`, `transformer_predictor.py:138` | `c.isalpha() or c == "'"` filters | Unicode-safe for French by accident (`é`.isalpha() is True), but the apostrophe rule is English contraction logic, not French elision logic. |
 | `swipe_recognizer.py:99` | `k.isalpha()` over single characters | Fine for French. Structurally meaningless for a kana or pinyin layout. |
@@ -434,12 +434,15 @@ speaker can build and tune) rather than a first-party one.
 
 ## Recommended phasing
 
-1. **Profile refactor.** English expressed as a `LanguageProfile`, no
-   behaviour change, whole suite green. The `QWERTY_POSITIONS` bug that
-   already affected Dvorak and Colemak users is done, separately: key
-   positions turned out to belong to the *layout* rather than the
-   language, so they are derived from the layout JSON and stay out of
-   the profile.
+1. ~~**Profile refactor.**~~ **Done.** English is expressed as a
+   `LanguageProfile` and the whole suite passes unchanged. The
+   `QWERTY_POSITIONS` bug that already affected Dvorak and Colemak users
+   is done too, separately: key positions turned out to belong to the
+   *layout* rather than the language, so they are derived from the
+   layout JSON and stay out of the profile. **What is left of this step
+   is the `text_patterns` locale data**, deliberately deferred to the
+   French slice so its fields land with a second value to hold rather
+   than as fields nothing reads.
 2. **French.** Layout, profile, accent folding, elision, data. Ship it.
    Reassess.
 3. **Candidate paging in the bar.** Needed by both CJK languages and

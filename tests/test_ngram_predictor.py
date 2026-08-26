@@ -645,7 +645,7 @@ class TestBaseWordlistFiltering:
 
     def test_real_short_words_still_loaded(self):
         p = NgramPredictor()
-        # All survive because they're in _SHORT_WORD_WHITELIST.
+        # All survive because they're on the profile's short-word list.
         for word in ("of", "to", "in", "is", "it", "be", "by", "we", "ok"):
             assert word in p.unigrams, f"real word {word!r} should be in base dict"
 
