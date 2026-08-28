@@ -38,8 +38,7 @@
                 {"type": "char", "key": ";", "shifted": ":", "width": 1.0, "fontSize": 14, "style": "secondary"},
                 {"type": "char", "key": "[", "shifted": "{", "width": 1.0, "fontSize": 14, "style": "secondary"},
                 {"type": "char", "key": "]", "shifted": "}", "width": 1.0, "fontSize": 14, "style": "secondary"},
-                {"type": "char", "key": "\\", "shifted": "|", "width": 1.0, "fontSize": 14, "style": "secondary"},
-                {"type": "special", "action": "delete", "display": "Del", "width": 1.0, "fontSize": 11, "style": "special"}
+                {"type": "char", "key": "\\", "shifted": "|", "width": 1.0, "fontSize": 14, "style": "secondary"}
             ]
         },
         {
@@ -57,7 +56,7 @@
                 {"type": "char", "key": "i", "width": 1.0},
                 {"type": "char", "key": "o", "width": 1.0},
                 {"type": "char", "key": "'", "shifted": "\"", "width": 1.0, "fontSize": 14, "style": "secondary"},
-                {"type": "special", "action": "return", "display": "Enter", "width": 1.8, "fontSize": 11, "style": "enter"}
+                {"type": "special", "action": "return", "display": "Enter", "width": 2.3, "fontSize": 11, "style": "enter"}
             ]
         },
         {
@@ -85,7 +84,8 @@
                 {"type": "modifier", "action": "alt", "display": "Alt", "width": 1.1, "fontSize": 11, "stateKey": "altOn", "style": "special"},
                 {"type": "special", "action": "space", "display": "", "width": 6.0},
                 {"type": "modifier", "action": "alt", "display": "Alt", "width": 1.1, "fontSize": 11, "stateKey": "altOn", "style": "special"},
-                {"type": "modifier", "action": "ctrl", "display": "Ctrl", "width": 1.2, "fontSize": 11, "stateKey": "ctrlOn", "style": "special"}
+                {"type": "modifier", "action": "ctrl", "display": "Ctrl", "width": 1.2, "fontSize": 11, "stateKey": "ctrlOn", "style": "special"},
+                {"type": "special", "action": "delete", "display": "Del", "width": 1.0, "fontSize": 11, "style": "special"}
             ]
         }
     ]

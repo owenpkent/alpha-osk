@@ -173,6 +173,80 @@ class TestFullSizeLayoutsUnchanged:
         assert len(widest["keys"]) - 1 == 14, "gap count feeds layoutFixedPixels"
 
 
+class TestTheLetterColumnsLineUp:
+    """W sits directly above S on the full-size layouts, for WASD gaming.
+
+    Main.qml centres every row against the widest one (each row is a `Row`
+    with `Layout.alignment: Qt.AlignHCenter`), so a row's horizontal offset
+    is `(widest_units - row_units) / 2` and its first letter's left edge is
+    that offset plus the leading modifier's width.  The top row used to
+    carry a Del key past the backslash, which made it 0.9u wider than the
+    home row and so pushed the whole letter block four fifths of a key
+    left: W landed between A and S.  On a pointer-driven keyboard that
+    turns every W->S in a WASD pair into a diagonal drag, which is the one
+    movement slow motor input is worst at.
+
+    Del moved to the space row, which has ~3u of slack against the widest
+    row and therefore costs no window width, and Enter grew 1.8u -> 2.3u
+    (standard ANSI is 2.25u) to take back the half-unit the top row lost.
+    Both halves are needed: dropping Del alone leaves W a quarter-key
+    short, and widening Enter alone overshoots.
+
+    These assertions are in key-width units and deliberately ignore
+    `keySpacing`: the top row carries one more gap than the home row, so
+    the true residual is half a gap, which is 1 px at the default window
+    width and never exceeds 2 px.
+    """
+
+    LAYOUTS = ["qwerty", "dvorak", "colemak"]
+
+    @staticmethod
+    def _rows(name: str) -> tuple[dict[str, dict], float]:
+        rows = {r["id"]: r for r in _load(f"{name}.json")["rows"]}
+        return rows, max(_row_units(r) for r in rows.values())
+
+    @staticmethod
+    def _centre(row: dict, index: int, widest: float) -> float:
+        """Centre of the key at `index`, in key-width units from the left."""
+        x = (widest - _row_units(row)) / 2.0
+        for key in row["keys"][:index]:
+            x += float(key.get("width", 1.0))
+        return x + float(row["keys"][index].get("width", 1.0)) / 2.0
+
+    @pytest.mark.parametrize("name", LAYOUTS)
+    def test_the_top_row_letters_sit_over_the_home_row_letters(self, name: str) -> None:
+        rows, widest = self._rows(name)
+        # Index 1 is the first letter on both rows (index 0 is Tab / Caps).
+        assert self._centre(rows["top"], 1, widest) == pytest.approx(
+            self._centre(rows["home"], 1, widest), abs=0.02
+        )
+
+    def test_w_is_directly_above_s(self) -> None:
+        rows, widest = self._rows("qwerty")
+        top = [k.get("key") for k in rows["top"]["keys"]]
+        home = [k.get("key") for k in rows["home"]["keys"]]
+        assert self._centre(rows["top"], top.index("w"), widest) == pytest.approx(
+            self._centre(rows["home"], home.index("s"), widest), abs=0.02
+        )
+
+    @pytest.mark.parametrize("name", LAYOUTS)
+    def test_del_moved_rather_than_vanished(self, name: str) -> None:
+        # The inverse of the alignment test: deleting the Del key would
+        # satisfy it just as well, and would cost a key that takes several
+        # clicks to work around (walk the caret past the mistake and back).
+        rows, _ = self._rows(name)
+        space = [k.get("action") for k in rows["space"]["keys"]]
+        assert "delete" in space, f"{name}: Del left the space row"
+        assert "delete" not in [k.get("action") for k in rows["top"]["keys"]]
+
+    @pytest.mark.parametrize("name", LAYOUTS)
+    def test_the_space_row_still_costs_no_window_width(self, name: str) -> None:
+        # Del is free only while the space row stays clear of the widest
+        # row; past that it would widen the whole keyboard.
+        rows, widest = self._rows(name)
+        assert _row_units(rows["space"]) < widest
+
+
 class TestCompactLayout:
     """qwerty-compact is a uniform grid — the invariants are tighter."""
 
