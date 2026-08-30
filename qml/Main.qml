@@ -2182,6 +2182,12 @@ Window {
                                         case "ctrlOn": return root.ctrlOn
                                         case "altOn": return root.altOn
                                         case "winOn": return root.winOn
+                                        // Not a modifier: the symbol layer's
+                                        // entry key sits on the always-visible
+                                        // space row, so lighting it is the only
+                                        // thing on screen that says which page
+                                        // the letters have been swapped for.
+                                        case "symLayer": return root.activeLayer === "sym"
                                         default: return false
                                     }
                                 }
@@ -2241,7 +2247,21 @@ Window {
                                 onKeyPressed: {
                                     if (kd.type === "char") {
                                         var ch = root.shiftOn && kd.shifted ? kd.shifted : kd.key
-                                        keyboard.pressKey(ch)
+                                        // `literal` keys type exactly the glyph
+                                        // on the cap, whatever Shift and Caps
+                                        // Lock are doing. The symbol layer is
+                                        // built from them, and it is not a
+                                        // stylistic choice: pressKey applies
+                                        // case normalisation, and Python's
+                                        // upper() is not the identity on every
+                                        // non-ASCII character. Caps Lock is
+                                        // deliberately left alone by a layer
+                                        // switch, so without this, Caps + the
+                                        // micro sign typed a Greek capital Mu.
+                                        if (kd.literal)
+                                            keyboard.pressKeyLiteral(kd.key)
+                                        else
+                                            keyboard.pressKey(ch)
                                         // displayText already reflects shift/
                                         // caps casing, so it matches the char
                                         // pressKey actually sends to the OS.
@@ -2289,8 +2309,22 @@ Window {
                                         // alive by signal delivery, not a live
                                         // binding, since the Connections handler
                                         // assigns to it).
+                                        //
+                                        // A layer key whose target is already
+                                        // showing goes back to base instead of
+                                        // re-selecting the layer it is on. The
+                                        // full-size layouts reach their symbol
+                                        // page from the space row, which has no
+                                        // `layer` field and therefore renders on
+                                        // every layer, so the same key has to be
+                                        // both the way in and the way out. Every
+                                        // other layer key targets something it
+                                        // is not on, so this branch is dead for
+                                        // them and their behaviour is unchanged.
                                         keyboard.releaseShift()
-                                        root.activeLayer = kd.target || "base"
+                                        var want = kd.target || "base"
+                                        root.activeLayer = (want === root.activeLayer)
+                                                           ? "base" : want
                                     } else {
                                         keyboard.pressSpecialKey(kd.action)
                                     }
@@ -2415,7 +2449,12 @@ Window {
             width: mainKeyboard.width
             height: mainKeyboard.height
             z: 50
-            enabled: root.swipeEnabled
+            // Off the base layer there are no letters to swipe across, and
+            // the registry the recogniser scores against would be holding
+            // the symbol page's key centres instead. Disabling hands every
+            // press back to the keys' own MouseAreas, which is the ordinary
+            // swipe-off path.
+            enabled: root.swipeEnabled && root.activeLayer === "base"
             keyboardBridge: keyboard
             // Two lists on purpose: keyRegistry is the recogniser's
             // key-centre map (characters only), tapRegistry is hit testing

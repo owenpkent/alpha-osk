@@ -153,17 +153,150 @@ class TestEveryLayout:
         )
 
 
-class TestFullSizeLayoutsUnchanged:
-    """The compact work must not perturb the shipped full-size layouts."""
+FULL_SIZE = ["qwerty", "dvorak", "colemak"]
 
-    @pytest.mark.parametrize("name", ["qwerty", "dvorak", "colemak"])
-    def test_no_layer_field(self, name: str) -> None:
-        # Rows with no `layer` always render, which is what keeps the
-        # full-size layouts working under the layer-filtering QML.
+# The three letter rows and the symbol row that replaces each of them.
+SWAPPED_ROWS = [("top", "sym-top"), ("home", "sym-home"), ("bottom", "sym-bottom")]
+
+
+class TestFullSizeSymbolLayer:
+    """The full-size layouts carry one symbol page, reached from the space row.
+
+    Compact View had ``?123`` and ``=\\<`` from the start and the full-size
+    layouts had nothing, so every glyph outside a physical keyboard's
+    printing was reachable in one view and not the other. These tests pin
+    the four properties that make the page cost nothing to have: the grid
+    does not move, digits and space never leave the screen, the page can
+    always be left again, and nothing on it duplicates a glyph the base
+    layer could already type.
+    """
+
+    @pytest.mark.parametrize("name", FULL_SIZE)
+    def test_the_grid_does_not_move_when_the_layer_switches(self, name: str) -> None:
+        """A symbol row matches the letter row it replaces, unit for unit.
+
+        Rows are centred individually, so a symbol row even slightly
+        narrower than its base counterpart re-indents the whole page and
+        every key lands somewhere new. On a keyboard driven by an imprecise
+        pointer that is the difference between a hop the user can predict
+        and one they have to re-aim after.
+        """
+        rows = {r["id"]: r for r in _load(f"{name}.json")["rows"]}
+        for base_id, sym_id in SWAPPED_ROWS:
+            base, sym = rows[base_id], rows[sym_id]
+            assert _row_units(sym) == pytest.approx(_row_units(base)), (
+                f"{name}/{sym_id} is {_row_units(sym)}u against {base_id}'s {_row_units(base)}u"
+            )
+            assert len(sym["keys"]) == len(base["keys"]), (
+                f"{name}/{sym_id} has {len(sym['keys'])} keys against "
+                f"{base_id}'s {len(base['keys'])}: equal totals alone still "
+                "move every key, because the gaps between them move"
+            )
+
+    @pytest.mark.parametrize("name", FULL_SIZE)
+    def test_digits_and_space_never_disappear(self, name: str) -> None:
+        """The number and space rows carry no `layer`, so they render on
+        every page. That is what lets the symbol layer swap only the three
+        letter rows: digits stay one tap away instead of going behind the
+        hop the way they do in Compact View, and the space bar, the most
+        clicked key on the keyboard, never moves or vanishes."""
         for row in _load(f"{name}.json")["rows"]:
-            assert "layer" not in row
+            if row["id"] in ("number", "space"):
+                assert "layer" not in row, f"{name}/{row['id']} is behind a layer"
 
-    @pytest.mark.parametrize("name", ["qwerty", "dvorak", "colemak"])
+    @pytest.mark.parametrize("name", FULL_SIZE)
+    def test_the_entry_keys_flank_the_space_bar_symmetrically(self, name: str) -> None:
+        """Equal width added to both ends of a centred row leaves every key
+        already in it exactly where it was. That is the whole reason there
+        are two Sym keys rather than one: a single key appended to either
+        end would have slid Ctrl, Win, Alt and the space bar sideways by
+        half a key width on a layout the user has used daily for months."""
+        space = next(r for r in _load(f"{name}.json")["rows"] if r["id"] == "space")
+        first, last = space["keys"][0], space["keys"][-1]
+        for end in (first, last):
+            assert end.get("type") == "layer" and end.get("target") == "sym", (
+                f"{name}: the space row does not open the symbol page from both ends"
+            )
+        assert first["width"] == last["width"], (
+            f"{name}: Sym keys are {first['width']}u and {last['width']}u, so the "
+            "row is no longer symmetric and everything inside it has moved"
+        )
+
+    @pytest.mark.parametrize("name", FULL_SIZE)
+    def test_the_symbol_page_can_always_be_left(self, name: str) -> None:
+        """Two ways back, and both are needed. The ABC keys sit where the
+        Shift keys they replace were (a symbol page must carry no Shift, see
+        TestNoDuplicateGlyphsWithinALayer), and the Sym key on the space row
+        is on a row that renders on every page, so QML sends a layer key
+        already showing its own target back to base."""
+        rows = _load(f"{name}.json")["rows"]
+        sym_rows = [r for r in rows if r.get("layer") == "sym"]
+        back = [
+            k
+            for r in sym_rows
+            for k in r["keys"]
+            if k.get("type") == "layer" and k.get("target") == "base"
+        ]
+        assert back, f"{name}: the symbol page has no ABC key"
+
+    @pytest.mark.parametrize("name", FULL_SIZE)
+    def test_the_editing_keys_keep_their_slots(self, name: str) -> None:
+        """Tab, Del, Caps and Enter are in the same position and width on the
+        symbol page as on the letters. Full size has the room compact did
+        not, so a comma typed on the symbol page does not cost a hop back to
+        reach Enter."""
+        rows = {r["id"]: r for r in _load(f"{name}.json")["rows"]}
+        for base_id, sym_id in SWAPPED_ROWS[:2]:
+            base, sym = rows[base_id], rows[sym_id]
+            for index in (0, -1):
+                assert base["keys"][index] == sym["keys"][index], (
+                    f"{name}/{sym_id}: the key at index {index} differs from {base_id}"
+                )
+
+    @pytest.mark.parametrize("name", FULL_SIZE)
+    def test_every_symbol_key_types_itself_literally(self, name: str) -> None:
+        """`literal` routes the key through pressKeyLiteral, which skips the
+        shift / caps-lock case normalisation pressKey applies.
+
+        Caps Lock deliberately survives a layer switch, and Python's upper()
+        is not the identity on every non-ASCII character: without this, Caps
+        Lock plus the micro sign typed a Greek capital Mu.
+        """
+        for row in _load(f"{name}.json")["rows"]:
+            if row.get("layer") != "sym":
+                continue
+            for key in row["keys"]:
+                if key.get("type") == "char":
+                    assert key.get("literal") is True, (
+                        f"{name}/{row['id']}: {key['key']!r} is not marked literal"
+                    )
+
+    @pytest.mark.parametrize("name", FULL_SIZE)
+    def test_no_symbol_repeats_what_the_base_layer_already_types(self, name: str) -> None:
+        """The page is worth a hop only for glyphs that have nowhere else to
+        come from. Every ASCII symbol is already on the base layer, either
+        printed on a key or as a shifted variant that Shift and right-click
+        both reach, so putting one here would spend a slot saying something
+        the keyboard already said. This is the same property
+        TestNoDuplicateGlyphsWithinALayer states within a single page,
+        applied across the hop.
+        """
+        rows = _load(f"{name}.json")["rows"]
+        base = [r for r in rows if r.get("layer", "base") == "base"]
+        reachable = {k["key"] for r in base for k in r["keys"] if k.get("type") == "char"}
+        reachable |= {k["shifted"] for r in base for k in r["keys"] if k.get("shifted")}
+        repeats = sorted(
+            {
+                k["key"]
+                for r in rows
+                if r.get("layer") == "sym"
+                for k in r["keys"]
+                if k.get("type") == "char" and k["key"] in reachable
+            }
+        )
+        assert not repeats, f"{name}: {repeats} are already on the base layer"
+
+    @pytest.mark.parametrize("name", FULL_SIZE)
     def test_widest_row_is_still_15_5_units(self, name: str) -> None:
         # Main.qml derives keyW from the widest row; this is the historical
         # number the default 940 px window width is tuned against.
@@ -397,21 +530,28 @@ class TestNoDuplicateGlyphsWithinALayer:
     that reintroduces an overlap fails here rather than on a user's screen.
     """
 
-    # A row with no `layer` field always renders, which is how the full-size
-    # layouts are built. Both helpers must therefore default it to "base", not
-    # skip it: filtering on `if r.get("layer")` returned the empty set for
-    # qwerty / dvorak / colemak, so two of the tests below iterated nothing and
-    # passed without asserting anything, while the parametrize ids advertised
-    # coverage of all four layouts.
+    # A row with no `layer` field renders on *every* layer, which is how both
+    # the full-size layouts and their symbol page are built. Skipping such a
+    # row (`if r.get("layer")`) returned the empty set for qwerty / dvorak /
+    # colemak, so two of the tests below iterated nothing and passed without
+    # asserting anything while the parametrize ids advertised coverage of all
+    # four layouts. Defaulting it to "base" fixed that and was right while
+    # full size had a single layer; now that it has two, "base" is one layer
+    # too few, and a glyph put on the always-visible number row and on the
+    # symbol page as well would collide on screen with nothing to catch it.
+
+    @staticmethod
+    def _rows_on(path: Path, layer: str) -> list[dict]:
+        """Every row that renders while *layer* is showing."""
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return [row for row in data["rows"] if row.get("layer", layer) == layer]
 
     @staticmethod
     def _layer_glyphs(path: Path, layer: str) -> list[str]:
         """Every glyph a user can *see* on *layer*, in key order."""
-        data = json.loads(path.read_text(encoding="utf-8"))
         return [
             key["key"]
-            for row in data["rows"]
-            if row.get("layer", "base") == layer
+            for row in TestNoDuplicateGlyphsWithinALayer._rows_on(path, layer)
             for key in row["keys"]
             if key.get("type") == "char" and key.get("key")
         ]
@@ -441,10 +581,10 @@ class TestNoDuplicateGlyphsWithinALayer:
         so on its own it would let an equivalent overlap through on a layer
         that kept its Shift key.
         """
-        data = json.loads(path.read_text(encoding="utf-8"))
-        by_layer: dict[str, list] = {}
-        for row in data["rows"]:
-            by_layer.setdefault(row.get("layer", "base"), []).extend(row["keys"])
+        by_layer: dict[str, list] = {
+            layer: [k for row in self._rows_on(path, layer) for k in row["keys"]]
+            for layer in self._layers(path)
+        }
 
         for layer, keys in by_layer.items():
             has_shift = any(

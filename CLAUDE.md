@@ -1068,6 +1068,105 @@ Load-bearing facts:
   warnings. That's the only guard against a binding error shipping as a blank
   keyboard.
 
+## Symbol Layer (full-size layouts)
+
+`qwerty` / `dvorak` / `colemak` carry one symbol page, reached from a `Sym`
+key at each end of the space row. Compact View had `?123` and `=\<` from the
+start and the full-size layouts had nothing, so every glyph outside a
+physical keyboard's printing (`° × ÷ ± € £ © ™ … → ¿`) was reachable in one
+view and not the other. Data plus QML only, like Compact View: the backends
+never see a layer.
+
+**One page, not two.** Compact needs two because a 13u row cannot hold the
+ASCII symbols *and* the extended ones. Full size already has every ASCII
+symbol on the base layer, printed on a key or as a shifted variant that both
+Shift and right-click reach, so the page is only worth a hop for glyphs that
+have nowhere else to come from. That is 34 slots, and the long tail
+(accented letters, `∞ √ π † ★`, emoji) belongs in the Symbols & Emoji window,
+which has categories and search. A second page here would be duplicating that
+window's job in layout JSON. `TestFullSizeSymbolLayer::test_no_symbol_repeats_what_the_base_layer_already_types`
+is the rule stated as a property: it is the same thing
+`TestNoDuplicateGlyphsWithinALayer` asserts within one page, applied across
+the hop.
+
+The 34: **`sym-top`** dashes, ellipsis, curly quotes, arrows, inverted marks;
+**`sym-home`** currency, section, pilcrow, bullet, copyright, registered,
+trademark, degree; **`sym-bottom`** the maths set. Everything on it is Latin-1
+Supplement, General Punctuation, Arrows or Math Operators, all text
+presentation. **Keep it that way**: the geometric-shape and dingbat ranges
+(`✓ ✗ ★`) resolve through Segoe UI Emoji on Windows, which renders in colour
+and ignores the `color` property outright, which is the same reason the lock
+badge and the clear-context ring are not glyphs (see *Right-Click to Lock*).
+
+### Why nothing moves
+
+**Only the three letter rows swap.** `number` and `space` carry no `layer`
+field, so they render on every page: digits stay one tap away instead of
+going behind the hop the way Compact View has to put them, and the space bar
+never leaves the screen. Each `sym-*` row matches the row it replaces both in
+unit total and in key count, so `keyW`, the window width and every column
+position are identical across the hop. Tab, Del, Caps and Enter keep their
+exact slots, which is the payoff for full size having room compact does not:
+a comma typed on the symbol page does not cost a hop back to reach Enter.
+
+**Two `Sym` keys, not one, and that is arithmetic rather than taste.** Rows
+are centred individually, so adding equal width to *both* ends of a centred
+row leaves every key already in it exactly where it was. A single key
+appended to either end would have slid Ctrl, Win, Alt and the space bar
+sideways by half a key width on the row the user clicks most. The space row
+goes 11.6u to 14.6u and stays under the number row's 15.5u, so the window
+width is untouched.
+
+**The `sym-*` rows must sit before the `space` row in the JSON array.**
+`visibleRows` filters in array order, so with them appended at the end the
+symbol page rendered `number, space, sym-top, sym-home, sym-bottom` and the
+space bar jumped three rows up the keyboard. Guarded by
+`TestTheFullSizeSymbolPage::test_the_space_bar_does_not_move`, which measures
+from the top-left corner of the key grid rather than in scene coordinates:
+the first tap on any non-char key settles the chrome above the keyboard by
+one pixel (Caps does it too, and did before this feature existed), so a
+scene-y assertion fails by 1 px for a reason that has nothing to do with the
+grid.
+
+### Why the keys are `literal`
+
+Every char key on the page sets `"literal": true`, which routes it through
+`pressKeyLiteral` instead of `pressKey`. `pressKey` applies shift / caps-lock
+case normalisation, a layer switch deliberately leaves Caps Lock alone (it
+only affects letters, and this page has none), and Python's `str.upper()` is
+not the identity on every non-ASCII character: Caps Lock plus the micro sign
+typed a Greek capital Mu, so the key emitted one glyph while the cap
+displayed another. That is the same disagreement the symbol pages carry no
+Shift key in order to avoid, arriving through the other toggle.
+
+The page therefore carries **no Shift key** either, per the existing rule; the
+two Shift slots on `sym-bottom` hold `ABC` keys instead, which is the phone
+convention and puts a wide exit target where a hand reaching for Shift out of
+habit already is.
+
+### The `Sym` key is both the way in and the way out
+
+It sits on the space row, which renders on every page, so it cannot be a
+one-way door the way compact's layer keys are. `Main.qml` therefore sends a
+layer key whose target is **already showing** back to `base`. Every other
+layer key in the project targets something it is not on, so that branch is
+dead for them and their behaviour is unchanged. `stateKey: "symLayer"` lights
+the key while the page is up, which is the only thing on screen that says
+which page the letters were swapped for.
+
+**Swipe is disabled off the base layer** (`enabled: root.swipeEnabled &&
+root.activeLayer === "base"`). A swipe is a shape matched against letter
+centres and the registry holds the symbol page's centres instead, so there is
+nothing meaningful to decode. Disabling hands every press back to the keys'
+own MouseAreas, which is the ordinary swipe-off path, so no key on the page
+becomes a dead tap (the failure the two-registry split exists to prevent).
+
+Guarded by `tests/test_layouts.py::TestFullSizeSymbolLayer` (the data) and
+`tests/test_qml_compact_view.py::TestTheFullSizeSymbolPage` (the live QML).
+`TestNoDuplicateGlyphsWithinALayer`'s helpers now fold a row with no `layer`
+into **every** layer rather than into `base` alone: that was correct while
+full size had a single layer, and one layer too few the moment it had two.
+
 ## Modular Layouts
 
 Design doc at `docs/architecture/MODULAR_LAYOUTS.md`. Inspired by Octavium's (`C:\Users\Owen\dev\Octavium`) Layout/KeyDef data model. Four levels of modularity: (1) Built-in JSON layout packs (video editing, gaming, streaming). (2) User-created layouts via editor. (3) Panel composition - snap independent panels (QWERTY, numpad, macros) into a grid. (4) App-aware auto-switching based on foreground window.
