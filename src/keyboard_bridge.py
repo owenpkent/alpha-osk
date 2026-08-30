@@ -33,6 +33,8 @@ except ImportError:
 
 from .__version__ import __version__ as APP_VERSION
 from .analytics import TypingAnalytics
+from .glyphs import MAX_RECENT
+from .glyphs import categories as glyph_categories
 from .platform import CURRENT_PLATFORM, create_key_synthesizer
 from .platform.base import KeySynthesizerBase
 from .platform.password_detect import (
@@ -2528,6 +2530,69 @@ class KeyboardBridge(QObject):
         self._auto_space_pending = False
         self._predictions = []
         self.predictionsChanged.emit([])
+
+    # ------------------------------------------------------------------
+    #  Symbols & Emoji — the long tail behind the keyboard's symbol layer
+    # ------------------------------------------------------------------
+
+    @Slot(result="QVariantList")
+    def getGlyphCategories(self) -> List[Dict[str, object]]:
+        """Return the picker's catalogue as ``[{id, label, glyphs}, ...]``.
+
+        Static data from :mod:`src.glyphs`, rebuilt into plain dicts and
+        lists on every call because a NamedTuple does not survive the
+        conversion into QML.  Cheap enough to leave uncached: QML asks
+        once, when the window is first opened.
+        """
+        return glyph_categories()
+
+    @Slot(result=int)
+    def getRecentGlyphLimit(self) -> int:
+        """How many recently-tapped glyphs the picker keeps.
+
+        The list itself lives in the Qt settings layer, so QML owns the
+        storage; the bound stays here so there is one number rather than
+        one per side, the same split ``getSnippetLimit`` uses.
+        """
+        return MAX_RECENT
+
+    @Slot(str, result=bool)
+    def insertGlyph(self, glyph: str) -> bool:
+        """Type *glyph* verbatim into the focused app.
+
+        The same shape as :meth:`insertSnippet`, deliberately: a tapped
+        glyph is a keystroke that happens to come from a window instead of
+        a keycap, so it takes the sticky modifiers with it, settles a
+        deferred auto-space as prose, spends an armed auto-capital, and
+        goes out through ``_send_literal_text`` so a held modifier cannot
+        rewrite it.  Not gated on privacy mode, for the same reason a
+        snippet is not: the user tapped it, so it has to reach the app.
+
+        Unlike a snippet this is one character, but the context handling
+        is identical rather than merely similar, and that is the point:
+        the two paths are siblings and the failure mode this codebase
+        keeps hitting is a pair of nearly-identical blocks drifting apart.
+        ``_context_buffer`` is left alone on both, which costs nothing
+        here because ``NgramPredictor._tokenize`` keeps only ``[a-zA-Z']``
+        and would discard the glyph anyway.
+
+        Returns False when nothing was typed, so QML can say so rather
+        than leave a tap that did nothing looking like one that missed.
+        """
+        if self._edit_mode_active or not glyph:
+            return False
+        self._release_sticky_modifiers()
+        deferred_space, _ = self._take_deferred_space(True)
+        self._consume_auto_cap()
+        self._send_literal_text(deferred_space + glyph)
+        self._current_word = ""
+        self._raw_token = ""
+        self._word_typed_under_caps_lock = False
+        self._word_prefix_lost = False
+        self._auto_space_pending = False
+        self._predictions = []
+        self.predictionsChanged.emit([])
+        return True
 
     # --- Snippet auto-detection ----------------------------------------
 
