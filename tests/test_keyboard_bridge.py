@@ -1822,6 +1822,62 @@ class TestPunctuationSpacing:
         assert bridge._context_buffer != "" or bridge._current_word == "hel"
 
 
+class TestTheClosingQuoteRemovesTheAutoSpace:
+    """`"` is the one mark that both opens and closes, so it earns the
+    space removal only when parity says it is closing something.  Every
+    case is paired with the near-miss it has to leave alone.
+    """
+
+    def test_a_closing_quote_after_a_sentence_removes_the_auto_space(self, bridge: KeyboardBridge):
+        """`"hi." ` is not a thing anyone types."""
+        bridge._auto_space_after_punctuation = True
+        for ch in '"hi':
+            bridge.pressKey(ch)
+        bridge.pressKey(".")
+        bridge._synth.send_key.reset_mock()
+        bridge.pressKey('"')
+        bridge._synth.send_key.assert_any_call("BackSpace", modifiers=None)
+
+    def test_an_opening_quote_keeps_the_auto_space(self, bridge: KeyboardBridge):
+        """The inverse, and the reason `"` cannot just join
+        _NO_SPACE_BEFORE: `he said, "hi` wants that space.
+        """
+        bridge._auto_space_after_punctuation = True
+        for ch in "he":
+            bridge.pressKey(ch)
+        bridge.pressKey(",")
+        bridge._synth.send_key.reset_mock()
+        bridge.pressKey('"')
+        backspaces = [c for c in bridge._synth.send_key.call_args_list if c[0][0] == "BackSpace"]
+        assert backspaces == []
+
+    def test_a_closing_quote_after_a_prediction_removes_the_auto_space(
+        self, bridge: KeyboardBridge
+    ):
+        """The common case: the pill's own trailing space, then the quote
+        that closes the quotation it was typed inside.
+        """
+        bridge.pressKey('"')
+        bridge.pressKey("h")
+        bridge.pressPrediction("hello")
+        bridge._synth.send_key.reset_mock()
+        bridge.pressKey('"')
+        bridge._synth.send_key.assert_any_call("BackSpace", modifiers=None)
+
+    def test_a_user_typed_space_before_a_closing_quote_is_preserved(self, bridge: KeyboardBridge):
+        """Only our own auto-space is ever undone, same rule the other
+        marks follow.
+        """
+        bridge.pressKey('"')
+        for ch in "hi":
+            bridge.pressKey(ch)
+        bridge.pressSpecialKey("space")
+        bridge._synth.send_key.reset_mock()
+        bridge.pressKey('"')
+        backspaces = [c for c in bridge._synth.send_key.call_args_list if c[0][0] == "BackSpace"]
+        assert backspaces == []
+
+
 class TestMatchCase:
     """KeyboardBridge._match_case casing rules for autocorrect output."""
 
@@ -2680,6 +2736,45 @@ class TestAutoCapitalizeIsNotAHeldShift:
         assert capping._pending_auto_cap is True
         _press(capping, "then")
         assert "".join(_typed(capping)).endswith("Then")
+
+    def test_an_opening_quote_passes_it_along(self, capping: KeyboardBridge):
+        """`hi. "hello"` capitalises the h, not the quote.
+
+        A `"` cannot carry a capital, so spending one on it threw it
+        away and the quoted sentence started lowercase.
+        """
+        _press(capping, 'i went home. "world')
+        assert "".join(_typed(capping)).endswith('. "World')
+
+    def test_a_closing_quote_passes_it_along(self, capping: KeyboardBridge):
+        """The same from the other side: `"hi." Then`.
+
+        The screen reads `." Then`; the joined ``send_text`` stream reads
+        `. "Then` because the auto-space is undone by a BackSpace (a
+        ``send_key``) and the user's own space is a ``send_key`` too.
+        The capital on the T is what this asserts.
+        """
+        _press(capping, '"i went home." then')
+        assert "".join(_typed(capping)).endswith('"Then')
+
+    def test_an_opening_bracket_passes_it_along(self, capping: KeyboardBridge):
+        _press(capping, "i went home. (world")
+        assert "".join(_typed(capping)).endswith(". (World")
+
+    def test_a_letter_still_spends_it(self, capping: KeyboardBridge):
+        """The inverse: carrying it through everything would pass the
+        quote cases and capitalise the whole sentence.
+        """
+        _press(capping, "i went home. world here")
+        assert "".join(_typed(capping)).endswith(". Worldhere")
+
+    def test_a_digit_still_spends_it(self, capping: KeyboardBridge):
+        """`hi. 5 apples` starts its sentence with the digit, so there is
+        no letter left owed a capital.
+        """
+        _press(capping, "i went home. 5 apples")
+        assert "".join(_typed(capping)).endswith("5apples")
+        assert capping._pending_auto_cap is False
 
     def test_the_edit_popup_does_not_eat_it(self, capping: KeyboardBridge):
         """Nor capitalise everything typed into the popup.
@@ -3738,8 +3833,8 @@ class TestCaretMoveClearsContext:
 
         ``_keystroke_since_poll`` was set only by ``_press_char`` and
         ``pressSpecialKey``, so every path that types without going
-        through them -- a tapped pill, a snippet, a swiped word, the
-        autocorrect retype -- read to this poll as the user clicking
+        through them -- a tapped pill, a snippet, the autocorrect
+        retype -- read to this poll as the user clicking
         somewhere else.  The context and the freshly emitted next-word
         pills were then torn down within 250 ms of the insert that
         produced them.  It is set in the synthesizer wrappers now, so a

@@ -660,8 +660,8 @@ that needs raw data should use these forwarders:
 
 | Method | Returns | Used by |
 |--------|---------|---------|
-| `get_unigram_freqs()` | merged `unigrams` dict (base + user) | `keyboard_bridge.processSwipe` (candidate set for the swipe decoder) |
-| `get_capitalized(word, sentence_start)` | `str` | same, to render "iPhone" / "Owen" correctly on decoded swipes |
+| `get_unigram_freqs()` | merged `unigrams` dict (base + user) | the encapsulation seam for reading the vocabulary without touching `_ngram` |
+| `get_capitalized(word, sentence_start)` | `str` | same seam, for rendering "iPhone" / "Owen" correctly outside the merge path |
 | `learn`, `learn_word`, `learn_from_selection`, `predict`, `predict_with_refinement` | — | all normal prediction paths |
 | `blacklist_word`, `unblacklist_word`, `mark_bad_suggestion`, `remove_dispreference` | — | right-click word suppression |
 | `enable_vocabulary_pack`, `disable_vocabulary_pack`, `import_vocabulary_pack` | — | vocabulary-pack UI |

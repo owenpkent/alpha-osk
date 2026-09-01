@@ -57,12 +57,7 @@ Item {
     property int repeatDelay: 500
     property int repeatInterval: 120
 
-    // Wired to root.registerCharKey / unregisterCharKey / showKeyPreview /
-    // hideKeyPreview in Main.qml.  Registration matters: the swipe overlay
-    // covers the whole main-keyboard area and hit-tests the registry to pass
-    // taps through, so an unregistered key is a dead tap while swipe is on.
-    property var registerFn: null
-    property var unregisterFn: null
+    // Wired to root.showKeyPreview / hideKeyPreview in Main.qml.
     property var previewFn: null
     property var hidePreviewFn: null
 
@@ -107,19 +102,6 @@ Item {
             KeyButton {
                 id: numKey
                 property var kd: modelData
-
-                // Every key registers, Esc included, so the swipe overlay can
-                // hit-test it. Esc registers as a *special*, which is what
-                // keeps it out of the recogniser's key-centre map: an "Esc"
-                // centre would be a phantom letter in every shape match. See
-                // the two-registry note in Main.qml's registerCharKey, which
-                // is where the type filter lives.
-                Component.onCompleted: if (numRow.registerFn)
-                    numRow.registerFn(numKey, kd.special
-                        ? { type: "special", action: kd.special }
-                        : { type: "char", key: kd.key })
-                Component.onDestruction: if (numRow.unregisterFn)
-                    numRow.unregisterFn(numKey)
 
                 keyText: kd.special ? kd.display : kd.key
                 displayText: kd.special ? kd.display

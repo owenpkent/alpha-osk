@@ -5,7 +5,6 @@ from .fuzzy_recognizer import FuzzyRecognizer
 from .hybrid_predictor import HybridPredictor
 from .ngram_predictor import NgramPredictor
 from .ppm_predictor import PPMPredictor, PPMWordPredictor
-from .swipe_recognizer import SwipeRecognizer
 
 __all__ = [
     "NgramPredictor",
@@ -13,5 +12,4 @@ __all__ = [
     "PPMWordPredictor",
     "FuzzyRecognizer",
     "HybridPredictor",
-    "SwipeRecognizer",
 ]

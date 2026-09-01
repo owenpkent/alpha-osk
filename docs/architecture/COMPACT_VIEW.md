@@ -146,9 +146,8 @@ It is a panel rather than a fifth row in the layout JSON because the compact
 layout's three layers must each be four rows of 13u
 (`test_has_three_layers_of_four_rows`), and because a panel is independent of
 which letter arrangement is selected. The digits behave like any other char key: shift shows and types the
-shifted glyph, right-click types it without flipping sticky shift, both flash
-the key preview, and every digit registers in `charKeyRegistry` so the swipe
-overlay passes taps through instead of swallowing them.
+shifted glyph, right-click types it without flipping sticky shift, and both
+flash the key preview.
 
 **The leading slot is `Esc`, not the physical keyboard's `` ` ``.** The Del/Esc
 trade above put Esc behind a hop, and "get me out of this dialog" is a bad key
@@ -158,12 +157,9 @@ the full-size layouts carry their own `` ` `` in the layout JSON. The Esc here
 duplicates the `?123` one deliberately, so `?123` stays the fallback for any
 future layout that shows the compact grid without this panel.
 
-Two consequences of Esc being a special key rather than a char key: it takes no
-key-preview bubble (a bubble over Esc isn't "what it typed", matching the main
-grid), and it is **not** in `charKeyRegistry`, because a phantom "Esc" centre
-would corrupt every swipe shape match. That makes it a dead tap while swipe
-typing is on — which is exactly how Backspace, Tab and Enter already behave
-under the overlay, not a regression specific to this row.
+One consequence of Esc being a special key rather than a char key: it takes no
+key-preview bubble, since a bubble over Esc isn't "what it typed", which
+matches the main grid.
 
 ## Compact turns the side panels off
 

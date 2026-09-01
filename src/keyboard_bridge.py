@@ -42,7 +42,7 @@ from .platform.password_detect import (
     is_password_field,
 )
 from .platform.pointer import external_click_detected
-from .prediction import HybridPredictor, SwipeRecognizer
+from .prediction import HybridPredictor
 from .prediction.token_predictor import TokenPredictor
 from .snippets import MAX_SNIPPETS, SNIPPET_COLORS, SnippetStore
 from .telemetry import TelemetryClient
@@ -864,12 +864,6 @@ class KeyboardBridge(QObject):
         # poll, the same place ``_compat_auto_active`` is.
         self._game_auto_active = False
 
-        # Swipe / glide typing — off by default, toggled in settings.
-        # The recognizer needs the keyboard layout (key centres) before it
-        # can decode anything; QML pushes that via setSwipeLayout().
-        self._swipe_enabled = False
-        self._swipe = SwipeRecognizer()
-
         # Privacy mode — suppresses prediction and learning
         self._privacy_mode = False
         self._privacy_mode_manual = False  # User toggled manually
@@ -1041,11 +1035,11 @@ class KeyboardBridge(QObject):
     def _consume_auto_cap(self) -> None:
         """Spend a pending auto-capital on a verbatim insert.
 
-        A tapped pill, a snippet and a swiped word are each "the next
-        thing typed", so they spend the capital exactly as a character
-        does.  The capital itself is already *in* the inserted text --
-        ``_display_cased`` applies it to pills and swipe results, and a
-        snippet is verbatim by definition -- so all that is missing is
+        A tapped pill and a snippet are each "the next thing typed", so
+        they spend the capital exactly as a character does.  The capital
+        itself is already *in* the inserted text -- ``_display_cased``
+        applies it to pills, and a snippet is verbatim by definition --
+        so all that is missing is
         clearing the flag.  Without that the capital stays owed and
         lands later on some unrelated character: type "hello. ", tap a
         pill, and the next letter you type comes out uppercase mid-word.
@@ -1085,7 +1079,7 @@ class KeyboardBridge(QObject):
         """Settle a deferred auto-space: ``(text to type, capital owed)``.
 
         *prose* is the caller's verdict on what follows: a letter, a
-        tapped pill, a snippet or a swiped word all mean the punctuation
+        tapped pill or a snippet both mean the punctuation
         ended a sentence after all, so the withheld space is owed.  A
         digit (``prose=False``) confirms the decimal and there was never
         a space to send.  Either way the deferral is spent, so this must
@@ -1114,8 +1108,8 @@ class KeyboardBridge(QObject):
     def _without_held_modifiers(self) -> Iterator[None]:
         """Run a verbatim insert with every held modifier temporarily down.
 
-        Verbatim inserts (prediction pills, snippets, swipe words, the
-        autocorrect retype) push text the user never typed character by
+        Verbatim inserts (prediction pills, snippets, the autocorrect
+        retype) push text the user never typed character by
         character, and a modifier standing held at the OS level silently
         rewrites all of it.  With Shift down the scancode path emits
         "HELLO" for "hello" -- ``_make_char_scancode_events`` only knows
@@ -1189,6 +1183,34 @@ class KeyboardBridge(QObject):
 
     # Punctuation that should not have a space before them
     _NO_SPACE_BEFORE = {"?", "!", ".", ",", ";", ":", ")", "]", "}"}
+
+    # Marks that may stand between a sentence boundary and the first
+    # letter of the sentence, and so do not spend a pending auto-capital:
+    # it is owed to that letter, not to the quote or bracket in front of
+    # it.  `hi. "hello"` and `hi. (see below)` both capitalise the letter.
+    # Closers are in the set for the same reason from the other side:
+    # `he said "hi." Then` and `(see hi.) Then` each put one between the
+    # full stop and the word that owns the capital.  Everything else
+    # spends it, a digit included, since `hi. 5 apples` starts its
+    # sentence with the digit and there is no capital to place.
+    _CARRIES_AUTO_CAP = {'"', "'", "(", ")", "[", "]", "{", "}"}
+
+    def _closes_a_quotation(self) -> bool:
+        """Is the `"` about to be typed a closing quote rather than an opening one?
+
+        `"` is the one mark that is both, so it cannot join
+        `_NO_SPACE_BEFORE` outright the way `)` and `]` can: `he said
+        "hello"` wants our auto-space kept before the first quote and
+        removed before the second.  Parity over the on-screen mirror
+        answers it: an odd number of quotes already on screen means we
+        are inside a quotation, so this one closes it.
+
+        A `_context_buffer` that was truncated at 200 chars or reset by
+        an app switch reads as even, which keeps the space.  That is the
+        safe way to be wrong: a stray space the user can delete, rather
+        than one we deleted out from under them.
+        """
+        return self._context_buffer.count('"') % 2 == 1
 
     @Slot(bool)
     def setEditMode(self, active: bool) -> None:
@@ -1314,8 +1336,12 @@ class KeyboardBridge(QObject):
         # backspace flicker after their own keystroke is surprising and
         # in some apps (rich-text editors, web fields) has side effects
         # like clobbering selection state or undo history.
+        #
+        # A closing `"` counts too, but only once parity says it closes
+        # something (see _closes_a_quotation).
+        closes_quote = char == '"' and self._closes_a_quotation()
         if (
-            char in self._NO_SPACE_BEFORE
+            (char in self._NO_SPACE_BEFORE or closes_quote)
             and self._auto_space_pending
             and self._context_buffer.endswith(" ")
             and not self._current_word
@@ -1540,8 +1566,12 @@ class KeyboardBridge(QObject):
         # Spend the pending auto-capital on the character just typed.
         # Guarded on `consumed_auto_cap` so a capital armed by *this*
         # keystroke (the punctuation branches above) survives for the
-        # next one, which is the whole point of it.
-        if consumed_auto_cap and not rearmed_auto_cap:
+        # next one, which is the whole point of it, and on
+        # `_CARRIES_AUTO_CAP` so a quote or bracket standing in front of
+        # the sentence passes it along instead: `"` cannot carry a
+        # capital, so spending one on it just threw it away and left
+        # `hi. "hello"` lowercase.
+        if consumed_auto_cap and not rearmed_auto_cap and char not in self._CARRIES_AUTO_CAP:
             self._pending_auto_cap = False
             self._update_layer()
 
@@ -4068,9 +4098,9 @@ class KeyboardBridge(QObject):
         **Typing moves the caret too**, so anything synthesized since the
         previous poll means the move was ours and is expected.  The flag
         is set in ``_send_key`` / ``_send_text`` / ``_replace_text``
-        rather than at the keystroke entry points, because a tapped pill,
-        a snippet and a swiped word all move the caret without going
-        through ``_press_char``: set only there, this poll mistook our
+        rather than at the keystroke entry points, because a tapped pill
+        and a snippet both move the caret without going through
+        ``_press_char``: set only there, this poll mistook our
         own insert for the user clicking elsewhere and tore down the
         context — and the next-word pills — the insert had just produced.
 
@@ -4797,141 +4827,6 @@ class KeyboardBridge(QObject):
             len(original),
             len(edited),
         )
-
-    # --- Swipe / Glide Typing ---
-
-    swipeEnabledChanged = Signal(bool)
-
-    @Slot(bool)
-    def setSwipeEnabled(self, enabled: bool) -> None:
-        """Toggle swipe / glide typing globally."""
-        self._swipe_enabled = enabled
-        self.swipeEnabledChanged.emit(enabled)
-        _logger.info("Swipe typing: %s", enabled)
-
-    def _get_swipe_enabled(self) -> bool:
-        return self._swipe_enabled
-
-    swipeEnabled = Property(bool, _get_swipe_enabled, notify=swipeEnabledChanged)
-
-    @Slot("QVariant")
-    def setSwipeLayout(self, key_centers: Any) -> None:
-        """Push the current keyboard layout to the swipe recognizer.
-
-        QML supplies a ``{letter: [x, y]}`` map of key-centre coordinates
-        in any consistent unit (window-local pixels work fine — the
-        recognizer normalises internally).
-        """
-        try:
-            # PySide6 hands JS objects across as QJSValue; convert to a
-            # native Python dict before iterating.
-            try:
-                from PySide6.QtQml import QJSValue
-
-                if isinstance(key_centers, QJSValue):
-                    key_centers = key_centers.toVariant()
-            except ImportError:
-                # Non-Qt test runner: key_centers is already a native
-                # Python dict, no QJSValue conversion needed.
-                pass
-
-            mapping: Dict[str, tuple] = {}
-            items = key_centers.items() if hasattr(key_centers, "items") else key_centers
-            for key, value in items:
-                if value is None:
-                    continue
-                if isinstance(value, dict):
-                    x, y = value.get("x", 0.0), value.get("y", 0.0)
-                else:
-                    x, y = value[0], value[1]
-                mapping[str(key)] = (float(x), float(y))
-            self._swipe.set_layout(mapping)
-        except Exception as e:
-            _logger.warning("setSwipeLayout failed: %s", e)
-
-    @Slot("QVariant")
-    def processSwipe(self, points: Any) -> None:
-        """Decode a swipe trace and insert the top candidate.
-
-        Args:
-            points: List of ``[x, y]`` pairs from QML, in the same
-                    coordinate space as the layout pushed via
-                    :meth:`setSwipeLayout`.
-        """
-        if not self._swipe_enabled or self._privacy_mode:
-            return
-
-        # PySide6 may hand JS arrays across as QJSValue; convert to native
-        # Python before iterating.
-        try:
-            from PySide6.QtQml import QJSValue
-
-            if isinstance(points, QJSValue):
-                points = points.toVariant()
-        except ImportError:
-            # Non-Qt test runner: points is already a native Python
-            # list, no QJSValue conversion needed.
-            pass
-
-        try:
-            trace = [(float(p[0]), float(p[1])) for p in points]
-        except (TypeError, ValueError, IndexError):
-            return
-        if len(trace) < 4:
-            return
-
-        unigrams = self._predictor.get_unigram_freqs()
-        results = self._swipe.decode(
-            trace,
-            unigrams.keys(),
-            word_freq=dict(unigrams),
-            top_k=self._prediction_count,
-        )
-        if not results:
-            self._add_debug_log("Swipe: no candidates matched")
-            return
-
-        # Apply learned/built-in capitalisation to each candidate so that
-        # picking the top word respects "iPhone" vs. "iphone".  Sentence
-        # start fires only when the trimmed context actually ends with
-        # .!? — empty context is *not* a sentence start (matches the
-        # n-gram path in HybridPredictor._merge_predictions; see
-        # CLAUDE.md "Auto-Capitalization & Proper Nouns" for the why).
-        trimmed = self._context_buffer.rstrip()
-        sentence_start = bool(trimmed) and trimmed.endswith((".", "!", "?"))
-        capitalised = [self._predictor.get_capitalized(w, sentence_start) for w in results]
-
-        display = self._display_cased(capitalised)
-        top = display[0]
-        # Same as the pill and snippet paths: the gesture is a keystroke,
-        # and the capital (if any) is already in `top`, so a Shift still
-        # held would double-apply and deliver the whole word uppercase.
-        self._release_sticky_modifiers()
-        # Same settlement the pill path does: deliver a deferred space
-        # (with the capital it owes, which _display_cased could not have
-        # known about) and spend an armed one, which is already in `top`.
-        deferred_space, owes_capital = self._take_deferred_space(True)
-        if owes_capital and top[:1].islower():
-            top = top[0].upper() + top[1:]
-        self._consume_auto_cap()
-        self._send_literal_text(deferred_space + top + " ")
-        self._context_buffer += top + " "
-        self._sentence_buffer += top + " "
-        if len(self._context_buffer) > 200:
-            self._context_buffer = self._context_buffer[-200:]
-        self._current_word = ""
-        self._raw_token = ""
-        self._word_typed_under_caps_lock = False
-        # The insert replaced the word outright, so a lost opening
-        # is no longer owed to anything.  Travels with the flag above.
-        self._word_prefix_lost = False
-
-        # Show the rest as alternative predictions in case the top guess is wrong.
-        self._predictions = display
-        self.predictionsChanged.emit(display)
-        self._analytics.record_word_completed(top)
-        self._add_debug_log(f"Swipe → {top} (alts: {display[1:4]})")
-        _logger.info("Swipe decoded (word_len=%d, alt_count=%d)", len(top), len(display[1:4]))
 
     # --- Audio Feedback ---
 
