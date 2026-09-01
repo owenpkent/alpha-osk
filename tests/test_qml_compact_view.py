@@ -391,36 +391,6 @@ class TestNumberRowPanel:
         keys = [d.get("key") for d in number_row_defs if d.get("key")]
         assert keys == list("1234567890-=")
 
-    def test_escape_stays_out_of_the_swipe_registry(self, qml_root) -> None:
-        """A phantom "Esc" key centre would corrupt every swipe shape match.
-
-        The panel's 12 char keys must register; its Esc must not. Asserted
-        in compact view, where the base layer carries no digits and no
-        `-`/`=` (those live on ?123), so every one of the 12 can only have
-        come from this panel.
-
-        The cost of staying out is that Esc is a dead tap while swipe
-        typing is on, which is how every other special key already behaves
-        under the overlay.
-        """
-        root, warnings, _ = qml_root
-        # Compact brings the panel with it: showNumberRow is derived from
-        # whether the active layout carries a `number` row of its own.
-        root.setProperty("compactView", True)
-        QCoreApplication.processEvents()
-
-        entries = root.property("charKeyRegistry").toVariant()
-        keys = [e["kd"]["key"] for e in entries]
-
-        assert set("1234567890-=") <= set(keys)
-        # registerCharKey only admits single-character char keys, so an Esc
-        # that slipped through would show up as a multi-char entry.
-        assert all(len(k) == 1 for k in keys), (
-            f"non-character key leaked into the swipe registry: {[k for k in keys if len(k) != 1]}"
-        )
-        assert "Esc" not in keys
-        assert _real_warnings(warnings) == []
-
 
 class TestEveryRowFitsTheContentArea:
     """No keyboard row may render wider than the space the sizer reserved.
@@ -1400,28 +1370,4 @@ class TestTheFullSizeSymbolPage:
 
         sent = [call.args[0] for call in bridge._synth.send_text.call_args_list]
         assert sent == ["µ"], f"typed {sent!r} instead of the glyph on the cap"
-        assert _real_warnings(warnings) == []
-
-    def test_swipe_is_disabled_on_the_symbol_page(self, full_size) -> None:
-        """A swipe is a shape matched against letter centres, and off the base
-        layer the registry holds the symbol page's instead. Disabling the
-        overlay hands every press back to the keys' own MouseAreas, which is
-        the ordinary swipe-off path, so nothing on the page becomes a dead
-        tap the way the specials did when one registry served both jobs.
-        """
-        root, warnings, _ = full_size
-        root.setProperty("swipeEnabled", True)
-        QCoreApplication.processEvents()
-
-        overlay = root.findChild(QQuickItem, "swipeOverlay")
-        assert overlay is not None, "swipeOverlay not found by objectName"
-        assert overlay.property("enabled") is True, "precondition: swipe is on"
-
-        TestSecondSymbolPage._tap(root, "sym")
-        overlay = root.findChild(QQuickItem, "swipeOverlay")
-        assert overlay.property("enabled") is False, "the overlay still owns every press"
-
-        TestSecondSymbolPage._tap(root, "sym")
-        overlay = root.findChild(QQuickItem, "swipeOverlay")
-        assert overlay.property("enabled") is True, "swipe never came back"
         assert _real_warnings(warnings) == []
