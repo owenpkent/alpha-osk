@@ -329,7 +329,7 @@ class TestLinuxSendText:
 
     Regression: ``xdotool type --clearmodifiers <text>`` and
     ``ydotool type <text>`` pass user-controlled text (typed words,
-    inserted snippets, swipe results) as the final argv token with
+    inserted snippets) as the final argv token with
     nothing forcing positional interpretation. A typed string that
     exactly matches a recognised flag (``--help``, ``--window``) would
     be parsed as an option and silently dropped instead of typed: a

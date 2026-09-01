@@ -49,7 +49,6 @@ Python status columns reflect `main`; C++ columns reflect the `cpp-rewrite` bran
 | PPM (char model) | ✅ | ✅ | ✅ | 🚧 ² | ❌ | ❌ |
 | Fuzzy / autocorrect | ✅ | ✅ | ✅ | 🚧 ² | ❌ | ❌ |
 | Hybrid merge (rank default) | ✅ | ✅ | ✅ | 🚧 ² | ❌ | ❌ |
-| Swipe typing | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ |
 | Structured tokens (numbers / phones / email domains) ⁹ | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ |
 | **Features** | | | | | | |
 | Settings panel | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ |
