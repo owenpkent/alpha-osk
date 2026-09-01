@@ -2532,7 +2532,7 @@ class KeyboardBridge(QObject):
         self.predictionsChanged.emit([])
 
     # ------------------------------------------------------------------
-    #  Symbols & Emoji — the long tail behind the keyboard's symbol layer
+    #  Symbols & Emoji: the long tail behind the keyboard's symbol layer
     # ------------------------------------------------------------------
 
     @Slot(result="QVariantList")

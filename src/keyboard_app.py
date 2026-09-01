@@ -689,8 +689,8 @@ def _wire_floating_windows(root) -> None:
     (objectNames ``snippetsWindow`` and ``symbolsWindow``) so they can
     float anywhere on the desktop, outside the keyboard. Like the main
     window they must never steal focus from the app the user is typing
-    into, so on Windows each needs ``WS_EX_NOACTIVATE`` applied via Win32
-    — the Qt ``WindowDoesNotAcceptFocus`` flag alone doesn't stop
+    into, so on Windows each needs ``WS_EX_NOACTIVATE`` applied via Win32,
+    since the Qt ``WindowDoesNotAcceptFocus`` flag alone doesn't stop
     click-activation there. The native handle only exists once a window
     has been shown, so we (re)apply on every visibility change rather
     than once at startup. A missing window is skipped rather than
@@ -720,12 +720,12 @@ def _wire_floating_windows(root) -> None:
                 try:
                     if target.property("visible"):
                         _apply_windows_extended_styles(target)
-                except Exception as exc:  # pragma: no cover — defensive
+                except Exception as exc:  # pragma: no cover, defensive
                     _logger.debug("%s style apply failed: %s", label, exc)
 
             win.visibleChanged.connect(_apply)
             _logger.info("Wired %s focus-suppression", name)
-    except Exception as exc:  # pragma: no cover — defensive
+    except Exception as exc:  # pragma: no cover, defensive
         _logger.warning("Failed to wire the floating windows: %s", exc)
 
 

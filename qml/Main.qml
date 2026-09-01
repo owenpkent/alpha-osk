@@ -4258,6 +4258,11 @@ Window {
 
             property bool _positioned: false
 
+            // Wired to the page count rather than to each mutation of the
+            // glyph list, so any future way the list shrinks under the
+            // current page is caught without a second call site.
+            onPageCountChanged: clampPage()
+
             function clampPage() {
                 if (page > pageCount - 1) page = pageCount - 1
                 if (page < 0) page = 0

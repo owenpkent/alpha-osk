@@ -1084,7 +1084,7 @@ symbol on the base layer, printed on a key or as a shifted variant that both
 Shift and right-click reach, so the page is only worth a hop for glyphs that
 have nowhere else to come from. That is 34 slots, and the long tail
 (accented letters, `∞ √ π † ★`, emoji) belongs in the Symbols & Emoji window,
-which has categories and search. A second page here would be duplicating that
+which has categories and a Recent page. A second page here would be duplicating that
 window's job in layout JSON. `TestFullSizeSymbolLayer::test_no_symbol_repeats_what_the_base_layer_already_types`
 is the rule stated as a property: it is the same thing
 `TestNoDuplicateGlyphsWithinALayer` asserts within one page, applied across
