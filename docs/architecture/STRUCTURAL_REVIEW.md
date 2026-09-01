@@ -23,7 +23,7 @@ above it is componentised. Everything passes through two files.
 ```mermaid
 flowchart TD
     subgraph QML["QML presentation, 11,867 lines"]
-        MQ["Main.qml, 5,070 lines<br/>81 root properties<br/>17 inline Window/Popup blocks"]
+        MQ["Main.qml, 5,070 lines<br/>81 root properties<br/>16 inline Window/Popup blocks"]
         CP["17 components"]
     end
 
@@ -98,9 +98,9 @@ intercepts keystrokes.
 | QML | 11,867 lines |
 | Tests | 21,291 lines, 1,418 test functions |
 | `keyboard_bridge.py` | 5,155 lines, 97 slots, 36 signals, 20 properties |
-| `Main.qml` | 5,070 lines, 81 root properties, 17 inline windows and popups |
+| `Main.qml` | 5,070 lines, 81 root properties, 16 inline windows and popups |
 | QML to bridge contract | 167 call sites over 103 distinct names |
-| Test references to bridge privates | 763 |
+| Test references to bridge privates | 750 |
 | Python exempt from mypy | 3,001 lines, 15.1% of `src/` |
 | Functions over 100 lines | 18 of 643 |
 
@@ -127,7 +127,7 @@ detection. Its `__init__` is 334 lines assigning 69 flat attributes and
 four timers.
 
 That alone would be ordinary god-object debt. What makes it expensive is
-the second number: **763 references to `bridge._...` across the test
+the second number: **750 references to `bridge._...` across the test
 suite**, frequently as *setup* rather than assertion. Renaming an internal
 field is a test-suite migration, so the cost of any decomposition is paid
 twice.
@@ -142,11 +142,12 @@ subsystem at a time. Each move is mechanical and independently shippable.
 ### 3.2 Parallel blocks are the dominant defect generator
 
 `CLAUDE.md` names this failure mode three separate times, and the project
-has shipped real bugs from it repeatedly. The count is worse than the docs
-state: sticky-modifier auto-release exists in **five** hand-written copies,
-not the four currently documented (the edit-mode intercept, the chord
+has shipped real bugs from it repeatedly. Sticky-modifier auto-release
+exists in **five** hand-written copies (the edit-mode intercept, the chord
 branch, the `_press_char` tail, `_release_edit_chord_modifiers`, and the
-`pressSpecialKey` tail). The verbatim-insert ritual (release sticky, settle
+`pressSpecialKey` tail), and the docs only say so in two places: the
+*Sticky Modifiers* section counts four, and *Editing a Prediction* names
+`_release_edit_chord_modifiers` as the fifth on its own. The verbatim-insert ritual (release sticky, settle
 the owed space, spend the pending auto-cap, send inside the held-modifier
 guard, reset five buffers) is repeated across five call sites, with only
 `_release_sticky_modifiers()` ever actually extracted.
@@ -172,7 +173,7 @@ requiring every site to remember.
 
 ### 3.3 Main.qml holds whole floating windows inline
 
-5,070 lines, 81 root-level properties, 17 inline `Window` or `Popup`
+5,070 lines, 81 root-level properties, 16 inline `Window` or `Popup`
 blocks. The Snippets window is roughly 1,200 lines, self-contained, with
 its own paging, actions sheet and editor state, reaching back into `root`
 only for theme helpers and the desktop clamp. Seven toast popups repeat the
@@ -305,7 +306,7 @@ configuration on 1 September 2026.
 | `SECURITY-EXCEPTIONS.md` | "`main` has no branch-protection rule", skipped because "solo-dev private repo" | The repository is public, and protection is configured with four required checks (Lint, Type Check, Tests, OSV Scanner). The entry's own stated revisit trigger has fired. |
 | `CLAUDE.md` | "mirrored 1:1 in C++", stated as present fact | No C++ files are tracked on `main`. The rewrite lives on `cpp-rewrite`. `docs/architecture/BACKEND_PARITY.md` says so; `CLAUDE.md` never does. |
 | `CLAUDE.md` | "1576 tests" in one section, "~1300" and "~1600" in others | 1,418 test functions on `main`. The three figures also contradict one another. |
-| `TODO.md` | Phase 3 "Hybrid n-gram + DistilGPT-2 LLM"; backlog item "Emoji and symbol panels" unchecked | The LLM path is constructed disabled and unreachable. The Symbols and Emoji window has shipped. |
+| `TODO.md` | Phase 3 "Hybrid n-gram + DistilGPT-2 LLM" | The LLM path is constructed disabled and unreachable. The unchecked "Emoji and symbol panels" item beside it is accurate: that window exists only on an open branch. |
 | `docs/architecture/BACKEND_PARITY.md` | Parity "verified mechanically by `tests/conformance/`" | `test_cross_backend_parity` skips unless `ALPHA_OSK_CPP_BIN` is set, and that variable appears nowhere in CI or `check.py`. Only the Python determinism self-check runs. |
 
 ---
@@ -374,7 +375,7 @@ is the part that is hard, correct, and best left alone.
    problems, one move.
 6. **Split one feature surface off the bridge as a proof.** Telemetry or
    data export, each of which already delegates to a backing object and has
-   few QML call sites. Do one, measure what the 763 private-attribute test
+   few QML call sites. Do one, measure what the 750 private-attribute test
    references actually cost, then decide whether to continue. This is a
    measurement, not a commitment.
 7. **Decide the status of the C++ branch.** Either give the conformance job
@@ -389,7 +390,9 @@ is the part that is hard, correct, and best left alone.
 Seven parallel passes over the tree: the bridge, the prediction engine, the
 platform layer, the QML layer, persistence, lifecycle and build, and the
 test suite and documentation. Counts come from the working tree at
-`7d69557`. Repository visibility and branch protection were read from the
+`7d69557`. The inline-window count is the `Window` and `Popup` blocks in
+`Main.qml` less the root window; the private-reference count is
+occurrences of `bridge._` under `tests/`. Repository visibility and branch protection were read from the
 live configuration rather than assumed. Merge-order hazards between
 in-flight branches were deliberately left out of this document, because
 they expire; findings here are about the structure, which does not.
