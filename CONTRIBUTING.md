@@ -153,7 +153,6 @@ Other useful docs in `docs/`:
 - `docs/architecture/HYBRID_MERGING.md` — prediction merging strategies
 - `docs/architecture/FUZZY_RECOGNITION.md` — spatial error correction
 - `docs/architecture/PPM.md` — character-level prediction
-- `docs/architecture/SWIPE_TYPING.md` — glide-typing decoder
 - `docs/build/WINDOWS.md`, `docs/build/LINUX.md`, `docs/build/MACOS.md` — per-platform build
   and packaging notes
 
