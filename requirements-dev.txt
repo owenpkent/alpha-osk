@@ -44,6 +44,11 @@ Pygments==2.20.0
 # Pulled in transitively by cyclonedx-bom -> py-serializable; pin past
 # CVE-2026-41066 (GHSA-vfmq-68hx-4jfw, fixed in 6.1.0).
 lxml==6.1.1
+# Pulled in transitively by cyclonedx-bom -> cyclonedx-python-lib[validation]
+# -> jsonschema[format]; pin past PYSEC-2026-215 (GHSA-65pc-fj4g-8rjx,
+# fixed in 3.15).  osv-scanner 2.5.x resolves the transitive closure of
+# this file, so an unpinned idna is what turned the scan red.
+idna==3.19
 
 # SBOM generation (used at release time by build/{windows,linux}/build.py
 # to emit CycloneDX 1.6 SBOMs alongside the .exe / AppImage).  Not used
