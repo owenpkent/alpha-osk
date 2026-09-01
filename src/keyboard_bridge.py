@@ -1190,6 +1190,34 @@ class KeyboardBridge(QObject):
     # Punctuation that should not have a space before them
     _NO_SPACE_BEFORE = {"?", "!", ".", ",", ";", ":", ")", "]", "}"}
 
+    # Marks that may stand between a sentence boundary and the first
+    # letter of the sentence, and so do not spend a pending auto-capital:
+    # it is owed to that letter, not to the quote or bracket in front of
+    # it.  `hi. "hello"` and `hi. (see below)` both capitalise the letter.
+    # Closers are in the set for the same reason from the other side:
+    # `he said "hi." Then` and `(see hi.) Then` each put one between the
+    # full stop and the word that owns the capital.  Everything else
+    # spends it, a digit included, since `hi. 5 apples` starts its
+    # sentence with the digit and there is no capital to place.
+    _CARRIES_AUTO_CAP = {'"', "'", "(", ")", "[", "]", "{", "}"}
+
+    def _closes_a_quotation(self) -> bool:
+        """Is the `"` about to be typed a closing quote rather than an opening one?
+
+        `"` is the one mark that is both, so it cannot join
+        `_NO_SPACE_BEFORE` outright the way `)` and `]` can: `he said
+        "hello"` wants our auto-space kept before the first quote and
+        removed before the second.  Parity over the on-screen mirror
+        answers it: an odd number of quotes already on screen means we
+        are inside a quotation, so this one closes it.
+
+        A `_context_buffer` that was truncated at 200 chars or reset by
+        an app switch reads as even, which keeps the space.  That is the
+        safe way to be wrong: a stray space the user can delete, rather
+        than one we deleted out from under them.
+        """
+        return self._context_buffer.count('"') % 2 == 1
+
     @Slot(bool)
     def setEditMode(self, active: bool) -> None:
         """Route OSK keystrokes to the QML edit popup instead of the OS.
@@ -1314,8 +1342,12 @@ class KeyboardBridge(QObject):
         # backspace flicker after their own keystroke is surprising and
         # in some apps (rich-text editors, web fields) has side effects
         # like clobbering selection state or undo history.
+        #
+        # A closing `"` counts too, but only once parity says it closes
+        # something (see _closes_a_quotation).
+        closes_quote = char == '"' and self._closes_a_quotation()
         if (
-            char in self._NO_SPACE_BEFORE
+            (char in self._NO_SPACE_BEFORE or closes_quote)
             and self._auto_space_pending
             and self._context_buffer.endswith(" ")
             and not self._current_word
@@ -1540,8 +1572,12 @@ class KeyboardBridge(QObject):
         # Spend the pending auto-capital on the character just typed.
         # Guarded on `consumed_auto_cap` so a capital armed by *this*
         # keystroke (the punctuation branches above) survives for the
-        # next one, which is the whole point of it.
-        if consumed_auto_cap and not rearmed_auto_cap:
+        # next one, which is the whole point of it, and on
+        # `_CARRIES_AUTO_CAP` so a quote or bracket standing in front of
+        # the sentence passes it along instead: `"` cannot carry a
+        # capital, so spending one on it just threw it away and left
+        # `hi. "hello"` lowercase.
+        if consumed_auto_cap and not rearmed_auto_cap and char not in self._CARRIES_AUTO_CAP:
             self._pending_auto_cap = False
             self._update_layer()
 
