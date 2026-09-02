@@ -61,6 +61,11 @@ class TestAlwaysOnTopIsAppliedAsAZOrderChange:
         monkeypatch.setattr(
             ctypes, "windll", types.SimpleNamespace(user32=user32, kernel32=kernel32), raising=False
         )
+        # The real function returns early off Windows so mypy can prune the
+        # ctypes body under --platform linux.  The suite runs on Linux too,
+        # and the fake windll above is what the body needs, so tell it it is
+        # on Windows for the duration of the test.
+        monkeypatch.setattr(sys, "platform", "win32")
         return user32
 
     @staticmethod
@@ -167,6 +172,11 @@ class TestTheKeyboardKeepsItsTaskbarButton:
         monkeypatch.setattr(
             ctypes, "windll", types.SimpleNamespace(user32=user32, kernel32=kernel32), raising=False
         )
+        # The real function returns early off Windows so mypy can prune the
+        # ctypes body under --platform linux.  The suite runs on Linux too,
+        # and the fake windll above is what the body needs, so tell it it is
+        # on Windows for the duration of the test.
+        monkeypatch.setattr(sys, "platform", "win32")
         return user32
 
     @staticmethod
