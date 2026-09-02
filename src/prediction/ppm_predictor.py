@@ -20,6 +20,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
+from ..atomic_write import atomic_write_json, atomic_write_text
+
 _logger = logging.getLogger("PPMPredictor")
 
 
@@ -363,9 +365,7 @@ class PPMPredictor:
             "root": node_to_dict(self.root),
         }
 
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with open(path, "w") as f:
-            json.dump(data, f)
+        atomic_write_json(path, data)
 
         _logger.info("PPM model saved to %s", path)
 
@@ -622,9 +622,8 @@ class PPMWordPredictor:
         self.ppm.save(model_path)
 
         if dict_path:
-            with open(dict_path, "w") as f:
-                for word in sorted(self.dictionary):
-                    f.write(word + "\n")
+            text = "".join(word + "\n" for word in sorted(self.dictionary))
+            atomic_write_text(dict_path, text)
 
     def get_stats(self) -> dict:
         """Get statistics."""

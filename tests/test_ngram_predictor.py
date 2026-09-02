@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
+
+import pytest
 
 from src.prediction.ngram_predictor import NgramPredictor
 
@@ -206,6 +209,39 @@ class TestNgramPersistence:
         loaded.load(path)
         loaded_preds = loaded.predict("the ", n=5)
         assert original_preds == loaded_preds
+
+    def test_a_save_whose_rename_fails_leaves_the_old_model_loadable(
+        self, tmp_model_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A crash mid-write must not corrupt the model a user cannot
+        recreate: the previous good save has to survive a failed rename
+        untouched, exactly as it did before this one was attempted."""
+        path = tmp_model_dir / "ngram.json"
+        predictor = NgramPredictor()
+        predictor.learn("zqxvex wqjplo brkzun")
+        predictor.save(path)
+        good_bytes = path.read_bytes()
+        baseline = NgramPredictor()
+        baseline.load(path)
+        baseline_unigrams = dict(baseline.unigrams)
+
+        predictor.learn("zqxvex wqjplo brkzun again and again")
+
+        def _boom(_src: object, _dst: object) -> None:
+            raise OSError("simulated rename failure")
+
+        monkeypatch.setattr(os, "replace", _boom)
+        with pytest.raises(OSError):
+            predictor.save(path)
+
+        # The file on disk is byte-identical to the last good save.
+        assert path.read_bytes() == good_bytes
+        loaded = NgramPredictor()
+        loaded.load(path)
+        assert dict(loaded.unigrams) == baseline_unigrams
+        # No *.tmp sibling left behind in the model directory.
+        leftovers = [p for p in tmp_model_dir.iterdir() if p.name != "ngram.json"]
+        assert leftovers == []
 
 
 class TestNgramTokenization:

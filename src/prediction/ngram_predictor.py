@@ -14,6 +14,7 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Dict, List, Mapping, Optional, Tuple
 
+from ..atomic_write import atomic_write_json
 from .language import ENGLISH, LanguageProfile
 from .token_predictor import TokenPredictor
 
@@ -1141,9 +1142,7 @@ class NgramPredictor:
             "candidate_counts": dict(self._candidate_counts),
             "candidate_last_seen": dict(self._candidate_last_seen),
         }
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with open(path, "w") as f:
-            json.dump(data, f)
+        atomic_write_json(path, data)
         _logger.info("Model saved to %s", path)
 
     # Defensive bounds on saved-model shape.  A legitimate model grown
