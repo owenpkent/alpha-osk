@@ -49,7 +49,6 @@ from .prediction import HybridPredictor
 from .prediction.fuzzy_recognizer import positions_from_layout
 from .prediction.token_predictor import TokenPredictor
 from .snippets import MAX_SNIPPETS, SNIPPET_COLORS, SnippetStore
-from .telemetry import TelemetryClient
 from .text_patterns import (
     detect_snippet_candidate,
     is_email,
@@ -731,24 +730,6 @@ class KeyboardBridge(QObject):
         # mutation, so there is no on-quit save path to wire up.
         self._snippets = SnippetStore()
         self._snippets.load()
-
-        # Telemetry — opt-in, off by default.  Pulls lifetime counters
-        # from the analytics dashboard's getter so there is one source
-        # of truth.  Settings → Data & Privacy → Privacy controls it; the QTimer below
-        # checks once an hour whether the weekly window has elapsed.
-        # See docs/architecture/TELEMETRY.md (design) and docs/PRIVACY.md (user-facing).
-        self._telemetry = TelemetryClient(
-            analytics_provider=self._analytics.get_session_stats,
-            app_version=APP_VERSION,
-            os_name=CURRENT_PLATFORM,
-        )
-        self._telemetry_timer = QTimer(self)
-        # Hourly tick is plenty: maybe_submit() short-circuits unless
-        # the 7-day window has elapsed, and we want the timer to be
-        # cheap (a no-op call costs ~5 microseconds).
-        self._telemetry_timer.setInterval(60 * 60 * 1000)
-        self._telemetry_timer.timeout.connect(self._telemetry.maybe_submit)
-        self._telemetry_timer.start()
 
         # Context tracking for predictions
         self._context_buffer = ""
@@ -4193,21 +4174,12 @@ class KeyboardBridge(QObject):
             getattr(self, "_password_timer", None),
             getattr(self, "_foreground_timer", None),
             getattr(self, "_click_timer", None),
-            getattr(self, "_telemetry_timer", None),
         ):
             if timer is not None:
                 try:
                     timer.stop()
                 except RuntimeError:
                     pass  # already deleted by Qt; harmless
-
-        # Last-chance telemetry submit on the on-quit path.  Internally
-        # gated on consent + endpoint + anon_id + a 60 s anti-spam
-        # window, so calling it unconditionally here is safe.
-        try:
-            self._telemetry.submit_on_quit()
-        except Exception as e:
-            _logger.info("telemetry on-quit submit failed: %s", e)
 
         # Release any held modifier — sticky or right-click-locked — so
         # quitting with one "active" doesn't pin it at the OS level.
@@ -4422,6 +4394,16 @@ class KeyboardBridge(QObject):
     def autoSaveOnExit(self) -> bool:
         """Whether to auto-save prediction model on exit."""
         return self._auto_save_on_exit
+
+    @property
+    def analytics(self) -> TypingAnalytics:
+        """Read-only access to the analytics store.
+
+        For objects that live outside the bridge (``TelemetryBridge``,
+        which needs ``get_session_stats`` to build its payload) rather
+        than reaching into the private ``_analytics`` attribute.
+        """
+        return self._analytics
 
     # --- Privacy Mode ---
 
@@ -4896,34 +4878,6 @@ class KeyboardBridge(QObject):
         """Enable/disable automatic password field detection."""
         self._password_detect_enabled = enabled
         _logger.info("Password field detection: %s", enabled)
-
-    # --- Telemetry (opt-in usage stats) ---
-
-    @Slot(result=bool)
-    def getTelemetryEnabled(self) -> bool:
-        """QML reads this on Settings panel mount to render the toggle."""
-        return self._telemetry.enabled
-
-    @Slot(bool)
-    def setTelemetryEnabled(self, enabled: bool) -> None:
-        """Toggle the opt-in telemetry pipeline.  Off → On generates a
-        new anon_id and starts the weekly clock; On → Off clears the
-        anon_id (so future opt-in cycles cannot be linked).  See
-        docs/PRIVACY.md.
-        """
-        if enabled:
-            self._telemetry.enable()
-        else:
-            self._telemetry.disable()
-        _logger.info("Telemetry consent: %s", enabled)
-
-    @Slot(result=bool)
-    def forgetTelemetryData(self) -> bool:
-        """Ask the server to delete this user's contributed row.
-        Triggered by the 'Delete my contributed data' button in
-        Settings → Data & Privacy → Privacy.  Returns True if the request was sent.
-        """
-        return self._telemetry.forget()
 
     def _get_privacy_mode(self) -> bool:
         return self._privacy_mode

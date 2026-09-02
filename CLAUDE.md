@@ -66,6 +66,7 @@ User clicks key (QML)
 | Path | What |
 |------|------|
 | `src/keyboard_bridge.py` | Central bridge: key handling, modifiers, context tracking, predictions |
+| `src/telemetry_bridge.py` | `TelemetryBridge` - QML-facing wrapper around opt-in telemetry, registered as its own context property (see *Opt-in Telemetry*) |
 | `src/keyboard_app.py` | App launcher: QML engine, window flags, auto-save on exit |
 | `src/platform/` | OS abstraction - `linux.py` (xdotool/ydotool), `windows.py` (SendInput), `password_detect.py` |
 | `src/platform/__init__.py` | Platform detection, `get_config_dir()`, `get_model_dir()` |
@@ -402,6 +403,8 @@ Regression coverage: `tests/test_data_export.py::TestInspect::test_zip_slip_reje
 ## QML <-> Python Bridge Pattern
 
 QML calls Python via `@Slot` methods on `KeyboardBridge`; Python emits `Signal`s back. The keystroke round trip is the one diagrammed under *Architecture Overview*, and it ends with `self.predictionsChanged.emit(predictions)`, which QML picks up as a binding on the `keyboard.predictions` property rather than as a callback.
+
+There are now **two** QML context properties registered in `keyboard_app.py`: `keyboard` (`KeyboardBridge`, everything above) and `telemetry` (`TelemetryBridge`, see *Opt-in Telemetry*) - the first feature surface pulled off the bridge per `docs/architecture/STRUCTURAL_REVIEW.md` section 3.1. A future split follows the same shape: its own `QObject` wrapper, its own context property name, registered next to `keyboard` in `keyboard_app.py` and in `tests/qml_context.py::install_context_properties` for the headless QML test fixtures.
 
 ## Caps Lock vs. Shift
 
@@ -1248,11 +1251,13 @@ Design: `docs/architecture/TELEMETRY.md`. User-facing privacy: `docs/PRIVACY.md`
 
 **Off by default.** When enabled (Settings -> Data & Privacy -> Privacy -> "Share anonymous usage stats"), the client sends a weekly POST containing nine integers: `anon_id`, `app_version`, `os`, `keystrokes`, `words`, `predictions`, `keystrokes_saved`, `minutes`, `sessions`, `prediction_offers`. These are exactly the lifetime counters already shown on the Analytics dashboard. **Never sent**: content, word frequencies, key frequencies, IP, hostname, or any per-session breakdown.
 
+**Reached from QML as its own context property, not through the bridge.** `src/telemetry_bridge.py::TelemetryBridge` owns the `TelemetryClient` and the hourly submit timer, and is registered in `keyboard_app.py` as `telemetry` (alongside `keyboard`, the `KeyboardBridge`) - see *QML <-> Python Bridge Pattern*. `UnifiedSettingsPanel.qml` calls `telemetry.getEnabled()` / `telemetry.setEnabled(c)` / `telemetry.forgetData()`; `KeyboardBridge` no longer references telemetry at all. The headless QML test fixtures register both context properties through one helper, `tests/qml_context.py::install_context_properties`, rather than each hand-rolling `setContextProperty` calls.
+
 Files, endpoint config, anon_id lifecycle, submit cadence, and the worker schema are all detailed in `docs/architecture/TELEMETRY.md`. Load-bearing facts:
 - **`DEFAULT_ENDPOINT` in `src/telemetry.py` is the empty string** - while empty the client silently no-ops every submit (consent toggle still works, no data leaves the machine). Set it per-build before shipping a telemetry-enabled release; the Windows checklist (`docs/build/WINDOWS.md` step 2a) gates on this.
 - **anon_id is cleared on opt-out**, so re-opt-in gets a fresh UUID4 and prior contributions can't be linked. "Delete my contributed data" POSTs to `/v1/forget`. (This is why the Data Backup archive deliberately excludes `telemetry.json`.)
-- **`TelemetryClient` is the source of truth for the consent flag** - `UnifiedSettingsPanel.qml` queries the bridge on mount; **don't** mirror it into `appSettings`.
-- **Cadence**: weekly `QTimer` (1-hour tick, 7-day window check) plus `submit_on_quit()` from `shutdown()` (60 s anti-spam guard). All paths gated on `enabled AND endpoint AND anon_id`; failures retry `[5s, 30s, 120s]` then drop silently.
+- **`TelemetryClient` is the source of truth for the consent flag** - `UnifiedSettingsPanel.qml` queries `telemetry` on mount; **don't** mirror it into `appSettings`.
+- **Cadence**: weekly `QTimer` (1-hour tick, 7-day window check) plus `submit_on_quit()` from `TelemetryBridge.shutdown()` (60 s anti-spam guard), called from `keyboard_app.py`'s quit sequence before `bridge.shutdown()` - the same relative order the two had when both lived inside the bridge's own `shutdown()`. All paths gated on `enabled AND endpoint AND anon_id`; failures retry `[5s, 30s, 120s]` then drop silently.
 - **Privacy mode needs no special handling** - it already suppresses learning/tracking upstream, so password activity never enters the counters telemetry forwards.
 - **Worker-side rate limiting** (`backend/cf-worker/src/worker.ts`): two layers, both keyed on `anon_id` and never on a request header. An edge `RATE_LIMITER` binding gates by `submit:<anon_id>`, and a `SUBMIT_COOLDOWN_SECONDS` (3600s) cooldown is enforced inside the D1 upserts themselves. The cooldown `WHERE` clause is on **both** statements in `handleSubmit` (`users` and `submissions_latest`); gating only the second left `users` taking a write per request, so the cooldown bounded half the write path. The clause gates `DO UPDATE` only, so a first-ever submission for an id still lands immediately. Every reject path, rate-limited, cooled-down, or a `/v1/forget` for an id that never existed, returns the same 204 a success would, so a response can never be used as an existence oracle for a given `anon_id`. `app_version` and `os` are validated against a semver regex and a platform enum before being written. Neither layer stops an attacker cycling through many fake `anon_id`s; that needs IP-based throttling, out of scope here.
 - **Not telemetry**: auto-update version checks (GitHub Releases requests) and the planned federated-learning feature (its own opt-in + DP-noise design). Keep them conceptually separate.
