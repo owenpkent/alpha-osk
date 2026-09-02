@@ -23,6 +23,8 @@ import uuid
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 
+from .atomic_write import atomic_write_json
+
 _logger = logging.getLogger("Telemetry")
 
 # The endpoint is read from this constant. Override per-build before
@@ -118,8 +120,7 @@ class TelemetryClient:
             "last_submit_ts": self._last_submit_ts,
         }
         try:
-            self._state_path.parent.mkdir(parents=True, exist_ok=True)
-            self._state_path.write_text(json.dumps(data, indent=2))
+            atomic_write_json(self._state_path, data, indent=2)
         except OSError as e:
             _logger.warning("failed to persist telemetry state: %s", e)
 

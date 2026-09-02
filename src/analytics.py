@@ -18,6 +18,8 @@ from typing import Any, Dict, List, Tuple
 
 from PySide6.QtCore import QObject, Signal, Slot
 
+from .atomic_write import atomic_write_json
+
 _logger = logging.getLogger("Analytics")
 
 
@@ -295,7 +297,7 @@ class TypingAnalytics(QObject):
                 "word_freq": dict(merged_words),
                 "key_freq": dict(merged_keys),
             }
-            self._stats_path.write_text(json.dumps(data, indent=2))
+            atomic_write_json(self._stats_path, data, indent=2)
             _logger.info("Saved analytics to %s", self._stats_path)
         except (OSError, TypeError, ValueError, OverflowError) as e:
             _logger.warning("Failed to save analytics: %s", e)

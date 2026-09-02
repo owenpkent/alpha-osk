@@ -123,6 +123,7 @@ Edit `always_capitalize` on the language profile in `src/prediction/language.py`
 
 ## Where User Data Lives
 
+- **Every store writes through `src/atomic_write.py`** (tempfile created in the same directory, flushed and fsynced, then renamed into place), so a crash or power loss mid-write can never leave a truncated file where a good one used to be. A new persistent store must not write with a bare `open()`/`write_text`; route it through `atomic_write_text` or `atomic_write_json` instead.
 - **Settings** (layout, theme, toggles): Managed by Qt `Settings` in QML. Auto-saved on change. Stored in OS registry/config automatically by Qt.
 - **Prediction model** (learned words/phrases): Saved to disk explicitly or via auto-save on exit.
   - Windows: `%APPDATA%/alpha-osk/models/`

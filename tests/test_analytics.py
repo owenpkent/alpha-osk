@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -170,6 +171,34 @@ class TestPersistenceRoundTrip:
         a = TypingAnalytics()
         assert a._alltime_top_pick_count == 0
         assert a.get_session_stats()["alltimeTopPickRate"] == 0.0
+
+    def test_a_save_whose_rename_fails_leaves_the_old_file_loadable(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """save() already swallows OSError (it must not propagate from
+        aboutToQuit / exportUserData), so the contract to check here is
+        that a failed rename never touches the previously saved file."""
+        stats_file = tmp_path / "analytics.json"
+        monkeypatch.setattr(TypingAnalytics, "_get_stats_path", staticmethod(lambda: stats_file))
+        a = TypingAnalytics()
+        a.record_prediction_selected("hello", rank=1, keystrokes_saved=3)
+        a.save()
+        good_bytes = stats_file.read_bytes()
+
+        a.record_prediction_selected("world", rank=2, keystrokes_saved=1)
+
+        def _boom(_src: object, _dst: object) -> None:
+            raise OSError("simulated rename failure")
+
+        monkeypatch.setattr(os, "replace", _boom)
+        a.save()  # must not raise
+
+        assert stats_file.read_bytes() == good_bytes
+        b = TypingAnalytics()
+        assert b._alltime_top_pick_count == 1
+        # No *.tmp sibling left behind in the config directory.
+        leftovers = [p for p in tmp_path.iterdir() if p.name != "analytics.json"]
+        assert leftovers == []
 
 
 class TestLoadCaps:
