@@ -682,18 +682,20 @@ def _apply_macos_window_flags(root) -> None:
         _logger.warning("Failed to apply macOS NSWindow flags: %s", exc)
 
 
-def _wire_snippets_window(root) -> None:
-    """Apply OSK focus-suppression to the floating Snippets window.
+def _wire_floating_windows(root) -> None:
+    """Apply OSK focus-suppression to the floating Snippets and Symbols windows.
 
-    The Snippets window is a separate top-level ``Window`` declared in
-    Main.qml (objectName ``snippetsWindow``) so it can float anywhere on
-    the desktop, outside the keyboard. Like the main window it must never
-    steal focus from the app the user is typing into, so on Windows it
-    needs ``WS_EX_NOACTIVATE`` applied via Win32 — the Qt
-    ``WindowDoesNotAcceptFocus`` flag alone doesn't stop click-activation
-    there. The native handle only exists once the window has been shown,
-    so we (re)apply on every visibility change rather than once at
-    startup.
+    Both are separate top-level ``Window``s declared in Main.qml
+    (objectNames ``snippetsWindow`` and ``symbolsWindow``) so they can
+    float anywhere on the desktop, outside the keyboard. Like the main
+    window they must never steal focus from the app the user is typing
+    into, so on Windows each needs ``WS_EX_NOACTIVATE`` applied via Win32,
+    since the Qt ``WindowDoesNotAcceptFocus`` flag alone doesn't stop
+    click-activation there. The native handle only exists once a window
+    has been shown, so we (re)apply on every visibility change rather
+    than once at startup. A missing window is skipped rather than
+    aborting the rest: one unstyled picker is a smaller problem than
+    both of them going unwired.
 
     No-op on non-Windows (the Qt flag is sufficient on X11/Wayland, and
     macOS uses the Accessory activation policy applied app-wide). Silent
@@ -705,22 +707,26 @@ def _wire_snippets_window(root) -> None:
     try:
         from PySide6.QtCore import QObject
 
-        win = root.findChild(QObject, "snippetsWindow")
-        if win is None:
-            _logger.warning("snippetsWindow not found; skipping focus-suppression")
-            return
+        for name in ("snippetsWindow", "symbolsWindow"):
+            win = root.findChild(QObject, name)
+            if win is None:
+                _logger.warning("%s not found; skipping focus-suppression", name)
+                continue
 
-        def _apply() -> None:
-            try:
-                if win.property("visible"):
-                    _apply_windows_extended_styles(win)
-            except Exception as exc:  # pragma: no cover — defensive
-                _logger.debug("snippetsWindow style apply failed: %s", exc)
+            # Bound as a default argument rather than closed over: the loop
+            # variable is rebound on the next pass, so a plain closure would
+            # leave every handler applying styles to the last window found.
+            def _apply(target: object = win, label: str = name) -> None:
+                try:
+                    if target.property("visible"):
+                        _apply_windows_extended_styles(target)
+                except Exception as exc:  # pragma: no cover, defensive
+                    _logger.debug("%s style apply failed: %s", label, exc)
 
-        win.visibleChanged.connect(_apply)
-        _logger.info("Wired snippetsWindow focus-suppression")
-    except Exception as exc:  # pragma: no cover — defensive
-        _logger.warning("Failed to wire snippetsWindow: %s", exc)
+            win.visibleChanged.connect(_apply)
+            _logger.info("Wired %s focus-suppression", name)
+    except Exception as exc:  # pragma: no cover, defensive
+        _logger.warning("Failed to wire the floating windows: %s", exc)
 
 
 def _migrate_legacy_compat_settings() -> None:
@@ -1131,7 +1137,7 @@ def main() -> int:
     root = engine.rootObjects()[0]
     if root:
         _apply_window_flags(root)
-        _wire_snippets_window(root)
+        _wire_floating_windows(root)
 
     # --- System tray icon ---
     tray = QSystemTrayIcon(app_icon, app)

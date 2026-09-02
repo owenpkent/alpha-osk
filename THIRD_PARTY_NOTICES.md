@@ -13,12 +13,13 @@ alongside every installer, and retain their own licences.
 
 ## Feather
 
-Several controls draw Feather icons. Their path data is embedded verbatim in
-the QML rather than bundled as assets, because it is fed to a `Canvas` via
-`ctx.path` (see `qml/components/StrokeIcon.qml`), and keeping it verbatim is
-what lets each icon be diffed against upstream.
+Several small controls draw Feather icons. Their path data is embedded verbatim
+in [`qml/Main.qml`](qml/Main.qml) rather than bundled as an asset, because it is
+fed to a `Canvas` via `ctx.path` (see `qml/components/StrokeIcon.qml`).
 
 - Project: https://github.com/feathericons/feather
+- Icons: `rotate-ccw` (clear-context button), `bookmark` (Snippets),
+  `smile` (Symbols & Emoji), `mic` (Dictation), `x` (close buttons)
 - Licence: MIT
 - Icons in use, all in [`qml/Main.qml`](qml/Main.qml):
   - `rotate-ccw`, the clear-context button in the suggestion bar
@@ -26,6 +27,11 @@ what lets each icon be diffed against upstream.
   - `mic`, the dictation buttons in the suggestion bar and the title bar
   - `chevron-left` / `chevron-right`, the Snippets window's back control and
     its page pager
+
+The one place the source is not reproduced character for character is `smile`:
+`StrokeIcon` takes path data only, so that icon's `<circle>` is written as the
+equivalent pair of arcs. Everything else, including the zero-length lines
+Feather uses for the eyes, is upstream's own data.
 
 ```
 The MIT License (MIT)
