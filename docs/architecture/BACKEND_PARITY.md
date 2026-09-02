@@ -3,8 +3,10 @@
 Alpha-OSK has **two backends** implementing the same behaviour, and **three
 platforms**. These are perpendicular axes, and the repo is organised around that:
 
-- **Backend** (language/runtime): the Python backend (`src/`) and the in-progress
-  C++/Qt6 rewrite (`cpp/`, on the `cpp-rewrite` branch). See
+- **Backend** (language/runtime): the Python backend (`src/`) and the
+  C++/Qt6 rewrite (`cpp/`, on the `cpp-rewrite` branch), **parked since
+  2026-09-02**: nothing on `main` is mirrored into it any more, and the
+  columns below describe it as of its last commit (2026-08-15). See
   [`docs/build/CPP_WINDOWS.md`](https://github.com/owenpkent/alpha-osk/blob/cpp-rewrite/docs/build/CPP_WINDOWS.md)
   for the rewrite's rationale. That file lives on the `cpp-rewrite` branch only,
   so the link is absolute: a relative one resolves to nothing on `main`.
@@ -17,7 +19,8 @@ platforms**. These are perpendicular axes, and the repo is organised around that
   can verify that mechanically, but its cross-backend diff runs only when
   `ALPHA_OSK_CPP_BIN` points at a built C++ binary, which neither CI nor `check.py`
   sets; without it only the Python determinism self-check runs, so parity is
-  currently asserted rather than verified.
+  asserted rather than verified. With the branch parked that is the intended
+  state; reviving it starts by giving CI that binary.
 
 Platform is a thin sub-layer, **never** a repo boundary: a per-platform split would
 slice through both backends and fork the 8,500-line QML three ways.
