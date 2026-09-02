@@ -13,7 +13,11 @@ platforms**. These are perpendicular axes, and the repo is organised around that
 - **Shared by every cell below**: `qml/`, `data/`, the `ngram_model.json` /
   `ppm_model.json` file formats, and this doc. The rewrite reuses the QML and data
   **unchanged** — that shared contract is what keeps the two backends cheap to
-  keep in sync (verified mechanically by [`tests/conformance/`](../../tests/conformance/README.md)).
+  keep in sync. The [`tests/conformance/`](../../tests/conformance/README.md) harness
+  can verify that mechanically, but its cross-backend diff runs only when
+  `ALPHA_OSK_CPP_BIN` points at a built C++ binary, which neither CI nor `check.py`
+  sets; without it only the Python determinism self-check runs, so parity is
+  currently asserted rather than verified.
 
 Platform is a thin sub-layer, **never** a repo boundary: a per-platform split would
 slice through both backends and fork the 8,500-line QML three ways.

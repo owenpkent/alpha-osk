@@ -42,7 +42,7 @@
 
 ## Phase 3: AI Prediction ✅
 
-- [x] **Word prediction engine** — Hybrid n-gram + DistilGPT-2 LLM
+- [x] **Word prediction engine** — Hybrid n-gram + PPM + fuzzy, entirely local (the DistilGPT-2 re-ranker in `transformer_predictor.py` is constructed disabled and is not reachable from the app)
 - [x] **Prediction integration** — Connected to QML UI with real-time updates
 - [x] **Personal vocabulary** — Learns from typed words and selections
 - [ ] **Abbreviation expansion** — Custom shortcuts (e.g., "omw" → "on my way")
@@ -69,7 +69,7 @@
 ## Backlog
 
 - [ ] Multi-language support
-- [ ] Emoji and symbol panels
+- [x] Emoji and symbol panels (shipped as the Symbols & Emoji window plus the full-size symbol layer)
 - [ ] Macro recording
 - [ ] Integration with AAC software
 - [ ] Eye-tracking support
