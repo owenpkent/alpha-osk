@@ -183,6 +183,15 @@ class TestTheWindowLoads:
         assert _recent(window) == [], "precondition: no history yet"
         assert window.property("categoryIndex") == 1
 
+    def test_the_window_is_a_standalone_component(self, picker) -> None:
+        """Pins the extraction out of Main.qml: QML names a component's
+        generated class after its file, so this fails if SymbolsWindow is
+        ever inlined back into Main.qml (where the class would be named
+        after Main.qml instead)."""
+        _root, window, _bridge, _warnings = picker
+        class_name = window.metaObject().className()
+        assert class_name.startswith("SymbolsWindow"), class_name
+
 
 class TestTappingAGlyph:
     """A tap has to do two things, and the second one is what makes the
