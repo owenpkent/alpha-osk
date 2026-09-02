@@ -19,7 +19,7 @@ import logging
 import time
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Optional, Set, Tuple
+from typing import Any, Collection, Dict, Iterable, Iterator, List, Optional, Set, Tuple
 
 from PySide6.QtCore import Property, QObject, QTimer, QUrl, Signal, Slot
 
@@ -1147,6 +1147,44 @@ class KeyboardBridge(QObject):
             self._context_buffer += " "
         return " ", self._auto_capitalize_after_punctuation and punct in (".", "!", "?")
 
+    def _begin_verbatim_insert(self, *, prose: bool = True) -> Tuple[str, bool]:
+        """Release sticky modifiers, settle a deferred auto-space, spend an armed auto-capital.
+
+        Every verbatim insert (a tapped prediction pill, a snippet, a
+        glyph, a token pill, a dictated phrase) opens with the same
+        three steps, in this order, and the order carries the argument
+        that used to be repeated at each site:
+
+        1. ``_release_sticky_modifiers()`` runs *before* the insert,
+           because the capital is already baked into the text --
+           ``_display_cased`` puts it on a pill, and a snippet / glyph /
+           dictated phrase is verbatim by definition -- so a Shift still
+           held at the OS level would uppercase the whole insert on top
+           of that. Releasing first also leaves nothing for
+           ``_without_held_modifiers`` to drop and restore, so the
+           ordinary (nothing held) path costs no extra round trip.
+        2. ``_take_deferred_space(prose)`` settles a provisionally
+           suppressed auto-space by **returning** it rather than sending
+           it, so the caller can type it inside the same
+           ``_without_held_modifiers`` guard as the text that follows --
+           a space sent outside that guard would arrive as a chord under
+           a right-click-locked Ctrl (Ctrl+Space is an IME toggle on
+           Windows), a hole in the very guard meant to stop a held
+           modifier rewriting the insert.
+        3. ``_consume_auto_cap()`` spends any *armed* auto-capital: the
+           insert is "the next thing typed", so leaving the flag set
+           hands the same capital to a later, unrelated character.
+
+        Returns ``(deferred_space, owes_capital)`` exactly as
+        ``_take_deferred_space`` does -- a caller that needs to fold an
+        owed capital into the word it is about to send
+        (``pressPrediction``) still can; the others discard it.
+        """
+        self._release_sticky_modifiers()
+        deferred_space, owes_capital = self._take_deferred_space(prose)
+        self._consume_auto_cap()
+        return deferred_space, owes_capital
+
     @contextmanager
     def _without_held_modifiers(self) -> Iterator[None]:
         """Run a verbatim insert with every held modifier temporarily down.
@@ -1203,6 +1241,40 @@ class KeyboardBridge(QObject):
         """Type ``text`` verbatim, immune to any modifier held at the OS level."""
         with self._without_held_modifiers():
             self._send_text(text)
+
+    def _commit_verbatim_insert(self, text: str) -> None:
+        """Run the insert prologue, send ``text``, and reset typing state.
+
+        For the two sites whose whole body *is* the prologue plus a
+        plain literal send: ``insertSnippet`` and ``insertGlyph``. Both
+        then clear the same seven fields, because the text just inserted
+        can carry punctuation, a newline or a symbol the word model has
+        no use for: ``_current_word`` / ``_raw_token`` are reset so
+        nothing lingers to corrupt the next prefix match,
+        ``_word_typed_under_caps_lock`` and ``_word_prefix_lost`` travel
+        with them (both describe the word that was just replaced
+        outright), ``_auto_space_pending`` is cleared because this
+        insert did not append its own trailing auto-space the way a
+        completed word does, and the prediction bar is blanked and
+        re-emitted empty since the fresh text is not a prefix of
+        anything the engine knows about.
+
+        ``pressPrediction``, ``_insert_token_pill`` and
+        ``_insert_dictated_text`` do NOT route through this: their tails
+        differ (they mirror the insert into ``_context_buffer``, set
+        ``_auto_space_pending = True``, learn from the selection, or
+        refresh the prediction bar), so they call
+        ``_begin_verbatim_insert`` directly and keep their own tail.
+        """
+        deferred_space, _ = self._begin_verbatim_insert()
+        self._send_literal_text(deferred_space + text)
+        self._current_word = ""
+        self._raw_token = ""
+        self._word_typed_under_caps_lock = False
+        self._word_prefix_lost = False
+        self._auto_space_pending = False
+        self._predictions = []
+        self.predictionsChanged.emit([])
 
     @staticmethod
     def _match_case(typed: str, replacement: str) -> str:
@@ -1337,12 +1409,9 @@ class KeyboardBridge(QObject):
                 char = key.lower()
             self.editKeyTyped.emit(char)
             # Auto-release shift after one keypress (caps lock persists;
-            # a right-click-locked Shift also stays held).
-            if self._shift_active and not self._caps_lock_active and not self._shift_locked:
-                self._shift_active = False
-                self._synth.release_modifier("shift")
-                self._update_layer()
-                self.shiftActiveChanged.emit(False)
+            # a right-click-locked Shift also stays held). Only shift is
+            # in play here: an edit field never arms a Ctrl/Alt/Win hold.
+            self._release_sticky_modifiers(("shift",))
             return
 
         # Close the 200 ms race window: if focus has just landed on a
@@ -1420,23 +1489,7 @@ class KeyboardBridge(QObject):
             # Auto-release each modifier after one keypress unless it's
             # right-click-locked (held down until the user releases it) —
             # locked lets Ctrl+C, Ctrl+V, ... fire without re-tapping.
-            if self._shift_active and not self._caps_lock_active and not self._shift_locked:
-                self._shift_active = False
-                self._synth.release_modifier("shift")
-                self._update_layer()
-                self.shiftActiveChanged.emit(self._shift_active)
-            if self._ctrl_active and not self._ctrl_locked:
-                self._synth.release_modifier("ctrl")
-                self._ctrl_active = False
-                self.ctrlActiveChanged.emit(self._ctrl_active)
-            if self._alt_active and not self._alt_locked:
-                self._synth.release_modifier("alt")
-                self._alt_active = False
-                self.altActiveChanged.emit(self._alt_active)
-            if self._win_active and not self._win_locked:
-                self._synth.release_modifier("win")
-                self._win_active = False
-                self.winActiveChanged.emit(self._win_active)
+            self._release_sticky_modifiers()
             return
         elif self._in_game_mode():
             # Polling game: send the single char as a held key so it survives
@@ -1618,51 +1671,22 @@ class KeyboardBridge(QObject):
             self._pending_auto_cap = False
             self._update_layer()
 
-        # Auto-release shift after one keypress (not caps lock, not a
-        # right-click-locked hold).  Auto-capitalize needs no exception
-        # here any more: it sets _pending_auto_cap, not _shift_active.
-        if self._shift_active and not self._caps_lock_active and not self._shift_locked:
-            self._shift_active = False
-            self._synth.release_modifier("shift")
-            self._update_layer()
-            self.shiftActiveChanged.emit(self._shift_active)
-
-        # Auto-release ctrl/alt/win after one keypress unless locked
-        if self._ctrl_active and not self._ctrl_locked:
-            self._synth.release_modifier("ctrl")
-            self._ctrl_active = False
-            self.ctrlActiveChanged.emit(self._ctrl_active)
-        if self._alt_active and not self._alt_locked:
-            self._synth.release_modifier("alt")
-            self._alt_active = False
-            self.altActiveChanged.emit(self._alt_active)
-        if self._win_active and not self._win_locked:
-            self._synth.release_modifier("win")
-            self._win_active = False
-            self.winActiveChanged.emit(self._win_active)
+        # Auto-release shift/ctrl/alt/win after one keypress (not caps
+        # lock, not a right-click-locked hold).  Auto-capitalize needs no
+        # exception here: it sets _pending_auto_cap, not _shift_active.
+        self._release_sticky_modifiers()
 
     def _release_edit_chord_modifiers(self) -> None:
         """Drop Ctrl/Alt/Win after a chord consumed inside an edit field.
 
-        The fifth copy of the auto-release block, and it exists rather
-        than being written inline for the reason this file gives for the
-        other four: they are parallel blocks that have to stay in step,
-        and a keystroke path that forgets one leaves a modifier the
-        bridge believes is held.  A right-click lock still wins, exactly
-        as it does everywhere else.
+        The chord-path entry point: a Ctrl/Alt/Win chord typed while an
+        edit field owns the keystrokes is handled locally (see
+        ``_EDIT_CHORDS``) and never reaches the OS, so the modifiers it
+        held have to come down here instead of at the ordinary keystroke
+        sites. A right-click lock still wins, exactly as it does
+        everywhere else.
         """
-        if self._ctrl_active and not self._ctrl_locked:
-            self._synth.release_modifier("ctrl")
-            self._ctrl_active = False
-            self.ctrlActiveChanged.emit(self._ctrl_active)
-        if self._alt_active and not self._alt_locked:
-            self._synth.release_modifier("alt")
-            self._alt_active = False
-            self.altActiveChanged.emit(self._alt_active)
-        if self._win_active and not self._win_locked:
-            self._synth.release_modifier("win")
-            self._win_active = False
-            self.winActiveChanged.emit(self._win_active)
+        self._release_sticky_modifiers(("ctrl", "alt", "win"))
 
     @Slot(str)
     def pressSpecialKey(self, key_name: str) -> None:
@@ -2010,28 +2034,7 @@ class KeyboardBridge(QObject):
         # A right-click-locked modifier stays held regardless of key type
         # (same as the nav-key exception, but the user opted in explicitly).
         keep_selection_modifiers = key_name in _NAV_KEYS
-        if (
-            self._shift_active
-            and not self._caps_lock_active
-            and not keep_selection_modifiers
-            and not self._shift_locked
-        ):
-            self._shift_active = False
-            self._synth.release_modifier("shift")
-            self._update_layer()
-            self.shiftActiveChanged.emit(self._shift_active)
-        if self._ctrl_active and not keep_selection_modifiers and not self._ctrl_locked:
-            self._synth.release_modifier("ctrl")
-            self._ctrl_active = False
-            self.ctrlActiveChanged.emit(self._ctrl_active)
-        if self._alt_active and not self._alt_locked:
-            self._synth.release_modifier("alt")
-            self._alt_active = False
-            self.altActiveChanged.emit(self._alt_active)
-        if self._win_active and not self._win_locked:
-            self._synth.release_modifier("win")
-            self._win_active = False
-            self.winActiveChanged.emit(self._win_active)
+        self._release_sticky_modifiers(keep=("shift", "ctrl") if keep_selection_modifiers else ())
 
     @Slot()
     def toggleShift(self) -> None:
@@ -2206,35 +2209,50 @@ class KeyboardBridge(QObject):
     # ``{name}LockedChanged``), so the four modifiers stay DRY.
     _MODIFIERS = ("shift", "ctrl", "alt", "win")
 
-    def _release_sticky_modifiers(self) -> None:
-        """Drop every sticky (non-locked) modifier, OS hold and state alike.
+    def _release_sticky_modifiers(
+        self, names: Iterable[str] = _MODIFIERS, *, keep: Collection[str] = ()
+    ) -> None:
+        """Drop sticky (non-locked, non-``keep``) modifiers, OS hold and state alike.
 
-        The per-keystroke auto-release, factored out.  A right-click lock
-        is skipped, matching every other release site: the whole point of
-        the lock is surviving a keystroke.
+        The per-keystroke auto-release, in one place: every keystroke
+        path (the char path, the edit-mode intercept, the Ctrl/Alt/Win
+        chord branch, the edit-chord path, special keys, and the
+        verbatim-insert paths) calls this instead of hand-copying the
+        block. A right-click lock is always skipped, matching every
+        release site: the whole point of the lock is surviving a
+        keystroke. Shift is additionally skipped while Caps Lock is on
+        (Caps Lock pins a sticky Shift; dropping it here would silently
+        end a Shift+drag the user had set up).
 
-        ``_press_char`` and ``pressSpecialKey`` keep their own inline
-        copies rather than calling this, and deliberately so — each has
-        per-site conditions this can't express (``pressSpecialKey`` holds
-        Shift/Ctrl across ``_NAV_KEYS`` so Shift+arrow selection persists,
-        and the char path sequences the layer update against the chord
-        branch).  This exists for the *verbatim insert* paths, which have
-        no such exceptions: they consume the modifiers outright.
+        ``names`` restricts which modifiers this call considers, for the
+        two sites that only ever touch part of the set (the edit-mode
+        intercept releases just Shift; the edit-chord path releases
+        Ctrl/Alt/Win and never Shift, since nothing typed inside an edit
+        field can arm a Shift release there). ``keep`` exempts specific
+        modifiers even though they *are* in ``names`` and active, for
+        ``pressSpecialKey``'s nav-key exception: Shift/Ctrl held across
+        an arrow key is a compound selection gesture (Shift+arrow extend,
+        Ctrl+Shift+arrow select-by-word), so auto-releasing after the
+        first press would break the second one.
+
+        A new keystroke path must call this rather than write its own
+        copy: that hand-copying is exactly the drift this method exists
+        to end.
         """
-        for name in self._MODIFIERS:
+        for name in names:
+            if name in keep:
+                continue
             if not getattr(self, f"_{name}_active") or getattr(self, f"_{name}_locked"):
                 continue
             if name == "shift" and self._caps_lock_active:
-                # Caps Lock deliberately pins a sticky Shift, the same
-                # exception both inline copies carry.  Dropping it here
-                # silently ended a Shift+drag the user had set up.
                 continue
             setattr(self, f"_{name}_active", False)
             self._synth.release_modifier(name)
-            getattr(self, f"{name}ActiveChanged").emit(False)
             if name == "shift":
-                # Shift drives the upper/lower layer; resync the keycaps.
+                # Shift drives the upper/lower layer; resync the keycaps
+                # before the change signal, matching every keystroke site.
                 self._update_layer()
+            getattr(self, f"{name}ActiveChanged").emit(False)
 
     def _clear_lock(self, name: str) -> None:
         """Drop a right-click lock without touching the active/held state.
@@ -2358,31 +2376,23 @@ class KeyboardBridge(QObject):
         # of independent single-event keystrokes that is robust to
         # per-event drops / duplicates.
         #
-        # Drop the sticky modifiers *before* the insert, not after.  A pill
-        # tap is a keystroke, so it consumes a one-shot Shift the same way
-        # typing a character does — and with Shift the ordering is load-
-        # bearing rather than cosmetic: `word` already carries the capital
-        # _display_cased put there, so a Shift still held at the OS level
-        # would uppercase the whole insert on top of it and "Hello" would
-        # arrive as "HELLO".  Releasing first also leaves nothing for
-        # _send_literal_text to drop and restore, so the ordinary path
-        # costs no extra modifier round trip.
-        self._release_sticky_modifiers()
-        # A provisionally suppressed auto-space is settled by this tap: a
-        # pill is a word, so the "42." that withheld the space ended a
-        # sentence after all.  It can also owe a capital the pill was
+        # Release sticky modifiers, settle a deferred auto-space and spend
+        # an armed auto-capital (see _begin_verbatim_insert for why that
+        # order matters). A pill tap is a keystroke like any other, so it
+        # consumes a one-shot Shift the same way; `word` already carries
+        # the capital _display_cased put there, so a Shift still held at
+        # the OS level would uppercase the whole insert on top of it.
+        #
+        # The returned deferred space can also owe a capital the pill was
         # never given, because nothing armed _pending_auto_cap while the
         # question was still open and _display_cased had nothing to act
-        # on.  The space itself is typed inside the guard below, with the
-        # rest of the insert.
-        deferred_space, owes_capital = self._take_deferred_space(True)
+        # on, so fold it into `word` here, since that one flows into the
+        # insert below rather than through _consume_auto_cap (which only
+        # spends what was already *visible* on the pill, case 3 of
+        # _display_cased).
+        deferred_space, owes_capital = self._begin_verbatim_insert()
         if owes_capital and word[:1].islower():
             word = word[0].upper() + word[1:]
-        # The tap also spends any *armed* auto-capital.  That one is
-        # already visible on the pill (_display_cased case 3), so only
-        # the flag is left to clear; leaving it set would hand the same
-        # capital to a later, unrelated character.
-        self._consume_auto_cap()
         # The guard wraps every branch, including the two that never reach
         # send_text: a locked Alt turns the compat BackSpaces into
         # Alt+BackSpace (undo), and a locked Ctrl turns replace_text's
@@ -2570,37 +2580,17 @@ class KeyboardBridge(QObject):
         about not *learning* from typing, and the user may well need to
         drop their address into a sensitive form.
 
-        After inserting, the typing context is cleared so the verbatim
-        text (which may carry punctuation or newlines) can't corrupt the
-        next prediction's prefix matching.
+        The capital a deferred auto-space might owe is deliberately not
+        applied to the value: a snippet is verbatim, and its own casing
+        is the whole point. Everything else is ``_commit_verbatim_insert``
+        (see its docstring for the prologue order and the reset it runs).
         """
         if self._edit_mode_active:
             return
         value = self._snippets.get_value(index)
         if not value:
             return
-        # A snippet tap is a keystroke, so it consumes the sticky
-        # modifiers like any other — and a held Shift would otherwise
-        # deliver the whole address in capitals.
-        self._release_sticky_modifiers()
-        # Settle a deferred auto-space (the snippet is prose following the
-        # punctuation that withheld it) and spend any armed auto-capital.
-        # The capital is deliberately *not* applied to the value: a
-        # snippet is verbatim, and its own casing is the whole point.
-        # The space rides along inside the literal insert so it is under
-        # the same held-modifier guard the value is.
-        deferred_space, _ = self._take_deferred_space(True)
-        self._consume_auto_cap()
-        self._send_literal_text(deferred_space + value)
-        self._current_word = ""
-        self._raw_token = ""
-        self._word_typed_under_caps_lock = False
-        # The insert replaced the word outright, so a lost opening
-        # is no longer owed to anything.  Travels with the flag above.
-        self._word_prefix_lost = False
-        self._auto_space_pending = False
-        self._predictions = []
-        self.predictionsChanged.emit([])
+        self._commit_verbatim_insert(value)
 
     # ------------------------------------------------------------------
     #  Symbols & Emoji: the long tail behind the keyboard's symbol layer
@@ -2631,38 +2621,27 @@ class KeyboardBridge(QObject):
     def insertGlyph(self, glyph: str) -> bool:
         """Type *glyph* verbatim into the focused app.
 
-        The same shape as :meth:`insertSnippet`, deliberately: a tapped
-        glyph is a keystroke that happens to come from a window instead of
-        a keycap, so it takes the sticky modifiers with it, settles a
-        deferred auto-space as prose, spends an armed auto-capital, and
-        goes out through ``_send_literal_text`` so a held modifier cannot
-        rewrite it.  Not gated on privacy mode, for the same reason a
-        snippet is not: the user tapped it, so it has to reach the app.
+        Goes through ``_commit_verbatim_insert``, the same call
+        ``insertSnippet`` makes: a tapped glyph is a keystroke that
+        happens to come from a window instead of a keycap, so the same
+        prologue and the same reset apply. Not gated on privacy mode,
+        for the same reason a snippet is not: the user tapped it, so it
+        has to reach the app.
 
         Unlike a snippet this is one character, but the context handling
         is identical rather than merely similar, and that is the point:
-        the two paths are siblings and the failure mode this codebase
-        keeps hitting is a pair of nearly-identical blocks drifting apart.
-        ``_context_buffer`` is left alone on both, which costs nothing
-        here because ``NgramPredictor._tokenize`` keeps only ``[a-zA-Z']``
-        and would discard the glyph anyway.
+        the two paths are siblings, and sharing one method is what stops
+        them drifting apart the way a pair of hand-copied blocks would.
+        ``_context_buffer`` is left alone by ``_commit_verbatim_insert``,
+        which costs nothing here because ``NgramPredictor._tokenize``
+        keeps only ``[a-zA-Z']`` and would discard the glyph anyway.
 
         Returns False when nothing was typed, so QML can say so rather
         than leave a tap that did nothing looking like one that missed.
         """
         if self._edit_mode_active or not glyph:
             return False
-        self._release_sticky_modifiers()
-        deferred_space, _ = self._take_deferred_space(True)
-        self._consume_auto_cap()
-        self._send_literal_text(deferred_space + glyph)
-        self._current_word = ""
-        self._raw_token = ""
-        self._word_typed_under_caps_lock = False
-        self._word_prefix_lost = False
-        self._auto_space_pending = False
-        self._predictions = []
-        self.predictionsChanged.emit([])
+        self._commit_verbatim_insert(glyph)
         return True
 
     # --- Snippet auto-detection ----------------------------------------
@@ -3284,16 +3263,17 @@ class KeyboardBridge(QObject):
                 rank, keystrokes_saved=max(0, len(word) - len(typed)) + len(trailing)
             )
 
-        # A pill tap is a keystroke, so it spends a one-shot Shift and any
-        # armed auto-capital, both *before* the insert. A Shift still
-        # held at the OS level would rewrite the whole string (see
-        # _without_held_modifiers).
-        self._release_sticky_modifiers()
-        self._consume_auto_cap()
-        # prose=False: the tap continues the token, which settles the
-        # withheld space as "the punctuation was structural after all".
-        # Delivering it would put a space inside the number being built.
-        self._take_deferred_space(False)
+        # A pill tap is a keystroke, so it runs the same verbatim-insert
+        # prologue every other insert path does (see
+        # _begin_verbatim_insert): sticky modifiers first, since a Shift
+        # still held at the OS level would rewrite the whole string (see
+        # _without_held_modifiers). prose=False, because the tap
+        # continues the token, which settles a withheld space as "the
+        # punctuation was structural after all" rather than delivering
+        # it and putting a space inside the number being built. The
+        # returned space is always empty for prose=False, so there is
+        # nothing here to fold into the insert.
+        self._begin_verbatim_insert(prose=False)
 
         # The context manager wraps the whole insert, not just the text:
         # the replace path's Shift+Left selection is itself a chord, so a
@@ -3975,13 +3955,16 @@ class KeyboardBridge(QObject):
     def _insert_dictated_text(self, text: str) -> None:
         """Type one finalised phrase into the focused app.
 
-        This is a verbatim insert and mirrors ``insertSnippet`` exactly,
-        including the two orderings that path documents: the sticky
-        modifiers are released *before* the send (a held Shift would
-        otherwise deliver the whole sentence in capitals, and a held Ctrl
-        would turn every character into a chord), and the send itself
-        runs inside ``_without_held_modifiers`` via ``_send_literal_text``
-        so a right-click *locked* modifier survives the insert.
+        This is a verbatim insert and opens with ``_begin_verbatim_insert``
+        like every other one: the sticky modifiers are released *before*
+        the send (a held Shift would otherwise deliver the whole sentence
+        in capitals, and a held Ctrl would turn every character into a
+        chord), and the send itself runs inside ``_without_held_modifiers``
+        via ``_send_literal_text`` so a right-click *locked* modifier
+        survives the insert. It does not route through
+        ``_commit_verbatim_insert``, because its tail differs (below):
+        the mirror into ``_context_buffer``/``_sentence_buffer`` and the
+        leading-space decision are specific to dictation.
 
         Not gated on privacy mode, the same rule as every other insert
         path: the user asked for this text, so it must reach the app.
@@ -4001,9 +3984,7 @@ class KeyboardBridge(QObject):
             # which is not where the user is looking.
             return
 
-        self._release_sticky_modifiers()
-        deferred_space, _ = self._take_deferred_space(True)
-        self._consume_auto_cap()
+        deferred_space, _ = self._begin_verbatim_insert()
 
         # Deepgram hands back phrases with no surrounding whitespace, so
         # consecutive finals would run together ("hello worldhow are
