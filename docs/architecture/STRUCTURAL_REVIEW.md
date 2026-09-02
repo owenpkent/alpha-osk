@@ -397,7 +397,7 @@ acted on. Numbers are pull requests on `owenpkent/alpha-osk`.
 | 4. Collapse the duplicate clusters | #56, #59 | one pack-id rule in `src/prediction/pack_ids.py`; `_release_sticky_modifiers(names, keep=)`, `_begin_verbatim_insert`, `_commit_verbatim_insert` |
 | 5. OS window code into `platform/` | #61 | `windows_window.py`, `macos_window.py`; `keyboard_app.py` off the mypy ignore list, which surfaced one real error |
 | 6. Split one surface off the bridge | #62 | telemetry; the measurement is below |
-| 7. Decide the C++ branch | open | a decision for the maintainer, not a pull request |
+| 7. Decide the C++ branch | decided 2026-09-02 | parked, not deleted: recorded in `CLAUDE.md` and `BACKEND_PARITY.md`; the conformance harness keeps skipping until a built binary exists, and the branch stays as reference |
 
 **What step 6 measured.** Moving telemetry removed 56 lines from the
 bridge and needed one seam, a read-only `analytics` property. The move

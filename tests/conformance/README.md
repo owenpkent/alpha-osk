@@ -50,6 +50,9 @@ ALPHA_OSK_CPP_BIN=/path/to/alpha-osk python -m pytest tests/conformance/ -v
 ```
 
 Without `ALPHA_OSK_CPP_BIN` the cross-backend test **skips** with a clear reason.
+That is the expected state: the `cpp-rewrite` branch is parked (2026-09-02),
+and the harness is kept so that reviving it starts from a working check
+rather than from a rewrite of this one.
 Fixtures whose `pillar` is not yet in `CPP_PORTED_PILLARS` (currently `{"ngram"}`)
 are treated as expected-divergence and don't fail the run, so the suite doubles as
 a live parity tracker: as the C++ PPM/fuzzy pillars land, add them to that set and
