@@ -280,7 +280,7 @@ Applied in `keyboard_app.py` → `_apply_window_flags()`:
 
 ### Windows-Specific (Win32 API)
 
-Applied in `keyboard_app.py` → `_apply_windows_extended_styles()`:
+Applied in `src/platform/windows_window.py` → `apply_extended_styles()`:
 
 | Extended Style | Hex | Purpose |
 |---------------|-----|---------|
@@ -299,7 +299,7 @@ Always-on-top is applied separately with `SetWindowPos(HWND_TOPMOST)`:
 the style bit and the topmost Z-order band are separate pieces of state,
 and writing the bit directly leaves the band untouched, producing a
 window that reports itself as topmost while sitting behind ordinary
-windows. See `_apply_windows_extended_styles()` for the full story.
+windows. See `apply_extended_styles()` for the full story.
 
 ---
 

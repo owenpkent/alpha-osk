@@ -36,7 +36,8 @@ Cross-Platform Behaviour
 
 See Also
 --------
-- ``src/platform/`` — OS-specific key synthesis backends.
+- ``src/platform/``: OS-specific key synthesis and window-styling
+  backends (``windows_window.py``, ``macos_window.py``, ``x11_window.py``).
 - ``docs/architecture/PLATFORM_ARCHITECTURE.md`` — design rationale.
 - ``docs/build/WINDOWS.md`` — Windows build / signing guide.
 """
@@ -52,6 +53,7 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 from types import TracebackType
+from typing import cast
 
 from PySide6.QtCore import QSettings, QSharedMemory, Qt, QUrl
 from PySide6.QtGui import QIcon, QWindow
@@ -65,6 +67,8 @@ from .platform import (
     LOG_FILENAME,
     get_config_dir,
     get_platform_info,
+    macos_window,
+    windows_window,
 )
 from .telemetry_bridge import TelemetryBridge
 
@@ -113,62 +117,8 @@ def _acquire_singleton_or_surface() -> bool:
     # without a DBus IPC layer we don't have yet).
     _logger.info("Another Alpha-OSK is already running; surfacing it.")
     if sys.platform == "win32":
-        _surface_existing_alpha_osk()
+        windows_window.surface_existing_instance()
     return False
-
-
-def _surface_existing_alpha_osk() -> None:
-    """Best-effort: un-minimise and bring the running instance forward.
-
-    Walks top-level windows looking for one titled "Alpha-OSK", then
-    calls ``ShowWindow(SW_RESTORE)`` and ``SetForegroundWindow``.  All
-    failures are silent — this is a courtesy to the user, not a
-    correctness requirement.
-    """
-    try:
-        import ctypes
-        from ctypes import wintypes
-
-        user32 = ctypes.windll.user32
-
-        EnumWindowsProc = ctypes.WINFUNCTYPE(ctypes.c_bool, wintypes.HWND, wintypes.LPARAM)
-        user32.EnumWindows.argtypes = [EnumWindowsProc, wintypes.LPARAM]
-        user32.EnumWindows.restype = ctypes.c_bool
-        user32.GetWindowTextW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
-        user32.GetWindowTextW.restype = ctypes.c_int
-        user32.IsWindowVisible.argtypes = [wintypes.HWND]
-        user32.IsWindowVisible.restype = ctypes.c_bool
-
-        SW_RESTORE = 9
-        target: list[int] = []
-
-        def _enum(hwnd: int, _lparam: int) -> bool:
-            if not user32.IsWindowVisible(hwnd):
-                return True
-            buf = ctypes.create_unicode_buffer(64)
-            user32.GetWindowTextW(hwnd, buf, 64)
-            if buf.value == "Alpha-OSK":
-                target.append(hwnd)
-                return False  # stop enumerating
-            return True
-
-        user32.EnumWindows(EnumWindowsProc(_enum), 0)
-        if target:
-            hwnd = target[0]
-            user32.ShowWindow(hwnd, SW_RESTORE)
-            # AllowSetForegroundWindow first lets SetForegroundWindow
-            # succeed across processes; ASFW_ANY = -1.
-            try:
-                user32.AllowSetForegroundWindow(-1)
-            except Exception:
-                # Probe-only: if AllowSetForegroundWindow isn't available
-                # the next SetForegroundWindow may flash the taskbar
-                # instead of stealing focus, which is acceptable degraded
-                # behaviour for a single-instance surface.
-                pass
-            user32.SetForegroundWindow(hwnd)
-    except Exception as exc:
-        _logger.debug("Surfacing existing instance failed: %s", exc)
 
 
 def _project_root() -> Path:
@@ -240,8 +190,8 @@ def _setup_platform_env() -> None:
       platform adapter is used automatically.
     - **macOS**: No environment overrides needed — the ``cocoa``
       platform adapter is used automatically.  NSWindow tuning
-      happens in ``_apply_macos_window_flags`` after the QML root
-      window is created.
+      happens in ``src.platform.macos_window.apply_window_flags`` after
+      the QML root window is created.
     """
     if CURRENT_PLATFORM == "linux":
         os.environ.setdefault("QT_QPA_PLATFORM", "xcb")
@@ -249,7 +199,7 @@ def _setup_platform_env() -> None:
     os.environ.setdefault("QT_QUICK_CONTROLS_STYLE", "Basic")
 
 
-def _apply_window_flags(root) -> None:
+def _apply_window_flags(root: QWindow) -> None:
     """
     Apply OS-specific window flags to make the keyboard behave as a
     proper on-screen keyboard:
@@ -291,10 +241,10 @@ def _apply_window_flags(root) -> None:
     # On Windows and Linux, Qt.Tool *also* removes the taskbar entry
     # (Windows) and changes WM hinting in ways the bridge / minimise
     # / tray icons don't expect — see the WS_EX_TOOLWINDOW note in
-    # ``_apply_windows_extended_styles`` for the full rationale.  So
-    # we only add Qt.Tool when we're actually on macOS, where the
-    # Accessory activation policy has already eliminated the
-    # taskbar/Dock entry anyway.
+    # ``src/platform/windows_window.py::apply_extended_styles`` for the
+    # full rationale.  So we only add Qt.Tool when we're actually on
+    # macOS, where the Accessory activation policy has already
+    # eliminated the taskbar/Dock entry anyway.
     if CURRENT_PLATFORM == "macos":
         base_flags = base_flags | Qt.WindowType.Tool
 
@@ -302,395 +252,12 @@ def _apply_window_flags(root) -> None:
 
     # Windows-specific: apply WS_EX_NOACTIVATE via Win32 API
     if CURRENT_PLATFORM == "windows":
-        _apply_windows_extended_styles(root, taskbar_button=True)
+        windows_window.apply_extended_styles(root, taskbar_button=True)
     elif CURRENT_PLATFORM == "macos":
-        _apply_macos_window_flags(root)
+        macos_window.apply_window_flags(root)
 
 
-def _apply_windows_extended_styles(root, *, taskbar_button: bool = False) -> None:
-    """
-    Use Win32 ``SetWindowLongW`` to add extended window styles that Qt
-    cannot express through its own flag system.
-
-    Styles applied:
-
-    - **WS_EX_NOACTIVATE** (``0x08000000``): The window is never
-      activated when clicked.  This is *critical* for an OSK — without
-      it, clicking a key would move focus away from the user's text
-      editor.  This one is settable through ``SetWindowLongW``.
-
-    **Always-on-top is applied with ``SetWindowPos(HWND_TOPMOST)``, not
-    by writing ``WS_EX_TOPMOST`` into the style word, and that
-    distinction is the whole feature.**  MSDN is explicit that the style
-    is added and removed with ``SetWindowPos``; the bit and the Z-order
-    *band* are separate pieces of state, and writing the bit directly
-    sets the first while leaving the second alone.  The result is a
-    window that reports itself as topmost and is not: this was reported
-    as "always on top isn't working", and a Z-order walk found the
-    keyboard sitting **fifteenth**, below a dozen ordinary windows,
-    with ``WS_EX_TOPMOST`` reading true the whole time.  Qt's
-    ``WindowStaysOnTopHint`` does place the window in the band, so the
-    old code appeared to work; writing the style word afterwards is what
-    knocked it back out.
-
-    So the ``SetWindowPos`` call below carries ``HWND_TOPMOST`` and must
-    **not** carry ``SWP_NOZORDER``, which would ask the system to leave
-    the Z-order exactly as it found it, which was the bug.  Anything
-    that re-applies window flags later has to re-assert this, because
-    ``setFlags`` on Windows can recreate the native window.
-
-    **``WS_EX_TOOLWINDOW`` is actively cleared here, not merely left
-    unset.**  It suppresses the taskbar entry, which leaves the minimise
-    button with nowhere to go and the tray icon as the only way back.
-    Qt adds it on its own: QML declares ``visible: true``, so the window
-    is already shown when :func:`_apply_window_flags` calls ``setFlags``,
-    and applying a non-activating, frameless, always-on-top flag set to
-    an *already shown* window is the case where Qt decides the window
-    does not belong in the taskbar.  Applying the same flags before the
-    first show does not do it, which is why the comments here claimed for
-    a long time that the style "was removed" while the shipped window
-    carried it.  ``WS_EX_APPWINDOW`` is set too, so the taskbar entry
-    does not depend on Qt leaving the rest of the style word alone.  The
-    trade-off is that the OSK appears in Alt+Tab, which is acceptable.
-
-    Requires the window to have a valid ``winId()`` (i.e. the native
-    window handle has been created).
-    """
-    try:
-        import ctypes
-        from ctypes import wintypes
-
-        GWL_EXSTYLE = -20
-        GWL_STYLE = -16
-        WS_EX_NOACTIVATE = 0x08000000
-        WS_EX_TOOLWINDOW = 0x00000080
-        WS_EX_APPWINDOW = 0x00040000
-        WS_MINIMIZEBOX = 0x00020000
-        WS_SYSMENU = 0x00080000
-
-        user32 = ctypes.windll.user32
-        kernel32 = ctypes.windll.kernel32
-
-        # Pin signatures so 64-bit Windows doesn't truncate handles.
-        user32.GetWindowLongW.argtypes = [wintypes.HWND, ctypes.c_int]
-        user32.GetWindowLongW.restype = ctypes.c_long
-        user32.SetWindowLongW.argtypes = [wintypes.HWND, ctypes.c_int, ctypes.c_long]
-        user32.SetWindowLongW.restype = ctypes.c_long
-
-        hwnd = int(root.winId())
-
-        # Read current extended style.  Both Get/Set return 0 on real
-        # failure but 0 is also a valid style value, so disambiguate
-        # via SetLastError(0) + GetLastError per MSDN guidance.
-        kernel32.SetLastError(0)
-        current = user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
-        if current == 0 and kernel32.GetLastError() != 0:
-            _logger.warning(
-                "GetWindowLongW failed (err=%d); skipping extended-style apply",
-                kernel32.GetLastError(),
-            )
-            return
-
-        # WS_EX_TOPMOST is deliberately NOT in this write.  See the
-        # docstring: the style word is not where always-on-top lives, and
-        # writing it here is what broke it.
-        #
-        # WS_EX_TOOLWINDOW is cleared and WS_EX_APPWINDOW set, because Qt
-        # adds the former behind our back and it is what removes a window
-        # from the taskbar.  QML declares `visible: true`, so the window
-        # is already on screen when `_apply_window_flags` calls setFlags,
-        # and applying these flags to a *shown* window is the case where
-        # Qt decides a non-activating window does not belong in the
-        # taskbar.  Setting the same flags before the first show does not
-        # do it, which is why this went unnoticed and why the comments
-        # here have claimed for a long time that the style "was removed":
-        # that was the intent, and the intent was not what shipped.
-        #
-        # Reported as the keyboard having no taskbar button, so the
-        # minimise button had nowhere to go and clicking the pinned icon
-        # did nothing.  APPWINDOW is set as well as TOOLWINDOW cleared,
-        # so the answer does not depend on Qt leaving the rest alone.
-        new_style = current | WS_EX_NOACTIVATE
-        if taskbar_button:
-            new_style = (new_style | WS_EX_APPWINDOW) & ~WS_EX_TOOLWINDOW
-        kernel32.SetLastError(0)
-        prev = user32.SetWindowLongW(hwnd, GWL_EXSTYLE, new_style)
-        if prev == 0 and kernel32.GetLastError() != 0:
-            _logger.warning(
-                "SetWindowLongW failed (err=%d); WS_EX_NOACTIVATE may not be active",
-                kernel32.GetLastError(),
-            )
-            return
-
-        # A taskbar button can *restore* a window without this, which is
-        # why minimising and clicking the button both worked while a
-        # second click did nothing. The shell decides whether a button may
-        # minimise from WS_MINIMIZEBOX / WS_SYSMENU in the ordinary style
-        # word, and this window is a bare WS_POPUP.
-        #
-        # Windows' own on-screen keyboard is the proof that this composes
-        # with never taking focus: osk.exe runs TOPMOST | APPWINDOW |
-        # NOACTIVATE | LAYERED, an extended style identical to ours, and
-        # carries MINIMIZEBOX | SYSMENU in its style word.
-        #
-        # No frame comes with them, which is the thing to check when
-        # touching this on a frameless window: measured before and after
-        # on a real window, the window rect stays equal to the client rect
-        # and neither WS_CAPTION nor WS_THICKFRAME appears. Qt also leaves
-        # the bits alone across a resize.
-        #
-        # Written here, before the SetWindowPos(SWP_FRAMECHANGED) call
-        # below rather than after it: MSDN's guidance for SetWindowLong
-        # is that a frame style change needs a following
-        # SetWindowPos(SWP_FRAMECHANGED) before the cached frame data
-        # picks it up, and WS_MINIMIZEBOX / WS_SYSMENU are frame styles
-        # like any other. Writing this after the one SWP_FRAMECHANGED
-        # call in this function left it unflushed until whatever next
-        # touched the frame.
-        if taskbar_button:
-            kernel32.SetLastError(0)
-            style = user32.GetWindowLongW(hwnd, GWL_STYLE)
-            if style or kernel32.GetLastError() == 0:
-                user32.SetWindowLongW(hwnd, GWL_STYLE, style | WS_MINIMIZEBOX | WS_SYSMENU)
-
-        # One call doing two jobs.
-        #
-        # HWND_TOPMOST puts the window in the topmost Z-order band, which
-        # is the only way to get there and the thing that was missing.
-        # SWP_FRAMECHANGED forces the system to re-read the extended and
-        # ordinary style words just written above; without it
-        # WS_EX_NOACTIVATE may not take effect and clicks on keys steal
-        # focus before SendInput fires, and the MINIMIZEBOX / SYSMENU bits
-        # just added to the ordinary style word may not be honoured either.
-        #
-        # SWP_NOACTIVATE keeps us off the foreground while doing it, which
-        # matters more here than usual: this window must never activate.
-        HWND_TOPMOST = -1
-        SWP_NOSIZE = 0x0001
-        SWP_NOMOVE = 0x0002
-        SWP_NOACTIVATE = 0x0010
-        SWP_FRAMECHANGED = 0x0020
-        user32.SetWindowPos.argtypes = [
-            wintypes.HWND,
-            wintypes.HWND,
-            ctypes.c_int,
-            ctypes.c_int,
-            ctypes.c_int,
-            ctypes.c_int,
-            wintypes.UINT,
-        ]
-        user32.SetWindowPos.restype = wintypes.BOOL
-        kernel32.SetLastError(0)
-        ok = user32.SetWindowPos(
-            hwnd,
-            HWND_TOPMOST,
-            0,
-            0,
-            0,
-            0,
-            SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE | SWP_FRAMECHANGED,
-        )
-        if not ok:
-            _logger.warning(
-                "SetWindowPos(HWND_TOPMOST) failed (err=%d); the keyboard may sit "
-                "behind other windows",
-                kernel32.GetLastError(),
-            )
-
-        _logger.info("Applied WS_EX_NOACTIVATE and placed the window in the topmost band")
-    except Exception as e:
-        _logger.warning("Failed to apply Windows extended styles: %s", e)
-
-
-def _apply_macos_activation_policy() -> None:
-    """Switch the NSApplication into ``Accessory`` activation policy.
-
-    This is the **critical** fix for OSK focus theft on macOS.  Qt's
-    ``WindowDoesNotAcceptFocus`` flag maps to ``canBecomeKeyWindow:
-    NO``, which stops the window from receiving keyboard input — but
-    on macOS, clicking on a window *also* activates the owning
-    application (yanks it to the foreground, owns the menu bar).  The
-    NSWindow-level flag does not prevent that.
-
-    Result before this fix: clicking any OSK key activated Alpha-OSK
-    as the foreground app, kicking TextEdit out of the frontmost slot.
-    ``CGEventPost`` then sent the synthesised keystroke to Alpha-OSK
-    itself (the new foreground), so nothing reached the editor — user
-    saw "keystrokes not sending".
-
-    ``NSApplicationActivationPolicyAccessory`` tells AppKit that this
-    app should never become the active app: clicks on its windows do
-    not steal application focus, and the previously frontmost app
-    keeps receiving input.  Same model used by macOS's own
-    "Accessibility Keyboard" and by menu-bar utilities like Magnet /
-    Rectangle / AltTab.
-
-    Trade-offs:
-    - **No Dock icon.** The system tray icon (already wired in
-      ``main()``) carries show/hide/quit.
-    - **No Cmd+Tab entry.** The OSK isn't an app in the switcher
-      sense; it's a system overlay.  Users who want a Cmd+Tab entry
-      can comment this out and pay the focus-theft cost, but for
-      first ship Accessory is the right answer.
-    - **No menu bar.** Qt was already not driving a menu bar for us.
-
-    Must run AFTER ``QApplication(sys.argv)`` so ``NSApp`` exists,
-    and BEFORE ``app.exec()``.  Silently no-ops if pyobjc isn't
-    available — degraded behaviour is "OSK works but steals focus",
-    same as without this function at all.
-    """
-    try:
-        from AppKit import (  # type: ignore[import-not-found]
-            NSApp,
-            NSApplicationActivationPolicyAccessory,
-        )
-    except ImportError as exc:
-        _logger.warning(
-            "pyobjc not available (%s) — cannot set Accessory activation "
-            "policy. OSK will likely steal focus on click. "
-            "Install: pip install pyobjc-framework-Cocoa",
-            exc,
-        )
-        return
-
-    try:
-        # NSApp is the global NSApplication singleton — created by Qt
-        # the moment QApplication is instantiated.
-        if NSApp is None:
-            _logger.warning(
-                "NSApp is None — QApplication probably not yet created. "
-                "Call _apply_macos_activation_policy() after "
-                "QApplication(sys.argv)."
-            )
-            return
-        NSApp.setActivationPolicy_(NSApplicationActivationPolicyAccessory)
-        _logger.info(
-            "Applied NSApplicationActivationPolicyAccessory — "
-            "OSK will not steal application focus on click"
-        )
-    except Exception as exc:
-        _logger.warning(
-            "Failed to set Accessory activation policy: %s — OSK may steal focus when clicked",
-            exc,
-        )
-
-
-def _apply_macos_window_flags(root) -> None:
-    """Configure the NSWindow backing the QML root for OSK behaviour.
-
-    Three things we ask Cocoa for that Qt does not surface as flags:
-
-    1. **Level = NSFloatingWindowLevel** (3) — float above ordinary
-       windows.  Qt's ``WindowStaysOnTopHint`` already requests this
-       on macOS, but we restate it for defence-in-depth and to match
-       the Windows path, which places the window in the topmost
-       Z-order band via ``SetWindowPos(HWND_TOPMOST)`` rather than a
-       style bit (see :func:`_apply_windows_extended_styles`).
-    2. **Collection behavior** — join all Spaces so the keyboard
-       follows the user when they switch desktops, mark it transient
-       so Mission Control won't try to tile it as a real window, and
-       add the fullscreen-auxiliary flag so it appears above other
-       apps that have entered fullscreen mode.
-    3. **hidesOnDeactivate = NO** — keep the keyboard visible the
-       moment focus moves to the text editor the user is typing into.
-       The default is NO for NSWindow, but Qt sometimes flips it for
-       Tool-class windows; setting it explicitly is cheap insurance.
-
-    Qt's ``WindowDoesNotAcceptFocus`` already prevents the window
-    from becoming key on macOS (it maps to ``canBecomeKeyWindow`` →
-    NO), so we don't need to subclass NSWindow here.  If a future
-    regression brings focus-theft back, swizzling
-    ``canBecomeKeyWindow`` on the live window is the next step.
-
-    Silently no-ops if pyobjc isn't installed — the OSK will still
-    work, the keyboard just won't follow Spaces and may dip behind
-    fullscreen apps.
-    """
-    try:
-        import objc  # type: ignore[import-not-found]
-        from AppKit import (  # type: ignore[import-not-found]
-            NSFloatingWindowLevel,
-            NSPanel,
-            NSWindowCollectionBehaviorCanJoinAllSpaces,
-            NSWindowCollectionBehaviorFullScreenAuxiliary,
-            NSWindowCollectionBehaviorTransient,
-        )
-    except ImportError as exc:
-        _logger.warning(
-            "pyobjc not available (%s) — skipping macOS NSWindow tuning. "
-            "Install with: pip install pyobjc-framework-Cocoa",
-            exc,
-        )
-        return
-
-    try:
-        # root.winId() returns the native NSView pointer on macOS.
-        # Wrap it as a real ObjC object and walk up to the NSWindow.
-        ns_view = objc.objc_object(c_void_p=int(root.winId()))
-        ns_window = ns_view.window()
-        if ns_window is None:
-            _logger.warning(
-                "Could not obtain NSWindow from QML root — macOS window flags not applied"
-            )
-            return
-
-        # The actual NSWindow class.  On Qt 6 / PySide6, QQuickWindow
-        # produces ``QNSWindow`` here regardless of Qt.Tool flag —
-        # Qt 5's Tool→NSPanel mapping was dropped.  We log at DEBUG
-        # in case a future Qt version restores the panel mapping (we'd
-        # see ``is_panel=True`` here and the NonactivatingPanel style
-        # bit below would actually do something).  Focus theft is
-        # *not* solved by the NSWindow tuning in this function — the
-        # working solution is the ``CGEventPostToPid`` routing in
-        # ``MacOSKeySynthesizer._post_event``.
-        cls_name = ns_window.className()
-        is_panel = bool(ns_window.isKindOfClass_(NSPanel))
-        _logger.debug(
-            "QML root NSWindow class=%s is_panel=%s",
-            cls_name,
-            is_panel,
-        )
-
-        ns_window.setLevel_(NSFloatingWindowLevel)
-        ns_window.setCollectionBehavior_(
-            NSWindowCollectionBehaviorCanJoinAllSpaces
-            | NSWindowCollectionBehaviorTransient
-            | NSWindowCollectionBehaviorFullScreenAuxiliary
-        )
-        ns_window.setHidesOnDeactivate_(False)
-
-        # NSWindowStyleMaskNonactivatingPanel = 1 << 7 (0x80).  Only
-        # NSPanel honors this bit; plain NSWindow ignores it.  We OR
-        # it in opportunistically so that a future Qt version that
-        # restores the Tool→NSPanel mapping would automatically pick
-        # up the non-activating semantics with no further changes
-        # here.  Today (Qt 6.10.x) ``is_panel`` is False and this
-        # branch is dead — the focus story is handled by
-        # CGEventPostToPid in the synthesizer.
-        if is_panel:
-            NS_WINDOW_STYLE_MASK_NONACTIVATING_PANEL = 1 << 7
-            current_mask = int(ns_window.styleMask())
-            new_mask = current_mask | NS_WINDOW_STYLE_MASK_NONACTIVATING_PANEL
-            ns_window.setStyleMask_(new_mask)
-            try:
-                ns_window.setWorksWhenModal_(True)
-            except Exception:
-                pass
-            _logger.debug(
-                "NSPanel styleMask: %#x → %#x (added NonactivatingPanel)",
-                current_mask,
-                new_mask,
-            )
-
-        _logger.info(
-            "Applied macOS NSWindow flags: "
-            "floating level, all-Spaces, fullscreen-aux, hides-on-deactivate=NO"
-        )
-    except Exception as exc:
-        _logger.warning("Failed to apply macOS NSWindow flags: %s", exc)
-
-
-def _wire_floating_windows(root) -> None:
+def _wire_floating_windows(root: QWindow) -> None:
     """Apply OSK focus-suppression to the floating Snippets and Symbols windows.
 
     Both are separate top-level ``Window``s declared in Main.qml
@@ -720,18 +287,22 @@ def _wire_floating_windows(root) -> None:
             if win is None:
                 _logger.warning("%s not found; skipping focus-suppression", name)
                 continue
+            # findChild() is typed to return a bare QObject; the QML side
+            # only ever names real top-level Window items here, so this is
+            # always a QWindow at runtime.
+            win_window = cast(QWindow, win)
 
             # Bound as a default argument rather than closed over: the loop
             # variable is rebound on the next pass, so a plain closure would
             # leave every handler applying styles to the last window found.
-            def _apply(target: object = win, label: str = name) -> None:
+            def _apply(target: QWindow = win_window, label: str = name) -> None:
                 try:
                     if target.property("visible"):
-                        _apply_windows_extended_styles(target)
+                        windows_window.apply_extended_styles(target)
                 except Exception as exc:  # pragma: no cover, defensive
                     _logger.debug("%s style apply failed: %s", label, exc)
 
-            win.visibleChanged.connect(_apply)
+            win_window.visibleChanged.connect(_apply)
             _logger.info("Wired %s focus-suppression", name)
     except Exception as exc:  # pragma: no cover, defensive
         _logger.warning("Failed to wire the floating windows: %s", exc)
@@ -942,12 +513,28 @@ def _install_exception_hooks() -> None:
         # SystemExit in a thread is how a worker asks to stop; it is not
         # a fault and the default hook already ignores it.
         if args.exc_type is not None and not issubclass(args.exc_type, SystemExit):
+            thread_name = args.thread.name if args.thread is not None else "<unknown>"
             try:
-                _logger.critical(
-                    "Uncaught exception in thread %s",
-                    args.thread.name if args.thread is not None else "<unknown>",
-                    exc_info=(args.exc_type, args.exc_value, args.exc_traceback),
-                )
+                # exc_value is typed Optional to mirror sys.exc_info()'s
+                # general (type, value, tb) shape, but Logger.critical's
+                # exc_info tuple form requires a real exception instance,
+                # not None, alongside a real type. A live thread crash
+                # always carries both together; this branch only exists
+                # so an all-type-no-value ExceptHookArgs (which nothing in
+                # this codebase produces, but the type does not rule out)
+                # still gets logged instead of silently falling through.
+                if args.exc_value is not None:
+                    _logger.critical(
+                        "Uncaught exception in thread %s",
+                        thread_name,
+                        exc_info=(args.exc_type, args.exc_value, args.exc_traceback),
+                    )
+                else:
+                    _logger.critical(
+                        "Uncaught exception in thread %s (exc_type=%s, no exception instance)",
+                        thread_name,
+                        args.exc_type,
+                    )
             except Exception:  # pragma: no cover - logging itself failed
                 pass
         previous_thread_hook(args)
@@ -960,52 +547,30 @@ def _install_exception_hooks() -> None:
 # Stable per-application identity for the Windows taskbar.  Must match the
 # AppUserModelID set on the installer's Start Menu / Desktop shortcuts so a
 # pinned shortcut groups with the running window.  Format convention is
-# ``Company.Product`` (see Microsoft's AppUserModelID guidance).
+# ``Company.Product`` (see Microsoft's AppUserModelID guidance).  Kept here
+# rather than in windows_window.py: it must also match the AppUserModelID
+# stamped on the installer's shortcuts, which is an app packaging concern,
+# not a windowing one.
 APP_USER_MODEL_ID = "OKStudio.AlphaOSK"
 
 
-def _set_windows_app_user_model_id() -> None:
-    """Give the process an explicit AppUserModelID on Windows.
-
-    Without this, Windows can't tie the OSK window's taskbar button back
-    to the application identity once the Qt window appears.  The button is
-    created at launch with the exe's embedded icon, then re-derives an
-    identity from the bare process and falls back to the generic default
-    icon the moment the window shows — the "taskbar icon reverts to the
-    default after opening" symptom.  ``SetCurrentProcessExplicitAppUserModelID``
-    pins the identity up front so the taskbar keeps using our icon.
-
-    Must run *before* the first top-level window is created (ideally before
-    ``QApplication``), or Windows has already cached the derived identity.
-    No-op on non-Windows and best-effort on Windows (a failure here only
-    costs the taskbar icon, never startup).
-    """
-    if CURRENT_PLATFORM != "windows":
-        return
-    try:
-        import ctypes
-
-        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(APP_USER_MODEL_ID)
-    except Exception as exc:  # pragma: no cover - platform/runtime dependent
-        _logger.debug("SetCurrentProcessExplicitAppUserModelID failed: %s", exc)
-
-
-def _toggle_keyboard_window(root, platform_name: str = CURRENT_PLATFORM) -> None:
+def _toggle_keyboard_window(root: QWindow, platform_name: str = CURRENT_PLATFORM) -> None:
     """Put the keyboard away, or bring it back.  One click each way.
 
     On Windows and Linux "away" means **minimized**, not hidden.  The OSK
     carries a normal taskbar entry (``WS_EX_TOOLWINDOW`` is actively
     cleared and ``WS_EX_APPWINDOW`` set, see
-    :func:`_apply_windows_extended_styles`), so a minimized keyboard is
-    still visibly parked somewhere the user can get at it, and the tray
-    icon and the taskbar entry agree about where the window went.  Hiding
-    it outright threw that away: the window vanished from the taskbar and
-    the tray icon became the only route back.
+    :func:`src.platform.windows_window.apply_extended_styles`), so a
+    minimized keyboard is still visibly parked somewhere the user can get
+    at it, and the tray icon and the taskbar entry agree about where the
+    window went.  Hiding it outright threw that away: the window vanished
+    from the taskbar and the tray icon became the only route back.
 
     macOS keeps the hide/show pair because it has no taskbar or Dock entry
-    to minimize *into* (the app runs under the Accessory activation policy
-    — see :func:`_apply_macos_window_flags`), so there minimizing would be
-    the version that leaves the user with only the tray icon.
+    to minimize *into* (the app runs under the Accessory activation policy,
+    see :func:`src.platform.macos_window.apply_window_flags`), so there
+    minimizing would be the version that leaves the user with only the
+    tray icon.
 
     A **tucked** window falls back to hiding for the same reason: while
     parked off-screen it is DOCK-typed, which costs it the taskbar entry
@@ -1109,7 +674,7 @@ def main() -> int:
     # Claim an explicit taskbar identity before any window exists, so the
     # taskbar button keeps our icon instead of reverting to the generic
     # default once the OSK window appears.  No-op off Windows.
-    _set_windows_app_user_model_id()
+    windows_window.set_app_user_model_id(APP_USER_MODEL_ID)
 
     # Log platform info
     pinfo = get_platform_info()
@@ -1136,7 +701,7 @@ def main() -> int:
     # happen after QApplication() because NSApp is created during
     # QApplication's __init__.
     if CURRENT_PLATFORM == "macos":
-        _apply_macos_activation_policy()
+        macos_window.apply_activation_policy()
 
     # Migrate any legacy "Remote Desktop Mode" setting keys to the new
     # "Compatibility Mode" names before QML's Settings element binds.
@@ -1223,8 +788,10 @@ def main() -> int:
         _logger.error("Failed to load QML — see preceding QML: warnings")
         return 1
 
-    # Apply window flags for OSK behavior (cross-platform + Windows extras)
-    root = engine.rootObjects()[0]
+    # Apply window flags for OSK behavior (cross-platform + Windows extras).
+    # rootObjects() is typed to return QObject; the loaded root is always
+    # the top-level QML Window, i.e. a QWindow, at runtime.
+    root = cast(QWindow, engine.rootObjects()[0])
     if root:
         _apply_window_flags(root)
         _wire_floating_windows(root)

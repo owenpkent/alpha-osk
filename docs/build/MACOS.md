@@ -112,7 +112,7 @@ as flags, and we need all three: float over normal windows
 apps (`CanJoinAllSpaces | FullScreenAuxiliary`), and stay visible
 when focus moves elsewhere (`hidesOnDeactivate: NO`).
 
-These three settings are applied in `_apply_macos_window_flags()` via
+These three settings are applied in `src/platform/macos_window.py::apply_window_flags()` via
 pyobjc, runs once at startup after the QML root is shown. The
 function silently no-ops if pyobjc is missing — the OSK still works,
 it just won't follow Spaces / fullscreen.
@@ -175,7 +175,7 @@ Implementation details:
 
 A future Qt version that restores the `Qt.Tool → NSPanel` mapping
 would let us drop this whole dance and use NonactivatingPanel
-directly. `_apply_macos_window_flags` already opportunistically sets
+directly. `apply_window_flags` already opportunistically sets
 the style bit if the window happens to be a panel — that branch is
 dead code today (`is_panel` is always False on Qt 6.10.x) but ready
 for that scenario.
@@ -195,7 +195,7 @@ backend per platform.
 - `src/platform/__init__.py` — `darwin` → `macos` branch, factory routing, config-dir resolution
 - `src/platform/macos.py` — `MacOSKeySynthesizer` via Quartz
 - `src/platform/password_detect.py` — macOS stub returning `_NullDetector`
-- `src/keyboard_app.py` — `_apply_macos_window_flags()` for NSWindow tuning
+- `src/platform/macos_window.py`: `apply_window_flags()` for NSWindow tuning
 - `src/keyboard_bridge.py` — `NSWorkspace`-based foreground tracking
 - `run.py` — `IS_MACOS` branch, first-run accessibility hint
 - `requirements.txt` — pyobjc deps gated by `sys_platform == "darwin"`
@@ -388,7 +388,7 @@ install step changes.
 | Path | Role |
 |------|------|
 | `src/platform/macos.py` | Quartz key synthesizer |
-| `src/keyboard_app.py::_apply_macos_window_flags` | NSWindow level / behavior / hides-on-deactivate |
+| `src/platform/macos_window.py::apply_window_flags` | NSWindow level / behavior / hides-on-deactivate |
 | `src/keyboard_bridge.py::_get_foreground_window_id` (macOS branch) | `NSWorkspace.frontmostApplication().processIdentifier()` |
 | `build/macos/alpha-osk.spec` | PyInstaller spec + `BUNDLE()` |
 | `build/macos/build.py` | Build driver + `.dmg` packaging |
@@ -420,7 +420,7 @@ identical from the user side:
    dropped.
 
 **Keyboard vanishes when I click into another app.** `hidesOnDeactivate`
-not applied — `_apply_macos_window_flags()` failed. Check the log for
+not applied: `apply_window_flags()` failed. Check the log for
 "Failed to apply macOS NSWindow flags" or "pyobjc not available" and
 reinstall `pyobjc-framework-Cocoa`.
 
