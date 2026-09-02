@@ -1778,10 +1778,10 @@ Item {
                                     // TelemetryClient is authoritative.
                                     checked: false
                                     Component.onCompleted: {
-                                        if (keyboard) checked = keyboard.getTelemetryEnabled()
+                                        if (telemetry) checked = telemetry.getEnabled()
                                     }
                                     onToggled: function(c) {
-                                        if (keyboard) keyboard.setTelemetryEnabled(c)
+                                        if (telemetry) telemetry.setEnabled(c)
                                     }
                                 }
 
@@ -1848,7 +1848,7 @@ Item {
                                                 forgetBtn.confirmStep = 1
                                                 forgetResetTimer.restart()
                                             } else if (forgetBtn.confirmStep === 1) {
-                                                if (keyboard) keyboard.forgetTelemetryData()
+                                                if (telemetry) telemetry.forgetData()
                                                 forgetBtn.confirmStep = 2
                                                 forgetResetTimer.restart()
                                             }

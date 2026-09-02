@@ -48,6 +48,7 @@ except ImportError as exc:  # pragma: no cover - environment-dependent
 
 from src.glyphs import MAX_RECENT  # noqa: E402
 from src.keyboard_bridge import KeyboardBridge  # noqa: E402
+from tests.qml_context import install_context_properties  # noqa: E402
 from tests.qt_settings_scope import TEST_APP, TEST_ORG  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -108,7 +109,7 @@ def picker_factory(qapp):
 
         engine = QQmlApplicationEngine()
         engine.warnings.connect(lambda errs: warnings.extend(e.toString() for e in errs))
-        engine.rootContext().setContextProperty("keyboard", bridge)
+        install_context_properties(engine, bridge)
         engine.load(QUrl.fromLocalFile(str(QML_MAIN)))
         assert engine.rootObjects(), "qml/Main.qml failed to load:\n  " + "\n  ".join(warnings)
         engines.append(engine)

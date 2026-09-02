@@ -55,6 +55,7 @@ QML_MAIN = REPO_ROOT / "qml" / "Main.qml"
 # Re-exported so the existing references below keep reading TEST_ORG /
 # TEST_APP.  All four QML modules must share one scope. See
 # tests/qt_settings_scope.py for why a per-module copy is a trap.
+from tests.qml_context import install_context_properties  # noqa: E402
 from tests.qt_settings_scope import TEST_APP, TEST_ORG  # noqa: E402
 
 IGNORED_WARNING_FRAGMENTS = ("does not support customization",)
@@ -159,7 +160,7 @@ def qml_root(qapp):
 
     engine = QQmlApplicationEngine()
     engine.warnings.connect(lambda errs: warnings.extend(e.toString() for e in errs))
-    engine.rootContext().setContextProperty("keyboard", bridge)
+    install_context_properties(engine, bridge)
     engine.load(QUrl.fromLocalFile(str(QML_MAIN)))
 
     assert engine.rootObjects(), "qml/Main.qml failed to load:\n  " + "\n  ".join(warnings)
