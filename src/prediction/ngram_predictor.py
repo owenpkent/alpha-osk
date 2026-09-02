@@ -9,12 +9,12 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 import time
 from collections import defaultdict
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Mapping, Optional, Tuple
 
+from .language import ENGLISH, LanguageProfile
 from .token_predictor import TokenPredictor
 
 _logger = logging.getLogger("NgramPredictor")
@@ -28,13 +28,22 @@ class NgramPredictor:
     to predict the next word based on context.
     """
 
-    def __init__(self, model_path: Optional[Path] = None):
+    def __init__(
+        self,
+        model_path: Optional[Path] = None,
+        profile: LanguageProfile = ENGLISH,
+    ):
         """
         Initialize the predictor.
 
         Args:
             model_path: Path to saved model file. If None, starts with empty model.
+            profile: Which language's word shapes, wordlists and
+                always-capitalise map to use.  Defaults to English, which
+                is expressed as a profile like any other rather than as
+                the constants this class used to carry inline.
         """
+        self.profile = profile
         # Unigram: word -> frequency (MERGED VIEW — base + user).  Kept
         # for backwards compatibility; predict() uses the split tables
         # below.  External callers (hybrid_predictor._is_valid_word) rely
@@ -87,14 +96,9 @@ class NgramPredictor:
         # rides along in this class's save/load and gets backed up with
         # the rest of what the user taught us.  See token_predictor.py.
         self.tokens = TokenPredictor()
-        # Words that are ALWAYS capitalized regardless of position
-        self._always_capitalize: Dict[str, str] = {
-            "i": "I",
-            "i'm": "I'm",
-            "i'll": "I'll",
-            "i'd": "I'd",
-            "i've": "I've",
-        }
+        # Words that are ALWAYS capitalized regardless of position.
+        # Language data, so it comes from the profile; see language.py.
+        self._always_capitalize: Mapping[str, str] = profile.always_capitalize
         # Words that are common English AND names — only capitalize at
         # sentence start, not mid-sentence (avoids "the Jack was loose"
         # or "there are Many reasons").  132 entries.
@@ -361,9 +365,9 @@ class NgramPredictor:
         Words are ranked by frequency in Google's Trillion Word Corpus.
         Position in file = frequency rank (line 1 = most common word).
         """
-        wordlist_path = (
-            Path(__file__).parent.parent.parent / "data" / "google-10000-english-usa-no-swears.txt"
-        )
+        wordlist_path = self.profile.frequency
+        if wordlist_path is None:
+            return
 
         if not wordlist_path.exists():
             _logger.debug("Google 10K wordlist not found: %s", wordlist_path)
@@ -676,87 +680,38 @@ class NgramPredictor:
         return [(word, float(freq)) for word, freq in sorted_words[:n]]
 
     def _tokenize(self, text: str) -> List[str]:
-        """Split text into words."""
-        # Simple tokenization: split on non-alphanumeric
-        words = re.findall(r"[a-zA-Z']+", text.lower())
-        return words
-
-    # Vowels include 'y' so "cry", "try", "rhythm" pass the shape filter.
-    _VOWELS = frozenset("aeiouy")
-    # 1- and 2-letter words that ARE legitimate — everything else at
-    # length ≤ 2 is treated as a fragment.  Kept small on purpose; edge
-    # cases just need to be typed a few times to enter user_vocab via
-    # the repetition gate path for unknown words that happen to have a
-    # vowel, but the pure-fragment case (length ≤ 2, no vowel) is
-    # shape-rejected outright.
-    _SHORT_WORD_WHITELIST = frozenset(
-        {
-            "a",
-            "i",
-            "am",
-            "an",
-            "as",
-            "at",
-            "be",
-            "by",
-            "do",
-            "go",
-            "he",
-            "hi",
-            "if",
-            "in",
-            "is",
-            "it",
-            "me",
-            "my",
-            "no",
-            "of",
-            "oh",
-            "ok",
-            "on",
-            "or",
-            "so",
-            "to",
-            "up",
-            "us",
-            "we",
-            "ya",
-            "ha",
-            "ah",
-            "eh",
-            "mm",
-            "hm",
-            "mr",
-            "ms",
-            "dr",
-            "st",
-            "pm",
-        }
-    )
+        """Split text into words, per the active language's word shape."""
+        return self.profile.word_re.findall(text.lower())
 
     def _is_plausible_word(self, word: str) -> bool:
         """Reject obvious keyboard-slip fragments.
 
         Rules:
-          - length ≤ 2: must be in the short-word whitelist
-          - length ≥ 3: must contain at least one vowel (a/e/i/o/u/y)
-            AND at least one non-aeiou letter.  The two-sided check
+          - length ≤ 2: must be on the profile's short-word allow-list
+          - length ≥ 3: must contain at least one vowel AND at least one
+            letter that is not a strict vowel.  The two-sided check
             rejects both all-consonant clusters ("xqz") and vowel mashing
-            ("aaaa", "iii").  'y' is counted as a vowel for the first
-            check (so "cry", "rhythm" pass) but as a consonant for the
-            second (so "eye", "aye" still pass).
+            ("aaaa", "iii").  A *semivowel* counts on both sides, which
+            in English is 'y': it passes the vowel half (so "cry",
+            "rhythm" survive) and the consonant half (so "eye", "aye"
+            still do too).
+
+        All three sets come from ``self.profile``; see language.py for
+        why they are not literals here any more.
         """
         n = len(word)
         if n == 0:
             return False
         if n <= 2:
-            return word in self._SHORT_WORD_WHITELIST
+            return self.profile.is_short_word(word)
+        vowels = self.profile.vowels
+        semivowels = self.profile.semivowels
         has_vowel = False
         has_consonant = False
         for c in word:
-            if c in "aeiou":
+            if c in vowels:
                 has_vowel = True
-            elif c == "y":
+            elif c in semivowels:
                 has_vowel = True
                 has_consonant = True
             elif c.isalpha():
@@ -1312,8 +1267,7 @@ class NgramPredictor:
             True if loaded successfully
         """
         if dict_path is None:
-            # Default location relative to this file
-            dict_path = Path(__file__).parent.parent.parent / "data" / "base_dictionary.txt"
+            dict_path = self.profile.dictionary
 
         if not dict_path.exists():
             _logger.warning("Base dictionary not found: %s", dict_path)

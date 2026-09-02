@@ -439,7 +439,7 @@ class TestShortWordsAreOfferedAsNextWords:
     from a typo or an interrupted word accumulate in the model, and a
     bare length change would let every one of them compete for a pill.
 
-    The list is ``NgramPredictor._SHORT_WORD_WHITELIST``, reused rather
+    The list is the language profile's ``short_words``, reused rather
     than restated: it is already the project's answer to "real word or
     keyboard slip", and a second copy would be one more thing to keep in
     sync.

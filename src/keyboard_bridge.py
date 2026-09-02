@@ -45,6 +45,7 @@ from .platform.password_detect import (
 )
 from .platform.pointer import external_click_detected
 from .prediction import HybridPredictor
+from .prediction.fuzzy_recognizer import positions_from_layout
 from .prediction.token_predictor import TokenPredictor
 from .snippets import MAX_SNIPPETS, SNIPPET_COLORS, SnippetStore
 from .telemetry import TelemetryClient
@@ -4932,6 +4933,29 @@ class KeyboardBridge(QObject):
                 _logger.info("Loaded layout: %s", layout_id)
             except (json.JSONDecodeError, OSError) as e:
                 _logger.warning("Failed to load layout %s: %s", path.name, e)
+        self._apply_layout_key_positions()
+
+    def _apply_layout_key_positions(self) -> None:
+        """Point the fuzzy recogniser's spatial model at the active layout.
+
+        Until this existed the recogniser fell back to its hardcoded
+        ``QWERTY_POSITIONS`` unconditionally, and nothing anywhere
+        passed it anything else, so a Dvorak or Colemak user was being
+        autocorrected against a QWERTY board: "hwllo" resolved to
+        "hello" on the strength of w neighbouring e, which on their
+        layout it does not.  That was a plain bug rather than a
+        multilingual one, and AZERTY is what made it worth fixing now.
+
+        Derivation is layout-driven rather than hardcoded per layout so
+        a new ``data/layouts/*.json`` keeps needing no code, which is
+        the property the whole layout system is built around.
+        """
+        rows = self._layouts.get(self._current_layout, {}).get("rows", [])
+        if not rows:
+            return
+        positions = positions_from_layout(rows)
+        if positions:
+            self._predictor.set_key_positions(positions)
 
     @Slot(result=list)
     def getAvailableLayouts(self) -> list:
@@ -4948,6 +4972,7 @@ class KeyboardBridge(QObject):
         """Switch to a different keyboard layout."""
         if layout_id in self._layouts and layout_id != self._current_layout:
             self._current_layout = layout_id
+            self._apply_layout_key_positions()
             self.layoutChanged.emit(layout_id)
             self.layoutDataChanged.emit(self._layouts[layout_id].get("rows", []))
             self._add_debug_log(f"Layout changed to: {layout_id}")

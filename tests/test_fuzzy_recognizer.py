@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import json
+import string
+from pathlib import Path
+
 from src.prediction.fuzzy_recognizer import (
     DEFAULT_CONFIDENCE_THRESHOLD,
     DEFAULT_PREDICTION_WEIGHT,
@@ -10,6 +14,7 @@ from src.prediction.fuzzy_recognizer import (
     FuzzyRecognizer,
     FuzzyWordGenerator,
     SpatialKeyModel,
+    positions_from_layout,
 )
 
 
@@ -355,3 +360,109 @@ class TestFuzzyRecognizer:
         assert "confidence_threshold" in stats
         assert "prediction_weight" in stats
         assert "dictionary_size" in stats
+
+
+class TestPositionsDerivedFromALayout:
+    """``positions_from_layout`` against the shipped layout JSON.
+
+    The bug these guard is that ``SpatialKeyModel`` fell back to
+    ``QWERTY_POSITIONS`` unconditionally and nothing ever passed it
+    anything else, so Dvorak and Colemak users were autocorrected
+    against a keyboard they were not typing on.
+    """
+
+    @staticmethod
+    def _rows(name: str) -> list:
+        path = Path(__file__).parent.parent / "data" / "layouts" / f"{name}.json"
+        return json.loads(path.read_text(encoding="utf-8"))["rows"]
+
+    def test_qwerty_json_reproduces_the_hardcoded_table(self):
+        # The whole reason the derivation is slot-based rather than
+        # width-based: moving the QWERTY user onto this path has to be
+        # a no-op for them, and "close enough" is not checkable.
+        assert positions_from_layout(self._rows("qwerty")) == QWERTY_POSITIONS
+
+    def test_dvorak_puts_p_in_the_slot_qwerty_gives_r(self):
+        # Dvorak's top row is ' , . p y f g c r l, so p is the fourth
+        # physical key.  Counting only the letters would put it at
+        # column 0 and hand Dvorak users a model wrong in a new way.
+        dvorak = positions_from_layout(self._rows("dvorak"))
+        assert dvorak["p"] == QWERTY_POSITIONS["r"]
+
+    def test_punctuation_holds_its_slot_without_entering_the_model(self):
+        # The inverse half of the test above: the three punctuation
+        # keys are what push p to column 3, and they must not
+        # themselves become correctable keys (punctuation has a
+        # different error mode, which is why QWERTY_POSITIONS omits it).
+        dvorak = positions_from_layout(self._rows("dvorak"))
+        assert "'" not in dvorak
+        assert "," not in dvorak
+        assert "." not in dvorak
+
+    def test_dvorak_neighbours_are_dvorak_neighbours(self):
+        # The behavioural point.  On Dvorak, e sits between u and o;
+        # on QWERTY it sits between w and r.  A model that still
+        # answered w/r here would pass every structural test above.
+        model = SpatialKeyModel(positions=positions_from_layout(self._rows("dvorak")))
+        nearby = set(model.get_nearby_keys("e"))
+        assert {"u", "o"} <= nearby
+        assert "w" not in nearby
+        assert "r" not in nearby
+
+    def test_the_digit_row_sits_directly_over_the_letters(self):
+        # The number row carries a leading backtick, which on a
+        # key-index rule would push every digit one column right of the
+        # letter it is meant to sit above, so 5 would stop being over t.
+        qwerty = positions_from_layout(self._rows("qwerty"))
+        assert qwerty["1"] == (-1.0, 0.0)
+        assert qwerty["5"][1] == qwerty["t"][1]
+        assert "`" not in qwerty
+
+    def test_a_layout_with_no_number_row_starts_at_the_letter_row(self):
+        # Compact keeps its digits on the sym layer, so its first row
+        # is the top letter row and must not be read as a digit row
+        # shifted up to -1.
+        compact = positions_from_layout(self._rows("qwerty-compact"))
+        assert compact["q"] == (0.0, 0.0)
+        assert compact["a"] == QWERTY_POSITIONS["a"]
+        assert compact["z"] == QWERTY_POSITIONS["z"]
+
+    def test_rows_on_another_layer_are_ignored(self):
+        # Compact's digits are on sym, where they replace the letters
+        # rather than sitting above them, so they are not spatially
+        # adjacent to anything and must not enter the model.
+        compact = positions_from_layout(self._rows("qwerty-compact"))
+        assert not any(c.isdigit() for c in compact)
+
+    def test_every_letter_survives_every_shipped_layout(self):
+        for name in ("qwerty", "dvorak", "colemak", "qwerty-compact"):
+            derived = positions_from_layout(self._rows(name))
+            missing = set(string.ascii_lowercase) - set(derived)
+            assert not missing, f"{name} lost {sorted(missing)}"
+
+    def test_a_layout_with_no_character_keys_yields_nothing(self):
+        assert positions_from_layout([{"keys": [{"type": "special", "action": "escape"}]}]) == {}
+
+
+class TestSwitchingLayoutRebuildsTheSpatialModel:
+    """``FuzzyRecognizer.set_key_positions``."""
+
+    def test_the_word_generator_sees_the_new_grid(self):
+        # The trap this exists for: FuzzyWordGenerator holds its own
+        # reference to the model, so re-pointing only the recogniser
+        # leaves candidate generation running on the old positions
+        # while every accessor reports the new ones.
+        recognizer = FuzzyRecognizer()
+        recognizer.set_key_positions({"a": (0.0, 0.0), "b": (0.0, 1.0)})
+        assert recognizer.word_generator.spatial_model is recognizer.spatial_model
+        assert set(recognizer.word_generator.spatial_model.positions) == {"a", "b"}
+
+    def test_an_empty_grid_is_ignored(self):
+        # A layout with no alphanumeric keys is one the spatial model
+        # has nothing to say about.  Blanking it would silently
+        # disable autocorrect rather than leaving the previous layout
+        # in place.
+        recognizer = FuzzyRecognizer()
+        before = dict(recognizer.spatial_model.positions)
+        recognizer.set_key_positions({})
+        assert recognizer.spatial_model.positions == before
