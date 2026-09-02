@@ -39,8 +39,7 @@
                 {"type": "char", "key": "p", "width": 1.0},
                 {"type": "char", "key": "[", "shifted": "{", "width": 1.0, "fontSize": 14, "style": "secondary"},
                 {"type": "char", "key": "]", "shifted": "}", "width": 1.0, "fontSize": 14, "style": "secondary"},
-                {"type": "char", "key": "\\", "shifted": "|", "width": 1.0, "fontSize": 14, "style": "secondary"},
-                {"type": "special", "action": "delete", "display": "Del", "width": 1.0, "fontSize": 11, "style": "special"}
+                {"type": "char", "key": "\\", "shifted": "|", "width": 1.0, "fontSize": 14, "style": "secondary"}
             ]
         },
         {
@@ -59,7 +58,7 @@
                 {"type": "char", "key": "l", "width": 1.0},
                 {"type": "char", "key": ";", "shifted": ":", "width": 1.0, "fontSize": 14, "style": "secondary"},
                 {"type": "char", "key": "'", "shifted": "\"", "width": 1.0, "fontSize": 14, "style": "secondary"},
-                {"type": "special", "action": "return", "display": "Enter", "width": 1.8, "fontSize": 11, "style": "enter"}
+                {"type": "special", "action": "return", "display": "Enter", "width": 2.3, "fontSize": 11, "style": "enter"}
             ]
         },
         {
@@ -97,8 +96,7 @@
                 {"type": "char", "key": "\u2191", "literal": true, "width": 1.0, "fontSize": 15, "style": "secondary"},
                 {"type": "char", "key": "\u2193", "literal": true, "width": 1.0, "fontSize": 15, "style": "secondary"},
                 {"type": "char", "key": "\u00bf", "literal": true, "width": 1.0, "fontSize": 15, "style": "secondary"},
-                {"type": "char", "key": "\u00a1", "literal": true, "width": 1.0, "fontSize": 15, "style": "secondary"},
-                {"type": "special", "action": "delete", "display": "Del", "width": 1.0, "fontSize": 11, "style": "special"}
+                {"type": "char", "key": "\u00a1", "literal": true, "width": 1.0, "fontSize": 15, "style": "secondary"}
             ]
         },
         {
@@ -117,7 +115,7 @@
                 {"type": "char", "key": "\u00ae", "literal": true, "width": 1.0, "fontSize": 15, "style": "secondary"},
                 {"type": "char", "key": "\u2122", "literal": true, "width": 1.0, "fontSize": 15, "style": "secondary"},
                 {"type": "char", "key": "\u00b0", "literal": true, "width": 1.0, "fontSize": 15, "style": "secondary"},
-                {"type": "special", "action": "return", "display": "Enter", "width": 1.8, "fontSize": 11, "style": "enter"}
+                {"type": "special", "action": "return", "display": "Enter", "width": 2.3, "fontSize": 11, "style": "enter"}
             ]
         },
         {

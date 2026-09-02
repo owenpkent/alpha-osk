@@ -987,9 +987,19 @@ field, so they render on every page: digits stay one tap away instead of
 going behind the hop the way Compact View has to put them, and the space bar
 never leaves the screen. Each `sym-*` row matches the row it replaces both in
 unit total and in key count, so `keyW`, the window width and every column
-position are identical across the hop. Tab, Del, Caps and Enter keep their
+position are identical across the hop. Tab, Caps and Enter keep their
 exact slots, which is the payoff for full size having room compact does not:
 a comma typed on the symbol page does not cost a hop back to reach Enter.
+
+**Del is not on the full-size grid at all.** It sits above the arrows on the
+Navigation panel (shown by default), which is where a physical keyboard puts
+it. The top row used to carry it past the backslash, which made that row 0.9u
+wider than the home row and, because rows are centred individually, pushed
+the whole letter block left until W sat between A and S. Removing it and
+growing Enter to 2.3u is what puts Q over A. The space row cannot take it
+either: with a `Sym` at each end a third key there is 15.6u, past the number
+row, and the window widens to fit. Guarded by
+`tests/test_layouts.py::TestTheLetterColumnsLineUp`.
 
 **Two `Sym` keys, not one, and that is arithmetic rather than taste.** Rows
 are centred individually, so adding equal width to *both* ends of a centred

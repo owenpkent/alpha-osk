@@ -19,6 +19,7 @@ from pathlib import Path
 import pytest
 
 LAYOUTS_DIR = Path(__file__).resolve().parent.parent / "data" / "layouts"
+NAV_PANEL = Path(__file__).resolve().parent.parent / "qml" / "components" / "NavigationPanel.qml"
 
 # Special-key actions KeyboardBridge.pressSpecialKey knows how to dispatch.
 KNOWN_SPECIAL_ACTIONS = frozenset(
@@ -101,17 +102,27 @@ class TestEveryLayout:
                         f"{path.stem}: unhandled modifier {key['action']!r}"
                     )
 
-    def test_delete_is_on_the_entry_layer(self, path: Path) -> None:
-        """Forward-delete must be one tap away, not behind a ?123 hop.
+    def test_delete_is_where_each_layout_family_keeps_it(self, path: Path) -> None:
+        """Forward-delete must be one tap away, and where it lives differs.
 
         Backspace alone means the caret has to be walked past a mistake and
-        back; on a pointer-driven keyboard that is several extra clicks.
-        Rows with no `layer` field are the full-size layouts' single layer.
+        back; on a pointer-driven keyboard that is several extra clicks. The
+        compact layouts have no room beside them for the Navigation panel,
+        so Del has to be on their base layer, not behind a ?123 hop. The
+        full-size layouts keep it *off* the grid on purpose: it sits above
+        the arrows on the Navigation panel (shown by default), and the top
+        row losing it is what lets Q sit over A (see
+        ``TestTheLetterColumnsLineUp``).
         """
         data = json.loads(path.read_text(encoding="utf-8"))
-        entry = [r for r in data["rows"] if r.get("layer", "base") == "base"]
-        actions = {k.get("action") for r in entry for k in r["keys"] if k.get("type") == "special"}
-        assert "delete" in actions, f"{path.stem}: no Del key on the base layer"
+        compact = "compactOf" in data
+        base = [r for r in data["rows"] if r.get("layer", "base") == "base"]
+        actions = {k.get("action") for r in base for k in r["keys"] if k.get("type") == "special"}
+        if compact:
+            assert "delete" in actions, f"{path.stem}: no Del key on the base layer"
+        else:
+            everywhere = {k.get("action") for r in data["rows"] for k in r["keys"]}
+            assert "delete" not in everywhere, f"{path.stem}: Del is back on the main grid"
 
     def test_modifiers_carry_a_state_key(self, path: Path) -> None:
         # Without stateKey the QML `isActive` binding can never highlight the
@@ -241,14 +252,17 @@ class TestFullSizeSymbolLayer:
 
     @pytest.mark.parametrize("name", FULL_SIZE)
     def test_the_editing_keys_keep_their_slots(self, name: str) -> None:
-        """Tab, Del, Caps and Enter are in the same position and width on the
+        """Tab, Caps and Enter are in the same position and width on the
         symbol page as on the letters. Full size has the room compact did
         not, so a comma typed on the symbol page does not cost a hop back to
-        reach Enter."""
+        reach Enter. The top row's right end is a plain character on both
+        pages: Del is not on the grid (it lives above the arrows on the
+        Navigation panel), so only Tab is pinned there."""
         rows = {r["id"]: r for r in _load(f"{name}.json")["rows"]}
+        pinned = {"top": (0,), "home": (0, -1)}
         for base_id, sym_id in SWAPPED_ROWS[:2]:
             base, sym = rows[base_id], rows[sym_id]
-            for index in (0, -1):
+            for index in pinned[base_id]:
                 assert base["keys"][index] == sym["keys"][index], (
                     f"{name}/{sym_id}: the key at index {index} differs from {base_id}"
                 )
@@ -304,6 +318,86 @@ class TestFullSizeSymbolLayer:
         widest = max(rows, key=_row_units)
         assert _row_units(widest) == pytest.approx(15.5)
         assert len(widest["keys"]) - 1 == 14, "gap count feeds layoutFixedPixels"
+
+
+class TestTheLetterColumnsLineUp:
+    """W sits directly above S on the full-size layouts, for WASD gaming.
+
+    Main.qml centres every row against the widest one (each row is a `Row`
+    with `Layout.alignment: Qt.AlignHCenter`), so a row's horizontal offset
+    is `(widest_units - row_units) / 2` and its first letter's left edge is
+    that offset plus the leading modifier's width.  The top row used to
+    carry a Del key past the backslash, which made it 0.9u wider than the
+    home row and so pushed the whole letter block four fifths of a key
+    left: W landed between A and S.  On a pointer-driven keyboard that
+    turns every W->S in a WASD pair into a diagonal drag, which is the one
+    movement slow motor input is worst at.
+
+    Del leaves the main grid altogether: it already sits above the arrows
+    on the Navigation panel, which is shown by default, and the space row
+    cannot take it since the symbol layer put a Sym key at each end (a
+    third key there overflows the 15.5u number row and widens the window).
+    Enter grew 1.8u -> 2.3u (standard ANSI is 2.25u) to take back the
+    half-unit the top row lost. Both halves are needed: dropping Del alone
+    leaves W a quarter-key short, and widening Enter alone overshoots. The
+    symbol page follows, because each of its rows has to match the letter
+    row it replaces in units and key count.
+
+    These assertions are in key-width units and deliberately ignore
+    `keySpacing`: the top row carries one more gap than the home row, so
+    the true residual is half a gap, which is 1 px at the default window
+    width and never exceeds 2 px.
+    """
+
+    LAYOUTS = ["qwerty", "dvorak", "colemak"]
+
+    @staticmethod
+    def _rows(name: str) -> tuple[dict[str, dict], float]:
+        rows = {r["id"]: r for r in _load(f"{name}.json")["rows"]}
+        return rows, max(_row_units(r) for r in rows.values())
+
+    @staticmethod
+    def _centre(row: dict, index: int, widest: float) -> float:
+        """Centre of the key at `index`, in key-width units from the left."""
+        x = (widest - _row_units(row)) / 2.0
+        for key in row["keys"][:index]:
+            x += float(key.get("width", 1.0))
+        return x + float(row["keys"][index].get("width", 1.0)) / 2.0
+
+    @pytest.mark.parametrize("name", LAYOUTS)
+    def test_the_top_row_letters_sit_over_the_home_row_letters(self, name: str) -> None:
+        rows, widest = self._rows(name)
+        # Index 1 is the first letter on both rows (index 0 is Tab / Caps).
+        assert self._centre(rows["top"], 1, widest) == pytest.approx(
+            self._centre(rows["home"], 1, widest), abs=0.02
+        )
+
+    def test_w_is_directly_above_s(self) -> None:
+        rows, widest = self._rows("qwerty")
+        top = [k.get("key") for k in rows["top"]["keys"]]
+        home = [k.get("key") for k in rows["home"]["keys"]]
+        assert self._centre(rows["top"], top.index("w"), widest) == pytest.approx(
+            self._centre(rows["home"], home.index("s"), widest), abs=0.02
+        )
+
+    @pytest.mark.parametrize("name", LAYOUTS)
+    def test_del_is_off_the_grid_and_on_the_navigation_panel(self, name: str) -> None:
+        # Del has to stay reachable (walking the caret past a mistake and
+        # back is several clicks), and the place it stays reachable is the
+        # Navigation panel, above the arrows. Pin both halves: nothing on
+        # the grid, and the panel still has it.
+        rows, _ = self._rows(name)
+        on_grid = [k.get("action") for r in rows.values() for k in r["keys"]]
+        assert "delete" not in on_grid, f"{name}: Del is back on the main grid"
+        panel = (NAV_PANEL).read_text(encoding="utf-8")
+        assert 'keyText: "delete"' in panel, "NavigationPanel.qml lost its Del key"
+
+    @pytest.mark.parametrize("name", LAYOUTS)
+    def test_the_space_row_still_costs_no_window_width(self, name: str) -> None:
+        # Del is free only while the space row stays clear of the widest
+        # row; past that it would widen the whole keyboard.
+        rows, widest = self._rows(name)
+        assert _row_units(rows["space"]) < widest
 
 
 class TestCompactLayout:
