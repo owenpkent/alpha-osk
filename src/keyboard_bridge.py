@@ -2900,14 +2900,24 @@ class KeyboardBridge(QObject):
         value = self._snippets.get_value(index)
         if not value:
             return False
+        return self._copy_to_clipboard(value)
+
+    def _copy_to_clipboard(self, text: str) -> bool:
+        """Put *text* on the system clipboard.  False if we could not.
+
+        Shared by every "copy" affordance (snippet tiles, the diagnostic
+        log path) so the two guards below are stated once rather than
+        once per caller.
+        """
+        if not text:
+            return False
         # Imported here rather than at module scope.  QtGui dlopens the
         # host's libEGL / libGL when it is first imported, and this module
         # is imported by most of the Python suite, so an unconditional
         # import turns every one of those files into a pytest *collection
         # error* on a host without them instead of a skip.  That is the
         # same failure tests/test_qml_snippets.py wraps its own QtGui
-        # import in a try/except to avoid.  One slot needs it; nothing
-        # else in this module does.
+        # import in a try/except to avoid.
         try:
             from PySide6.QtGui import QGuiApplication
         except ImportError:  # no GUI stack on this host
@@ -2922,7 +2932,7 @@ class KeyboardBridge(QObject):
         clipboard = QGuiApplication.clipboard()
         if clipboard is None:
             return False
-        clipboard.setText(value)
+        clipboard.setText(text)
         return True
 
     @Slot(int, str)
@@ -3504,6 +3514,61 @@ class KeyboardBridge(QObject):
     def savePredictionModel(self) -> None:
         """Save the prediction model to disk."""
         self._predictor.save()
+
+    # ------------------------------------------------------------------
+    #  Diagnostic log (the file users attach to a bug report)
+    # ------------------------------------------------------------------
+
+    @Slot(result=str)
+    def getLogPath(self) -> str:
+        """Return the full path of the diagnostic log, for display.
+
+        The path is only otherwise announced *inside* the log itself at
+        startup, which is no help to anyone who cannot already find it.
+        """
+        from .platform import get_log_path
+
+        try:
+            return str(get_log_path())
+        except OSError:
+            # get_config_dir() creates the directory, so this is a
+            # read-only profile or a full disk.  A blank path hides the
+            # section rather than showing one that points nowhere.
+            return ""
+
+    @Slot(result=bool)
+    def openLogFolder(self) -> bool:
+        """Open the config directory in the system file manager.
+
+        The *folder*, not the file: a .log has no registered handler on
+        a stock Windows install, so opening the file itself is a "how do
+        you want to open this?" dialog, and the folder is where the
+        rotations (.1 / .2 / .3) are anyway.
+        """
+        from .platform import get_config_dir
+
+        # Lazy import for the same reason _copy_to_clipboard has one:
+        # QtGui pulls in the host's GL stack at import time.
+        try:
+            from PySide6.QtCore import QUrl
+            from PySide6.QtGui import QDesktopServices
+        except ImportError:  # no GUI stack on this host
+            return False
+        try:
+            folder = str(get_config_dir())
+        except OSError:
+            return False
+        return bool(QDesktopServices.openUrl(QUrl.fromLocalFile(folder)))
+
+    @Slot(result=bool)
+    def copyLogPath(self) -> bool:
+        """Put the log's path on the clipboard.
+
+        The fallback for the case ``openLogFolder`` cannot cover: no
+        file manager, a remote session, or a user who wants to paste the
+        path into a bug report.
+        """
+        return self._copy_to_clipboard(self.getLogPath())
 
     # ------------------------------------------------------------------
     #  Export / import (data backup — see src/data_export.py)

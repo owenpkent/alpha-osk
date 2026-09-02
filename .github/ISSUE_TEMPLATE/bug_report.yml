@@ -57,7 +57,17 @@ body:
     id: logs
     attributes:
       label: Logs or error output
-      description: If the keyboard printed an error or stack trace to the console, paste it here. Run `python run.py` from a terminal to capture output.
+      description: |
+        Paste the tail of the diagnostic log, or attach the file. It records errors
+        and crashes, never what you type.
+
+        Find it with **Settings > Data & Privacy > Diagnostics > Open Log Folder**, or at:
+        - Windows: `%APPDATA%\alpha-osk\alpha-osk.log`
+        - Linux: `~/.config/alpha-osk/alpha-osk.log`
+        - macOS: `~/Library/Application Support/alpha-osk/alpha-osk.log`
+
+        Older copies sit beside it as `.1`, `.2` and `.3`. Running from source?
+        `python run.py` in a terminal prints the same records.
       render: shell
 
   - type: checkboxes

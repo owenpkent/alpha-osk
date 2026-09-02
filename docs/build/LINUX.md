@@ -220,6 +220,8 @@ trust a hash pasted from anywhere other than a file you fetched yourself.
 
 ## Troubleshooting
 
+**Where the log is.** `~/.config/alpha-osk/alpha-osk.log` (rotating, 2 MB x 3), reachable from the app at *Settings -> Data & Privacy -> Diagnostics -> Open Log Folder*. An AppImage launched from a file manager has no console, so that file is the only place errors and crash tracebacks land, including a crash during startup.
+
 | Symptom | Likely cause | Fix |
 |---------|--------------|-----|
 | `ModuleNotFoundError` at runtime | Missing hidden import in spec | Add it to `hiddenimports` in `build/linux/alpha-osk.spec` |

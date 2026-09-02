@@ -10,7 +10,7 @@ Type into any Windows or Linux app by clicking on-screen keys. Built for people 
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![CI](https://github.com/owenpkent/alpha-osk/actions/workflows/ci.yml/badge.svg)](https://github.com/owenpkent/alpha-osk/actions/workflows/ci.yml)
-[![Tests](https://img.shields.io/badge/tests-1669-brightgreen.svg)](tests/)
+[![Tests](https://img.shields.io/badge/tests-1679-brightgreen.svg)](tests/)
 [![Releases](https://img.shields.io/badge/releases-alpha--osk--releases-orange.svg)](https://github.com/okstudio1/alpha-osk-releases/releases)
 
 <img src="assets/screenshots/dark-theme-keyboard.png" alt="Alpha-OSK on-screen keyboard with function row, QWERTY block, navigation cluster, and numpad" width="900" />
@@ -174,6 +174,9 @@ Your typing, no. Your voice, only if you switch on Dictation and supply your own
 
 Nothing else leaves the machine on its own. The opt-in anonymous-stats client is wired into the app but `DEFAULT_ENDPOINT` is currently the empty string, so the client silently no-ops every submission attempt regardless of the toggle. When the endpoint is deployed in a future release, opting in would send nine integer counters per week (lifetime keystroke count, words typed, predictions used, etc.) plus a random UUID. Never content, word frequencies, key frequencies, IP, or hostname. See [`docs/PRIVACY.md`](docs/PRIVACY.md).
 
+**Something went wrong. What should I send with the bug report?**
+The diagnostic log. **Settings > Data & Privacy > Diagnostics** has **Open Log Folder** and **Copy Path**; the file is `alpha-osk.log` in your config directory. It records errors and crashes, including the full traceback if the app falls over, and never records what you type.
+
 **Can I import my own vocabulary?**
 Yes. Settings → Your Language Model → Vocabulary Packs → Import Custom Pack. A pack is a folder containing `dictionary.txt` (one word per line) and optionally `bigrams.txt`, `trigrams.txt`, and `pack.json`. No built-in packs ship; the rationale is in the white paper.
 
@@ -191,7 +194,7 @@ Yes on Windows (Unicode keystroke injection covers anything in BMP and supplemen
 | Anonymous telemetry (opt-in) | Client + UI shipped, endpoint not yet deployed |
 | Analytics dashboard | Shipping |
 | Data backup (export / import) | Shipping |
-| Test suite | 1669 tests passing |
+| Test suite | 1679 tests passing |
 | macOS port | In progress |
 | Federated learning | Designed, not implemented |
 | Voice dictation (opt-in, bring your own Deepgram key) | Shipping |
@@ -247,7 +250,7 @@ Yes on Windows (Unicode keystroke injection covers anything in BMP and supplemen
 ### Reliability
 
 - Single-instance lock prevents accidental duplicates
-- 1669 tests covering prediction, platform abstraction, bridge, vocab packs, dictation, telemetry, data export,
+- 1679 tests covering prediction, platform abstraction, bridge, vocab packs, dictation, telemetry, data export,
   including property-based suites that generate adversarial inputs for the archive / pack import
   paths and the prediction-engine invariants
 - CI runs ruff + mypy + pytest + OSV CVE scan on every push and PR
@@ -292,7 +295,7 @@ The full index lives in [`docs/README.md`](docs/README.md).
 
 ```bash
 python run.py                               # Launch the keyboard
-python -m pytest                            # Run the test suite (1669 tests)
+python -m pytest                            # Run the test suite (1679 tests)
 python check.py                             # Pre-push gate: ruff + mypy + pytest (~60s)
 python check.py --full                      # Adds coverage gate (~110s, matches CI)
 python check.py --install-hook              # Run that gate on `git push` instead of by hand

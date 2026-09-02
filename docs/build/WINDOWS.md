@@ -788,6 +788,8 @@ higher-integrity windows) without granting broad admin access.  See the
 
 ## Troubleshooting
 
+**"Check the logs" below means `alpha-osk.log` in the config directory (`%APPDATA%\alpha-osk\`), reachable from the app at *Settings -> Data & Privacy -> Diagnostics -> Open Log Folder*. The installed build is windowed and has no console, so that file is the only place errors and crash tracebacks land, including a crash during startup (the launcher writes the traceback there before showing its error dialog).**
+
 ### Keystrokes Not Reaching Target Application
 
 | Symptom | Cause | Fix |
