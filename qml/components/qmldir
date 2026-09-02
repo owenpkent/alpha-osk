@@ -3,9 +3,9 @@ KeyButton 1.0 KeyButton.qml
 NavigationPanel 1.0 NavigationPanel.qml
 NumpadPanel 1.0 NumpadPanel.qml
 FunctionRow 1.0 FunctionRow.qml
-SettingsPanel 1.0 SettingsPanel.qml
 SettingsToggle 1.0 SettingsToggle.qml
-PredictionSettingsPanel 1.0 PredictionSettingsPanel.qml
 DebugPanel 1.0 DebugPanel.qml
 AnalyticsDashboard 1.0 AnalyticsDashboard.qml
 ModelVisualization 1.0 ModelVisualization.qml
+SnippetsWindow 1.0 SnippetsWindow.qml
+SymbolsWindow 1.0 SymbolsWindow.qml

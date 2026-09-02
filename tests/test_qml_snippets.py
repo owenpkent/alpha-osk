@@ -207,6 +207,23 @@ def _fill(bridge, window, count: int) -> None:
     window.refresh()
 
 
+class TestDeadComponentsAreGone:
+    """SettingsPanel.qml and PredictionSettingsPanel.qml were only ever
+    referenced from qmldir; UnifiedSettingsPanel replaced both. A pure
+    filesystem check, so it fails loudly if either file (or its qmldir
+    entry) is ever reintroduced by an errant merge or copy-paste."""
+
+    def test_the_dead_qml_files_do_not_exist(self):
+        components_dir = REPO_ROOT / "qml" / "components"
+        assert not (components_dir / "SettingsPanel.qml").exists()
+        assert not (components_dir / "PredictionSettingsPanel.qml").exists()
+
+    def test_qmldir_does_not_name_them(self):
+        qmldir = (REPO_ROOT / "qml" / "components" / "qmldir").read_text(encoding="utf-8")
+        assert "SettingsPanel" not in qmldir
+        assert "PredictionSettingsPanel" not in qmldir
+
+
 class TestTheWindowLoads:
     def test_it_opens_on_the_grid_with_no_qml_warnings(self, snippets_window):
         window, _bridge, warnings = snippets_window
@@ -215,6 +232,15 @@ class TestTheWindowLoads:
         assert window.property("menuIndex") == -1
         assert window.property("page") == 0
         assert _real_warnings(warnings) == [], "\n".join(_real_warnings(warnings))
+
+    def test_the_window_is_a_standalone_component(self, snippets_window):
+        """Pins the extraction out of Main.qml: QML names a component's
+        generated class after its file, so this fails if SnippetsWindow
+        is ever inlined back into Main.qml (where the class would be
+        named after Main.qml instead)."""
+        window, _bridge, _w = snippets_window
+        class_name = window.metaObject().className()
+        assert class_name.startswith("SnippetsWindow"), class_name
 
     def test_only_one_view_is_ever_showing(self, snippets_window):
         """The three views are siblings gated on the same two indices, so a
