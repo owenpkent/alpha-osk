@@ -225,6 +225,76 @@ window width. Giving the screen back is the entire point of the feature; keeping
 the window fixed and merely growing the keys would miss it. The user can still
 resize freely afterwards.
 
+## Accent-filled editing keys
+
+Esc, Tab, Shift, Backspace and Del carry `"style": "accent"` in the compact
+layout JSON, resolved by `root.accentKeyColor` in `Main.qml`. The compact grid
+is uniform, so unlike the full-size layouts there are no size cues to tell the
+editing keys apart from the letters: they have to be findable by colour.
+Full-size layouts are deliberately untouched.
+
+The fill is a **wash of the accent over the theme's key colour, not the raw
+accent**. Three themes have a pale accent (Blackboard `#ffffaa`, Spaceship
+`#00ff9f`) and Typewriter is a light theme with near-black text, so a saturated
+fill would destroy the label contrast. Same reason Enter is a muted `#2a5a2a`.
+
+**The wash strength is derived, not fixed.** A flat 35% was measured against all
+nine themes and dropped the label below WCAG AA on five of them:
+
+| Theme | Contrast at 0% wash | at a flat 35% |
+|-------|--------------------|---------------|
+| Blackboard | 6.19:1 | 2.66:1 |
+| Vaporwave | 6.17:1 | 2.97:1 |
+| Forest | 7.53:1 | 3.33:1 |
+| Spaceship | 10.37:1 | 3.85:1 |
+| Ocean | 6.96:1 | 4.44:1 |
+
+That is the worst place in the UI to lose contrast, because these are the exact
+keys the style exists to make findable, and Forest could not be rescued by
+swapping the label to black or white either (best case 4.37). So
+`root.accentWashFor()` walks the alpha down from 0.35 until the theme's own
+`textColor` clears 4.5:1. **Don't reintroduce a constant here.**
+
+Accent keys also take an accent-coloured border, which carries the cue on the
+themes where the wash has to back off to 0.12-0.21; a border sits beside the
+label rather than behind it, so it costs no contrast.
+
+Pinned by `tests/test_layouts.py::TestCompactEditingKeysAreAccented` (which
+keys) and `tests/test_qml_compact_view.py::TestAccentKeysStayReadable` (the
+contrast floor, plus the inverse test that the wash is still visible, so "stop
+tinting" cannot pass as a fix).
+
+## No panel that lines up with the grid may use `QtQuick.Layouts`
+
+Number Row and Function Row are plain `Row`s, Navigation is a plain `Grid`,
+Numpad is a `Column` of `Row`s.
+
+`Main.qml` reserves an exact float unit budget for each panel when it derives
+`minimumWidth`, so a rounding positioner costs pixels the window was never
+given. `QtQuick.Layouts` rounds every child up to a whole pixel: 13 keys of
+69.23 px each became 13 of 70, and the panel rendered 10 px wider than the
+keyboard grid it is supposed to sit flush with, overhanging the window and
+clipping its last key. The keyboard rows are plain `Row` positioners, which keep
+`keyW` as the float it is; a panel that sizes itself any other way cannot line
+up with the keys underneath it.
+
+Guarded by `tests/test_qml_compact_view.py::TestPanelsSitFlushWithTheGrid`,
+which asserts the panel width equals the widest keyboard row rather than merely
+fitting the window, because "fits" was already true of the broken version at
+some widths.
+
+## Leaving a letters page never carries Shift onto a symbol page
+
+`Main.qml`'s layer branch calls the idempotent `keyboard.releaseShift()` on
+every switch, never `if (shiftOn) toggleShift()`: `root.shiftOn` is a mirror
+kept alive by signal delivery rather than a live binding, so a flip could turn
+Shift *on* here.
+
+It is load-bearing because the modifier is held at the OS level. A Shift carried
+in from the letters page would make `1` emit `!` while the keycap still read
+`1`, and the symbol pages have no Shift key to clear it from. Caps Lock is left
+alone, since it only affects letters.
+
 ## Adding a compact layout
 
 1. Every row must total the same unit count, or the gutters return.

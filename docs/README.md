@@ -37,6 +37,8 @@ Per-platform build pipelines and the auto-update path. Edit when the release pro
 - [`build/MACOS.md`](build/MACOS.md): macOS port plan, phase breakdown, TCC and SEI specifics.
 - [`build/AUTO_UPDATE.md`](build/AUTO_UPDATE.md): auto-update flow, threat model, signature verification, and the relauncher spawn (why it needs `CREATE_NO_WINDOW` on top of detaching, and why no test may reach it).
 - [`build/BRANDING.md`](build/BRANDING.md): asset regeneration (icons, installer images).
+- [`build/RELEASE.md`](build/RELEASE.md): release artefacts, the clickwrap EULA, dependency lockfile + SBOM, CVE scanning.
+- [`build/CI.md`](build/CI.md): the pre-push gate and CI, why the suite shards on two axes, and the rules a new test has to respect.
 
 ## `roadmap/`: planned, not-yet-built
 

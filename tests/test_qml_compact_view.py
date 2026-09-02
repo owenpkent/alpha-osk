@@ -1185,3 +1185,189 @@ class TestTheMainWindowRestoreClampsToTheWholeDesktop:
         width = root.property("width")
         assert _real_warnings(warnings) == []
         assert root.property("x") == pytest.approx((right - width) / 2)
+
+
+class TestTheFullSizeSymbolPage:
+    r"""The full-size layouts reach one symbol page from the space row.
+
+    Compact View has had ``?123`` and ``=\<`` from the start while the
+    full-size layouts had nothing, so anything outside a physical keyboard's
+    printing was reachable in one view and not the other. The data half of
+    this is asserted in tests/test_layouts.py; this is the QML half, and it
+    covers the three things only a live load can show: that the page can be
+    left again, that reaching it moves nothing on screen, and that a key on
+    it types the glyph printed on its cap.
+    """
+
+    @staticmethod
+    def _visible_keys(root) -> list:
+        return [i for i in TestSecondSymbolPage._key_items(root) if i.isVisible()]
+
+    @classmethod
+    def _key_data(cls, root) -> list[dict]:
+        out: list[dict] = []
+        for item in cls._visible_keys(root):
+            kd = item.property("kd")
+            if hasattr(kd, "toVariant"):
+                kd = kd.toVariant()
+            if isinstance(kd, dict):
+                out.append(kd)
+        return out
+
+    @classmethod
+    def _click_point(cls, root, match):
+        """Scene-centre of the first visible key *match* accepts, for tapping.
+
+        Separate from _key_point, which measures. Returns a bare point and
+        drops the item reference before returning, for the same reason
+        TestSecondSymbolPage._tap does: the caller pumps next, and a layer
+        switch frees the delegate.
+        """
+        for item in cls._visible_keys(root):
+            kd = item.property("kd")
+            if hasattr(kd, "toVariant"):
+                kd = kd.toVariant()
+            if isinstance(kd, dict) and match(kd):
+                point = item.mapToScene(item.boundingRect().center()).toPoint()
+                del item
+                return point
+        return None
+
+    @classmethod
+    def _key_point(cls, root, match):
+        """Centre of the first visible key *match* accepts, measured from the
+        top-left corner of the key grid.
+
+        Not scene coordinates, and the difference is what makes the
+        assertion honest rather than flaky. The first tap on a non-char key
+        settles the chrome above the keyboard by one pixel (Caps does it too,
+        on a tree with no symbol layer in it), so a scene-y comparison across
+        a tap fails by 1 px for a reason that has nothing to do with the
+        grid. Measuring from the grid's own corner normalises that away while
+        still catching the failure this test exists for: a row rendered in the
+        wrong order moves the space bar by a whole row.
+
+        Returns bare numbers and drops every item reference before returning:
+        callers pump the event loop next, and a layer switch frees the
+        Repeater's delegates. Holding a PySide wrapper across that is what
+        segfaulted CI once already.
+        """
+        found = None
+        left = top = None
+        for item in cls._visible_keys(root):
+            corner = item.mapToScene(item.boundingRect().topLeft())
+            left = corner.x() if left is None else min(left, corner.x())
+            top = corner.y() if top is None else min(top, corner.y())
+            kd = item.property("kd")
+            if hasattr(kd, "toVariant"):
+                kd = kd.toVariant()
+            if isinstance(kd, dict) and match(kd):
+                centre = item.mapToScene(item.boundingRect().center())
+                found = (centre.x(), centre.y())
+        if found is None:
+            return None
+        return (round(found[0] - left, 3), round(found[1] - top, 3))
+
+    @pytest.fixture
+    def full_size(self, qml_root):
+        root, warnings, bridge = qml_root
+        root.show()
+        _pump_until(lambda: len(self._visible_keys(root)))
+        assert root.property("compactView") is False, "precondition: full size"
+        assert root.property("activeLayer") == "base"
+        return root, warnings, bridge
+
+    def test_the_sym_key_is_both_the_way_in_and_the_way_out(self, full_size) -> None:
+        """The entry key sits on the space row, which carries no `layer` and
+        therefore renders on every page. Tapping it a second time has to come
+        back: on the page it opened it is the key the pointer is already on,
+        and re-selecting the layer already showing is a dead tap.
+        """
+        root, warnings, _ = full_size
+
+        TestSecondSymbolPage._tap(root, "sym")
+        assert root.property("activeLayer") == "sym"
+
+        TestSecondSymbolPage._tap(root, "sym")
+        assert root.property("activeLayer") == "base", (
+            "the Sym key did not come back out of the page it opened"
+        )
+        assert _real_warnings(warnings) == []
+
+    def test_abc_leaves_the_page_as_well(self, full_size) -> None:
+        """Two ways back, and the second is not redundant: ABC sits in the
+        slots the Shift keys had, so it is the wide target already under a
+        pointer that reached for Shift out of habit."""
+        root, warnings, _ = full_size
+
+        TestSecondSymbolPage._tap(root, "sym")
+        TestSecondSymbolPage._tap(root, "base")
+
+        assert root.property("activeLayer") == "base"
+        assert _real_warnings(warnings) == []
+
+    def test_the_space_bar_does_not_move(self, full_size) -> None:
+        """The one measurement the layout tests cannot make.
+
+        Matching unit totals per row are what should keep the grid still, but
+        rows are centred individually and the space row grew by a key at each
+        end, so this asserts the result rather than the arithmetic behind it:
+        the most-clicked key on the keyboard is in the same place on both
+        pages, to the pixel.
+        """
+        root, warnings, _ = full_size
+
+        before = self._key_point(root, lambda kd: kd.get("action") == "space")
+        assert before is not None, "no space bar rendered"
+        key_w = root.property("keyW")
+
+        TestSecondSymbolPage._tap(root, "sym")
+        _pump_until(lambda: len(self._visible_keys(root)))
+
+        after = self._key_point(root, lambda kd: kd.get("action") == "space")
+        assert after is not None, "the space bar left the screen on the symbol page"
+        assert after == before, f"the space bar moved from {before} to {after} within the grid"
+        assert root.property("keyW") == pytest.approx(key_w), "the keys resized"
+        assert _real_warnings(warnings) == []
+
+    def test_the_digits_stay_on_screen(self, full_size) -> None:
+        """Compact View puts its digits behind the ?123 hop because a 13u row
+        has nowhere else for them. Full size has a number row of its own and
+        it carries no `layer`, so the symbol page swaps only the three letter
+        rows and a digit never costs a second hop.
+        """
+        root, _, _ = full_size
+        TestSecondSymbolPage._tap(root, "sym")
+
+        glyphs = {kd.get("key") for kd in self._key_data(root) if kd.get("type") == "char"}
+        assert set("1234567890") <= glyphs, "digits went behind the symbol hop"
+
+    def test_a_symbol_key_types_the_glyph_on_its_cap(self, full_size) -> None:
+        """Caps Lock deliberately survives a layer switch (it only affects
+        letters, and this page has none), and Python's ``str.upper()`` is not
+        the identity on every non-ASCII character. Without the `literal` flag
+        routing these keys through pressKeyLiteral, Caps Lock plus the micro
+        sign typed a Greek capital Mu: the key emitted one glyph while the cap
+        displayed another, which is the same disagreement the symbol pages
+        carry no Shift key in order to avoid.
+        """
+        root, warnings, bridge = full_size
+        bridge.toggleCapsLock()
+        QCoreApplication.processEvents()
+        assert root.property("capsOn") is True, "precondition: Caps Lock is on"
+
+        TestSecondSymbolPage._tap(root, "sym")
+        _pump_until(lambda: len(self._visible_keys(root)))
+
+        point = self._click_point(root, lambda kd: kd.get("key") == "µ")
+        assert point is not None, "no micro-sign key on the symbol page"
+
+        bridge._synth.send_text.reset_mock()
+        QTest.mousePress(root, Qt.LeftButton, Qt.NoModifier, point)
+        QCoreApplication.processEvents()
+        QTest.mouseRelease(root, Qt.LeftButton, Qt.NoModifier, point)
+        QCoreApplication.processEvents()
+
+        sent = [call.args[0] for call in bridge._synth.send_text.call_args_list]
+        assert sent == ["µ"], f"typed {sent!r} instead of the glyph on the cap"
+        assert _real_warnings(warnings) == []
