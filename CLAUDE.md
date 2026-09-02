@@ -2,6 +2,10 @@
 
 Alpha-OSK is an AI-assisted, mouse-driven on-screen keyboard for Windows and Linux (macOS in progress). Users click QML keys to type into whatever app currently holds OS focus; a hybrid n-gram + PPM + fuzzy engine predicts words locally, with no LLM, no GPU, and nothing leaving the machine. It is an accessibility tool the owner depends on daily. This file is both the AI-onboarding doc and the human codebase map; the detailed reference sections below are authoritative project knowledge, not background.
 
+## About the Owner
+
+Owen is a wheelchair user with muscular dystrophy. Typing is hard - be proactive, make decisions, don't ask for confirmation on small things. Offer A/B/C choices so he can type one letter instead of explaining. This is an accessibility tool he actually needs.
+
 ## Key rules (non-obvious, cross-cutting)
 
 - The keyboard must NEVER steal OS focus: `WS_EX_NOACTIVATE` on Windows (`keyboard_app.py::_apply_window_flags`), `WindowDoesNotAcceptFocus` elsewhere. Because our window cannot hold focus, route in-app text entry (prediction-edit popup, snippets editor, any future input slot) through `setEditMode(true)` plus the `editKeyTyped` / `editSpecialPressed` signals, never Qt focus. Set edit mode on open and clear it on close.
@@ -17,7 +21,7 @@ Alpha-OSK is an AI-assisted, mouse-driven on-screen keyboard for Windows and Lin
 - Telemetry is OFF by default and `DEFAULT_ENDPOINT` in `src/telemetry.py` ships empty (silent no-op). `TelemetryClient` is the source of truth for the consent flag; do NOT mirror it into `appSettings`. The Data Backup archive deliberately excludes `telemetry.json`.
 - Adding a setting requires the full 8-step wiring (see "Settings Panel Structure"): `Settings{}` savedFoo + root prop in `Main.qml`, prop + `SettingsToggle` in the correct sub-view of `UnifiedSettingsPanel.qml`, pass-through, `onSettingChanged`, optional `@Slot` on `keyboard_bridge.py`, and load in `Component.onCompleted`.
 - Releases: `src/__version__.py` is the single source of version truth; publish to the separate `okstudio1/alpha-osk-releases` repo with an explicit `--repo` (the updater API URL is hard-pinned there); the installer asset name must be exactly `Alpha-OSK-Setup-{version}.exe`.
-- The generated NSIS installer no longer relies on `InstallDirRegKey HKCU` (a dangling read of a user-writable registry value nothing in the build ever wrote, which the silent `/S` auto-update path honoured anyway); `updater.py::_install_target_dir()` computes the directory instead and every silent install passes an explicit `/S /D=<dir>`. NSIS requires `/D=` to be the last parameter on the command line and unquoted even when the path has spaces. Don't reorder or requote it.
+- The install path is computed, never read from the registry: every silent install passes an explicit `/S /D=<dir>` from `updater.py::_install_target_dir()`. NSIS requires `/D=` last on the command line and unquoted even when the path has spaces, so don't reorder or requote the installer arguments (full reasoning under *Auto-Update*).
 - `run.py::ensure_admin_windows()` runs after dependency installation, not as the first statement in `main()`, so `pip install` never executes with an admin token; `--dashboard` never elevates at all. The repo tree is still user-writable, so this narrows the blast radius rather than closing it.
 - Load-bearing invariants: merge-strategy default MUST stay `"rank"`; `NgramPredictor._user_total == sum(user_vocab.values())`; window height is content-bound (never persist or assign it); every analytics metric needs both a session and an `_alltime_*` form; Windows subprocess calls need `CREATE_NO_WINDOW` when they suppress output *or* may run without a console to inherit (a git hook, a frozen GUI build).
 
@@ -29,7 +33,7 @@ Alpha-OSK is an AI-assisted, mouse-driven on-screen keyboard for Windows and Lin
 ## Build, run, test
 
 - Run: `python run.py` (creates venv, installs deps, launches the keyboard).
-- Test: `python -m pytest` (also `-k fuzzy`, or a single file like `tests/test_keyboard_bridge.py`).
+- Test: `python -m pytest` (1687 tests; also `-k fuzzy`, `-k property`, or a single file like `tests/test_keyboard_bridge.py`).
 - Pre-push gate, the same checks as CI (`ruff check`, `ruff format --check`, `mypy` under **both** `--platform linux` and `--platform win32`, `pytest`): `python check.py` (~60s); `python check.py --full` adds the `--cov-fail-under=60` coverage gate (~110s, full CI parity). `python check.py --install-hook` wires it to `git push` so it runs automatically rather than by hand (`--no-verify` skips it once). CI additionally runs `osv-scanner` over the lockfiles. Formatting is gated separately from linting because `ruff check` ignores layout; fix a format failure with `ruff format src/ tests/`. The two mypy passes are both required and neither substitutes for the other: `linux` is what the runner uses (typeshed gates whole symbols on platform, so `ctypes.WinDLL` degrades to `Any` there and trips `warn_return_any`), and `win32` is the only thing that type-checks the `if sys.platform == "win32"` bodies at all, since mypy prunes them as unreachable under the other.
 
 ## Conventions
@@ -44,23 +48,6 @@ Alpha-OSK is an AI-assisted, mouse-driven on-screen keyboard for Windows and Lin
 - Call out in the PR description any change to the prediction engine, the build/signing pipeline, or telemetry.
 - Get alignment before: changing the security-reporting flow or CoC contact (update `SECURITY.md` / `CONTRIBUTING.md` / `bug_report.yml` cross-references together); changing the data-export schema (`SCHEMA_VERSION` bump + back-compat import paths); changing the telemetry payload or consent model; loosening any import-hardening check; or disabling the OSV `fail-on-vuln` gate.
 - If you cannot decide which Settings category a new toggle belongs in, that is a UX smell: push back on the requirement before adding the setting.
-
----
-
-## About the Owner
-
-Owen is a wheelchair user with muscular dystrophy. Typing is hard - be proactive, make decisions, don't ask for confirmation on small things. Offer A/B/C choices so he can type one letter instead of explaining. This is an accessibility tool he actually needs.
-
-## What This Is
-
-Alpha-OSK is an AI-powered on-screen keyboard for Windows and Linux. Users click keys in the UI to type into other applications. It uses a hybrid prediction engine (n-gram + PPM + fuzzy recognition) - no LLM/GPU required.
-
-## How to Run
-
-```bash
-python run.py          # Creates venv, installs deps, launches keyboard
-python -m pytest       # Run tests (1576 tests)
-```
 
 ## Architecture Overview
 
@@ -389,12 +376,7 @@ Regression coverage: `tests/test_data_export.py::TestInspect::test_zip_slip_reje
 
 ## QML <-> Python Bridge Pattern
 
-QML calls Python via `@Slot` methods on `KeyboardBridge`. Python emits `Signal`s back to QML. Example flow:
-
-1. QML: `keyboard.pressKey("a")` -> calls `KeyboardBridge.pressKey()`
-2. Python: synthesizes keystroke, updates context, runs prediction
-3. Python: `self.predictionsChanged.emit(predictions)` -> Signal
-4. QML: binds to `keyboard.predictions` property, updates UI
+QML calls Python via `@Slot` methods on `KeyboardBridge`; Python emits `Signal`s back. The keystroke round trip is the one diagrammed under *Architecture Overview*, and it ends with `self.predictionsChanged.emit(predictions)`, which QML picks up as a binding on the `keyboard.predictions` property rather than as a callback.
 
 ## Caps Lock vs. Shift
 
@@ -496,9 +478,9 @@ The one exception to "held at the OS level": on Linux, `LinuxKeySynthesizer.hold
 
 ### Right-Click to Lock (persistent hold)
 
-**Right-clicking** Shift / Ctrl / Alt / Win **locks** it held down: the modifier stays held at the OS level and is **exempt from the per-keystroke auto-release**, so the user can fire several combos (Ctrl+C then Ctrl+V) or hold Shift across a whole selection without re-tapping. This is the accessibility answer to "hold the key down" for a mouse-driven OSK. Right-click again — or plain left-tap — to release. **Caps Lock is not lockable** (it's already a persistent toggle). Right-click-to-lock on a modifier is **independent of the "Right-Click for Shifted Character" setting** (a modifier has no shifted variant, and the whole point of the gesture is holding it).
+**Right-clicking** Shift / Ctrl / Alt / Win **locks** it held down: the modifier stays held at the OS level and is **exempt from the per-keystroke auto-release**, so the user can fire several combos (Ctrl+C then Ctrl+V) or hold Shift across a whole selection without re-tapping. This is the accessibility answer to "hold the key down" for a mouse-driven OSK. Right-click again, or plain left-tap, to release. **Caps Lock is not lockable** (it's already a persistent toggle). Right-click-to-lock on a modifier is **independent of the "Right-Click for Shifted Character" setting** (a modifier has no shifted variant, and the whole point of the gesture is holding it).
 
-State model: each modifier keeps its existing `_*_active` (held-at-OS, drives the highlight + chord logic) plus a new `_*_locked` flag. **Locked always implies active.** `lockModifier(name)` (bridge slot, called from QML `onKeyRightPressed` for `type === "modifier"` keys) toggles the lock: locking sets active+locked and holds at OS (only if not already held, so locking an already-sticky-active modifier doesn't re-send a key-down); unlocking clears both and releases. The sticky `toggleX()` paths call `_clear_lock(name)` when they turn a modifier off, so a left-tap on a locked key also clears the lock (easy way out). **Every** auto-release site is guarded with `and not self._*_locked` — there are four: the edit-mode intercept, the Ctrl/Alt/Win chord branch, the char-path end (`_press_char`), and the special-key end (`pressSpecialKey`, alongside the existing nav-key `keep_selection_modifiers` exception). Miss one and a locked modifier would silently drop after a keystroke. `shutdown()` releases locked modifiers too (and clears the flags) so quitting never pins one desktop-wide.
+State model: each modifier keeps its existing `_*_active` (held-at-OS, drives the highlight + chord logic) plus a new `_*_locked` flag. **Locked always implies active.** `lockModifier(name)` (bridge slot, called from QML `onKeyRightPressed` for `type === "modifier"` keys) toggles the lock: locking sets active+locked and holds at OS (only if not already held, so locking an already-sticky-active modifier doesn't re-send a key-down); unlocking clears both and releases. The sticky `toggleX()` paths call `_clear_lock(name)` when they turn a modifier off, so a left-tap on a locked key also clears the lock (easy way out). **Every** auto-release site is guarded with `and not self._*_locked`: there are four: the edit-mode intercept, the Ctrl/Alt/Win chord branch, the char-path end (`_press_char`), and the special-key end (`pressSpecialKey`, alongside the existing nav-key `keep_selection_modifiers` exception). Miss one and a locked modifier would silently drop after a keystroke. `shutdown()` releases locked modifiers too (and clears the flags) so quitting never pins one desktop-wide.
 
 QML surfaces the lock via `shiftLocked` / `ctrlLocked` / `altLocked` / `winLocked` bridge properties (+ `*LockedChanged` signals), bound in `Main.qml` and mapped per `kd.stateKey` onto `KeyButton.isLocked`. Because locked implies active, a locked key already carries the accent fill a sticky one-shot has; the lock adds a **solid 3 px bar along the bottom edge** (`lockBar` in `KeyButton.qml`) on top of it, so the two states differ by one unmissable mark rather than by a whole second colour scheme. The bar is inked with `KeyButton._onFillColor`, the shared luminance rule that also picks the key label's colour on an active/pressed fill: dark on a bright accent, white on a dark one. Nine themes ship, several with a pale accent (Blackboard, Spaceship) and one light outright (Typewriter), so any fixed colour is unreadable on roughly half of them. It is inset horizontally past the keycap's corner radius because `clip: true` clips to the bounding rect, not the rounded shape, so a full-bleed bar pokes out past the curve.
 
@@ -510,7 +492,7 @@ Three things about that are load-bearing. **It goes through `ctx.path` on the `C
 
 Guarded by `tests/test_qml_prediction_bar.py::TestTheClearButtonIcon`, which is worth reading before adding an assertion here, because **two successive metrics were wrong**. The ink bounding box is centred in the *glyph* version too, to within half a pixel, since the tail hanging off one side cancels the ring being pushed to the other, so a bbox assertion alone would have passed against the bug it was written for. A radial-spread metric replaced it and did separate them (glyph 0.29, hand-drawn arc 0.09, bar 0.15) but had to go as well: Feather's arrow sits outside the ring by design and scores 0.147, and a test passing by three thousandths is not a test. What is left is the pair that is honest about what the code guarantees: the icon is *drawn* rather than typeset (this is what catches the glyph), and it is grossly centred within 3 px (this catches a dropped transform, verified at -8 px). The one-unit optical correction is deliberately not pinned: asserting it across renderers buys a flake, not a guard.
 
-**Synth invariant (load-bearing — the lock is worthless without it).** Keeping the bridge state "held" isn't enough; the OS modifier must physically stay down. `hold_modifier` puts it down, but `send_key`/`replace_text` used to *wrap* the action key with a modifier down+up, and that trailing key-up silently released a held modifier after the first keystroke (mouse Ctrl+click / Shift+drag / Alt+Tab then broke even though the key still showed it held). Fix: **`WindowsKeySynthesizer.send_key` and `replace_text` skip wrapping any modifier that is already physically held** (`_modifier_already_held` → `GetAsyncKeyState`), relying on the standing hold instead. This mirrors the pre-existing `shift_already_held` guard in `_make_char_scancode_events`. Any new synth path that wraps a modifier around a keystroke must apply the same guard, or a locked (or sticky) modifier will drop. Mirrored in C++ (`WindowsKeySynthesizer::modifierAlreadyHeld`, used by `sendKey` + `replaceText`). Covered by `tests/test_platform.py::TestWindowsSendKeyPunctuationChord::test_already_held_modifier_is_not_wrapped` and `TestWindowsReplaceText::test_held_shift_not_wrapped_in_selection`.
+**Synth invariant (load-bearing: the lock is worthless without it).** Keeping the bridge state "held" isn't enough; the OS modifier must physically stay down. `hold_modifier` puts it down, but `send_key`/`replace_text` used to *wrap* the action key with a modifier down+up, and that trailing key-up silently released a held modifier after the first keystroke (mouse Ctrl+click / Shift+drag / Alt+Tab then broke even though the key still showed it held). Fix: **`WindowsKeySynthesizer.send_key` and `replace_text` skip wrapping any modifier that is already physically held** (`_modifier_already_held` → `GetAsyncKeyState`), relying on the standing hold instead. This mirrors the pre-existing `shift_already_held` guard in `_make_char_scancode_events`. Any new synth path that wraps a modifier around a keystroke must apply the same guard, or a locked (or sticky) modifier will drop. Mirrored in C++ (`WindowsKeySynthesizer::modifierAlreadyHeld`, used by `sendKey` + `replaceText`). Covered by `tests/test_platform.py::TestWindowsSendKeyPunctuationChord::test_already_held_modifier_is_not_wrapped` and `TestWindowsReplaceText::test_held_shift_not_wrapped_in_selection`.
 
 **Parity**: mirrored 1:1 in C++ (`KeyboardBridge::lockModifier` / `clearLock`, the `m_*Locked` members, the guarded `releaseStickyAll()` + `pressSpecialKey` + edit-mode blocks, and the `*Locked` Q_PROPERTY/signals). Bridge behaviour is covered by `tests/test_keyboard_bridge.py::TestModifierLock` on the Python side.
 
@@ -586,8 +568,6 @@ python -m pytest -k "fuzzy"         # Fuzzy recognizer tests
 python -m pytest -k "property"      # Property-based suites only
 ```
 
-Linting: `ruff check src/`, type checking: `mypy src/`
-
 ### Property-based tests
 
 `tests/test_property_import_hardening.py` and
@@ -632,7 +612,7 @@ Determinism is load-bearing: the `alpha-osk` profile in `tests/conftest.py`
 sets `database=None` and `derandomize=True`, so these cannot pass locally
 and fail on CI from a stale `.hypothesis` corpus. Use
 `--hypothesis-profile=alpha-osk-fast` (25 examples) while iterating. **Don't
-add `assume()` to filter a generated value down to a narrow case** — it
+add `assume()` to filter a generated value down to a narrow case**: it
 throws away most examples and trips the `filter_too_much` health check;
 build a strategy that generates the interesting shape directly, and branch
 on the predicate instead of discarding.
@@ -648,125 +628,43 @@ on the predicate instead of discarding.
 
 ### Pre-push check
 
-Run `python check.py` before `git push` to catch lint / format / type /
-test failures locally instead of waiting for CI's red X (the same gates
-GitHub Actions runs).  Default mode skips coverage tracking
-(~60 s); add `--full` to include the `--cov-fail-under=60` gate
-(~110 s, matches CI exactly).  **`python check.py --install-hook`** writes
-`.git/hooks/pre-push` so it runs on `git push` instead of from memory;
-`git push --no-verify` is the escape hatch.  Hooks are not version
-controlled, so a fresh clone has to run that once.
+`python check.py` runs the same gates CI does (lint, format, mypy under both
+platforms, pytest) in ~60 s; `--full` adds the `--cov-fail-under=60` coverage
+gate (~110 s, full CI parity). `python check.py --install-hook` wires it to
+`git push` so it happens instead of being remembered; `git push --no-verify`
+is the escape hatch. Hooks are not version controlled, so a fresh clone runs
+that once.
 
-**The suite is sharded with `pytest-xdist` (`-n auto`), and that is what
-makes the gate a minute instead of twenty-five.**  There is deliberately
-**no fast-subset tier**, and the reason is worth keeping: the three
-static steps cost ~5 s between them, so the gate *was* pytest, and pytest
-was slow for a reason unrelated to how many tests there are.  Building a
-`KeyboardBridge` cost ~1 s (20k-word dictionary + SymSpell deletion index
-+ PPM), the `bridge` fixture is function-scoped, and there are ~1300
-tests: per-process setup repeated 1300 times, which no amount of clever
-test selection touches and which shards almost linearly.  Half of that
-per-bridge second was also a genuine bug: `HybridPredictor.__init__`
-called `set_frequencies` twice, and the first call's SymSpell index was
-discarded four lines later by the second, on every app launch as well as
-every test.  If the gate creeps back up, **measure before tiering**;
-trading away coverage on the one gate that runs before code leaves the
-machine is the last resort, not the first.
+The suite is sharded on two different axes: `pytest-xdist` (`-n auto`) across
+one machine's cores, and `--shard-id` / `--shard-count` across CI machines
+(the matrix is `os x shard[0..3]`, eight jobs, each still `-n auto`). That is
+what makes the gate a minute rather than twenty-five, and CI fourteen minutes
+rather than twenty-six. Measurements, the per-choice reasoning, and the bugs
+each one fixed: `docs/build/CI.md`. The rules that outlive the reasoning:
 
-Sharding needed one test-side fix, and it is the kind that recurs: the
-four headless QML modules each persist through a QML `Settings {}`
-element, which resolves to a *process-external* store (a key under HKCU
-on Windows).  Three of them defined the same `TEST_ORG` literal
-independently and the fourth imported it, so under `-n auto` several
-workers shared one scope and called `.clear()` on each other mid-test.
-That surfaced as "the window width drifted across restarts: [1160, 940,
-1160]", indistinguishable from the persistence bug those tests exist to
-catch. The scope now lives once in `tests/qt_settings_scope.py`, suffixed
-with `PYTEST_XDIST_WORKER`. Any new test touching QSettings, the
-registry, a fixed temp path, or any other machine-global resource has to
-key it per worker the same way.
-
-**CI shards on two axes, and they are different axes.** `-n auto`
-spreads the suite over one machine's cores; `--shard-id N
---shard-count M` spreads it over several machines. CI does both.
-
-Across cores came first, and the argument for leaving it serial was
-that CI is the release gate and its runners have far fewer cores. The
-cores are real, 4 against 16, but the argument was wrong about where
-the time goes: the run is dominated by per-test setup repeated ~1600
-times, which shards almost linearly whatever the core count. Serial it
-took **26 minutes**.
-
-Across machines came second, because 4 cores is still 4 cores: after
-`-n auto`, ubuntu took **14m30s** and windows **19m05s**, with every
-push waiting on the slower. Dependency install was 15 s and 52 s
-respectively and lint / typecheck / OSV are all under 30 s, so there
-was nothing else to cut. The matrix is now `os x shard[0..3]`, eight
-jobs, each still `-n auto` over its own cores.
-
-The split lives in `tests/conftest.py::pytest_collection_modifyitems`:
-a test belongs to shard `crc32(nodeid) % count`. Deliberately not
-`pytest-split`, which wants a recorded-durations file that goes stale
-silently and is one more exactly-pinned, CVE-scanned dependency; at
-1600 tests over 4 shards a hash balances to within about 6% (measured:
-377 / 389 / 421 / 421) with no moving parts. **The hash cannot be
-`hash()`**: CPython salts string hashing per process, every xdist
-worker inside a shard is its own process, and workers disagreeing about
-which tests are theirs does not fail loudly, it runs some tests twice
-and others never.
-
-**`--cov-fail-under` moved out of the test jobs**, because a shard
-measures roughly a quarter of the lines and every shard would fail the
-gate. Each shard uploads its `.coverage.<os>.<shard>` and a separate
-`coverage` job combines and applies the threshold. Two things about it
-are load-bearing: `include-hidden-files: true` on the upload (the file
-starts with a dot, and upload-artifact has excluded hidden files since
-v4.4, so without it every upload is empty and the gate silently stops
-gating), and the combine is **per OS**, since a coverage data file
-records absolute source paths and the two runners disagree about
-those. Per OS also preserves what the unsharded jobs promised: each
-platform had to clear 60% on its own, and the `if sys.platform ==
-"win32"` bodies are measured on exactly one of the two.
-
-`fail-fast: false` on the matrix: the default cancelled every sibling
-on the first red, so one flaky ubuntu test took the windows job down
-with it and the run reported two failures where there was one, with
-nothing to say whether windows would have passed.
-
-**Branch protection requires the `Tests` job, not the shards.** Required
-status checks are configured by *name*, in the repo settings rather
-than in the workflow file, so naming the shards there would mean
-re-configuring protection on every change to the shard count. A stale
-entry does not fail loudly: the named check never reports and every PR
-blocks for ever on something that cannot go green, which is what
-sharding did to the old `Test (ubuntu-latest)` / `Test (windows-latest)`
-entries. `tests-passed` is a one-step job that asserts
-`needs.test.result` and `needs.coverage.result`, and it carries
-`if: always()` because a job whose dependency failed is *skipped*, and
-a skipped required check reads as pending rather than red: without it
-the gate goes quiet exactly when it should be loud. The required set is
-now Lint, Type Check, Tests, OSV Scanner.
-
-The workflow also sets `concurrency: group: ci-${{ github.ref }}` with
-`cancel-in-progress: true`, so a new push supersedes the run it replaces
-rather than both finishing. A cancelled intermediate commit is the
-intended outcome: what has to be green is the tip.
-
-`mypy` runs **twice**, under `--platform linux` and `--platform win32`,
-and CI mirrors both.  Neither covers the other: linux is the runner's
-platform, and win32 is the only pass that type-checks the
-`if sys.platform == "win32"` bodies, which mypy otherwise prunes as
-unreachable.  On the linux pass alone, a deliberate `int = "str"` planted
-inside `_window_class_name`'s Windows branch was invisible.
-
-The `format` step is `ruff format --check src/ tests/`, and it is a
-separate gate from `ruff` because `ruff check` does not look at layout.
-Fix a failure with `ruff format src/ tests/` rather than by hand.  The
-`ruff-format` hook in `.pre-commit-config.yaml` only helps contributors
-who ran `pre-commit install`, which is why the tree had drifted in 46 of
-57 files before the gate existed. The hook is pinned to a commit SHA
-matching CI's `ruff==0.16.2`, so a contributor's local `--fix` pass and
-CI never disagree on a rule version.
+- **Any test touching QSettings, the registry, a fixed temp path, or any other
+  machine-global resource has to key it per xdist worker**, through
+  `tests/qt_settings_scope.py` (suffixed with `PYTEST_XDIST_WORKER`). Workers
+  sharing one scope call `.clear()` on each other mid-test, and it surfaces as
+  exactly the persistence bug those tests exist to catch, not as an obvious
+  crash.
+- **The shard hash cannot be `hash()`.** CPython salts string hashing per
+  process, so workers would disagree about which tests are theirs, which does
+  not fail loudly: it runs some tests twice and others never. It is
+  `crc32(nodeid) % count`, in `tests/conftest.py::pytest_collection_modifyitems`.
+- **Branch protection requires the `Tests` job, not the shards.** Required
+  checks are configured by name in the repo settings, so naming shards there
+  means reconfiguring protection on every change to the shard count, and a
+  stale entry blocks every PR for ever on a check that can never report.
+- **`--cov-fail-under` belongs to the separate `coverage` job**, not the test
+  jobs: a shard measures roughly a quarter of the lines. Its artifact upload
+  needs `include-hidden-files: true`, or every upload is empty and the gate
+  silently stops gating.
+- **There is deliberately no fast-subset tier.** The static steps cost ~5 s
+  between them, so the gate is pytest, and pytest is dominated by per-test
+  setup rather than test count. If the gate creeps back up, measure before
+  tiering: coverage on the one gate that runs before code leaves the machine
+  is the last thing to trade away.
 
 ## Word Suppression and Boosting
 
@@ -921,9 +819,7 @@ The `StatBox` component grows its background Rectangle from `contentCol.implicit
 
 The earlier composite Prediction Quality Score (0-100, weighted savings + hit rate + rank + low-correction) was removed because the number wasn't actionable: a user can act on "you've saved 4.2 hours" but a "73/100" composite hides which lever moved. Don't reintroduce the composite as a primary surface; if you need a single internal scoring number for ranking strategy comparisons, compute it ad-hoc in tests rather than baking it back into `get_session_stats`.
 
-`top_pick_count` is still computed and persisted (incremented inside `record_prediction_selected` only when `rank == 1`) and surfaced as `alltimeTopPickRate` for the Model Visualization Dashboard. It was briefly the subtext on the Predictions Used tile but reads "0%" for any user upgrading from a prior build (the counter didn't exist then), which masked real usage.
-
-`top_pick_count` is incremented inside `record_prediction_selected` only when `rank == 1`. The bridge already passes a 1-based rank in `pressPrediction`, so no caller-side change is needed when adding new prediction surfaces. They just need to call `record_prediction_selected` with the right rank.
+`top_pick_count` is still computed and persisted, incremented inside `record_prediction_selected` only when `rank == 1`, and surfaced as `alltimeTopPickRate` for the Model Visualization Dashboard. It was briefly the subtext on the Predictions Used tile but reads "0%" for any user upgrading from a prior build (the counter didn't exist then), which masked real usage. The bridge already passes a 1-based rank in `pressPrediction`, so a new prediction surface needs no caller-side change: it just has to call `record_prediction_selected` with the right rank.
 
 ## Prediction & Autocorrect - Architecture Notes
 
@@ -934,121 +830,62 @@ Load-bearing defaults to keep in mind: **space-time autocorrect is OFF by defaul
 ## Compact View
 
 A denser 13x4 keyboard for small screens. Off by default; toggle in *Settings ->
-Appearance -> Panels -> Compact View*. Design doc + measurements:
+Appearance -> Panels -> Compact View*. The design, the measurements behind it,
+and the full rationale for every rule below live in
 `docs/architecture/COMPACT_VIEW.md`.
 
-Load-bearing facts:
+Load-bearing rules:
 
 - **Every row in a compact layout must total the same unit count** (13.0 for
   `qwerty-compact`). `Main.qml` centres any narrower row, so an unequal row
   brings back the exact side gutters this view exists to remove. Enforced by
   `tests/test_layouts.py::TestCompactLayout::test_every_row_is_exactly_13_units`.
-- **Layers are a QML-side view concept - the backends never see them.** Rows may
-  carry a `"layer"` field; `Main.qml` filters `layoutRows` into `visibleRows` by
-  `root.activeLayer`. Rows *without* a `layer` field always render, which is what
-  keeps the full-size layouts working. A `"type": "layer"` key sets
-  `activeLayer`; it deliberately does **not** call `keyboard.setLayout()` (that
-  would persist as the user's layout preference and make `getCurrentLayout()`
-  report the symbol layer). `activeLayer` resets to `"base"` on every layout
-  change - stranding the user on a `sym` layer the next layout doesn't define
-  would render an empty keyboard.
-- **Because it's data + QML only, it needed zero backend work on either Python
-  or C++.** Don't "port" it; both backends get it from the shared `qml/` +
-  `data/` contract.
-- **`totalKeyUnits` is now derived, not hardcoded.** `_widestRow` in `Main.qml`
-  computes the widest visible row's units + gap count. Full-size layouts resolve
-  to exactly the historical 15.5u / 14 gaps, so the default 940 px window is
-  unchanged. Don't reintroduce the constant.
-- **Compact is orthogonal to letter arrangement.** `currentLayout` stays
-  qwerty/dvorak/colemak; `resolveLayoutId()` combines it with the `compactView`
-  bool into `<layout>-compact`. A layout with no compact variant falls back to
-  full size, so the toggle is always safe. Adding compact Dvorak = drop
-  `data/layouts/dvorak-compact.json` in place, no code change.
-- **The nav column reads Home / PgUp / PgDn / End top to bottom** (a scroll
-  ladder: top, page up, page down, bottom). Owen asked for Home above PgUp.
-  Pinned by `test_layouts.py::TestCompactLayout::test_nav_column_reads_top_to_bottom`.
-- **Del sits on the base layer, Esc on `?123`.** A 13u row has no spare unit, so
-  the two traded places; Esc was the only base-layer key not in the protected
-  "never behind a hop" set. Don't swap them back without reading the rationale
-  in `docs/architecture/COMPACT_VIEW.md`. The Number Row panel (below) puts a
-  second Esc back at the top-left; that duplicate is deliberate, so `?123`
-  stays the fallback for any future layout that shows the compact grid without
-  the panel.
-- **`:` has its own key on `?123` row 3**, in the slot `^` used to hold. Row 2
-  already carried `;`→`:`, but a shifted variant is invisible (the keycap reads
-  `;`), so the layer read as having no colon.
-- **The symbol pages carry no Shift key; Shift's slot switches to a second
-  page (`=\<`), the phone convention.** Shift on `?123` used to re-render row 1
-  as `! @ # $ % ^ & * ( )` while row 3 already showed `! @ # $ % : & ( )`
-  permanently: nine keys on screen saying the same thing as another key on
-  screen. Making the shift-position key a page switch means every glyph Shift
-  used to reach has a key of its own, so the overlap is *structurally
-  impossible* rather than merely absent. `sym2` holds what `?123` lacks:
-  `~ ^ * _ + { } | < >`, then maths (`° × ÷ ± ≈ ≠ ≤ ≥`), then currency and
-  legal (`€ £ ¥ ¢ § • © ® ™` - the bullet sits in the pilcrow's slot; it was
-  briefly on the bottom row, where it displaced the period every other layer
-  has there). All three layers are 13.0u with matching key counts
-  (12/13/12/11), so hopping pages never resizes a key. **The bottom row and
-  the right-hand nav column are byte-identical on every layer**, and the tests
-  that guard that derive the layer list from the file rather than naming
-  base/sym: written against a hardcoded pair they were blind to `sym2`, which
-  is how the bullet shipped green.
-  **The `shifted` fields stay on the symbol keys** even though no Shift key can
-  reach them: right-click still types the shifted variant, and that is a
-  bonus rather than a duplicate, because right-click output is never
-  displayed. **`Main.qml`'s layer branch calls the idempotent
-  `keyboard.releaseShift()` on every switch** (never
-  `if (shiftOn) toggleShift()` - `root.shiftOn` is a mirror kept alive by
-  signal delivery, not a live binding, so a flip could turn Shift *on* here)
-  and that is load-bearing: the modifier is held at the OS level, so a Shift
-  carried in from the letters page would make `1` emit `!` while the keycap
-  still read `1`, and the pages have no Shift key to clear it from. Caps is
-  left alone (it only affects letters). Guarded by
-  `tests/test_layouts.py::TestNoDuplicateGlyphsWithinALayer` (in particular
-  `test_shifted_variants_never_duplicate_a_visible_key`, which states the
-  property rather than the fix, so it catches an equivalent overlap on any
-  layer that keeps a Shift key) and
-  `tests/test_qml_compact_view.py::TestSecondSymbolPage`.
-- **Esc, Tab, Shift, Backspace and Del are accent-filled on the compact layouts**
-  (`"style": "accent"` in the layout JSON, resolved by `root.accentKeyColor` in
-  `Main.qml`). The compact grid is uniform, so unlike the full-size layouts
-  there are no size cues to tell the editing keys apart from the letters, and
-  they have to be findable by colour. The fill is a **wash of the accent over
-  the theme's key colour, not the raw accent**: three themes have a pale accent
-  (Blackboard `#ffffaa`, Spaceship `#00ff9f`) and Typewriter is a light theme
-  with near-black text, so a saturated fill would destroy the label contrast.
-  Same reason Enter is a muted `#2a5a2a`. **The wash strength is derived, not
-  fixed**: a flat 35% was measured against all nine themes and dropped the
-  label below WCAG AA on five of them (Blackboard 6.19:1 -> 2.66:1, Vaporwave
-  6.17 -> 2.97, Forest 7.53 -> 3.33, Spaceship 10.37 -> 3.85, Ocean 6.96 ->
-  4.44), which is the worst place to lose contrast because these are the keys
-  the style exists to make findable, and Forest could not be rescued by
-  swapping the label to black or white either (best case 4.37). So
-  `root.accentWashFor()` walks the alpha down from 0.35 until the theme's own
-  `textColor` clears 4.5:1. **Don't reintroduce a constant here.** Accent keys
-  also take an accent-coloured border, which carries the cue on the themes
-  where the wash has to back off to 0.12-0.21; a border sits beside the label
-  rather than behind it, so it costs no contrast. Full-size layouts are
-  deliberately untouched. Pinned by
-  `tests/test_layouts.py::TestCompactEditingKeysAreAccented` (which keys) and
-  `tests/test_qml_compact_view.py::TestAccentKeysStayReadable` (the contrast
-  floor, plus the inverse test that the wash is still visible, so "stop
-  tinting" cannot pass as a fix).
+- **Layers are a QML-side view concept and the backends never see them.** Rows
+  carry an optional `"layer"` field and rows without one always render, which is
+  what keeps the full-size layouts working; a `"type": "layer"` key sets
+  `activeLayer` and deliberately does **not** call `keyboard.setLayout()` (that
+  would persist as the user's layout preference). `activeLayer` resets to
+  `"base"` on every layout change. Because the whole feature is data + QML, it
+  needed zero backend work on either Python or C++: don't "port" it.
+- **`totalKeyUnits` is derived, not hardcoded** (`_widestRow` in `Main.qml`
+  computes the widest visible row's units + gap count, and full-size layouts
+  resolve to exactly the historical 15.5u / 14 gaps). Don't reintroduce the
+  constant.
+- **Compact is orthogonal to letter arrangement.** `resolveLayoutId()` combines
+  `currentLayout` with the `compactView` bool into `<layout>-compact`, and a
+  layout with no compact variant falls back to full size, so the toggle is always
+  safe. Adding compact Dvorak is dropping `data/layouts/dvorak-compact.json` in
+  place, no code change.
 - **No panel that has to line up with the keyboard grid may use
-  `QtQuick.Layouts`.** Number Row and Function Row are plain `Row`s,
-  Navigation is a plain `Grid`, Numpad is a `Column` of `Row`s. `Main.qml`
-  reserves an exact float unit budget for each panel when it derives
-  `minimumWidth`, so a rounding positioner costs pixels the window was never
-  given. `QtQuick.Layouts` rounds every child up to a whole pixel, so
-  13 keys of 69.23 px each became 13 of 70 and the panel rendered 10 px wider
-  than the keyboard grid it is supposed to sit flush with, overhanging the
-  window and clipping its last key. The keyboard rows are plain `Row`
-  positioners, which keep `keyW` as the float it is; a panel that sizes itself
-  any other way cannot line up with the keys underneath it. Guarded by
-  `tests/test_qml_compact_view.py::TestPanelsSitFlushWithTheGrid`, which
-  asserts the panel width equals the widest keyboard row rather than merely
-  fitting the window, because "fits" was already true of the broken version at
-  some widths.
+  `QtQuick.Layouts`.** It rounds every child up to a whole pixel, so 13 keys of
+  69.23 px each became 13 of 70, and the panel rendered 10 px wider than the grid
+  it sits flush with, overhanging the window and clipping its last key. Number
+  Row and Function Row are plain `Row`s, Navigation a plain `Grid`, Numpad a
+  `Column` of `Row`s. Guarded by
+  `tests/test_qml_compact_view.py::TestPanelsSitFlushWithTheGrid`.
+- **The accent fill on the editing keys (Esc, Tab, Shift, Backspace, Del) is a
+  derived wash over the theme's key colour, never the raw accent and never a
+  constant.** `root.accentWashFor()` walks the alpha down from 0.35 until the
+  theme's own `textColor` clears 4.5:1; a flat 35% dropped five of the nine
+  themes below WCAG AA, on exactly the keys the style exists to make findable.
+  The accent-coloured border carries the cue where the wash has to back off.
+  Full-size layouts are deliberately untouched.
+- **Del sits on the base layer, Esc on `?123`.** A 13u row has no spare unit, so
+  the two traded places. The Number Row panel puts a second Esc back at the
+  top-left and that duplicate is deliberate, so `?123` stays the fallback for a
+  future layout that shows the compact grid without the panel. Don't swap them
+  back without reading the rationale in the design doc.
+- **The symbol pages carry no Shift key**; Shift's slot switches to a second page
+  (`=\<`), the phone convention, which makes a glyph appearing twice on one
+  screen *structurally impossible* rather than merely absent. The bottom row and
+  the right-hand nav column are byte-identical on every layer, and the tests that
+  guard that derive the layer list from the file rather than naming base/sym.
+  `Main.qml`'s layer branch calls the idempotent `keyboard.releaseShift()` on
+  every switch (never `if (shiftOn) toggleShift()`), because the modifier is held
+  at the OS level and a Shift carried in from the letters page makes `1` emit `!`
+  with the keycap still reading `1`. Guarded by
+  `tests/test_layouts.py::TestNoDuplicateGlyphsWithinALayer` and
+  `tests/test_qml_compact_view.py::TestSecondSymbolPage`.
 - **Digits come back via a panel, not a fifth row, and not via a toggle.**
   `qml/components/NumberRow.qml` (13 x 1u, flush with the compact grid) renders
   above the keyboard whenever `Main.qml::showNumberRow` is true, which is
@@ -1059,9 +896,13 @@ Load-bearing facts:
   off the layout rather than `compactView` matters because a letter arrangement
   with no compact variant silently falls back to full size. Its leading key
   is **Esc, not `` ` ``** (backtick lives on `?123` row 2).
+- **The nav column reads Home / PgUp / PgDn / End top to bottom** (a scroll
+  ladder: top, page up, page down, bottom; Owen asked for Home above PgUp).
+  Pinned by
+  `test_layouts.py::TestCompactLayout::test_nav_column_reads_top_to_bottom`.
 - QML-only behaviour can't be covered by the Python suite, so
-  `tests/test_qml_compact_view.py` and `tests/test_qml_prediction_bar.py` load
-  the real `Main.qml` headlessly (`QT_QPA_PLATFORM=offscreen`) and fail on QML
+  `tests/test_qml_compact_view.py` and `tests/test_qml_prediction_bar.py` load the
+  real `Main.qml` headlessly (`QT_QPA_PLATFORM=offscreen`) and fail on QML
   warnings. That's the only guard against a binding error shipping as a blank
   keyboard.
 
@@ -1270,7 +1111,7 @@ Guarded by `tests/test_qml_symbols.py`, `tests/test_glyphs.py`, and
 
 ## Modular Layouts
 
-Design doc at `docs/architecture/MODULAR_LAYOUTS.md`. Inspired by Octavium's (`C:\Users\Owen\dev\Octavium`) Layout/KeyDef data model. Four levels of modularity: (1) Built-in JSON layout packs (video editing, gaming, streaming). (2) User-created layouts via editor. (3) Panel composition - snap independent panels (QWERTY, numpad, macros) into a grid. (4) App-aware auto-switching based on foreground window.
+Design doc at `docs/architecture/MODULAR_LAYOUTS.md`. Inspired by Octavium's (`C:\Users\owenp\dev\Octavium`) Layout/KeyDef data model. Four levels of modularity: (1) Built-in JSON layout packs (video editing, gaming, streaming). (2) User-created layouts via editor. (3) Panel composition - snap independent panels (QWERTY, numpad, macros) into a grid. (4) App-aware auto-switching based on foreground window.
 
 Action types: `char`, `special`, `hotkey`, `text`, `macro`, `launch`, `layout`, `midi`. Profiles bundle layout + theme + window position + auto-switch rules.
 
@@ -1298,10 +1139,10 @@ Design doc at `docs/roadmap/ECOSYSTEM.md`. Alpha-OSK is part of a four-tool adap
 
 | Tool | Repo | Output |
 |------|------|--------|
-| **Alpha-OSK** | `C:\Users\Owen\dev\alpha-osk` | Keystrokes (SendInput) |
-| **MacroVox** | `C:\Users\Owen\dev\MacroVox` | Text (Deepgram STT -> clipboard) |
-| **Octavium** | `C:\Users\Owen\dev\Octavium` | MIDI (virtual piano/pads) |
-| **Nimbus** | `C:\Users\Owen\dev\Nimbus-Adaptive-Controller` | Joystick (vJoy/ViGEm) |
+| **Alpha-OSK** | `C:\Users\owenp\dev\alpha-osk` | Keystrokes (SendInput) |
+| **MacroVox** | `C:\Users\owenp\dev\MacroVox` | Text (Deepgram STT -> clipboard) |
+| **Octavium** | `C:\Users\owenp\dev\Octavium` | MIDI (virtual piano/pads) |
+| **Nimbus** | `C:\Users\owenp\dev\Nimbus-Adaptive-Controller` | Joystick (vJoy/ViGEm) |
 
 All four: same developer, same EV cert, PySide6/Qt (except MacroVox: Tauri), mouse-driven, accessibility-first. Integration phases: coexistence -> launch/trigger -> profile auto-switch -> shared input layer -> unified UI.
 
@@ -1483,18 +1324,15 @@ The full list of implementation gotchas and invariants lives in
 **`docs/architecture/GOTCHAS.md`** - read it before touching keystroke
 synthesis, the prediction context buffers, window flags, or the build
 pipeline. The highest-frequency traps, kept inline because they're the
-easiest to reintroduce:
+easiest to reintroduce. Focus / window flags, sticky-modifier release,
+suffix-only insertion and the buffer invariants are not repeated here: they
+are in *Key rules* at the top of this file.
 
-- **Window flags / focus**: the keyboard must never steal focus. `WS_EX_NOACTIVATE` is set via Win32 API on Windows (`_apply_window_flags()` in `keyboard_app.py`); `WindowDoesNotAcceptFocus` elsewhere.
-- **Sticky modifier auto-release lives in two parallel blocks — keep them in sync.** `_press_char` and `pressSpecialKey` each end with their own Shift/Ctrl/Alt/Win release sequence (state flip + `release_modifier()` + change-signal emit, plus `_update_layer()` for Shift). New keystroke paths that branch off (autocorrect retype, pill insertion, edit-mode, macros) must mirror it. **Two exceptions, both of which skip the release:** (1) `pressSpecialKey` keeps Shift/Ctrl held on `_NAV_KEYS` (arrows/home/end/pageup/pagedown) so Shift+arrow selection and Ctrl+arrow word-jump persist across presses; Alt/Win still release. (2) a **right-click-locked** modifier (`_*_locked`, see *Sticky Modifiers → Right-Click to Lock*) is skipped in every release block. There are actually **four** guarded blocks, not two — also the edit-mode intercept and the Ctrl/Alt/Win chord branch in `_press_char`. A new keystroke path must add the `and not self._*_locked` guard or a held modifier will silently drop.
-- **Prediction insertion is suffix-only** (type just the unseen tail), falling back to `replace_text()` only on a prefix mismatch (casing). Compatibility Mode (`_in_compat_mode()`) rewires this to BackSpace + retype for remote-desktop clients and IDEs where suffix-only is unsafe.
-- **`_context_buffer` / `_current_word` mirror the on-screen text.** Backspace must trim the buffer and rehydrate a mid-word tail back into `_current_word`; prefix punctuation must be treated as a word boundary or pill clicks eat it. That check is an **allow-list of word characters** (alphanumeric plus `'` and `_`), not a list of separators: as a separator list it failed open when the second symbol page added 18 glyphs, none of which were on it, so `cost€` became the prediction prefix and the learned token. Don't convert it back.
 - **Windows uses scancode mode** for both `send_text` (ASCII) and chords/`hold_modifier` (UNICODE/`wVk`-mode only as a fallback) - required for Blender/VirtualBox/games and for Ctrl+V over TeamViewer/RDP.
 - **Linux `xdotool`/`ydotool` calls that carry arbitrary typed text must precede it with a literal `--`.** Both tools' `type` subcommand parses flags with getopt, so typed text that happens to look like an option (`--help`) would otherwise be silently parsed as one and dropped instead of typed. The four call sites carrying arbitrary text do this; the other sixteen `xdotool`/`ydotool` call sites pass internally-built key names, not user text, so they don't need it. `platform/linux.py::_run()` is also bounded by a 2.0 s `_SUBPROCESS_TIMEOUT_S`: it runs synchronously on the Qt UI thread on every keystroke, so a wedged binary (dead X server, unresponsive display) used to freeze the whole keyboard; `TimeoutExpired` is now caught and logged, not left to hang.
 - **Games need a held key, not a zero-gap tap.** Games read the keyboard by *polling* state once per render frame (DirectInput / Raw Input / `GetAsyncKeyState`), so a key-down+key-up injected in one `SendInput` batch can land entirely between two polls and be missed: the keystroke does nothing in-game even though it works everywhere else. Auto game-compat fixes this: when `_window_is_game(hwnd)` is true, `_game_auto_active` flips on (set in the same 250 ms foreground poll as compat auto-detect) and single keys are sent with `hold_seconds = _GAME_KEY_HOLD_SECONDS` (50 ms). `WindowsKeySynthesizer.send_key` then splits the injection into a down-batch, a real `time.sleep`, and an up-batch (modifiers wrap the held key). Non-game keystrokes keep the zero-latency atomic path. `_window_is_game` uses two signals (`keyboard_bridge.py`): (1) the owning-process exe is in `_GAME_PROCESS_NAMES` (seeded with Age of Empires; extend like `_COMPAT_PROCESS_NAMES`), which catches games even in windowed mode; (2) a **borderless-fullscreen heuristic** (`_window_is_borderless_fullscreen`: window rect covers the whole monitor *and* the window has no `WS_CAPTION`) as a zero-config catch-all for unlisted games. The heuristic is deliberately skipped for exes in `_COMPAT_PROCESS_NAMES` (IDEs / remote-desktop clients), which are sometimes run fullscreen and must not get the typing-lag hold. Requiring "no caption" excludes normal maximized windows (which keep their title bar); the remaining false positives (fullscreen video players, slideshows) are harmless because a 50 ms hold doesn't hurt there. This is unrelated to UIAccess: a signed Program-Files install still hit it because the keystrokes *reach* the game, they're just too brief to be polled.
 - **`pressKey` lowercases its input** - use `pressKeyLiteral` when QML already resolved the final character (right-click shifted variant, etc.).
 - **QML `Text` defaults to `AutoText`, which sniffs the string for HTML and can trigger an outbound request just from being displayed.** Any `Text` rendering a value that ultimately came from imported or otherwise untrusted data (a vocabulary pack's `name`/`description`, anything read from a file the user picked) must set `textFormat: Text.PlainText` explicitly, or an `<img src=...>` planted in that string makes Qt fetch it the moment the Settings page renders. 23 `Text` elements across 7 QML files (`Main.qml`, `UnifiedSettingsPanel.qml`, `DebugPanel.qml`, `AnalyticsDashboard.qml`, `ModelVisualization.qml`, `KeyButton.qml`, `SettingsToggle.qml`) now set it explicitly; new `Text` elements displaying untrusted strings must too. **Known gap**: the attached-property `ToolTip.text` idiom has no `textFormat` to set, so a tooltip built from untrusted text is not covered.
-- **Invariants**: `NgramPredictor._user_total == sum(user_vocab.values())`; merge strategy default MUST stay `"rank"`; window height is content-bound (never persist/assign it); analytics metrics need both session and `_alltime_*` forms; Windows subprocess calls need `CREATE_NO_WINDOW` when they suppress output *or* may run without a console to inherit.
 
 ## Right-Click for Shifted Character
 
