@@ -432,7 +432,7 @@ class TestBoundedCopy:
 
 class TestReservedPackNames:
     """A pack id that collides with a Windows reserved device name (con,
-    nul, com1, ...) passes _PACK_ID_RE (it looks like a normal lowercase
+    nul, com1, ...) passes PACK_ID_RE (it looks like a normal lowercase
     id) but would fail dest_dir.mkdir() on Windows. It must never be
     extracted, and its presence must not abort the rest of the import."""
 
@@ -457,15 +457,15 @@ class TestReservedPackNames:
         assert (dst / "packs" / "good_pack" / "dictionary.txt").is_file()
 
     def test_helper_matches_case_insensitively_and_with_extension(self) -> None:
-        from src.data_export import _is_reserved_device_name
+        from src.prediction.pack_ids import is_reserved_device_name
 
-        assert _is_reserved_device_name("con")
-        assert _is_reserved_device_name("CON")
-        assert _is_reserved_device_name("Con.txt")
-        assert _is_reserved_device_name("com1")
-        assert _is_reserved_device_name("lpt9")
-        assert not _is_reserved_device_name("console")
-        assert not _is_reserved_device_name("company")
+        assert is_reserved_device_name("con")
+        assert is_reserved_device_name("CON")
+        assert is_reserved_device_name("Con.txt")
+        assert is_reserved_device_name("com1")
+        assert is_reserved_device_name("lpt9")
+        assert not is_reserved_device_name("console")
+        assert not is_reserved_device_name("company")
 
     def test_export_skips_a_pre_existing_reserved_name_pack(self, tmp_path: Path) -> None:
         """Only reachable on a platform that never enforced the Windows

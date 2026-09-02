@@ -52,13 +52,14 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 import shutil
 import zipfile
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import IO, List, Optional, Set
+
+from .prediction.pack_ids import PACK_ID_RE, is_valid_pack_id
 
 _logger = logging.getLogger("DataExport")
 
@@ -88,39 +89,18 @@ _MAX_TOTAL_UNCOMPRESSED = 500 * 1024 * 1024  # sum of uncompressed
 
 # Pack ids are already sanitised by PackManager.import_pack but we
 # re-check on export AND on import: defence against a hand-edited
-# archive substituting `../escape` for a pack id.
-_PACK_ID_RE = re.compile(r"^[a-z0-9_-]{1,64}$")
+# archive substituting `../escape` for a pack id. The pattern, the
+# reserved-device-name check and the combined predicate all live in
+# src/prediction/pack_ids.py, imported above, so this rule and
+# PackManager's copy of it cannot drift the way they once did.
 
 _REQUIRED_PACK_FILE = "dictionary.txt"
 _PACK_FILES = frozenset({"dictionary.txt", "bigrams.txt", "trigrams.txt", "pack.json"})
-
-# Windows reserves these device names for every path component, regardless
-# of case and regardless of any extension attached ("con.txt" is exactly as
-# unrepresentable as "con"). _PACK_ID_RE happily matches "con": it is a
-# valid lowercase [a-z0-9_-] string. Without this check, a pack id of "con"
-# extracted on Windows would hit dest_dir.mkdir() raising an uncaught
-# OSError partway through import, after model files/analytics/snippets have
-# already been replaced, leaving a half-applied import.
-_WINDOWS_RESERVED_NAMES = frozenset(
-    {"con", "prn", "aux", "nul"}
-    | {f"com{i}" for i in range(1, 10)}
-    | {f"lpt{i}" for i in range(1, 10)}
-)
 
 # Chunk size for the bounded copy used during extraction (see
 # _bounded_copy). Arbitrary but reasonable: big enough to be efficient,
 # small enough that overshoot past a cap is bounded to one chunk.
 _COPY_CHUNK_BYTES = 1024 * 1024
-
-
-def _is_reserved_device_name(name: str) -> bool:
-    """True if *name* collides with a Windows reserved device name.
-
-    Checked on the base name before any extension, case-insensitively,
-    matching how Windows itself resolves these names.
-    """
-    base = name.split(".", 1)[0].lower()
-    return base in _WINDOWS_RESERVED_NAMES
 
 
 class DataExportError(Exception):
@@ -188,7 +168,7 @@ def export_user_data(config_dir: Path, dest: Path) -> ExportSummary:
             # enforced the restriction (e.g. it was created on Linux); skip
             # it here too so export never produces an archive that would
             # abort partway through re-import on Windows.
-            if not _PACK_ID_RE.match(pack_entry.name) or _is_reserved_device_name(pack_entry.name):
+            if not is_valid_pack_id(pack_entry.name):
                 _logger.warning(
                     "Skipping pack with non-sanitised id during export: %s",
                     pack_entry.name,
@@ -336,9 +316,7 @@ def _allowed_archive_member(name: str) -> bool:
     parts = name.split("/")
     if len(parts) == 3 and parts[0] == "packs":
         pack_id, filename = parts[1], parts[2]
-        if _is_reserved_device_name(pack_id):
-            return False
-        return bool(_PACK_ID_RE.match(pack_id)) and filename in _PACK_FILES
+        return is_valid_pack_id(pack_id) and filename in _PACK_FILES
     return False
 
 
@@ -529,14 +507,19 @@ def import_user_data(src: Path, config_dir: Path) -> ExportSummary:
             _flatten_imported_snippet_newlines(config_dir / "snippets.json")
 
         # Packs: full replace. Remove all existing packs (matching the
-        # id regex, defensively) before extraction.
+        # id pattern, defensively) before extraction. Pattern-only on
+        # purpose, not the combined is_valid_pack_id: a reserved-name
+        # pack directory can only exist here if it was created on a
+        # platform that never enforced the restriction (e.g. Linux),
+        # and full-replace semantics mean it should still be cleared
+        # out like any other leftover pack.
         packs_dir = config_dir / "packs"
         packs_dir.mkdir(parents=True, exist_ok=True)
         packs_root = packs_dir.resolve()
         for existing in packs_dir.iterdir():
             if not existing.is_dir():
                 continue
-            if not _PACK_ID_RE.match(existing.name):
+            if not PACK_ID_RE.match(existing.name):
                 continue
             try:
                 resolved = existing.resolve()
@@ -557,7 +540,7 @@ def import_user_data(src: Path, config_dir: Path) -> ExportSummary:
             if len(parts) != 3 or parts[0] != "packs":
                 continue
             pack_id, filename = parts[1], parts[2]
-            if not _PACK_ID_RE.match(pack_id) or _is_reserved_device_name(pack_id):
+            if not is_valid_pack_id(pack_id):
                 continue
             if filename not in _PACK_FILES:
                 continue

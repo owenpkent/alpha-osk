@@ -45,7 +45,8 @@ from src.data_export import (
     import_user_data,
     inspect_export,
 )
-from src.prediction.vocabulary_pack import _VALID_PACK_ID, PackManager
+from src.prediction.pack_ids import PACK_ID_RE
+from src.prediction.vocabulary_pack import PackManager
 
 # ---------------------------------------------------------------------------
 # Strategies
@@ -560,7 +561,7 @@ class TestPackImportStaysInsideUserPacksDir:
             if pack_id is None:
                 return
 
-            assert _VALID_PACK_ID.match(pack_id), (
+            assert PACK_ID_RE.match(pack_id), (
                 f"accepted an unsanitised id {pack_id!r} from folder {name!r}"
             )
             dest = (user_dir / pack_id).resolve()
