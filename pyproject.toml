@@ -38,7 +38,7 @@ warn_unused_configs = true
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
-module = ["src.platform.windows", "src.platform.linux", "src.keyboard_app"]
+module = ["src.platform.windows", "src.platform.linux"]
 ignore_errors = true
 
 # Optional transitive deps that may be installed locally (e.g. via the

@@ -183,7 +183,7 @@ comes from a separate `SetWindowPos(HWND_TOPMOST)` call: the style bit
 and the topmost Z-order band are different pieces of state, and writing
 the bit alone leaves the band untouched, producing a window that reports
 itself as topmost while sitting behind ordinary ones. See
-`_apply_windows_extended_styles()` in `src/keyboard_app.py` for the full
+`apply_extended_styles()` in `src/platform/windows_window.py` for the full
 story.
 
 ---
