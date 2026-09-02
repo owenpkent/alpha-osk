@@ -19,6 +19,14 @@ Window {
     // Persistent settings — saved automatically on change, restored on launch
     Settings {
         id: appSettings
+        // Reachable by name from the headless tests. QML's Settings element
+        // batches its writes and flushes through QSettings on its own
+        // schedule, so a test that reads a fresh QSettings straight after a
+        // change sees nothing and cannot tell a write that was deferred from
+        // one that never happened. Asserting on the property here tests the
+        // half this code owns; the restore half is tested by seeding the
+        // store before the engine loads.
+        objectName: "appSettings"
         category: "ui"
         property bool savedShowNavigation: true
         property bool savedShowNumpad: false
@@ -38,7 +46,6 @@ Window {
         property bool savedSnippetDetection: true
         property bool savedAutoCapitalizeAfterPunctuation: false
         property bool savedAutoSaveOnExit: true
-        property bool savedSwipeEnabled: false
         property bool savedRightClickShift: true
         // Flash a small bubble above a key showing the character it just
         // typed (left- or right-click).  Mobile-keyboard "key preview".
@@ -100,6 +107,12 @@ Window {
         // clear of the field they are filling in.
         property int savedSnippetsX: -1000000
         property int savedSnippetsY: -1000000
+        property int savedSymbolsX: -1000000
+        property int savedSymbolsY: -1000000
+        // Recently-tapped glyphs, newest first, as a JSON array of strings.
+        // In the settings layer rather than a file of its own on purpose:
+        // see the note on symbolsWindow.recent.
+        property string savedRecentGlyphs: ""
     }
 
     // Set when Component.onCompleted finishes restoring the saved
@@ -195,8 +208,7 @@ Window {
     // (near line 301).  It calls saveGeometryTimer.restart() when
     // _geometryRestored is true, so width persistence flows through
     // that single seam.  Height isn't saved at all (see the Settings
-    // block above for why) and onHeightChanged only refreshes the
-    // swipe layout — no save call.
+    // block above for why).
 
     // Auto-update — bridge fills these in when checkForUpdate() finds
     // a signed newer release.  See src/updater.py for the security model.
@@ -269,7 +281,6 @@ Window {
             keyboard.setSnippetDetection(appSettings.savedSnippetDetection)
             keyboard.setAutoCapitalizeAfterPunctuation(appSettings.savedAutoCapitalizeAfterPunctuation)
             keyboard.setAutoSaveOnExit(appSettings.savedAutoSaveOnExit)
-            keyboard.setSwipeEnabled(appSettings.savedSwipeEnabled)
             keyboard.setCompatMode(appSettings.savedCompatMode)
             keyboard.setCompatAutoDetect(appSettings.savedCompatAutoDetect)
             keyboard.setMergeStrategy(appSettings.savedMergeStrategy)
@@ -397,21 +408,6 @@ Window {
         if (!active && keyboard) keyboard.clearPredictions()
     }
 
-    // Refresh the swipe-recognizer layout whenever the window is resized —
-    // key positions move with the layout.  (See the merged onWidthChanged
-    // handler further down which also handles minimumWidth clamping.)
-    // Height is not persisted (it's bound to content) so there's no
-    // save call here.
-    onHeightChanged: {
-        swipeLayoutPushTimer.restart()
-    }
-
-    onSwipeEnabledChanged: {
-        appSettings.savedSwipeEnabled = swipeEnabled
-        if (keyboard) keyboard.setSwipeEnabled(swipeEnabled)
-        if (swipeEnabled) pushSwipeLayout()
-    }
-
     // Window transparency (0.3 = very transparent, 1.0 = fully opaque)
     property real windowOpacity: appSettings.savedWindowOpacity
 
@@ -454,9 +450,6 @@ Window {
     // Prediction merge strategy — see savedMergeStrategy.
     property string mergeStrategy: appSettings.savedMergeStrategy
 
-    // Swipe / glide typing — when on, dragging across keys decodes a word.
-    property bool swipeEnabled: appSettings.savedSwipeEnabled
-
     // Right-click on a char key types its shifted variant (e.g. "1" → "!",
     // "a" → "A") without flipping the sticky shift state.  Purely additive
     // — left-click behaviour is unchanged whether this is on or off.
@@ -489,51 +482,6 @@ Window {
     // alone would let the first repeat land at 600 ms.
     property bool characterRepeat: appSettings.savedCharacterRepeat
 
-    // Two registries, both populated by each KeyButton on creation. They are
-    // deliberately NOT the same list, and the split is load-bearing:
-    //
-    //  • charKeyRegistry: single character keys only. Feeds
-    //    pushSwipeLayout(), i.e. the recogniser's key-centre map. A
-    //    "backspace" centre in there is a phantom letter in every shape
-    //    match, so this filter must stay exactly as strict as it is.
-    //  • tappableKeyRegistry: EVERY key under the swipe overlay. Feeds the
-    //    overlay's hit testing only.
-    //
-    // One list served both consumers until swipe typing was found to make
-    // Backspace, Enter, Tab, the arrows, the modifiers, ?123 and the Number
-    // Row's Esc dead taps: the overlay takes every press in its rectangle,
-    // then resolved it against a char-only list that could not contain them.
-    // Widening the char filter would have fixed the taps and corrupted swipe
-    // decoding; giving each consumer its own list fixes one without touching
-    // the other.
-    property var charKeyRegistry: []
-    property var tappableKeyRegistry: []
-
-    function registerCharKey(item, kd) {
-        // Registered first and unconditionally: the overlay must be able to
-        // hit-test every key it covers, whatever its type.
-        tappableKeyRegistry.push({ item: item, kd: kd })
-        if (!kd || kd.type !== "char" || !kd.key || kd.key.length !== 1) return
-        charKeyRegistry.push({ item: item, kd: kd })
-        swipeLayoutPushTimer.restart()
-    }
-
-    function unregisterCharKey(item) {
-        for (var t = 0; t < tappableKeyRegistry.length; t++) {
-            if (tappableKeyRegistry[t].item === item) {
-                tappableKeyRegistry.splice(t, 1)
-                break
-            }
-        }
-        for (var i = 0; i < charKeyRegistry.length; i++) {
-            if (charKeyRegistry[i].item === item) {
-                charKeyRegistry.splice(i, 1)
-                break
-            }
-        }
-        swipeLayoutPushTimer.restart()
-    }
-
     // Briefly float a preview bubble above a key showing the character it
     // just typed.  Right-click sends the shifted variant (e.g. "," → "<",
     // "a" → "A") without flipping sticky shift, and that glyph isn't
@@ -555,45 +503,6 @@ Window {
         keyPreviewBubble.hide()
     }
 
-
-    // Coalesce many register/unregister calls during a layout swap into one
-    // setSwipeLayout push to Python.
-    Timer {
-        id: swipeLayoutPushTimer
-        interval: 100
-        repeat: false
-        onTriggered: root.pushSwipeLayout()
-    }
-
-    function pushSwipeLayout() {
-        if (!keyboard) return
-        // Push key centres in the same coordinate frame the SwipeOverlay
-        // uses for its trace (overlay-local), so the recogniser sees both
-        // in matching units.
-        var overlay = (typeof swipeOverlay !== "undefined") ? swipeOverlay : null
-        if (!overlay) return
-        var centers = ({})
-        for (var i = 0; i < charKeyRegistry.length; i++) {
-            var entry = charKeyRegistry[i]
-            if (!entry.item || !entry.kd || !entry.kd.key) continue
-            // Skip keys that are not on screen. A KeyButton inside a hidden
-            // panel is still constructed and still registers, so with the
-            // Number Row switched off its keys contribute centres computed
-            // from stale geometry, and this map is keyed by character, so a
-            // hidden key silently overwrites the visible one of the same
-            // name. Inert today only because the Number Row holds nothing but
-            // digits and Esc, and SwipeRecognizer.set_layout drops every
-            // non-alphabetic key: the corruption cannot reach decoding until
-            // some future panel carries a letter. Cheap to be correct now
-            // rather than to debug then.
-            if (!entry.item.visible) continue
-            var p = overlay.mapFromItem(entry.item,
-                                        entry.item.width / 2,
-                                        entry.item.height / 2)
-            centers[entry.kd.key.toLowerCase()] = [p.x, p.y]
-        }
-        keyboard.setSwipeLayout(centers)
-    }
 
     // Keyboard state from Python bridge
     property bool shiftOn: keyboard ? keyboard.shiftActive : false
@@ -771,12 +680,9 @@ Window {
     property real keyH: Math.max(34, keyW * 0.89)
 
     // Safety net: if the window width ever drops below minimumWidth (e.g. via
-    // OS window-snap, DPI change, or panel toggle), clamp it back up.  Also
-    // refreshes the swipe-recognizer's key-centre map since the keys move
-    // when the window resizes.
+    // OS window-snap, DPI change, or panel toggle), clamp it back up.
     onWidthChanged: {
         if (width < minimumWidth) width = minimumWidth
-        swipeLayoutPushTimer.restart()
         if (_geometryRestored) saveGeometryTimer.restart()
     }
 
@@ -1411,6 +1317,46 @@ Window {
                 // clear-context button has always had that hole; this one
                 // does not get to inherit it.
                 Rectangle {
+                    objectName: "symbolsTitleBarButton"
+                    visible: !root.suggestionsEnabled
+                    width: visible ? 28 : 0
+                    height: 24
+                    radius: 4
+                    color: symbolsBtn.containsMouse ? "#444" : "transparent"
+
+                    ToolTip.visible: symbolsBtn.containsMouse
+                    ToolTip.text: qsTr("Symbols & emoji: tap one to type it")
+                    ToolTip.delay: 400
+
+                    // Same icon as the bar button, and here for the same
+                    // reason its Snippets neighbour is: the suggestion bar
+                    // collapses to zero height when suggestions are switched
+                    // off, taking every control in it, and an unrelated
+                    // setting must not be the only thing standing between the
+                    // user and a feature.
+                    Comp.StrokeIcon {
+                        anchors.centerIn: parent
+                        width: 16
+                        height: 16
+                        paths: ["M2 12 A10 10 0 0 1 22 12 A10 10 0 0 1 2 12",
+                                "M8 14s1.5 2 4 2 4-2 4-2",
+                                "M9 9L9.01 9", "M15 9L15.01 9"]
+                        ink: symbolsWindow.visible ? root.themeAccent : "#999"
+                    }
+
+                    MouseArea {
+                        id: symbolsBtn
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: {
+                            if (symbolsWindow.visible) symbolsWindow.hide()
+                            else symbolsWindow.openPicker()
+                        }
+                    }
+                }
+
+                Rectangle {
                     objectName: "snippetsTitleBarButton"
                     visible: !root.suggestionsEnabled
                     width: visible ? 28 : 0
@@ -1626,13 +1572,19 @@ Window {
                 // twice the width, and long words would start eliding sooner.
                 // Gap between the two buttons parked at the right end.
                 property real predButtonGap: 6
+                // How many round buttons are parked at the right end.  A
+                // number rather than a hardcoded reserve below, because the
+                // reserve went from one button to two to three and each time
+                // it was the formula that had to be re-derived by hand.
+                property int predButtonCount: 3
                 // Width the pills must keep clear so the row can never render
-                // underneath the buttons.  Two buttons now, not one: derived
-                // from the same numbers the Row is laid out from, because a
-                // reserve that is merely *near* the truth puts a pill under a
-                // control, which is the bug this property exists to prevent.
+                // underneath the buttons.  Derived from the same numbers the
+                // Row is laid out from, because a reserve that is merely
+                // *near* the truth puts a pill under a control, which is the
+                // bug this property exists to prevent.
                 property real clearCtxReserve: root.suggestionsEnabled
-                    ? predPillHeight * 2 + predButtonGap + 16 : 0
+                    ? predPillHeight * predButtonCount
+                      + predButtonGap * (predButtonCount - 1) + 16 : 0
                 Layout.preferredHeight: root.suggestionsEnabled ? predPillHeight + 4 : 0
                 Layout.bottomMargin: root.suggestionsEnabled ? 4 : 0
                 clip: true
@@ -1956,6 +1908,57 @@ Window {
                     visible: root.suggestionsEnabled
 
                 Rectangle {
+                    id: symbolsPill
+                    objectName: "symbolsBarButton"
+                    width: predBar.predPillHeight
+                    height: predBar.predPillHeight
+                    radius: width / 2
+                    color: symbolsBarBtn.containsMouse ? Qt.lighter(root.themeKeyColor, 1.3)
+                                                       : Qt.rgba(0, 0, 0, 0.18)
+                    border.color: symbolsWindow.visible || symbolsBarBtn.containsMouse
+                                  ? root.themeAccent : Qt.rgba(1, 1, 1, 0.18)
+                    border.width: 1
+
+                    ToolTip.visible: symbolsBarBtn.containsMouse
+                    ToolTip.text: qsTr("Symbols & emoji: tap one to type it")
+                    ToolTip.delay: 400
+
+                    // Feather's "smile", MIT, (c) 2013-2023 Cole Bemis.
+                    // See THIRD_PARTY_NOTICES.md.  One deviation, and it is
+                    // forced: StrokeIcon takes path data only, so the
+                    // source's <circle> is written as the equivalent pair of
+                    // arcs.  The eyes are upstream's zero-length lines,
+                    // verbatim, which rely on the SVG round-cap rule and
+                    // were measured rendering correctly through Canvas
+                    // rather than assumed to.  Drawn rather than typeset for
+                    // the usual reason: a smiley in a Text resolves through
+                    // Segoe UI Emoji on Windows and comes out as a colour
+                    // glyph that ignores the ink it is given.
+                    Comp.StrokeIcon {
+                        anchors.fill: parent
+                        paths: ["M2 12 A10 10 0 0 1 22 12 A10 10 0 0 1 2 12",
+                                "M8 14s1.5 2 4 2 4-2 4-2",
+                                "M9 9L9.01 9", "M15 9L15.01 9"]
+                        boxFraction: 0.62
+                        ink: symbolsWindow.visible ? root.themeAccent
+                             : (symbolsBarBtn.containsMouse ? root.themeTextColor : "#bbb")
+                    }
+
+                    MouseArea {
+                        id: symbolsBarBtn
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: {
+                            if (symbolsWindow.visible) symbolsWindow.hide()
+                            else symbolsWindow.openPicker()
+                        }
+                    }
+
+                    Behavior on color { ColorAnimation { duration: 100 } }
+                }
+
+                Rectangle {
                     id: snippetsPill
                     objectName: "snippetsBarButton"
                     width: predBar.predPillHeight
@@ -2113,8 +2116,6 @@ Window {
                         characterRepeat: root.characterRepeat
                         repeatDelay: root.repeatDelay
                         repeatInterval: root.repeatInterval
-                        registerFn: root.registerCharKey
-                        unregisterFn: root.unregisterCharKey
                         previewFn: root.showKeyPreview
                         hidePreviewFn: root.hideKeyPreview
                     }
@@ -2131,8 +2132,6 @@ Window {
                         // leaves visible space at both ends. That is the
                         // chosen shape, not an oversight: see the geometry
                         // note in FunctionRow.qml before changing it.
-                        registerFn: root.registerCharKey
-                        unregisterFn: root.unregisterCharKey
                         keyColor: Qt.darker(root.themeKeyColor, 1.15)
                         keyPressedColor: root.themeKeyPressed
                         keyTextColor: root.themeTextColor
@@ -2156,8 +2155,6 @@ Window {
                             Comp.KeyButton {
                                 id: keyBtn
                                 property var kd: modelData
-                                Component.onCompleted: root.registerCharKey(keyBtn, kd)
-                                Component.onDestruction: root.unregisterCharKey(keyBtn)
                                 keyText: kd.key || kd.action || ""
                                 displayText: {
                                     if (kd.type === "char") {
@@ -2182,6 +2179,12 @@ Window {
                                         case "ctrlOn": return root.ctrlOn
                                         case "altOn": return root.altOn
                                         case "winOn": return root.winOn
+                                        // Not a modifier: the symbol layer's
+                                        // entry key sits on the always-visible
+                                        // space row, so lighting it is the only
+                                        // thing on screen that says which page
+                                        // the letters have been swapped for.
+                                        case "symLayer": return root.activeLayer === "sym"
                                         default: return false
                                     }
                                 }
@@ -2241,7 +2244,21 @@ Window {
                                 onKeyPressed: {
                                     if (kd.type === "char") {
                                         var ch = root.shiftOn && kd.shifted ? kd.shifted : kd.key
-                                        keyboard.pressKey(ch)
+                                        // `literal` keys type exactly the glyph
+                                        // on the cap, whatever Shift and Caps
+                                        // Lock are doing. The symbol layer is
+                                        // built from them, and it is not a
+                                        // stylistic choice: pressKey applies
+                                        // case normalisation, and Python's
+                                        // upper() is not the identity on every
+                                        // non-ASCII character. Caps Lock is
+                                        // deliberately left alone by a layer
+                                        // switch, so without this, Caps + the
+                                        // micro sign typed a Greek capital Mu.
+                                        if (kd.literal)
+                                            keyboard.pressKeyLiteral(kd.key)
+                                        else
+                                            keyboard.pressKey(ch)
                                         // displayText already reflects shift/
                                         // caps casing, so it matches the char
                                         // pressKey actually sends to the OS.
@@ -2289,8 +2306,22 @@ Window {
                                         // alive by signal delivery, not a live
                                         // binding, since the Connections handler
                                         // assigns to it).
+                                        //
+                                        // A layer key whose target is already
+                                        // showing goes back to base instead of
+                                        // re-selecting the layer it is on. The
+                                        // full-size layouts reach their symbol
+                                        // page from the space row, which has no
+                                        // `layer` field and therefore renders on
+                                        // every layer, so the same key has to be
+                                        // both the way in and the way out. Every
+                                        // other layer key targets something it
+                                        // is not on, so this branch is dead for
+                                        // them and their behaviour is unchanged.
                                         keyboard.releaseShift()
-                                        root.activeLayer = kd.target || "base"
+                                        var want = kd.target || "base"
+                                        root.activeLayer = (want === root.activeLayer)
+                                                           ? "base" : want
                                     } else {
                                         keyboard.pressSpecialKey(kd.action)
                                     }
@@ -2396,32 +2427,6 @@ Window {
                 repeatInterval: root.repeatInterval
             }
             }
-        }
-
-        // Swipe overlay — covers the main keyboard area when swipe typing
-        // is on.  Sibling to mainLayout (NOT a child of mainKeyboard),
-        // because re-parenting into a QtQuick.Layouts ColumnLayout makes
-        // Qt warn about anchors-on-layout-managed-items even when we set
-        // the parent imperatively.  Geometry is bound to mainKeyboard's
-        // position/size through coordinate bindings instead.
-        Comp.SwipeOverlay {
-            id: swipeOverlay
-            // Lets tests/test_qml_swipe_overlay.py assert the overlay really
-            // is in the way, so a tap test cannot pass by the overlay simply
-            // not being there.
-            objectName: "swipeOverlay"
-            x: mainLayout.x + mainKeyboard.x
-            y: mainLayout.y + mainKeyboard.y
-            width: mainKeyboard.width
-            height: mainKeyboard.height
-            z: 50
-            enabled: root.swipeEnabled
-            keyboardBridge: keyboard
-            // Two lists on purpose: keyRegistry is the recogniser's
-            // key-centre map (characters only), tapRegistry is hit testing
-            // (everything). See registerCharKey.
-            keyRegistry: root.charKeyRegistry
-            tapRegistry: root.tappableKeyRegistry
         }
 
         // Custom styled context menu for prediction pills
@@ -4020,6 +4025,485 @@ Window {
             }
         }
 
+        // ===== Symbols & Emoji =====
+        //
+        // The long tail behind the keyboard's own symbol layer. That layer
+        // carries the 34 glyphs worth a single click; the full catalogue,
+        // the accented letters and every emoji live here, because
+        // categories, a Recent page and hundreds of glyphs do not fit on a
+        // key grid at a size an imprecise pointer can hit.
+        //
+        // A separate top-level Window rather than a Popup, for the same
+        // reason the Snippets window is one: a Popup is clipped to its
+        // parent window's overlay, so it could never be dragged clear of
+        // the field being filled in. The whole shell here is deliberately
+        // the Snippets window's, down to the drag handle, the desktop-wide
+        // position clamp and the full-page grid, so the two read as
+        // siblings rather than as two people's guesses at the same thing.
+        Window {
+            id: symbolsWindow
+            // Found by objectName from keyboard_app.py, which re-applies
+            // WS_EX_NOACTIVATE on every show: on Windows the Qt flag alone
+            // does not stop click-activation, and this window must never
+            // take focus from the app being typed into.
+            objectName: "symbolsWindow"
+            width: 460
+            height: Math.max(240, symContent.implicitHeight + 24)
+            minimumWidth: 460
+            minimumHeight: 240
+            color: "transparent"
+            title: "Alpha-OSK Symbols"
+            flags: Qt.Window | Qt.FramelessWindowHint
+                   | Qt.WindowStaysOnTopHint | Qt.WindowDoesNotAcceptFocus
+
+            // [{id, label, glyphs}] from src/glyphs.py, fetched once on the
+            // first open. It is static data, so re-querying it per open
+            // would rebuild several hundred strings for no reason.
+            property var catalogue: []
+            // 0 is the Recent tab; 1 and up index into `catalogue`.
+            property int categoryIndex: 1
+            property int page: 0
+            // Most-recent-first, persisted in the Qt settings layer rather
+            // than in a file of its own. It is a convenience the user can
+            // rebuild by tapping four glyphs, which is exactly the kind of
+            // state the Data Backup archive deliberately does not carry, so
+            // giving it a file would have meant a loader, a size cap and an
+            // export decision for something worth none of them.
+            property var recent: []
+            readonly property int recentLimit: keyboard ? keyboard.getRecentGlyphLimit() : 24
+
+            // 8 x 4. The grid is paged rather than scrolled for the reason
+            // the Snippets grid is: this window floats over whatever is
+            // being typed into, so a list that grew downward would end up
+            // covering the target app.
+            readonly property int columns: 8
+            readonly property int rowCount: 4
+            readonly property int pageSize: columns * rowCount
+
+            readonly property var tabLabels: {
+                var out = [qsTr("Recent")]
+                for (var i = 0; i < catalogue.length; i++)
+                    out.push(catalogue[i].label)
+                return out
+            }
+
+            readonly property var activeGlyphs: {
+                if (categoryIndex <= 0) return recent
+                var c = catalogue[categoryIndex - 1]
+                return c ? c.glyphs : []
+            }
+            readonly property int pageCount:
+                Math.max(1, Math.ceil(activeGlyphs.length / pageSize))
+
+            // Theme-derived, the same set the Snippets window derives and
+            // for the same reason: hardcoded colours read as foreign on the
+            // dark themes and break outright on Typewriter.
+            readonly property color surface: root.themeKeyColor
+            readonly property color surfaceHi: root.themeKeyPressed
+            readonly property color txt: root.themeTextColor
+            readonly property color muted: Qt.rgba(txt.r, txt.g, txt.b, 0.58)
+            readonly property color faint: Qt.rgba(txt.r, txt.g, txt.b, 0.42)
+
+            // Derived from the layout properties rather than restated as
+            // literals, the rule the Snippets grid had to learn: a copied
+            // margin is flush only until someone edits the margin.
+            readonly property real cellW:
+                (width - 2 * symContent.anchors.margins
+                 - (columns - 1) * symGrid.spacing) / columns
+
+            property bool _positioned: false
+
+            // Wired to the page count rather than to each mutation of the
+            // glyph list, so any future way the list shrinks under the
+            // current page is caught without a second call site.
+            onPageCountChanged: clampPage()
+
+            function clampPage() {
+                if (page > pageCount - 1) page = pageCount - 1
+                if (page < 0) page = 0
+            }
+
+            function selectCategory(idx) {
+                categoryIndex = idx
+                page = 0
+            }
+
+            function loadRecent() {
+                var out = []
+                try {
+                    var parsed = JSON.parse(appSettings.savedRecentGlyphs || "[]")
+                    if (parsed && parsed.length !== undefined) {
+                        for (var i = 0; i < parsed.length && out.length < recentLimit; i++) {
+                            if (typeof parsed[i] === "string" && parsed[i].length > 0)
+                                out.push(parsed[i])
+                        }
+                    }
+                } catch (e) {
+                    // A malformed value costs the Recent tab and nothing
+                    // else, so it is dropped rather than reported: the
+                    // catalogue underneath it is intact and the user is one
+                    // tap from refilling this.
+                }
+                recent = out
+            }
+
+            function remember(glyph) {
+                var out = [glyph]
+                for (var i = 0; i < recent.length && out.length < recentLimit; i++) {
+                    if (recent[i] !== glyph) out.push(recent[i])
+                }
+                recent = out
+                appSettings.savedRecentGlyphs = JSON.stringify(out)
+            }
+
+            function typeGlyph(glyph) {
+                if (!glyph || !keyboard) return
+                // A false return means nothing reached the app: the bridge
+                // refuses while an edit field owns the keystrokes. Saying so
+                // matters more here than it would on a keycap, because this
+                // window sits somewhere else on the desktop, so a tap that
+                // silently did nothing is indistinguishable from one that
+                // missed, and the user taps again.
+                if (keyboard.insertGlyph(glyph)) remember(glyph)
+                else snippetProblemToast.flash(qsTr("Could not type that here"))
+            }
+
+            function openPicker() {
+                if (catalogue.length === 0 && keyboard)
+                    catalogue = keyboard.getGlyphCategories()
+                loadRecent()
+                // Recent once there is something in it, the first catalogue
+                // tab before that: opening on an empty page teaches the
+                // user the window is empty.
+                selectCategory(recent.length > 0 ? 0 : 1)
+                // Restore where it was last left, clamped back on-screen
+                // over the whole virtual desktop rather than the primary
+                // screen. Only the first open of a session positions it.
+                if (!_positioned) {
+                    if (appSettings.savedSymbolsX > -1000000
+                            && appSettings.savedSymbolsY > -1000000) {
+                        var pos = root.clampedWindowPos(appSettings.savedSymbolsX,
+                                                        appSettings.savedSymbolsY,
+                                                        symbolsWindow.width,
+                                                        symbolsWindow.height)
+                        symbolsWindow.x = pos.x
+                        symbolsWindow.y = pos.y
+                    } else {
+                        symbolsWindow.x = root.x + (root.width - symbolsWindow.width) / 2
+                        symbolsWindow.y = Math.max(0, root.y - symbolsWindow.height - 8)
+                    }
+                    _positioned = true
+                }
+                symbolsWindow.show()
+                symbolsWindow.raise()
+            }
+
+            Rectangle {
+                anchors.fill: parent
+                color: root.themeBackground
+                radius: 8
+                border.color: root.themeAccent
+                border.width: 1
+
+                ColumnLayout {
+                    id: symContent
+                    anchors.fill: parent
+                    anchors.margins: 12
+                    spacing: 8
+
+                    // --- header: title, drag handle, close ---
+                    Item {
+                        Layout.fillWidth: true
+                        Layout.preferredHeight: 26
+
+                        Text {
+                            anchors.left: parent.left
+                            anchors.verticalCenter: parent.verticalCenter
+                            text: qsTr("Symbols & Emoji")
+                            textFormat: Text.PlainText
+                            color: symbolsWindow.txt
+                            font.pixelSize: 14
+                            font.bold: true
+                        }
+
+                        MouseArea {
+                            id: symDragArea
+                            anchors.left: parent.left
+                            anchors.top: parent.top
+                            anchors.bottom: parent.bottom
+                            anchors.right: symCloseBtn.left
+                            cursorShape: Qt.SizeAllCursor
+                            property real startMx
+                            property real startMy
+                            property real startX
+                            property real startY
+                            // Manual x/y drag, never startSystemMove(), the
+                            // same rule the other two draggable windows
+                            // follow: this window cannot accept focus, so a
+                            // WM-driven move is unreliable on X11/Mutter and
+                            // its true-on-send return value used to suppress
+                            // the fallback and kill the drag outright.
+                            onPressed: function(mouse) {
+                                var g = mapToGlobal(mouse.x, mouse.y)
+                                startMx = g.x; startMy = g.y
+                                startX = symbolsWindow.x; startY = symbolsWindow.y
+                            }
+                            onPositionChanged: function(mouse) {
+                                if (!pressed) return
+                                var g = mapToGlobal(mouse.x, mouse.y)
+                                symbolsWindow.x = startX + (g.x - startMx)
+                                symbolsWindow.y = startY + (g.y - startMy)
+                            }
+                            // One write per drag rather than hundreds.
+                            onReleased: {
+                                appSettings.savedSymbolsX = Math.round(symbolsWindow.x)
+                                appSettings.savedSymbolsY = Math.round(symbolsWindow.y)
+                            }
+                        }
+
+                        Rectangle {
+                            id: symCloseBtn
+                            objectName: "symbolsCloseButton"
+                            anchors.right: parent.right
+                            anchors.verticalCenter: parent.verticalCenter
+                            width: 26
+                            height: 26
+                            radius: 4
+                            color: symCloseArea.containsMouse ? symbolsWindow.surfaceHi
+                                                              : "transparent"
+
+                            // Feather's "x", MIT, (c) 2013-2023 Cole Bemis.
+                            // Drawn rather than typeset, the rule this file
+                            // documents three times over: a cross in a Text
+                            // resolves through Segoe UI Emoji on Windows and
+                            // comes out as a colour glyph that ignores `ink`.
+                            Comp.StrokeIcon {
+                                anchors.centerIn: parent
+                                width: 14
+                                height: 14
+                                paths: ["M18 6L6 18", "M6 6l12 12"]
+                                ink: symCloseArea.containsMouse ? symbolsWindow.txt
+                                                                : symbolsWindow.muted
+                            }
+
+                            MouseArea {
+                                id: symCloseArea
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: symbolsWindow.hide()
+                            }
+                        }
+                    }
+
+                    // --- category tabs ---
+                    //
+                    // A Flow that wraps onto two or three lines, not a
+                    // horizontally scrolling strip. Every chip stays a full
+                    // target that way; a scroll strip would put half the
+                    // categories behind a drag gesture, which is the one
+                    // input this keyboard's users can least rely on.
+                    Flow {
+                        id: symTabs
+                        Layout.fillWidth: true
+                        spacing: 5
+
+                        Repeater {
+                            model: symbolsWindow.tabLabels
+
+                            Rectangle {
+                                property bool selected: index === symbolsWindow.categoryIndex
+                                width: symTabText.implicitWidth + 16
+                                height: 26
+                                radius: 4
+                                color: selected ? symbolsWindow.surfaceHi
+                                       : (symTabArea.containsMouse ? symbolsWindow.surface
+                                                                   : "transparent")
+                                border.color: selected ? root.themeAccent : symbolsWindow.faint
+                                border.width: 1
+
+                                Text {
+                                    id: symTabText
+                                    anchors.centerIn: parent
+                                    text: modelData
+                                    textFormat: Text.PlainText
+                                    color: parent.selected ? symbolsWindow.txt
+                                                           : symbolsWindow.muted
+                                    font.pixelSize: 12
+                                }
+
+                                MouseArea {
+                                    id: symTabArea
+                                    anchors.fill: parent
+                                    hoverEnabled: true
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: symbolsWindow.selectCategory(index)
+                                }
+                            }
+                        }
+                    }
+
+                    // --- glyph grid ---
+                    Item {
+                        Layout.fillWidth: true
+                        Layout.preferredHeight: symGrid.implicitHeight
+
+                        Grid {
+                            id: symGrid
+                            objectName: "symbolsGrid"
+                            anchors.horizontalCenter: parent.horizontalCenter
+                            columns: symbolsWindow.columns
+                            spacing: 5
+
+                            Repeater {
+                                // The model is the page size, not the number
+                                // of glyphs left, so a short last page keeps
+                                // its empty cells and the pager underneath it
+                                // cannot walk up the window into a pointer
+                                // already travelling toward it. Same rule as
+                                // the Snippets grid.
+                                model: symbolsWindow.pageSize
+
+                                Rectangle {
+                                    property int glyphIndex:
+                                        symbolsWindow.page * symbolsWindow.pageSize + index
+                                    property string glyph:
+                                        glyphIndex < symbolsWindow.activeGlyphs.length
+                                        ? symbolsWindow.activeGlyphs[glyphIndex] : ""
+                                    width: symbolsWindow.cellW
+                                    height: 42
+                                    radius: 5
+                                    color: glyph.length === 0 ? "transparent"
+                                           : (symCellArea.containsMouse ? symbolsWindow.surfaceHi
+                                                                        : symbolsWindow.surface)
+                                    border.color: glyph.length > 0 && symCellArea.containsMouse
+                                                  ? root.themeAccent : "transparent"
+                                    border.width: 1
+
+                                    Text {
+                                        anchors.centerIn: parent
+                                        text: parent.glyph
+                                        textFormat: Text.PlainText
+                                        color: symbolsWindow.txt
+                                        font.pixelSize: 21
+                                        // No family is named, and that is the
+                                        // decision rather than the default.
+                                        // This is the one surface in the app
+                                        // that *wants* the host emoji font
+                                        // (colour is the content here, not
+                                        // chrome that has to obey an ink
+                                        // colour), and Qt's own fallback is
+                                        // what picks it: `font.families` does
+                                        // not exist on this Qt's grouped font
+                                        // property, and naming a single family
+                                        // would pin one platform's font and
+                                        // lose the glyph on the other two.
+                                    }
+
+                                    MouseArea {
+                                        id: symCellArea
+                                        anchors.fill: parent
+                                        hoverEnabled: true
+                                        enabled: parent.glyph.length > 0
+                                        cursorShape: Qt.PointingHandCursor
+                                        onClicked: symbolsWindow.typeGlyph(parent.glyph)
+                                    }
+                                }
+                            }
+                        }
+
+                        Text {
+                            anchors.centerIn: parent
+                            width: parent.width - 40
+                            visible: symbolsWindow.categoryIndex === 0
+                                     && symbolsWindow.recent.length === 0
+                            text: qsTr("Symbols you tap turn up here, newest first.")
+                            textFormat: Text.PlainText
+                            color: symbolsWindow.muted
+                            font.pixelSize: 12
+                            horizontalAlignment: Text.AlignHCenter
+                            wrapMode: Text.WordWrap
+                        }
+                    }
+
+                    // --- pager ---
+                    //
+                    // Always present, with its arrows disabled at the ends
+                    // rather than hidden. A control that disappears when it
+                    // has nothing to do takes the row's height with it and
+                    // moves everything below.
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: 8
+
+                        Rectangle {
+                            objectName: "symbolsPrevPage"
+                            Layout.preferredWidth: 60
+                            Layout.preferredHeight: 26
+                            radius: 4
+                            enabled: symbolsWindow.page > 0
+                            opacity: enabled ? 1.0 : 0.35
+                            color: symPrevArea.containsMouse && enabled
+                                   ? symbolsWindow.surfaceHi : symbolsWindow.surface
+                            Text {
+                                anchors.centerIn: parent
+                                text: qsTr("Back")
+                                textFormat: Text.PlainText
+                                color: symbolsWindow.txt
+                                font.pixelSize: 12
+                            }
+                            MouseArea {
+                                id: symPrevArea
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: if (symbolsWindow.page > 0) symbolsWindow.page--
+                            }
+                        }
+
+                        Text {
+                            Layout.fillWidth: true
+                            horizontalAlignment: Text.AlignHCenter
+                            text: qsTr("Page %1 of %2").arg(symbolsWindow.page + 1)
+                                                       .arg(symbolsWindow.pageCount)
+                            textFormat: Text.PlainText
+                            color: symbolsWindow.muted
+                            font.pixelSize: 11
+                        }
+
+                        Rectangle {
+                            objectName: "symbolsNextPage"
+                            Layout.preferredWidth: 60
+                            Layout.preferredHeight: 26
+                            radius: 4
+                            enabled: symbolsWindow.page < symbolsWindow.pageCount - 1
+                            opacity: enabled ? 1.0 : 0.35
+                            color: symNextArea.containsMouse && enabled
+                                   ? symbolsWindow.surfaceHi : symbolsWindow.surface
+                            Text {
+                                anchors.centerIn: parent
+                                text: qsTr("More")
+                                textFormat: Text.PlainText
+                                color: symbolsWindow.txt
+                                font.pixelSize: 12
+                            }
+                            MouseArea {
+                                id: symNextArea
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: {
+                                    if (symbolsWindow.page < symbolsWindow.pageCount - 1)
+                                        symbolsWindow.page++
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+
         // Post-update toast — shown once on the first launch after the
         // auto-updater applied a new version. Confirms to the user
         // that the install completed (the previous flow gave no signal:
@@ -4886,7 +5370,6 @@ Window {
             snippetDetection: root.snippetDetection
             autoCapitalizeAfterPunctuation: root.autoCapitalizeAfterPunctuation
             autoSaveOnExit: root.autoSaveOnExit
-            swipeEnabled: root.swipeEnabled
             rightClickShift: root.rightClickShift
             keyPreviewEnabled: root.keyPreviewEnabled
             repeatDelay: root.repeatDelay
@@ -4960,8 +5443,6 @@ Window {
                     root.autoSaveOnExit = value
                     appSettings.savedAutoSaveOnExit = value
                     if (keyboard) keyboard.setAutoSaveOnExit(value)
-                } else if (setting === "swipeEnabled") {
-                    root.swipeEnabled = value
                 } else if (setting === "rightClickShift") {
                     root.rightClickShift = value
                     appSettings.savedRightClickShift = value

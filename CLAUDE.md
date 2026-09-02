@@ -2,13 +2,17 @@
 
 Alpha-OSK is an AI-assisted, mouse-driven on-screen keyboard for Windows and Linux (macOS in progress). Users click QML keys to type into whatever app currently holds OS focus; a hybrid n-gram + PPM + fuzzy engine predicts words locally, with no LLM, no GPU, and nothing leaving the machine. It is an accessibility tool the owner depends on daily. This file is both the AI-onboarding doc and the human codebase map; the detailed reference sections below are authoritative project knowledge, not background.
 
+## About the Owner
+
+Owen is a wheelchair user with muscular dystrophy. Typing is hard - be proactive, make decisions, don't ask for confirmation on small things. Offer A/B/C choices so he can type one letter instead of explaining. This is an accessibility tool he actually needs.
+
 ## Key rules (non-obvious, cross-cutting)
 
 - The keyboard must NEVER steal OS focus: `WS_EX_NOACTIVATE` on Windows (`keyboard_app.py::_apply_window_flags`), `WindowDoesNotAcceptFocus` elsewhere. Because our window cannot hold focus, route in-app text entry (prediction-edit popup, snippets editor, any future input slot) through `setEditMode(true)` plus the `editKeyTyped` / `editSpecialPressed` signals, never Qt focus. Set edit mode on open and clear it on close.
 - Sticky-modifier auto-release logic is duplicated in `_press_char` and `pressSpecialKey` (state flip + `release_modifier()` + change-signal emit, plus `_update_layer()` for Shift). Keep both blocks in sync; new keystroke paths (autocorrect retype, pill insert, macros) must mirror it. `pressSpecialKey` deliberately keeps Shift/Ctrl held on `_NAV_KEYS` (arrows/home/end/pageup/pagedown).
 - Linux `LinuxKeySynthesizer.hold_modifier()` MUST skip `win`/`super`: holding Super triggers a WM pointer grab that swallows every click, including clicks on the OSK itself. Do not "fix" it to hold Super. Windows still holds `VK_LWIN`.
 - Pill-facing casing comes only from `KeyboardBridge._display_cased`, which mirrors every uppercase position of the typed prefix onto the pill, unconditionally (including fuzzy/autocorrect candidates). Auto-capitalisation is ONLY the "I" family in `ngram_predictor._always_capitalize`; do NOT reintroduce the removed three-tier proper-noun auto-cap as a default. Every pill emit site must route through `_display_cased`.
-- Verbatim inserts (prediction pill, snippet, swipe word, autocorrect retype) run inside `_without_held_modifiers()` and call `_release_sticky_modifiers()` first. A modifier held at the OS level rewrites the whole string: `_make_char_scancode_events` only knows not to *add* a redundant Shift wrap, it cannot cancel a standing hold, so "Hello" typed with Shift down arrives as "HELLO" and with Ctrl down every character arrives as a chord. The context manager drops the holds for the duration and restores them, which keeps a right-click lock intact; the sticky release is separate and belongs to the caller. **It must wrap the whole insert, not just the text**: two of `pressPrediction`'s branches never reach `send_text` (the compat BackSpace loop, and `replace_text`, whose Shift+Left selection is itself a chord), and those are the destructive ones. `_send_literal_text` is a one-line convenience over the same context manager. The single-character path in `_press_char` deliberately does NOT route through it (there the held Shift is what makes the keystroke uppercase).
+- Verbatim inserts (prediction pill, snippet, autocorrect retype) run inside `_without_held_modifiers()` and call `_release_sticky_modifiers()` first. A modifier held at the OS level rewrites the whole string: `_make_char_scancode_events` only knows not to *add* a redundant Shift wrap, it cannot cancel a standing hold, so "Hello" typed with Shift down arrives as "HELLO" and with Ctrl down every character arrives as a chord. The context manager drops the holds for the duration and restores them, which keeps a right-click lock intact; the sticky release is separate and belongs to the caller. **It must wrap the whole insert, not just the text**: two of `pressPrediction`'s branches never reach `send_text` (the compat BackSpace loop, and `replace_text`, whose Shift+Left selection is itself a chord), and those are the destructive ones. `_send_literal_text` is a one-line convenience over the same context manager. The single-character path in `_press_char` deliberately does NOT route through it (there the held Shift is what makes the keystroke uppercase).
 - Prediction insertion is suffix-only (type just the unseen tail), falling back to `replace_text()` on a prefix/casing mismatch. Compatibility Mode (`_in_compat_mode`, matched on IDE/RDP exe basenames in `_COMPAT_PROCESS_NAMES`, never window class) rewires this to BackSpace+retype. `_context_buffer` / `_current_word` must always mirror the on-screen text; backspace must trim and rehydrate a mid-word tail.
 - Import paths are security-critical: `PackManager.import_pack`, `data_export.import_user_data`, and `inspect_export` sanitise names, cap sizes, and use allow-list (not deny-list) extraction against zip-slip. Do NOT loosen without re-reading the regression tests (`tests/test_vocabulary_pack.py::TestImportPackSecurity`, and the slip/absolute-path/oversize/future-schema/telemetry cases in `tests/test_data_export.py`).
 - Imported snippets have every `\r`/`\n` in a value flattened to a space (`data_export.py::_flatten_imported_snippet_newlines`) before the write; locally authored snippets (typed in the snippet editor) keep their newlines. `xdotool type` turns a literal newline into a real Return keypress, and an imported archive is untrusted, so the flatten applies only on import.
@@ -17,7 +21,7 @@ Alpha-OSK is an AI-assisted, mouse-driven on-screen keyboard for Windows and Lin
 - Telemetry is OFF by default and `DEFAULT_ENDPOINT` in `src/telemetry.py` ships empty (silent no-op). `TelemetryClient` is the source of truth for the consent flag; do NOT mirror it into `appSettings`. The Data Backup archive deliberately excludes `telemetry.json`.
 - Adding a setting requires the full 8-step wiring (see "Settings Panel Structure"): `Settings{}` savedFoo + root prop in `Main.qml`, prop + `SettingsToggle` in the correct sub-view of `UnifiedSettingsPanel.qml`, pass-through, `onSettingChanged`, optional `@Slot` on `keyboard_bridge.py`, and load in `Component.onCompleted`.
 - Releases: `src/__version__.py` is the single source of version truth; publish to the separate `okstudio1/alpha-osk-releases` repo with an explicit `--repo` (the updater API URL is hard-pinned there); the installer asset name must be exactly `Alpha-OSK-Setup-{version}.exe`.
-- The generated NSIS installer no longer relies on `InstallDirRegKey HKCU` (a dangling read of a user-writable registry value nothing in the build ever wrote, which the silent `/S` auto-update path honoured anyway); `updater.py::_install_target_dir()` computes the directory instead and every silent install passes an explicit `/S /D=<dir>`. NSIS requires `/D=` to be the last parameter on the command line and unquoted even when the path has spaces. Don't reorder or requote it.
+- The install path is computed, never read from the registry: every silent install passes an explicit `/S /D=<dir>` from `updater.py::_install_target_dir()`. NSIS requires `/D=` last on the command line and unquoted even when the path has spaces, so don't reorder or requote the installer arguments (full reasoning under *Auto-Update*).
 - `run.py::ensure_admin_windows()` runs after dependency installation, not as the first statement in `main()`, so `pip install` never executes with an admin token; `--dashboard` never elevates at all. The repo tree is still user-writable, so this narrows the blast radius rather than closing it.
 - Load-bearing invariants: merge-strategy default MUST stay `"rank"`; `NgramPredictor._user_total == sum(user_vocab.values())`; window height is content-bound (never persist or assign it); every analytics metric needs both a session and an `_alltime_*` form; Windows subprocess calls need `CREATE_NO_WINDOW` when they suppress output *or* may run without a console to inherit (a git hook, a frozen GUI build).
 
@@ -29,7 +33,7 @@ Alpha-OSK is an AI-assisted, mouse-driven on-screen keyboard for Windows and Lin
 ## Build, run, test
 
 - Run: `python run.py` (creates venv, installs deps, launches the keyboard).
-- Test: `python -m pytest` (also `-k fuzzy`, or a single file like `tests/test_keyboard_bridge.py`).
+- Test: `python -m pytest` (1687 tests; also `-k fuzzy`, `-k property`, or a single file like `tests/test_keyboard_bridge.py`).
 - Pre-push gate, the same checks as CI (`ruff check`, `ruff format --check`, `mypy` under **both** `--platform linux` and `--platform win32`, `pytest`): `python check.py` (~60s); `python check.py --full` adds the `--cov-fail-under=60` coverage gate (~110s, full CI parity). `python check.py --install-hook` wires it to `git push` so it runs automatically rather than by hand (`--no-verify` skips it once). CI additionally runs `osv-scanner` over the lockfiles. Formatting is gated separately from linting because `ruff check` ignores layout; fix a format failure with `ruff format src/ tests/`. The two mypy passes are both required and neither substitutes for the other: `linux` is what the runner uses (typeshed gates whole symbols on platform, so `ctypes.WinDLL` degrades to `Any` there and trips `warn_return_any`), and `win32` is the only thing that type-checks the `if sys.platform == "win32"` bodies at all, since mypy prunes them as unreachable under the other.
 
 ## Conventions
@@ -44,23 +48,6 @@ Alpha-OSK is an AI-assisted, mouse-driven on-screen keyboard for Windows and Lin
 - Call out in the PR description any change to the prediction engine, the build/signing pipeline, or telemetry.
 - Get alignment before: changing the security-reporting flow or CoC contact (update `SECURITY.md` / `CONTRIBUTING.md` / `bug_report.yml` cross-references together); changing the data-export schema (`SCHEMA_VERSION` bump + back-compat import paths); changing the telemetry payload or consent model; loosening any import-hardening check; or disabling the OSV `fail-on-vuln` gate.
 - If you cannot decide which Settings category a new toggle belongs in, that is a UX smell: push back on the requirement before adding the setting.
-
----
-
-## About the Owner
-
-Owen is a wheelchair user with muscular dystrophy. Typing is hard - be proactive, make decisions, don't ask for confirmation on small things. Offer A/B/C choices so he can type one letter instead of explaining. This is an accessibility tool he actually needs.
-
-## What This Is
-
-Alpha-OSK is an AI-powered on-screen keyboard for Windows and Linux. Users click keys in the UI to type into other applications. It uses a hybrid prediction engine (n-gram + PPM + fuzzy recognition) - no LLM/GPU required.
-
-## How to Run
-
-```bash
-python run.py          # Creates venv, installs deps, launches keyboard
-python -m pytest       # Run tests (1576 tests)
-```
 
 ## Architecture Overview
 
@@ -83,6 +70,7 @@ User clicks key (QML)
 | `src/platform/` | OS abstraction - `linux.py` (xdotool/ydotool), `windows.py` (SendInput), `password_detect.py` |
 | `src/platform/__init__.py` | Platform detection, `get_config_dir()`, `get_model_dir()` |
 | `src/prediction/` | Prediction engines (see below) |
+| `src/glyphs.py` | Static symbol / emoji catalogue behind the Symbols & Emoji window |
 | `qml/Main.qml` | Root UI - title bar, keyboard rows, prediction bar, resize handles |
 | `qml/components/` | Reusable QML components (KeyButton, settings panels, etc.) |
 | `data/` | Static data: dictionaries, training corpus, keyboard layouts, vocab packs |
@@ -103,7 +91,7 @@ All in `src/prediction/`. Orchestrated by `hybrid_predictor.py`:
 | `vocabulary_pack.py` | Custom vocab pack import (no built-ins ship - see *Vocabulary Packs* section) |
 | `transformer_predictor.py` | Optional LLM re-ranking (disabled by default) |
 
-Deep-dive design docs for each algorithm: `docs/architecture/FUZZY_RECOGNITION.md` (spatial model + tunable constants), `docs/architecture/PPM.md` (variable-order character model + PPMD escape), `docs/architecture/HYBRID_MERGING.md` (merge weights + validation + capitalization), `docs/architecture/SWIPE_TYPING.md` (shape-matching swipe decoder).
+Deep-dive design docs for each algorithm: `docs/architecture/FUZZY_RECOGNITION.md` (spatial model + tunable constants), `docs/architecture/PPM.md` (variable-order character model + PPMD escape), `docs/architecture/HYBRID_MERGING.md` (merge weights + validation + capitalization).
 
 ## Short words in next-word predictions
 
@@ -179,7 +167,7 @@ Not gated on privacy mode, same rule as the insert path: privacy is about not *l
 ### Insertion path (Python only, no UI path today)
 `KeyboardBridge.insertSnippet(index)` types a snippet verbatim into the focused app. **Nothing in QML calls it** since the tile tap became a copy; it is kept because it works, is covered by tests, and is the reference for how a verbatim snippet insert has to behave. Read it before wiring any new path that types stored text.
 
-`KeyboardBridge.insertSnippet(index)` routes the value through `_release_sticky_modifiers()` then `_send_literal_text` (the same verbatim path swipe / predictions use; a held Shift would otherwise deliver the whole address in capitals). Snippets are full literal inserts, so unlike prediction pills there is **no** prefix matching, no autocorrect, and **no compat-mode BackSpace+retype** (that dance exists to replace a typed prefix, which a fresh insert doesn't have). Insertion is **not** blocked by privacy mode: privacy is about not *learning* from typing, and the user may need to drop their address into a sensitive form. After inserting, `_current_word` / predictions are cleared so the verbatim text (which may carry punctuation or newlines) can't corrupt the next prediction's prefix matching. `insertSnippet` is a no-op while edit mode is active (`_edit_mode_active`) so it can't fire while the user is editing a snippet field.
+`KeyboardBridge.insertSnippet(index)` routes the value through `_release_sticky_modifiers()` then `_send_literal_text` (the same verbatim path predictions use; a held Shift would otherwise deliver the whole address in capitals). Snippets are full literal inserts, so unlike prediction pills there is **no** prefix matching, no autocorrect, and **no compat-mode BackSpace+retype** (that dance exists to replace a typed prefix, which a fresh insert doesn't have). Insertion is **not** blocked by privacy mode: privacy is about not *learning* from typing, and the user may need to drop their address into a sensitive form. After inserting, `_current_word` / predictions are cleared so the verbatim text (which may carry punctuation or newlines) can't corrupt the next prediction's prefix matching. `insertSnippet` is a no-op while edit mode is active (`_edit_mode_active`) so it can't fire while the user is editing a snippet field.
 
 ### Floating window (NOT a Popup)
 `snippetsWindow` is a **separate top-level `Window`**, not a QML `Popup`. A `Popup` is clipped to its parent window's overlay, so it could never be dragged off the keyboard; a standalone `Window` floats anywhere on the desktop. It carries the same OSK flags as the main window (`Qt.Window | FramelessWindowHint | WindowStaysOnTopHint | WindowDoesNotAcceptFocus`). On Windows that Qt flag alone doesn't stop click-activation, so `keyboard_app.py::_wire_snippets_window` finds the window by `objectName: "snippetsWindow"` and re-applies `WS_EX_NOACTIVATE` (via the shared `_apply_windows_extended_styles`) on every `visibleChanged` (the native handle only exists once shown). Non-Windows is a no-op (X11/Wayland respect the Qt flag; macOS uses the app-wide Accessory policy). The header is a drag handle that moves the whole window freely with no clamp. The dragged position **persists across restarts** (`appSettings.savedSnippetsX/Y`, the same -1000000 sentinel and on-screen clamp as the main window's `savedWindowX/Y`, written once on drag release rather than on every motion event); first open on a fresh install centers it just above the keyboard. It used to reset every launch, which undid the one adjustment anyone makes to this window: dragging it clear of the field they are filling in.
@@ -234,17 +222,21 @@ Both features need the unbroken run of characters immediately before the cursor,
 
 When suppressed, three things are skipped together: the sent space, the space in `_context_buffer` (it mirrors the screen, and a phantom space breaks pill inserts), and the auto-capitalize (or `example.com` comes out `example.Com`). The auto-space-**off** path is deliberately byte-identical to before.
 
+**The other half of the auto-space is taking one back, and `"` cannot join the list that does it.** `_NO_SPACE_BEFORE` (`? ! . , ; : ) ] }`) is the set whose members backspace over an auto-space we inserted, and every one of them is a closer or a terminator. A quote is both: `he said, "hi."` wants the space kept before the first `"` and removed before the second, so adding it to the set would jam every opening quote against the word in front of it. `_closes_a_quotation` decides per keystroke on the parity of `"` in `_context_buffer`; odd means we are inside a quotation and this one closes it. A buffer truncated at 200 chars or cleared by an app switch reads as even and keeps the space, which is the safe way to be wrong: a stray space the user deletes beats one we deleted for them. Guarded by `tests/test_keyboard_bridge.py::TestTheClosingQuoteRemovesTheAutoSpace`, where each removal case is paired with the near-miss it must leave alone.
+
 **Structural rules are gated on structural punctuation.** The `@` and path rules fire for `.` and `:` only. A domain contains dots and colons and never a comma or a semicolon, so one typed after an address belongs to the sentence around it; firing for all four auto-spaced marks turned `owen@gmail.com, thanks` into `owen@gmail.com,thanks`. Guarded by `tests/test_text_patterns.py::TestAutoSpaceSurvivesProse::test_a_comma_after_an_address_is_prose`, paired with the inverse that the structural marks are still suppressed.
 
 **A bare digit run suppresses *provisionally*.** `3` and `42` are the same token, so `3` + `.` (a decimal) and `42` + `.` (a full stop) cannot be told apart when the dot lands. Suppressing outright corrupted prose (`the total is 42. Then` → `42.Then`, capital skipped too); not suppressing broke `3.14`. So the space is withheld and settled by the **next** character: a digit confirms the decimal, a letter proves prose and the withheld space (plus any capital it owed) is typed then, one keystroke late. `text_patterns.suppression_is_provisional` decides which suppressions qualify (a bare digit run and nothing else: `192.168.1` and `1,000` already carry a separator, and `@`/path/scheme rules stand on their own evidence); the bridge holds the owed punctuation in `_deferred_auto_space` and settles it in `_flush_deferred_space`.
 
-This is *not* a reintroduction of the rejected "guess from the following character" rule below, and the difference is the direction: that rule *withheld* a space on a guess, this one only ever *adds* one. Nothing typed is taken back, so the worst case is a space arriving a keystroke late rather than mangled text. The deferral is dropped, never delivered, by any special key (the user typed their own space, backspaced, or moved the caret) and by a context reset (the punctuation is no longer at the caret); the three verbatim insert paths flush it, because a pill, a snippet and a swiped word are all prose. Guarded by `tests/test_keyboard_bridge.py::TestTheDeferredSpaceAfterABareNumber`.
+This is *not* a reintroduction of the rejected "guess from the following character" rule below, and the difference is the direction: that rule *withheld* a space on a guess, this one only ever *adds* one. Nothing typed is taken back, so the worst case is a space arriving a keystroke late rather than mangled text. The deferral is dropped, never delivered, by any special key (the user typed their own space, backspaced, or moved the caret) and by a context reset (the punctuation is no longer at the caret); the verbatim insert paths flush it, because a pill and a snippet are both prose. Guarded by `tests/test_keyboard_bridge.py::TestTheDeferredSpaceAfterABareNumber`.
 
 ### Auto-capitalize is not a held Shift
 
 `_auto_capitalize_after_punctuation` arms **`_pending_auto_cap`**, never `_shift_active`. The distinction is load-bearing and was learned the hard way. Expressing it as a Shift looks equivalent (both uppercase the next letter) but `_send_key` builds its chord modifiers straight from `_shift_active`, so a sentence-ending period left every following chord poisoned: Enter became Shift+Enter (a newline in Slack rather than send), Ctrl+C became Ctrl+Shift+C, and arrows started extending a selection. It was also the one site in the file that set an `_*_active` flag with **no paired `hold_modifier()`**, so the bridge believed in a hold the OS never had, which is exactly the invariant `_without_held_modifiers` relies on to decide what to restore. `_pending_auto_cap` feeds the case computation in `_press_char`, `_update_layer` (so the keycaps show it) and `_display_cased` case 3 (so a next-word pill shows the capital it will insert, exactly as a held Shift does); it is spent by the next character, and dropped by a caret move or a context reset. Space deliberately does *not* clear it, because the word after the auto-space is the one the capital was meant for. Guarded by `tests/test_keyboard_bridge.py::TestAutoCapitalizeIsNotAHeldShift`.
 
-**Three things must spend it, and each was missed once.** (1) The **verbatim inserts** (`pressPrediction`, `insertSnippet`, `processSwipe`) each call `_consume_auto_cap`: a tapped pill is the next thing typed, so it takes the capital, and leaving the flag armed handed the same capital to a later unrelated character. (2) The **edit-mode branch** of `_press_char` deliberately does *not* consult it at all: the capital is owed to the app behind us (nothing typed in edit mode can arm one, the branch returns before the punctuation handling), and applying it there spent nothing, so after `hello.` every character typed in the prediction-edit popup or the snippets editor came out uppercase. (3) The spend at the end of `_press_char` is guarded on `consumed_auto_cap and not rearmed_auto_cap`. "Was one owed when this keystroke started" is not "did this keystroke arm one", and the `?` of `Wait!?` does both; on the snapshot alone it threw the new capital away. Note the parity trap when testing this: each mark alternately armed and cleared, so a three-dot ellipsis came out right by accident and proves nothing. Use even-length runs.
+**Three things must spend it, and each was missed once.** (1) The **verbatim inserts** (`pressPrediction`, `insertSnippet`) each call `_consume_auto_cap`: a tapped pill is the next thing typed, so it takes the capital, and leaving the flag armed handed the same capital to a later unrelated character. (2) The **edit-mode branch** of `_press_char` deliberately does *not* consult it at all: the capital is owed to the app behind us (nothing typed in edit mode can arm one, the branch returns before the punctuation handling), and applying it there spent nothing, so after `hello.` every character typed in the prediction-edit popup or the snippets editor came out uppercase. (3) The spend at the end of `_press_char` is guarded on `consumed_auto_cap and not rearmed_auto_cap`. "Was one owed when this keystroke started" is not "did this keystroke arm one", and the `?` of `Wait!?` does both; on the snapshot alone it threw the new capital away. Note the parity trap when testing this: each mark alternately armed and cleared, so a three-dot ellipsis came out right by accident and proves nothing. Use even-length runs.
+
+**And one class of character must *not* spend it: the quotes and brackets in `_CARRIES_AUTO_CAP` (`" ' ( ) [ ] { }`).** They can stand between a sentence boundary and the first letter of the sentence, and none of them can carry a capital, so spending one on them threw it away: `hi. "hello"` and `hi. (see below)` both came out lowercase, as did `he said "hi." Then`, where the closer sits on the other side of the same gap. Everything else still spends it, a **digit included**, since `hi. 5 apples` starts its sentence with the digit and there is no letter left owed a capital. Keep the set tight: a mark that only ever appears mid-word (`-`, `/`, `=`) would leave the flag armed on a keystroke that genuinely ended the case for it. Guarded by the three `passes_it_along` cases in `TestAutoCapitalizeIsNotAHeldShift`, each paired with a spend case (a letter, a digit) that fails if the carry is widened to everything.
 
 (Before this, the feature was inert: it set `_shift_active` and the auto-release block at the end of the same keystroke cleared it, so the toggle had no observable effect at all.)
 
@@ -384,12 +376,7 @@ Regression coverage: `tests/test_data_export.py::TestInspect::test_zip_slip_reje
 
 ## QML <-> Python Bridge Pattern
 
-QML calls Python via `@Slot` methods on `KeyboardBridge`. Python emits `Signal`s back to QML. Example flow:
-
-1. QML: `keyboard.pressKey("a")` -> calls `KeyboardBridge.pressKey()`
-2. Python: synthesizes keystroke, updates context, runs prediction
-3. Python: `self.predictionsChanged.emit(predictions)` -> Signal
-4. QML: binds to `keyboard.predictions` property, updates UI
+QML calls Python via `@Slot` methods on `KeyboardBridge`; Python emits `Signal`s back. The keystroke round trip is the one diagrammed under *Architecture Overview*, and it ends with `self.predictionsChanged.emit(predictions)`, which QML picks up as a binding on the `keyboard.predictions` property rather than as a callback.
 
 ## Caps Lock vs. Shift
 
@@ -405,7 +392,7 @@ The shifted *glyph* on a key (e.g. `!` on the `1` key) follows shift only - caps
 
 ### Caps Lock and the prediction bar
 
-When Caps Lock is on, the prediction pills also render uppercase. The pills must match what the user is typing *and* what the pill will insert when clicked - showing "hello" while the user has typed "HELL" and then inserting lowercase next to the uppercase prefix was the pre-fix bug. Implementation: `KeyboardBridge._display_cased()` uppercases the engine's output when `_caps_lock_active`, and every emit site (`_on_predictions_ready`, `_on_predictions_refined`, next-word-after-selection, `editPrediction`, swipe) routes through it. `toggleCapsLock` re-queries the engine so currently-visible pills flip case immediately - we can't just `.upper()` / `.lower()` the stored list in place because once "iPhone" becomes "IPHONE" the original casing is lost.
+When Caps Lock is on, the prediction pills also render uppercase. The pills must match what the user is typing *and* what the pill will insert when clicked - showing "hello" while the user has typed "HELL" and then inserting lowercase next to the uppercase prefix was the pre-fix bug. Implementation: `KeyboardBridge._display_cased()` uppercases the engine's output when `_caps_lock_active`, and every emit site (`_on_predictions_ready`, `_on_predictions_refined`, next-word-after-selection, `editPrediction`) routes through it. `toggleCapsLock` re-queries the engine so currently-visible pills flip case immediately - we can't just `.upper()` / `.lower()` the stored list in place because once "iPhone" becomes "IPHONE" the original casing is lost.
 
 ### Shift and the prediction bar
 
@@ -454,22 +441,18 @@ Right-click a prediction pill -> Edit opens a small popup with the word pre-fill
 
 If you add a new input source (e.g. a voice-dictation slot, another popup with its own TextField), the pattern is: set edit mode on open, listen to `editKeyTyped` / `editSpecialPressed`, clear edit mode on close. Don't try to route through Qt focus - `WS_EX_NOACTIVATE` / `WindowDoesNotAcceptFocus` prevent our window from holding OS focus, so physical keyboard input and synthesized input both go to whatever app was focused before we opened.
 
-## Swipe / Glide Typing
+## Removed: Swipe / Glide Typing
 
-Drag the mouse across letters to type a whole word in one gesture, like Gboard. Off by default; toggle in *Settings -> Smart Typing -> Suggestions -> Swipe Typing*. Design doc: `docs/architecture/SWIPE_TYPING.md`.
+Swipe typing (drag across letters to type a word in one gesture) was removed; issue #39 carries the reasoning. It is not a candidate for a quiet reintroduction.
 
-| File | Role |
-|------|------|
-| `src/prediction/swipe_recognizer.py` | `SwipeRecognizer` - simplified SHARK^2 shape matching + frequency prior |
-| `src/keyboard_bridge.py` | `setSwipeEnabled`, `setSwipeLayout`, `processSwipe` slots |
-| `qml/components/SwipeOverlay.qml` | Mouse interceptor + path canvas, hidden when off |
-| `qml/Main.qml` | `charKeyRegistry` + `tappableKeyRegistry`, `pushSwipeLayout()` (overlay-local key centres) |
+What went with it: `src/prediction/swipe_recognizer.py`, `qml/components/SwipeOverlay.qml`, `KeyboardBridge.setSwipeEnabled` / `setSwipeLayout` / `processSwipe`, the `charKeyRegistry` / `tappableKeyRegistry` pair plus `registerCharKey` / `pushSwipeLayout` in `Main.qml`, the `registerFn` plumbing in `NumberRow.qml` / `FunctionRow.qml`, `KeyButton.externalPress` / `externalRelease` / `externalHoldPress`, the settings toggle, and `docs/architecture/SWIPE_TYPING.md`. All of it is recoverable in full from the commit before the removal.
 
-When the toggle is on, a transparent overlay covers the keyboard rows and intercepts all gestures. Press -> drag past 60 px -> swipe; press -> release on a key -> tap fall-through. The recogniser pre-filters by start/end key, then scores remaining candidates with `log(freq+1) - 8 * mean_normalized_distance`. Top result is typed via `send_text` + space; alternates appear in the prediction bar so the user can repick.
+Two things worth knowing before any future gesture feature, because both were learned expensively:
 
-**Two registries, and the split is load-bearing.** `registerCharKey` fills both: `charKeyRegistry` (single-character keys only) is the recogniser's key-centre map, and `tappableKeyRegistry` (every key under the overlay) is hit testing. One list served both until swipe typing was found to make Backspace, Delete, Tab, Enter, the arrows, the modifiers, `?123` and the Number Row's Esc **dead taps** (issue #15): the overlay took every press, then resolved it against a list that structurally could not contain them. Widening the char filter fixes the taps and corrupts swipe decoding, so **never** do that; give each consumer its own list. Hit testing also skips `visible: false` items, because a KeyButton in a hidden panel still registers and carries stale geometry.
+- **The overlay was the cause of issue #15, not merely where it surfaced.** It covered the keyboard rows and took *every* press inside its bounds, then resolved it against a registry, so any key missing from that registry was a dead tap. That bill was paid three separate times (the main grid, the Number Row's Esc, every F-key), and every new control near the grid had to remember it. An interceptor that owns every press is the design flaw; the registry was the patch.
+- **The two registries were not duplication.** `charKeyRegistry` held the recogniser's key centres, single characters only, because a "Backspace" centre is a phantom letter in every shape match; `tappableKeyRegistry` held every key for hit testing. Collapsing them into one list is what caused #15, and widening the char filter to fix the taps corrupts decoding instead. Any replacement meets the same fork.
 
-**Specials activate on press and hold; characters activate on release.** A gesture starting on a non-character key can never be a swipe, so activating immediately is safe and is what keeps **auto-repeat** working (holding Backspace to delete a word). Characters must wait for release because until the gesture ends it is genuinely ambiguous. The overlay drives keys through `KeyButton.externalPress()` / `externalRelease()`, which share the debounce / visual / activation / repeat code with the button's own MouseArea, so a key behaves identically whether or not swipe is on. Guarded by `tests/test_qml_swipe_overlay.py`.
+The premise to re-examine first is the one this feature skipped: a sustained, precise drag is the single gesture a mouse-driven user with imprecise motor control cannot reliably make, which is why every other input path here is a click.
 
 ## Sticky Modifiers (Shift, Ctrl, Alt, Win)
 
@@ -495,9 +478,9 @@ The one exception to "held at the OS level": on Linux, `LinuxKeySynthesizer.hold
 
 ### Right-Click to Lock (persistent hold)
 
-**Right-clicking** Shift / Ctrl / Alt / Win **locks** it held down: the modifier stays held at the OS level and is **exempt from the per-keystroke auto-release**, so the user can fire several combos (Ctrl+C then Ctrl+V) or hold Shift across a whole selection without re-tapping. This is the accessibility answer to "hold the key down" for a mouse-driven OSK. Right-click again — or plain left-tap — to release. **Caps Lock is not lockable** (it's already a persistent toggle). Right-click-to-lock on a modifier is **independent of the "Right-Click for Shifted Character" setting** (a modifier has no shifted variant, and the whole point of the gesture is holding it).
+**Right-clicking** Shift / Ctrl / Alt / Win **locks** it held down: the modifier stays held at the OS level and is **exempt from the per-keystroke auto-release**, so the user can fire several combos (Ctrl+C then Ctrl+V) or hold Shift across a whole selection without re-tapping. This is the accessibility answer to "hold the key down" for a mouse-driven OSK. Right-click again, or plain left-tap, to release. **Caps Lock is not lockable** (it's already a persistent toggle). Right-click-to-lock on a modifier is **independent of the "Right-Click for Shifted Character" setting** (a modifier has no shifted variant, and the whole point of the gesture is holding it).
 
-State model: each modifier keeps its existing `_*_active` (held-at-OS, drives the highlight + chord logic) plus a new `_*_locked` flag. **Locked always implies active.** `lockModifier(name)` (bridge slot, called from QML `onKeyRightPressed` for `type === "modifier"` keys) toggles the lock: locking sets active+locked and holds at OS (only if not already held, so locking an already-sticky-active modifier doesn't re-send a key-down); unlocking clears both and releases. The sticky `toggleX()` paths call `_clear_lock(name)` when they turn a modifier off, so a left-tap on a locked key also clears the lock (easy way out). **Every** auto-release site is guarded with `and not self._*_locked` — there are four: the edit-mode intercept, the Ctrl/Alt/Win chord branch, the char-path end (`_press_char`), and the special-key end (`pressSpecialKey`, alongside the existing nav-key `keep_selection_modifiers` exception). Miss one and a locked modifier would silently drop after a keystroke. `shutdown()` releases locked modifiers too (and clears the flags) so quitting never pins one desktop-wide.
+State model: each modifier keeps its existing `_*_active` (held-at-OS, drives the highlight + chord logic) plus a new `_*_locked` flag. **Locked always implies active.** `lockModifier(name)` (bridge slot, called from QML `onKeyRightPressed` for `type === "modifier"` keys) toggles the lock: locking sets active+locked and holds at OS (only if not already held, so locking an already-sticky-active modifier doesn't re-send a key-down); unlocking clears both and releases. The sticky `toggleX()` paths call `_clear_lock(name)` when they turn a modifier off, so a left-tap on a locked key also clears the lock (easy way out). **Every** auto-release site is guarded with `and not self._*_locked`: there are four: the edit-mode intercept, the Ctrl/Alt/Win chord branch, the char-path end (`_press_char`), and the special-key end (`pressSpecialKey`, alongside the existing nav-key `keep_selection_modifiers` exception). Miss one and a locked modifier would silently drop after a keystroke. `shutdown()` releases locked modifiers too (and clears the flags) so quitting never pins one desktop-wide.
 
 QML surfaces the lock via `shiftLocked` / `ctrlLocked` / `altLocked` / `winLocked` bridge properties (+ `*LockedChanged` signals), bound in `Main.qml` and mapped per `kd.stateKey` onto `KeyButton.isLocked`. Because locked implies active, a locked key already carries the accent fill a sticky one-shot has; the lock adds a **solid 3 px bar along the bottom edge** (`lockBar` in `KeyButton.qml`) on top of it, so the two states differ by one unmissable mark rather than by a whole second colour scheme. The bar is inked with `KeyButton._onFillColor`, the shared luminance rule that also picks the key label's colour on an active/pressed fill: dark on a bright accent, white on a dark one. Nine themes ship, several with a pale accent (Blackboard, Spaceship) and one light outright (Typewriter), so any fixed colour is unreadable on roughly half of them. It is inset horizontally past the keycap's corner radius because `clip: true` clips to the bounding rect, not the rounded shape, so a full-bleed bar pokes out past the curve.
 
@@ -509,7 +492,7 @@ Three things about that are load-bearing. **It goes through `ctx.path` on the `C
 
 Guarded by `tests/test_qml_prediction_bar.py::TestTheClearButtonIcon`, which is worth reading before adding an assertion here, because **two successive metrics were wrong**. The ink bounding box is centred in the *glyph* version too, to within half a pixel, since the tail hanging off one side cancels the ring being pushed to the other, so a bbox assertion alone would have passed against the bug it was written for. A radial-spread metric replaced it and did separate them (glyph 0.29, hand-drawn arc 0.09, bar 0.15) but had to go as well: Feather's arrow sits outside the ring by design and scores 0.147, and a test passing by three thousandths is not a test. What is left is the pair that is honest about what the code guarantees: the icon is *drawn* rather than typeset (this is what catches the glyph), and it is grossly centred within 3 px (this catches a dropped transform, verified at -8 px). The one-unit optical correction is deliberately not pinned: asserting it across renderers buys a flake, not a guard.
 
-**Synth invariant (load-bearing — the lock is worthless without it).** Keeping the bridge state "held" isn't enough; the OS modifier must physically stay down. `hold_modifier` puts it down, but `send_key`/`replace_text` used to *wrap* the action key with a modifier down+up, and that trailing key-up silently released a held modifier after the first keystroke (mouse Ctrl+click / Shift+drag / Alt+Tab then broke even though the key still showed it held). Fix: **`WindowsKeySynthesizer.send_key` and `replace_text` skip wrapping any modifier that is already physically held** (`_modifier_already_held` → `GetAsyncKeyState`), relying on the standing hold instead. This mirrors the pre-existing `shift_already_held` guard in `_make_char_scancode_events`. Any new synth path that wraps a modifier around a keystroke must apply the same guard, or a locked (or sticky) modifier will drop. Mirrored in C++ (`WindowsKeySynthesizer::modifierAlreadyHeld`, used by `sendKey` + `replaceText`). Covered by `tests/test_platform.py::TestWindowsSendKeyPunctuationChord::test_already_held_modifier_is_not_wrapped` and `TestWindowsReplaceText::test_held_shift_not_wrapped_in_selection`.
+**Synth invariant (load-bearing: the lock is worthless without it).** Keeping the bridge state "held" isn't enough; the OS modifier must physically stay down. `hold_modifier` puts it down, but `send_key`/`replace_text` used to *wrap* the action key with a modifier down+up, and that trailing key-up silently released a held modifier after the first keystroke (mouse Ctrl+click / Shift+drag / Alt+Tab then broke even though the key still showed it held). Fix: **`WindowsKeySynthesizer.send_key` and `replace_text` skip wrapping any modifier that is already physically held** (`_modifier_already_held` → `GetAsyncKeyState`), relying on the standing hold instead. This mirrors the pre-existing `shift_already_held` guard in `_make_char_scancode_events`. Any new synth path that wraps a modifier around a keystroke must apply the same guard, or a locked (or sticky) modifier will drop. Mirrored in C++ (`WindowsKeySynthesizer::modifierAlreadyHeld`, used by `sendKey` + `replaceText`). Covered by `tests/test_platform.py::TestWindowsSendKeyPunctuationChord::test_already_held_modifier_is_not_wrapped` and `TestWindowsReplaceText::test_held_shift_not_wrapped_in_selection`.
 
 **Parity**: mirrored 1:1 in C++ (`KeyboardBridge::lockModifier` / `clearLock`, the `m_*Locked` members, the guarded `releaseStickyAll()` + `pressSpecialKey` + edit-mode blocks, and the `*Locked` Q_PROPERTY/signals). Bridge behaviour is covered by `tests/test_keyboard_bridge.py::TestModifierLock` on the Python side.
 
@@ -529,7 +512,7 @@ The parent (`Main.qml`'s settings popup window) calls `settingsPanel.resetToHome
 | | Keyboard Layout | qwerty / dvorak / colemak picker (compact variants are filtered out - see *Compact View*) |
 | | Theme | 9-theme color picker |
 | | Sound & Opacity | Key click sound, opacity slider |
-| **Smart Typing** | Suggestions | Show suggestions, auto-space, intelligent spacing, auto-cap, swipe, max count |
+| **Smart Typing** | Suggestions | Show suggestions, auto-space, intelligent spacing, auto-cap, max count |
 | | Suggestion Engine | Merge strategy 4-card picker (rank / rrf / linear / loglinear) |
 | | Input | Right-click shift, key preview popup, Compatibility Mode picker, repeat delay & interval |
 | **Your Language Model** | (top button) | Open Dashboard -> opens ModelVisualization |
@@ -585,8 +568,6 @@ python -m pytest -k "fuzzy"         # Fuzzy recognizer tests
 python -m pytest -k "property"      # Property-based suites only
 ```
 
-Linting: `ruff check src/`, type checking: `mypy src/`
-
 ### Property-based tests
 
 `tests/test_property_import_hardening.py` and
@@ -631,7 +612,7 @@ Determinism is load-bearing: the `alpha-osk` profile in `tests/conftest.py`
 sets `database=None` and `derandomize=True`, so these cannot pass locally
 and fail on CI from a stale `.hypothesis` corpus. Use
 `--hypothesis-profile=alpha-osk-fast` (25 examples) while iterating. **Don't
-add `assume()` to filter a generated value down to a narrow case** — it
+add `assume()` to filter a generated value down to a narrow case**: it
 throws away most examples and trips the `filter_too_much` health check;
 build a strategy that generates the interesting shape directly, and branch
 on the predicate instead of discarding.
@@ -647,125 +628,43 @@ on the predicate instead of discarding.
 
 ### Pre-push check
 
-Run `python check.py` before `git push` to catch lint / format / type /
-test failures locally instead of waiting for CI's red X (the same gates
-GitHub Actions runs).  Default mode skips coverage tracking
-(~60 s); add `--full` to include the `--cov-fail-under=60` gate
-(~110 s, matches CI exactly).  **`python check.py --install-hook`** writes
-`.git/hooks/pre-push` so it runs on `git push` instead of from memory;
-`git push --no-verify` is the escape hatch.  Hooks are not version
-controlled, so a fresh clone has to run that once.
+`python check.py` runs the same gates CI does (lint, format, mypy under both
+platforms, pytest) in ~60 s; `--full` adds the `--cov-fail-under=60` coverage
+gate (~110 s, full CI parity). `python check.py --install-hook` wires it to
+`git push` so it happens instead of being remembered; `git push --no-verify`
+is the escape hatch. Hooks are not version controlled, so a fresh clone runs
+that once.
 
-**The suite is sharded with `pytest-xdist` (`-n auto`), and that is what
-makes the gate a minute instead of twenty-five.**  There is deliberately
-**no fast-subset tier**, and the reason is worth keeping: the three
-static steps cost ~5 s between them, so the gate *was* pytest, and pytest
-was slow for a reason unrelated to how many tests there are.  Building a
-`KeyboardBridge` cost ~1 s (20k-word dictionary + SymSpell deletion index
-+ PPM), the `bridge` fixture is function-scoped, and there are ~1300
-tests: per-process setup repeated 1300 times, which no amount of clever
-test selection touches and which shards almost linearly.  Half of that
-per-bridge second was also a genuine bug: `HybridPredictor.__init__`
-called `set_frequencies` twice, and the first call's SymSpell index was
-discarded four lines later by the second, on every app launch as well as
-every test.  If the gate creeps back up, **measure before tiering**;
-trading away coverage on the one gate that runs before code leaves the
-machine is the last resort, not the first.
+The suite is sharded on two different axes: `pytest-xdist` (`-n auto`) across
+one machine's cores, and `--shard-id` / `--shard-count` across CI machines
+(the matrix is `os x shard[0..3]`, eight jobs, each still `-n auto`). That is
+what makes the gate a minute rather than twenty-five, and CI fourteen minutes
+rather than twenty-six. Measurements, the per-choice reasoning, and the bugs
+each one fixed: `docs/build/CI.md`. The rules that outlive the reasoning:
 
-Sharding needed one test-side fix, and it is the kind that recurs: the
-four headless QML modules each persist through a QML `Settings {}`
-element, which resolves to a *process-external* store (a key under HKCU
-on Windows).  Three of them defined the same `TEST_ORG` literal
-independently and the fourth imported it, so under `-n auto` several
-workers shared one scope and called `.clear()` on each other mid-test.
-That surfaced as "the window width drifted across restarts: [1160, 940,
-1160]", indistinguishable from the persistence bug those tests exist to
-catch. The scope now lives once in `tests/qt_settings_scope.py`, suffixed
-with `PYTEST_XDIST_WORKER`. Any new test touching QSettings, the
-registry, a fixed temp path, or any other machine-global resource has to
-key it per worker the same way.
-
-**CI shards on two axes, and they are different axes.** `-n auto`
-spreads the suite over one machine's cores; `--shard-id N
---shard-count M` spreads it over several machines. CI does both.
-
-Across cores came first, and the argument for leaving it serial was
-that CI is the release gate and its runners have far fewer cores. The
-cores are real, 4 against 16, but the argument was wrong about where
-the time goes: the run is dominated by per-test setup repeated ~1600
-times, which shards almost linearly whatever the core count. Serial it
-took **26 minutes**.
-
-Across machines came second, because 4 cores is still 4 cores: after
-`-n auto`, ubuntu took **14m30s** and windows **19m05s**, with every
-push waiting on the slower. Dependency install was 15 s and 52 s
-respectively and lint / typecheck / OSV are all under 30 s, so there
-was nothing else to cut. The matrix is now `os x shard[0..3]`, eight
-jobs, each still `-n auto` over its own cores.
-
-The split lives in `tests/conftest.py::pytest_collection_modifyitems`:
-a test belongs to shard `crc32(nodeid) % count`. Deliberately not
-`pytest-split`, which wants a recorded-durations file that goes stale
-silently and is one more exactly-pinned, CVE-scanned dependency; at
-1600 tests over 4 shards a hash balances to within about 6% (measured:
-377 / 389 / 421 / 421) with no moving parts. **The hash cannot be
-`hash()`**: CPython salts string hashing per process, every xdist
-worker inside a shard is its own process, and workers disagreeing about
-which tests are theirs does not fail loudly, it runs some tests twice
-and others never.
-
-**`--cov-fail-under` moved out of the test jobs**, because a shard
-measures roughly a quarter of the lines and every shard would fail the
-gate. Each shard uploads its `.coverage.<os>.<shard>` and a separate
-`coverage` job combines and applies the threshold. Two things about it
-are load-bearing: `include-hidden-files: true` on the upload (the file
-starts with a dot, and upload-artifact has excluded hidden files since
-v4.4, so without it every upload is empty and the gate silently stops
-gating), and the combine is **per OS**, since a coverage data file
-records absolute source paths and the two runners disagree about
-those. Per OS also preserves what the unsharded jobs promised: each
-platform had to clear 60% on its own, and the `if sys.platform ==
-"win32"` bodies are measured on exactly one of the two.
-
-`fail-fast: false` on the matrix: the default cancelled every sibling
-on the first red, so one flaky ubuntu test took the windows job down
-with it and the run reported two failures where there was one, with
-nothing to say whether windows would have passed.
-
-**Branch protection requires the `Tests` job, not the shards.** Required
-status checks are configured by *name*, in the repo settings rather
-than in the workflow file, so naming the shards there would mean
-re-configuring protection on every change to the shard count. A stale
-entry does not fail loudly: the named check never reports and every PR
-blocks for ever on something that cannot go green, which is what
-sharding did to the old `Test (ubuntu-latest)` / `Test (windows-latest)`
-entries. `tests-passed` is a one-step job that asserts
-`needs.test.result` and `needs.coverage.result`, and it carries
-`if: always()` because a job whose dependency failed is *skipped*, and
-a skipped required check reads as pending rather than red: without it
-the gate goes quiet exactly when it should be loud. The required set is
-now Lint, Type Check, Tests, OSV Scanner.
-
-The workflow also sets `concurrency: group: ci-${{ github.ref }}` with
-`cancel-in-progress: true`, so a new push supersedes the run it replaces
-rather than both finishing. A cancelled intermediate commit is the
-intended outcome: what has to be green is the tip.
-
-`mypy` runs **twice**, under `--platform linux` and `--platform win32`,
-and CI mirrors both.  Neither covers the other: linux is the runner's
-platform, and win32 is the only pass that type-checks the
-`if sys.platform == "win32"` bodies, which mypy otherwise prunes as
-unreachable.  On the linux pass alone, a deliberate `int = "str"` planted
-inside `_window_class_name`'s Windows branch was invisible.
-
-The `format` step is `ruff format --check src/ tests/`, and it is a
-separate gate from `ruff` because `ruff check` does not look at layout.
-Fix a failure with `ruff format src/ tests/` rather than by hand.  The
-`ruff-format` hook in `.pre-commit-config.yaml` only helps contributors
-who ran `pre-commit install`, which is why the tree had drifted in 46 of
-57 files before the gate existed. The hook is pinned to a commit SHA
-matching CI's `ruff==0.16.2`, so a contributor's local `--fix` pass and
-CI never disagree on a rule version.
+- **Any test touching QSettings, the registry, a fixed temp path, or any other
+  machine-global resource has to key it per xdist worker**, through
+  `tests/qt_settings_scope.py` (suffixed with `PYTEST_XDIST_WORKER`). Workers
+  sharing one scope call `.clear()` on each other mid-test, and it surfaces as
+  exactly the persistence bug those tests exist to catch, not as an obvious
+  crash.
+- **The shard hash cannot be `hash()`.** CPython salts string hashing per
+  process, so workers would disagree about which tests are theirs, which does
+  not fail loudly: it runs some tests twice and others never. It is
+  `crc32(nodeid) % count`, in `tests/conftest.py::pytest_collection_modifyitems`.
+- **Branch protection requires the `Tests` job, not the shards.** Required
+  checks are configured by name in the repo settings, so naming shards there
+  means reconfiguring protection on every change to the shard count, and a
+  stale entry blocks every PR for ever on a check that can never report.
+- **`--cov-fail-under` belongs to the separate `coverage` job**, not the test
+  jobs: a shard measures roughly a quarter of the lines. Its artifact upload
+  needs `include-hidden-files: true`, or every upload is empty and the gate
+  silently stops gating.
+- **There is deliberately no fast-subset tier.** The static steps cost ~5 s
+  between them, so the gate is pytest, and pytest is dominated by per-test
+  setup rather than test count. If the gate creeps back up, measure before
+  tiering: coverage on the one gate that runs before code leaves the machine
+  is the last thing to trade away.
 
 ## Word Suppression and Boosting
 
@@ -856,7 +755,7 @@ Two implementation notes on (4), both load-bearing. **Clicks on our own window a
 
 `_check_caret_moved` carries two guards, and both matter:
 
-- **Typing moves the caret too.** `_keystroke_since_poll` is cleared on each poll, so a move we caused is never mistaken for one the user made. It is set in the bridge's synthesizer wrappers (`_send_key` / `_send_text` / `_replace_text`), **not** at the keystroke entry points: a tapped pill, a snippet and a swiped word all type without going through `_press_char`, so keying it off the entry points made this poll read our own insert as the user clicking elsewhere and tear down the context, and the freshly emitted next-word pills, within 250 ms of producing them. Setting it at the synth layer covers any future insert path by construction. Guarded by `TestCaretMoveClearsContext::test_our_own_inserts_do_not_trigger_it`.
+- **Typing moves the caret too.** `_keystroke_since_poll` is cleared on each poll, so a move we caused is never mistaken for one the user made. It is set in the bridge's synthesizer wrappers (`_send_key` / `_send_text` / `_replace_text`), **not** at the keystroke entry points: a tapped pill and a snippet both type without going through `_press_char`, so keying it off the entry points made this poll read our own insert as the user clicking elsewhere and tear down the context, and the freshly emitted next-word pills, within 250 ms of producing them. Setting it at the synth layer covers any future insert path by construction. Guarded by `TestCaretMoveClearsContext::test_our_own_inserts_do_not_trigger_it`.
 - **Only between words** (`_current_word` must be empty). A reset mid-word is the dangerous direction: it clears `_current_word` while the partial word is still on screen, so the next pill tap inserts the whole word beside it, which is the "backspacbackspaces" duplication the rehydrate logic exists to prevent. Scrolling also drags the caret rectangle across the screen without the caret moving in the text, and that is the false positive most likely to land mid-word. Waiting for a word boundary costs the mid-word case, where a stale context matters least because the user is about to finish the word anyway. **The outside-click signal (4) no longer shares this guard**: there the mid-word case is the common one and the caret-neutral false positive is rare, so the trade lands the other way round. Don't re-unify them.
 
 **`resetContext` (the clear-context ring) delegates to `_reset_typing_context` rather than clearing the same fields itself.** They were two hand-written copies of one field list and had drifted in *both* directions: the ring cleared `_learned_raw_token` and the shared reset did not, while the shared reset cleared `_pending_auto_cap` and the ring did not, so typing `hello.` and tapping the ring left a capital owed and the next character came out uppercase in a context the user had just told the keyboard to forget. That is the parallel-blocks failure this file documents for sticky-modifier release, and the fix is the one prescribed there: one method, every caller through it. Guarded by `TestTheClearContextRingClearsEverything`.
@@ -920,134 +819,73 @@ The `StatBox` component grows its background Rectangle from `contentCol.implicit
 
 The earlier composite Prediction Quality Score (0-100, weighted savings + hit rate + rank + low-correction) was removed because the number wasn't actionable: a user can act on "you've saved 4.2 hours" but a "73/100" composite hides which lever moved. Don't reintroduce the composite as a primary surface; if you need a single internal scoring number for ranking strategy comparisons, compute it ad-hoc in tests rather than baking it back into `get_session_stats`.
 
-`top_pick_count` is still computed and persisted (incremented inside `record_prediction_selected` only when `rank == 1`) and surfaced as `alltimeTopPickRate` for the Model Visualization Dashboard. It was briefly the subtext on the Predictions Used tile but reads "0%" for any user upgrading from a prior build (the counter didn't exist then), which masked real usage.
-
-`top_pick_count` is incremented inside `record_prediction_selected` only when `rank == 1`. The bridge already passes a 1-based rank in `pressPrediction`, so no caller-side change is needed when adding new prediction surfaces. They just need to call `record_prediction_selected` with the right rank.
+`top_pick_count` is still computed and persisted, incremented inside `record_prediction_selected` only when `rank == 1`, and surfaced as `alltimeTopPickRate` for the Model Visualization Dashboard. It was briefly the subtext on the Predictions Used tile but reads "0%" for any user upgrading from a prior build (the counter didn't exist then), which masked real usage. The bridge already passes a 1-based rank in `pressPrediction`, so a new prediction surface needs no caller-side change: it just has to call `record_prediction_selected` with the right rank.
 
 ## Prediction & Autocorrect - Architecture Notes
 
-Full notes in **`docs/architecture/PREDICTION_NOTES.md`** (the "unified system" framing, fragment filter + repetition gate, autocorrect thresholds, reinforcement-on-click, backspace-as-negative-signal, the prioritized future-work gaps, and reference implementations). Per-algorithm deep dives: `FUZZY_RECOGNITION.md`, `PPM.md`, `HYBRID_MERGING.md`, `SWIPE_TYPING.md`.
+Full notes in **`docs/architecture/PREDICTION_NOTES.md`** (the "unified system" framing, fragment filter + repetition gate, autocorrect thresholds, reinforcement-on-click, backspace-as-negative-signal, the prioritized future-work gaps, and reference implementations). Per-algorithm deep dives: `FUZZY_RECOGNITION.md`, `PPM.md`, `HYBRID_MERGING.md`.
 
 Load-bearing defaults to keep in mind: **space-time autocorrect is OFF by default** (`KeyboardBridge._autocorrect_enabled = False` - corrections surface as pills, never silent overwrites); the autocorrect gate skips typings under 3 chars and runs an absolute + relative threshold so deliberate typings ("thru", "lol") survive; n-gram scoring is linear interpolation in probability space (lambda = 0.5/0.3/0.2); unknown words promote into `user_vocab` only after 3 sightings (pill clicks gated the same way).
 
 ## Compact View
 
 A denser 13x4 keyboard for small screens. Off by default; toggle in *Settings ->
-Appearance -> Panels -> Compact View*. Design doc + measurements:
+Appearance -> Panels -> Compact View*. The design, the measurements behind it,
+and the full rationale for every rule below live in
 `docs/architecture/COMPACT_VIEW.md`.
 
-Load-bearing facts:
+Load-bearing rules:
 
 - **Every row in a compact layout must total the same unit count** (13.0 for
   `qwerty-compact`). `Main.qml` centres any narrower row, so an unequal row
   brings back the exact side gutters this view exists to remove. Enforced by
   `tests/test_layouts.py::TestCompactLayout::test_every_row_is_exactly_13_units`.
-- **Layers are a QML-side view concept - the backends never see them.** Rows may
-  carry a `"layer"` field; `Main.qml` filters `layoutRows` into `visibleRows` by
-  `root.activeLayer`. Rows *without* a `layer` field always render, which is what
-  keeps the full-size layouts working. A `"type": "layer"` key sets
-  `activeLayer`; it deliberately does **not** call `keyboard.setLayout()` (that
-  would persist as the user's layout preference and make `getCurrentLayout()`
-  report the symbol layer). `activeLayer` resets to `"base"` on every layout
-  change - stranding the user on a `sym` layer the next layout doesn't define
-  would render an empty keyboard.
-- **Because it's data + QML only, it needed zero backend work on either Python
-  or C++.** Don't "port" it; both backends get it from the shared `qml/` +
-  `data/` contract.
-- **`totalKeyUnits` is now derived, not hardcoded.** `_widestRow` in `Main.qml`
-  computes the widest visible row's units + gap count. Full-size layouts resolve
-  to exactly the historical 15.5u / 14 gaps, so the default 940 px window is
-  unchanged. Don't reintroduce the constant.
-- **Compact is orthogonal to letter arrangement.** `currentLayout` stays
-  qwerty/dvorak/colemak; `resolveLayoutId()` combines it with the `compactView`
-  bool into `<layout>-compact`. A layout with no compact variant falls back to
-  full size, so the toggle is always safe. Adding compact Dvorak = drop
-  `data/layouts/dvorak-compact.json` in place, no code change.
-- **The nav column reads Home / PgUp / PgDn / End top to bottom** (a scroll
-  ladder: top, page up, page down, bottom). Owen asked for Home above PgUp.
-  Pinned by `test_layouts.py::TestCompactLayout::test_nav_column_reads_top_to_bottom`.
-- **Del sits on the base layer, Esc on `?123`.** A 13u row has no spare unit, so
-  the two traded places; Esc was the only base-layer key not in the protected
-  "never behind a hop" set. Don't swap them back without reading the rationale
-  in `docs/architecture/COMPACT_VIEW.md`. The Number Row panel (below) puts a
-  second Esc back at the top-left; that duplicate is deliberate, so `?123`
-  stays the fallback for any future layout that shows the compact grid without
-  the panel.
-- **`:` has its own key on `?123` row 3**, in the slot `^` used to hold. Row 2
-  already carried `;`→`:`, but a shifted variant is invisible (the keycap reads
-  `;`), so the layer read as having no colon.
-- **The symbol pages carry no Shift key; Shift's slot switches to a second
-  page (`=\<`), the phone convention.** Shift on `?123` used to re-render row 1
-  as `! @ # $ % ^ & * ( )` while row 3 already showed `! @ # $ % : & ( )`
-  permanently: nine keys on screen saying the same thing as another key on
-  screen. Making the shift-position key a page switch means every glyph Shift
-  used to reach has a key of its own, so the overlap is *structurally
-  impossible* rather than merely absent. `sym2` holds what `?123` lacks:
-  `~ ^ * _ + { } | < >`, then maths (`° × ÷ ± ≈ ≠ ≤ ≥`), then currency and
-  legal (`€ £ ¥ ¢ § • © ® ™` - the bullet sits in the pilcrow's slot; it was
-  briefly on the bottom row, where it displaced the period every other layer
-  has there). All three layers are 13.0u with matching key counts
-  (12/13/12/11), so hopping pages never resizes a key. **The bottom row and
-  the right-hand nav column are byte-identical on every layer**, and the tests
-  that guard that derive the layer list from the file rather than naming
-  base/sym: written against a hardcoded pair they were blind to `sym2`, which
-  is how the bullet shipped green.
-  **The `shifted` fields stay on the symbol keys** even though no Shift key can
-  reach them: right-click still types the shifted variant, and that is a
-  bonus rather than a duplicate, because right-click output is never
-  displayed. **`Main.qml`'s layer branch calls the idempotent
-  `keyboard.releaseShift()` on every switch** (never
-  `if (shiftOn) toggleShift()` - `root.shiftOn` is a mirror kept alive by
-  signal delivery, not a live binding, so a flip could turn Shift *on* here)
-  and that is load-bearing: the modifier is held at the OS level, so a Shift
-  carried in from the letters page would make `1` emit `!` while the keycap
-  still read `1`, and the pages have no Shift key to clear it from. Caps is
-  left alone (it only affects letters). Guarded by
-  `tests/test_layouts.py::TestNoDuplicateGlyphsWithinALayer` (in particular
-  `test_shifted_variants_never_duplicate_a_visible_key`, which states the
-  property rather than the fix, so it catches an equivalent overlap on any
-  layer that keeps a Shift key) and
-  `tests/test_qml_compact_view.py::TestSecondSymbolPage`.
-- **Esc, Tab, Shift, Backspace and Del are accent-filled on the compact layouts**
-  (`"style": "accent"` in the layout JSON, resolved by `root.accentKeyColor` in
-  `Main.qml`). The compact grid is uniform, so unlike the full-size layouts
-  there are no size cues to tell the editing keys apart from the letters, and
-  they have to be findable by colour. The fill is a **wash of the accent over
-  the theme's key colour, not the raw accent**: three themes have a pale accent
-  (Blackboard `#ffffaa`, Spaceship `#00ff9f`) and Typewriter is a light theme
-  with near-black text, so a saturated fill would destroy the label contrast.
-  Same reason Enter is a muted `#2a5a2a`. **The wash strength is derived, not
-  fixed**: a flat 35% was measured against all nine themes and dropped the
-  label below WCAG AA on five of them (Blackboard 6.19:1 -> 2.66:1, Vaporwave
-  6.17 -> 2.97, Forest 7.53 -> 3.33, Spaceship 10.37 -> 3.85, Ocean 6.96 ->
-  4.44), which is the worst place to lose contrast because these are the keys
-  the style exists to make findable, and Forest could not be rescued by
-  swapping the label to black or white either (best case 4.37). So
-  `root.accentWashFor()` walks the alpha down from 0.35 until the theme's own
-  `textColor` clears 4.5:1. **Don't reintroduce a constant here.** Accent keys
-  also take an accent-coloured border, which carries the cue on the themes
-  where the wash has to back off to 0.12-0.21; a border sits beside the label
-  rather than behind it, so it costs no contrast. Full-size layouts are
-  deliberately untouched. Pinned by
-  `tests/test_layouts.py::TestCompactEditingKeysAreAccented` (which keys) and
-  `tests/test_qml_compact_view.py::TestAccentKeysStayReadable` (the contrast
-  floor, plus the inverse test that the wash is still visible, so "stop
-  tinting" cannot pass as a fix).
+- **Layers are a QML-side view concept and the backends never see them.** Rows
+  carry an optional `"layer"` field and rows without one always render, which is
+  what keeps the full-size layouts working; a `"type": "layer"` key sets
+  `activeLayer` and deliberately does **not** call `keyboard.setLayout()` (that
+  would persist as the user's layout preference). `activeLayer` resets to
+  `"base"` on every layout change. Because the whole feature is data + QML, it
+  needed zero backend work on either Python or C++: don't "port" it.
+- **`totalKeyUnits` is derived, not hardcoded** (`_widestRow` in `Main.qml`
+  computes the widest visible row's units + gap count, and full-size layouts
+  resolve to exactly the historical 15.5u / 14 gaps). Don't reintroduce the
+  constant.
+- **Compact is orthogonal to letter arrangement.** `resolveLayoutId()` combines
+  `currentLayout` with the `compactView` bool into `<layout>-compact`, and a
+  layout with no compact variant falls back to full size, so the toggle is always
+  safe. Adding compact Dvorak is dropping `data/layouts/dvorak-compact.json` in
+  place, no code change.
 - **No panel that has to line up with the keyboard grid may use
-  `QtQuick.Layouts`.** Number Row and Function Row are plain `Row`s,
-  Navigation is a plain `Grid`, Numpad is a `Column` of `Row`s. `Main.qml`
-  reserves an exact float unit budget for each panel when it derives
-  `minimumWidth`, so a rounding positioner costs pixels the window was never
-  given. `QtQuick.Layouts` rounds every child up to a whole pixel, so
-  13 keys of 69.23 px each became 13 of 70 and the panel rendered 10 px wider
-  than the keyboard grid it is supposed to sit flush with, overhanging the
-  window and clipping its last key. The keyboard rows are plain `Row`
-  positioners, which keep `keyW` as the float it is; a panel that sizes itself
-  any other way cannot line up with the keys underneath it. Guarded by
-  `tests/test_qml_compact_view.py::TestPanelsSitFlushWithTheGrid`, which
-  asserts the panel width equals the widest keyboard row rather than merely
-  fitting the window, because "fits" was already true of the broken version at
-  some widths.
+  `QtQuick.Layouts`.** It rounds every child up to a whole pixel, so 13 keys of
+  69.23 px each became 13 of 70, and the panel rendered 10 px wider than the grid
+  it sits flush with, overhanging the window and clipping its last key. Number
+  Row and Function Row are plain `Row`s, Navigation a plain `Grid`, Numpad a
+  `Column` of `Row`s. Guarded by
+  `tests/test_qml_compact_view.py::TestPanelsSitFlushWithTheGrid`.
+- **The accent fill on the editing keys (Esc, Tab, Shift, Backspace, Del) is a
+  derived wash over the theme's key colour, never the raw accent and never a
+  constant.** `root.accentWashFor()` walks the alpha down from 0.35 until the
+  theme's own `textColor` clears 4.5:1; a flat 35% dropped five of the nine
+  themes below WCAG AA, on exactly the keys the style exists to make findable.
+  The accent-coloured border carries the cue where the wash has to back off.
+  Full-size layouts are deliberately untouched.
+- **Del sits on the base layer, Esc on `?123`.** A 13u row has no spare unit, so
+  the two traded places. The Number Row panel puts a second Esc back at the
+  top-left and that duplicate is deliberate, so `?123` stays the fallback for a
+  future layout that shows the compact grid without the panel. Don't swap them
+  back without reading the rationale in the design doc.
+- **The symbol pages carry no Shift key**; Shift's slot switches to a second page
+  (`=\<`), the phone convention, which makes a glyph appearing twice on one
+  screen *structurally impossible* rather than merely absent. The bottom row and
+  the right-hand nav column are byte-identical on every layer, and the tests that
+  guard that derive the layer list from the file rather than naming base/sym.
+  `Main.qml`'s layer branch calls the idempotent `keyboard.releaseShift()` on
+  every switch (never `if (shiftOn) toggleShift()`), because the modifier is held
+  at the OS level and a Shift carried in from the letters page makes `1` emit `!`
+  with the keycap still reading `1`. Guarded by
+  `tests/test_layouts.py::TestNoDuplicateGlyphsWithinALayer` and
+  `tests/test_qml_compact_view.py::TestSecondSymbolPage`.
 - **Digits come back via a panel, not a fifth row, and not via a toggle.**
   `qml/components/NumberRow.qml` (13 x 1u, flush with the compact grid) renders
   above the keyboard whenever `Main.qml::showNumberRow` is true, which is
@@ -1056,21 +894,234 @@ Load-bearing facts:
   on screen in both views and a full-size layout can never end up with a
   second, narrower number row stacked on the one built into its JSON. Keying it
   off the layout rather than `compactView` matters because a letter arrangement
-  with no compact variant silently falls back to full size. Every key must register through
-  `registerFn` or the swipe overlay swallows every tap on it. Its leading key
-  is **Esc, not `` ` ``** (backtick lives on `?123` row 2), and Esc registers
-  as a `special`, not a `char`: that keeps it hit-testable while keeping a
-  phantom "Esc" centre out of the swipe shape match. See the two-registry
-  note under *Swipe / Glide Typing*.
+  with no compact variant silently falls back to full size. Its leading key
+  is **Esc, not `` ` ``** (backtick lives on `?123` row 2).
+- **The nav column reads Home / PgUp / PgDn / End top to bottom** (a scroll
+  ladder: top, page up, page down, bottom; Owen asked for Home above PgUp).
+  Pinned by
+  `test_layouts.py::TestCompactLayout::test_nav_column_reads_top_to_bottom`.
 - QML-only behaviour can't be covered by the Python suite, so
-  `tests/test_qml_compact_view.py` and `tests/test_qml_prediction_bar.py` load
-  the real `Main.qml` headlessly (`QT_QPA_PLATFORM=offscreen`) and fail on QML
+  `tests/test_qml_compact_view.py` and `tests/test_qml_prediction_bar.py` load the
+  real `Main.qml` headlessly (`QT_QPA_PLATFORM=offscreen`) and fail on QML
   warnings. That's the only guard against a binding error shipping as a blank
   keyboard.
 
+## Symbol Layer (full-size layouts)
+
+`qwerty` / `dvorak` / `colemak` carry one symbol page, reached from a `Sym`
+key at each end of the space row. Compact View had `?123` and `=\<` from the
+start and the full-size layouts had nothing, so every glyph outside a
+physical keyboard's printing (`° × ÷ ± € £ © ™ … → ¿`) was reachable in one
+view and not the other. Data plus QML only, like Compact View: the backends
+never see a layer.
+
+**One page, not two.** Compact needs two because a 13u row cannot hold the
+ASCII symbols *and* the extended ones. Full size already has every ASCII
+symbol on the base layer, printed on a key or as a shifted variant that both
+Shift and right-click reach, so the page is only worth a hop for glyphs that
+have nowhere else to come from. That is 34 slots, and the long tail
+(accented letters, `∞ √ π † ★`, emoji) belongs in the Symbols & Emoji window,
+which has categories and a Recent page. A second page here would be duplicating that
+window's job in layout JSON. `TestFullSizeSymbolLayer::test_no_symbol_repeats_what_the_base_layer_already_types`
+is the rule stated as a property: it is the same thing
+`TestNoDuplicateGlyphsWithinALayer` asserts within one page, applied across
+the hop.
+
+The 34: **`sym-top`** dashes, ellipsis, curly quotes, arrows, inverted marks;
+**`sym-home`** currency, section, pilcrow, bullet, copyright, registered,
+trademark, degree; **`sym-bottom`** the maths set. Everything on it is Latin-1
+Supplement, General Punctuation, Arrows or Math Operators, all text
+presentation. **Keep it that way**: the geometric-shape and dingbat ranges
+(`✓ ✗ ★`) resolve through Segoe UI Emoji on Windows, which renders in colour
+and ignores the `color` property outright, which is the same reason the lock
+badge and the clear-context ring are not glyphs (see *Right-Click to Lock*).
+
+### Why nothing moves
+
+**Only the three letter rows swap.** `number` and `space` carry no `layer`
+field, so they render on every page: digits stay one tap away instead of
+going behind the hop the way Compact View has to put them, and the space bar
+never leaves the screen. Each `sym-*` row matches the row it replaces both in
+unit total and in key count, so `keyW`, the window width and every column
+position are identical across the hop. Tab, Caps and Enter keep their
+exact slots, which is the payoff for full size having room compact does not:
+a comma typed on the symbol page does not cost a hop back to reach Enter.
+
+**Del is not on the full-size grid at all.** It sits above the arrows on the
+Navigation panel (shown by default), which is where a physical keyboard puts
+it. The top row used to carry it past the backslash, which made that row 0.9u
+wider than the home row and, because rows are centred individually, pushed
+the whole letter block left until W sat between A and S. Removing it and
+growing Enter to 2.3u is what puts Q over A. The space row cannot take it
+either: with a `Sym` at each end a third key there is 15.6u, past the number
+row, and the window widens to fit. Guarded by
+`tests/test_layouts.py::TestTheLetterColumnsLineUp`.
+
+**Two `Sym` keys, not one, and that is arithmetic rather than taste.** Rows
+are centred individually, so adding equal width to *both* ends of a centred
+row leaves every key already in it exactly where it was. A single key
+appended to either end would have slid Ctrl, Win, Alt and the space bar
+sideways by half a key width on the row the user clicks most. The space row
+goes 11.6u to 14.6u and stays under the number row's 15.5u, so the window
+width is untouched.
+
+**The `sym-*` rows must sit before the `space` row in the JSON array.**
+`visibleRows` filters in array order, so with them appended at the end the
+symbol page rendered `number, space, sym-top, sym-home, sym-bottom` and the
+space bar jumped three rows up the keyboard. Guarded by
+`TestTheFullSizeSymbolPage::test_the_space_bar_does_not_move`, which measures
+from the top-left corner of the key grid rather than in scene coordinates:
+the first tap on any non-char key settles the chrome above the keyboard by
+one pixel (Caps does it too, and did before this feature existed), so a
+scene-y assertion fails by 1 px for a reason that has nothing to do with the
+grid.
+
+### Why the keys are `literal`
+
+Every char key on the page sets `"literal": true`, which routes it through
+`pressKeyLiteral` instead of `pressKey`. `pressKey` applies shift / caps-lock
+case normalisation, a layer switch deliberately leaves Caps Lock alone (it
+only affects letters, and this page has none), and Python's `str.upper()` is
+not the identity on every non-ASCII character: Caps Lock plus the micro sign
+typed a Greek capital Mu, so the key emitted one glyph while the cap
+displayed another. That is the same disagreement the symbol pages carry no
+Shift key in order to avoid, arriving through the other toggle.
+
+The page therefore carries **no Shift key** either, per the existing rule; the
+two Shift slots on `sym-bottom` hold `ABC` keys instead, which is the phone
+convention and puts a wide exit target where a hand reaching for Shift out of
+habit already is.
+
+### The `Sym` key is both the way in and the way out
+
+It sits on the space row, which renders on every page, so it cannot be a
+one-way door the way compact's layer keys are. `Main.qml` therefore sends a
+layer key whose target is **already showing** back to `base`. Every other
+layer key in the project targets something it is not on, so that branch is
+dead for them and their behaviour is unchanged. `stateKey: "symLayer"` lights
+the key while the page is up, which is the only thing on screen that says
+which page the letters were swapped for.
+
+Guarded by `tests/test_layouts.py::TestFullSizeSymbolLayer` (the data) and
+`tests/test_qml_compact_view.py::TestTheFullSizeSymbolPage` (the live QML).
+`TestNoDuplicateGlyphsWithinALayer`'s helpers now fold a row with no `layer`
+into **every** layer rather than into `base` alone: that was correct while
+full size had a single layer, and one layer too few the moment it had two.
+
+## Symbols & Emoji window
+
+The long tail behind the symbol layer above. That layer carries the 34 glyphs
+worth a single click; this window carries the rest, because categories, a
+Recent page and several hundred glyphs do not fit on a key grid at a size an
+imprecise pointer can hit. Opened from a smile button in the suggestion bar,
+immediately left of the Snippets bookmark, with a title-bar twin
+(`symbolsTitleBarButton`) visible only when `suggestionsEnabled` is false, for
+the reason the Snippets pair documents: the suggestion bar collapses to zero
+height with that setting and an unrelated toggle must not be the only thing
+between the user and a feature.
+
+Catalogue in `src/glyphs.py`, bridge slots `getGlyphCategories()`,
+`insertGlyph(str) -> bool` and `getRecentGlyphLimit()`, UI is the floating
+`symbolsWindow` in `qml/Main.qml`.
+
+### A tap types, it does not copy
+
+This is the one place the window deliberately diverges from Snippets, which
+copies to the clipboard and offers no way to type at all. The argument there
+is that a long address is expensive to retype, only lands when the caret is
+already in the right field, and **misses silently** when it does not. A glyph
+is a keystroke. Every key on the keyboard has exactly the same focus
+exposure, so paying two clicks and a clipboard round trip to type one
+character would make the window worse than the keys beside it.
+
+`insertGlyph` is deliberately the **same shape as `insertSnippet`** rather
+than merely similar, because a pair of nearly-identical blocks drifting apart
+is this codebase's recurring failure: `_release_sticky_modifiers()` first, a
+deferred auto-space settled as prose, `_consume_auto_cap()`, the send inside
+`_send_literal_text` so a held modifier cannot rewrite it, then
+`_current_word` / `_raw_token` / the pill row cleared so the glyph cannot
+corrupt the next prefix match. Not gated on privacy mode, same rule as every
+other insert: the user tapped it, so it has to reach the app.
+
+**It returns a bool and QML honours it.** The bridge refuses while an edit
+field owns the keystrokes (the prediction-edit popup, the snippets editor).
+The window is somewhere else on the desktop, so a tap that silently did
+nothing is indistinguishable from one that missed and the user taps again;
+a refused tap flashes the problem toast and is **not** written to Recent,
+which would otherwise fill with glyphs that never reached anything.
+
+### Recent lives in the settings layer, not in a file
+
+It is a convenience the user rebuilds by tapping four glyphs. A file would
+have needed a loader, a size cap and a Data Backup decision for something
+worth none of the three, so it is `appSettings.savedRecentGlyphs`, a JSON
+array of strings, capped at `glyphs.MAX_RECENT` and deduplicated most-recent
+first. The cap lives in Python and QML asks for it, the same split
+`getSnippetLimit` uses: QML owns the storage, the bridge owns the bound.
+
+A malformed value is dropped rather than reported. The catalogue underneath
+it is intact and the user is one tap from refilling the list, so a dialog
+would cost more than the thing it is about.
+
+The window **opens on Recent once there is something in it**, and on the
+first catalogue tab before that: opening on an empty page teaches the user
+the window is empty.
+
+### The shell is the Snippets window's
+
+Same flags, same manual drag (never `startSystemMove()`), same
+desktop-wide `clampedWindowPos` restore, same write-position-on-release. It
+is found by `objectName` from `keyboard_app.py::_wire_floating_windows`,
+which now loops over both windows and re-applies `WS_EX_NOACTIVATE` on every
+`visibleChanged`; the per-window handler binds its target as a **default
+argument** rather than closing over the loop variable, which would otherwise
+leave both handlers styling whichever window was found last.
+
+The grid pages 8 x 4 and the Repeater's model is the **page size, not the
+glyphs remaining**, so a short last page keeps its empty cells and the pager
+underneath cannot walk up the window into a pointer already travelling toward
+it. An empty cell's MouseArea is disabled, so it is not a tap that silently
+does nothing. Switching category resets to page 0, or a tab switch lands on
+page 3 of a category with two.
+
+Category tabs are a **wrapping `Flow`, not a scrolling strip**: a scroll
+strip would put half the categories behind a drag gesture, which is the input
+this keyboard's users can least rely on. Three rows of chips is the cost.
+
+### Two font rules, and they pull in opposite directions
+
+The **chrome** obeys the project's usual rule: the smile and the close cross
+are `StrokeIcon` path data, never typeset, because Segoe UI Emoji renders a
+glyph in colour and ignores the ink it is given.
+
+The **cells** do the opposite and name no font family at all. Colour is the
+content here rather than chrome that has to obey an ink colour, and Qt's own
+fallback is what reaches the host emoji font. `font.families` (a list) does
+not exist on this Qt's grouped font property, and naming a single family
+would pin one platform's font and lose the glyph on the other two.
+
+`tests/test_qml_symbols.py::TestTheEntryButtonIcon` asserts the smile paints
+ink at all, which is the property its one hand-converted path can break:
+invalid path data paints **nothing** through `ctx.path` (measured: zero lit
+pixels), so a bad conversion ships as a blank circle on the suggestion bar
+rather than as an error.
+
+### The suggestion bar's button reserve is derived
+
+`predBar.predButtonCount` is now the number the reserve is computed from
+(`predPillHeight * count + predButtonGap * (count - 1) + 16`). It went from
+one button to two to three and each time the formula was re-derived by hand;
+the reserve is what stops a prediction pill rendering underneath a control,
+so a reserve that is merely near the truth is the bug the property exists to
+prevent. The new button is the **first** child of the right-anchored Row, so
+Snippets and the clear-context ring do not move.
+
+Guarded by `tests/test_qml_symbols.py`, `tests/test_glyphs.py`, and
+`tests/test_keyboard_bridge.py::TestTypingAGlyphFromThePicker`.
+
 ## Modular Layouts
 
-Design doc at `docs/architecture/MODULAR_LAYOUTS.md`. Inspired by Octavium's (`C:\Users\Owen\dev\Octavium`) Layout/KeyDef data model. Four levels of modularity: (1) Built-in JSON layout packs (video editing, gaming, streaming). (2) User-created layouts via editor. (3) Panel composition - snap independent panels (QWERTY, numpad, macros) into a grid. (4) App-aware auto-switching based on foreground window.
+Design doc at `docs/architecture/MODULAR_LAYOUTS.md`. Inspired by Octavium's (`C:\Users\owenp\dev\Octavium`) Layout/KeyDef data model. Four levels of modularity: (1) Built-in JSON layout packs (video editing, gaming, streaming). (2) User-created layouts via editor. (3) Panel composition - snap independent panels (QWERTY, numpad, macros) into a grid. (4) App-aware auto-switching based on foreground window.
 
 Action types: `char`, `special`, `hotkey`, `text`, `macro`, `launch`, `layout`, `midi`. Profiles bundle layout + theme + window position + auto-switch rules.
 
@@ -1098,10 +1149,10 @@ Design doc at `docs/roadmap/ECOSYSTEM.md`. Alpha-OSK is part of a four-tool adap
 
 | Tool | Repo | Output |
 |------|------|--------|
-| **Alpha-OSK** | `C:\Users\Owen\dev\alpha-osk` | Keystrokes (SendInput) |
-| **MacroVox** | `C:\Users\Owen\dev\MacroVox` | Text (Deepgram STT -> clipboard) |
-| **Octavium** | `C:\Users\Owen\dev\Octavium` | MIDI (virtual piano/pads) |
-| **Nimbus** | `C:\Users\Owen\dev\Nimbus-Adaptive-Controller` | Joystick (vJoy/ViGEm) |
+| **Alpha-OSK** | `C:\Users\owenp\dev\alpha-osk` | Keystrokes (SendInput) |
+| **MacroVox** | `C:\Users\owenp\dev\MacroVox` | Text (Deepgram STT -> clipboard) |
+| **Octavium** | `C:\Users\owenp\dev\Octavium` | MIDI (virtual piano/pads) |
+| **Nimbus** | `C:\Users\owenp\dev\Nimbus-Adaptive-Controller` | Joystick (vJoy/ViGEm) |
 
 All four: same developer, same EV cert, PySide6/Qt (except MacroVox: Tauri), mouse-driven, accessibility-first. Integration phases: coexistence -> launch/trigger -> profile auto-switch -> shared input layer -> unified UI.
 
@@ -1283,18 +1334,15 @@ The full list of implementation gotchas and invariants lives in
 **`docs/architecture/GOTCHAS.md`** - read it before touching keystroke
 synthesis, the prediction context buffers, window flags, or the build
 pipeline. The highest-frequency traps, kept inline because they're the
-easiest to reintroduce:
+easiest to reintroduce. Focus / window flags, sticky-modifier release,
+suffix-only insertion and the buffer invariants are not repeated here: they
+are in *Key rules* at the top of this file.
 
-- **Window flags / focus**: the keyboard must never steal focus. `WS_EX_NOACTIVATE` is set via Win32 API on Windows (`_apply_window_flags()` in `keyboard_app.py`); `WindowDoesNotAcceptFocus` elsewhere.
-- **Sticky modifier auto-release lives in two parallel blocks — keep them in sync.** `_press_char` and `pressSpecialKey` each end with their own Shift/Ctrl/Alt/Win release sequence (state flip + `release_modifier()` + change-signal emit, plus `_update_layer()` for Shift). New keystroke paths that branch off (autocorrect retype, pill insertion, edit-mode, macros) must mirror it. **Two exceptions, both of which skip the release:** (1) `pressSpecialKey` keeps Shift/Ctrl held on `_NAV_KEYS` (arrows/home/end/pageup/pagedown) so Shift+arrow selection and Ctrl+arrow word-jump persist across presses; Alt/Win still release. (2) a **right-click-locked** modifier (`_*_locked`, see *Sticky Modifiers → Right-Click to Lock*) is skipped in every release block. There are actually **four** guarded blocks, not two — also the edit-mode intercept and the Ctrl/Alt/Win chord branch in `_press_char`. A new keystroke path must add the `and not self._*_locked` guard or a held modifier will silently drop.
-- **Prediction insertion is suffix-only** (type just the unseen tail), falling back to `replace_text()` only on a prefix mismatch (casing). Compatibility Mode (`_in_compat_mode()`) rewires this to BackSpace + retype for remote-desktop clients and IDEs where suffix-only is unsafe.
-- **`_context_buffer` / `_current_word` mirror the on-screen text.** Backspace must trim the buffer and rehydrate a mid-word tail back into `_current_word`; prefix punctuation must be treated as a word boundary or pill clicks eat it. That check is an **allow-list of word characters** (alphanumeric plus `'` and `_`), not a list of separators: as a separator list it failed open when the second symbol page added 18 glyphs, none of which were on it, so `cost€` became the prediction prefix and the learned token. Don't convert it back.
 - **Windows uses scancode mode** for both `send_text` (ASCII) and chords/`hold_modifier` (UNICODE/`wVk`-mode only as a fallback) - required for Blender/VirtualBox/games and for Ctrl+V over TeamViewer/RDP.
 - **Linux `xdotool`/`ydotool` calls that carry arbitrary typed text must precede it with a literal `--`.** Both tools' `type` subcommand parses flags with getopt, so typed text that happens to look like an option (`--help`) would otherwise be silently parsed as one and dropped instead of typed. The four call sites carrying arbitrary text do this; the other sixteen `xdotool`/`ydotool` call sites pass internally-built key names, not user text, so they don't need it. `platform/linux.py::_run()` is also bounded by a 2.0 s `_SUBPROCESS_TIMEOUT_S`: it runs synchronously on the Qt UI thread on every keystroke, so a wedged binary (dead X server, unresponsive display) used to freeze the whole keyboard; `TimeoutExpired` is now caught and logged, not left to hang.
 - **Games need a held key, not a zero-gap tap.** Games read the keyboard by *polling* state once per render frame (DirectInput / Raw Input / `GetAsyncKeyState`), so a key-down+key-up injected in one `SendInput` batch can land entirely between two polls and be missed: the keystroke does nothing in-game even though it works everywhere else. Auto game-compat fixes this: when `_window_is_game(hwnd)` is true, `_game_auto_active` flips on (set in the same 250 ms foreground poll as compat auto-detect) and single keys are sent with `hold_seconds = _GAME_KEY_HOLD_SECONDS` (50 ms). `WindowsKeySynthesizer.send_key` then splits the injection into a down-batch, a real `time.sleep`, and an up-batch (modifiers wrap the held key). Non-game keystrokes keep the zero-latency atomic path. `_window_is_game` uses two signals (`keyboard_bridge.py`): (1) the owning-process exe is in `_GAME_PROCESS_NAMES` (seeded with Age of Empires; extend like `_COMPAT_PROCESS_NAMES`), which catches games even in windowed mode; (2) a **borderless-fullscreen heuristic** (`_window_is_borderless_fullscreen`: window rect covers the whole monitor *and* the window has no `WS_CAPTION`) as a zero-config catch-all for unlisted games. The heuristic is deliberately skipped for exes in `_COMPAT_PROCESS_NAMES` (IDEs / remote-desktop clients), which are sometimes run fullscreen and must not get the typing-lag hold. Requiring "no caption" excludes normal maximized windows (which keep their title bar); the remaining false positives (fullscreen video players, slideshows) are harmless because a 50 ms hold doesn't hurt there. This is unrelated to UIAccess: a signed Program-Files install still hit it because the keystrokes *reach* the game, they're just too brief to be polled.
 - **`pressKey` lowercases its input** - use `pressKeyLiteral` when QML already resolved the final character (right-click shifted variant, etc.).
 - **QML `Text` defaults to `AutoText`, which sniffs the string for HTML and can trigger an outbound request just from being displayed.** Any `Text` rendering a value that ultimately came from imported or otherwise untrusted data (a vocabulary pack's `name`/`description`, anything read from a file the user picked) must set `textFormat: Text.PlainText` explicitly, or an `<img src=...>` planted in that string makes Qt fetch it the moment the Settings page renders. 23 `Text` elements across 7 QML files (`Main.qml`, `UnifiedSettingsPanel.qml`, `DebugPanel.qml`, `AnalyticsDashboard.qml`, `ModelVisualization.qml`, `KeyButton.qml`, `SettingsToggle.qml`) now set it explicitly; new `Text` elements displaying untrusted strings must too. **Known gap**: the attached-property `ToolTip.text` idiom has no `textFormat` to set, so a tooltip built from untrusted text is not covered.
-- **Invariants**: `NgramPredictor._user_total == sum(user_vocab.values())`; merge strategy default MUST stay `"rank"`; window height is content-bound (never persist/assign it); analytics metrics need both session and `_alltime_*` forms; Windows subprocess calls need `CREATE_NO_WINDOW` when they suppress output *or* may run without a console to inherit.
 
 ## Right-Click for Shifted Character
 

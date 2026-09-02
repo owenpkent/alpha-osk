@@ -215,15 +215,11 @@ Item {
 
     // ===== Press lifecycle =====
     //
-    // Split out of the MouseArea because this key has TWO possible input
-    // sources.  Normally its own MouseArea drives it.  But when swipe typing
-    // is on, SwipeOverlay covers the whole keyboard block with
-    // `preventStealing: true` and takes every press before a KeyButton can
-    // see it, so the overlay has to drive the key remotely instead (see
-    // `externalPress` / `externalRelease` below).  Both sources run these
-    // same functions: a key that behaved differently depending on whether
-    // swipe happened to be enabled is exactly the bug this structure exists
-    // to prevent.
+    // Split out of the MouseArea because a press can end through more than
+    // one path - release, cancel, or the cursor dragging off the key while
+    // it is still held - and every one of them has to run the same
+    // teardown.  Inlining it in each handler is how one of them ends up
+    // forgetting to stop the repeat timer.
 
     // Debounce: drop any second press within debounceMs of the previous
     // accepted one.  Catches hardware bounce and accidental double-clicks
@@ -270,47 +266,6 @@ Item {
         repeatTimer.interval = keyRoot.repeatDelay
         repeatTimer.repeat = false
         repeatTimer.phase = 0
-    }
-
-    // Drive a full press from outside this item, in item-local coordinates.
-    // Returns false if the debounce swallowed it, so the caller knows not to
-    // pair it with a release.  This is a real press, not a synthesised tap:
-    // holding Backspace under the swipe overlay has to repeat exactly the way
-    // holding it without the overlay does.
-    function externalPress(localX, localY) {
-        if (!keyRoot._acceptPress())
-            return false
-        keyRoot._pressVisual(localX, localY)
-        keyRoot._activate()
-        return true
-    }
-
-    function externalRelease() {
-        if (keyRoot._visualPressed)
-            keyRoot._endPress()
-    }
-
-    // Drive a press that has ALREADY served its full warm-up wait - the
-    // caller (SwipeOverlay's charHoldTimer) held off for ``repeatArmDelay``
-    // before calling this, so there is nothing left to warm up.  Shares
-    // the debounce/visual/ripple path with ``externalPress`` and emits
-    // ``keyPressed()`` once the same way ``_activate()`` does, but arms
-    // the repeat timer straight into phase 2 (repeating, at
-    // ``repeatInterval`` cadence) instead of replaying phase 0/1: doing
-    // that again here would double the wait the overlay already paid.
-    // Same false-on-debounce contract as ``externalPress``.
-    function externalHoldPress(localX, localY) {
-        if (!keyRoot._acceptPress())
-            return false
-        keyRoot._pressVisual(localX, localY)
-        keyRoot.keyPressed()
-        if (keyRoot.enableRepeat) {
-            repeatTimer.phase = 2
-            repeatTimer.interval = keyRoot.repeatInterval
-            repeatTimer.repeat = true
-            repeatTimer.start()
-        }
-        return true
     }
 
     Rectangle {

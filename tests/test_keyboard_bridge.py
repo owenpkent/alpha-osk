@@ -1822,6 +1822,62 @@ class TestPunctuationSpacing:
         assert bridge._context_buffer != "" or bridge._current_word == "hel"
 
 
+class TestTheClosingQuoteRemovesTheAutoSpace:
+    """`"` is the one mark that both opens and closes, so it earns the
+    space removal only when parity says it is closing something.  Every
+    case is paired with the near-miss it has to leave alone.
+    """
+
+    def test_a_closing_quote_after_a_sentence_removes_the_auto_space(self, bridge: KeyboardBridge):
+        """`"hi." ` is not a thing anyone types."""
+        bridge._auto_space_after_punctuation = True
+        for ch in '"hi':
+            bridge.pressKey(ch)
+        bridge.pressKey(".")
+        bridge._synth.send_key.reset_mock()
+        bridge.pressKey('"')
+        bridge._synth.send_key.assert_any_call("BackSpace", modifiers=None)
+
+    def test_an_opening_quote_keeps_the_auto_space(self, bridge: KeyboardBridge):
+        """The inverse, and the reason `"` cannot just join
+        _NO_SPACE_BEFORE: `he said, "hi` wants that space.
+        """
+        bridge._auto_space_after_punctuation = True
+        for ch in "he":
+            bridge.pressKey(ch)
+        bridge.pressKey(",")
+        bridge._synth.send_key.reset_mock()
+        bridge.pressKey('"')
+        backspaces = [c for c in bridge._synth.send_key.call_args_list if c[0][0] == "BackSpace"]
+        assert backspaces == []
+
+    def test_a_closing_quote_after_a_prediction_removes_the_auto_space(
+        self, bridge: KeyboardBridge
+    ):
+        """The common case: the pill's own trailing space, then the quote
+        that closes the quotation it was typed inside.
+        """
+        bridge.pressKey('"')
+        bridge.pressKey("h")
+        bridge.pressPrediction("hello")
+        bridge._synth.send_key.reset_mock()
+        bridge.pressKey('"')
+        bridge._synth.send_key.assert_any_call("BackSpace", modifiers=None)
+
+    def test_a_user_typed_space_before_a_closing_quote_is_preserved(self, bridge: KeyboardBridge):
+        """Only our own auto-space is ever undone, same rule the other
+        marks follow.
+        """
+        bridge.pressKey('"')
+        for ch in "hi":
+            bridge.pressKey(ch)
+        bridge.pressSpecialKey("space")
+        bridge._synth.send_key.reset_mock()
+        bridge.pressKey('"')
+        backspaces = [c for c in bridge._synth.send_key.call_args_list if c[0][0] == "BackSpace"]
+        assert backspaces == []
+
+
 class TestMatchCase:
     """KeyboardBridge._match_case casing rules for autocorrect output."""
 
@@ -2680,6 +2736,45 @@ class TestAutoCapitalizeIsNotAHeldShift:
         assert capping._pending_auto_cap is True
         _press(capping, "then")
         assert "".join(_typed(capping)).endswith("Then")
+
+    def test_an_opening_quote_passes_it_along(self, capping: KeyboardBridge):
+        """`hi. "hello"` capitalises the h, not the quote.
+
+        A `"` cannot carry a capital, so spending one on it threw it
+        away and the quoted sentence started lowercase.
+        """
+        _press(capping, 'i went home. "world')
+        assert "".join(_typed(capping)).endswith('. "World')
+
+    def test_a_closing_quote_passes_it_along(self, capping: KeyboardBridge):
+        """The same from the other side: `"hi." Then`.
+
+        The screen reads `." Then`; the joined ``send_text`` stream reads
+        `. "Then` because the auto-space is undone by a BackSpace (a
+        ``send_key``) and the user's own space is a ``send_key`` too.
+        The capital on the T is what this asserts.
+        """
+        _press(capping, '"i went home." then')
+        assert "".join(_typed(capping)).endswith('"Then')
+
+    def test_an_opening_bracket_passes_it_along(self, capping: KeyboardBridge):
+        _press(capping, "i went home. (world")
+        assert "".join(_typed(capping)).endswith(". (World")
+
+    def test_a_letter_still_spends_it(self, capping: KeyboardBridge):
+        """The inverse: carrying it through everything would pass the
+        quote cases and capitalise the whole sentence.
+        """
+        _press(capping, "i went home. world here")
+        assert "".join(_typed(capping)).endswith(". Worldhere")
+
+    def test_a_digit_still_spends_it(self, capping: KeyboardBridge):
+        """`hi. 5 apples` starts its sentence with the digit, so there is
+        no letter left owed a capital.
+        """
+        _press(capping, "i went home. 5 apples")
+        assert "".join(_typed(capping)).endswith("5apples")
+        assert capping._pending_auto_cap is False
 
     def test_the_edit_popup_does_not_eat_it(self, capping: KeyboardBridge):
         """Nor capitalise everything typed into the popup.
@@ -3738,8 +3833,8 @@ class TestCaretMoveClearsContext:
 
         ``_keystroke_since_poll`` was set only by ``_press_char`` and
         ``pressSpecialKey``, so every path that types without going
-        through them -- a tapped pill, a snippet, a swiped word, the
-        autocorrect retype -- read to this poll as the user clicking
+        through them -- a tapped pill, a snippet, the autocorrect
+        retype -- read to this poll as the user clicking
         somewhere else.  The context and the freshly emitted next-word
         pills were then torn down within 250 ms of the insert that
         produced them.  It is set in the synthesizer wrappers now, so a
@@ -4268,3 +4363,131 @@ class TestTheClearContextRingClearsEverything:
         assert bridge._raw_token == ""
         assert bridge._learned_raw_token == ""
         assert bridge._predictions == []
+
+
+class TestTypingAGlyphFromThePicker:
+    """`insertGlyph` is the Symbols & Emoji window's only way to the OS.
+
+    It is deliberately the same shape as `insertSnippet` rather than merely
+    similar. A tapped glyph is a keystroke that happens to arrive from a
+    window instead of a keycap, so it has to take the sticky modifiers with
+    it, run inside the held-modifier guard, and leave no half of the typing
+    context describing text that is no longer on screen. The failure this
+    codebase keeps hitting is two nearly-identical blocks drifting apart, so
+    each of these pins one invariant the two paths share.
+    """
+
+    GLYPH = "…"
+
+    def test_the_glyph_is_typed_verbatim(self, bridge: KeyboardBridge):
+        assert bridge.insertGlyph(self.GLYPH) is True
+        assert _typed(bridge)[-1] == self.GLYPH
+
+    def test_a_held_shift_is_dropped_first(self, bridge: KeyboardBridge):
+        """A modifier held at the OS level rewrites whatever is sent under it.
+
+        Harmless on an ellipsis and not on an accented letter: with Shift down
+        the picker's lowercase e-acute would arrive uppercase, which is not
+        the glyph the cell displayed.
+        """
+        bridge._shift_active = True
+        assert bridge.insertGlyph("é") is True
+        assert bridge._shift_active is False
+        bridge._synth.release_modifier.assert_any_call("shift")
+        assert _typed(bridge)[-1] == "é"
+
+    def test_a_locked_modifier_is_restored_afterwards(self, bridge: KeyboardBridge):
+        """The lock is the user's decision; corrupting the glyph is not.
+
+        Same contract as a tapped prediction pill: the hold is dropped for
+        the duration of the insert and put back after, so the keycap still
+        agrees with the OS about Ctrl being down.
+        """
+        bridge.lockModifier("ctrl")
+        bridge._synth.reset_mock()
+        assert bridge.insertGlyph(self.GLYPH) is True
+        assert bridge._ctrl_locked is True
+        assert bridge._ctrl_active is True
+        bridge._synth.release_modifier.assert_any_call("ctrl")
+        bridge._synth.hold_modifier.assert_any_call("ctrl")
+        assert _typed(bridge)[-1] == self.GLYPH
+
+    def test_privacy_mode_does_not_block_it(self, bridge: KeyboardBridge):
+        """Privacy is about not *learning* from typing, not about refusing to
+        type. The user tapped the glyph, so it has to reach the app, exactly
+        as a snippet does and for the same reason."""
+        bridge.setPrivacyMode(True)
+        assert bridge.insertGlyph(self.GLYPH) is True
+        assert _typed(bridge)[-1] == self.GLYPH
+
+    def test_edit_mode_refuses_and_says_so(self, bridge: KeyboardBridge):
+        """While the prediction-edit popup or the snippets editor owns the
+        keystrokes, an insert into the app behind them would be a keystroke
+        landing somewhere nobody is looking.
+
+        The bool return is the point: the window is elsewhere on the desktop,
+        so a tap that silently did nothing is indistinguishable from one that
+        missed, and the user taps again.
+        """
+        bridge.setEditMode(True)
+        before = list(_typed(bridge))
+        assert bridge.insertGlyph(self.GLYPH) is False
+        assert list(_typed(bridge)) == before
+
+    def test_an_empty_glyph_is_refused_rather_than_typed(self, bridge: KeyboardBridge):
+        """An empty cell on a short last page is not a target, but QML is
+        free to drift, so the bridge does not take its word for it."""
+        before = list(_typed(bridge))
+        assert bridge.insertGlyph("") is False
+        assert list(_typed(bridge)) == before
+
+    def test_the_word_in_progress_is_cleared(self, bridge: KeyboardBridge):
+        """`_current_word` and `_raw_token` are what the insert path measures
+        against: a pill types only the tail it believes is unseen, and
+        otherwise selects that many characters backwards and overwrites them.
+        Leaving a word in progress behind a glyph the engine never saw is how
+        a later tap eats text the user typed.
+        """
+        for ch in "hel":
+            bridge.pressKey(ch)
+        assert bridge._current_word == "hel"
+        assert bridge.insertGlyph(self.GLYPH) is True
+        assert bridge._current_word == ""
+        assert bridge._raw_token == ""
+
+    def test_a_deferred_space_is_settled_as_prose(self, bridge: KeyboardBridge):
+        """A bare digit run followed by a full stop withholds its auto-space
+        until the next character says whether it was a decimal or a sentence
+        end. A tapped glyph is prose, the same verdict a pill and a snippet
+        both give, so the withheld space is owed and rides along
+        inside the literal insert rather than being typed outside the
+        held-modifier guard.
+        """
+        bridge.setAutoSpaceAfterPunctuation(True)
+        for ch in "42":
+            bridge.pressKey(ch)
+        bridge.pressKey(".")
+        assert bridge._deferred_auto_space, "precondition: a space is deferred"
+        assert bridge.insertGlyph(self.GLYPH) is True
+        assert _typed(bridge)[-1] == " " + self.GLYPH
+
+    def test_the_catalogue_survives_the_trip_into_qml(self, bridge: KeyboardBridge):
+        """`getGlyphCategories` must hand back plain dicts and lists.
+
+        A NamedTuple does not survive the conversion a Qt slot performs, and
+        the failure is silent on this side: QML simply reads undefined and
+        renders an empty grid.
+        """
+        cats = bridge.getGlyphCategories()
+        assert isinstance(cats, list) and cats
+        for cat in cats:
+            assert isinstance(cat, dict)
+            assert isinstance(cat["id"], str) and cat["id"]
+            assert isinstance(cat["label"], str) and cat["label"]
+            assert isinstance(cat["glyphs"], list) and cat["glyphs"]
+
+    def test_the_recent_limit_is_a_number_qml_can_use(self, bridge: KeyboardBridge):
+        """QML owns the recent list's storage (it lives in the Qt settings
+        layer), the bridge owns its bound, so there is one number rather than
+        one per side."""
+        assert bridge.getRecentGlyphLimit() > 0

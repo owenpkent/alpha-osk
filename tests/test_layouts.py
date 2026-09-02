@@ -19,6 +19,7 @@ from pathlib import Path
 import pytest
 
 LAYOUTS_DIR = Path(__file__).resolve().parent.parent / "data" / "layouts"
+NAV_PANEL = Path(__file__).resolve().parent.parent / "qml" / "components" / "NavigationPanel.qml"
 
 # Special-key actions KeyboardBridge.pressSpecialKey knows how to dispatch.
 KNOWN_SPECIAL_ACTIONS = frozenset(
@@ -101,17 +102,27 @@ class TestEveryLayout:
                         f"{path.stem}: unhandled modifier {key['action']!r}"
                     )
 
-    def test_delete_is_on_the_entry_layer(self, path: Path) -> None:
-        """Forward-delete must be one tap away, not behind a ?123 hop.
+    def test_delete_is_where_each_layout_family_keeps_it(self, path: Path) -> None:
+        """Forward-delete must be one tap away, and where it lives differs.
 
         Backspace alone means the caret has to be walked past a mistake and
-        back; on a pointer-driven keyboard that is several extra clicks.
-        Rows with no `layer` field are the full-size layouts' single layer.
+        back; on a pointer-driven keyboard that is several extra clicks. The
+        compact layouts have no room beside them for the Navigation panel,
+        so Del has to be on their base layer, not behind a ?123 hop. The
+        full-size layouts keep it *off* the grid on purpose: it sits above
+        the arrows on the Navigation panel (shown by default), and the top
+        row losing it is what lets Q sit over A (see
+        ``TestTheLetterColumnsLineUp``).
         """
         data = json.loads(path.read_text(encoding="utf-8"))
-        entry = [r for r in data["rows"] if r.get("layer", "base") == "base"]
-        actions = {k.get("action") for r in entry for k in r["keys"] if k.get("type") == "special"}
-        assert "delete" in actions, f"{path.stem}: no Del key on the base layer"
+        compact = "compactOf" in data
+        base = [r for r in data["rows"] if r.get("layer", "base") == "base"]
+        actions = {k.get("action") for r in base for k in r["keys"] if k.get("type") == "special"}
+        if compact:
+            assert "delete" in actions, f"{path.stem}: no Del key on the base layer"
+        else:
+            everywhere = {k.get("action") for r in data["rows"] for k in r["keys"]}
+            assert "delete" not in everywhere, f"{path.stem}: Del is back on the main grid"
 
     def test_modifiers_carry_a_state_key(self, path: Path) -> None:
         # Without stateKey the QML `isActive` binding can never highlight the
@@ -153,17 +164,153 @@ class TestEveryLayout:
         )
 
 
-class TestFullSizeLayoutsUnchanged:
-    """The compact work must not perturb the shipped full-size layouts."""
+FULL_SIZE = ["qwerty", "dvorak", "colemak"]
 
-    @pytest.mark.parametrize("name", ["qwerty", "dvorak", "colemak"])
-    def test_no_layer_field(self, name: str) -> None:
-        # Rows with no `layer` always render, which is what keeps the
-        # full-size layouts working under the layer-filtering QML.
+# The three letter rows and the symbol row that replaces each of them.
+SWAPPED_ROWS = [("top", "sym-top"), ("home", "sym-home"), ("bottom", "sym-bottom")]
+
+
+class TestFullSizeSymbolLayer:
+    """The full-size layouts carry one symbol page, reached from the space row.
+
+    Compact View had ``?123`` and ``=\\<`` from the start and the full-size
+    layouts had nothing, so every glyph outside a physical keyboard's
+    printing was reachable in one view and not the other. These tests pin
+    the four properties that make the page cost nothing to have: the grid
+    does not move, digits and space never leave the screen, the page can
+    always be left again, and nothing on it duplicates a glyph the base
+    layer could already type.
+    """
+
+    @pytest.mark.parametrize("name", FULL_SIZE)
+    def test_the_grid_does_not_move_when_the_layer_switches(self, name: str) -> None:
+        """A symbol row matches the letter row it replaces, unit for unit.
+
+        Rows are centred individually, so a symbol row even slightly
+        narrower than its base counterpart re-indents the whole page and
+        every key lands somewhere new. On a keyboard driven by an imprecise
+        pointer that is the difference between a hop the user can predict
+        and one they have to re-aim after.
+        """
+        rows = {r["id"]: r for r in _load(f"{name}.json")["rows"]}
+        for base_id, sym_id in SWAPPED_ROWS:
+            base, sym = rows[base_id], rows[sym_id]
+            assert _row_units(sym) == pytest.approx(_row_units(base)), (
+                f"{name}/{sym_id} is {_row_units(sym)}u against {base_id}'s {_row_units(base)}u"
+            )
+            assert len(sym["keys"]) == len(base["keys"]), (
+                f"{name}/{sym_id} has {len(sym['keys'])} keys against "
+                f"{base_id}'s {len(base['keys'])}: equal totals alone still "
+                "move every key, because the gaps between them move"
+            )
+
+    @pytest.mark.parametrize("name", FULL_SIZE)
+    def test_digits_and_space_never_disappear(self, name: str) -> None:
+        """The number and space rows carry no `layer`, so they render on
+        every page. That is what lets the symbol layer swap only the three
+        letter rows: digits stay one tap away instead of going behind the
+        hop the way they do in Compact View, and the space bar, the most
+        clicked key on the keyboard, never moves or vanishes."""
         for row in _load(f"{name}.json")["rows"]:
-            assert "layer" not in row
+            if row["id"] in ("number", "space"):
+                assert "layer" not in row, f"{name}/{row['id']} is behind a layer"
 
-    @pytest.mark.parametrize("name", ["qwerty", "dvorak", "colemak"])
+    @pytest.mark.parametrize("name", FULL_SIZE)
+    def test_the_entry_keys_flank_the_space_bar_symmetrically(self, name: str) -> None:
+        """Equal width added to both ends of a centred row leaves every key
+        already in it exactly where it was. That is the whole reason there
+        are two Sym keys rather than one: a single key appended to either
+        end would have slid Ctrl, Win, Alt and the space bar sideways by
+        half a key width on a layout the user has used daily for months."""
+        space = next(r for r in _load(f"{name}.json")["rows"] if r["id"] == "space")
+        first, last = space["keys"][0], space["keys"][-1]
+        for end in (first, last):
+            assert end.get("type") == "layer" and end.get("target") == "sym", (
+                f"{name}: the space row does not open the symbol page from both ends"
+            )
+        assert first["width"] == last["width"], (
+            f"{name}: Sym keys are {first['width']}u and {last['width']}u, so the "
+            "row is no longer symmetric and everything inside it has moved"
+        )
+
+    @pytest.mark.parametrize("name", FULL_SIZE)
+    def test_the_symbol_page_can_always_be_left(self, name: str) -> None:
+        """Two ways back, and both are needed. The ABC keys sit where the
+        Shift keys they replace were (a symbol page must carry no Shift, see
+        TestNoDuplicateGlyphsWithinALayer), and the Sym key on the space row
+        is on a row that renders on every page, so QML sends a layer key
+        already showing its own target back to base."""
+        rows = _load(f"{name}.json")["rows"]
+        sym_rows = [r for r in rows if r.get("layer") == "sym"]
+        back = [
+            k
+            for r in sym_rows
+            for k in r["keys"]
+            if k.get("type") == "layer" and k.get("target") == "base"
+        ]
+        assert back, f"{name}: the symbol page has no ABC key"
+
+    @pytest.mark.parametrize("name", FULL_SIZE)
+    def test_the_editing_keys_keep_their_slots(self, name: str) -> None:
+        """Tab, Caps and Enter are in the same position and width on the
+        symbol page as on the letters. Full size has the room compact did
+        not, so a comma typed on the symbol page does not cost a hop back to
+        reach Enter. The top row's right end is a plain character on both
+        pages: Del is not on the grid (it lives above the arrows on the
+        Navigation panel), so only Tab is pinned there."""
+        rows = {r["id"]: r for r in _load(f"{name}.json")["rows"]}
+        pinned = {"top": (0,), "home": (0, -1)}
+        for base_id, sym_id in SWAPPED_ROWS[:2]:
+            base, sym = rows[base_id], rows[sym_id]
+            for index in pinned[base_id]:
+                assert base["keys"][index] == sym["keys"][index], (
+                    f"{name}/{sym_id}: the key at index {index} differs from {base_id}"
+                )
+
+    @pytest.mark.parametrize("name", FULL_SIZE)
+    def test_every_symbol_key_types_itself_literally(self, name: str) -> None:
+        """`literal` routes the key through pressKeyLiteral, which skips the
+        shift / caps-lock case normalisation pressKey applies.
+
+        Caps Lock deliberately survives a layer switch, and Python's upper()
+        is not the identity on every non-ASCII character: without this, Caps
+        Lock plus the micro sign typed a Greek capital Mu.
+        """
+        for row in _load(f"{name}.json")["rows"]:
+            if row.get("layer") != "sym":
+                continue
+            for key in row["keys"]:
+                if key.get("type") == "char":
+                    assert key.get("literal") is True, (
+                        f"{name}/{row['id']}: {key['key']!r} is not marked literal"
+                    )
+
+    @pytest.mark.parametrize("name", FULL_SIZE)
+    def test_no_symbol_repeats_what_the_base_layer_already_types(self, name: str) -> None:
+        """The page is worth a hop only for glyphs that have nowhere else to
+        come from. Every ASCII symbol is already on the base layer, either
+        printed on a key or as a shifted variant that Shift and right-click
+        both reach, so putting one here would spend a slot saying something
+        the keyboard already said. This is the same property
+        TestNoDuplicateGlyphsWithinALayer states within a single page,
+        applied across the hop.
+        """
+        rows = _load(f"{name}.json")["rows"]
+        base = [r for r in rows if r.get("layer", "base") == "base"]
+        reachable = {k["key"] for r in base for k in r["keys"] if k.get("type") == "char"}
+        reachable |= {k["shifted"] for r in base for k in r["keys"] if k.get("shifted")}
+        repeats = sorted(
+            {
+                k["key"]
+                for r in rows
+                if r.get("layer") == "sym"
+                for k in r["keys"]
+                if k.get("type") == "char" and k["key"] in reachable
+            }
+        )
+        assert not repeats, f"{name}: {repeats} are already on the base layer"
+
+    @pytest.mark.parametrize("name", FULL_SIZE)
     def test_widest_row_is_still_15_5_units(self, name: str) -> None:
         # Main.qml derives keyW from the widest row; this is the historical
         # number the default 940 px window width is tuned against.
@@ -186,11 +333,15 @@ class TestTheLetterColumnsLineUp:
     turns every W->S in a WASD pair into a diagonal drag, which is the one
     movement slow motor input is worst at.
 
-    Del moved to the space row, which has ~3u of slack against the widest
-    row and therefore costs no window width, and Enter grew 1.8u -> 2.3u
-    (standard ANSI is 2.25u) to take back the half-unit the top row lost.
-    Both halves are needed: dropping Del alone leaves W a quarter-key
-    short, and widening Enter alone overshoots.
+    Del leaves the main grid altogether: it already sits above the arrows
+    on the Navigation panel, which is shown by default, and the space row
+    cannot take it since the symbol layer put a Sym key at each end (a
+    third key there overflows the 15.5u number row and widens the window).
+    Enter grew 1.8u -> 2.3u (standard ANSI is 2.25u) to take back the
+    half-unit the top row lost. Both halves are needed: dropping Del alone
+    leaves W a quarter-key short, and widening Enter alone overshoots. The
+    symbol page follows, because each of its rows has to match the letter
+    row it replaces in units and key count.
 
     These assertions are in key-width units and deliberately ignore
     `keySpacing`: the top row carries one more gap than the home row, so
@@ -230,14 +381,16 @@ class TestTheLetterColumnsLineUp:
         )
 
     @pytest.mark.parametrize("name", LAYOUTS)
-    def test_del_moved_rather_than_vanished(self, name: str) -> None:
-        # The inverse of the alignment test: deleting the Del key would
-        # satisfy it just as well, and would cost a key that takes several
-        # clicks to work around (walk the caret past the mistake and back).
+    def test_del_is_off_the_grid_and_on_the_navigation_panel(self, name: str) -> None:
+        # Del has to stay reachable (walking the caret past a mistake and
+        # back is several clicks), and the place it stays reachable is the
+        # Navigation panel, above the arrows. Pin both halves: nothing on
+        # the grid, and the panel still has it.
         rows, _ = self._rows(name)
-        space = [k.get("action") for k in rows["space"]["keys"]]
-        assert "delete" in space, f"{name}: Del left the space row"
-        assert "delete" not in [k.get("action") for k in rows["top"]["keys"]]
+        on_grid = [k.get("action") for r in rows.values() for k in r["keys"]]
+        assert "delete" not in on_grid, f"{name}: Del is back on the main grid"
+        panel = (NAV_PANEL).read_text(encoding="utf-8")
+        assert 'keyText: "delete"' in panel, "NavigationPanel.qml lost its Del key"
 
     @pytest.mark.parametrize("name", LAYOUTS)
     def test_the_space_row_still_costs_no_window_width(self, name: str) -> None:
@@ -471,21 +624,28 @@ class TestNoDuplicateGlyphsWithinALayer:
     that reintroduces an overlap fails here rather than on a user's screen.
     """
 
-    # A row with no `layer` field always renders, which is how the full-size
-    # layouts are built. Both helpers must therefore default it to "base", not
-    # skip it: filtering on `if r.get("layer")` returned the empty set for
-    # qwerty / dvorak / colemak, so two of the tests below iterated nothing and
-    # passed without asserting anything, while the parametrize ids advertised
-    # coverage of all four layouts.
+    # A row with no `layer` field renders on *every* layer, which is how both
+    # the full-size layouts and their symbol page are built. Skipping such a
+    # row (`if r.get("layer")`) returned the empty set for qwerty / dvorak /
+    # colemak, so two of the tests below iterated nothing and passed without
+    # asserting anything while the parametrize ids advertised coverage of all
+    # four layouts. Defaulting it to "base" fixed that and was right while
+    # full size had a single layer; now that it has two, "base" is one layer
+    # too few, and a glyph put on the always-visible number row and on the
+    # symbol page as well would collide on screen with nothing to catch it.
+
+    @staticmethod
+    def _rows_on(path: Path, layer: str) -> list[dict]:
+        """Every row that renders while *layer* is showing."""
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return [row for row in data["rows"] if row.get("layer", layer) == layer]
 
     @staticmethod
     def _layer_glyphs(path: Path, layer: str) -> list[str]:
         """Every glyph a user can *see* on *layer*, in key order."""
-        data = json.loads(path.read_text(encoding="utf-8"))
         return [
             key["key"]
-            for row in data["rows"]
-            if row.get("layer", "base") == layer
+            for row in TestNoDuplicateGlyphsWithinALayer._rows_on(path, layer)
             for key in row["keys"]
             if key.get("type") == "char" and key.get("key")
         ]
@@ -515,10 +675,10 @@ class TestNoDuplicateGlyphsWithinALayer:
         so on its own it would let an equivalent overlap through on a layer
         that kept its Shift key.
         """
-        data = json.loads(path.read_text(encoding="utf-8"))
-        by_layer: dict[str, list] = {}
-        for row in data["rows"]:
-            by_layer.setdefault(row.get("layer", "base"), []).extend(row["keys"])
+        by_layer: dict[str, list] = {
+            layer: [k for row in self._rows_on(path, layer) for k in row["keys"]]
+            for layer in self._layers(path)
+        }
 
         for layer, keys in by_layer.items():
             has_shift = any(

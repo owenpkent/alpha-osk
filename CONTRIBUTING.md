@@ -124,8 +124,10 @@ tests:
 - **`python check.py --serial` reproduces a failure in one process**, which
   is the first thing to try when a test passes alone and fails in a run.
 
-CI shards the same way, so a green local run and a green CI run now cost
-about the same and mean the same thing. It also cancels a run that a
+CI shards the same way (across machines as well as cores), so a green
+local run and a green CI run now cost about the same and mean the same
+thing. `docs/build/CI.md` has the full arrangement and the reasoning
+behind it. It also cancels a run that a
 newer push has superseded, so pushing a few commits in a row gives you
 one result for the tip rather than several stale ones arriving out of
 order.
@@ -153,7 +155,6 @@ Other useful docs in `docs/`:
 - `docs/architecture/HYBRID_MERGING.md` — prediction merging strategies
 - `docs/architecture/FUZZY_RECOGNITION.md` — spatial error correction
 - `docs/architecture/PPM.md` — character-level prediction
-- `docs/architecture/SWIPE_TYPING.md` — glide-typing decoder
 - `docs/build/WINDOWS.md`, `docs/build/LINUX.md`, `docs/build/MACOS.md` — per-platform build
   and packaging notes
 
