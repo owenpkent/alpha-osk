@@ -38,10 +38,18 @@ pyobjc-framework-ApplicationServices>=10.0; sys_platform == "darwin"
 #   pip install pyinstaller
 # pyinstaller>=6.0.0
 
+# Dictation needs no entry here, deliberately.  It captures through
+# PySide6.QtMultimedia (QAudioSource) and streams through
+# PySide6.QtWebSockets (QWebSocket), both of which are already inside the
+# PySide6 wheel above.  `sounddevice` was the obvious alternative and was
+# not taken: it needs PortAudio, a native binary the PyInstaller + NSIS
+# pipeline would then have to carry and the EV cert to sign, to do a job
+# Qt already does (and does better here, since QAudioSource resamples to
+# the 16 kHz mono the recogniser wants whatever the device runs at).
+# See docs/architecture/DICTATION.md before adding an audio dependency.
+
 # Future dependencies (uncomment as needed):
-# openai-whisper>=20231117  # Voice transcription
 # flwr>=1.6.0           # Federated learning (Flower)
-# sounddevice>=0.4.6    # Audio input
 # numpy>=1.26.0         # Numerical operations
 
 # Note: The Windows key synthesis backend uses only ctypes (Python stdlib).

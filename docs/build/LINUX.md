@@ -30,11 +30,19 @@ out of the box. Wayland users who prefer `ydotool` can override it:
 QT_QPA_PLATFORM=wayland python run.py
 ```
 
+Dictation capture does not go through `xdotool` at all: it opens the
+microphone through Qt's multimedia backend, which needs a working
+**PipeWire or PulseAudio** sound server on the host. Most desktops ship
+one; without it the mic button reports that the microphone could not be
+opened.
+
 ---
 
 ## Platform-parity features
 
-Features originally written for Windows that now also work on Linux:
+Features whose Linux behaviour is worth stating explicitly, either because
+they were written for Windows first and now also work here, or because how
+they behave under X11 versus Wayland is not obvious:
 
 | Feature | X11 | Wayland | Mechanism |
 |---------|-----|---------|-----------|
@@ -43,6 +51,7 @@ Features originally written for Windows that now also work on Linux:
 | Password-field auto privacy mode | ✅ | ✅ (if toolkit speaks AT-SPI) | `gi.repository.Atspi` focus listener — needs `python3-gi` + `gir1.2-atspi-2.0` |
 | Sticky-modifier hold / release | ✅ | ✅ | `xdotool keydown/keyup` or `ydotool key --key-down/--key-up`. **Super/Meta (Win) is never held** — see note below |
 | Defensive modifier release on startup | ✅ | ✅ | `LinuxKeySynthesizer.reset_modifier_state()` (see Troubleshooting) |
+| Dictation microphone capture | ✅ | ✅ | `QAudioSource` (QtMultimedia) talking to the host's PipeWire or PulseAudio server; no X11 / Wayland involvement either way |
 
 > **Super/Meta (the Win key) is sent only as a chord, never held.** Holding Super down makes the window manager (Mutter/KWin) grab the pointer for window move/resize gestures, so every click — including on the OSK's own keys — is swallowed as a WM gesture and the keyboard becomes unusable until the hold is released. `LinuxKeySynthesizer.hold_modifier()` therefore skips `win`/`super`; Super+`<key>` combos (Win+D, Win+L, Win+arrow) still work because they go out as an atomic `xdotool key super+<key>` chord. Other modifiers (Shift/Ctrl/Alt) are still held so Shift+drag selection etc. work in the target app.
 
@@ -125,6 +134,16 @@ Run the bundle directly with `./dist/alpha-osk/alpha-osk` — no install
 needed. Runtime still requires `xdotool` or `ydotool` on the host,
 because those are OS-level tools (not Python libraries) and are not
 bundled.
+
+**If dictation is in scope, complete one run against a real microphone
+from the bundle**, not only from source. Launching the bundle is not
+sufficient on its own: naming `PySide6.QtMultimedia` in the spec bundles
+the *module*, while opening a device also needs Qt's `multimedia`
+**plugin** directory, and a missing plugin surfaces as the message "The
+microphone could not be opened." rather than as a crash, so it will not
+show up in any other step. Check the device picker lists your inputs too,
+since it goes through the same backend. Same check as `WINDOWS.md` §
+*Test the installer* step 9.
 
 ### Dependency Lockfile & SBOM
 

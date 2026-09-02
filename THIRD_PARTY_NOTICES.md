@@ -19,8 +19,14 @@ fed to a `Canvas` via `ctx.path` (see `qml/components/StrokeIcon.qml`).
 
 - Project: https://github.com/feathericons/feather
 - Icons: `rotate-ccw` (clear-context button), `bookmark` (Snippets),
-  `smile` (Symbols & Emoji), `x` (close buttons)
+  `smile` (Symbols & Emoji), `mic` (Dictation), `x` (close buttons)
 - Licence: MIT
+- Icons in use, all in [`qml/Main.qml`](qml/Main.qml):
+  - `rotate-ccw`, the clear-context button in the suggestion bar
+  - `bookmark`, the Snippets buttons in the suggestion bar and the title bar
+  - `mic`, the dictation buttons in the suggestion bar and the title bar
+  - `chevron-left` / `chevron-right`, the Snippets window's back control and
+    its page pager
 
 The one place the source is not reproduced character for character is `smile`:
 `StrokeIcon` takes path data only, so that icon's `<circle>` is written as the

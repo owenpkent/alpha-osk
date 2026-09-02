@@ -115,7 +115,7 @@ A phased plan to harden Alpha-OSK's codebase, starting with the highest-impact, 
 
 - [ ] Add `Accessible.name` and `Accessible.description` to all interactive QML elements
 - [ ] Tab/arrow-key navigation within the OSK window
-- [ ] Voice dictation stub (Whisper integration placeholder)
+- [x] **Voice dictation** (Deepgram, not the Whisper placeholder this line first imagined): `src/dictation/`, off by default and inert until the user supplies their own API key. See `docs/architecture/DICTATION.md`
 - [ ] Cognitive accessibility profile (simplified layout, fewer keys visible)
 - [ ] Auditory feedback option (key click sounds, spoken predictions)
 

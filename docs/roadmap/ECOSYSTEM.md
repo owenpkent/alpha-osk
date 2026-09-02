@@ -23,7 +23,7 @@ All four are:
 A person with muscular dystrophy, cerebral palsy, or a spinal cord injury may only be able to use a mouse (or trackball, head tracker, eye gaze). They need:
 
 - **Text input** → Alpha-OSK (keyboard predictions reduce effort)
-- **Voice input** → MacroVox (speak when typing is too tiring)
+- **Voice input** → Alpha-OSK's own dictation for plain speech-to-text (see [`../architecture/DICTATION.md`](../architecture/DICTATION.md)), or MacroVox when the transcript needs AI cleanup or agentic writing
 - **Game input** → Nimbus (mouse → joystick with sensitivity curves + tremor filtering)
 - **Music input** → Octavium (mouse → MIDI with scale quantization + latch)
 
@@ -82,12 +82,21 @@ Each app can launch and trigger the others.
 
 | From | To | Trigger |
 |------|----|---------|
-| Alpha-OSK | MacroVox | Mic icon → Ctrl+Space toggle |
+| Alpha-OSK | MacroVox | A launch control of its own, **not** the mic button (see the note below) |
 | Alpha-OSK | Nimbus | Gamepad icon → launch Nimbus with gaming profile |
 | Alpha-OSK | Octavium | Music icon → launch Octavium with DAW profile |
 | Nimbus | Alpha-OSK | Button mapped to "open keyboard" |
 
 **Implementation**: Process detection + launch + hotkey synthesis. No IPC needed.
+
+> **The mic button is already spoken for.** Alpha-OSK now has native
+> dictation ([`../architecture/DICTATION.md`](../architecture/DICTATION.md)):
+> the microphone at the left end of the suggestion bar starts and stops
+> Alpha-OSK's own Deepgram run, and there is a title-bar mirror of it when
+> suggestions are switched off. This does not retire the MacroVox hook, since
+> the two answer different questions (MacroVox adds AI transcript cleanup and
+> agentic writing on top of raw dictation), but that hook needs a control of
+> its own rather than an icon a real feature is using.
 
 ### Phase 3 — Profile Auto-Switch
 
@@ -200,7 +209,7 @@ Since Alpha-OSK, Octavium, and Nimbus are all PySide6/Qt, their widgets can be e
 ## Recommended Next Steps
 
 1. **Document the ecosystem** (this file) ✅
-2. **Alpha-OSK Phase 2**: Mic icon (MacroVox), gamepad icon (Nimbus) in title bar
+2. **Alpha-OSK Phase 2**: gamepad icon (Nimbus), music icon (Octavium) in the title bar. The MacroVox hook needs a control that is not the mic button, which native dictation now owns.
 3. **Shared foreground monitor**: Alpha-OSK broadcasts foreground window changes via named pipe; Nimbus and Octavium subscribe
 4. **Nimbus keyboard output**: When Nimbus adds keyboard output mode, it becomes a direct complement to Alpha-OSK (joystick for movement, keyboard for text)
 5. **Unified profile format**: JSON schema that all four tools can read for auto-switch rules
