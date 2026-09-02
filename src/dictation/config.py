@@ -33,12 +33,12 @@ from __future__ import annotations
 import base64
 import json
 import logging
-import os
 import sys
-import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+
+from ..atomic_write import atomic_write_json
 
 _logger = logging.getLogger(__name__)
 
@@ -334,25 +334,10 @@ class DictationConfig:
                 payload["key_protected"] = False
 
         try:
-            target.parent.mkdir(parents=True, exist_ok=True)
-            fd, tmp_name = tempfile.mkstemp(dir=str(target.parent), suffix=".tmp")
-            try:
-                with os.fdopen(fd, "w", encoding="utf-8") as fh:
-                    json.dump(payload, fh, indent=2)
-                # Narrow the mode before the rename, so the file is never
-                # world-readable even for the instant between the two.  A
-                # no-op on Windows, where DPAPI is doing this job.
-                try:
-                    os.chmod(tmp_name, 0o600)
-                except OSError:
-                    pass
-                os.replace(tmp_name, target)
-            except BaseException:
-                try:
-                    os.unlink(tmp_name)
-                except OSError:
-                    pass
-                raise
+            # mode=0o600 narrows the file before the rename, so it is never
+            # world-readable even for the instant between the two.  A no-op
+            # on Windows, where DPAPI is doing this job.
+            atomic_write_json(target, payload, indent=2, mode=0o600)
         except OSError:
             _logger.warning("Could not save dictation settings", exc_info=True)
             return False

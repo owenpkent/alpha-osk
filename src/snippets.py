@@ -58,6 +58,7 @@ import logging
 from pathlib import Path
 from typing import Dict, List, Optional
 
+from .atomic_write import atomic_write_json
 from .platform import get_config_dir
 
 _logger = logging.getLogger("Snippets")
@@ -213,20 +214,11 @@ class SnippetStore:
 
     def save(self) -> None:
         """Write snippets to disk atomically (tempfile then rename)."""
-        self._path.parent.mkdir(parents=True, exist_ok=True)
         payload = {"version": SCHEMA_VERSION, "snippets": self._snippets}
-        tmp = self._path.with_suffix(self._path.suffix + ".saving")
         try:
-            with open(tmp, "w", encoding="utf-8") as fh:
-                json.dump(payload, fh, ensure_ascii=False, indent=2)
-            tmp.replace(self._path)
+            atomic_write_json(self._path, payload, indent=2, ensure_ascii=False)
         except OSError as exc:
             _logger.warning("Failed to save snippets: %s", exc)
-            if tmp.exists():
-                try:
-                    tmp.unlink()
-                except OSError:
-                    pass
 
     # --- Seeding -------------------------------------------------------
 

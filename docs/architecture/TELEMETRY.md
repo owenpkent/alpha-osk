@@ -63,7 +63,7 @@ If the user clears their config dir or reinstalls, they get a new anon_id and th
 
 Two paths, both gated on consent:
 
-1. **Weekly QTimer**: 7-day interval, fires from `KeyboardBridge` once telemetry is enabled. First submission lands ~7 days after opt-in (not immediately on toggle), so a user toggling out of curiosity doesn't accidentally send anything.
+1. **Weekly QTimer**: 7-day interval, fires from `TelemetryBridge` (`src/telemetry_bridge.py`, registered in QML as the `telemetry` context property) once telemetry is enabled. First submission lands ~7 days after opt-in (not immediately on toggle), so a user toggling out of curiosity doesn't accidentally send anything.
 2. **`aboutToQuit`**: if any counter has changed since the last successful submit, send before exit.
 
 If the user opts in, types for two days, then opts out: nothing was sent because the weekly window hadn't elapsed. This is fine. The counters are lifetime totals, so a delayed submit just means the public aggregate lags reality by up to a week.

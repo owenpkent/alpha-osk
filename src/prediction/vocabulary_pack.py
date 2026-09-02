@@ -22,22 +22,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Set
 
-# Pack IDs are used as filesystem directory names under the user's packs
-# directory.  A pack id of ".." (or anything that resolves outside that
-# directory) must be rejected before any shutil.rmtree / copytree call.
-_VALID_PACK_ID = re.compile(r"^[a-z0-9][a-z0-9_\-]{0,63}$")
-
-# Windows reserves these device names for every path component, regardless
-# of case and regardless of any extension attached ("con.txt" is exactly as
-# unrepresentable as "con"). _VALID_PACK_ID happily matches "con": it is a
-# valid lowercase id. Without this check, importing a pack derived from a
-# folder named "con" would hit shutil.copytree's destination mkdir raising
-# an uncaught OSError on Windows.
-_RESERVED_DEVICE_NAMES = frozenset(
-    {"con", "prn", "aux", "nul"}
-    | {f"com{i}" for i in range(1, 10)}
-    | {f"lpt{i}" for i in range(1, 10)}
-)
+from .pack_ids import is_valid_pack_id
 
 _logger = logging.getLogger("VocabularyPack")
 
@@ -97,16 +82,6 @@ def _clean_meta_text(value: object, fallback: str) -> str:
         return fallback
     collapsed = " ".join(value.split())
     return collapsed[:_MAX_PACK_META_FIELD_LEN] if collapsed else fallback
-
-
-def _is_reserved_device_name(name: str) -> bool:
-    """True if *name* collides with a Windows reserved device name.
-
-    Checked on the base name before any extension, case-insensitively,
-    matching how Windows itself resolves these names.
-    """
-    base = name.split(".", 1)[0].lower()
-    return base in _RESERVED_DEVICE_NAMES
 
 
 @dataclass
@@ -505,7 +480,7 @@ class PackManager:
         # user_packs_dir — defence in depth against symlinked configs.
         raw_id = source_dir.name.lower().replace(" ", "_")
         pack_id = re.sub(r"[^a-z0-9_\-]", "", raw_id).strip("_-")
-        if not pack_id or not _VALID_PACK_ID.match(pack_id) or _is_reserved_device_name(pack_id):
+        if not pack_id or not is_valid_pack_id(pack_id):
             _logger.error(
                 "Rejected pack import: invalid pack id %r derived from %s",
                 pack_id,

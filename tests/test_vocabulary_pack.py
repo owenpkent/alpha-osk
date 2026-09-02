@@ -278,7 +278,7 @@ class TestImportPackSecurity:
     def test_rejects_reserved_windows_device_name(self, tmp_path: Path):
         """A source folder that sanitises to a Windows reserved device
         name (con, nul, com1, ...) must be rejected: it passes
-        _VALID_PACK_ID (a normal-looking lowercase id) but
+        PACK_ID_RE (a normal-looking lowercase id) but
         dest_dir.mkdir() would raise an uncaught OSError for it on
         Windows."""
         mgr = self._mgr(tmp_path)

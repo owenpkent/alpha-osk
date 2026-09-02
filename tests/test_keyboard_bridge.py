@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 import time
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, Mock, call, patch
 
 import pytest
 
@@ -492,6 +492,95 @@ class TestModifierLock:
         bridge.shutdown()
         bridge._synth.release_modifier.assert_any_call("ctrl")
         assert not bridge._ctrl_locked
+
+
+class TestModifierReleaseIsOneMethod:
+    """`_release_sticky_modifiers` is the one place the auto-release lives.
+
+    Every keystroke path used to hand-copy the per-modifier release
+    block inline; it is now one parameterised method (`names` restricts
+    which modifiers a call even considers, `keep` exempts specific ones
+    from an otherwise-eligible release), and every keystroke path calls
+    it instead of writing its own copy. The behavioural half is covered
+    first (keep / names / lock / caps-lock survive a call); the wiring
+    half then asserts each keystroke path actually calls through,
+    rather than a reintroduced inline copy that happens to behave the
+    same today and silently drifts tomorrow.
+    """
+
+    def test_keep_leaves_the_named_modifiers_held(self, bridge: KeyboardBridge):
+        bridge._shift_active = True
+        bridge._ctrl_active = True
+        bridge._alt_active = True
+        bridge._synth.reset_mock()
+
+        bridge._release_sticky_modifiers(keep=("shift", "ctrl"))
+
+        assert bridge._shift_active is True
+        assert bridge._ctrl_active is True
+        assert bridge._alt_active is False
+        bridge._synth.release_modifier.assert_called_once_with("alt")
+
+    def test_names_restricts_which_modifiers_are_considered(self, bridge: KeyboardBridge):
+        bridge._shift_active = True
+        bridge._ctrl_active = True
+
+        bridge._release_sticky_modifiers(("shift",))
+
+        assert bridge._shift_active is False
+        assert bridge._ctrl_active is True, "ctrl was not in `names` and must be untouched"
+
+    def test_a_right_click_locked_modifier_survives(self, bridge: KeyboardBridge):
+        bridge.lockModifier("ctrl")
+        assert bridge._ctrl_active is True
+
+        bridge._release_sticky_modifiers()
+
+        assert bridge._ctrl_active is True
+        assert bridge._ctrl_locked is True
+
+    def test_shift_under_caps_lock_survives(self, bridge: KeyboardBridge):
+        bridge.toggleCapsLock()
+        bridge.toggleShift()
+        assert bridge._shift_active is True
+
+        bridge._release_sticky_modifiers()
+
+        assert bridge._shift_active is True
+
+    def test_a_plain_char_calls_it_with_no_restriction(self, bridge: KeyboardBridge):
+        with patch.object(kb.KeyboardBridge, "_release_sticky_modifiers") as mock_release:
+            bridge.pressKeyLiteral("a")
+        mock_release.assert_called_once_with()
+
+    def test_a_char_in_edit_mode_calls_it_for_shift_only(self, bridge: KeyboardBridge):
+        bridge.setEditMode(True)
+        with patch.object(kb.KeyboardBridge, "_release_sticky_modifiers") as mock_release:
+            bridge.pressKeyLiteral("a")
+        mock_release.assert_called_once_with(("shift",))
+
+    def test_a_ctrl_chord_calls_it_with_no_restriction(self, bridge: KeyboardBridge):
+        bridge.toggleCtrl()
+        with patch.object(kb.KeyboardBridge, "_release_sticky_modifiers") as mock_release:
+            bridge.pressKeyLiteral("c")
+        mock_release.assert_called_once_with()
+
+    def test_a_non_nav_special_key_keeps_nothing(self, bridge: KeyboardBridge):
+        with patch.object(kb.KeyboardBridge, "_release_sticky_modifiers") as mock_release:
+            bridge.pressSpecialKey("return")
+        mock_release.assert_called_once_with(keep=())
+
+    def test_a_nav_key_keeps_shift_and_ctrl(self, bridge: KeyboardBridge):
+        with patch.object(kb.KeyboardBridge, "_release_sticky_modifiers") as mock_release:
+            bridge.pressSpecialKey("left")
+        mock_release.assert_called_once_with(keep=("shift", "ctrl"))
+
+    def test_an_edit_mode_chord_calls_it_for_ctrl_alt_win(self, bridge: KeyboardBridge):
+        bridge.setEditMode(True)
+        bridge.toggleCtrl()
+        with patch.object(kb.KeyboardBridge, "_release_sticky_modifiers") as mock_release:
+            bridge.pressKeyLiteral("a")  # Ctrl+A -> selectall
+        mock_release.assert_called_once_with(("ctrl", "alt", "win"))
 
 
 class TestLayerManagement:
@@ -2399,6 +2488,79 @@ class TestVerbatimInsertsSurviveAHeldModifier:
         bridge.pressPrediction("hello")
         bridge._synth.release_modifier.assert_not_called()
         bridge._synth.hold_modifier.assert_not_called()
+
+
+class TestVerbatimInsertsShareOnePrologue:
+    """Every verbatim insert opens with the same `_begin_verbatim_insert`.
+
+    It used to be five copies of "release sticky modifiers, settle a
+    deferred auto-space, spend an armed auto-capital" (six, counting
+    `_insert_token_pill`'s own order for the same three steps). This
+    class asserts each insert path now calls the one shared method
+    exactly once, with the right `prose` argument, and that the method
+    itself runs its three steps in the documented order.
+    """
+
+    def test_press_prediction_calls_it_once(self, bridge: KeyboardBridge):
+        bridge._current_word = ""
+        with patch.object(
+            kb.KeyboardBridge, "_begin_verbatim_insert", return_value=("", False)
+        ) as mock_begin:
+            bridge.pressPrediction("hello")
+        mock_begin.assert_called_once_with()
+
+    def test_insert_snippet_calls_it_once(self, bridge: KeyboardBridge):
+        bridge._snippets.set(1, "Email", "owen@example.com")
+        with patch.object(
+            kb.KeyboardBridge, "_begin_verbatim_insert", return_value=("", False)
+        ) as mock_begin:
+            bridge.insertSnippet(1)
+        mock_begin.assert_called_once_with()
+
+    def test_insert_glyph_calls_it_once(self, bridge: KeyboardBridge):
+        with patch.object(
+            kb.KeyboardBridge, "_begin_verbatim_insert", return_value=("", False)
+        ) as mock_begin:
+            bridge.insertGlyph("é")
+        mock_begin.assert_called_once_with()
+
+    def test_token_pill_calls_it_once_with_prose_false(self, bridge: KeyboardBridge):
+        _type(bridge, "555-123-4567 ")
+        _type(bridge, "555-12")
+        assert "555-123-4567" in bridge._predictions
+        with patch.object(
+            kb.KeyboardBridge, "_begin_verbatim_insert", return_value=("", False)
+        ) as mock_begin:
+            bridge.pressPrediction("555-123-4567")
+        mock_begin.assert_called_once_with(prose=False)
+
+    def test_dictated_text_calls_it_once(self, bridge: KeyboardBridge):
+        with patch.object(
+            kb.KeyboardBridge, "_begin_verbatim_insert", return_value=("", False)
+        ) as mock_begin:
+            bridge._insert_dictated_text("hello")
+        mock_begin.assert_called_once_with()
+
+    def test_the_prologue_runs_its_three_steps_in_order(self, bridge: KeyboardBridge):
+        """Release, then settle the deferred space, then spend the auto-cap.
+
+        The order is load-bearing (see `_begin_verbatim_insert`'s
+        docstring), so it is worth pinning directly rather than trusting
+        that the three still read top-to-bottom in the source.
+        """
+        parent = Mock()
+        with (
+            patch.object(bridge, "_release_sticky_modifiers") as mock_release,
+            patch.object(bridge, "_take_deferred_space", return_value=("", False)) as mock_deferred,
+            patch.object(bridge, "_consume_auto_cap") as mock_consume,
+        ):
+            parent.attach_mock(mock_release, "release")
+            parent.attach_mock(mock_deferred, "deferred")
+            parent.attach_mock(mock_consume, "consume")
+
+            bridge._begin_verbatim_insert()
+
+        assert parent.mock_calls == [call.release(), call.deferred(True), call.consume()]
 
 
 class TestIntelligentSpacing:

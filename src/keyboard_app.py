@@ -70,6 +70,7 @@ from .platform import (
     macos_window,
     windows_window,
 )
+from .telemetry_bridge import TelemetryBridge
 
 _logger = logging.getLogger("KeyboardApp")
 
@@ -729,6 +730,17 @@ def main() -> int:
     # Create the bridge (auto-detects platform key synthesizer)
     bridge = KeyboardBridge()
 
+    # Telemetry lives on its own QObject rather than on the bridge -- see
+    # docs/architecture/STRUCTURAL_REVIEW.md section 3.1.  Parented to the
+    # bridge so its lifetime is tied to a live C++ owner rather than to
+    # whichever Python name happens to still reference it.
+    telemetry = TelemetryBridge(
+        bridge.analytics.get_session_stats,
+        app_version=__version__,
+        os_name=CURRENT_PLATFORM,
+        parent=bridge,
+    )
+
     if not bridge.synthAvailable:
         if CURRENT_PLATFORM == "linux":
             _logger.warning(
@@ -761,6 +773,7 @@ def main() -> int:
 
     # Expose bridge to QML
     engine.rootContext().setContextProperty("keyboard", bridge)
+    engine.rootContext().setContextProperty("telemetry", telemetry)
 
     # Load QML
     main_qml = qml_path()
@@ -815,6 +828,10 @@ def main() -> int:
             _logger.info("Auto-saving prediction model on exit...")
             bridge.savePredictionModel()
         bridge.saveAnalytics()
+        # Telemetry's own timer-stop-then-submit runs first, matching the
+        # relative order it had when it was the first thing bridge.shutdown()
+        # did, before bridge.shutdown() tears down its own timers/modifiers.
+        telemetry.shutdown()
         bridge.shutdown()
 
     app.aboutToQuit.connect(_on_about_to_quit)

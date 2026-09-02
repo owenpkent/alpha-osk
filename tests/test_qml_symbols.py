@@ -48,6 +48,7 @@ except ImportError as exc:  # pragma: no cover - environment-dependent
 
 from src.glyphs import MAX_RECENT  # noqa: E402
 from src.keyboard_bridge import KeyboardBridge  # noqa: E402
+from tests.qml_context import install_context_properties  # noqa: E402
 from tests.qt_settings_scope import TEST_APP, TEST_ORG  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -108,7 +109,7 @@ def picker_factory(qapp):
 
         engine = QQmlApplicationEngine()
         engine.warnings.connect(lambda errs: warnings.extend(e.toString() for e in errs))
-        engine.rootContext().setContextProperty("keyboard", bridge)
+        install_context_properties(engine, bridge)
         engine.load(QUrl.fromLocalFile(str(QML_MAIN)))
         assert engine.rootObjects(), "qml/Main.qml failed to load:\n  " + "\n  ".join(warnings)
         engines.append(engine)
@@ -181,6 +182,15 @@ class TestTheWindowLoads:
         _root, window, _bridge, _warnings = picker
         assert _recent(window) == [], "precondition: no history yet"
         assert window.property("categoryIndex") == 1
+
+    def test_the_window_is_a_standalone_component(self, picker) -> None:
+        """Pins the extraction out of Main.qml: QML names a component's
+        generated class after its file, so this fails if SymbolsWindow is
+        ever inlined back into Main.qml (where the class would be named
+        after Main.qml instead)."""
+        _root, window, _bridge, _warnings = picker
+        class_name = window.metaObject().className()
+        assert class_name.startswith("SymbolsWindow"), class_name
 
 
 class TestTappingAGlyph:

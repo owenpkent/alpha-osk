@@ -45,6 +45,7 @@ from tests.test_qml_compact_view import (  # noqa: E402
     _pump_until,
     _real_warnings,
     _theme_names,
+    install_context_properties,
 )
 
 # Reuse that module's `qapp` / `qml_root` fixtures without importing their
@@ -649,7 +650,7 @@ class TestRestartPersistence:
 
         engine = QQmlApplicationEngine()
         engine.warnings.connect(lambda errs: warnings.extend(e.toString() for e in errs))
-        engine.rootContext().setContextProperty("keyboard", bridge)
+        install_context_properties(engine, bridge)
         engine.load(QUrl.fromLocalFile(str(_QML_MAIN)))
         assert engine.rootObjects(), "Main.qml failed to reload"
         _settle()

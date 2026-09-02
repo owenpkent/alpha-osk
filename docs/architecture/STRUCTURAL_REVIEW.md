@@ -383,6 +383,41 @@ is the part that is hard, correct, and best left alone.
    parked. Either is fine. The costly state is the current one, in which a
    document asserts mechanical verification that nothing performs.
 
+
+### Status, 2 September 2026
+
+Each step became its own pull request, so that a reader can tell what was
+acted on. Numbers are pull requests on `owenpkent/alpha-osk`.
+
+| Step | Where | Note |
+|---|---|---|
+| 1. Extract the floating windows | #55 | `SnippetsWindow.qml`, `SymbolsWindow.qml`; `Main.qml` 6,004 to 4,338 lines; the two dead panels deleted |
+| 2. Fix the contradicted claims | the pull request that added this table | all five rows of section 4 |
+| 3. Atomic model write | #57 | `src/atomic_write.py`; all six stores route through it |
+| 4. Collapse the duplicate clusters | #56, #59 | one pack-id rule in `src/prediction/pack_ids.py`; `_release_sticky_modifiers(names, keep=)`, `_begin_verbatim_insert`, `_commit_verbatim_insert` |
+| 5. OS window code into `platform/` | #61 | `windows_window.py`, `macos_window.py`; `keyboard_app.py` off the mypy ignore list, which surfaced one real error |
+| 6. Split one surface off the bridge | #62 | telemetry; the measurement is below |
+| 7. Decide the C++ branch | open | a decision for the maintainer, not a pull request |
+
+**What step 6 measured.** Moving telemetry removed 56 lines from the
+bridge and needed one seam, a read-only `analytics` property. The move
+itself was mechanical. The expense was elsewhere: seven headless QML
+fixtures each registered the `keyboard` context property by hand, so a
+second property meant seven edits (now one, through
+`tests/qml_context.py`), and the new test module hit a Qt lifecycle flake
+(`QTimer.isActive()` reads False with no `QCoreApplication` in the
+worker). The private-reference count in the tests did not move for the
+bridge, because no bridge test had referenced telemetry. Data export, the
+next candidate, is a different bet: six slots, and `importUserData`
+reloads the predictor, analytics and snippets and clears the typing
+buffers, so expect the one seam to become three or four.
+
+Two things the sequence did not anticipate, both fixed on the way: running
+several worktree gates at once collided on the test QSettings scope, which
+was keyed only by xdist worker (#58), and four advisories against a
+transitive npm dev dependency blocked every pull request on the OSV gate
+for an afternoon (#60).
+
 ---
 
 ## 7. Method

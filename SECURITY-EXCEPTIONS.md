@@ -9,11 +9,22 @@ Triage agents should treat entries here as "known skipped, do not
 re-flag" rather than as a free pass to ignore the underlying class of
 finding.
 
-## scorecard/Branch-Protection = 0/10
+## scorecard/Branch-Protection = 0/10 (resolved 2026-09-02)
 
-- **Finding:** `main` has no GitHub branch-protection rule.
-- **Decided:** 2026-05-16. Skip.
-- **Reason:** Solo-dev private repo. The protection adds a forced PR
+- **Finding:** `main` had no GitHub branch-protection rule.
+- **Decided:** 2026-05-16. Skip. **Revisited:** 2026-09-02, and the skip no
+  longer applies: the repository is public and the rule now exists.
+- **What is configured now:** `main` requires the Lint, Type Check, Tests
+  and OSV Scanner checks to pass and refuses force-pushes and branch
+  deletion. It does not require a review (there is still one maintainer),
+  does not apply to administrators, and does not require a branch to be
+  up to date before merging. Those three gaps are deliberate, for the
+  motor-cost reason the original skip gave, and they are the residual
+  this entry now records: Scorecard will keep scoring the rule below
+  10/10 on the review requirement.
+- **Revisit when:** A second maintainer is added (then require a review),
+  or a bad merge lands that an up-to-date requirement would have caught.
+- **Original reason (2026-05-16):** Solo-dev private repo. The protection adds a forced PR
   workflow on every change. Concrete cost (extra steps per fix) is
   high for an accessibility tool maintained by a user with motor
   constraints; concrete benefit is small. `git log` is already the
@@ -21,8 +32,8 @@ finding.
   account-compromise scenario the attacker would route around anyway
   (a compromised account can land a malicious commit through the new
   PR flow just as easily as via direct push).
-- **Revisit when:** A second contributor is added to the repo, or
-  the repo goes public.
+- **Original revisit trigger:** A second contributor is added to the
+  repo, or the repo goes public. The second fired.
 
 ## scorecard/Signed-Releases = 0/10
 

@@ -32,13 +32,37 @@ while each module's explicit ``QSettings(TEST_ORG, TEST_APP)`` calls
 look wherever their own copy says.  Diverge them and the tests read a
 different scope than the QML wrote to, which fails as a persistence
 bug rather than as a configuration mistake.
+
+* **It must be per checkout, too.**  Worker names are ``gw0``..``gwN``
+  in every run, so two checkouts of this repo (git worktrees, say, each
+  gating a branch at the same time) collide exactly as two workers did,
+  and it shows up the same way: a window width that "drifted across
+  restarts", in whichever run lost the race.  Seen on 2026-09-02 with
+  four worktrees running ``check.py`` at once.  The scope therefore
+  also carries a short stable hash of the checkout path.  ``crc32``
+  rather than ``hash()``, for the reason ``conftest.py`` gives for the
+  shard hash: string hashing is salted per process.
 """
 
 from __future__ import annotations
 
 import os
+import zlib
+from pathlib import Path
+
+
+def scope_org(checkout: Path, worker: str) -> str:
+    """The organisation name for one (checkout, xdist worker) pair.
+
+    Every part is alphanumeric or a hyphen, so the value is safe as both
+    a registry key and a directory name.
+    """
+    tag = f"{zlib.crc32(str(checkout.resolve()).encode('utf-8')) & 0xFFFFFFFF:08x}"
+    return "-".join(part for part in ("alpha-osk-tests", tag, worker) if part)
+
 
 _XDIST_WORKER = os.environ.get("PYTEST_XDIST_WORKER", "")
+_CHECKOUT = Path(__file__).resolve().parent.parent
 
-TEST_ORG = f"alpha-osk-tests-{_XDIST_WORKER}" if _XDIST_WORKER else "alpha-osk-tests"
+TEST_ORG = scope_org(_CHECKOUT, _XDIST_WORKER)
 TEST_APP = "Alpha-OSK-Tests"
