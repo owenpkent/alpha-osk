@@ -80,6 +80,12 @@ jobs:
   test:
     name: Test (${{ matrix.os }} ${{ matrix.shard }}/4)
     runs-on: ${{ matrix.os }}
+    # A shard finishes in about six minutes, so one that reaches twenty has
+    # hung, not slowed. Without this the default is six hours: on 2026-09-03
+    # a windows shard reached 84% in four minutes and then produced nothing
+    # for twenty-eight more, holding its PR until someone cancelled it by
+    # hand. The rerun passed in six.
+    timeout-minutes: 20
     permissions:
       contents: read
     strategy:
@@ -229,6 +235,9 @@ jobs:
     name: Coverage (${{ matrix.os }})
     needs: test
     runs-on: ${{ matrix.os }}
+    # Same reasoning as the test job: this runs the whole suite on one
+    # machine and can hang the same way.
+    timeout-minutes: 20
     permissions:
       contents: read
     strategy:
