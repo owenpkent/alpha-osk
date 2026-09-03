@@ -233,7 +233,8 @@ fast first-pass rather than the primary engine.
 
 ### What stays
 
-- N-gram, PPM, fuzzy — all of it. The transformer re-ranks the merged
+- N-gram and fuzzy, all of it (PPM trains alongside but its word candidates
+  left the merge on 2026-09-03). The transformer re-ranks the merged
   candidate list rather than replacing it.
 - All the rules. They become input features, not the final answer.
 
