@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import random
 import statistics
 import sys
 import tempfile
@@ -52,6 +53,7 @@ import logging  # noqa: E402
 
 logging.disable(logging.CRITICAL)  # keep INFO-level engine-init noise off the table
 
+from src.prediction.fuzzy_recognizer import SpatialKeyModel  # noqa: E402
 from src.prediction.hybrid_predictor import HybridPredictor  # noqa: E402
 
 # 30 held-out everyday sentences. Written by hand, not drawn from
@@ -89,7 +91,16 @@ it might rain later so bring an umbrella just in case
 i will send you the updated version first thing tomorrow
 """.strip().splitlines()
 
-VALID_CONDITIONS = {"full", "no-ppm", "no-fuzzy", "rank", "rrf", "linear", "loglinear"}
+VALID_CONDITIONS = {
+    "full",
+    "no-ppm",
+    "no-fuzzy",
+    "legacy-fuzzy",
+    "rank",
+    "rrf",
+    "linear",
+    "loglinear",
+}
 
 
 @dataclass
@@ -122,7 +133,26 @@ def _warmup(hp: HybridPredictor, calls: int = 100) -> None:
                 return
 
 
-def measure(hp: HybridPredictor, label: str, sentences: Sequence[str], top: int) -> KsrResult:
+def _slipped(word: str, at: int, rng: random.Random) -> str:
+    """*word* with the character at *at* replaced by one of its spatial neighbours."""
+    model = _SPATIAL
+    options = [k for k in model.get_nearby_keys(word[at]) if k != word[at] and k.isalpha()]
+    if not options:
+        return word
+    return word[:at] + rng.choice(options) + word[at + 1 :]
+
+
+_SPATIAL = SpatialKeyModel()
+
+
+def measure(
+    hp: HybridPredictor,
+    label: str,
+    sentences: Sequence[str],
+    top: int,
+    *,
+    slip_at: int | None = None,
+) -> KsrResult:
     """Run the greedy keystroke-savings simulation over *sentences*.
 
     For every word, at every prefix length from empty to fully-typed, this
@@ -131,6 +161,9 @@ def measure(hp: HybridPredictor, label: str, sentences: Sequence[str], top: int)
     "clicked the instant it showed up" user). Savings are counted against
     typing every letter of the word plus one trailing space.
     """
+    # A fixed seed per measurement, so every condition slips the same words
+    # the same way and the rows stay comparable.
+    rng = random.Random(23)
     clicks_with = clicks_without = 0
     next_word_hits = next_word_total = 0
     first_hit_prefixes: list[int] = []
@@ -142,9 +175,15 @@ def measure(hp: HybridPredictor, label: str, sentences: Sequence[str], top: int)
             context = " ".join(words[:wi]) + (" " if wi else "")
             baseline = len(word) + 1
             used = baseline
+            # With ``slip_at`` set, one click of every word of four letters or
+            # more lands on a neighbouring key and is never corrected by the
+            # simulated user: the question is what the bar does about it.
+            shown = word
+            if slip_at is not None and len(word) > slip_at + 2:
+                shown = _slipped(word, slip_at, rng)
             for i in range(len(word)):
                 t0 = time.perf_counter()
-                preds = hp.predict(context + word[:i], top)
+                preds = hp.predict(context + shown[:i], top)
                 latencies_s.append(time.perf_counter() - t0)
                 if i == 0:
                     next_word_total += 1
@@ -204,6 +243,15 @@ def apply_condition(hp: HybridPredictor, name: str) -> Iterator[None]:
             yield
         finally:
             hp._fuzzy.get_fuzzy_predictions = real_get_fuzzy  # type: ignore[method-assign]
+        return
+    if name == "legacy-fuzzy":
+        # The pre-beam fuzzy source: whole-word correction offered mid-word.
+        previous_mode = hp._fuzzy.prefix_completion
+        hp._fuzzy.prefix_completion = False
+        try:
+            yield
+        finally:
+            hp._fuzzy.prefix_completion = previous_mode
         return
     if name in ("rank", "rrf", "linear", "loglinear"):
         previous_strategy = hp._merge_strategy
@@ -285,6 +333,14 @@ def build_parser() -> argparse.ArgumentParser:
         "(the live model under the user's config dir is never touched)",
     )
     parser.add_argument(
+        "--mis-click",
+        action="store_true",
+        help=(
+            "also run every condition with one neighbour slip on the second character of "
+            'each word, left uncorrected, and report it as a second row ("+slip")'
+        ),
+    )
+    parser.add_argument(
         "--learn-half",
         action="store_true",
         help="learn sentences 1-15 once, test on 16-30, report before/after plus an oracle row "
@@ -329,6 +385,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     for name in conditions:
         with apply_condition(hp, name):
             results.append(measure(hp, name, HELD_OUT, args.pills))
+            if args.mis_click:
+                results.append(measure(hp, name + " +slip", HELD_OUT, args.pills, slip_at=1))
 
     print_table(results)
     return 0

@@ -14,6 +14,7 @@ import logging
 import math
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
+from .prefix_beam import Position, PrefixBeam, PrefixIndex, SpatialEmissions
 from .symspell import SymSpell
 
 _logger = logging.getLogger("FuzzyRecognizer")
@@ -268,6 +269,14 @@ class FuzzyWordGenerator:
         if self.dictionary:
             for word, freq in self.dictionary.items():
                 self._symspell.add_word(word, int(max(1, freq)))
+        # The prefix beam behind ``complete_prefix``.  Built lazily on first
+        # use and again after any dictionary change (``_prefix_dirty``) or
+        # when the spatial model is re-pointed by a layout switch
+        # (``_prefix_spatial_id``), so no call order can leave it searching
+        # a stale grid or a stale word list.
+        self._prefix_beam: Optional[PrefixBeam] = None
+        self._prefix_dirty = True
+        self._prefix_spatial_id = 0
 
     def generate_candidates(
         self,
@@ -475,6 +484,7 @@ class FuzzyWordGenerator:
                     if freq > self.dictionary.get(word, 0.0):
                         self.dictionary[word] = freq
                     self._symspell.add_word(word, int(max(1, freq)))
+            self._prefix_dirty = True
             _logger.info("Fuzzy dictionary loaded: %d words", len(self.dictionary))
             return True
         except OSError as e:
@@ -502,6 +512,34 @@ class FuzzyWordGenerator:
         # user's first keystroke.  Lazy-build is fine for incremental
         # additions later (vocab pack toggles, learned words).
         self._symspell.prepare()
+        self._prefix_dirty = True
+
+    def complete_prefix(
+        self,
+        typed: str,
+        n: int = 5,
+        positions: Optional[Sequence[Optional[Position]]] = None,
+    ) -> List[Tuple[str, float]]:
+        """Completions of a possibly mistyped prefix; see ``prefix_beam``.
+
+        This is the mid-word counterpart of ``generate_candidates``, which
+        corrects a *finished* word and stays as it is for that.  The index
+        is rebuilt after any dictionary change and the emission table
+        whenever the spatial model object changes (``set_key_positions``
+        re-points it on a layout switch), and both are cheap enough (about
+        0.01 s for the shipped list) that rebuilding beats keeping them in
+        step by hand.
+        """
+        spatial_id = id(self.spatial_model)
+        if self._prefix_beam is None or self._prefix_dirty or spatial_id != self._prefix_spatial_id:
+            if self._prefix_beam is not None and not self._prefix_dirty:
+                index = self._prefix_beam.index
+            else:
+                index = PrefixIndex(self.dictionary)
+            self._prefix_beam = PrefixBeam(index, SpatialEmissions(self.spatial_model.positions))
+            self._prefix_dirty = False
+            self._prefix_spatial_id = spatial_id
+        return self._prefix_beam.complete(typed, n, positions)
 
 
 class FuzzyRecognizer:
@@ -511,6 +549,13 @@ class FuzzyRecognizer:
     confidence_threshold: float = DEFAULT_CONFIDENCE_THRESHOLD
     prediction_weight: float = DEFAULT_PREDICTION_WEIGHT
     autocorrect_margin: float = DEFAULT_AUTOCORRECT_MARGIN
+    # Mid-word, the live bar's fuzzy source completes the typed prefix
+    # through an error (``prefix_beam``) rather than correcting it as a
+    # finished word.  Off, ``get_fuzzy_predictions`` is the pre-beam
+    # whole-word path, kept for the benchmark's before/after and nothing
+    # else: measured, it put the intended word in the top five 0.0% of the
+    # time after a mid-word slip.
+    prefix_completion: bool = True
 
     def __init__(
         self,
@@ -558,19 +603,25 @@ class FuzzyRecognizer:
         self,
         typed_text: str,
         n: int = 5,
+        *,
+        positions: Optional[Sequence[Optional[Position]]] = None,
     ) -> List[Tuple[str, float]]:
         """Top-``n`` fuzzy candidates for the current word in ``typed_text``.
 
-        Splits on whitespace and runs candidate generation against the
-        trailing partial word.  Returns an empty list when the user is
-        between words (last char is whitespace) or has typed nothing —
-        the merge layer treats fuzzy as a "complete what you're typing"
-        source, not a next-word predictor.
+        Splits on whitespace and completes the trailing partial word through
+        the prefix beam (or, with ``prefix_completion`` off, corrects it as
+        a finished word).  Returns an empty list when the user is between
+        words (last char is whitespace) or has typed nothing: the merge
+        layer treats fuzzy as a "complete what you're typing" source, not a
+        next-word predictor.  ``positions`` optionally carries one click
+        position per character of the current word, in key units.
         """
         words = typed_text.split()
         current_word = words[-1] if words and not typed_text.endswith(" ") else ""
         if not current_word:
             return []
+        if self.prefix_completion:
+            return self.word_generator.complete_prefix(current_word, n, positions)
         return self.word_generator.generate_candidates(current_word)[:n]
 
     def should_autocorrect(
@@ -673,5 +724,6 @@ class FuzzyRecognizer:
             "spatial_uncertainty": self.spatial_uncertainty,
             "confidence_threshold": self.confidence_threshold,
             "prediction_weight": self.prediction_weight,
+            "prefix_completion": self.prefix_completion,
             "dictionary_size": len(self.word_generator.dictionary),
         }
