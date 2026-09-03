@@ -734,6 +734,7 @@ class KeyboardBridge(QObject):
         # Context tracking for predictions
         self._context_buffer = ""
         self._current_word = ""
+        self._word_offsets: List[Tuple[float, float]] = []
         # True iff Caps Lock was active for at least one character in the
         # currently-being-typed word.  Distinguishes "user shouted via
         # caps lock" from "user deliberately right-clicked / shifted each
@@ -1324,7 +1325,8 @@ class KeyboardBridge(QObject):
         self._edit_mode_active = active
 
     @Slot(str)
-    def pressKey(self, key: str) -> None:
+    @Slot(str, float, float)
+    def pressKey(self, key: str, dx: float = 0.0, dy: float = 0.0) -> None:
         """Called from QML when a character key is pressed.
 
         Applies shift / caps-lock case normalization to `key`. For a
@@ -1332,10 +1334,11 @@ class KeyboardBridge(QObject):
         variant where QML has already picked the exact character to
         send), use :meth:`pressKeyLiteral` instead.
         """
-        self._press_char(key, literal=False)
+        self._press_char(key, literal=False, offset=(dx, dy))
 
     @Slot(str)
-    def pressKeyLiteral(self, char: str) -> None:
+    @Slot(str, float, float)
+    def pressKeyLiteral(self, char: str, dx: float = 0.0, dy: float = 0.0) -> None:
         """Type ``char`` exactly as-is, bypassing shift / caps-lock case
         normalization.
 
@@ -1345,9 +1348,11 @@ class KeyboardBridge(QObject):
         side effects (analytics, learning, predictions, modifier
         auto-release) match :meth:`pressKey`.
         """
-        self._press_char(char, literal=True)
+        self._press_char(char, literal=True, offset=(dx, dy))
 
-    def _press_char(self, key: str, literal: bool) -> None:
+    def _press_char(
+        self, key: str, literal: bool, offset: Tuple[float, float] = (0.0, 0.0)
+    ) -> None:
         # Edit-mode intercept: route the character to the popup's
         # TextField instead of the OS. Apply shift/caps for case but
         # skip everything else (password detection, analytics,
@@ -1488,6 +1493,19 @@ class KeyboardBridge(QObject):
         else:
             # Update context and get predictions
             self._current_word += char
+            # Where inside the key this click landed, kept parallel to
+            # `_current_word` for the fuzzy beam.  `dx` / `dy` are
+            # fractions of the key from its centre (0, 0 for a Python
+            # caller, which is the key centre and today's behaviour).
+            # Many paths reset `_current_word` without knowing about this
+            # list, so it is re-synced here rather than at each of them,
+            # and `_update_predictions` only hands it on when the lengths
+            # agree.  The press is also observed for the learned bias,
+            # inside the not-privacy branch like every other learning.
+            if len(self._word_offsets) != len(self._current_word) - 1:
+                self._word_offsets = [(0.0, 0.0)] * (len(self._current_word) - 1)
+            self._word_offsets.append(offset)
+            self._predictor.observe_press(char, offset[0], offset[1])
             # Track whether Caps Lock was on for any char in this word
             # — gates whether all-caps typing is allowed to be learned
             # (see `_word_typed_under_caps_lock` in __init__).
@@ -1840,6 +1858,8 @@ class KeyboardBridge(QObject):
             self._learned_raw_token = ""
             if self._current_word:
                 self._current_word = self._current_word[:-1]
+                if self._word_offsets:
+                    self._word_offsets.pop()
                 if not self._current_word:
                     self._word_typed_under_caps_lock = False
                 # Backspacing inside "owen@gmai" or "555-123-" must keep
@@ -3014,7 +3034,15 @@ class KeyboardBridge(QObject):
     def _update_predictions(self) -> None:
         """Request updated predictions from the engine."""
         context = self._context_buffer + self._current_word
-        self._predictor.predict_with_refinement(context, n=self._prediction_count)
+        # Click positions only travel when they line up with the word;
+        # otherwise the beam uses key centres, which is how every path
+        # that resets the word without this list keeps working.
+        offsets = (
+            list(self._word_offsets)
+            if self._current_word and len(self._word_offsets) == len(self._current_word)
+            else None
+        )
+        self._predictor.predict_with_refinement(context, n=self._prediction_count, offsets=offsets)
         # Tell the language-model visualization what the active edge is
         # so it can pulse the node + edge live as the user types.
         # Privacy mode suppresses the emit — the viz must not leak
@@ -4813,6 +4841,7 @@ class KeyboardBridge(QObject):
         # tail.  See _take_lost_prefix for what learning it would cost.
         self._word_prefix_lost = bool(self._current_word)
         self._current_word = ""
+        self._word_offsets = []
         self._raw_token = ""
         # Goes with _raw_token: it names the run last handed to the token
         # store, and that run is gone.  Left behind, it was the one piece

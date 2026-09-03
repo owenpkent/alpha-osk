@@ -17,6 +17,7 @@ from typing import Dict, List, Mapping, Optional, Tuple
 
 from ..atomic_write import atomic_write_json
 from .language import ENGLISH, LanguageProfile
+from .pointer_model import PointerModel
 from .token_predictor import TokenPredictor
 
 _logger = logging.getLogger("NgramPredictor")
@@ -113,6 +114,13 @@ class NgramPredictor:
         # rides along in this class's save/load and gets backed up with
         # the rest of what the user taught us.  See token_predictor.py.
         self.tokens = TokenPredictor()
+        # Where inside a key the user tends to click, per physical slot.
+        # Owned here for the same reason the token store is: it rides in
+        # this class's save / load, the backup archive and Clear Learned
+        # Data.  The fuzzy recognizer holds a reference to this same
+        # object (the hybrid binds it), so it must be mutated in place,
+        # never rebound.  See pointer_model.py.
+        self.pointer = PointerModel()
         # Words that are ALWAYS capitalized regardless of position.
         # Language data, so it comes from the profile; see language.py.
         self._always_capitalize: Mapping[str, str] = profile.always_capitalize
@@ -1326,6 +1334,7 @@ class NgramPredictor:
             "blacklist_type_count": dict(self._blacklist_type_count),
             "capitalization": dict(self.capitalization),
             "tokens": self.tokens.to_dict(),
+            "pointer": self.pointer.to_dict(),
             "candidate_counts": dict(self._candidate_counts),
             "candidate_last_seen": dict(self._candidate_last_seen),
         }
@@ -1477,6 +1486,7 @@ class NgramPredictor:
             # Absent from every model saved before the token store existed,
             # which from_dict reads as an empty store rather than an error.
             self.tokens.from_dict(data.get("tokens", {}))
+            self.pointer.from_dict(data.get("pointer", {}))
             _logger.info(
                 "Model loaded from %s (%d blacklisted, %d capitalizations)",
                 path,
@@ -1648,6 +1658,7 @@ class NgramPredictor:
         # Learned phone numbers / addresses / emails are user data too,
         # and "clear my learned data" has to mean all of it.
         self.tokens.clear()
+        self.pointer.clear()
 
         # Rebuild base vocabulary from wordlists
         self._load_frequency_wordlist()

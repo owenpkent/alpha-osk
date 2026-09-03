@@ -16,7 +16,7 @@ import logging
 import math
 import threading
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Tuple
+from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 from PySide6.QtCore import QObject, Signal
 
@@ -147,6 +147,8 @@ class HybridPredictor(QObject):
 
         # Initialize fuzzy recognizer (spatial error correction)
         self._fuzzy = FuzzyRecognizer()
+        # One click-offset table, persisted with the n-gram model.
+        self._fuzzy.pointer = self._ngram.pointer
         data_dir = Path(__file__).parent.parent.parent / "data"
         self._fuzzy.load_dictionary(profile.dictionary)
         # Load common-misspellings fast-path table for autocorrect.
@@ -226,7 +228,13 @@ class HybridPredictor(QObject):
         thread = threading.Thread(target=loader, daemon=True)
         thread.start()
 
-    def predict(self, context: str, n: int = 5) -> List[str]:
+    def predict(
+        self,
+        context: str,
+        n: int = 5,
+        *,
+        offsets: Optional[Sequence[Optional[Tuple[float, float]]]] = None,
+    ) -> List[str]:
         """
         Get instant predictions combining n-gram, PPM, fuzzy, and vocabulary packs.
 
@@ -260,7 +268,7 @@ class HybridPredictor(QObject):
             _logger.debug("PPM preds: %s", [w for w, _ in ppm_preds[:5]])
 
         # Add fuzzy candidates for current word
-        fuzzy_preds = self._fuzzy.get_fuzzy_predictions(context, n)
+        fuzzy_preds = self._fuzzy.get_fuzzy_predictions(context, n, offsets=offsets)
         if fuzzy_preds:
             _logger.debug("FUZZY preds: %s", [w for w, _ in fuzzy_preds[:5]])
 
@@ -680,7 +688,13 @@ class HybridPredictor(QObject):
 
         return results
 
-    def predict_with_refinement(self, context: str, n: int = 5) -> List[str]:
+    def predict_with_refinement(
+        self,
+        context: str,
+        n: int = 5,
+        *,
+        offsets: Optional[Sequence[Optional[Tuple[float, float]]]] = None,
+    ) -> List[str]:
         """
         Get instant predictions and trigger async LLM refinement.
 
@@ -697,7 +711,7 @@ class HybridPredictor(QObject):
         self._current_context = context
 
         # Get instant hybrid predictions (n-gram + PPM + fuzzy)
-        predictions = self.predict(context, n)
+        predictions = self.predict(context, n, offsets=offsets)
         self.predictionsReady.emit(predictions)
 
         # Trigger async LLM refinement if available
@@ -743,6 +757,10 @@ class HybridPredictor(QObject):
             self._ppm_word.learn(text)
 
         return new_words
+
+    def observe_press(self, char: str, dx: float, dy: float) -> None:
+        """Record where inside its key a press landed; see ``pointer_model``."""
+        self._fuzzy.observe_press(char, dx, dy)
 
     def _refresh_fuzzy_frequencies(self, words: Optional[Iterable[str]] = None) -> None:
         """Push vocabulary changes into the fuzzy recognizer.

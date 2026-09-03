@@ -146,6 +146,37 @@ def _slipped(word: str, at: int, rng: random.Random) -> str:
 _SPATIAL = SpatialKeyModel()
 
 
+class Pointer:
+    """A pointer that lands a fixed distance from where it aims, plus scatter.
+
+    Every click on an intended key lands at the key's centre plus a
+    systematic bias plus Gaussian noise, all in key units.  The key
+    reported to the engine is the one whose centre is nearest the landing
+    point (a fair stand-in for "which rectangle contains it" on a grid of
+    1u keys), and the offset is the landing point's displacement from
+    that key's centre, which is what KeyButton.qml reports in the app.
+    """
+
+    def __init__(self, bias_x: float, bias_y: float, noise: float, rng: random.Random) -> None:
+        self.bias = (bias_x, bias_y)
+        self.noise = noise
+        self.rng = rng
+        self._keys = {k: v for k, v in _SPATIAL.positions.items() if k.isalpha()}
+
+    def click(self, intended: str) -> tuple[str, tuple[float, float]]:
+        """``(reported key, (dx, dy))`` for a click aimed at ``intended``."""
+        centre = self._keys.get(intended)
+        if centre is None:
+            return intended, (0.0, 0.0)
+        row = centre[0] + self.bias[1] + self.rng.gauss(0.0, self.noise)
+        col = centre[1] + self.bias[0] + self.rng.gauss(0.0, self.noise)
+        reported = min(
+            self._keys, key=lambda k: (self._keys[k][0] - row) ** 2 + (self._keys[k][1] - col) ** 2
+        )
+        rc = self._keys[reported]
+        return reported, (col - rc[1], row - rc[0])
+
+
 def measure(
     hp: HybridPredictor,
     label: str,
@@ -153,6 +184,9 @@ def measure(
     top: int,
     *,
     slip_at: int | None = None,
+    pointer: Pointer | None = None,
+    forward_offsets: bool = False,
+    learn_bias: bool = False,
 ) -> KsrResult:
     """Run the greedy keystroke-savings simulation over *sentences*.
 
@@ -180,11 +214,25 @@ def measure(
             # more lands on a neighbouring key and is never corrected by the
             # simulated user: the question is what the bar does about it.
             shown = word
+            offsets: list[tuple[float, float]] = []
             if slip_at is not None and len(word) > slip_at + 2:
                 shown = _slipped(word, slip_at, rng)
+            if pointer is not None:
+                # Every click lands where the pointer puts it; the engine sees
+                # the reported keys and, when allowed, the offsets, and learns
+                # the bias from each press as the real bridge would.
+                clicks = [pointer.click(c) for c in word]
+                shown = "".join(c for c, _ in clicks)
+                offsets = [off for _, off in clicks]
             for i in range(len(word)):
+                if pointer is not None and learn_bias and i > 0:
+                    hp.observe_press(shown[i - 1], offsets[i - 1][0], offsets[i - 1][1])
                 t0 = time.perf_counter()
-                preds = hp.predict(context + shown[:i], top)
+                preds = hp.predict(
+                    context + shown[:i],
+                    top,
+                    offsets=offsets[:i] if (pointer is not None and forward_offsets) else None,
+                )
                 latencies_s.append(time.perf_counter() - t0)
                 if i == 0:
                     next_word_total += 1
@@ -352,6 +400,15 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--pointer",
+        metavar="BIAS_X,BIAS_Y,NOISE",
+        help=(
+            "simulate a pointer that lands BIAS_X,BIAS_Y key-widths from where it aims "
+            "with Gaussian scatter NOISE (e.g. 0.2,0.15,0.3), and report each condition "
+            "three ways: reported keys only, plus click offsets, plus a learned bias"
+        ),
+    )
+    parser.add_argument(
         "--learn-half",
         action="store_true",
         help="learn sentences 1-15 once, test on 16-30, report before/after plus an oracle row "
@@ -381,6 +438,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.learn_half:
         run_learn_half(model_dir, args.pills)
         return 0
+    pointer_spec: tuple[float, float, float] | None = None
+    if args.pointer:
+        try:
+            bx, by, nz = (float(v) for v in args.pointer.split(","))
+        except ValueError:
+            parser.error("--pointer expects BIAS_X,BIAS_Y,NOISE, e.g. 0.2,0.15,0.3")
+        pointer_spec = (bx, by, nz)
 
     hp = HybridPredictor(model_dir=model_dir, enable_llm=False)
     ng = hp._ngram
@@ -395,9 +459,33 @@ def main(argv: Sequence[str] | None = None) -> int:
     results: list[KsrResult] = []
     for name in conditions:
         with apply_condition(hp, name):
-            results.append(measure(hp, name, HELD_OUT, args.pills))
+            if pointer_spec is None:
+                results.append(measure(hp, name, HELD_OUT, args.pills))
             if args.mis_click:
                 results.append(measure(hp, name + " +slip", HELD_OUT, args.pills, slip_at=1))
+            if pointer_spec is not None:
+                bias_x, bias_y, noise = pointer_spec
+                for suffix, fwd, learn in (
+                    (" keys only", False, False),
+                    (" +offsets", True, False),
+                    (" +learned bias", True, True),
+                ):
+                    # A fresh pointer per row, so every row sees the same clicks;
+                    # a fresh bias table too, so learning never leaks across rows.
+                    hp._ngram.pointer.clear()
+                    ptr = Pointer(bias_x, bias_y, noise, random.Random(5))
+                    results.append(
+                        measure(
+                            hp,
+                            name + suffix,
+                            HELD_OUT,
+                            args.pills,
+                            pointer=ptr,
+                            forward_offsets=fwd,
+                            learn_bias=learn,
+                        )
+                    )
+                hp._ngram.pointer.clear()
 
     print_table(results)
     return 0

@@ -149,28 +149,51 @@ class SpatialEmissions:
     distance.
     """
 
+    # Uncertainty, in key widths, when only the key is known: the click was
+    # somewhere inside it, plus scatter.
+    KEY_SIGMA = 0.85
+    # Uncertainty when the click's position inside the key is known.  Set by
+    # sweep against two simulated pointers (scripts/bench/ksr.py --pointer):
+    # a scatter-heavy one (bias 0.2, 0.15; noise 0.3) and a drift-heavy one
+    # (0.35, 0.25; 0.15).  Sharper than this hurts both, because scatter
+    # then puts the intended key on the expensive side of the click more
+    # often than the extra precision helps (0.3 lost 1.6 points, 0.22 lost
+    # 6); 0.55 never regressed either profile.  The beam already recovers
+    # most of what a position could tell it from the reported key alone,
+    # so the whole gain is modest: +0.3 to +0.8 points of keystroke savings
+    # with the learned bias, depending on how systematic the pointer is.
+    POSITION_SIGMA = 0.55
+
     def __init__(
         self,
         positions: Mapping[str, Position],
         *,
-        sigma: float = 0.85,
+        sigma: Optional[float] = None,
+        position_sigma: Optional[float] = None,
         radius: float = 2.2,
     ) -> None:
-        self.sigma = sigma
+        self.sigma = self.KEY_SIGMA if sigma is None else sigma
+        self.position_sigma = self.POSITION_SIGMA if position_sigma is None else position_sigma
         self.radius = radius
         self._positions: Dict[str, Position] = dict(positions)
         self._table: Dict[str, Dict[str, float]] = {}
         for key, pos in self._positions.items():
-            self._table[key] = self.for_position(pos)
+            self._table[key] = self.for_position(pos, sigma=self.sigma)
 
     def for_key(self, char: str) -> Optional[Dict[str, float]]:
         """Emissions for a click reported as ``char``, or ``None`` if unmapped."""
         return self._table.get(char)
 
-    def for_position(self, pos: Position) -> Dict[str, float]:
-        """Emissions for a click at an arbitrary position in key units."""
+    def for_position(self, pos: Position, *, sigma: Optional[float] = None) -> Dict[str, float]:
+        """Emissions for a click at a known position in key units.
+
+        Defaults to ``position_sigma``: a known position carries only the
+        scatter's uncertainty, where the per-key table has to allow for the
+        click being anywhere inside the key as well.
+        """
+        s = self.position_sigma if sigma is None else sigma
         r2 = self.radius * self.radius
-        denom = 2.0 * self.sigma * self.sigma
+        denom = 2.0 * s * s
         row: Dict[str, float] = {}
         for key, kpos in self._positions.items():
             d2 = (pos[0] - kpos[0]) ** 2 + (pos[1] - kpos[1]) ** 2
