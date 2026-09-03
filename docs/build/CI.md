@@ -107,6 +107,21 @@ The default cancelled every sibling on the first red, so one flaky ubuntu
 test took the windows job down with it and the run reported two failures
 where there was one, with nothing to say whether windows would have passed.
 
+## The suite jobs carry `timeout-minutes: 20`
+
+GitHub's default job timeout is six hours. On 2026-09-03 a windows shard on
+PR #66 reached 84% in four minutes and then produced nothing for
+twenty-eight more; with xdist's `-q` output there was no name to go on, the
+same shard had passed on the three sibling PRs whose test sets were
+supersets of it, and the rerun passed in six minutes. So it was a flaky
+hang, and the cost of a flaky hang is set by the timeout: without one it
+holds the PR until somebody notices and cancels by hand.
+
+Twenty minutes is about three times the slowest shard observed and applies
+to the `test` and `coverage` jobs, the two that run pytest. A job that
+reaches it has hung, not slowed, so if the shards ever grow toward it the
+answer is to measure what grew, not to raise the number first.
+
 ## Branch protection requires the `Tests` job, not the shards
 
 Required status checks are configured by *name*, in the repo settings

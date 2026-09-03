@@ -728,6 +728,11 @@ each one fixed: `docs/build/CI.md`. The rules that outlive the reasoning:
   setup rather than test count. If the gate creeps back up, measure before
   tiering: coverage on the one gate that runs before code leaves the machine
   is the last thing to trade away.
+- **The `test` and `coverage` jobs carry `timeout-minutes: 20`.** A shard
+  finishes in about six minutes, so a job that reaches twenty has hung, not
+  slowed; without it the default is six hours, and a flaky hang on a windows
+  shard held a PR for half an hour until it was cancelled by hand. If the
+  shards ever grow toward it, measure what grew before raising the number.
 
 **A test module that constructs a Qt application must build a
 `QGuiApplication` under that same scope, never a bare
