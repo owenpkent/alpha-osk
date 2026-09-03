@@ -111,13 +111,13 @@ class TestTheBridgeKeepsOffsetsParallelToTheWord:
         bridge.pressKey("h", 0.25, -0.1)
         bridge.pressKey("o")
         assert bridge._current_word == "ho"
-        assert bridge._word_offsets == [(0.25, -0.1), (0.0, 0.0)]
+        assert bridge._word_offsets == [("h", 0.25, -0.1), ("o", 0.0, 0.0)]
 
     def test_backspace_pops_and_a_reset_clears(self, bridge: KeyboardBridge):
         bridge.pressKey("h", 0.25, -0.1)
         bridge.pressKey("o", 0.1, 0.1)
         bridge.pressSpecialKey("backspace")
-        assert bridge._word_offsets == [(0.25, -0.1)]
+        assert bridge._word_offsets == [("h", 0.25, -0.1)]
         bridge._reset_typing_context()
         assert bridge._word_offsets == []
 
@@ -140,9 +140,52 @@ class TestTheBridgeKeepsOffsetsParallelToTheWord:
         bridge.pressKey("w", 0.1, 0.0)
         assert seen[-1] == [(0.0, 0.0)] * 5 + [(0.1, 0.0)]
 
+    def test_a_rewritten_word_of_the_same_length_does_not_inherit_them(
+        self, bridge: KeyboardBridge, monkeypatch
+    ):
+        # Typed `hwllo`, tapped the `hello` pill, backspaced into it: five
+        # letters, five offsets, four of them under the wrong letter.  A
+        # length check let that through; autocorrect has the same shape.
+        seen: list = []
+        monkeypatch.setattr(
+            bridge._predictor,
+            "predict_with_refinement",
+            lambda context, n=5, offsets=None: seen.append(offsets) or [],
+        )
+        typed = [(0.1, 0.0), (0.2, 0.0), (0.3, 0.0), (0.4, 0.0), (0.5, 0.0)]
+        for ch, (dx, dy) in zip("hwllo", typed):
+            bridge.pressKey(ch, dx, dy)
+        assert seen[-1] == typed
+        bridge._predictions = ["hello"]
+        bridge.pressPrediction("hello")
+        bridge.pressSpecialKey("backspace")
+        assert bridge._current_word == "hello"
+        bridge._update_predictions()
+        assert seen[-1] is None
+
+    def test_backspacing_into_the_word_as_it_was_typed_keeps_them(
+        self, bridge: KeyboardBridge, monkeypatch
+    ):
+        # The inverse: the same letters under the same clicks are still
+        # the user's own presses, so they travel.
+        seen: list = []
+        monkeypatch.setattr(
+            bridge._predictor,
+            "predict_with_refinement",
+            lambda context, n=5, offsets=None: seen.append(offsets) or [],
+        )
+        typed = [(0.1, 0.0), (0.2, 0.0), (0.3, 0.0), (0.4, 0.0), (0.5, 0.0)]
+        for ch, (dx, dy) in zip("hello", typed):
+            bridge.pressKey(ch, dx, dy)
+        bridge.pressSpecialKey("space")
+        bridge.pressSpecialKey("backspace")
+        assert bridge._current_word == "hello"
+        bridge._update_predictions()
+        assert seen[-1] == typed
+
     def test_the_literal_path_carries_the_offset_too(self, bridge: KeyboardBridge):
         bridge.pressKeyLiteral("A", 0.3, 0.2)
-        assert bridge._word_offsets == [(0.3, 0.2)]
+        assert bridge._word_offsets == [("A", 0.3, 0.2)]
 
     def test_a_press_is_observed_for_the_bias_outside_privacy_mode_only(
         self, bridge: KeyboardBridge

@@ -734,7 +734,7 @@ class KeyboardBridge(QObject):
         # Context tracking for predictions
         self._context_buffer = ""
         self._current_word = ""
-        self._word_offsets: List[Tuple[float, float]] = []
+        self._word_offsets: List[Tuple[str, float, float]] = []
         # True iff Caps Lock was active for at least one character in the
         # currently-being-typed word.  Distinguishes "user shouted via
         # caps lock" from "user deliberately right-clicked / shifted each
@@ -1499,12 +1499,15 @@ class KeyboardBridge(QObject):
             # caller, which is the key centre and today's behaviour).
             # Many paths reset `_current_word` without knowing about this
             # list, so it is re-synced here rather than at each of them,
-            # and `_update_predictions` only hands it on when the lengths
-            # agree.  The press is also observed for the learned bias,
-            # inside the not-privacy branch like every other learning.
-            if len(self._word_offsets) != len(self._current_word) - 1:
-                self._word_offsets = [(0.0, 0.0)] * (len(self._current_word) - 1)
-            self._word_offsets.append(offset)
+            # and `_update_predictions` only hands it on when the
+            # characters it was recorded under spell the word (see
+            # `_offsets_spell` for why a length check was not enough).
+            # The press is also observed for the learned bias, inside
+            # the not-privacy branch like every other learning.
+            so_far = self._current_word[:-1]
+            if not self._offsets_spell(so_far):
+                self._word_offsets = [(c, 0.0, 0.0) for c in so_far]
+            self._word_offsets.append((char, offset[0], offset[1]))
             self._predictor.observe_press(char, offset[0], offset[1])
             # Track whether Caps Lock was on for any char in this word
             # — gates whether all-caps typing is allowed to be learned
@@ -3031,17 +3034,34 @@ class KeyboardBridge(QObject):
             self._current_layer = new_layer
             self.currentLayerChanged.emit(self._current_layer)
 
+    def _offsets_spell(self, word: str) -> bool:
+        """Whether the recorded click positions were taken under ``word``.
+
+        Each entry carries the character it was recorded with, and that
+        is what makes a rewrite of the same length impossible to mistake
+        for the typed word: ``hwllo`` typed, the ``hello`` pill tapped and
+        a backspace into it leaves five letters and five offsets, four of
+        them under the wrong letter (autocorrect has the same shape).  A
+        length check let that through, and matching on the characters
+        closes it without touching any of the sites that rewrite the
+        word, the same argument ``_token_pill_words`` makes.
+        """
+        return "".join(c for c, _, _ in self._word_offsets).lower() == word.lower()
+
+    def _offsets_for_word(self) -> Optional[List[Tuple[float, float]]]:
+        """The click positions for ``_current_word``, or None for key centres."""
+        if not self._current_word or not self._offsets_spell(self._current_word):
+            return None
+        return [(dx, dy) for _, dx, dy in self._word_offsets]
+
     def _update_predictions(self) -> None:
         """Request updated predictions from the engine."""
         context = self._context_buffer + self._current_word
-        # Click positions only travel when they line up with the word;
-        # otherwise the beam uses key centres, which is how every path
-        # that resets the word without this list keeps working.
-        offsets = (
-            list(self._word_offsets)
-            if self._current_word and len(self._word_offsets) == len(self._current_word)
-            else None
-        )
+        # Click positions only travel when they were recorded under the
+        # word on screen; otherwise the beam uses key centres, which is
+        # how every path that resets the word without this list keeps
+        # working.
+        offsets = self._offsets_for_word()
         self._predictor.predict_with_refinement(context, n=self._prediction_count, offsets=offsets)
         # Tell the language-model visualization what the active edge is
         # so it can pulse the node + edge live as the user types.
