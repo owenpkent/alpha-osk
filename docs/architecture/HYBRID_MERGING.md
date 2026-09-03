@@ -720,3 +720,15 @@ it.  CLAUDE.md "Things to Watch Out For" calls this out.
   outperforms Condorcet and individual rank learning methods.*
   SIGIR.  Origin of the `1/(k+rank)` formula and `k=60` default.
   Now the standard in elasticsearch, Vespa, Azure AI Search.
+
+## Status (2026-09-03): PPM's list is empty by default
+
+Everything above that blends a PPM source describes the merge before
+2026-09-03. `HybridPredictor._ppm_in_merge` now defaults to False, so
+`predict()` hands the strategies an empty PPM list; the `ppm_weight` in
+`_source_weights` and the PPM branches of every strategy are inert but
+intact, and `scripts/bench/ksr.py --conditions ppm-merge` puts the list
+back for a before/after. The fuzzy source, meanwhile, is the prefix beam
+mid-word (`prefix_beam.py`) and its dictionary now follows the vocabulary
+during a session. Rationale and numbers in `CLAUDE.md`, sections *Prefix
+beam* and *Fuzzy dictionary refresh, and PPM out of the merge*.

@@ -193,3 +193,32 @@ class TestBeamUnit:
         index = PrefixIndex({f"help{c}": 1.0 for c in "abcdefgh"})
         beam = PrefixBeam(index, SpatialEmissions(QWERTY_POSITIONS))
         assert len(beam.complete("help", 3)) == 3
+
+
+class TestWhatWasTypedIsEvidence:
+    def test_a_rare_word_typed_exactly_beats_a_common_word_a_few_slips_away(self):
+        # On frequency alone "spent" (four slips: z->s, o->p, r->e, b->n) buys
+        # its way past a word typed three times; the exact prefix must win.
+        index = PrefixIndex({"zorblat": 3.0, "spent": 9000.0, "spend": 8000.0})
+        beam = PrefixBeam(index, SpatialEmissions(QWERTY_POSITIONS))
+        assert [w for w, _ in beam.complete("zorb", 3)][0] == "zorblat"
+
+    def test_but_a_prefix_that_is_not_live_still_goes_to_the_slips(self):
+        index = PrefixIndex({"spent": 9000.0, "spend": 8000.0})
+        beam = PrefixBeam(index, SpatialEmissions(QWERTY_POSITIONS))
+        assert [w for w, _ in beam.complete("zorb", 3)] == ["spent", "spend"]
+
+    def test_within_the_exact_completions_frequency_still_orders(self, fr):
+        assert top(fr, "docu")[0] == "document"
+
+    def test_one_cheap_edit_still_competes_on_frequency(self, fr):
+        # "teh" is a live prefix in the shipped list, and "the" is one swap away;
+        # a hard exact-first tier buried it behind the rare word.
+        first_two = top(fr, "teh", 2)
+        assert "the" in first_two
+        assert not first_two[0].startswith("teh")
+
+    def test_an_expensive_path_is_only_moved_below_the_exact_completions_not_dropped(self):
+        index = PrefixIndex({"zorblat": 3.0, "spent": 9000.0, "spend": 8000.0})
+        beam = PrefixBeam(index, SpatialEmissions(QWERTY_POSITIONS))
+        assert [w for w, _ in beam.complete("zorb", 3)] == ["zorblat", "spent", "spend"]

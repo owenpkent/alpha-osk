@@ -204,3 +204,19 @@ positional rank only.
 - Ward, D. J., Blackwell, A. F., & MacKay, D. J. C. (2000).  *Dasher
   — a data entry interface using continuous gestures and language
   models.*  UIST.  (PPM for assistive text input.)
+
+## Status (2026-09-03): trained, persisted, out of the word merge
+
+`PPMWordPredictor` was always constructed without a dictionary, so the
+dictionary-completion path described above never ran in the shipped
+engine; what reached the merge was the novel-completion beam, which emits
+fragments. Measured with the prefix beam in place, removing PPM's word
+candidates from the merge raised keystroke savings 53.6 -> 55.0% and cut
+per-keystroke latency from 21 ms to 3 ms, and it did not help in-domain
+learning or surface a word before its third sighting (the merge's
+vocabulary gate blocks that either way). `HybridPredictor._ppm_in_merge`
+is False by default; the character model still trains on every `learn`
+and still loads and saves `ppm_model.json`, so a fusion of its
+per-character probabilities inside `prefix_beam.py` (the VelociTap shape)
+remains the intended next use. See the *Fuzzy dictionary refresh, and PPM
+out of the merge* section of `CLAUDE.md`.

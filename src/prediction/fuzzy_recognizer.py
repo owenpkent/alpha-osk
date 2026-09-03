@@ -514,6 +514,38 @@ class FuzzyWordGenerator:
         self._symspell.prepare()
         self._prefix_dirty = True
 
+    def update_word(self, word: str, freq: float) -> None:
+        """Add one word, or raise its frequency, everywhere it is indexed.
+
+        The per-word counterpart of ``set_frequencies``: the dictionary,
+        SymSpell and the prefix index are each updated in place, so a word
+        the user has just taught the engine is fuzzy-matchable on the next
+        keystroke instead of after the next restart.  A lower frequency is
+        ignored, the same ``max`` rule ``set_frequencies`` applies.
+        """
+        word = word.lower()
+        if not word:
+            return
+        freq = float(freq)
+        if freq <= self.dictionary.get(word, 0.0):
+            return
+        self.dictionary[word] = freq
+        self._symspell.add_word(word, int(max(1, freq)))
+        if self._prefix_beam is not None and not self._prefix_dirty:
+            self._prefix_beam.index.update_word(word, freq)
+
+    def reset_dictionary(self) -> None:
+        """Forget every word, for a caller about to rebuild from scratch.
+
+        ``set_frequencies`` and ``update_word`` only ever add or raise, so
+        a vocabulary that has *shrunk* (Clear Learned Data, a Data Backup
+        import) needs this first or the old words stay fuzzy-matchable.
+        """
+        self.dictionary.clear()
+        self._symspell = SymSpell(max_edit_distance=self.max_edit_distance)
+        self._prefix_beam = None
+        self._prefix_dirty = True
+
     def complete_prefix(
         self,
         typed: str,
@@ -717,6 +749,14 @@ class FuzzyRecognizer:
     def set_frequencies(self, freqs: Mapping[str, float]) -> None:
         """Merge n-gram-style frequency counts into the fuzzy dictionary."""
         self.word_generator.set_frequencies(freqs)
+
+    def update_word(self, word: str, freq: float) -> None:
+        """Add one word or raise its frequency; pass-through to the generator."""
+        self.word_generator.update_word(word, freq)
+
+    def reset_dictionary(self) -> None:
+        """Forget every word ahead of a full rebuild; pass-through to the generator."""
+        self.word_generator.reset_dictionary()
 
     def get_stats(self) -> dict:
         """Diagnostic snapshot of the recognizer's tuning + dictionary size."""
