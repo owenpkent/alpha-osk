@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import time
 from collections import defaultdict
 from pathlib import Path
@@ -54,6 +55,21 @@ class NgramPredictor:
         self.bigrams: Dict[str, Dict[str, int]] = defaultdict(lambda: defaultdict(int))
         # Trigram: (prev2, prev1, word) -> frequency (optional, more context)
         self.trigrams: Dict[str, Dict[str, int]] = defaultdict(lambda: defaultdict(int))
+        # The user's half of the two context tables above.  ``bigrams`` /
+        # ``trigrams`` stay the merged view every reader expects; the base
+        # share is whatever is left once the user's share is taken out
+        # (invariant: ``bigrams[p][w] >= round(_user_bigrams[p][w])``).
+        # Keeping the halves apart is what lets the shipped seeds be
+        # re-applied on every launch without accumulating, lets recency
+        # decay act on the user's typing without erasing the curated
+        # corpus, and lets scoring trust the user's phrases in proportion
+        # to how often they were typed (see ``_context_probs``).  Floats,
+        # so a count decays a little at a time instead of snapping to the
+        # int floor of 1, which is how 78% of a matured model's edges
+        # ended up parked there permanently.  Only these two tables are
+        # persisted; the base half is rebuilt from the data files.
+        self._user_bigrams: Dict[str, Dict[str, float]] = defaultdict(lambda: defaultdict(float))
+        self._user_trigrams: Dict[str, Dict[str, float]] = defaultdict(lambda: defaultdict(float))
 
         # Total word count for probability calculation
         self.total_words = 0
@@ -527,6 +543,29 @@ class NgramPredictor:
     _LAMBDA_BI = 0.3
     _LAMBDA_UNI = 0.2
 
+    # How far to trust the user's own context counts against the base
+    # corpus, per prefix.  The user's distribution gets weight
+    # ``U / (U + prior)`` where ``U`` is how many times the user has typed
+    # anything after this prefix and ``prior`` is
+    # ``_CONTEXT_PRIOR_FLOOR + _CONTEXT_BASE_TRUST * (base count for the
+    # prefix)``.  Two things this shape buys, and both were measured
+    # failures of the single merged table: a phrase typed once after a
+    # word with a rich seed table (2,600 seed mass behind "the") needed
+    # 55 typings to reach the pills, and a phrase typed once after a word
+    # with no seeds at all was scored as a certainty (P = 1.0).  With the
+    # seeds loaded at 50 per curated pair, a trust of 0.02 makes one
+    # curated pair worth one user typing; the floor keeps a prefix with
+    # no base evidence from handing a single sighting the whole
+    # distribution (one typing gets 1 / 6, five get 1 / 2).  With no user
+    # evidence the formula collapses to the base distribution exactly, so
+    # a fresh model scores byte-for-byte as it did before the split.
+    _CONTEXT_PRIOR_FLOOR = 5.0
+    _CONTEXT_BASE_TRUST = 0.02
+    # A user context count below this after decay is dropped.  At the
+    # 0.95 decay factor a single typing survives about 45 decay ticks,
+    # roughly a week of ordinary typing, before it is forgotten.
+    _USER_CONTEXT_MIN = 0.1
+
     def predict(self, context: str, n: int = 5) -> List[str]:
         """
         Predict next words based on context.
@@ -595,23 +634,17 @@ class NgramPredictor:
         trigram_probs: Dict[str, float] = {}
         if len(words) >= 2:
             key = f"{words[-2]} {words[-1]}"
-            tri_context = self.trigrams.get(key)
-            if tri_context:
-                total = sum(tri_context.values())
-                if total > 0:
-                    for word, freq in tri_context.items():
-                        trigram_probs[word] = freq / total
+            trigram_probs = self._context_probs(
+                self.trigrams.get(key), self._user_trigrams.get(key)
+            )
 
         # Conditional bigram probabilities for the 1-word prefix.
         bigram_probs: Dict[str, float] = {}
         if len(words) >= 1:
             prev_word = words[-1]
-            bi_context = self.bigrams.get(prev_word)
-            if bi_context:
-                total = sum(bi_context.values())
-                if total > 0:
-                    for word, freq in bi_context.items():
-                        bigram_probs[word] = freq / total
+            bigram_probs = self._context_probs(
+                self.bigrams.get(prev_word), self._user_bigrams.get(prev_word)
+            )
 
         alpha = self.personal_weight
         user_total = self._user_total
@@ -719,9 +752,15 @@ class NgramPredictor:
                 has_consonant = True
         return has_vowel and has_consonant
 
-    def learn(self, text: str) -> List[str]:
+    def learn(self, text: str, *, corpus: bool = False) -> List[str]:
         """
         Learn from new text, updating n-gram frequencies.
+
+        ``corpus=True`` marks the text as shipped training data rather
+        than the user's typing: the bigram / trigram pairs then go to the
+        base share of the context tables, which is re-read from the data
+        files on every launch and never persisted, instead of to the
+        user's share, which is.  The unigram side is unchanged either way.
 
         Unknown words pass through a two-stage filter:
           1. Shape check — rejects all-consonant clusters and untrusted
@@ -781,18 +820,7 @@ class NgramPredictor:
             else:
                 learned.append(None)
 
-        # Update bigrams — only between neighbours that both made it in.
-        for i in range(1, len(learned)):
-            prev_word, curr_word = learned[i - 1], learned[i]
-            if prev_word and curr_word:
-                self.bigrams[prev_word][curr_word] += 1
-
-        # Update trigrams — all three positions must have been accepted.
-        for i in range(2, len(learned)):
-            w2, w1, curr = learned[i - 2], learned[i - 1], learned[i]
-            if w2 and w1 and curr:
-                key = f"{w2} {w1}"
-                self.trigrams[key][curr] += 1
+        self._link_context(learned, base=corpus)
 
         # Periodic recency decay so old words don't dominate
         self._learn_count += 1
@@ -802,14 +830,144 @@ class NgramPredictor:
 
         return new_words
 
+    def _link_context(self, learned: List[Optional[str]], *, base: bool) -> None:
+        """Record the bigram / trigram pairs of one accepted word sequence.
+
+        ``learned`` is parallel to the tokenised text; a ``None`` marks a
+        word that did not make it into the vocabulary, and no pair is
+        formed across one, so a gated fragment never seeds a context edge.
+        Base pairs go straight into the merged tables; user pairs go
+        through ``_bump_user_context`` so the user's share is tracked.
+        """
+        for i in range(1, len(learned)):
+            prev_word, curr_word = learned[i - 1], learned[i]
+            if prev_word and curr_word:
+                if base:
+                    self.bigrams[prev_word][curr_word] += 1
+                else:
+                    self._bump_user_context(self._user_bigrams, self.bigrams, prev_word, curr_word)
+        for i in range(2, len(learned)):
+            w2, w1, curr = learned[i - 2], learned[i - 1], learned[i]
+            if w2 and w1 and curr:
+                key = f"{w2} {w1}"
+                if base:
+                    self.trigrams[key][curr] += 1
+                else:
+                    self._bump_user_context(self._user_trigrams, self.trigrams, key, curr)
+
+    def learn_corpus_context(self, text: str) -> None:
+        """Add a corpus's bigram / trigram pairs to the base share only.
+
+        The unigram side is deliberately left alone.  ``reload_from_disk``
+        uses this after a Data Backup import: the file it re-reads holds
+        only the user's half of the context tables, so the shipped seeds
+        and corpus have to be re-applied, and re-learning the corpus in
+        full would add one more copy of its words to the unigram counts.
+        """
+        learned: List[Optional[str]] = [
+            word if self._is_plausible_word(word) else None for word in self._tokenize(text)
+        ]
+        self._link_context(learned, base=True)
+
+    @staticmethod
+    def _ri(value: float) -> int:
+        """Round half up; ``round()`` rounds half to even."""
+        return int(value + 0.5)
+
+    def _bump_user_context(
+        self,
+        user_table: Dict[str, Dict[str, float]],
+        merged_table: Dict[str, Dict[str, int]],
+        prefix: str,
+        word: str,
+        delta: float = 1.0,
+    ) -> None:
+        """Add ``delta`` to a user context count, keeping the merged view in step."""
+        old = user_table[prefix].get(word, 0.0)
+        new = old + delta
+        user_table[prefix][word] = new
+        merged_table[prefix][word] += self._ri(new) - self._ri(old)
+
+    def _decay_user_context(
+        self,
+        user_table: Dict[str, Dict[str, float]],
+        merged_table: Dict[str, Dict[str, int]],
+        factor: float,
+    ) -> None:
+        """Scale the user's share of a context table down, dropping the dust.
+
+        The merged view loses exactly what the user's share loses, so the
+        base share underneath is untouched: a curated pair keeps its seed
+        count however long the session runs.
+        """
+        for prefix in list(user_table):
+            row = user_table[prefix]
+            merged_row = merged_table.get(prefix)
+            for word in list(row):
+                old = row[word]
+                new = old * factor
+                if new < self._USER_CONTEXT_MIN:
+                    del row[word]
+                    new = 0.0
+                else:
+                    row[word] = new
+                if merged_row is not None:
+                    merged_row[word] -= self._ri(old) - self._ri(new)
+                    if merged_row[word] <= 0:
+                        del merged_row[word]
+            if not row:
+                del user_table[prefix]
+            if merged_row is not None and not merged_row:
+                del merged_table[prefix]
+
+    def _context_probs(
+        self,
+        merged_ctx: Optional[Dict[str, int]],
+        user_ctx: Optional[Dict[str, float]],
+    ) -> Dict[str, float]:
+        """P(w | prefix), blending the base and user shares of one prefix row.
+
+        With no user evidence this is the merged row normalised, exactly
+        the pre-split computation.  Otherwise the user's distribution is
+        trusted with weight ``U / (U + prior)``; see the constants above
+        for why the prior scales with the base evidence.  When the prefix
+        has no base evidence at all the remaining ``1 - w`` mass goes
+        nowhere, which is the point: it falls through to the lower-order
+        terms of the interpolation rather than crowning a single sighting.
+        """
+        if not merged_ctx:
+            return {}
+        user_evidence = sum(user_ctx.values()) if user_ctx else 0.0
+        if user_evidence <= 0.0 or user_ctx is None:
+            total = sum(merged_ctx.values())
+            if total <= 0:
+                return {}
+            return {word: count / total for word, count in merged_ctx.items()}
+        base_counts: Dict[str, int] = {}
+        base_total = 0
+        for word, count in merged_ctx.items():
+            base = count - self._ri(user_ctx.get(word, 0.0))
+            if base > 0:
+                base_counts[word] = base
+                base_total += base
+        prior = self._CONTEXT_PRIOR_FLOOR + self._CONTEXT_BASE_TRUST * base_total
+        w_user = user_evidence / (user_evidence + prior)
+        probs: Dict[str, float] = {}
+        for word in set(merged_ctx) | set(user_ctx):
+            p = w_user * (user_ctx.get(word, 0.0) / user_evidence)
+            if base_total > 0:
+                p += (1.0 - w_user) * (base_counts.get(word, 0) / base_total)
+            if p > 0.0:
+                probs[word] = p
+        return probs
+
     def _learn_base(self, text: str) -> None:
         """Learn from a base corpus / built-in dictionary.
 
         Unlike :meth:`learn`, counts go into ``_base_unigrams`` (not
         ``user_vocab``), so loading the shipped dictionary does not mask
-        the user's genuine typing signal.  Bigrams and trigrams are still
-        populated — those tables are not split in the current design, and
-        the base sentences are useful context regardless.
+        the user's genuine typing signal.  Bigrams and trigrams go to the
+        base share of the context tables for the same reason.
         """
         words = self._tokenize(text)
         if not words:
@@ -845,12 +1003,15 @@ class NgramPredictor:
             del self.user_vocab[word]
         self._user_total = new_total
 
-        # Decay user-learned bigrams (only those above base dictionary levels)
-        for prev_word in list(self.bigrams):
-            for word in list(self.bigrams[prev_word]):
-                self.bigrams[prev_word][word] = max(
-                    min_freq, int(self.bigrams[prev_word][word] * factor)
-                )
+        # Decay the user's share of both context tables.  This used to
+        # scale every bigram in the merged table, seeds included, floored
+        # at 1: on a fresh model the curated corpus was flat within about
+        # 2,500 learns, and on a matured one the seeds instead inflated,
+        # because every launch re-added them on top of the decayed file.
+        # Trigrams were never decayed at all, so a user trigram typed once
+        # sat at 1 against seeds that grew by 50 per launch.
+        self._decay_user_context(self._user_bigrams, self.bigrams, factor)
+        self._decay_user_context(self._user_trigrams, self.trigrams, factor)
 
         # Time-based sweep: drop candidates not seen within the max-age
         # window before applying the multiplicative decay. An accidental
@@ -1076,10 +1237,10 @@ class NgramPredictor:
         if not prev_tokens:
             return
         prev_word = prev_tokens[-1]
-        self.bigrams[prev_word][sel] += 1
+        self._bump_user_context(self._user_bigrams, self.bigrams, prev_word, sel)
         if len(prev_tokens) >= 2:
             prev2 = prev_tokens[-2]
-            self.trigrams[f"{prev2} {prev_word}"][sel] += 1
+            self._bump_user_context(self._user_trigrams, self.trigrams, f"{prev2} {prev_word}", sel)
 
     def unlearn_word(self, word: str) -> bool:
         """Reverse one sighting of a word — backspace-as-negative-signal.
@@ -1129,8 +1290,13 @@ class NgramPredictor:
         """Save model to JSON file."""
         data = {
             "unigrams": dict(self.unigrams),
-            "bigrams": {k: dict(v) for k, v in self.bigrams.items()},
-            "trigrams": {k: dict(v) for k, v in self.trigrams.items()},
+            # Only the user's half of the context tables is written.  The
+            # base half is re-read from the data files on every launch,
+            # and persisting the merged view is what made the seeds grow
+            # by 50 per launch (a live model was found at 1,037 for a
+            # pair shipped at 50, and 3,848 for a trigram shipped at 53).
+            "user_bigrams": self._user_context_to_json(self._user_bigrams),
+            "user_trigrams": self._user_context_to_json(self._user_trigrams),
             "user_vocab": dict(self.user_vocab),
             "total_words": self.total_words,
             "blacklist": sorted(self.blacklist),
@@ -1153,6 +1319,50 @@ class NgramPredictor:
     _MAX_UNIGRAMS = 500_000
     _MAX_BIGRAMS_PREFIXES = 500_000
     _MAX_CAPITALIZATIONS = 100_000
+
+    @staticmethod
+    def _user_context_to_json(table: Dict[str, Dict[str, float]]) -> Dict[str, Dict[str, float]]:
+        return {
+            prefix: {word: round(count, 3) for word, count in row.items() if count > 0}
+            for prefix, row in table.items()
+            if row
+        }
+
+    def _adopt_user_context(
+        self, raw: object
+    ) -> Tuple[Dict[str, Dict[str, float]], Dict[str, Dict[str, int]]]:
+        """Build (user, merged) context tables from a persisted mapping.
+
+        Accepts both the current ``user_*`` form and a legacy merged
+        table, which is adopted wholesale as user history: its counts
+        cannot be separated after the fact, treating them as the user's
+        keeps every ranking exactly as it was, and recency decay retires
+        the inherited seed mass over the following weeks while the base
+        share underneath is re-seeded cleanly from the data files.
+        Malformed entries are skipped one at a time rather than failing
+        the file, the same rule the token store applies.
+        """
+        user: Dict[str, Dict[str, float]] = defaultdict(lambda: defaultdict(float))
+        merged: Dict[str, Dict[str, int]] = defaultdict(lambda: defaultdict(int))
+        if not isinstance(raw, dict):
+            return user, merged
+        for prefix, row in raw.items():
+            if not isinstance(prefix, str) or not isinstance(row, dict):
+                continue
+            for word, value in row.items():
+                if not isinstance(word, str) or isinstance(value, bool):
+                    continue
+                try:
+                    count = float(value)
+                except (TypeError, ValueError):
+                    continue
+                if not math.isfinite(count) or count <= 0.0:
+                    continue
+                user[prefix][word] = count
+                rounded = self._ri(count)
+                if rounded > 0:
+                    merged[prefix][word] = rounded
+        return user, merged
 
     def load(self, path: Path) -> None:
         """Load model from JSON file."""
@@ -1179,15 +1389,19 @@ class NgramPredictor:
                     self._MAX_UNIGRAMS,
                 )
                 return
-            bigrams = data.get("bigrams", {})
-            if len(bigrams) > self._MAX_BIGRAMS_PREFIXES:
-                _logger.warning(
-                    "Model file %s has %d bigram prefixes (> %d); skipping load.",
-                    path,
-                    len(bigrams),
-                    self._MAX_BIGRAMS_PREFIXES,
-                )
-                return
+            legacy_context = "user_bigrams" not in data and "bigrams" in data
+            bigrams = data.get("user_bigrams", data.get("bigrams", {}))
+            trigrams = data.get("user_trigrams", data.get("trigrams", {}))
+            for label, table in (("bigram", bigrams), ("trigram", trigrams)):
+                if len(table) > self._MAX_BIGRAMS_PREFIXES:
+                    _logger.warning(
+                        "Model file %s has %d %s prefixes (> %d); skipping load.",
+                        path,
+                        len(table),
+                        label,
+                        self._MAX_BIGRAMS_PREFIXES,
+                    )
+                    return
             caps = data.get("capitalization", {})
             if len(caps) > self._MAX_CAPITALIZATIONS:
                 _logger.warning(
@@ -1212,13 +1426,15 @@ class NgramPredictor:
             }
 
             self.unigrams = defaultdict(int, unigrams)
-            self.bigrams = defaultdict(
-                lambda: defaultdict(int), {k: defaultdict(int, v) for k, v in bigrams.items()}
-            )
-            self.trigrams = defaultdict(
-                lambda: defaultdict(int),
-                {k: defaultdict(int, v) for k, v in data.get("trigrams", {}).items()},
-            )
+            self._user_bigrams, self.bigrams = self._adopt_user_context(bigrams)
+            self._user_trigrams, self.trigrams = self._adopt_user_context(trigrams)
+            if legacy_context:
+                _logger.info(
+                    "Adopted a pre-split context table (%d bigram, %d trigram prefixes) "
+                    "as user history; base seeds are re-applied from the data files.",
+                    len(self.bigrams),
+                    len(self.trigrams),
+                )
             self.user_vocab = defaultdict(int, user_vocab_clean)
             # Rebuild incremental running total from loaded counts.
             self._user_total = sum(self.user_vocab.values())
@@ -1252,7 +1468,7 @@ class NgramPredictor:
     def load_corpus(self, text: str) -> None:
         """Load a large corpus for initial training."""
         _logger.info("Loading corpus (%d chars)...", len(text))
-        self.learn(text)
+        self.learn(text, corpus=True)
         _logger.info("Corpus loaded. Total words: %d", self.total_words)
 
     def load_base_dictionary(self, dict_path: Optional[Path] = None) -> bool:
@@ -1393,6 +1609,8 @@ class NgramPredictor:
         self.unigrams.clear()
         self.bigrams.clear()
         self.trigrams.clear()
+        self._user_bigrams.clear()
+        self._user_trigrams.clear()
         self._base_unigrams.clear()
         self._base_total = 0
         self._user_total = 0
@@ -1422,5 +1640,7 @@ class NgramPredictor:
             "unique_words": len(self.unigrams),
             "bigrams": sum(len(v) for v in self.bigrams.values()),
             "trigrams": sum(len(v) for v in self.trigrams.values()),
+            "user_bigrams": sum(len(v) for v in self._user_bigrams.values()),
+            "user_trigrams": sum(len(v) for v in self._user_trigrams.values()),
             "user_words": len(self.user_vocab),
         }
