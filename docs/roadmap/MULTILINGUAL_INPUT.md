@@ -397,7 +397,7 @@ download for every user to serve a minority of them, and it lands on
 good reasons.
 
 The mechanism is already built twice over. Releases are published as
-assets on `okstudio1/alpha-osk-releases` and the updater already
+assets on `owenpkent/alpha-osk-releases` and the updater already
 downloads, verifies and installs from there. Vocabulary packs already
 have a hardened import path with size caps, allow-list extraction and
 reserved-name rejection. A language pack is a vocabulary pack with a
