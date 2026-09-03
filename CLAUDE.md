@@ -625,7 +625,7 @@ and `SymbolsWindow.qml` are the examples: both are declared once, as
 ## Fuzzy Recognition Defaults
 
 Hardcoded in `src/prediction/fuzzy_recognizer.py` as `DEFAULT_*` / `_*_PROB` constants. Used to be six "accessibility profiles" (Precise / Normal / Mild Tremor / etc.) but they were confusing - the profile UI is gone and there's now one generous, Gboard-leaning default. Knobs:
-- **`spatial_uncertainty` (1.4)**: how far off-center a press still counts as the intended key, in key-widths.
+- **`spatial_uncertainty` (1.4)**: how far off-center a press still counts as the intended key, in key-widths. It governs the whole-word paths only (`generate_candidates`, `get_correction`, `should_autocorrect`); the mid-word prefix beam scores with its own emission width, `SpatialEmissions.sigma`, which was set by sweep and deliberately does not follow this knob (see *Prefix beam*).
 - **`confidence_threshold` (0.65)**: minimum *absolute* score for `should_autocorrect` to fire - the first gate.
 - **`autocorrect_margin` (1.5)**: *relative* gate. The correction's score must clear `typed_baseline * autocorrect_margin`, where `typed_baseline = log1p(1) approx 0.69` for plausibly-shaped typings (vowel + consonant) and `0` for implausible slop. This is the LatinIME / Gboard "the literal typed word competes against corrections" pattern - keeps autocorrect from stomping on deliberate typings like "thru", "lol", "btw" while still letting obvious typos through. Implausible inputs ("xqz", "thx") fall back to the absolute threshold alone since their baseline is 0.
 - **`prediction_weight` (0.6)**: weight applied to fuzzy candidates in the hybrid merge.
