@@ -70,7 +70,7 @@ flowchart LR
     RT["_raw_token<br/>the unbroken run before the cursor,<br/>punctuation included"]
     D{"_in_token_context<br/>a digit anywhere, or an @<br/>that is not the first character"}
     TP["TokenPredictor<br/>phone, zip, house number, domain<br/>prefix match on count<br/>no context, no fuzzy"]
-    HP["HybridPredictor<br/>ngram + PPM + fuzzy + packs<br/>4 pluggable merge strategies"]
+    HP["HybridPredictor<br/>ngram + fuzzy + packs<br/>(PPM trains, out of the merge)<br/>4 pluggable merge strategies"]
     FS["_finalize_scores<br/>suppression, boosts, capitalisation,<br/>short-word allow-list"]
     BAR["prediction bar<br/>one kind of pill at a time"]
 

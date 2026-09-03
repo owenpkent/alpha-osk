@@ -88,7 +88,7 @@ alpha-osk/
 - **Key Synthesis:**
   - **Linux:** xdotool (X11) / ydotool (Wayland) via subprocess
   - **Windows:** Win32 SendInput API via ctypes (zero external deps)
-- **Prediction:** Hybrid engine (n-gram + PPM + fuzzy recognition)
+- **Prediction:** Hybrid engine (n-gram + fuzzy recognition)
 - **No AI/LLM required** — Transformer disabled by default (can re-enable if desired)
 - **Windows Build:** PyInstaller + UIAccess manifest + EV code signing
 
@@ -161,7 +161,7 @@ User types key → Fuzzy Recognition (spatial correction)
 - ✅ Key hold/repeat for continuous typing (including backspace)
 
 ### Prediction
-- ✅ **Hybrid prediction** (n-gram + PPM + fuzzy recognition)
+- ✅ **Hybrid prediction** (n-gram + fuzzy recognition)
 - ✅ **PPM Language Model** — Character-level prediction (Dasher algorithm)
 - ✅ **Fuzzy/Spatial Recognition** — Corrects mistypes based on key proximity
 - ✅ **Next-word prediction** — After selecting a word, suggests likely follow-ups
@@ -205,7 +205,7 @@ python3 run.py              # Auto-creates venv, installs PySide6
 python run.py               # No system deps needed — SendInput is built-in
 ```
 
-That's it! No AI/LLM download required. Predictions work out of the box with n-gram + PPM + fuzzy recognition.
+That's it! No AI/LLM download required. Predictions work out of the box with n-gram + fuzzy recognition.
 
 ### Building a Windows .exe (with UIAccess)
 ```powershell

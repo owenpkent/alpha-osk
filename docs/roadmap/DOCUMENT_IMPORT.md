@@ -10,7 +10,7 @@ Let users import their own documents (emails, essays, chat logs, notes) so the p
 
 **Short answer: No, not for the core feature.**
 
-The existing prediction engine (n-gram + PPM) already learns writing style effectively without any AI/ML model:
+The existing prediction engine (n-gram, with a PPM character model trained alongside) already learns writing style effectively without any AI/ML model:
 
 | What It Learns | How | AI Needed? |
 |----------------|-----|------------|

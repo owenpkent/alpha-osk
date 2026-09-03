@@ -10,7 +10,7 @@ Type into any Windows or Linux app by clicking on-screen keys. Built for people 
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![CI](https://github.com/owenpkent/alpha-osk/actions/workflows/ci.yml/badge.svg)](https://github.com/owenpkent/alpha-osk/actions/workflows/ci.yml)
-[![Tests](https://img.shields.io/badge/tests-1679-brightgreen.svg)](tests/)
+[![Tests](https://img.shields.io/badge/tests-2045-brightgreen.svg)](tests/)
 [![Releases](https://img.shields.io/badge/releases-alpha--osk--releases-orange.svg)](https://github.com/owenpkent/alpha-osk-releases/releases)
 
 <img src="assets/screenshots/dark-theme-keyboard.png" alt="Alpha-OSK on-screen keyboard with function row, QWERTY block, navigation cluster, and numpad" width="900" />
@@ -221,7 +221,9 @@ Yes on Windows (Unicode keystroke injection covers anything in BMP and supplemen
 
 ### Prediction
 
-- Hybrid n-gram + PPM + fuzzy spatial recognition merged with one of four user-selectable strategies (rank, RRF, linear, log-linear)
+- Hybrid n-gram + fuzzy spatial recognition merged with one of four user-selectable strategies (rank, RRF, linear, log-linear)
+- Completes a word through a mis-click: mid-word suggestions come from a beam over the dictionary's live prefixes that allows a slipped, missed, doubled or swapped click, so `hwllo` still offers `hello`
+- Uses where inside the key you clicked, and learns your pointer's habitual bias per key position, on-device and never while a password field is focused
 - Learns your vocabulary on-device, with backspace as a negative signal
 - Learns the things a word model can't hold: your phone number, zip, house number and email address, suggested back by prefix. Typing `@` offers common email domains, and the ones you actually use move to the front. Long digit runs are refused outright so card and Social Security numbers are never stored (see [Privacy](docs/PRIVACY.md))
 - Right-click any prediction pill to show more, show less, edit, or remove permanently
