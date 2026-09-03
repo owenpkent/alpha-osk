@@ -863,10 +863,24 @@ class NgramPredictor:
         only the user's half of the context tables, so the shipped seeds
         and corpus have to be re-applied, and re-learning the corpus in
         full would add one more copy of its words to the unigram counts.
+
+        Which words may form a pair is decided exactly as :meth:`learn`
+        decides it for the same text: a known word always, an unknown one
+        only from its third sighting (the candidate pool, read here but
+        not written).  Without that gate a reload linked context for
+        every rare corpus word that a launch withholds, so the base share
+        differed between a fresh start and a post-import reload.
         """
-        learned: List[Optional[str]] = [
-            word if self._is_plausible_word(word) else None for word in self._tokenize(text)
-        ]
+        sightings: Dict[str, int] = defaultdict(int, self._candidate_counts)
+        learned: List[Optional[str]] = []
+        for word in self._tokenize(text):
+            if not self._is_plausible_word(word):
+                learned.append(None)
+            elif word in self._base_unigrams or word in self.user_vocab:
+                learned.append(word)
+            else:
+                sightings[word] += 1
+                learned.append(word if sightings[word] >= self._candidate_threshold else None)
         self._link_context(learned, base=True)
 
     @staticmethod
@@ -935,14 +949,21 @@ class NgramPredictor:
         nowhere, which is the point: it falls through to the lower-order
         terms of the interpolation rather than crowning a single sighting.
         """
-        if not merged_ctx:
-            return {}
         user_evidence = sum(user_ctx.values()) if user_ctx else 0.0
         if user_evidence <= 0.0 or user_ctx is None:
+            if not merged_ctx:
+                return {}
             total = sum(merged_ctx.values())
             if total <= 0:
                 return {}
             return {word: count / total for word, count in merged_ctx.items()}
+        # The merged row may already be gone while the user row is not:
+        # decay drops a merged count the moment it rounds to zero, but
+        # the user's float share lives on down to _USER_CONTEXT_MIN, and
+        # for a prefix with no base evidence that leaves nothing merged
+        # for most of the pair's remaining lifetime.  The user row alone
+        # still scores it at U / (U + prior), as the docstring promises.
+        merged_ctx = merged_ctx or {}
         base_counts: Dict[str, int] = {}
         base_total = 0
         for word, count in merged_ctx.items():

@@ -99,6 +99,24 @@ class TestTheMergedViewStaysHonest:
         # unigram behaviour is deliberately unchanged by the split
         assert p.total_words > 0
 
+    def test_reseeding_the_corpus_gates_rare_words_exactly_as_a_launch_does(self):
+        # A launch learns the corpus through `learn(corpus=True)`, which
+        # withholds an unknown word until its third sighting.  The reseed
+        # after a Data Backup import linked every plausible word instead,
+        # so a reload grew context edges a fresh start never has.
+        rare = "zibbertrunk flombasso"
+        launched, reloaded = NgramPredictor(), NgramPredictor()
+        launched.load_corpus(rare)
+        reloaded.learn_corpus_context(rare)
+        assert not launched.bigrams.get("zibbertrunk")
+        assert not reloaded.bigrams.get("zibbertrunk")
+        # and the inverse: the third sighting promotes on both paths alike
+        launched, reloaded = NgramPredictor(), NgramPredictor()
+        launched.load_corpus(" ".join([rare] * 3))
+        reloaded.learn_corpus_context(" ".join([rare] * 3))
+        assert launched.bigrams["zibbertrunk"]["flombasso"] == 1
+        assert reloaded.bigrams["zibbertrunk"]["flombasso"] == 1
+
 
 class TestScoringTrustsTheUserInProportion:
     def test_with_no_user_evidence_the_score_is_the_old_normalised_row(self):
@@ -112,6 +130,30 @@ class TestScoringTrustsTheUserInProportion:
         p.learn("zebra crossing")
         probs = p._context_probs(p.bigrams["zebra"], p._user_bigrams["zebra"])
         assert probs["crossing"] == pytest.approx(1 / (1 + p._CONTEXT_PRIOR_FLOOR))
+
+    def test_a_lone_user_pair_keeps_scoring_until_it_is_forgotten(self):
+        # Decay drops the merged count the moment it rounds to zero (14
+        # ticks for a single typing) while the user share lives on down
+        # to _USER_CONTEXT_MIN (45 ticks).  For a prefix with no base
+        # evidence that used to leave an empty merged row, and an early
+        # return on it scored the pair at nothing for two thirds of its
+        # remaining life.
+        p = NgramPredictor()
+        p.learn("zebra crossing")
+        for _ in range(20):
+            p._apply_decay()
+        share = p._user_bigrams["zebra"]["crossing"]
+        assert share > p._USER_CONTEXT_MIN
+        assert not p.bigrams.get("zebra")
+        probs = p._context_probs(p.bigrams.get("zebra"), p._user_bigrams.get("zebra"))
+        assert probs["crossing"] == pytest.approx(share / (share + p._CONTEXT_PRIOR_FLOOR))
+
+    def test_and_scores_nothing_once_the_user_share_is_gone_too(self):
+        p = NgramPredictor()
+        p.learn("zebra crossing")
+        for _ in range(80):
+            p._apply_decay()
+        assert p._context_probs(p.bigrams.get("zebra"), p._user_bigrams.get("zebra")) == {}
 
     def test_a_personal_phrase_surfaces_after_a_few_typings_after_a_common_word(self, tmp_path):
         p = NgramPredictor()
