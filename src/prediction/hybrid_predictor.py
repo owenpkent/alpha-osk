@@ -16,7 +16,7 @@ import logging
 import math
 import threading
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, Iterable, List, Optional, Tuple
 
 from PySide6.QtCore import QObject, Signal
 
@@ -129,6 +129,20 @@ class HybridPredictor(QObject):
         self._ppm = PPMPredictor(model_path=ppm_path if ppm_path.exists() else None)
         self._ppm_word = PPMWordPredictor(ppm=self._ppm)
         self._enable_ppm = True
+        # The character model keeps training and persisting, but its word
+        # candidates no longer enter the merge.  Measured with the prefix
+        # beam in place (scripts/bench/ksr.py, conditions full vs
+        # ppm-merge): taking it out raised keystroke savings 53.6 -> 55.0%
+        # and next-word hits 30.7 -> 32.6% while cutting the per-keystroke
+        # cost from 21 ms to 3 ms, because its word path was a character
+        # beam with no dictionary (the dictionary argument was never
+        # wired) that emitted fragments like "ing", and the one thing a
+        # character model could add, surfacing a word before its third
+        # sighting, never reached the bar: _is_valid_word gates on the
+        # unigram table either way.  The model stays so a later fusion
+        # inside the prefix beam has it; the bench flips this on for the
+        # before/after.
+        self._ppm_in_merge = False
         _logger.info("PPM predictor initialized")
 
         # Initialize fuzzy recognizer (spatial error correction)
@@ -144,8 +158,11 @@ class HybridPredictor(QObject):
         self._load_training_corpus()
         # Inject n-gram unigram frequencies so candidate ranking prefers
         # common words ("the") over rare ones ("tha").  Learning during a
-        # session updates the n-gram model directly and re-injects via
-        # _refresh_fuzzy_frequencies.
+        # session pushes each changed word through
+        # _refresh_fuzzy_frequencies (for a long time that method was
+        # named here and did not exist, so the fuzzy dictionary was frozen
+        # at startup); the events that replace the vocabulary wholesale go
+        # through _rebuild_fuzzy_dictionary instead.
         #
         # Injected *once*, and after the corpus rather than before it.
         # There used to be a second call above `_load_training_corpus`,
@@ -158,7 +175,7 @@ class HybridPredictor(QObject):
         # generating deletion variants, so the wasted build was ~0.5 s of
         # the ~1.5 s this constructor took, paid on every launch, and on
         # every one of the ~1300 tests that builds a bridge.
-        self._fuzzy.set_frequencies(self._ngram.unigrams)
+        self._fuzzy.set_frequencies(self._fuzzy_frequencies())
 
         # Initialize vocabulary pack manager
         self._pack_manager = PackManager()
@@ -235,9 +252,10 @@ class HybridPredictor(QObject):
             [w for w, _ in ngram_preds[:5]],
         )
 
-        # Add PPM predictions if enabled
+        # PPM word candidates, only when explicitly put back into the merge
+        # (see the constructor note).
         ppm_preds: List[Tuple[str, float]] = []
-        if self._enable_ppm:
+        if self._enable_ppm and self._ppm_in_merge:
             ppm_preds = self._ppm_word.predict_with_scores(context, n * 2)
             _logger.debug("PPM preds: %s", [w for w, _ in ppm_preds[:5]])
 
@@ -717,6 +735,7 @@ class HybridPredictor(QObject):
             List of words that were new to user vocabulary.
         """
         new_words = self._ngram.learn(text)
+        self._refresh_fuzzy_frequencies(self._ngram._tokenize(text))
 
         # Also train PPM model
         if self._enable_ppm:
@@ -725,9 +744,73 @@ class HybridPredictor(QObject):
 
         return new_words
 
+    def _refresh_fuzzy_frequencies(self, words: Optional[Iterable[str]] = None) -> None:
+        """Push vocabulary changes into the fuzzy recognizer.
+
+        With ``words``, each is looked up in the unigram table and pushed
+        through ``FuzzyRecognizer.update_word``, which is cheap (SymSpell
+        indexes a new word in place, the prefix index adjusts the word's
+        own prefixes), so every learning path can afford it.  With ``None``
+        the whole table is merged, for a pack enable, where the words are
+        many and the moment is the user's.  Neither removes anything; a
+        vocabulary that shrank needs ``_rebuild_fuzzy_dictionary``.
+        """
+        if words is None:
+            self._fuzzy.set_frequencies(self._fuzzy_frequencies())
+            return
+        for word in words:
+            freq = self._fuzzy_frequency(word.lower())
+            if freq > 0.0:
+                self._fuzzy.update_word(word, freq)
+
+    def _fuzzy_frequency(self, word: str) -> float:
+        """The frequency the fuzzy recognizer should rank ``word`` by.
+
+        The fuzzy dictionary used to take the merged unigram count, which
+        puts a base word at its rank-derived count (up to 9,885) and a
+        personal word typed three times at 3.  On that scale the beam's
+        frequency term buys four slips' worth of spatial cost, so a typed
+        ``zorb`` ranked ``spent`` above the ``zorblat`` the user had just
+        taught it.  The n-gram does not have this problem: its
+        ``P(w) = alpha * P_user + (1 - alpha) * P_base`` makes a personal
+        word far likelier than a base word.  This maps that same belief
+        onto the base count's scale, so a word the user has never typed
+        keeps exactly its base count (a fresh model ranks as before) and a
+        typed one is lifted by the n-gram's own personal weight.
+        """
+        ng = self._ngram
+        # A vocabulary pack writes into the merged table only, so a word in
+        # neither the base nor the user table takes its merged count.
+        base = ng._base_unigrams.get(word, 0) or ng.unigrams.get(word, 0)
+        user = ng.user_vocab.get(word, 0)
+        if not user or not ng._user_total or not ng._base_total:
+            return float(base)
+        alpha = ng.personal_weight
+        p_user = alpha * user / ng._user_total
+        p_base = (1.0 - alpha) * base / ng._base_total
+        return (p_user + p_base) * ng._base_total / (1.0 - alpha)
+
+    def _fuzzy_frequencies(self) -> Dict[str, float]:
+        """``_fuzzy_frequency`` over every word the n-gram knows."""
+        return {word: self._fuzzy_frequency(word) for word in self._ngram.unigrams}
+
+    def _rebuild_fuzzy_dictionary(self) -> None:
+        """Rebuild the fuzzy dictionary from scratch after the vocabulary shrank.
+
+        ``set_frequencies`` only adds or raises, so Clear Learned Data and a
+        Data Backup import, which replace the vocabulary wholesale, reset
+        first and re-run the startup sequence: the profile's wordlist, then
+        the n-gram's counts.  About half a second, at a moment the user
+        asked for.
+        """
+        self._fuzzy.reset_dictionary()
+        self._fuzzy.load_dictionary(self._ngram.profile.dictionary)
+        self._fuzzy.set_frequencies(self._fuzzy_frequencies())
+
     def learn_word(self, word: str) -> None:
         """Learn a single word (e.g., when user types it)."""
         self._ngram.learn_word(word)
+        self._refresh_fuzzy_frequencies([word])
 
     def unlearn_word(self, word: str) -> bool:
         """Reverse one sighting of a word — see ``NgramPredictor.unlearn_word``."""
@@ -781,6 +864,7 @@ class HybridPredictor(QObject):
         """
         self._ngram.learn_from_pill_click(selected_word)
         self._ngram.reinforce_context(context, selected_word)
+        self._refresh_fuzzy_frequencies([selected_word])
 
     def save(self) -> None:
         """Save all models to disk."""
@@ -813,6 +897,7 @@ class HybridPredictor(QObject):
         if ngram_path.exists():
             self._ngram.load(ngram_path)
             self._reseed_context()
+            self._rebuild_fuzzy_dictionary()
         ppm_path = self._model_dir / "ppm_model.json"
         if self._enable_ppm and ppm_path.exists():
             self._ppm.load(ppm_path)
@@ -912,6 +997,7 @@ class HybridPredictor(QObject):
         stats["llm_enabled"] = self._enable_llm
         stats["llm_available"] = self._llm_available
         stats["ppm_enabled"] = self._enable_ppm
+        stats["ppm_in_merge"] = self._ppm_in_merge
         stats["merge_strategy"] = self._merge_strategy
         stats["ppm"] = self._ppm.get_stats()
         stats["fuzzy"] = self._fuzzy.get_stats()
@@ -1058,6 +1144,7 @@ class HybridPredictor(QObject):
             self._ppm = PPMPredictor(max_order=self._ppm.max_order)
             self._ppm_word = PPMWordPredictor(ppm=self._ppm)
             self._load_training_corpus()
+        self._rebuild_fuzzy_dictionary()
 
     def reload_dictionary(self) -> bool:
         """Reload the base dictionary."""
@@ -1085,6 +1172,7 @@ class HybridPredictor(QObject):
         """
         if self._pack_manager.enable_pack(pack_id):
             self._pack_manager.apply_to_predictor(self._ngram)
+            self._refresh_fuzzy_frequencies()
             self.packsChanged.emit()
             _logger.info("Vocabulary pack enabled: %s", pack_id)
             return True
@@ -1149,6 +1237,7 @@ class HybridPredictor(QObject):
         """Boost a word and record the boost for later undo."""
         self._ngram.remove_dispreference(word)
         self._ngram.mark_good(word)
+        self._refresh_fuzzy_frequencies([word])
 
     def remove_dispreference(self, word: str) -> None:
         """Remove dispreference penalty from a word."""

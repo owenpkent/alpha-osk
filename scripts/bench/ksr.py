@@ -96,6 +96,7 @@ VALID_CONDITIONS = {
     "no-ppm",
     "no-fuzzy",
     "legacy-fuzzy",
+    "ppm-merge",
     "rank",
     "rrf",
     "linear",
@@ -243,6 +244,16 @@ def apply_condition(hp: HybridPredictor, name: str) -> Iterator[None]:
             yield
         finally:
             hp._fuzzy.get_fuzzy_predictions = real_get_fuzzy  # type: ignore[method-assign]
+        return
+    if name == "ppm-merge":
+        # Put the character model's word candidates back into the merge, the
+        # way the engine ran before 2026-09-03.
+        previous_merge = hp._ppm_in_merge
+        hp._ppm_in_merge = True
+        try:
+            yield
+        finally:
+            hp._ppm_in_merge = previous_merge
         return
     if name == "legacy-fuzzy":
         # The pre-beam fuzzy source: whole-word correction offered mid-word.

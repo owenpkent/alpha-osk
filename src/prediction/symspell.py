@@ -102,16 +102,26 @@ class SymSpell:
         self._built = False
 
     def add_word(self, word: str, freq: int = 1) -> None:
-        """Add or update a word's frequency.  Higher freq always wins."""
+        """Add or update a word's frequency.  Higher freq always wins.
+
+        On a built index a *new* word is indexed on the spot, which costs
+        its own handful of deletion variants, rather than invalidating the
+        whole index: the vocabulary changes on the keystroke path (a word
+        promoted into ``user_vocab``, a pill click), and a full rebuild is
+        about half a second.  A frequency change on a known word needs no
+        indexing at all.
+        """
         word = word.lower()
         if not word:
             return
+        is_new = word not in self._words
         existing = self._words.get(word, 0)
-        if freq > existing:
+        if is_new or freq > existing:
             self._words[word] = freq
-        elif word not in self._words:
-            self._words[word] = freq
-        self._built = False
+        if is_new and self._built:
+            self._index_word(word)
+        elif is_new:
+            self._built = False
 
     def add_dictionary(self, entries: Iterable[Tuple[str, int]]) -> None:
         """Bulk-add ``(word, freq)`` pairs."""
@@ -151,16 +161,19 @@ class SymSpell:
         """
         self._build_index()
 
+    def _index_word(self, word: str) -> None:
+        indexed = word[: self.prefix_length] if len(word) > self.prefix_length else word
+        # The indexed prefix is itself a "zero-deletion variant".
+        self._deletes[indexed].append(word)
+        for variant in self._deletion_variants(indexed, self.max_edit_distance):
+            self._deletes[variant].append(word)
+
     def _build_index(self) -> None:
         if self._built:
             return
         self._deletes.clear()
         for word in self._words:
-            indexed = word[: self.prefix_length] if len(word) > self.prefix_length else word
-            # The indexed prefix is itself a "zero-deletion variant".
-            self._deletes[indexed].append(word)
-            for variant in self._deletion_variants(indexed, self.max_edit_distance):
-                self._deletes[variant].append(word)
+            self._index_word(word)
         self._built = True
         _logger.debug(
             "SymSpell index: %d words, %d deletion variants",

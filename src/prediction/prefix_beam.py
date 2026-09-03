@@ -85,6 +85,38 @@ class PrefixIndex:
     def __len__(self) -> int:
         return len(self._live)
 
+    def update_word(self, word: str, freq: float) -> None:
+        """Add ``word`` or raise its frequency, keeping every table in step.
+
+        Cheap (the word's own prefixes, and a re-sort of at most ``top_k``
+        entries per short prefix), so the vocabulary can change on the
+        keystroke path without a rebuild.  A word that once fell out of a
+        short prefix's top ``top_k`` only comes back if its frequency now
+        clears the list, which is also what a rebuild would decide.
+        """
+        if not word:
+            return
+        freq = float(freq)
+        is_new = word not in self._freq
+        if not is_new and freq <= self._freq[word]:
+            return
+        self._freq[word] = freq
+        if is_new:
+            bisect.insort(self._words, word)
+            for i in range(1, len(word) + 1):
+                prefix = word[:i]
+                self._live.add(prefix)
+                if i < len(word):
+                    following = self._children.get(prefix, "")
+                    if word[i] not in following:
+                        self._children[prefix] = "".join(sorted(following + word[i]))
+        for i in range(1, min(len(word), self.precompute_len) + 1):
+            prefix = word[:i]
+            entries = [(f, w) for f, w in self._top.get(prefix, []) if w != word]
+            entries.append((freq, word))
+            entries.sort(reverse=True)
+            self._top[prefix] = entries[: self.top_k]
+
     def is_live(self, prefix: str) -> bool:
         return prefix in self._live
 
@@ -175,6 +207,10 @@ class PrefixBeam:
     # act on and the n-gram completer's exact-prefix match is the better
     # source; the same guard ``should_autocorrect`` applies.
     MIN_TYPED = 3
+    # A path costing more than this (one cheap edit: an adjacent slip is
+    # -0.69, a diagonal -0.87, a swap -1.0) may not be bought past the
+    # completions of the exact typed prefix by frequency alone.
+    FREQUENCY_MAY_BUY = -1.5
 
     def __init__(self, index: PrefixIndex, emissions: SpatialEmissions) -> None:
         self.index = index
@@ -192,7 +228,8 @@ class PrefixBeam:
         typed character; ``None`` entries (and a missing sequence) fall back
         to the reported key's centre.  Scores are relative, in ``(0, 1]``
         with the best at 1.0, so the merge's sum-to-1 normalisation sees
-        positives.
+        positives.  See ``_protect_exact_completions`` for the one rule
+        applied on top of the path scores.
         """
         typed = typed.lower()
         if len(typed) < self.MIN_TYPED or n <= 0:
@@ -261,13 +298,50 @@ class PrefixBeam:
         if len(final) > self.BEAM_WIDTH:
             final = dict(sorted(final.items(), key=lambda kv: -kv[1])[: self.BEAM_WIDTH])
         scored: Dict[str, float] = {}
+        best_path: Dict[str, float] = {}
         for prefix, score in final.items():
             for freq, word in index.completions(prefix):
                 value = score + self.FREQ_WEIGHT * math.log1p(freq)
                 if value > scored.get(word, -math.inf):
                     scored[word] = value
+                    best_path[word] = score
         if not scored:
             return []
+        self._protect_exact_completions(typed, scored, best_path)
         ranked = sorted(scored.items(), key=lambda kv: -kv[1])[:n]
         best = ranked[0][1]
         return [(word, math.exp(value - best)) for word, value in ranked]
+
+    def _protect_exact_completions(
+        self, typed: str, scored: Dict[str, float], best_path: Dict[str, float]
+    ) -> None:
+        """What was typed is evidence too.
+
+        When the typed prefix is itself live, a candidate reached only by
+        paths costing more than one cheap edit is moved just below the best
+        of the exact prefix's own completions, its order among its peers
+        kept.  For a common word this changes nothing, its exact path
+        already won; for a rare, pack or freshly learned word it is the
+        difference between being offered and not, because base counts are
+        rank-derived (up to 9,885) and a word typed three times sits at 3,
+        so on frequency alone a typed ``zorb`` ranked ``spent`` (four slips
+        away) above ``zorblat``.  One cheap edit still competes on
+        frequency, which is what keeps ``teh`` offering ``the`` ahead of the
+        rare word that happens to start with ``teh``.
+        """
+        if not self.index.is_live(typed):
+            return
+        exact = {word for _, word in self.index.completions(typed)}
+        exact_best = max((scored[w] for w in exact if w in scored), default=None)
+        if exact_best is None:
+            return
+        clamped = [
+            word
+            for word, path in best_path.items()
+            if word not in exact and path < self.FREQUENCY_MAY_BUY and scored[word] >= exact_best
+        ]
+        if not clamped:
+            return
+        shift = max(scored[w] for w in clamped) - exact_best + 1e-3
+        for word in clamped:
+            scored[word] -= shift
