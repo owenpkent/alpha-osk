@@ -11,7 +11,7 @@ welcome, especially from users of adaptive technology.
 - For security issues, **do not** open a public issue. Follow the process
   in [SECURITY.md](SECURITY.md) instead.
 - Releases live in a separate public repo:
-  [`okstudio1/alpha-osk-releases`](https://github.com/okstudio1/alpha-osk-releases).
+  [`owenpkent/alpha-osk-releases`](https://github.com/owenpkent/alpha-osk-releases).
   Installer downloads and signed binaries go there. Source code,
   development, and issues live here.
 
