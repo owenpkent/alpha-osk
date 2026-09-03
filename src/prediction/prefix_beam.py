@@ -154,9 +154,11 @@ class SpatialEmissions:
     KEY_SIGMA = 0.85
     # Uncertainty when the click's position inside the key is known.  Set by
     # sweep against two simulated pointers (scripts/bench/ksr.py --pointer):
-    # a scatter-heavy one (bias 0.2, 0.15; noise 0.3) and a drift-heavy one
-    # (0.35, 0.25; 0.15).  Sharper than this hurts both, because scatter
-    # then puts the intended key on the expensive side of the click more
+    # one whose misses are mostly random (bias 0.2, 0.15; noise 0.3), the
+    # robustness check, and one whose misses are mostly systematic
+    # (0.35, 0.25; 0.15), the case the learned bias is for.  Sharper than
+    # this hurts both, because scatter then puts the intended key on the
+    # expensive side of the click more
     # often than the extra precision helps (0.3 lost 1.6 points, 0.22 lost
     # 6); 0.55 never regressed either profile.  The beam already recovers
     # most of what a position could tell it from the reported key alone,

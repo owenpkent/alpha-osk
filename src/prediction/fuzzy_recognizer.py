@@ -154,10 +154,9 @@ def positions_from_layout(
     return positions
 
 
-# Tuned so a press one key off-center still has its true neighbours
-# (cardinal + diagonal) in the candidate set.  Larger than the original
-# "Normal" profile (1.0) but smaller than the "Mild Tremor" profile
-# (1.5) — picks up the diagonals without dragging in second-row noise.
+# Tuned so a press one key off-centre still has its true neighbours
+# (cardinal and diagonal) in the candidate set: 1.4 picks up the
+# diagonals without dragging in second-row noise.
 DEFAULT_SPATIAL_UNCERTAINTY = 1.4
 
 # Minimum confidence for ``should_autocorrect`` to fire.

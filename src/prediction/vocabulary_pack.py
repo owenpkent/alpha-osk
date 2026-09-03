@@ -2,7 +2,7 @@
 Vocabulary Pack system for domain-specific prediction.
 
 Packs are additive layers of vocabulary (unigrams, bigrams, trigrams)
-that users can enable/disable independently of their accessibility profile.
+that users can enable/disable independently of the spatial-correction tuning.
 
 Pack format (on disk):
     data/packs/<pack-name>/
