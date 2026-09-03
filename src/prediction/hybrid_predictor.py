@@ -785,7 +785,10 @@ class HybridPredictor(QObject):
         user = ng.user_vocab.get(word, 0)
         if not user or not ng._user_total or not ng._base_total:
             return float(base)
-        alpha = ng.personal_weight
+        # `personal_weight` is a plain attribute with no clamp of its own,
+        # and at 1.0 the base-scale mapping below divides by zero on the
+        # keystroke path (this runs inside `learn`), so bound it here.
+        alpha = min(max(ng.personal_weight, 0.0), 0.99)
         p_user = alpha * user / ng._user_total
         p_base = (1.0 - alpha) * base / ng._base_total
         return (p_user + p_base) * ng._base_total / (1.0 - alpha)
@@ -1244,8 +1247,16 @@ class HybridPredictor(QObject):
         self._ngram.remove_dispreference(word)
 
     def unprefer(self, word: str) -> None:
-        """Roll back an explicit user boost."""
+        """Roll back an explicit user boost.
+
+        The boost reached the fuzzy dictionary through the refresh, and
+        that path only ever raises, so the rollback is the third event
+        (with Clear Learned Data and a Data Backup import) that has to
+        rebuild it; otherwise the word kept winning mid-word completions
+        as if still boosted until the next restart.
+        """
         self._ngram.unprefer(word)
+        self._rebuild_fuzzy_dictionary()
 
     def record_typed_word(self, word: str) -> Optional[str]:
         """Track typed word for auto-rehabilitation of blacklisted words."""

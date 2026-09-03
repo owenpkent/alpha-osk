@@ -62,6 +62,14 @@ class TestLearnedWordsReachTheFuzzySource:
         hp._fuzzy.update_word("hello", 1)
         assert hp._fuzzy.word_generator.dictionary["hello"] == before
 
+    def test_a_personal_weight_of_one_does_not_take_the_keystroke_path_down(self, hp):
+        # `personal_weight` is unclamped and the base-scale mapping divides
+        # by (1 - alpha) inside `learn`, so 1.0 used to raise mid-keystroke.
+        hp._ngram.personal_weight = 1.0
+        for _ in range(3):
+            hp.learn(f"the {NOVEL} arrived")
+        assert NOVEL in hp._fuzzy.word_generator.dictionary
+
 
 class TestPacksReachTheFuzzySource:
     def test_enabling_a_pack_makes_its_words_fuzzy_matchable(self, hp, tmp_path):
@@ -82,6 +90,17 @@ class TestAShrunkVocabularyIsRebuilt:
         hp.clear_user_data()
         assert NOVEL not in hp._fuzzy.word_generator.dictionary
         assert "hello" in hp._fuzzy.word_generator.dictionary  # the base survives
+
+    def test_rolling_back_a_boost_lowers_the_fuzzy_frequency_too(self, hp):
+        # The boost reaches the fuzzy dictionary through the refresh, which
+        # only raises, so the rollback has to rebuild; without it the word
+        # kept its boosted frequency until the next restart.
+        before = hp._fuzzy.word_generator.dictionary["hello"]
+        hp.mark_good_suggestion("hello")
+        boosted = hp._fuzzy.word_generator.dictionary["hello"]
+        assert boosted > before
+        hp.unprefer("hello")
+        assert hp._fuzzy.word_generator.dictionary["hello"] == before
 
     def test_reload_from_disk_rebuilds_from_what_is_on_disk(self, hp, tmp_path):
         for _ in range(3):
