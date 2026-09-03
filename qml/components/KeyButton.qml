@@ -130,6 +130,14 @@ Item {
     // transient UI such as the key-preview bubble.
     signal keyReleased()
 
+    // Where inside the key the current press landed, as fractions of the
+    // key's width and height from its centre (-0.5 to 0.5).  Set on press
+    // and handed to the bridge with the character, so the fuzzy beam can
+    // tell a click near a key's edge from one dead centre and learn the
+    // user's systematic offset.  Auto-repeat re-reads the same values.
+    property real pressDx: 0
+    property real pressDy: 0
+
     width: keyWidth
     height: keyHeight
     // implicitWidth/Height are what Qt Quick Layouts (RowLayout, GridLayout)
@@ -414,6 +422,8 @@ Item {
                 return
             }
             keyRoot._pressVisual(mouse.x, mouse.y)
+            keyRoot.pressDx = keyRoot.width > 0 ? mouse.x / keyRoot.width - 0.5 : 0
+            keyRoot.pressDy = keyRoot.height > 0 ? mouse.y / keyRoot.height - 0.5 : 0
 
             if (mouse.button === Qt.RightButton) {
                 // Right-click is a one-shot: never auto-repeats, and

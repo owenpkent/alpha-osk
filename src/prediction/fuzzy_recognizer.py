@@ -14,6 +14,7 @@ import logging
 import math
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
+from .pointer_model import PointerModel, slot_id
 from .prefix_beam import Position, PrefixBeam, PrefixIndex, SpatialEmissions
 from .symspell import SymSpell
 
@@ -153,10 +154,9 @@ def positions_from_layout(
     return positions
 
 
-# Tuned so a press one key off-center still has its true neighbours
-# (cardinal + diagonal) in the candidate set.  Larger than the original
-# "Normal" profile (1.0) but smaller than the "Mild Tremor" profile
-# (1.5) — picks up the diagonals without dragging in second-row noise.
+# Tuned so a press one key off-centre still has its true neighbours
+# (cardinal and diagonal) in the candidate set: 1.4 picks up the
+# diagonals without dragging in second-row noise.
 DEFAULT_SPATIAL_UNCERTAINTY = 1.4
 
 # Minimum confidence for ``should_autocorrect`` to fire.
@@ -602,6 +602,10 @@ class FuzzyRecognizer:
             spatial_model=self.spatial_model,
             dictionary=dictionary,
         )
+        # The learned click-offset table.  The hybrid rebinds this to the
+        # n-gram's instance so it is persisted with the rest of what the
+        # user taught the engine; a bare recognizer gets its own.
+        self.pointer = PointerModel()
 
     def set_key_positions(self, positions: Dict[str, Tuple[float, float]]) -> None:
         """Re-point the spatial model at a different layout's key grid.
@@ -631,12 +635,47 @@ class FuzzyRecognizer:
         self.word_generator.spatial_model = self.spatial_model
         _logger.info("Spatial key model rebuilt: %d keys", len(positions))
 
+    def observe_press(self, char: str, dx: float, dy: float) -> None:
+        """Record where inside its key a press on ``char`` landed.
+
+        ``dx`` / ``dy`` are fractions of the key's width and height from
+        its centre.  Keyed by the key's physical slot, so the bias
+        survives a letter remap.  Unmapped characters (punctuation, the
+        space bar) are ignored.  The caller gates this on privacy mode.
+        """
+        pos = self.spatial_model.positions.get(char.lower())
+        if pos is not None:
+            self.pointer.observe(slot_id(pos), dx, dy)
+
+    def positions_for(
+        self, word: str, offsets: Sequence[Optional[Tuple[float, float]]]
+    ) -> List[Optional[Position]]:
+        """Click positions in key units for ``word``, from per-key offsets.
+
+        Each offset is resolved against the reported key's centre in the
+        current spatial model, with the learned bias for that slot taken
+        out first.  A missing offset, or a character the model does not
+        place, yields ``None`` and the beam falls back to the key centre.
+        """
+        positions = self.spatial_model.positions
+        out: List[Optional[Position]] = []
+        for i, char in enumerate(word):
+            offset = offsets[i] if i < len(offsets) else None
+            pos = positions.get(char.lower())
+            if offset is None or pos is None:
+                out.append(None)
+                continue
+            dx, dy = self.pointer.correct(slot_id(pos), offset[0], offset[1])
+            out.append((pos[0] + dy, pos[1] + dx))
+        return out
+
     def get_fuzzy_predictions(
         self,
         typed_text: str,
         n: int = 5,
         *,
         positions: Optional[Sequence[Optional[Position]]] = None,
+        offsets: Optional[Sequence[Optional[Tuple[float, float]]]] = None,
     ) -> List[Tuple[str, float]]:
         """Top-``n`` fuzzy candidates for the current word in ``typed_text``.
 
@@ -653,6 +692,8 @@ class FuzzyRecognizer:
         if not current_word:
             return []
         if self.prefix_completion:
+            if positions is None and offsets is not None:
+                positions = self.positions_for(current_word, offsets)
             return self.word_generator.complete_prefix(current_word, n, positions)
         return self.word_generator.generate_candidates(current_word)[:n]
 

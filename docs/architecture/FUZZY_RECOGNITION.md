@@ -1,8 +1,8 @@
 # Fuzzy / Spatial Recognition — Design
 
 Fuzzy recognition is Alpha-OSK's **accessibility-first spelling / typing
-error corrector**.  The idea is simple: when someone with tremor or
-limited precision aims for `h`, they might land on `g`, `j`, or `y`
+error corrector**.  The idea is simple: when someone whose pointer control
+is imprecise aims for `h`, they might land on `g`, `j`, or `y`
 instead.  The recognizer models this spatial uncertainty and proposes
 the word the user most likely *meant* to type.
 
@@ -103,8 +103,7 @@ dictionary**.  (If the user typed a valid word, we don't "correct" it.)
 
 ## Tunable Parameters
 
-There used to be six pre-built "accessibility profiles" (Precise,
-Normal, Mild/Moderate/Severe Tremor, Limited Mobility) that swapped
+There used to be six pre-built "accessibility profiles" that swapped
 parameter sets at runtime.  They were confusing — most users picked
 "Normal" and never looked at the others, and the parameters that
 actually mattered (`spatial_uncertainty`, `confidence_threshold`,

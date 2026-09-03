@@ -2599,9 +2599,9 @@ Window {
                                         // switch, so without this, Caps + the
                                         // micro sign typed a Greek capital Mu.
                                         if (kd.literal)
-                                            keyboard.pressKeyLiteral(kd.key)
+                                            keyboard.pressKeyLiteral(kd.key, keyBtn.pressDx, keyBtn.pressDy)
                                         else
-                                            keyboard.pressKey(ch)
+                                            keyboard.pressKey(ch, keyBtn.pressDx, keyBtn.pressDy)
                                         // displayText already reflects shift/
                                         // caps casing, so it matches the char
                                         // pressKey actually sends to the OS.
@@ -2705,7 +2705,7 @@ Window {
                                     } else {
                                         return
                                     }
-                                    keyboard.pressKeyLiteral(rch)
+                                    keyboard.pressKeyLiteral(rch, keyBtn.pressDx, keyBtn.pressDy)
                                     if (root.keyPreviewEnabled)
                                         root.showKeyPreview(keyBtn, rch)
                                 }
