@@ -812,6 +812,7 @@ class HybridPredictor(QObject):
         ngram_path = self._model_dir / "ngram_model.json"
         if ngram_path.exists():
             self._ngram.load(ngram_path)
+            self._reseed_context()
         ppm_path = self._model_dir / "ppm_model.json"
         if self._enable_ppm and ppm_path.exists():
             self._ppm.load(ppm_path)
@@ -820,20 +821,45 @@ class HybridPredictor(QObject):
         self.packsChanged.emit()
         _logger.info("Predictor reloaded from disk")
 
-    def _load_training_corpus(self) -> None:
-        """Load default training corpus for better predictions."""
+    @staticmethod
+    def _read_training_corpus() -> str:
+        """The shipped training corpus with comment lines removed, or ""."""
         corpus_path = Path(__file__).parent.parent.parent / "data" / "training_corpus.txt"
-
         if not corpus_path.exists():
             _logger.info("No training corpus found at %s", corpus_path)
+            return ""
+        try:
+            text = corpus_path.read_text(encoding="utf-8", errors="ignore")
+        except OSError as e:
+            _logger.error("Failed to read training corpus: %s", e)
+            return ""
+        lines = [line for line in text.split("\n") if line.strip() and not line.startswith("#")]
+        return "\n".join(lines)
+
+    def _reseed_context(self) -> None:
+        """Re-apply the shipped context seeds after the user half was replaced.
+
+        The n-gram model persists only the user's bigram / trigram counts;
+        the curated pairs and the training corpus are re-read from the
+        data files on every launch.  A reload from disk swaps the user
+        half and, without this, would leave the tables holding nothing
+        else until the next restart.  It used to work by accident: the
+        persisted merged table already carried the seeds, inflated by one
+        copy per launch.
+        """
+        self._ngram.load_common_bigrams()
+        self._ngram.load_common_trigrams()
+        text = self._read_training_corpus()
+        if text:
+            self._ngram.learn_corpus_context(text)
+
+    def _load_training_corpus(self) -> None:
+        """Load default training corpus for better predictions."""
+        clean_text = self._read_training_corpus()
+        if not clean_text:
             return
 
         try:
-            text = corpus_path.read_text(encoding="utf-8", errors="ignore")
-            # Filter out comments
-            lines = [line for line in text.split("\n") if line.strip() and not line.startswith("#")]
-            clean_text = "\n".join(lines)
-
             # Train both n-gram and PPM
             self._ngram.load_corpus(clean_text)
             if self._enable_ppm:
