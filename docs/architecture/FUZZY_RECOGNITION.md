@@ -203,3 +203,22 @@ Notes" section:
   (SymSpell — precomputed-deletions approach.)
 - Damerau, F. J. (1964).  *A technique for computer detection and
   correction of spelling errors.*  CACM.
+
+## Mid-word completion has moved to `prefix_beam.py` (2026-09-02)
+
+Everything above describes whole-word correction: the spatial beam emits
+sequences exactly as long as the typed text, SymSpell reaches two edits
+further, and both are scored against the typed text as a finished word.
+That is what `generate_candidates`, `get_correction` and
+`should_autocorrect` still do, on space.
+
+Mid-word, the live suggestion bar's fuzzy source (`get_fuzzy_predictions`)
+now runs `src/prediction/prefix_beam.py` instead: a beam over the
+dictionary's live prefixes with substitution, omitted-click, extra-click and
+transposition transitions and an unnormalised Gaussian emission, so a
+correctly hit key costs nothing and a perfect long word no longer prunes
+out. Measured on the shipped list with the n-gram's counts, a one-slip
+5-letter prefix completes to the intended word 94.5% of the time (0.0%
+before) and a clean 4-letter prefix 92% (1.4% before). The whole account,
+including the sweep behind each constant and why there is no user setting,
+is the *Prefix beam* section of `CLAUDE.md`.

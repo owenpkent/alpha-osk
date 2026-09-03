@@ -33,7 +33,7 @@ import random
 import sys
 import time
 from pathlib import Path
-from typing import Callable, Mapping, Sequence
+from typing import Callable, Sequence
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")  # see ksr.py: same package import chain
 
@@ -45,6 +45,7 @@ from src.prediction.fuzzy_recognizer import (  # noqa: E402
     FuzzyWordGenerator,
     SpatialKeyModel,
 )
+from src.prediction.ngram_predictor import NgramPredictor  # noqa: E402
 
 DEFAULT_DICTIONARY = REPO_ROOT / "data" / "google-10000-english-usa-no-swears.txt"
 
@@ -136,8 +137,8 @@ def recall_by_length(
 
 
 def clean_prefix_completion(
-    generator: FuzzyWordGenerator,
-    dictionary: Mapping[str, float],
+    recognizer: FuzzyRecognizer,
+    words: Sequence[str],
     n: int,
     rng: random.Random,
 ) -> tuple[int, int]:
@@ -147,21 +148,21 @@ def clean_prefix_completion(
     prefix is genuinely partial), with no injected error: this is the floor
     the mid-word section measures against.
     """
-    pool = [w for w in dictionary if len(w) >= 6 and w.isalpha()]
+    pool = [w for w in words if len(w) >= 6]
     hit = total = 0
     for word in rng.sample(pool, min(n, len(pool))):
         for prefix_len in (3, 4):
             prefix = word[:prefix_len]
-            candidates = [c for c, _ in generator.generate_candidates(prefix)][:5]
+            candidates = [c for c, _ in recognizer.get_fuzzy_predictions(prefix, 5)]
             total += 1
             hit += word in candidates
     return hit, total
 
 
 def mistyped_prefix_recall(
-    generator: FuzzyWordGenerator,
+    recognizer: FuzzyRecognizer,
     injector: ErrorInjector,
-    dictionary: Mapping[str, float],
+    words: Sequence[str],
     prefix_len: int,
     n: int,
     rng: random.Random,
@@ -172,14 +173,14 @@ def mistyped_prefix_recall(
     the weaker "any word with the correct (untyped) prefix" bar, which is
     still a useful pill even when it is not the word the user meant.
     """
-    pool = [w for w in dictionary if len(w) >= prefix_len + 2 and w.isalpha()]
+    pool = [w for w in words if len(w) >= prefix_len + 2]
     hit = hit_any = total = 0
     for word in rng.sample(pool, min(n, len(pool))):
         prefix = word[:prefix_len]
         typed = injector.slip(prefix)
         if typed == prefix:
             continue
-        candidates = [c for c, _ in generator.generate_candidates(typed)][:5]
+        candidates = [c for c, _ in recognizer.get_fuzzy_predictions(typed, 5)]
         total += 1
         hit += word in candidates
         hit_any += any(c.startswith(prefix) for c in candidates)
@@ -195,6 +196,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--seed", type=int, default=7, help="random seed (default: 7)")
     parser.add_argument(
+        "--legacy",
+        action="store_true",
+        help="drive the mid-word sections through the pre-beam whole-word path instead",
+    )
+    parser.add_argument(
         "--dictionary",
         type=Path,
         default=DEFAULT_DICTIONARY,
@@ -209,6 +215,14 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     fr = FuzzyRecognizer()
     fr.load_dictionary(str(args.dictionary))
+    # The wordlist carries no counts, so on its own every word is 1.0 and the
+    # beam's frequency term is inert.  The hybrid follows the load with the
+    # n-gram's unigram counts, and so does this, so the tables below are the
+    # ranking the bar actually sees.
+    ngram = NgramPredictor()
+    ngram.load_base_dictionary()
+    fr.set_frequencies(ngram.unigrams)
+    fr.prefix_completion = not args.legacy
     generator = fr.word_generator
     dictionary = generator.dictionary
     print(f"dictionary: {len(dictionary)} words ({args.dictionary})")
@@ -218,6 +232,11 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     # The 2000 most frequent words of length >= 3: common enough to be worth
     # correcting, long enough that a single-character error is meaningful.
+    # The mid-word sections draw from the same list.  Typing follows
+    # frequency, and with frequency in the beam's ranking a uniform draw over
+    # the whole dictionary (which this script did at first) weights a word
+    # used once a year the same as "because" and reads 30% where real typing
+    # sees 92%.
     ranked = sorted(dictionary, key=lambda x: -dictionary[x])
     words = [w for w in ranked if len(w) >= 3 and w.isalpha()][:2000]
 
@@ -245,16 +264,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         hits, total = recall_by_length(generator, injector, pool, args.n, rng)
         print(f"{f'{lo}-{hi}':<10} {total:5d} {hits / total:6.1%}")
 
-    print("\n=== mid-word: clean prefix completion (len 3-4 of a >=6-letter word) ===")
-    hit, total = clean_prefix_completion(generator, dictionary, args.n, rng)
+    path = "legacy whole-word path" if args.legacy else "prefix beam"
+    print(f"\n=== mid-word ({path}): clean prefix completion (len 3-4 of a >=6-letter word) ===")
+    hit, total = clean_prefix_completion(fr, words, args.n, rng)
     print(f"  target in top5: {hit / total:.1%}  (n={total})")
 
     print("\n=== mid-word: mistyped prefix (one neighbour slip inside the prefix) ===")
     print(f"{'prefix len':<12} {'n':>5} {'intended in top5':>18} {'any correct-prefix top5':>25}")
     for prefix_len in (3, 4, 5, 6):
-        hit, hit_any, total = mistyped_prefix_recall(
-            generator, injector, dictionary, prefix_len, args.n, rng
-        )
+        hit, hit_any, total = mistyped_prefix_recall(fr, injector, words, prefix_len, args.n, rng)
         print(f"{prefix_len:<12} {total:5d} {hit / total:17.1%} {hit_any / total:24.1%}")
 
     return 0
