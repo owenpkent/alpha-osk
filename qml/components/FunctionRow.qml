@@ -6,6 +6,13 @@ Item {
     property real keyW: 48
     property real keyH: 36
     property real keySpacing: 2
+    // Each key's share of the gap around it; see KeyButton's
+    // `hitMarginH`.  The deliberate `keySpacing * 4` between the three
+    // groups keeps a dead strip in the middle of it, which is the same
+    // trade as the gutter between two panels: it is a separator rather
+    // than a gap nobody meant to leave.
+    property real hitMarginH: 0
+    property real hitMarginV: 0
     property color keyColor: "#333333"
     property color keyPressedColor: "#5a5a5a"
     property color keyTextColor: "#e0e0e0"
@@ -80,6 +87,8 @@ Item {
                         displayText: modelData
                         keyWidth: fnRow.keyW
                         keyHeight: fnRow.keyH
+                        hitMarginH: fnRow.hitMarginH
+                        hitMarginV: fnRow.hitMarginV
                         fontSize: 10
                         isSpecial: true
                         enableRepeat: false

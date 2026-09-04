@@ -34,6 +34,11 @@ Item {
     property real keyW: 48
     property real keyH: 36
     property real keySpacing: 2
+    // Each key's share of the gap around it; see KeyButton's
+    // `hitMarginH`.  0 by default so the component is unchanged for a
+    // caller that does not set them.
+    property real hitMarginH: 0
+    property real hitMarginV: 0
     property color keyColor: "#333333"
     property color keyPressedColor: "#5a5a5a"
     property color keyTextColor: "#e0e0e0"
@@ -108,6 +113,8 @@ Item {
                                         : (numRow.shiftOn ? kd.shifted : kd.key)
                 keyWidth: numRow.keyW
                 keyHeight: numRow.keyH
+                hitMarginH: numRow.hitMarginH
+                hitMarginV: numRow.hitMarginV
                 fontSize: kd.special ? 11 : 14
                 isSpecial: !!kd.special
                 // Digits follow the same setting the letters do, so
