@@ -1504,6 +1504,85 @@ are in *Key rules* at the top of this file.
 - **`pressKey` lowercases its input** - use `pressKeyLiteral` when QML already resolved the final character (right-click shifted variant, etc.).
 - **QML `Text` defaults to `AutoText`, which sniffs the string for HTML and can trigger an outbound request just from being displayed.** Any `Text` rendering a value that ultimately came from imported or otherwise untrusted data (a vocabulary pack's `name`/`description`, anything read from a file the user picked) must set `textFormat: Text.PlainText` explicitly, or an `<img src=...>` planted in that string makes Qt fetch it the moment the Settings page renders. 23 `Text` elements across 7 QML files (`Main.qml`, `UnifiedSettingsPanel.qml`, `DebugPanel.qml`, `AnalyticsDashboard.qml`, `ModelVisualization.qml`, `KeyButton.qml`, `SettingsToggle.qml`) now set it explicitly; new `Text` elements displaying untrusted strings must too. **Known gap**: the attached-property `ToolTip.text` idiom has no `textFormat` to set, so a tooltip built from untrusted text is not covered.
 
+## Title-bar window menu, and click-free Move
+
+Right-clicking the title bar opens the menu a real window's caption strip
+gives you: **Move**, **Minimize**, **Tuck away / Bring back** (X11 only),
+**Close**. The keyboard is frameless and `WS_EX_NOACTIVATE`, so it has no OS
+system menu and no gesture that reaches one (Alt+Space wants the focus we
+deliberately never take). Everything lives in `qml/Main.qml`; guarded by
+`tests/test_qml_window_menu.py`.
+
+Three of the four entries also have a caption button a few pixels away, and
+that is the point rather than a redundancy: those are 28x24 targets bunched at
+the far right end of the bar, and the menu puts the same actions under the
+pointer wherever it already is on the strip the user grabs the window by.
+
+- **`titleBarMenuArea` is declared *before* every other child of `titleBar`
+  and accepts only `Qt.RightButton`.** Being first puts it underneath
+  everything, and taking only the right button means it consumes nothing else:
+  a left press still reaches `dragArea` and the caption buttons above it,
+  while a right press finds no taker up there and falls through. That is what
+  makes the *whole* strip a menu target, buttons and the gaps between them
+  included, rather than only the region `dragArea` covers (which stops 332 px
+  short of the right edge). The failure mode to avoid is declaring it on top:
+  it would silently kill dragging the window. `dragArea` shields it well
+  enough that "a left press does not open the menu" is not a falsifiable test,
+  so the guard is
+  `TestRightClickingTheTitleBarOpensTheMenu::test_a_left_drag_on_the_strip_still_moves_the_window`,
+  which presses, travels and asserts the window followed.
+- **Rows come from a model (`windowMenu.actions`), not four near-identical
+  blocks**, and are **word-only, no icons**: any glyph small enough to sit in a
+  menu row is at the mercy of the host emoji font, which on Windows renders in
+  colour and ignores the ink it is given (same reason as the lock badge and the
+  clear-context ring). The Tuck row is built unconditionally and **collapses to
+  zero height** off X11, because a row for something that cannot happen is
+  worse than no row. **Close carries a rule and a 9 px gap above it**: it is
+  the one row that ends the session, there is no undo, and it must not sit
+  flush against Minimize under an imprecise pointer.
+
+### Move mode
+
+**The one entry with no button behind it, and the reason the menu is worth
+having.** Dragging the title bar means holding the button down for the whole
+travel, which is the single gesture this keyboard's user cannot reliably make
+(the same argument that removed swipe typing). Move mode splits it into two
+taps with a free hand in between: pick the window up, move it, put it down.
+
+- **The window follows the pointer by `(current - anchor)` in the overlay's own
+  coordinates, and that is self-correcting**: the window slides out from under
+  the pointer by exactly the delta, which puts the pointer back on the anchor
+  and makes the next delta zero. It converges instead of running away, and it
+  needs no global coordinates. A sub-pixel delta is left to accumulate rather
+  than rounded away, or the same delta stays pending on every later event.
+- **The anchor is dropped on `onExited` as well as on open.** A fast flick can
+  outrun the window it is dragging; measuring the way back in against the
+  anchor the excursion started from teleports the window by however far the
+  pointer went while it was away.
+- **`windowMoveOverlay` covers the whole window and is `enabled: root.moveMode`,
+  not merely hidden.** It has to swallow the click that ends the move, or that
+  click lands on a key, a pill or the Close button.
+- **Left puts it down, right puts it back** (`_moveReturnX/Y`). There is no
+  Escape: this window never holds focus, so a physical Escape goes to the app
+  behind us and the OSK's own Esc key is synthesised into that app too. The
+  cancel is what makes the mode safe to try for someone who could not recover
+  a window that landed somewhere unreachable, so don't drop it.
+- A hint banner rides on the overlay saying which click does which. It is not
+  garnish: a keyboard that has started following the pointer with nothing on
+  screen to say why is alarming, and the mode has no other tell.
+- The landing spot persists for free, since `onXChanged` / `onYChanged` already
+  restart `saveGeometryTimer`.
+
+**Testing note.** `tests/test_qml_window_menu.py` drives the pointer in
+*desktop* coordinates, not window-local ones. In move mode the two are not
+interchangeable: the window slides by exactly the delta, so the same local
+point maps back to the same global point and Qt drops the second event as a
+duplicate. Two other offscreen-plugin traps are pinned in that file: a window
+parked at a negative x is reported 4 px adrift of where it was put (hence
+`PARKED_X`/`PARKED_Y`), and a closed `Popup`'s rows all report
+`visible: false`, so any assertion about which rows are showing has to open the
+menu first or it passes against anything at all.
+
 ## Right-Click for Shifted Character
 
 Right-click on a char key types its shifted variant without flipping the sticky shift state - `1` -> `!`, `,` -> `<`, `a` -> `A`. Modifier and special keys are deliberate no-ops. Toggle in *Settings -> Smart Typing -> Input -> "Right-Click for Shifted Character"* (default ON; left-click is unaffected whether on or off). Implementation:

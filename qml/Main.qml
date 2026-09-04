@@ -175,6 +175,35 @@ Window {
         }
     }
 
+    // Click-free window move, offered as "Move" on the title bar's right-click
+    // menu.  Dragging the bar means holding the button down for the whole
+    // travel, and a sustained precise hold is the one gesture this keyboard's
+    // user cannot reliably make -- the same argument that removed swipe
+    // typing.  Move mode splits the drag into two taps with a free hand in
+    // between: pick the window up, move it, put it down.  `_moveReturnX/Y` is
+    // where a cancel puts it back, which is what makes the mode safe to try.
+    property bool moveMode: false
+    property real _moveReturnX: 0
+    property real _moveReturnY: 0
+
+    function beginWindowMove() {
+        if (root.moveMode) return
+        root._moveReturnX = root.x
+        root._moveReturnY = root.y
+        root.moveMode = true
+    }
+
+    function endWindowMove(cancelled) {
+        if (!root.moveMode) return
+        root.moveMode = false
+        if (cancelled) {
+            root.x = root._moveReturnX
+            root.y = root._moveReturnY
+        }
+        // No explicit save: onXChanged / onYChanged already restart
+        // saveGeometryTimer, so the landing spot persists like any drag.
+    }
+
     // Safety net: if the keyboard was parked off-screen (DOCK) and then put
     // away and brought back via the tray, restore it to a usable on-screen
     // NORMAL state instead of reappearing off-screen. Tuck's own move doesn't
@@ -1065,6 +1094,27 @@ Window {
                 color: parent.color
             }
             
+            // Right-click anywhere on the bar opens the window menu.
+            //
+            // Declared *before* every other child so it sits underneath them
+            // all, and accepting only the right button so it consumes nothing
+            // else: a left press still reaches dragArea and the caption
+            // buttons on top of it, while a right press finds no taker up
+            // there and falls through to here.  That is what makes the whole
+            // strip a menu target -- the grip, the gaps between the buttons,
+            // and the buttons themselves -- the way a real caption bar is,
+            // rather than only the drag region dragArea happens to cover
+            // (which stops 332 px short of the right edge).
+            MouseArea {
+                id: titleBarMenuArea
+                anchors.fill: parent
+                acceptedButtons: Qt.RightButton
+                onPressed: function (mouse) {
+                    var pos = mapToItem(background, mouse.x, mouse.y)
+                    windowMenu.showAt(pos.x, pos.y)
+                }
+            }
+
             // Drag area (most of title bar)
             MouseArea {
                 id: dragArea
@@ -2769,6 +2819,245 @@ Window {
                 repeatDelay: root.repeatDelay
                 repeatInterval: root.repeatInterval
             }
+            }
+        }
+
+        // ===== Move mode =====
+        // While active the window follows the pointer with no button held,
+        // and a click puts it down.  It covers the whole window so the
+        // pointer cannot fall off the thing it is dragging, and so no key,
+        // pill or caption button can be hit by the click that ends the move.
+        MouseArea {
+            id: windowMoveOverlay
+            anchors.fill: parent
+            z: 200
+            visible: root.moveMode
+            enabled: root.moveMode
+            hoverEnabled: true
+            cursorShape: Qt.SizeAllCursor
+            acceptedButtons: Qt.LeftButton | Qt.RightButton
+
+            // The pointer's position within this overlay when the follow
+            // began.  Moving the window by (current - anchor) is
+            // self-correcting: the window slides out from under the pointer
+            // by exactly that much, which puts the pointer back on the anchor
+            // and makes the next delta zero.  So it converges instead of
+            // running away, and it needs no global coordinates.
+            property bool anchored: false
+            property real anchorX: 0
+            property real anchorY: 0
+
+            // Re-anchor rather than resume, both when the mode opens and if a
+            // fast flick outruns the window and the pointer leaves it.  The
+            // alternative is measuring against a stale anchor on the way back
+            // in, which teleports the window by however far the excursion went.
+            // Qt fires onExited when an item under the pointer is hidden, so
+            // that one covers the close of a mode as well; onVisibleChanged is
+            // what keeps "a mode opens unanchored" from resting on that.
+            onVisibleChanged: anchored = false
+            onExited: anchored = false
+
+            onPositionChanged: function (mouse) {
+                if (!anchored) {
+                    anchorX = mouse.x
+                    anchorY = mouse.y
+                    anchored = true
+                    return
+                }
+                var dx = mouse.x - anchorX
+                var dy = mouse.y - anchorY
+                // Window positions are whole pixels, so a sub-pixel delta
+                // would round away to no move at all and leave the same
+                // delta pending on every later event.  Let it accumulate.
+                if (Math.abs(dx) < 1 && Math.abs(dy) < 1) return
+                root.x = Math.round(root.x + dx)
+                root.y = Math.round(root.y + dy)
+            }
+
+            // Left puts it down, right puts it back.  Escape is not an option
+            // here the way it is in a real window's move mode: this window
+            // never holds focus, so a physical Escape goes to the app behind
+            // us and the OSK's own Esc key is synthesised into that app too.
+            onPressed: function (mouse) {
+                root.endWindowMove(mouse.button === Qt.RightButton)
+            }
+
+            // The mode has no other tell, and a keyboard that has started
+            // following the pointer with nothing on screen to say why is
+            // alarming.  Parked at the top, clear of where the pointer is.
+            Rectangle {
+                anchors.horizontalCenter: parent.horizontalCenter
+                anchors.top: parent.top
+                anchors.topMargin: 12
+                width: moveHintText.implicitWidth + 28
+                height: 34
+                radius: 17
+                color: root.themeAccent
+                border.color: Qt.rgba(0, 0, 0, 0.35)
+                border.width: 1
+
+                Text {
+                    id: moveHintText
+                    anchors.centerIn: parent
+                    text: qsTr("Click to place the keyboard \u00B7 right-click to cancel")
+                    textFormat: Text.PlainText
+                    font.pixelSize: 13
+                    font.bold: true
+                    color: root.inkOn(root.themeAccent)
+                }
+            }
+        }
+
+        // ===== Title-bar window menu =====
+        // The menu a real window's caption strip gives you on a right-click.
+        // This one is frameless and WS_EX_NOACTIVATE, so it has no OS system
+        // menu and no way to reach one -- Alt+Space wants the focus we
+        // deliberately never take.  Minimize, Tuck and Close each also have a
+        // caption button a few pixels away, and that is the point rather than
+        // a redundancy: those are 28x24 targets bunched at the far right end,
+        // and this puts them under the pointer wherever it already is on the
+        // strip.  Move is the one entry with no button behind it.
+        Popup {
+            id: windowMenu
+
+            parent: Overlay.overlay
+            property real popupX: 0
+            property real popupY: 0
+            x: popupX
+            y: popupY
+            width: 216
+            height: windowMenuCol.implicitHeight
+            padding: 0
+            modal: true
+            dim: false
+            closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+
+            // One destructive colour, picked per theme rather than fixed, the
+            // same rule the snippets window uses: a dark red is illegible on
+            // Typewriter's cream and a bright one glares on Spaceship.
+            readonly property color danger: root.luminance(root.themeBackground) > 0.5
+                                            ? "#a3271c" : "#ef8b80"
+
+            // One row per action, as a model rather than four near-identical
+            // blocks -- they differ only in their label and in what they call,
+            // and parallel copies of one shape is how this codebase's bugs
+            // start.  Word-only, no icons: every glyph small enough to sit in
+            // a menu row is at the mercy of the host emoji font, which on
+            // Windows renders in colour and ignores the ink it is given (see
+            // the lock badge and the clear-context ring).
+            readonly property var actions: [
+                { action: "move", label: qsTr("Move"), gapAbove: false, destructive: false },
+                { action: "minimize", label: qsTr("Minimize"), gapAbove: false, destructive: false },
+                { action: "tuck",
+                  label: root.tucked ? qsTr("Bring back") : qsTr("Tuck away"),
+                  gapAbove: false, destructive: false },
+                { action: "close", label: qsTr("Close"), gapAbove: true, destructive: true }
+            ]
+
+            function showAt(localX, localY) {
+                popupX = Math.max(4, Math.min(localX, root.width - width - 4))
+                popupY = Math.max(4, Math.min(localY + 4, root.height - height - 4))
+                open()
+            }
+
+            function invoke(action) {
+                close()
+                if (action === "move") root.beginWindowMove()
+                else if (action === "minimize") root.showMinimized()
+                else if (action === "tuck") root.toggleTuck()
+                else if (action === "close") Qt.quit()
+            }
+
+            // The theme's key colour, which is what a raised surface is made of
+            // everywhere else here (the snippets window calls it `surface`).
+            // Deriving it from the window background instead reads as a hole
+            // rather than a panel: on the dark themes that background is
+            // already near-black, so a darkened copy of it is separated from
+            // the app only by the border, and on Typewriter's cream the same
+            // expression has to go the other way to work at all.  The key
+            // colour is the one surface every theme already guarantees
+            // `themeTextColor` is legible on.
+            background: Rectangle {
+                color: root.themeKeyColor
+                border.color: root.themeBorder
+                border.width: 1
+                radius: 10
+            }
+
+            contentItem: Column {
+                id: windowMenuCol
+                width: windowMenu.width
+                padding: 6
+                spacing: 2
+
+                Repeater {
+                    model: windowMenu.actions
+
+                    delegate: Item {
+                        id: menuRow
+                        // The row's own label, republished as a property
+                        // because the tests cannot reach it any other way: a
+                        // Repeater's delegates are re-parented as *visual*
+                        // children, so findChildren() returns none of them.
+                        readonly property string rowLabel: modelData.label
+                        // Tuck is X11-only, and a row for a thing that cannot
+                        // happen is worse than no row: it collapses to nothing
+                        // rather than sitting there inert.
+                        readonly property bool shown: modelData.action !== "tuck"
+                                                      || root.tuckSupported
+                        // 40 px, not the 34 the pill menu uses: this is a
+                        // menu one of whose rows quits the application.
+                        readonly property real gap: modelData.gapAbove ? 9 : 0
+                        width: windowMenuCol.width - 12
+                        height: shown ? 40 + gap : 0
+                        visible: shown
+
+                        // Close sits under a rule and a gap, so the row that
+                        // ends the session is not flush against the one above
+                        // it under an imprecise pointer.
+                        Rectangle {
+                            anchors.top: parent.top
+                            anchors.topMargin: 4
+                            anchors.horizontalCenter: parent.horizontalCenter
+                            width: parent.width - 16
+                            height: 1
+                            visible: modelData.gapAbove
+                            color: Qt.rgba(root.themeTextColor.r, root.themeTextColor.g,
+                                           root.themeTextColor.b, 0.18)
+                        }
+
+                        Rectangle {
+                            id: rowFill
+                            anchors.bottom: parent.bottom
+                            width: parent.width
+                            height: 40
+                            radius: 7
+                            readonly property color hoverFill: modelData.destructive
+                                                               ? windowMenu.danger
+                                                               : root.themeAccent
+                            color: rowMa.containsMouse ? hoverFill : "transparent"
+
+                            Text {
+                                anchors.verticalCenter: parent.verticalCenter
+                                anchors.left: parent.left
+                                anchors.leftMargin: 14
+                                text: modelData.label
+                                textFormat: Text.PlainText
+                                font.pixelSize: 14
+                                color: rowMa.containsMouse ? root.inkOn(rowFill.hoverFill)
+                                                           : root.themeTextColor
+                            }
+
+                            MouseArea {
+                                id: rowMa
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: windowMenu.invoke(modelData.action)
+                            }
+                        }
+                    }
+                }
             }
         }
 
