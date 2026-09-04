@@ -23,7 +23,7 @@ Owen is a wheelchair user with muscular dystrophy. Typing is hard - be proactive
 - Releases: `src/__version__.py` is the single source of version truth; publish to the separate `owenpkent/alpha-osk-releases` repo with an explicit `--repo` (the updater API URL is hard-pinned there); the installer asset name must be exactly `Alpha-OSK-Setup-{version}.exe`.
 - The install path is computed, never read from the registry: every silent install passes an explicit `/S /D=<dir>` from `updater.py::_install_target_dir()`. NSIS requires `/D=` last on the command line and unquoted even when the path has spaces, so don't reorder or requote the installer arguments (full reasoning under *Auto-Update*).
 - `run.py::ensure_admin_windows()` runs after dependency installation, not as the first statement in `main()`, so `pip install` never executes with an admin token; `--dashboard` never elevates at all. The repo tree is still user-writable, so this narrows the blast radius rather than closing it.
-- Load-bearing invariants: merge-strategy default MUST stay `"rank"`; `NgramPredictor._user_total == sum(user_vocab.values())`; `NgramPredictor.bigrams[p][w] >= round(_user_bigrams[p][w])` (the merged context tables never drop below the user's share, and only that share is ever persisted, see *Context tables*); window height is content-bound (never persist or assign it); every analytics metric needs both a session and an `_alltime_*` form; Windows subprocess calls need `CREATE_NO_WINDOW` when they suppress output *or* may run without a console to inherit (a git hook, a frozen GUI build).
+- Load-bearing invariants: merge-strategy default MUST stay `"rank"`; `NgramPredictor._user_total == sum(user_vocab.values())`; `NgramPredictor.bigrams[p][w] >= round(_user_bigrams[p][w])` (the merged context tables never drop below the user's share, and only that share is ever persisted, see *Context tables*); window height is content-bound (never persist or assign it); every `KeyButton` needs a share of the gap around it (`hitMarginH` / `hitMarginV`) or the strip between it and its neighbour is dead; every analytics metric needs both a session and an `_alltime_*` form; Windows subprocess calls need `CREATE_NO_WINDOW` when they suppress output *or* may run without a console to inherit (a git hook, a frozen GUI build).
 
 ## Stack & layout
 
@@ -1026,6 +1026,63 @@ Load-bearing rules:
   real `Main.qml` headlessly (`QT_QPA_PLATFORM=offscreen`) and fail on QML
   warnings. That's the only guard against a binding error shipping as a blank
   keyboard.
+
+## Dead space between keys
+
+Every `KeyButton`'s MouseArea reaches half a gap past the key's own slot
+(`hitMarginH` / `hitMarginV`, anchored with negative margins), so two
+neighbours meet in the middle of the gap between their caps and no strip of
+the grid types nothing.
+
+The gap was `keySpacing` wide horizontally (1 px below a 1111 px window, 2 px
+above) and `rowSpacing` plus the positioner's rounding vertically, and a click
+landing in it was a **silent** miss. That is strictly worse than a click on
+the wrong key, which the prefix beam and the pointer-bias model between them
+usually recover, because no character is emitted for the engine to see at all.
+
+Four things about it are load-bearing:
+
+- **Half each, not all of it.** Two hit areas that overlap resolve to
+  whichever key was declared later (the right-hand or the lower one), never
+  the nearer one, so an over-generous margin quietly hands every borderline
+  click to the same side.
+- **The vertical share carries an extra half pixel, and that is not slop.** A
+  `Row` reports a height ceiled above its tallest key (53 against 52.719 at
+  one width), and the remainder sits below the keys, inside no key, on top of
+  `rowSpacing`. The gap between two rows is therefore `rowSpacing` plus up to
+  a pixel neither row can predict, so each key takes half a pixel more than
+  its half. Vertical neighbours then overlap by under a pixel instead of
+  leaving a strip under a pixel wide, which is the right way round: an
+  overlap resolves to the lower key, a gap resolves to nothing at all.
+- **`mouse.x` / `mouse.y` are relative to the enlarged area**, so the press
+  handler subtracts the margin back out before the ripple's origin and
+  `pressDx` / `pressDy`. A press in the gap then reads just past +/-0.5,
+  which is true, and is signal rather than noise for the pointer-bias model
+  (`PointerModel` clamps at 1.0).
+- **A new key or panel has to be passed both margins**; there is no cascade
+  and the default is 0, so a forgotten binding is a silently dead strip
+  rather than an error. `Main.qml` owns the numbers (`keyHitMarginH` /
+  `keyHitMarginV`, plus `panelHitMarginV` for the two side panels, which lay
+  their own rows out on `keySpacing` rather than `rowSpacing`) and hands them
+  to the grid delegate and to each of the four panels.
+
+Two alternatives were rejected. Growing the keycaps to fill the gap changes
+what the keyboard looks like. One MouseArea over the whole grid resolving
+each press to the nearest key is the swipe overlay's design flaw exactly (see
+*Removed: Swipe / Glide Typing*): an interceptor that owns every press turns
+every key it does not know about into a dead tap, and that bill was paid
+three times.
+
+`FunctionRow`'s deliberate `keySpacing * 4` between its three groups keeps a
+dead strip in the middle of it. That is the same trade as the gutter between
+two panels: a separator, not a gap nobody meant to leave.
+
+Guarded by `tests/test_qml_compact_view.py::TestNoDeadStripBetweenKeys`, which
+measures the live MouseArea rather than recomputing the rectangle from the
+same properties the QML sets, and which drives a real click at a whole pixel
+lying strictly between two key slots. That last part is the half that matters:
+no geometric assertion can tell you whether Qt still delivers a press to a
+child outside its parent's bounds, which is what the whole approach rests on.
 
 ## Symbol Layer (full-size layouts)
 

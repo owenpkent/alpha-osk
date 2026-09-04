@@ -6,6 +6,11 @@ Item {
     property real keyW: 48
     property real keyH: 44
     property real keySpacing: 2
+    // Each key's share of the gap around it; see KeyButton's
+    // `hitMarginH`.  This panel is laid out on `keySpacing` in both
+    // directions, so a caller passes half of it for both axes.
+    property real hitMarginH: 0
+    property real hitMarginV: 0
     property bool numLockOn: true
     property color keyColor: "#3a3a3a"
     property color specialKeyColor: "#333333"
@@ -58,6 +63,8 @@ Item {
                 keyTextColor: numpadPanel.keyTextColor
                 accentColor: numpadPanel.accentColor
                 borderColor: numpadPanel.borderColor
+                hitMarginH: numpadPanel.hitMarginH
+                hitMarginV: numpadPanel.hitMarginV
                 // Home does not repeat with NumLock off, matching
                 // NavigationPanel: the caret is already at the line start
                 // after the first press, so every later one is a no-op.
@@ -77,6 +84,8 @@ Item {
                 keyTextColor: numpadPanel.keyTextColor
                 accentColor: numpadPanel.accentColor
                 borderColor: numpadPanel.borderColor
+                hitMarginH: numpadPanel.hitMarginH
+                hitMarginV: numpadPanel.hitMarginV
                 enableRepeat: numpadPanel.numLockOn ? numpadPanel.characterRepeat : true
                 repeatDelay: numpadPanel.repeatDelay
                 repeatInterval: numpadPanel.repeatInterval
@@ -93,6 +102,8 @@ Item {
                 keyTextColor: numpadPanel.keyTextColor
                 accentColor: numpadPanel.accentColor
                 borderColor: numpadPanel.borderColor
+                hitMarginH: numpadPanel.hitMarginH
+                hitMarginV: numpadPanel.hitMarginV
                 enableRepeat: numpadPanel.numLockOn ? numpadPanel.characterRepeat : true
                 repeatDelay: numpadPanel.repeatDelay
                 repeatInterval: numpadPanel.repeatInterval
@@ -110,6 +121,8 @@ Item {
                 keyTextColor: numpadPanel.keyTextColor
                 accentColor: numpadPanel.accentColor
                 borderColor: numpadPanel.borderColor
+                hitMarginH: numpadPanel.hitMarginH
+                hitMarginV: numpadPanel.hitMarginV
                 enableRepeat: numpadPanel.characterRepeat
                 repeatDelay: numpadPanel.repeatDelay
                 repeatInterval: numpadPanel.repeatInterval
@@ -131,6 +144,8 @@ Item {
                 keyTextColor: numpadPanel.keyTextColor
                 accentColor: numpadPanel.accentColor
                 borderColor: numpadPanel.borderColor
+                hitMarginH: numpadPanel.hitMarginH
+                hitMarginV: numpadPanel.hitMarginV
                 enableRepeat: numpadPanel.numLockOn ? numpadPanel.characterRepeat : true
                 repeatDelay: numpadPanel.repeatDelay
                 repeatInterval: numpadPanel.repeatInterval
@@ -147,6 +162,8 @@ Item {
                 keyTextColor: numpadPanel.keyTextColor
                 accentColor: numpadPanel.accentColor
                 borderColor: numpadPanel.borderColor
+                hitMarginH: numpadPanel.hitMarginH
+                hitMarginV: numpadPanel.hitMarginV
                 enabled: numpadPanel.numLockOn
                 // Blank and disabled with NumLock off, so nothing to repeat.
                 enableRepeat: numpadPanel.numLockOn && numpadPanel.characterRepeat
@@ -165,6 +182,8 @@ Item {
                 keyTextColor: numpadPanel.keyTextColor
                 accentColor: numpadPanel.accentColor
                 borderColor: numpadPanel.borderColor
+                hitMarginH: numpadPanel.hitMarginH
+                hitMarginV: numpadPanel.hitMarginV
                 enableRepeat: numpadPanel.numLockOn ? numpadPanel.characterRepeat : true
                 repeatDelay: numpadPanel.repeatDelay
                 repeatInterval: numpadPanel.repeatInterval
@@ -182,6 +201,8 @@ Item {
                 keyTextColor: numpadPanel.keyTextColor
                 accentColor: numpadPanel.accentColor
                 borderColor: numpadPanel.borderColor
+                hitMarginH: numpadPanel.hitMarginH
+                hitMarginV: numpadPanel.hitMarginV
                 enableRepeat: numpadPanel.characterRepeat
                 repeatDelay: numpadPanel.repeatDelay
                 repeatInterval: numpadPanel.repeatInterval
@@ -203,6 +224,8 @@ Item {
                 keyTextColor: numpadPanel.keyTextColor
                 accentColor: numpadPanel.accentColor
                 borderColor: numpadPanel.borderColor
+                hitMarginH: numpadPanel.hitMarginH
+                hitMarginV: numpadPanel.hitMarginV
                 // End does not repeat with NumLock off, same reason as Home
                 // on the 7 key above.
                 enableRepeat: numpadPanel.numLockOn && numpadPanel.characterRepeat
@@ -221,6 +244,8 @@ Item {
                 keyTextColor: numpadPanel.keyTextColor
                 accentColor: numpadPanel.accentColor
                 borderColor: numpadPanel.borderColor
+                hitMarginH: numpadPanel.hitMarginH
+                hitMarginV: numpadPanel.hitMarginV
                 enableRepeat: numpadPanel.numLockOn ? numpadPanel.characterRepeat : true
                 repeatDelay: numpadPanel.repeatDelay
                 repeatInterval: numpadPanel.repeatInterval
@@ -237,6 +262,8 @@ Item {
                 keyTextColor: numpadPanel.keyTextColor
                 accentColor: numpadPanel.accentColor
                 borderColor: numpadPanel.borderColor
+                hitMarginH: numpadPanel.hitMarginH
+                hitMarginV: numpadPanel.hitMarginV
                 enableRepeat: numpadPanel.numLockOn ? numpadPanel.characterRepeat : true
                 repeatDelay: numpadPanel.repeatDelay
                 repeatInterval: numpadPanel.repeatInterval
@@ -254,6 +281,8 @@ Item {
                 keyTextColor: numpadPanel.keyTextColor
                 accentColor: numpadPanel.accentColor
                 borderColor: numpadPanel.borderColor
+                hitMarginH: numpadPanel.hitMarginH
+                hitMarginV: numpadPanel.hitMarginV
                 enableRepeat: numpadPanel.characterRepeat
                 repeatDelay: numpadPanel.repeatDelay
                 repeatInterval: numpadPanel.repeatInterval
@@ -275,6 +304,8 @@ Item {
                 keyTextColor: numpadPanel.keyTextColor
                 accentColor: numpadPanel.accentColor
                 borderColor: numpadPanel.borderColor
+                hitMarginH: numpadPanel.hitMarginH
+                hitMarginV: numpadPanel.hitMarginV
                 // Insert is not in the repeat-worthy nav set (matches
                 // NavigationPanel's own Insert key, which has no
                 // enableRepeat either), so it stays off with NumLock off.
@@ -294,6 +325,8 @@ Item {
                 keyTextColor: numpadPanel.keyTextColor
                 accentColor: numpadPanel.accentColor
                 borderColor: numpadPanel.borderColor
+                hitMarginH: numpadPanel.hitMarginH
+                hitMarginV: numpadPanel.hitMarginV
                 enableRepeat: numpadPanel.numLockOn ? numpadPanel.characterRepeat : true
                 repeatDelay: numpadPanel.repeatDelay
                 repeatInterval: numpadPanel.repeatInterval
@@ -310,6 +343,8 @@ Item {
                 keyTextColor: numpadPanel.keyTextColor
                 accentColor: numpadPanel.accentColor
                 borderColor: numpadPanel.borderColor
+                hitMarginH: numpadPanel.hitMarginH
+                hitMarginV: numpadPanel.hitMarginV
                 enableRepeat: numpadPanel.characterRepeat
                 repeatDelay: numpadPanel.repeatDelay
                 repeatInterval: numpadPanel.repeatInterval
@@ -332,6 +367,8 @@ Item {
                 keyTextColor: numpadPanel.keyTextColor
                 accentColor: numpadPanel.accentColor
                 borderColor: numpadPanel.borderColor
+                hitMarginH: numpadPanel.hitMarginH
+                hitMarginV: numpadPanel.hitMarginV
                 // Never repeats: not in root.repeatableActions, and holding
                 // Enter/Return on a slow release firing twenty times is
                 // exactly the hostile case that list exists to exclude.
@@ -350,6 +387,8 @@ Item {
                 keyTextColor: numpadPanel.keyTextColor
                 accentColor: numpadPanel.accentColor
                 borderColor: numpadPanel.borderColor
+                hitMarginH: numpadPanel.hitMarginH
+                hitMarginV: numpadPanel.hitMarginV
                 // Never repeats: it toggles a mode on each activation, so a
                 // hold-driven repeat would just flip NumLock back and forth
                 // for as long as the button stayed down.

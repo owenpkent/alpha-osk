@@ -651,6 +651,34 @@ Window {
     // mouse-driven OSK.
     property real keySpacing: Math.max(1, Math.floor(root.width * 0.0018))
 
+    // The vertical gap between two stacked keyboard rows.  A property
+    // rather than a literal on the ColumnLayout because `keyHitMarginV`
+    // below has to be exactly half of it, and the same number written in
+    // two places is how the two drift apart.
+    property real rowSpacing: 2
+
+    // A key's share of the gap around it: half, so two neighbours meet
+    // in the middle of it and no strip of the grid is dead.  See the
+    // `hitMarginH` comment in KeyButton.qml for why the gap could not
+    // just be left to nobody.  The two axes differ because the gaps do:
+    // `keySpacing` separates keys within a row, `rowSpacing` separates
+    // the rows, and the side panels lay their own rows out on
+    // `keySpacing` in both directions.
+    //
+    // The extra half pixel on the vertical share is not slop, it is the
+    // positioner's: a `Row` reports a height ceiled above its tallest
+    // key (measured 53 against 52.719 at one width), and that remainder
+    // sits below the keys, inside no key, on top of `rowSpacing`.  The
+    // true gap between two rows is therefore `rowSpacing` plus up to a
+    // pixel that neither row can predict, so each key takes half a pixel
+    // more than its half.  Vertical neighbours then overlap by under a
+    // pixel instead of leaving a strip under a pixel wide, which is the
+    // right way round: an overlap resolves to the lower key, a gap
+    // resolves to nothing at all.
+    property real keyHitMarginH: keySpacing / 2
+    property real keyHitMarginV: rowSpacing / 2 + 0.5
+    property real panelHitMarginV: keySpacing / 2 + 0.5
+
     // The widest visible row drives sizing — every narrower row is centred
     // against it.  Derived from the layout data rather than hardcoded so a
     // layout with a different column count sizes itself correctly: the
@@ -2431,7 +2459,9 @@ Window {
                 ColumnLayout {
                     id: mainKeyboard
                     Layout.fillWidth: true
-                    spacing: 2
+                    // Half of this is what each row's keys reach into,
+                    // so it and `keyHitMarginV` must stay in step.
+                    spacing: root.rowSpacing
 
                     // ===== Number Row (` 1-0 - =) =====
                     // Above the function row so the digits sit adjacent to
@@ -2447,6 +2477,8 @@ Window {
                         keyW: root.keyW
                         keyH: root.keyH
                         keySpacing: root.keySpacing
+                        hitMarginH: root.keyHitMarginH
+                        hitMarginV: root.keyHitMarginV
                         keyColor: Qt.darker(root.themeKeyColor, 1.3)
                         accentKeyColor: root.accentKeyColor
                         keyPressedColor: root.themeKeyPressed
@@ -2471,6 +2503,8 @@ Window {
                         keyW: root.keyW
                         keyH: root.keyH * 0.7
                         keySpacing: root.keySpacing
+                        hitMarginH: root.keyHitMarginH
+                        hitMarginV: root.keyHitMarginV
                         // Centred rather than filling the grid width, which
                         // leaves visible space at both ends. That is the
                         // chosen shape, not an oversight: see the geometry
@@ -2512,6 +2546,8 @@ Window {
                                 }
                                 keyWidth: root.keyW * (kd.width || 1.0)
                                 keyHeight: rowKeyH
+                                hitMarginH: root.keyHitMarginH
+                                hitMarginV: root.keyHitMarginV
                                 fontSize: kd.fontSize || 16
                                 isSpecial: kd.type !== "char"
                                 isActive: {
@@ -2732,6 +2768,10 @@ Window {
             Comp.NavigationPanel {
                 objectName: "navigationPanel"
                 visible: root.showNavigation
+                // Vertically off `keySpacing`, not `rowSpacing`: this
+                // panel lays its own rows out on it.
+                hitMarginH: root.keyHitMarginH
+                hitMarginV: root.panelHitMarginV
                 keyW: root.keyW
                 keyH: root.keyH
                 keySpacing: root.keySpacing
@@ -2755,6 +2795,10 @@ Window {
             Comp.NumpadPanel {
                 objectName: "numpadPanel"
                 visible: root.showNumpad
+                // Vertically off `keySpacing`, not `rowSpacing`: this
+                // panel lays its own rows out on it.
+                hitMarginH: root.keyHitMarginH
+                hitMarginV: root.panelHitMarginV
                 keyW: root.keyW
                 keyH: root.keyH
                 keySpacing: root.keySpacing

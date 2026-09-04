@@ -27,6 +27,24 @@ Item {
     property bool isLocked: false
     property bool isWide: false
 
+    // How far the hit area reaches past the keycap's own slot, per
+    // axis, in pixels.  The gap between two caps is otherwise dead: a
+    // click landing in it types nothing and shows nothing, and unlike a
+    // click that lands on the *wrong* key it is a miss nothing
+    // downstream can recover, because no character is emitted for the
+    // prediction engine to see.  Each key takes half of every gap around
+    // it, so two neighbours meet in the middle: nothing is dead, and
+    // nothing overlaps either, which matters because an overlap resolves
+    // to whichever key was declared later rather than to the nearer one.
+    // The alternatives were both worse - growing the caps changes what
+    // the keyboard looks like, and one interceptor over the grid that
+    // resolves each press to the nearest key is the swipe overlay's
+    // design flaw (see the removal note in CLAUDE.md).  Both default to
+    // 0, so a KeyButton with no gap around it - and every caller that
+    // does not set them - is unchanged.
+    property real hitMarginH: 0
+    property real hitMarginV: 0
+
     // Key repeat settings.  Default OFF — only callers that clearly
     // benefit from auto-repeat (backspace, arrow keys, delete, page
     // up/down) opt in.  Character keys do NOT repeat on this OSK: a
@@ -412,7 +430,17 @@ Item {
 
     MouseArea {
         id: mouseArea
+        // Negative margins grow the area past `keyRoot`, which is what
+        // puts the gap between two caps under a key rather than under
+        // nothing.  Qt Quick delivers a press to a child outside its
+        // parent's bounds as long as no ancestor clips, and none does on
+        // this path (`keyBackground` sets `clip` for its own rounded
+        // corners, but it is this area's sibling, not its parent).
         anchors.fill: parent
+        anchors.leftMargin: -keyRoot.hitMarginH
+        anchors.rightMargin: -keyRoot.hitMarginH
+        anchors.topMargin: -keyRoot.hitMarginV
+        anchors.bottomMargin: -keyRoot.hitMarginV
         hoverEnabled: true
         acceptedButtons: Qt.LeftButton | Qt.RightButton
 
@@ -421,9 +449,18 @@ Item {
                 mouse.accepted = true
                 return
             }
-            keyRoot._pressVisual(mouse.x, mouse.y)
-            keyRoot.pressDx = keyRoot.width > 0 ? mouse.x / keyRoot.width - 0.5 : 0
-            keyRoot.pressDy = keyRoot.height > 0 ? mouse.y / keyRoot.height - 0.5 : 0
+            // mouse.x/y are relative to the enlarged hit area, so take
+            // the margin back out: the ripple's origin and the press
+            // offset the pointer-bias model learns from both mean "where
+            // inside the keycap".  A press in the gap therefore reads
+            // just past +/-0.5, which is true, and is signal rather than
+            // noise - a click landing off the cap is exactly what a
+            // pointer bias looks like, and PointerModel clamps at 1.0.
+            var capX = mouse.x - keyRoot.hitMarginH
+            var capY = mouse.y - keyRoot.hitMarginV
+            keyRoot._pressVisual(capX, capY)
+            keyRoot.pressDx = keyRoot.width > 0 ? capX / keyRoot.width - 0.5 : 0
+            keyRoot.pressDy = keyRoot.height > 0 ? capY / keyRoot.height - 0.5 : 0
 
             if (mouse.button === Qt.RightButton) {
                 // Right-click is a one-shot: never auto-repeats, and

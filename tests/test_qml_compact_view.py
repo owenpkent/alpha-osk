@@ -12,6 +12,7 @@ import failure, and would otherwise ship as a keyboard that renders blank.
 
 from __future__ import annotations
 
+import math
 import os
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -30,7 +31,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 # contributor without the Qt system libs still gets the rest of the suite.
 # CI installs the libs (see .github/workflows/ci.yml) so these still run there.
 try:
-    from PySide6.QtCore import QCoreApplication, QSettings, Qt, QUrl  # noqa: E402
+    from PySide6.QtCore import QCoreApplication, QPoint, QSettings, Qt, QUrl  # noqa: E402
     from PySide6.QtGui import QGuiApplication  # noqa: E402
     from PySide6.QtQml import QQmlApplicationEngine  # noqa: E402
 
@@ -1371,4 +1372,342 @@ class TestTheFullSizeSymbolPage:
 
         sent = [call.args[0] for call in bridge._synth.send_text.call_args_list]
         assert sent == ["µ"], f"typed {sent!r} instead of the glyph on the cap"
+        assert _real_warnings(warnings) == []
+
+
+class TestNoDeadStripBetweenKeys:
+    """A click landing between two keycaps has to type one of them.
+
+    The gap between two caps was dead until this feature: `keySpacing`
+    horizontally (1 px at the default window, 2 px past 1111 px), and
+    vertically the keyboard column's own `rowSpacing` plus whatever the
+    positioner ceiled a row's height by. A click in it typed nothing and
+    showed nothing, and unlike a click that lands on the *wrong* key it is a
+    miss nothing downstream can recover: no character is emitted, so the
+    prediction engine never sees it. Every KeyButton now takes half of each
+    gap around it (`hitMarginH` / `hitMarginV` there, `keyHitMarginH` /
+    `keyHitMarginV` in Main.qml), so two neighbours meet in the middle.
+
+    Geometry is measured off the live MouseArea, never recomputed from the
+    same `hitMargin*` properties the QML sets: a test that derived the
+    rectangle the way the code does would pass just as happily against a
+    MouseArea that ignored them. The two click tests are the ones that prove
+    event *delivery*, which is what the whole approach rests on -- Qt hands a
+    press to a child outside its parent's bounds only while no ancestor
+    clips, and no geometric assertion can tell you whether that still holds.
+    """
+
+    # Both view modes at three widths. `keySpacing` is
+    # floor(width * 0.0018), so 940 and 1000 give a 1 px horizontal gap and
+    # 1240 a 2 px one: the arithmetic differs either side of that step, and
+    # the seam has to land in the right place on both.
+    WIDTHS = (940, 1000, 1240)
+
+    # Every position here is a float off a division that rarely terminates in
+    # binary, so an exact-equality assertion on a seam would be a coin flip.
+    EPS = 0.01
+
+    # How far the seam between two hit areas may sit from the middle of the
+    # gap it divides. Half of each key's share is exact arithmetic, so the
+    # real error is zero and this is float slack rather than tolerance: the
+    # failure it has to catch is closing the strip by handing one key the
+    # *whole* gap, and the narrowest gap that ships is 1 px, so anything at
+    # or above half a pixel would let that through.
+    HALF_SHARE_TOLERANCE_PX = 0.25
+
+    @staticmethod
+    def _hit_area(key):
+        """The KeyButton's MouseArea: the rectangle a pointer actually hits.
+
+        Matched on class name because `property("acceptedButtons")` *raises*
+        in PySide ("Can't find converter for 'QFlags<Qt::MouseButton>'"),
+        which would abort the walk rather than skip a child that is not one.
+        """
+        for child in key.childItems():
+            if child.metaObject().className().startswith("QQuickMouseArea"):
+                return child
+        return None
+
+    @staticmethod
+    def _scene_rect(item):
+        """(left, top, right, bottom) of *item*, in scene coordinates."""
+        box = item.boundingRect()
+        corner = item.mapToScene(box.topLeft())
+        return (corner.x(), corner.y(), corner.x() + box.width(), corner.y() + box.height())
+
+    @classmethod
+    def _keys(cls, row):
+        """Every KeyButton in *row*, left to right.
+
+        A KeyButton is the only item in there carrying `hitMarginH`; the
+        Repeater and the caps' own Rectangles are children too.
+        """
+        keys = [c for c in row.childItems() if c.property("hitMarginH") is not None]
+        keys.sort(key=lambda k: cls._scene_rect(k)[0])
+        return keys
+
+    @classmethod
+    def _measure(cls, root):
+        """Every rendered row, top to bottom, as bare numbers.
+
+        `slot` is the KeyButton's own rectangle, which is exactly what the
+        hit area used to be, so a point strictly between two slots is a point
+        that used to be dead. `hit` is the MouseArea's.
+
+        Returns numbers and holds no QML item, deliberately: callers pump the
+        event loop next, and a Repeater frees its delegates on any model
+        change. A PySide wrapper outliving its item segfaulted CI once.
+        """
+        rows = []
+        for row in TestEveryRowFitsTheContentArea._rendered_rows(root):
+            keys = cls._keys(row)
+            if not keys:
+                continue
+            entry = {"id": row.property("rowData")["id"], "keys": []}
+            for key in keys:
+                area = cls._hit_area(key)
+                assert area is not None, "a KeyButton rendered with no MouseArea"
+                kd = key.property("kd")
+                if hasattr(kd, "toVariant"):
+                    kd = kd.toVariant()
+                kd = kd if isinstance(kd, dict) else {}
+                entry["keys"].append(
+                    {
+                        "slot": cls._scene_rect(key),
+                        "hit": cls._scene_rect(area),
+                        "char": kd.get("key") if kd.get("type") == "char" else None,
+                    }
+                )
+            rows.append(entry)
+        rows.sort(key=lambda r: r["keys"][0]["slot"][1])
+        return rows
+
+    @classmethod
+    def _key_margins(cls, root):
+        """(hitMarginH, hitMarginV) for every KeyButton anywhere in the tree."""
+        found = []
+
+        def walk(item):
+            for child in item.childItems():
+                margin = child.property("hitMarginH")
+                if margin is not None:
+                    found.append((margin, child.property("hitMarginV")))
+                walk(child)
+
+        walk(root.property("contentItem"))
+        return found
+
+    @pytest.fixture
+    def shown(self, qml_root):
+        root, warnings, bridge = qml_root
+        root.show()
+        _pump_until(lambda: len(TestEveryRowFitsTheContentArea._rendered_rows(root)))
+        return root, warnings, bridge
+
+    def _rows_at(self, root, width, compact=False):
+        root.setProperty("compactView", compact)
+        root.setProperty("width", width)
+        _pump_until(lambda: len(TestEveryRowFitsTheContentArea._rendered_rows(root)))
+        rows = self._measure(root)
+        assert rows, f"no keyboard rows rendered at width {width} (compact={compact})"
+        return rows
+
+    @pytest.mark.parametrize("compact", (False, True))
+    def test_no_dead_strip_between_two_keys_in_a_row(self, shown, compact) -> None:
+        root, warnings, _ = shown
+        gaps_seen = 0
+        for width in self.WIDTHS:
+            for row in self._rows_at(root, width, compact):
+                for left, right in zip(row["keys"], row["keys"][1:]):
+                    if right["slot"][0] - left["slot"][2] > 0:
+                        gaps_seen += 1
+                    assert left["hit"][2] >= right["hit"][0] - self.EPS, (
+                        f"{right['hit'][0] - left['hit'][2]:.3f} px of dead "
+                        f"strip between two keys in the {row['id']!r} row at "
+                        f"window width {width} (compact={compact}): a click "
+                        "there types nothing at all"
+                    )
+        assert gaps_seen, (
+            "no two keys in any row were separated at all, so this swept "
+            "nothing -- keySpacing collapsed to 0 or the rows did not render"
+        )
+        assert _real_warnings(warnings) == []
+
+    @pytest.mark.parametrize("compact", (False, True))
+    def test_no_dead_strip_between_two_rows(self, shown, compact) -> None:
+        root, warnings, _ = shown
+        gaps_seen = 0
+        for width in self.WIDTHS:
+            rows = self._rows_at(root, width, compact)
+            for upper, lower in zip(rows, rows[1:]):
+                # Row-wide extremes rather than one key's: within a row the
+                # keys share a height, but the number row's are shorter than
+                # the letter rows' and a future row need not match either.
+                bottom = max(k["slot"][3] for k in upper["keys"])
+                top = min(k["slot"][1] for k in lower["keys"])
+                if top - bottom > 0:
+                    gaps_seen += 1
+                hit_bottom = max(k["hit"][3] for k in upper["keys"])
+                hit_top = min(k["hit"][1] for k in lower["keys"])
+                assert hit_bottom >= hit_top - self.EPS, (
+                    f"{hit_top - hit_bottom:.3f} px of dead strip between the "
+                    f"{upper['id']!r} and {lower['id']!r} rows at window width "
+                    f"{width} (compact={compact}): a click there types nothing"
+                )
+        assert gaps_seen, "the rows were not separated at all, so this swept nothing"
+        assert _real_warnings(warnings) == []
+
+    def test_neither_key_takes_more_than_its_half(self, shown) -> None:
+        """The seam sits in the middle of the gap, not on somebody's edge.
+
+        The inverse of the two tests above, and the reason they cannot stand
+        alone: coverage is also satisfied by giving one key a margin wide
+        enough to swallow the whole gap, which would hand every borderline
+        click to the same side. Horizontal only -- the vertical share carries
+        a deliberate half-pixel of the positioner's rounding (see
+        `keyHitMarginV` in Main.qml), so its seam is not the midpoint.
+        """
+        root, warnings, _ = shown
+        checked = 0
+        for width in self.WIDTHS:
+            for row in self._rows_at(root, width):
+                for left, right in zip(row["keys"], row["keys"][1:]):
+                    middle = (left["slot"][2] + right["slot"][0]) / 2
+                    assert abs(left["hit"][2] - middle) <= self.HALF_SHARE_TOLERANCE_PX, (
+                        f"the seam between two keys in the {row['id']!r} row "
+                        f"sits {left['hit'][2] - middle:.3f} px off the middle "
+                        f"of the gap at window width {width}: one of them is "
+                        "taking more than its share of its neighbour's edge"
+                    )
+                    checked += 1
+        assert checked, "no adjacent pair was measured"
+        assert _real_warnings(warnings) == []
+
+    def test_a_click_between_two_keys_types_one_of_them(self, shown) -> None:
+        """The horizontal strip, driven rather than measured.
+
+        Everything above is arithmetic on rectangles, and rectangles are not
+        what types a character: this presses a whole pixel that lies strictly
+        between two key slots, which is precisely what the hit areas used to
+        be, so the same press before this feature reached nothing at all.
+        """
+        root, warnings, bridge = shown
+        # 1240 px puts keySpacing at 2, so the strip is two pixels wide and
+        # a whole pixel is certain to fall strictly inside it.
+        rows = self._rows_at(root, 1240)
+
+        target = None
+        for row in rows:
+            for left, right in zip(row["keys"], row["keys"][1:]):
+                if not (left["char"] and right["char"]):
+                    continue
+                x = math.floor(left["slot"][2]) + 1
+                if x >= right["slot"][0]:
+                    continue
+                y = round((left["slot"][1] + left["slot"][3]) / 2)
+                target = (x, y, left["char"], right["char"])
+                break
+            if target:
+                break
+
+        assert target is not None, (
+            "no whole pixel fell strictly between two character keys, so "
+            "pressing one would prove nothing about the strip that was dead"
+        )
+        x, y, left_char, right_char = target
+
+        bridge._synth.send_text.reset_mock()
+        QTest.mousePress(root, Qt.LeftButton, Qt.NoModifier, QPoint(x, y))
+        QCoreApplication.processEvents()
+        QTest.mouseRelease(root, Qt.LeftButton, Qt.NoModifier, QPoint(x, y))
+        QCoreApplication.processEvents()
+
+        sent = [call.args[0] for call in bridge._synth.send_text.call_args_list]
+        assert sent in ([left_char], [right_char]), (
+            f"a click at x={x}, between {left_char!r} and {right_char!r}, "
+            f"typed {sent!r}: the gap between two keys is still dead"
+        )
+        assert _real_warnings(warnings) == []
+
+    def test_a_click_between_two_rows_types_one_of_them(self, shown) -> None:
+        """The vertical strip, same argument as the horizontal one.
+
+        Worth driving separately because the two axes are closed by different
+        numbers: the row gap is `rowSpacing` plus the positioner's rounding,
+        not `keySpacing`, and a fix that only reached the horizontal one
+        would still leave every row boundary dead.
+        """
+        root, warnings, bridge = shown
+        rows = self._rows_at(root, 1240)
+
+        target = None
+        for upper, lower in zip(rows, rows[1:]):
+            for key in upper["keys"]:
+                if not key["char"]:
+                    continue
+                x = round((key["slot"][0] + key["slot"][2]) / 2)
+                below = [
+                    k for k in lower["keys"] if k["slot"][0] <= x <= k["slot"][2] and k["char"]
+                ]
+                if not below:
+                    continue
+                y = math.floor(key["slot"][3]) + 1
+                if y >= min(k["slot"][1] for k in lower["keys"]):
+                    continue
+                target = (x, y, key["char"], below[0]["char"])
+                break
+            if target:
+                break
+
+        assert target is not None, (
+            "no whole pixel fell strictly between two rows of character keys, "
+            "so pressing one would prove nothing about the strip that was dead"
+        )
+        x, y, upper_char, lower_char = target
+
+        bridge._synth.send_text.reset_mock()
+        QTest.mousePress(root, Qt.LeftButton, Qt.NoModifier, QPoint(x, y))
+        QCoreApplication.processEvents()
+        QTest.mouseRelease(root, Qt.LeftButton, Qt.NoModifier, QPoint(x, y))
+        QCoreApplication.processEvents()
+
+        sent = [call.args[0] for call in bridge._synth.send_text.call_args_list]
+        assert sent in ([upper_char], [lower_char]), (
+            f"a click at y={y}, between {upper_char!r} and {lower_char!r}, "
+            f"typed {sent!r}: the gap between two rows is still dead"
+        )
+        assert _real_warnings(warnings) == []
+
+    def test_every_key_in_every_panel_takes_a_share_too(self, shown) -> None:
+        """The panels have the same gaps and get the same treatment.
+
+        Weaker than the sweeps above on purpose: those walk the rows the
+        layout JSON drives, which is where a click lands most often, and the
+        Number Row, Function Row, Navigation and Numpad panels are laid out
+        by four separate QML files. Asserting each of them owns a share of
+        its gaps is what catches a panel nobody remembered to wire, which is
+        the way this feature is most likely to be half-applied.
+        """
+        root, warnings, _ = shown
+        for compact in (False, True):
+            root.setProperty("compactView", compact)
+            root.setProperty("showFunctionRow", True)
+            if not compact:
+                # Compact View forces these off and re-disables the toggles.
+                root.setProperty("showNavigation", True)
+                root.setProperty("showNumpad", True)
+            _pump_until(lambda: len(self._key_margins(root)))
+
+            margins = self._key_margins(root)
+            assert len(margins) >= 50, (
+                f"only {len(margins)} keys found with the panels on "
+                f"(compact={compact}); the walk missed most of the keyboard "
+                "and the assertion below would be near-vacuous"
+            )
+            dead = [m for m in margins if not (m[0] > 0 and m[1] > 0)]
+            assert not dead, (
+                f"{len(dead)} of {len(margins)} keys take no share of the gap "
+                f"around them (compact={compact}): whichever panel owns them "
+                "was not passed hitMarginH / hitMarginV"
+            )
         assert _real_warnings(warnings) == []
