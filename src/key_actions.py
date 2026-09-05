@@ -518,7 +518,14 @@ class KeyActionStore:
         return True
 
     def reload_from_disk(self) -> None:
-        """Re-read key_actions.json (used after a data import)."""
+        """Re-read key_actions.json, discarding what is in memory.
+
+        Nothing calls this yet: the sibling stores are reloaded after a
+        Data Backup import and this file is deliberately not in that
+        archive (see the module docstring).  It is kept because it is
+        exactly what that file joining the archive would need, and
+        because the lazy ``_loaded`` flag makes it two lines.
+        """
         self._loaded = False
         self.load()
 

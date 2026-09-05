@@ -407,9 +407,7 @@ class TestTheEditor:
         assert field is not None, "no phrase field in the editor"
         return field
 
-    def test_shift_and_an_arrow_select_rather_than_moving_the_caret(
-        self, qml_root
-    ) -> None:
+    def test_shift_and_an_arrow_select_rather_than_moving_the_caret(self, qml_root) -> None:
         """This window never holds OS focus, so Qt's own key handling never
         sees the modifier and the editor has to apply it itself. Without
         this there is no way at all to select a range in a 500-character

@@ -53,6 +53,7 @@ from .key_actions import (
     ActionExecutor,
     KeyActionStore,
     action_type_info,
+    clean_action,
     describe_action,
 )
 from .platform import CURRENT_PLATFORM, create_key_synthesizer
@@ -3169,11 +3170,27 @@ class KeyboardBridge(QObject):
         True: a green "Saved" over a write that never happened is the
         exact failure ``setSnippet`` and ``acceptSnippetOffer`` were both
         given bool returns for.
+
+        ``KeyActionStore.set`` answers a *different* question, though,
+        and forwarding it straight through is a bug: it reports whether
+        anything **changed**, which is what decides whether the file is
+        rewritten and the signal emitted, so it is False for a valid
+        payload identical to the one already stored.  Opening the editor
+        on a key that already does what you want and tapping Save is an
+        ordinary thing to do, and that False put a red "could not be
+        saved" over state that was exactly right.  An unchanged
+        assignment therefore reports success here, with no signal, since
+        nothing moved.
         """
-        if not self._key_actions.set(key_name, dict(payload)):
-            return False
-        self.keyActionsChanged.emit(self._key_actions.get_all())
-        return True
+        if self._key_actions.set(key_name, dict(payload)):
+            self.keyActionsChanged.emit(self._key_actions.get_all())
+            return True
+        # Nothing was written. That is success only when what is stored
+        # is already exactly what was asked for. An unprogrammable key
+        # and a payload that fails validation both land here too, and
+        # both are real failures the user has to be told about.
+        cleaned = clean_action(dict(payload))
+        return cleaned is not None and self._key_actions.get(key_name) == cleaned
 
     @Slot(str, result=bool)
     def clearKeyAction(self, key_name: str) -> bool:

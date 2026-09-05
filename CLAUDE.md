@@ -705,9 +705,25 @@ to register, so the user taps it again. Text follows
 control character and DEL stripped, capped).
 
 `setKeyAction` **returns a bool and QML honours it** - the editor flashes
-"Saved" only on True. A green confirmation over a write that never happened
-is the failure `setSnippet` and `acceptSnippetOffer` were both given bool
-returns for.
+"Saved" only on True, and its failure toast otherwise. A green confirmation
+over a write that never happened is the failure `setSnippet` and
+`acceptSnippetOffer` were both given bool returns for.
+
+**The slot's bool and `KeyActionStore.set`'s bool are not the same
+question, and the slot must not just forward it.** The store answers "did
+anything change", which is what decides whether the file is rewritten and
+`keyActionsChanged` emitted, so it is False for a valid payload identical
+to the one already stored. The slot answers "did my save stick". Those
+differ in exactly one case, re-saving an unchanged action, which is an
+ordinary thing to do (open the editor on a key that already does what you
+want, tap Save) and which read as a red "could not be saved" over state
+that was exactly right. The slot therefore re-validates and treats an
+unchanged assignment as success, emitting nothing since nothing moved.
+Guarded by
+`tests/test_keyboard_bridge.py::TestProgrammableFunctionKeys::test_saving_an_unchanged_action_still_reports_success`,
+paired with the inverse that a refused key, an invalid payload and an
+unknown action type are all still reported as failures: a slot that simply
+returned True would satisfy the first on its own.
 
 **Deliberately NOT in the Data Backup archive.** Adding a fourth file to
 `_MODEL_FILES` means bumping `data_export.SCHEMA_VERSION` and writing the

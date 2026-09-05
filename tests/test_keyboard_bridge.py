@@ -4777,6 +4777,8 @@ class TestTheLogIsReachableFromTheUI:
         monkeypatch.setattr("PySide6.QtGui.QDesktopServices", _FakeDesktopServices, raising=True)
 
         assert bridge.openLogFolder() is False
+
+
 class TestExtraFunctionKeys:
     """F13-F24 reach the synthesiser under their own names."""
 
@@ -4911,6 +4913,27 @@ class TestProgrammableFunctionKeys:
     def test_an_invalid_assignment_is_reported_rather_than_stored(self, bridge, actions):
         assert bridge.setKeyAction("f22", {"type": "hotkey", "modifiers": ["ctrl"]}) is False
         assert bridge.getKeyActions() == {}
+
+    def test_saving_an_unchanged_action_still_reports_success(self, bridge, actions):
+        """Opening the editor on a key that already does what you want and
+        tapping Save is ordinary. The store answers "did anything change",
+        which is False there, and forwarding that put a red "could not be
+        saved" over state that was exactly right."""
+        payload = {"type": "hotkey", "key": "s", "modifiers": ["ctrl"]}
+        assert bridge.setKeyAction("f13", dict(payload)) is True
+        assert bridge.setKeyAction("f13", dict(payload)) is True
+        assert bridge.describeKeyAction("f13") == "Ctrl+S"
+
+    def test_a_save_that_did_not_land_is_still_reported_as_failure(self, bridge, actions):
+        """The inverse half, and the reason the bool exists at all: a slot
+        that just returned True would pass the test above while flashing
+        "Saved" over a write that never happened."""
+        # A hotkey with no action key is not a chord, so it is refused.
+        assert bridge.setKeyAction("f13", {"type": "hotkey", "modifiers": ["ctrl"]}) is False
+        # Backspace is not programmable, however valid the payload is.
+        assert bridge.setKeyAction("backspace", {"type": "text", "text": "hi"}) is False
+        # An unknown action type has no entry to validate against.
+        assert bridge.setKeyAction("f14", {"type": "launch", "path": "x"}) is False
 
     def test_clearing_restores_the_plain_keystroke(self, bridge, actions):
         bridge.setKeyAction("f23", {"type": "hotkey", "key": "s", "modifiers": ["ctrl"]})
