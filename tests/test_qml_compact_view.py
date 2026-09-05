@@ -1711,3 +1711,122 @@ class TestNoDeadStripBetweenKeys:
                 "was not passed hitMarginH / hitMarginV"
             )
         assert _real_warnings(warnings) == []
+
+
+class TestTheArrowGutterSeparatesTheArrowsFromTheNavBlock:
+    """The Navigation panel's `arrowGap`: a gutter opens ABOVE the Up arrow,
+    not within the arrow cluster itself.
+
+    `NavigationPanel.qml` grows the three cells of the Up-arrow row by
+    `arrowGap` (`keySpacing * 4`) and anchors the Up `KeyButton` to the
+    BOTTOM of its (now taller) cell, so the extra height is dead space
+    sitting above the key rather than below it. A `Grid` aligns a cell's
+    content to the top by default, so growing the cells without the
+    bottom-anchor would have opened the gutter between Up and the
+    Left/Down/Right row instead -- splitting the very cluster it is meant
+    to set apart from the PrtSc/Ins/Del block above.
+
+    Both directions matter, so this pins both: the gap immediately above
+    Up must be wider than an ordinary inter-key gap (that is the whole
+    point of `arrowGap`), and the gap immediately below Up -- between Up
+    and Down -- must still be the *ordinary* gap, or the "separator" reads
+    as "the arrows have unusually large spacing throughout" instead of "the
+    arrows are set apart from the block above them".
+
+    Measured off the live `KeyButton`s (found by their `keyText` property,
+    since neither they nor the wrapper `Item`s around them carry an
+    `objectName`), never recomputed from `arrowGap` / `keySpacing`
+    directly: a test built from the same properties the QML uses would
+    pass even if the anchor were wrong, since `arrowGap` would still report
+    the same number regardless of which side of the Up key it landed on.
+    """
+
+    @staticmethod
+    def _find_key_by_text(item, key_text: str):
+        """First descendant of *item* whose `keyText` property matches, or
+        `None`.
+
+        `keyText` is a KeyButton-only property (see `hitMarginH` used the
+        same way in `TestNoDeadStripBetweenKeys._key_margins` above), so
+        this cannot accidentally match the wrapper `Item`s the arrow row
+        uses for its taller cells. Non-asserting: `_pump_until` needs a
+        predicate that can report "not yet" without raising, before the
+        Navigation panel has necessarily rendered anything at all.
+        """
+        found = []
+
+        def walk(it):
+            if found:
+                return
+            for child in it.childItems():
+                if child.property("keyText") == key_text:
+                    found.append(child)
+                    return
+                walk(child)
+                if found:
+                    return
+
+        walk(item)
+        return found[0] if found else None
+
+    @classmethod
+    def _key_by_text(cls, item, key_text: str):
+        """`_find_key_by_text`, but fails loudly instead of returning `None`."""
+        key = cls._find_key_by_text(item, key_text)
+        assert key is not None, f"no KeyButton with keyText={key_text!r} found"
+        return key
+
+    @classmethod
+    def _scene_rect(cls, item):
+        """(top, bottom) of *item* in scene coordinates.
+
+        Scene coordinates, not local ones: Up sits inside its own wrapper
+        `Item` (the taller cell), one nesting level deeper than End or
+        Down, which are direct `Grid` children, so the two are not in the
+        same local coordinate frame and a bare `.y()` comparison would
+        compare unrelated origins.
+        """
+        box = item.boundingRect()
+        top_left = item.mapToScene(box.topLeft())
+        return (top_left.y(), top_left.y() + box.height())
+
+    @pytest.fixture
+    def nav_shown(self, qml_root):
+        root, warnings, bridge = qml_root
+        root.setProperty("showNavigation", True)
+        _pump_until(lambda: self._find_key_by_text(root.property("contentItem"), "up") is not None)
+        return root, warnings, bridge
+
+    def test_the_gutter_opens_above_the_arrows_not_within_them(self, nav_shown) -> None:
+        root, warnings, _bridge = nav_shown
+        content = root.property("contentItem")
+
+        end_top, end_bottom = self._scene_rect(self._key_by_text(content, "end"))
+        home_top, home_bottom = self._scene_rect(self._key_by_text(content, "home"))
+        up_top, up_bottom = self._scene_rect(self._key_by_text(content, "up"))
+        down_top, down_bottom = self._scene_rect(self._key_by_text(content, "down"))
+
+        ordinary_gap = end_top - home_bottom
+        gutter_above_up = up_top - end_bottom
+        gap_below_up = down_top - up_bottom
+
+        assert ordinary_gap > 0, (
+            "Home and End rendered with no gap between them at all, so this "
+            "measurement cannot tell an enlarged gutter from an ordinary one"
+        )
+        assert gutter_above_up > ordinary_gap, (
+            f"the gap above Up ({gutter_above_up:.2f}px) is not wider than the "
+            f"ordinary gap between two stacked keys ({ordinary_gap:.2f}px) -- "
+            "the arrow cluster is not visually separated from the block above it"
+        )
+
+        # The near-miss this test exists to reject: the gutter must not have
+        # opened *within* the arrow cluster instead, splitting Up from
+        # Down/Left/Right. That gap has to stay the ordinary key spacing.
+        assert gap_below_up == pytest.approx(ordinary_gap, abs=0.5), (
+            f"the gap below Up ({gap_below_up:.2f}px) differs from the "
+            f"ordinary inter-key gap ({ordinary_gap:.2f}px) -- the arrow "
+            "cluster itself has been split apart instead of being set apart "
+            "from the block above it"
+        )
+        assert _real_warnings(warnings) == []

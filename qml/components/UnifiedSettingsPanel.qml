@@ -2244,7 +2244,18 @@ Item {
                                         wrapMode: Text.WordWrap
                                     }
 
-                                    Row {
+                                    // Flow, not Row, and Layout.fillWidth is the
+                                    // load-bearing half. A Row sizes to its content,
+                                    // and in a ColumnLayout that raises the whole
+                                    // column's implicit width, so these two long model
+                                    // labels ("Nova 3, most accurate, best for
+                                    // dictation") made every fillWidth sibling size to
+                                    // a width the 360 px window does not have: the
+                                    // Deepgram paragraph wrapped past the right edge
+                                    // and the language chips were clipped mid-word.
+                                    // One overflowing child clips the whole category.
+                                    Flow {
+                                        Layout.fillWidth: true
                                         spacing: 6
                                         visible: unifiedSettings.dictationModels.length > 0
 
