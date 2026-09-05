@@ -2578,6 +2578,39 @@ Window {
                         property var rowData: modelData
                         property real rowKeyH: rowData.id === "number" ? root.keyH - 4 : root.keyH
 
+                        // Equal unit totals are NOT equal pixel widths, and the
+                        // difference is what makes the grid's edges step even after
+                        // every row was made 15.5u. A row measures
+                        // `units * keyW + (keys - 1) * keySpacing`, and the rows carry
+                        // very different key counts: the space row has 6 keys against
+                        // the number row's 15, so it is nine gaps short and, at
+                        // keySpacing 2, rendered 18 px narrower. Being centred, that
+                        // put it 9 px inside the grid at each end. Compact View has the
+                        // same shape at a smaller scale, 10 to 12 gaps across its rows.
+                        //
+                        // Each row absorbs its own shortfall into its own keys. Gaps
+                        // therefore stay identical everywhere (widening them instead
+                        // would have given the space row 5.6 px gutters against 2 px
+                        // elsewhere), and the widest row is unchanged by construction,
+                        // so `keyW`, the side panels and the window's width budget are
+                        // all exactly what they were.
+                        //
+                        // The letter alignment survives: the top and home rows differ
+                        // by one gap, so their keys differ by keySpacing / units, and q
+                        // and a drift by about 0.3 px at the default window. That is
+                        // inside the half-gap residual TestTheLetterColumnsLineUp
+                        // already documents as unavoidable.
+                        property real rowUnits: {
+                            var u = 0
+                            for (var i = 0; i < rowData.keys.length; i++)
+                                u += (rowData.keys[i].width || 1.0)
+                            return u
+                        }
+                        property real rowKeyW: rowUnits > 0
+                            ? root.keyW + (root._widestRow.gaps - (rowData.keys.length - 1))
+                                          * root.keySpacing / rowUnits
+                            : root.keyW
+
                         Repeater {
                             model: rowData.keys
 
@@ -2596,7 +2629,7 @@ Window {
                                     }
                                     return kd.display || ""
                                 }
-                                keyWidth: root.keyW * (kd.width || 1.0)
+                                keyWidth: rowKeyW * (kd.width || 1.0)
                                 keyHeight: rowKeyH
                                 hitMarginH: root.keyHitMarginH
                                 hitMarginV: root.keyHitMarginV

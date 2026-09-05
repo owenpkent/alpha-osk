@@ -1165,6 +1165,43 @@ So the whole keyboard is 1.0u, 1.75u and 2.75u keys plus Backspace (1.5u) and
 the space bar. `TestEveryFullSizeRowIsFlush` pins the rule, the two symmetric
 rows, and that shared-width consequence.
 
+**Equal units are not equal pixels, and the second half is the one that
+bites.** A row measures `units * keyW + (keys - 1) * keySpacing`, and the rows
+carry very different key counts: 15, 14, 13, 12 and 6. The space row is
+therefore nine gaps short of the number row, which at the default window is
+18 px, and since each row is centred on its own it sat 9 px inside the grid at
+each end. Making the unit totals equal straightened four edges and left the
+fifth visibly short, which is exactly what was reported. Compact View has the
+same shape at a smaller scale (10 to 12 gaps across its rows).
+
+So **each row absorbs its own gap shortfall into its own keys**: the `Row`
+delegate in `Main.qml` derives `rowKeyW` as
+`keyW + (_widestRow.gaps - (keys - 1)) * keySpacing / rowUnits`. Three things
+follow, and each was a live alternative:
+
+- **Gaps stay identical everywhere.** Widening each row's `spacing` to fill
+  would also have squared the edges, and would have given the space row 5.6 px
+  gutters against 2 px elsewhere. Absorbing into the keys is invisible: about
+  1 px on a 60 px key.
+- **The widest row is unchanged by construction** (its shortfall is zero), so
+  `keyW`, the side panels and the window's width budget are all exactly what
+  they were. That is why this needed no change to `totalKeyUnits` or
+  `layoutFixedPixels`.
+- **It cannot be made exact, and the residual is the positioner's.** Qt Quick
+  snaps child positions to whole pixels, so a row of fractionally-wide keys
+  accumulates rounding along its length and its centred origin can land a pixel
+  either side of its neighbour's. Non-compact comes out exact; two of compact's
+  four rows sit 1 px across. `TestEveryGridRowIsPixelFlush` therefore asserts
+  equal *widths* exactly and equal *origins* to within a pixel, and keeps the
+  two apart deliberately, so a row that went genuinely short fails loudly
+  instead of hiding under the tolerance.
+
+One measurement trap that cost a while: a `Repeater` is itself a zero-sized
+`QQuickItem` sitting in the positioner beside its delegates, so a `Row`'s own
+`width` can carry a phantom pixel past the last key that draws nothing. Measure
+from the first key's left edge to the last key's right edge, not the row's
+bounding box, or two compact rows read as 1 px wider than they render.
+
 **The letter alignment got sturdier, and the mechanism changed.** W over S (for
 WASD) reduces to `inset_top + Tab == inset_home + Caps`. With the rows flush
 both insets are zero, so it is now simply **Tab and Caps must be the same

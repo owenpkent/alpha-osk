@@ -1189,6 +1189,162 @@ class TestTheMainWindowRestoreClampsToTheWholeDesktop:
         assert root.property("x") == pytest.approx((right - width) / 2)
 
 
+class TestEveryGridRowIsPixelFlush:
+    """Equal unit totals are not equal pixel widths, and the eye reads pixels.
+
+    Making every full-size row total 15.5u straightened four of the five edges
+    and left the fifth visibly short, reported as the bottom row wanting to be
+    "a little bigger to be flush". A row measures
+    ``units * keyW + (keys - 1) * keySpacing``, and the rows carry very
+    different key counts: the space row has 6 keys against the number row's
+    15, so it was nine gaps short. At the default window that is 18 px, and
+    since each row is centred on its own it sat 9 px inside the grid at each
+    end. Measured before the fix, in row order: 949 / 947 / 945 / 943 / 931 px.
+    Compact View has the same shape at a smaller scale, 10 to 12 gaps across
+    its rows.
+
+    Each row now absorbs its own gap shortfall into its own keys. The tests
+    below pin what that buys, what it must not cost, and the one part of it
+    that cannot be made exact.
+    """
+
+    WIDTHS = [760, 940, 1160, 1240]
+
+    @staticmethod
+    def _row_spans(root):
+        """(id, left, right) per rendered row, measured across its KEYS.
+
+        Not the Row item's own `width`, and the distinction matters. A
+        `Repeater` is itself a zero-sized QQuickItem sitting in the positioner
+        alongside the delegates, so a Row's bounding box can carry a phantom
+        pixel past the last key that draws nothing: measuring the box reports
+        two of the four compact rows as 1 px wider than they render. The first
+        key's left edge to the last key's right edge is what the eye sees.
+
+        Returns numbers and holds no QML item, deliberately: callers pump the
+        event loop next, and a Repeater frees its delegates on any model
+        change. A PySide wrapper outliving its item segfaulted CI once.
+        """
+        out = []
+        for row in TestEveryRowFitsTheContentArea._expect_rows(root, "pixel flush"):
+            keys = TestNoDeadStripBetweenKeys._keys(row)
+            assert keys, f"row {row.property('rowData')['id']} rendered no keys"
+            left = keys[0].mapToItem(None, 0, 0).x()
+            right = keys[-1].mapToItem(None, 0, 0).x() + keys[-1].width()
+            out.append((row.property("rowData")["id"], left, right))
+        return out
+
+    @pytest.mark.parametrize("compact", [False, True])
+    def test_every_row_spans_the_same_width(self, qml_root, compact) -> None:
+        """The substantive property: no row is shorter than its neighbours.
+
+        This is what "flush" means dimensionally, and it is exact, because
+        each row's key width is derived to cancel its own gap count. It is the
+        assertion that fails loudly on the reported defect: before the fix the
+        space row came out 18 px short of the number row.
+
+        Swept across widths because `keySpacing` steps from 1 px to 2 px at
+        1111 px, which doubles the shortfall, so a single width would leave
+        half the behaviour unmeasured.
+        """
+        root, warnings, _bridge = qml_root
+        root.setProperty("compactView", compact)
+        for width in self.WIDTHS:
+            root.setProperty("width", width)
+            _pump_until(lambda: len(TestEveryRowFitsTheContentArea._rendered_rows(root)))
+            spans = self._row_spans(root)
+            widths = {round(right - left, 3) for _, left, right in spans}
+            assert len(widths) == 1, (
+                f"compact={compact} at {width}px: rows span {sorted(widths)}, so "
+                f"the grid's edges step. Rows: {[s[0] for s in spans]}"
+            )
+        assert _real_warnings(warnings) == []
+
+    @pytest.mark.parametrize("compact", [False, True])
+    def test_the_rows_are_aligned_to_within_a_pixel(self, qml_root, compact) -> None:
+        """Equal widths still leave sub-pixel centring, and it cannot be zero.
+
+        Qt Quick's positioners snap child positions to whole pixels, so a row
+        whose keys are fractionally wide accumulates rounding along its length
+        and its centred origin can land a pixel either side of its neighbour's.
+        Non-compact happens to come out exact; two of compact's four rows sit
+        1 px across. That is a property of the positioner, not of the widths,
+        and no unit arithmetic removes it.
+
+        So this is bounded rather than exact, and deliberately not folded into
+        the width test above: a regression that made a row genuinely short
+        would fail there, loudly, instead of hiding under a tolerance.
+        """
+        root, _warnings, _bridge = qml_root
+        root.setProperty("compactView", compact)
+        for width in self.WIDTHS:
+            root.setProperty("width", width)
+            _pump_until(lambda: len(TestEveryRowFitsTheContentArea._rendered_rows(root)))
+            spans = self._row_spans(root)
+            lefts = [left for _, left, _ in spans]
+            spread = max(lefts) - min(lefts)
+            assert spread <= 1.0, (
+                f"compact={compact} at {width}px: row origins span {spread:.2f}px "
+                f"({[(s[0], round(s[1], 2)) for s in spans]}), which is more than "
+                "positioner rounding can account for"
+            )
+
+    def test_the_gaps_between_keys_stay_uniform(self, qml_root) -> None:
+        """The shortfall is absorbed by the keys, never by the gaps.
+
+        The near-miss this rules out: widening each row's `spacing` to fill
+        would also have made the edges flush, and would have given the space
+        row 5.6 px gutters against 2 px everywhere else. Absorbing into the
+        keys is invisible instead, about 1 px on a 60 px key.
+        """
+        root, _warnings, _bridge = qml_root
+        root.setProperty("compactView", False)
+        root.setProperty("width", 1160)
+        _pump_until(lambda: len(TestEveryRowFitsTheContentArea._rendered_rows(root)))
+
+        spacings = {
+            round(row.property("spacing"), 4)
+            for row in TestEveryRowFitsTheContentArea._expect_rows(root, "uniform gaps")
+        }
+        assert len(spacings) == 1, f"rows use different gap widths: {sorted(spacings)}"
+
+    def test_the_letter_columns_survive_the_per_row_key_width(self, qml_root) -> None:
+        """q stays over a, which is what W-over-S for WASD rests on.
+
+        This is the cost side of the fix and the reason it is measured rather
+        than reasoned about. The top and home rows differ by one gap, so their
+        keys now differ by `keySpacing / units`, and the first letter of each
+        sits 2.25 key widths in, leaving a drift of about 0.3 px at the
+        default window. That is inside the half-gap residual
+        `TestTheLetterColumnsLineUp` already documents as unavoidable.
+
+        The bound is 1 px rather than that measured 0.3 deliberately: this
+        guards against the columns coming apart, not against the arithmetic
+        moving in the third decimal.
+        """
+        root, _warnings, _bridge = qml_root
+        root.setProperty("compactView", False)
+        root.setProperty("width", 1160)
+        _pump_until(lambda: len(TestEveryRowFitsTheContentArea._rendered_rows(root)))
+
+        centres = {}
+        for row in TestEveryRowFitsTheContentArea._expect_rows(root, "letter columns"):
+            rid = row.property("rowData")["id"]
+            if rid not in ("top", "home"):
+                continue
+            keys = TestNoDeadStripBetweenKeys._keys(row)
+            assert len(keys) > 1, f"{rid} rendered {len(keys)} keys"
+            letter = keys[1]
+            centres[rid] = letter.mapToItem(None, 0, 0).x() + letter.width() / 2
+
+        assert set(centres) == {"top", "home"}, f"only found {sorted(centres)}"
+        drift = abs(centres["top"] - centres["home"])
+        assert drift < 1.0, (
+            f"the first letter of the top row is {drift:.3f}px from the home row's, "
+            "so the letter columns have come apart and W no longer sits over S"
+        )
+
+
 class TestNoDeadStripBetweenKeys:
     """A click landing between two keycaps has to type one of them.
 
