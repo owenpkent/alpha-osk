@@ -629,6 +629,25 @@ The lockfile (~5-10 KB) is the human/pip-friendly answer; the SBOM (~100 KB) is 
 
 To add it to an already-published release: `gh release view vX.Y.Z --repo owenpkent/alpha-osk-releases --json body --jq .body > body.md`, prepend the block, then `gh release edit vX.Y.Z --repo owenpkent/alpha-osk-releases --notes-file body.md`. See *SmartScreen warnings are NOT a signing failure* under Code Signing for why this is reputation, not a signing bug.
 
+### 8. Confirm alphaosk.com picked it up
+
+**There is nothing to edit and nothing to deploy.** The site (`owenpkent/alpha-osk-website`) reads
+the latest tag from the releases API on every page load and writes it into its download buttons,
+so publishing step 7 is what updates the site. This step is a check, not a task, and it exists so
+nobody adds a "bump the version on the website" step that has no file to change.
+
+Open [alphaosk.com](https://alphaosk.com) and confirm the download buttons read the new version.
+If they still show the old one, or read "Latest release" with no version at all, the cause is on
+the API side of the fence rather than the site's:
+
+- The release is a **draft**. `/releases/latest` skips drafts and prereleases, so publish it.
+- The release went to the **wrong repo**. Step 7's `--repo` flag is the usual culprit, and it is
+  the same mistake that leaves end users' updaters looking at nothing.
+- The browser cached the page. The HTML is served `must-revalidate`, so a normal reload is enough.
+
+A failed lookup is deliberately silent and non-fatal: the buttons fall back to the static text in
+the markup and still link to the releases page, so a rate limit never leaves a broken download.
+
 ### Tracking downloads
 
 GitHub stamps a `download_count` on every release asset. To see the per-release breakdown and total:

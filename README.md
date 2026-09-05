@@ -8,6 +8,7 @@
 
 Type into any Windows or Linux app by clicking on-screen keys. Built for people who can't comfortably use a physical keyboard. Prediction that learns as you go, with no LLM, no GPU, and nothing leaving your machine. Optional voice dictation is the one exception, and it is off until you turn it on.
 
+[![Website](https://img.shields.io/badge/website-alphaosk.com-4a9eff.svg)](https://alphaosk.com)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![CI](https://github.com/owenpkent/alpha-osk/actions/workflows/ci.yml/badge.svg)](https://github.com/owenpkent/alpha-osk/actions/workflows/ci.yml)
 [![Tests](https://img.shields.io/badge/tests-2045-brightgreen.svg)](tests/)
@@ -65,7 +66,10 @@ As you click, the keyboard learns your vocabulary and surfaces predictions as cl
 
 ### End users
 
-Download the latest installer from the public releases repo:
+**[alphaosk.com](https://alphaosk.com)** is the front door: it names the file for your platform
+and explains the Windows SmartScreen prompt before you hit it.
+
+The installers themselves live in the public releases repo, if you would rather go straight there:
 
 **[github.com/owenpkent/alpha-osk-releases](https://github.com/owenpkent/alpha-osk-releases/releases)**
 
@@ -343,6 +347,14 @@ Alpha-OSK is part of a four-tool adaptive-input platform built by the same autho
 - **Nimbus**: joystick (vJoy / ViGEm)
 
 See [`docs/roadmap/ECOSYSTEM.md`](docs/roadmap/ECOSYSTEM.md) for the integration plan.
+
+Alpha-OSK itself is spread across three repositories:
+
+| Repo | What it holds |
+|------|---------------|
+| [`alpha-osk`](https://github.com/owenpkent/alpha-osk) (this one) | The application source, tests, docs and build pipelines. |
+| [`alpha-osk-releases`](https://github.com/owenpkent/alpha-osk-releases) | Published installers. The auto-updater's API URL is hard-pinned here. |
+| `alpha-osk-website` | The [alphaosk.com](https://alphaosk.com) marketing site. Reads the latest release tag at page load, so a release never edits it. |
 
 ---
 

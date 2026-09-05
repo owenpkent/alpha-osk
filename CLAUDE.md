@@ -20,7 +20,7 @@ Owen is a wheelchair user with muscular dystrophy. Typing is hard - be proactive
 - `pressPrediction` and `editPrediction` call `_check_password_field_sync()` before anything else, then gate `record_prediction_selected`, `learn_from_selection`, `learn_capitalization` and `set_capitalization` behind `if not self._privacy_mode`. The insertion itself (BackSpace+retype, `_send_literal_text`, suffix insert, `replace_text`) is deliberately NOT gated: the user tapped the pill, so the word must still reach the target app regardless of privacy mode. Any new pill-click or prediction-edit path must mirror both halves.
 - Telemetry is OFF by default and `DEFAULT_ENDPOINT` in `src/telemetry.py` ships empty (silent no-op). `TelemetryClient` is the source of truth for the consent flag; do NOT mirror it into `appSettings`. The Data Backup archive deliberately excludes `telemetry.json`.
 - Adding a setting requires the full 8-step wiring (see "Settings Panel Structure"): `Settings{}` savedFoo + root prop in `Main.qml`, prop + `SettingsToggle` in the correct sub-view of `UnifiedSettingsPanel.qml`, pass-through, `onSettingChanged`, optional `@Slot` on `keyboard_bridge.py`, and load in `Component.onCompleted`.
-- Releases: `src/__version__.py` is the single source of version truth; publish to the separate `owenpkent/alpha-osk-releases` repo with an explicit `--repo` (the updater API URL is hard-pinned there); the installer asset name must be exactly `Alpha-OSK-Setup-{version}.exe`.
+- Releases: `src/__version__.py` is the single source of version truth; publish to the separate `owenpkent/alpha-osk-releases` repo with an explicit `--repo` (the updater API URL is hard-pinned there); the installer asset name must be exactly `Alpha-OSK-Setup-{version}.exe`. The marketing site is a **third** repo, `owenpkent/alpha-osk-website`, and a release deliberately does not touch it: it reads the latest tag from the releases API at page load, so there is no version to bump there and no step to forget (see *The website*).
 - The install path is computed, never read from the registry: every silent install passes an explicit `/S /D=<dir>` from `updater.py::_install_target_dir()`. NSIS requires `/D=` last on the command line and unquoted even when the path has spaces, so don't reorder or requote the installer arguments (full reasoning under *Auto-Update*).
 - `run.py::ensure_admin_windows()` runs after dependency installation, not as the first statement in `main()`, so `pip install` never executes with an admin token; `--dashboard` never elevates at all. The repo tree is still user-writable, so this narrows the blast radius rather than closing it.
 - Load-bearing invariants: merge-strategy default MUST stay `"rank"`; `NgramPredictor._user_total == sum(user_vocab.values())`; `NgramPredictor.bigrams[p][w] >= round(_user_bigrams[p][w])` (the merged context tables never drop below the user's share, and only that share is ever persisted, see *Context tables*); window height is content-bound (never persist or assign it); every analytics metric needs both a session and an `_alltime_*` form; Windows subprocess calls need `CREATE_NO_WINDOW` when they suppress output *or* may run without a console to inherit (a git hook, a frozen GUI build).
@@ -1268,6 +1268,35 @@ Version source of truth is `src/__version__.py`. The release-asset filename **mu
 Full walkthrough (the four pieces from "user clicks install" to "new keyboard appears", plus the v1.0.19 file list) is in `docs/build/AUTO_UPDATE.md`. The non-obvious bits to remember: **never expose the download URL to QML** (the bridge only emits primitive ints); the pre-install toast sleeps `_PRE_INSTALL_TOAST_DWELL_S` (1.8 s) in the worker so it paints before the installer's taskkill; the relauncher splash is a `QTimer` state machine with an indeterminate `QProgressBar` (NSIS silent install has no real percentage); `_run_headless` is preserved as the test target and no-display fallback; and `_is_dev_target()` routes `python`/`pythonw` straight to headless so dev runs don't hang waiting for an exe mtime that never changes.
 
 **`_spawn_relauncher` must pass `CREATE_NO_WINDOW` *instead of* `DETACHED_PROCESS`, not alongside it.** Windows documents the two as mutually exclusive ("CREATE_NO_WINDOW ... is ignored if it is used with either CREATE_NEW_CONSOLE or DETACHED_PROCESS"), so OR-ing them, which this did first, leaves `DETACHED_PROCESS` winning and the console suppression inert. The console has to be *suppressed* rather than absent because the flags do not propagate: in dev mode the command starts `venv\Scripts\python.exe`, that interpreter re-execs as the base interpreter, and the re-exec is a fresh `CreateProcess` carrying none of them. Under `DETACHED_PROCESS` there is no console for it to inherit so it allocates one (an empty terminal per relauncher, titled with the working directory); under `CREATE_NO_WINDOW` it inherits a console that is merely invisible. Detachment is not lost: Windows has no parent-death signal, so the child already outlives us, and `CREATE_NEW_PROCESS_GROUP` keeps it clear of the installer's taskkill. Relatedly, **no test may reach the real `_spawn_relauncher`** (an autouse guard in `tests/conftest.py` enforces it): several `download_and_install` tests stub only `_launch_installer`, and each real spawn is a detached process that outlives the pytest worker and never exits, because the helper has no branch for a parent PID that is already gone. That last part is still open, see `TODO.md`. Full write-up in `docs/build/AUTO_UPDATE.md`.
+
+## The website (alphaosk.com)
+
+Source in `owenpkent/alpha-osk-website`, cloned alongside this repo as `alpha-osk-website`. One
+static page, no build step, no dependencies, deployed from the repo root on Netlify. It is the
+same shape as the author's other site repos (`reflex-website`, `okstudio-website`): plain HTML
+plus one stylesheet and one script, with `netlify.toml` carrying the security headers, cache
+rules and the apex redirect.
+
+**A release never edits it, and that is the point.** `scripts/alphaosk.js` reads the latest tag
+from `api.github.com/repos/owenpkent/alpha-osk-releases/releases/latest` on page load and writes
+it into the download buttons, so there is no version string in that repo to go stale. If the
+request fails (rate limit, offline, a blocked origin) the buttons keep the static text the markup
+already carried, which is why none of them say a version number on their own. Two consequences:
+the CSP in `netlify.toml` must keep `https://api.github.com` in `connect-src`, and a release that
+does not appear on the site is a releases-API question, never a site deploy question.
+
+**Its content is derived from this repo, so this repo is the authority.** The copy comes from
+`README.md` and `docs/PRIVACY.md`. When the two disagree the site is stale, and the claims most
+likely to go stale are named in that repo's own README: the platform table (macOS is listed as
+not yet released), the note that the telemetry endpoint is not deployed, and the test count.
+Changing any of those three here means changing them there in the same sitting.
+
+**The screenshots and icons are generated, not hand-made.** `images/screenshots/` is copied from
+this repo's `assets/screenshots/`, which `scripts/capture_screenshots.py` produces against a
+sandboxed config directory and a demo vocabulary, so nothing on the public site is anybody's real
+typing. The favicons and the Open Graph card come from this repo's logo through that repo's
+`tools/gen_assets.py` (PySide6, no new dependency), so the site's icon and the application's icon
+cannot drift apart.
 
 ## Accessibility Ecosystem
 
