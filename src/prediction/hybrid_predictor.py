@@ -606,6 +606,26 @@ class HybridPredictor(QObject):
         fuzzy_weight = self._fuzzy.prediction_weight
         return ngram_weight, ppm_weight, fuzzy_weight
 
+    def _next_word_allowed(self, word: str) -> bool:
+        """The short-word gate, plus the taught-acronym exemption.
+
+        The profile's allow-list answers "is this short string a real
+        word", which it cannot do for something the user invented the
+        need for: "pr" is two characters and will never be in a shipped
+        English list.  A form the user taught by shifting each letter
+        individually (:meth:`NgramPredictor.is_taught_acronym`) is the
+        one other kind of evidence that a short string is a word here,
+        so it is checked alongside rather than added to the profile.
+
+        Both gates in the merge go through this, because they are the
+        same rule read twice and the pair drifting apart would show up
+        as an acronym that reaches one strategy's pills and not
+        another's.
+        """
+        if _short_word_allowed(word, self._ngram.profile):
+            return True
+        return self._ngram.is_taught_acronym(word)
+
     def _candidate_passes(self, word: str, is_next_word: bool) -> bool:
         """Combined short-word filter + vocabulary validation gate.
 
@@ -613,7 +633,7 @@ class HybridPredictor(QObject):
         adding a word to ``scores``.  Used by every strategy that
         iterates per-source predictions before merging.
         """
-        if is_next_word and not _short_word_allowed(word, self._ngram.profile):
+        if is_next_word and not self._next_word_allowed(word):
             return False
         return self._is_valid_word(word)
 
@@ -677,7 +697,7 @@ class HybridPredictor(QObject):
             # Final short-word guard — catches any short word that
             # slipped past the per-source filter (e.g. fuzzy, which
             # the rank strategy historically didn't filter).
-            if is_next_word and not _short_word_allowed(word, self._ngram.profile):
+            if is_next_word and not self._next_word_allowed(word):
                 continue
             capped = self._ngram.get_capitalized(word, sentence_start)
             results.append(capped)

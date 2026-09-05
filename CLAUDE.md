@@ -11,7 +11,7 @@ Owen is a wheelchair user with muscular dystrophy. Typing is hard - be proactive
 - The keyboard must NEVER steal OS focus: `WS_EX_NOACTIVATE` on Windows (`keyboard_app.py::_apply_window_flags` dispatches to `src/platform/windows_window.py::apply_extended_styles`), `WindowDoesNotAcceptFocus` elsewhere. Because our window cannot hold focus, route in-app text entry (prediction-edit popup, snippets editor, any future input slot) through `setEditMode(true)` plus the `editKeyTyped` / `editSpecialPressed` signals, never Qt focus. Set edit mode on open and clear it on close.
 - Sticky-modifier auto-release lives in one place, `KeyboardBridge._release_sticky_modifiers(names=_MODIFIERS, *, keep=())`: every keystroke path (`_press_char`'s edit intercept, chord branch and char-path end; `_release_edit_chord_modifiers`; `pressSpecialKey`) calls it instead of hand-copying the block. `names` restricts which modifiers a call considers (the edit intercept passes only `("shift",)`); `keep` exempts specific active modifiers from an otherwise-eligible release (`pressSpecialKey` passes `keep=("shift", "ctrl")` on `_NAV_KEYS` so Shift/Ctrl survive arrow-key selection). A new keystroke path must call this rather than write its own copy.
 - Linux `LinuxKeySynthesizer.hold_modifier()` MUST skip `win`/`super`: holding Super triggers a WM pointer grab that swallows every click, including clicks on the OSK itself. Do not "fix" it to hold Super. Windows still holds `VK_LWIN`.
-- Pill-facing casing comes only from `KeyboardBridge._display_cased`, which mirrors every uppercase position of the typed prefix onto the pill, unconditionally (including fuzzy/autocorrect candidates). Auto-capitalisation is ONLY the "I" family, and it lives in the language profile (`language.ENGLISH.always_capitalize`) rather than in `ngram_predictor`; do NOT reintroduce the removed three-tier proper-noun auto-cap as a default. Every pill emit site must route through `_display_cased`.
+- Pill-facing casing comes only from `KeyboardBridge._display_cased`, which mirrors every uppercase position of the typed prefix onto the pill, unconditionally (including fuzzy/autocorrect candidates). Auto-capitalisation is the "I" family (in the language profile, `language.ENGLISH.always_capitalize`, rather than in `ngram_predictor`) plus taught acronyms (see *Taught acronyms*); do NOT reintroduce the removed three-tier proper-noun auto-cap as a default. Every pill emit site must route through `_display_cased`.
 - Verbatim inserts (prediction pill, snippet, glyph, token pill, dictated phrase) all open with `KeyboardBridge._begin_verbatim_insert(*, prose=True)`, which runs `_release_sticky_modifiers()`, settles a deferred auto-space (`_take_deferred_space(prose)`) and spends an armed auto-capital (`_consume_auto_cap()`), in that order, returning `(deferred_space, owes_capital)`. The two purely-literal inserts (`insertSnippet`, `insertGlyph`) go one step further through `_commit_verbatim_insert(text)`, which also sends the text inside `_without_held_modifiers()` and resets the typing-state fields both share. A modifier held at the OS level rewrites the whole string: `_make_char_scancode_events` only knows not to *add* a redundant Shift wrap, it cannot cancel a standing hold, so "Hello" typed with Shift down arrives as "HELLO" and with Ctrl down every character arrives as a chord. The context manager drops the holds for the duration and restores them, which keeps a right-click lock intact; the sticky release is separate and belongs to the caller. **It must wrap the whole insert, not just the text**: two of `pressPrediction`'s branches never reach `send_text` (the compat BackSpace loop, and `replace_text`, whose Shift+Left selection is itself a chord), and those are the destructive ones. `_send_literal_text` is a one-line convenience over the same context manager. The single-character path in `_press_char` deliberately does NOT route through it (there the held Shift is what makes the keystroke uppercase).
 - Prediction insertion is suffix-only (type just the unseen tail), falling back to `replace_text()` on a prefix/casing mismatch. Compatibility Mode (`_in_compat_mode`, matched on IDE/RDP exe basenames in `_COMPAT_PROCESS_NAMES`, never window class) rewires this to BackSpace+retype. `_context_buffer` / `_current_word` must always mirror the on-screen text; backspace must trim and rehydrate a mid-word tail.
 - Import paths are security-critical: `PackManager.import_pack`, `data_export.import_user_data`, and `inspect_export` sanitise names, cap sizes, and use allow-list (not deny-list) extraction against zip-slip. Do NOT loosen without re-reading the regression tests (`tests/test_vocabulary_pack.py::TestImportPackSecurity`, and the slip/absolute-path/oversize/future-schema/telemetry cases in `tests/test_data_export.py`).
@@ -155,7 +155,65 @@ The last of the 2026-09-02 recommendations, landed 2026-09-03, and the one whose
 
 `HybridPredictor._short_word_allowed` gates one- and two-letter words out of *next-word* predictions (the filter does not apply once the user has started typing a word, where the prefix already constrains things). It used to be a blanket `len(word) <= 2` with `"i"` as the single exception, which discarded exactly the words next-word prediction is best at: after "I want", the useful pills are "to", "it", "my", "us"; after "one", they are "of" and "or". Those are also the highest-frequency words in English, so the bar was withholding its strongest guesses and offering the fourth-best instead.
 
-It is now an **allow-list of real short words**, not a relaxed length rule, and that distinction is load-bearing: the engine learns whatever the user types, so stray two-character fragments ("th", "ap", "sm") from a typo or an interrupted word accumulate in the model, and a bare length change would let every one of them compete for a pill. Words, not lengths. The list is the active language profile's `short_words` (`language.ENGLISH.short_words`), reused rather than restated: it is already the project's answer to "real word or keyboard slip" (it gates the dictionary-load fragment filter), and a private copy in `hybrid_predictor` would be one more thing to keep in sync. Extend that set to extend this filter. Guarded by `tests/test_hybrid_predictor.py::TestShortWordsAreOfferedAsNextWords`, whose negative half is what stops a future "just drop the filter" from passing.
+It is now an **allow-list of real short words**, not a relaxed length rule, and that distinction is load-bearing: the engine learns whatever the user types, so stray two-character fragments ("th", "ap", "sm") from a typo or an interrupted word accumulate in the model, and a bare length change would let every one of them compete for a pill. Words, not lengths. (The one thing besides that list which can satisfy the gate is a taught acronym, so `pr` can be offered after `opened a`; see *Taught acronyms*. Both merge sites go through `HybridPredictor._next_word_allowed` rather than calling `_short_word_allowed` directly.) The list is the active language profile's `short_words` (`language.ENGLISH.short_words`), reused rather than restated: it is already the project's answer to "real word or keyboard slip" (it gates the dictionary-load fragment filter), and a private copy in `hybrid_predictor` would be one more thing to keep in sync. Extend that set to extend this filter. Guarded by `tests/test_hybrid_predictor.py::TestShortWordsAreOfferedAsNextWords`, whose negative half is what stops a future "just drop the filter" from passing.
+
+## Taught acronyms (why "PR" would never learn)
+
+The engine could not hold an acronym, however many times it was typed.
+`NgramPredictor._is_plausible_word` rejects a 1- or 2-letter word that is
+not on the profile's `short_words` list, and a longer word with no vowel;
+`pr` fails the first rule and `prs` the second, for exactly the reason
+`th` and `xqz` do. `learn()` therefore dropped both before the 3-sighting
+candidate gate, `_link_context` formed no `a -> pr` edge across the gap,
+and the strip on load re-deleted them from any model that somehow held
+them. The shape filter cannot tell a vowel-less acronym from a vowel-less
+slip, and no rule over the letters ever will: they are the same shape.
+
+**The evidence is what the user paid to type it.**
+`NgramPredictor.is_taught_acronym(word)` is true when
+`capitalization[word]` carries **two or more capitals**, which on this
+keyboard means shifting or right-clicking each letter individually, since
+`learn_capitalization` refuses an all-caps form unless Caps Lock was off
+for the whole word (`_word_typed_under_caps_lock`). No new store, no new
+setting: the capitalisation table already recorded exactly this, and
+already has the load caps, the backup archive and Clear Learned Data
+behind it.
+
+Three things about it are load-bearing:
+
+- **Two capitals, not one.** A leading capital is what every word at a
+  sentence start carries, so `Th` from an interrupted word reaches
+  `learn_capitalization` the same way an acronym does, and a one-capital
+  rule would hand the fragment class the filter exists for a free pass.
+- **`load()` merges `capitalization` *before* the fragment strip.** It
+  used to merge after, and the strip asks `_is_plausible_word`, so every
+  learned acronym would have been deleted on the way back in and the
+  model could never hold one across a restart.
+- **The next-word gate consults it too** (`HybridPredictor._next_word_allowed`,
+  which both merge sites now call). Letting `pr` into the vocabulary is
+  not enough on its own: `_short_word_allowed` would still drop it for
+  being two characters, in the position the pill is worth the most.
+
+`get_capitalized` returns the taught form under two further guards, and
+this is the only thing besides the "I" family that it will capitalise.
+It is **not** the removed Tier 3, which was wrong because it fired on
+ordinary words and on forms the user had typed lowercase: the word must
+not be in `_base_unigrams` (so `us`, `ok`, `it` keep their own casing
+however they were once typed) and the taught form must be
+**acronym-shaped**, all caps but for a plural `s` (so `ZigZaqCorp` stays
+lowercase). The shape guard is what keeps this narrow, and the reason it
+is needed at all is that `_display_cased` already renders a mixed-case
+brand correctly from the typed prefix, while an acronym is the one case
+that mirror cannot reach: every capital after the first falls outside any
+prefix short enough to still want a pill, so `PR` came back `Pr` and got
+retyped by hand.
+
+Known limitation: the acronym has to be taught with per-letter shift or
+right-click at least once. Typed under Caps Lock it teaches nothing,
+because that is one click for the whole word and therefore no evidence
+about it. Guarded by `tests/test_ngram_predictor.py::TestTaughtAcronymsAreLearnable`
+and `tests/test_hybrid_predictor.py::TestTaughtAcronymsReachTheBar`, where
+every positive case is paired with the near-miss it must still reject.
 
 ## Auto-Capitalization & Proper Nouns
 
@@ -164,7 +222,7 @@ The pill-facing capitalization rule is intentionally minimal: **only the "I" fam
 This used to be a three-tier Gboard-style system (Tier 1 "I" family, Tier 2 sentence-start for ambiguous names like `will` / `jack` / `may`, Tier 3 ~8 000 unambiguous proper nouns from `data/proper_nouns.txt` plus user-taught forms). Tiers 2 and 3 fired on too many common English words ("the hope is that", "a rose by", "will you", "may i", and the post-period word in any sentence), so pills came back capitalised when the user had typed lowercase. The user's stance is that those auto-caps were noise, not help.
 
 ### How it works now
-- `NgramPredictor.get_capitalized(word, sentence_start)` returns the `_always_capitalize` form for the "I" family, otherwise returns `word` unchanged. The `sentence_start` argument is kept for API compatibility but ignored.
+- `NgramPredictor.get_capitalized(word, sentence_start)` returns the `_always_capitalize` form for the "I" family, the taught form for an acronym-shaped non-word the user taught with per-letter capitals (see *Taught acronyms*, which carries the two guards that keep this from being Tier 3), otherwise returns `word` unchanged. The `sentence_start` argument is kept for API compatibility but ignored.
 - `HybridPredictor._merge_predictions()` still calls `get_capitalized` on each pill (so the "I" family flows through the engine like any other word), and still computes `sentence_start = bool(ctx) and ctx[-1] in ".!?"` - the value just doesn't affect the result.
 - **Pill-facing casing comes from `KeyboardBridge._display_cased`** - it mirrors *every* uppercase position from the typed prefix onto the pill. Type lowercase `monday` -> pill shows `monday`. Type `Monday` (one-shot shift on the M) -> pill shows `Monday`. Type `MON` (right-click each letter) -> pill shows `MONday`. This is the only path that produces capitals in pills, and it's driven entirely by what the user typed.
 

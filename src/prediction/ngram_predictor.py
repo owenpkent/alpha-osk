@@ -527,11 +527,32 @@ class NgramPredictor:
         downstream by the typed-prefix mirror in
         ``KeyboardBridge._display_cased``.
 
-        ``self.capitalization`` is still populated by ``_load_proper_nouns``
-        and ``learn_capitalization`` and persisted with the model, but
-        is intentionally not consulted here. Keeping it lets a future
-        opt-in switch re-enable proper-noun cap without losing the
-        accumulated user preferences.
+        ``self.capitalization`` is otherwise still populated by
+        ``_load_proper_nouns`` and ``learn_capitalization`` and persisted
+        with the model, but is intentionally not consulted here. Keeping
+        it lets a future opt-in switch re-enable proper-noun cap without
+        losing the accumulated user preferences.
+
+        The **one** entry it does consult is a taught acronym (see
+        :meth:`is_taught_acronym`), under two further guards, and that is
+        not the removed Tier 3 creeping back.  Tier 3 was wrong because
+        it fired on ordinary words ("will", "may", "rose", "hope") and
+        on mixed-case forms the user had typed lowercase, so both are
+        excluded here:
+
+        - **not a shipped word** (``_base_unigrams``): "us", "ok", "it"
+          and "no" stay lowercase however the user once typed them.
+          "pr", "prs", "qml" are not words at all, so the taught form is
+          the only casing they have ever had.
+        - **acronym-shaped**, i.e. all caps but for a plural "s".
+          "ZigZaqCorp" is a brand rather than an acronym and stays
+          lowercase, because ``_display_cased`` already renders it
+          correctly from the typed prefix: the user types those capitals
+          on the way in.  An acronym is the case that mirror cannot
+          reach, since every capital after the first falls outside any
+          prefix short enough to still want a pill, so "PR" comes back
+          "Pr" and gets retyped by hand.  That is the whole complaint
+          this exemption answers.
 
         Args:
             word: The word to capitalize (usually lowercase).
@@ -540,6 +561,13 @@ class NgramPredictor:
         lower = word.lower()
         if lower in self._always_capitalize:
             return self._always_capitalize[lower]
+        taught = self.capitalization.get(lower, "")
+        if (
+            lower not in self._base_unigrams
+            and self.is_taught_acronym(lower)
+            and taught.rstrip("s").isupper()
+        ):
+            return taught
         return word
 
     # Linear-interpolation weights for next-word scoring.  Mirrors the
@@ -725,6 +753,33 @@ class NgramPredictor:
         """Split text into words, per the active language's word shape."""
         return self.profile.word_re.findall(text.lower())
 
+    def is_taught_acronym(self, word: str) -> bool:
+        """True if the user has taught us *word* as a multi-capital form.
+
+        This is the one exemption from the shape filter below, and it
+        exists because that filter cannot tell a vowel-less acronym from
+        a vowel-less keyboard slip: "PR", "PRs", "QML" and "npm" fail it
+        for exactly the reason "xqz", "th" and "sm" do.  The signal that
+        separates them is what the user paid to type it.
+
+        ``learn_capitalization`` stores the display form of a word typed
+        with deliberate casing, and the bridge only lets an all-caps one
+        through when Caps Lock was off for every character, meaning the
+        user right-clicked or shifted each letter individually.  Two
+        capitals is therefore several deliberate clicks on this
+        keyboard, which no slip pays.
+
+        **Two capitals, not one**, and that is the load-bearing half: a
+        single leading capital is what every word at a sentence start
+        carries, so "Th" left by an interrupted word would otherwise buy
+        itself an exemption and land back in the vocabulary, which is
+        the fragment class the filter exists to reject.
+        """
+        stored = self.capitalization.get(word.lower())
+        if not stored:
+            return False
+        return sum(1 for c in stored if c.isupper()) >= 2
+
     def _is_plausible_word(self, word: str) -> bool:
         """Reject obvious keyboard-slip fragments.
 
@@ -738,6 +793,11 @@ class NgramPredictor:
             "rhythm" survive) and the consonant half (so "eye", "aye"
             still do too).
 
+        Either rule can be overridden by :meth:`is_taught_acronym`, the
+        only way a word the profile calls implausible gets in.  It is
+        checked last rather than first so the common case stays one
+        length test or one pass over the characters.
+
         All three sets come from ``self.profile``; see language.py for
         why they are not literals here any more.
         """
@@ -745,7 +805,9 @@ class NgramPredictor:
         if n == 0:
             return False
         if n <= 2:
-            return self.profile.is_short_word(word)
+            if self.profile.is_short_word(word):
+                return True
+            return self.is_taught_acronym(word)
         vowels = self.profile.vowels
         semivowels = self.profile.semivowels
         has_vowel = False
@@ -758,7 +820,9 @@ class NgramPredictor:
                 has_consonant = True
             elif c.isalpha():
                 has_consonant = True
-        return has_vowel and has_consonant
+        if has_vowel and has_consonant:
+            return True
+        return self.is_taught_acronym(word)
 
     def learn(self, text: str, *, corpus: bool = False) -> List[str]:
         """
@@ -1433,6 +1497,12 @@ class NgramPredictor:
                     )
                     return
             caps = data.get("capitalization", {})
+            # The merge below now happens early enough that a malformed
+            # field would take the whole load down with it rather than
+            # just the tail, so normalise it here the way every sibling
+            # loader does: a bad value costs its own key, not the file.
+            if not isinstance(caps, dict):
+                caps = {}
             if len(caps) > self._MAX_CAPITALIZATIONS:
                 _logger.warning(
                     "Model file %s has %d capitalizations (> %d); skipping load.",
@@ -1441,6 +1511,15 @@ class NgramPredictor:
                     self._MAX_CAPITALIZATIONS,
                 )
                 return
+
+            # Merge saved capitalization with built-in proper nouns
+            # (user overrides win).  This has to happen *before* the
+            # strip below, not after it: the strip asks
+            # _is_plausible_word, whose one exemption is a taught
+            # multi-capital form, so merging afterwards would delete
+            # every learned acronym on the way back in and the model
+            # could never hold one across a restart.
+            self.capitalization.update(caps)
 
             # Strip fragments from older saved models. The dictionary
             # loaders apply this filter at startup so fresh installs
@@ -1481,8 +1560,6 @@ class NgramPredictor:
             self._candidate_last_seen = {
                 str(w): float(t) for w, t in raw_last_seen.items() if w in self._candidate_counts
             }
-            # Merge saved capitalization with built-in proper nouns (user overrides win)
-            self.capitalization.update(caps)
             # Absent from every model saved before the token store existed,
             # which from_dict reads as an empty store rather than an error.
             self.tokens.from_dict(data.get("tokens", {}))
