@@ -166,149 +166,91 @@ class TestEveryLayout:
 
 FULL_SIZE = ["qwerty", "dvorak", "colemak"]
 
-# The three letter rows and the symbol row that replaces each of them.
-SWAPPED_ROWS = [("top", "sym-top"), ("home", "sym-home"), ("bottom", "sym-bottom")]
+# Where the space bar's centre sits, in key-width units from the left edge of
+# the widest row. It is the one number the 6.0u -> 9.0u widening had to leave
+# alone, so it is written down rather than recomputed from the row it guards.
+SPACE_CENTRE = 8.25
 
 
-class TestFullSizeSymbolLayer:
-    """The full-size layouts carry one symbol page, reached from the space row.
+class TestTheFullSizeSpaceRow:
+    """The full-size layouts have one layer, and the space bar took the room.
 
-    Compact View had ``?123`` and ``=\\<`` from the start and the full-size
-    layouts had nothing, so every glyph outside a physical keyboard's
-    printing was reachable in one view and not the other. These tests pin
-    the four properties that make the page cost nothing to have: the grid
-    does not move, digits and space never leave the screen, the page can
-    always be left again, and nothing on it duplicates a glyph the base
-    layer could already type.
+    They briefly carried a symbol page, reached from a ``Sym`` key at each end
+    of the space row. It was removed: all 34 of its glyphs are also in the
+    Symbols & Emoji picker, which is one click away in the suggestion bar on
+    every layout, so the layer was spending 3.0u of the bottom row, its two
+    widest keys after the space bar, on a second route to glyphs that already
+    had one. The picker is a browsing surface (categories, paging, a Recent
+    page) and the layer was a positional one, which is a real distinction and
+    the reason it was built, but not one worth a fifth of that row to a
+    pointer that reaches for the space bar more often than for anything else.
+
+    These tests pin what the removal bought and the one thing it had to not
+    cost.
     """
 
-    @pytest.mark.parametrize("name", FULL_SIZE)
-    def test_the_grid_does_not_move_when_the_layer_switches(self, name: str) -> None:
-        """A symbol row matches the letter row it replaces, unit for unit.
+    @staticmethod
+    def _space_row(name: str) -> dict:
+        return next(r for r in _load(f"{name}.json")["rows"] if r["id"] == "space")
 
-        Rows are centred individually, so a symbol row even slightly
-        narrower than its base counterpart re-indents the whole page and
-        every key lands somewhere new. On a keyboard driven by an imprecise
-        pointer that is the difference between a hop the user can predict
-        and one they have to re-aim after.
+    @pytest.mark.parametrize("name", FULL_SIZE)
+    def test_the_space_bar_grew_around_its_own_centre(self, name: str) -> None:
+        """6.0u -> 9.0u, with the centre exactly where it was.
+
+        This is the property the whole change rests on. Rows are centred
+        individually, so a key's absolute position is set by the widths in
+        front of it plus half the row's own indent; the two 1.5u Sym keys
+        flanked the row symmetrically, so removing both and spending all 3.0u
+        on the space bar leaves the row 14.6u and the bar centred where it
+        already was. Every click that landed on the space bar before still
+        lands on it, and 1.5u of fresh target appears at each end.
+
+        What moved instead is Ctrl / Win / Alt, 1.5u outward on both sides.
+        That is the trade, taken deliberately: the space bar is pressed after
+        every word and those five are not.
         """
-        rows = {r["id"]: r for r in _load(f"{name}.json")["rows"]}
-        for base_id, sym_id in SWAPPED_ROWS:
-            base, sym = rows[base_id], rows[sym_id]
-            assert _row_units(sym) == pytest.approx(_row_units(base)), (
-                f"{name}/{sym_id} is {_row_units(sym)}u against {base_id}'s {_row_units(base)}u"
-            )
-            assert len(sym["keys"]) == len(base["keys"]), (
-                f"{name}/{sym_id} has {len(sym['keys'])} keys against "
-                f"{base_id}'s {len(base['keys'])}: equal totals alone still "
-                "move every key, because the gaps between them move"
-            )
+        rows = _load(f"{name}.json")["rows"]
+        row = self._space_row(name)
+        widest = max(_row_units(r) for r in rows)
 
-    @pytest.mark.parametrize("name", FULL_SIZE)
-    def test_digits_and_space_never_disappear(self, name: str) -> None:
-        """The number and space rows carry no `layer`, so they render on
-        every page. That is what lets the symbol layer swap only the three
-        letter rows: digits stay one tap away instead of going behind the
-        hop the way they do in Compact View, and the space bar, the most
-        clicked key on the keyboard, never moves or vanishes."""
-        for row in _load(f"{name}.json")["rows"]:
-            if row["id"] in ("number", "space"):
-                assert "layer" not in row, f"{name}/{row['id']} is behind a layer"
+        space_index = next(i for i, k in enumerate(row["keys"]) if k.get("action") == "space")
+        space = row["keys"][space_index]
+        assert space["width"] == pytest.approx(9.0), (
+            f"{name}: the space bar is {space['width']}u, not 9.0u"
+        )
 
-    @pytest.mark.parametrize("name", FULL_SIZE)
-    def test_the_entry_keys_flank_the_space_bar_symmetrically(self, name: str) -> None:
-        """Equal width added to both ends of a centred row leaves every key
-        already in it exactly where it was. That is the whole reason there
-        are two Sym keys rather than one: a single key appended to either
-        end would have slid Ctrl, Win, Alt and the space bar sideways by
-        half a key width on a layout the user has used daily for months."""
-        space = next(r for r in _load(f"{name}.json")["rows"] if r["id"] == "space")
-        first, last = space["keys"][0], space["keys"][-1]
-        for end in (first, last):
-            assert end.get("type") == "layer" and end.get("target") == "sym", (
-                f"{name}: the space row does not open the symbol page from both ends"
-            )
-        assert first["width"] == last["width"], (
-            f"{name}: Sym keys are {first['width']}u and {last['width']}u, so the "
-            "row is no longer symmetric and everything inside it has moved"
+        x = (widest - _row_units(row)) / 2.0
+        for key in row["keys"][:space_index]:
+            x += float(key.get("width", 1.0))
+        centre = x + space["width"] / 2.0
+        assert centre == pytest.approx(SPACE_CENTRE, abs=0.001), (
+            f"{name}: the space bar's centre moved to {centre}u from {SPACE_CENTRE}u, "
+            "so clicks that used to land on it can now miss"
         )
 
     @pytest.mark.parametrize("name", FULL_SIZE)
-    def test_the_symbol_page_can_always_be_left(self, name: str) -> None:
-        """Two ways back, and both are needed. The ABC keys sit where the
-        Shift keys they replace were (a symbol page must carry no Shift, see
-        TestNoDuplicateGlyphsWithinALayer), and the Sym key on the space row
-        is on a row that renders on every page, so QML sends a layer key
-        already showing its own target back to base."""
-        rows = _load(f"{name}.json")["rows"]
-        sym_rows = [r for r in rows if r.get("layer") == "sym"]
-        back = [
-            k
-            for r in sym_rows
-            for k in r["keys"]
-            if k.get("type") == "layer" and k.get("target") == "base"
-        ]
-        assert back, f"{name}: the symbol page has no ABC key"
-
-    @pytest.mark.parametrize("name", FULL_SIZE)
-    def test_the_editing_keys_keep_their_slots(self, name: str) -> None:
-        """Tab, Caps and Enter are in the same position and width on the
-        symbol page as on the letters. Full size has the room compact did
-        not, so a comma typed on the symbol page does not cost a hop back to
-        reach Enter. The top row's right end is a plain character on both
-        pages: Del is not on the grid (it lives above the arrows on the
-        Navigation panel), so only Tab is pinned there."""
-        rows = {r["id"]: r for r in _load(f"{name}.json")["rows"]}
-        pinned = {"top": (0,), "home": (0, -1)}
-        for base_id, sym_id in SWAPPED_ROWS[:2]:
-            base, sym = rows[base_id], rows[sym_id]
-            for index in pinned[base_id]:
-                assert base["keys"][index] == sym["keys"][index], (
-                    f"{name}/{sym_id}: the key at index {index} differs from {base_id}"
-                )
-
-    @pytest.mark.parametrize("name", FULL_SIZE)
-    def test_every_symbol_key_types_itself_literally(self, name: str) -> None:
-        """`literal` routes the key through pressKeyLiteral, which skips the
-        shift / caps-lock case normalisation pressKey applies.
-
-        Caps Lock deliberately survives a layer switch, and Python's upper()
-        is not the identity on every non-ASCII character: without this, Caps
-        Lock plus the micro sign typed a Greek capital Mu.
-        """
-        for row in _load(f"{name}.json")["rows"]:
-            if row.get("layer") != "sym":
-                continue
-            for key in row["keys"]:
-                if key.get("type") == "char":
-                    assert key.get("literal") is True, (
-                        f"{name}/{row['id']}: {key['key']!r} is not marked literal"
-                    )
-
-    @pytest.mark.parametrize("name", FULL_SIZE)
-    def test_no_symbol_repeats_what_the_base_layer_already_types(self, name: str) -> None:
-        """The page is worth a hop only for glyphs that have nowhere else to
-        come from. Every ASCII symbol is already on the base layer, either
-        printed on a key or as a shifted variant that Shift and right-click
-        both reach, so putting one here would spend a slot saying something
-        the keyboard already said. This is the same property
-        TestNoDuplicateGlyphsWithinALayer states within a single page,
-        applied across the hop.
-        """
-        rows = _load(f"{name}.json")["rows"]
-        base = [r for r in rows if r.get("layer", "base") == "base"]
-        reachable = {k["key"] for r in base for k in r["keys"] if k.get("type") == "char"}
-        reachable |= {k["shifted"] for r in base for k in r["keys"] if k.get("shifted")}
-        repeats = sorted(
-            {
-                k["key"]
-                for r in rows
-                if r.get("layer") == "sym"
-                for k in r["keys"]
-                if k.get("type") == "char" and k["key"] in reachable
-            }
+    def test_the_space_row_opens_no_layer(self, name: str) -> None:
+        """Stated as a property so re-adding a Sym key fails here, next to
+        the reasoning, rather than on screen. If a symbol page ever comes
+        back it should not come back on this row: the space bar is the thing
+        that row is for, and the Symbols & Emoji picker already reaches every
+        glyph such a page would carry."""
+        kinds = [k.get("type") for k in self._space_row(name)["keys"]]
+        assert "layer" not in kinds, (
+            f"{name}: the space row has a layer key again, at the space bar's expense"
         )
-        assert not repeats, f"{name}: {repeats} are already on the base layer"
+
+    @pytest.mark.parametrize("name", FULL_SIZE)
+    def test_a_full_size_layout_declares_a_single_layer(self, name: str) -> None:
+        """No row carries a `layer` field, so every row renders always.
+
+        Compact View has to hide things behind ?123 because 13 units cannot
+        hold letters and digits at once. Full size has the room, and paying a
+        hop for glyphs the picker already lists is the trade this removal
+        reversed.
+        """
+        layered = [r["id"] for r in _load(f"{name}.json")["rows"] if r.get("layer")]
+        assert not layered, f"{name}: rows {layered} are behind a layer"
 
     @pytest.mark.parametrize("name", FULL_SIZE)
     def test_widest_row_is_still_15_5_units(self, name: str) -> None:
@@ -335,13 +277,11 @@ class TestTheLetterColumnsLineUp:
 
     Del leaves the main grid altogether: it already sits above the arrows
     on the Navigation panel, which is shown by default, and the space row
-    cannot take it since the symbol layer put a Sym key at each end (a
-    third key there overflows the 15.5u number row and widens the window).
+    has no room for it, since the space bar took the 3.0u the symbol
+    layer's two Sym keys used to hold (see TestTheFullSizeSpaceRow).
     Enter grew 1.8u -> 2.3u (standard ANSI is 2.25u) to take back the
     half-unit the top row lost. Both halves are needed: dropping Del alone
-    leaves W a quarter-key short, and widening Enter alone overshoots. The
-    symbol page follows, because each of its rows has to match the letter
-    row it replaces in units and key count.
+    leaves W a quarter-key short, and widening Enter alone overshoots.
 
     These assertions are in key-width units and deliberately ignore
     `keySpacing`: the top row carries one more gap than the home row, so
@@ -624,15 +564,15 @@ class TestNoDuplicateGlyphsWithinALayer:
     that reintroduces an overlap fails here rather than on a user's screen.
     """
 
-    # A row with no `layer` field renders on *every* layer, which is how both
-    # the full-size layouts and their symbol page are built. Skipping such a
-    # row (`if r.get("layer")`) returned the empty set for qwerty / dvorak /
+    # A row with no `layer` field renders on *every* layer, which is how the
+    # full-size layouts are built (they have no layers at all) and how
+    # compact's always-visible rows are. Skipping such a row
+    # (`if r.get("layer")`) returned the empty set for qwerty / dvorak /
     # colemak, so two of the tests below iterated nothing and passed without
     # asserting anything while the parametrize ids advertised coverage of all
-    # four layouts. Defaulting it to "base" fixed that and was right while
-    # full size had a single layer; now that it has two, "base" is one layer
-    # too few, and a glyph put on the always-visible number row and on the
-    # symbol page as well would collide on screen with nothing to catch it.
+    # four layouts. Defaulting it to the layer being read is what fixed that,
+    # and it keeps working if a layer is ever added back: a glyph on an
+    # always-visible row would collide with one on the new page.
 
     @staticmethod
     def _rows_on(path: Path, layer: str) -> list[dict]:

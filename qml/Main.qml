@@ -2610,12 +2610,6 @@ Window {
                                         case "ctrlOn": return root.ctrlOn
                                         case "altOn": return root.altOn
                                         case "winOn": return root.winOn
-                                        // Not a modifier: the symbol layer's
-                                        // entry key sits on the always-visible
-                                        // space row, so lighting it is the only
-                                        // thing on screen that says which page
-                                        // the letters have been swapped for.
-                                        case "symLayer": return root.activeLayer === "sym"
                                         default: return false
                                     }
                                 }
@@ -2737,22 +2731,8 @@ Window {
                                         // alive by signal delivery, not a live
                                         // binding, since the Connections handler
                                         // assigns to it).
-                                        //
-                                        // A layer key whose target is already
-                                        // showing goes back to base instead of
-                                        // re-selecting the layer it is on. The
-                                        // full-size layouts reach their symbol
-                                        // page from the space row, which has no
-                                        // `layer` field and therefore renders on
-                                        // every layer, so the same key has to be
-                                        // both the way in and the way out. Every
-                                        // other layer key targets something it
-                                        // is not on, so this branch is dead for
-                                        // them and their behaviour is unchanged.
                                         keyboard.releaseShift()
-                                        var want = kd.target || "base"
-                                        root.activeLayer = (want === root.activeLayer)
-                                                           ? "base" : want
+                                        root.activeLayer = kd.target || "base"
                                     } else {
                                         keyboard.pressSpecialKey(kd.action)
                                     }

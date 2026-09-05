@@ -1084,114 +1084,60 @@ lying strictly between two key slots. That last part is the half that matters:
 no geometric assertion can tell you whether Qt still delivers a press to a
 child outside its parent's bounds, which is what the whole approach rests on.
 
-## Symbol Layer (full-size layouts)
+## Removed: the full-size symbol layer
 
-`qwerty` / `dvorak` / `colemak` carry one symbol page, reached from a `Sym`
-key at each end of the space row. Compact View had `?123` and `=\<` from the
-start and the full-size layouts had nothing, so every glyph outside a
-physical keyboard's printing (`° × ÷ ± € £ © ™ … → ¿`) was reachable in one
-view and not the other. Data plus QML only, like Compact View: the backends
-never see a layer.
+`qwerty` / `dvorak` / `colemak` briefly carried one symbol page of 34 glyphs
+(`° × ÷ ± € £ © ™ … → ¿`), reached from a `Sym` key at each end of the
+space row. It was removed on 2026-09-05, and the 3.0u those two keys held went
+to the space bar (6.0u -> 9.0u). Both halves had shipped together in #51.
 
-**One page, not two.** Compact needs two because a 13u row cannot hold the
-ASCII symbols *and* the extended ones. Full size already has every ASCII
-symbol on the base layer, printed on a key or as a shifted variant that both
-Shift and right-click reach, so the page is only worth a hop for glyphs that
-have nowhere else to come from. That is 34 slots, and the long tail
-(accented letters, `∞ √ π † ★`, emoji) belongs in the Symbols & Emoji window,
-which has categories and a Recent page. A second page here would be duplicating that
-window's job in layout JSON. `TestFullSizeSymbolLayer::test_no_symbol_repeats_what_the_base_layer_already_types`
-is the rule stated as a property: it is the same thing
-`TestNoDuplicateGlyphsWithinALayer` asserts within one page, applied across
-the hop.
+**Why.** Every one of the 34 is also in the Symbols & Emoji window below,
+which is one click away in the suggestion bar on every layout, so the layer
+was a second route to a set that already had one, and it charged the two
+widest keys on the space row after the space bar for it. The two surfaces are
+genuinely different, which is why the layer was built: the picker is a
+*browsing* surface (categories, paging, a Recent page, a window that floats
+over the app you are typing into), the layer was a *positional* one (two
+clicks, nothing covering the screen, findable by memory). That distinction is
+not worth a fifth of the space row to a pointer that reaches for the space bar
+after every word.
 
-The 34: **`sym-top`** dashes, ellipsis, curly quotes, arrows, inverted marks;
-**`sym-home`** currency, section, pilcrow, bullet, copyright, registered,
-trademark, degree; **`sym-bottom`** the maths set. Everything on it is Latin-1
-Supplement, General Punctuation, Arrows or Math Operators, all text
-presentation. **Keep it that way**: the geometric-shape and dingbat ranges
-(`✓ ✗ ★`) resolve through Segoe UI Emoji on Windows, which renders in colour
-and ignores the `color` property outright, which is the same reason the lock
-badge and the clear-context ring are not glyphs (see *Right-Click to Lock*).
+**What went with it**: the `sym-top` / `sym-home` / `sym-bottom` rows and the
+`"layer": "base"` fields on the three letter rows across the three full-size
+layout files (both were added by the same feature, so the files are back to
+declaring no layers at all), the two `Sym` keys, the `symLayer` case in
+`Main.qml`'s `isActive` switch, and the "a layer key whose target is already
+showing goes back to base" branch beside it. That branch existed only for
+`Sym`, whose entry key sat on the always-visible space row; every other layer
+key in the project targets something it is not on, so it was dead for them.
+`TestNoDuplicateGlyphsWithinALayer`'s helper still folds an unlayered row into
+whichever layer is being read, which is what compact needs and what full size
+needed before this page existed. All of it is recoverable in full from the
+commit before the removal.
 
-### Why nothing moves
+**The one thing that must not be undone.** The widening is symmetric *about
+the space bar's own centre*, and that is what makes it free rather than a
+relearning cost: the two `Sym` keys flanked the row, so removing both and
+spending all 3.0u on the space bar leaves the row at 14.6u and the bar centred
+exactly where it already was. No click that landed on the space bar before can
+miss now; 1.5u of fresh target appears at each end. What moved instead is
+Ctrl / Win / Alt, 1.5u outward on both sides, which is the trade, taken
+deliberately. Pinned by `tests/test_layouts.py::TestTheFullSizeSpaceRow`.
 
-**Only the three letter rows swap.** `number` and `space` carry no `layer`
-field, so they render on every page: digits stay one tap away instead of
-going behind the hop the way Compact View has to put them, and the space bar
-never leaves the screen. Each `sym-*` row matches the row it replaces both in
-unit total and in key count, so `keyW`, the window width and every column
-position are identical across the hop. Tab, Caps and Enter keep their
-exact slots, which is the payoff for full size having room compact does not:
-a comma typed on the symbol page does not cost a hop back to reach Enter.
-
-**Del is not on the full-size grid at all.** It sits above the arrows on the
-Navigation panel (shown by default), which is where a physical keyboard puts
-it. The top row used to carry it past the backslash, which made that row 0.9u
-wider than the home row and, because rows are centred individually, pushed
-the whole letter block left until W sat between A and S. Removing it and
-growing Enter to 2.3u is what puts Q over A. The space row cannot take it
-either: with a `Sym` at each end a third key there is 15.6u, past the number
-row, and the window widens to fit. Guarded by
-`tests/test_layouts.py::TestTheLetterColumnsLineUp`.
-
-**Two `Sym` keys, not one, and that is arithmetic rather than taste.** Rows
-are centred individually, so adding equal width to *both* ends of a centred
-row leaves every key already in it exactly where it was. A single key
-appended to either end would have slid Ctrl, Win, Alt and the space bar
-sideways by half a key width on the row the user clicks most. The space row
-goes 11.6u to 14.6u and stays under the number row's 15.5u, so the window
-width is untouched.
-
-**The `sym-*` rows must sit before the `space` row in the JSON array.**
-`visibleRows` filters in array order, so with them appended at the end the
-symbol page rendered `number, space, sym-top, sym-home, sym-bottom` and the
-space bar jumped three rows up the keyboard. Guarded by
-`TestTheFullSizeSymbolPage::test_the_space_bar_does_not_move`, which measures
-from the top-left corner of the key grid rather than in scene coordinates:
-the first tap on any non-char key settles the chrome above the keyboard by
-one pixel (Caps does it too, and did before this feature existed), so a
-scene-y assertion fails by 1 px for a reason that has nothing to do with the
-grid.
-
-### Why the keys are `literal`
-
-Every char key on the page sets `"literal": true`, which routes it through
-`pressKeyLiteral` instead of `pressKey`. `pressKey` applies shift / caps-lock
-case normalisation, a layer switch deliberately leaves Caps Lock alone (it
-only affects letters, and this page has none), and Python's `str.upper()` is
-not the identity on every non-ASCII character: Caps Lock plus the micro sign
-typed a Greek capital Mu, so the key emitted one glyph while the cap
-displayed another. That is the same disagreement the symbol pages carry no
-Shift key in order to avoid, arriving through the other toggle.
-
-The page therefore carries **no Shift key** either, per the existing rule; the
-two Shift slots on `sym-bottom` hold `ABC` keys instead, which is the phone
-convention and puts a wide exit target where a hand reaching for Shift out of
-habit already is.
-
-### The `Sym` key is both the way in and the way out
-
-It sits on the space row, which renders on every page, so it cannot be a
-one-way door the way compact's layer keys are. `Main.qml` therefore sends a
-layer key whose target is **already showing** back to `base`. Every other
-layer key in the project targets something it is not on, so that branch is
-dead for them and their behaviour is unchanged. `stateKey: "symLayer"` lights
-the key while the page is up, which is the only thing on screen that says
-which page the letters were swapped for.
-
-Guarded by `tests/test_layouts.py::TestFullSizeSymbolLayer` (the data) and
-`tests/test_qml_compact_view.py::TestTheFullSizeSymbolPage` (the live QML).
-`TestNoDuplicateGlyphsWithinALayer`'s helpers now fold a row with no `layer`
-into **every** layer rather than into `base` alone: that was correct while
-full size had a single layer, and one layer too few the moment it had two.
+Two things this deliberately did **not** touch. Del stays off the full-size
+grid and Enter stays at 2.3u: those were the other half of the same commit and
+are what puts Q over A (see *Why nothing moves* under
+`TestTheLetterColumnsLineUp`). And Compact View's `?123` / `=\<` pages are
+**not** removable by the same argument: 13 units cannot hold letters and
+digits at once, so compact has no other route to either, and the picker is not
+a substitute for a digit.
 
 ## Symbols & Emoji window
 
-The long tail behind the symbol layer above. That layer carries the 34 glyphs
-worth a single click; this window carries the rest, because categories, a
+The only route to a glyph outside a physical keyboard's printing, on every
+layout, since the full-size symbol layer above was removed. Categories, a
 Recent page and several hundred glyphs do not fit on a key grid at a size an
-imprecise pointer can hit. Opened from a smile button in the suggestion bar,
+imprecise pointer can hit, which is why this is a window and not a layer. Opened from a smile button in the suggestion bar,
 immediately left of the Snippets bookmark, with a title-bar twin
 (`symbolsTitleBarButton`) visible only when `suggestionsEnabled` is false, for
 the reason the Snippets pair documents: the suggestion bar collapses to zero
