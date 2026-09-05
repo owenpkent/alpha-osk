@@ -6,6 +6,11 @@ Item {
     property real keyW: 44
     property real keyH: 44
     property real keySpacing: 2
+    // Each key's share of the gap around it; see KeyButton's
+    // `hitMarginH`.  This panel is laid out on `keySpacing` in both
+    // directions, so a caller passes half of it for both axes.
+    property real hitMarginH: 0
+    property real hitMarginV: 0
     property color keyColor: "#333333"
     property color keyPressedColor: "#5a5a5a"
     property color keyTextColor: "#e0e0e0"
@@ -44,6 +49,8 @@ Item {
             keyTextColor: navPanel.keyTextColor
             accentColor: navPanel.accentColor
             borderColor: navPanel.borderColor
+            hitMarginH: navPanel.hitMarginH
+            hitMarginV: navPanel.hitMarginV
             onKeyPressed: keyboard.pressSpecialKey("print")
         }
         KeyButton {
@@ -54,6 +61,8 @@ Item {
             keyTextColor: navPanel.keyTextColor
             accentColor: navPanel.accentColor
             borderColor: navPanel.borderColor
+            hitMarginH: navPanel.hitMarginH
+            hitMarginV: navPanel.hitMarginV
             onKeyPressed: keyboard.pressSpecialKey("scrolllock")
         }
         KeyButton {
@@ -64,6 +73,8 @@ Item {
             keyTextColor: navPanel.keyTextColor
             accentColor: navPanel.accentColor
             borderColor: navPanel.borderColor
+            hitMarginH: navPanel.hitMarginH
+            hitMarginV: navPanel.hitMarginV
             onKeyPressed: keyboard.pressSpecialKey("pause")
         }
 
@@ -76,6 +87,8 @@ Item {
             keyTextColor: navPanel.keyTextColor
             accentColor: navPanel.accentColor
             borderColor: navPanel.borderColor
+            hitMarginH: navPanel.hitMarginH
+            hitMarginV: navPanel.hitMarginV
             onKeyPressed: keyboard.pressSpecialKey("insert")
         }
         KeyButton {
@@ -86,6 +99,8 @@ Item {
             keyTextColor: navPanel.keyTextColor
             accentColor: navPanel.accentColor
             borderColor: navPanel.borderColor
+            hitMarginH: navPanel.hitMarginH
+            hitMarginV: navPanel.hitMarginV
             onKeyPressed: keyboard.pressSpecialKey("home")
         }
         KeyButton {
@@ -96,6 +111,8 @@ Item {
             keyTextColor: navPanel.keyTextColor
             accentColor: navPanel.accentColor
             borderColor: navPanel.borderColor
+            hitMarginH: navPanel.hitMarginH
+            hitMarginV: navPanel.hitMarginV
             enableRepeat: true; repeatDelay: navPanel.repeatDelay; repeatInterval: navPanel.repeatInterval
             onKeyPressed: keyboard.pressSpecialKey("pageup")
         }
@@ -109,6 +126,8 @@ Item {
             keyTextColor: navPanel.keyTextColor
             accentColor: navPanel.accentColor
             borderColor: navPanel.borderColor
+            hitMarginH: navPanel.hitMarginH
+            hitMarginV: navPanel.hitMarginV
             enableRepeat: true; repeatDelay: navPanel.repeatDelay; repeatInterval: navPanel.repeatInterval
             onKeyPressed: keyboard.pressSpecialKey("delete")
         }
@@ -120,6 +139,8 @@ Item {
             keyTextColor: navPanel.keyTextColor
             accentColor: navPanel.accentColor
             borderColor: navPanel.borderColor
+            hitMarginH: navPanel.hitMarginH
+            hitMarginV: navPanel.hitMarginV
             onKeyPressed: keyboard.pressSpecialKey("end")
         }
         KeyButton {
@@ -130,6 +151,8 @@ Item {
             keyTextColor: navPanel.keyTextColor
             accentColor: navPanel.accentColor
             borderColor: navPanel.borderColor
+            hitMarginH: navPanel.hitMarginH
+            hitMarginV: navPanel.hitMarginV
             enableRepeat: true; repeatDelay: navPanel.repeatDelay; repeatInterval: navPanel.repeatInterval
             onKeyPressed: keyboard.pressSpecialKey("pagedown")
         }
@@ -146,6 +169,8 @@ Item {
             keyTextColor: navPanel.keyTextColor
             accentColor: navPanel.accentColor
             borderColor: navPanel.borderColor
+            hitMarginH: navPanel.hitMarginH
+            hitMarginV: navPanel.hitMarginV
             enableRepeat: true; repeatDelay: navPanel.repeatDelay; repeatInterval: navPanel.repeatInterval
             onKeyPressed: keyboard.pressSpecialKey("up")
         }
@@ -162,6 +187,8 @@ Item {
             keyTextColor: navPanel.keyTextColor
             accentColor: navPanel.accentColor
             borderColor: navPanel.borderColor
+            hitMarginH: navPanel.hitMarginH
+            hitMarginV: navPanel.hitMarginV
             enableRepeat: true; repeatDelay: navPanel.repeatDelay; repeatInterval: navPanel.repeatInterval
             onKeyPressed: keyboard.pressSpecialKey("left")
         }
@@ -173,6 +200,8 @@ Item {
             keyTextColor: navPanel.keyTextColor
             accentColor: navPanel.accentColor
             borderColor: navPanel.borderColor
+            hitMarginH: navPanel.hitMarginH
+            hitMarginV: navPanel.hitMarginV
             enableRepeat: true; repeatDelay: navPanel.repeatDelay; repeatInterval: navPanel.repeatInterval
             onKeyPressed: keyboard.pressSpecialKey("down")
         }
@@ -184,6 +213,8 @@ Item {
             keyTextColor: navPanel.keyTextColor
             accentColor: navPanel.accentColor
             borderColor: navPanel.borderColor
+            hitMarginH: navPanel.hitMarginH
+            hitMarginV: navPanel.hitMarginV
             enableRepeat: true; repeatDelay: navPanel.repeatDelay; repeatInterval: navPanel.repeatInterval
             onKeyPressed: keyboard.pressSpecialKey("right")
         }
