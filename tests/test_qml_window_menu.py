@@ -163,22 +163,6 @@ def _menu_rows(root) -> list[tuple[str, bool]]:
     return rows
 
 
-def _press(root, x: int, y: int, button) -> None:
-    QTest.mousePress(root, button, Qt.KeyboardModifier.NoModifier, QPoint(x, y))
-    QTest.mouseRelease(root, button, Qt.KeyboardModifier.NoModifier, QPoint(x, y))
-    QGuiApplication.processEvents()
-
-
-def _park(root) -> None:
-    """Put the window somewhere the offscreen plugin reports honestly."""
-    _eval(root, f"root.x = {PARKED_X}; root.y = {PARKED_Y}")
-    QGuiApplication.processEvents()
-
-
-def _pos(root) -> tuple[int, int]:
-    return root.property("x"), root.property("y")
-
-
 def _hover(root, gx: int, gy: int) -> None:
     """Hover-move the pointer to the *desktop* point (gx, gy).
 
@@ -191,12 +175,6 @@ def _hover(root, gx: int, gy: int) -> None:
     pointer across the desktop, not across itself.
     """
     QTest.mouseMove(root, QPoint(gx - root.property("x"), gy - root.property("y")))
-    QGuiApplication.processEvents()
-
-
-def _press(root, gx: int, gy: int, button) -> None:
-    local = QPoint(gx - root.property("x"), gy - root.property("y"))
-    QTest.mousePress(root, button, Qt.KeyboardModifier.NoModifier, local)
     QGuiApplication.processEvents()
 
 
@@ -443,7 +421,7 @@ class TestMoveMode:
         _hover(root, ANCHOR_GX + 40, ANCHOR_GY)
         moved = _pos(root)
 
-        _press(root, ANCHOR_GX + 40, ANCHOR_GY, Qt.MouseButton.LeftButton)
+        _click(root, ANCHOR_GX + 40, ANCHOR_GY, Qt.MouseButton.LeftButton)
 
         assert not _eval(root, "root.moveMode")
         assert _pos(root) == moved
@@ -461,7 +439,7 @@ class TestMoveMode:
         _hover(root, ANCHOR_GX + 120, ANCHOR_GY + 60)
         assert _pos(root) != before
 
-        _press(root, ANCHOR_GX + 120, ANCHOR_GY + 60, Qt.MouseButton.RightButton)
+        _click(root, ANCHOR_GX + 120, ANCHOR_GY + 60, Qt.MouseButton.RightButton)
 
         assert not _eval(root, "root.moveMode")
         assert _pos(root) == before

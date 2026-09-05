@@ -1096,8 +1096,10 @@ Window {
             
             // Right-click anywhere on the bar opens the window menu.
             //
-            // Declared *before* every other child so it sits underneath them
-            // all, and accepting only the right button so it consumes nothing
+            // Declared *before* every other child that takes input, so it
+            // sits underneath them all (only the corner-rounding Rectangle
+            // is above it, and that accepts nothing), and accepting only the
+            // right button so it consumes nothing
             // else: a left press still reaches dragArea and the caption
             // buttons on top of it, while a right press finds no taker up
             // there and falls through to here.  That is what makes the whole

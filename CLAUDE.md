@@ -1518,8 +1518,10 @@ that is the point rather than a redundancy: those are 28x24 targets bunched at
 the far right end of the bar, and the menu puts the same actions under the
 pointer wherever it already is on the strip the user grabs the window by.
 
-- **`titleBarMenuArea` is declared *before* every other child of `titleBar`
-  and accepts only `Qt.RightButton`.** Being first puts it underneath
+- **`titleBarMenuArea` is declared *before* every other input-taking child of
+  `titleBar` and accepts only `Qt.RightButton`.** Only the corner-rounding
+  Rectangle sits above it in the file, and that accepts nothing. Being first
+  puts it underneath
   everything, and taking only the right button means it consumes nothing else:
   a left press still reaches `dragArea` and the caption buttons above it,
   while a right press finds no taker up there and falls through. That is what
