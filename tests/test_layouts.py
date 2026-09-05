@@ -195,19 +195,24 @@ class TestTheFullSizeSpaceRow:
 
     @pytest.mark.parametrize("name", FULL_SIZE)
     def test_the_space_bar_grew_around_its_own_centre(self, name: str) -> None:
-        """6.0u -> 9.0u, with the centre exactly where it was.
+        """6.0u -> 9.5u, with the centre exactly where it was.
 
-        This is the property the whole change rests on. Rows are centred
-        individually, so a key's absolute position is set by the widths in
-        front of it plus half the row's own indent; the two 1.5u Sym keys
-        flanked the row symmetrically, so removing both and spending all 3.0u
-        on the space bar leaves the row 14.6u and the bar centred where it
-        already was. Every click that landed on the space bar before still
-        lands on it, and 1.5u of fresh target appears at each end.
+        This is the property the whole change rests on. On a flush row the
+        bar's centre is (15.5 + left - right) / 2, where left is Ctrl + Win +
+        Alt and right is Alt + Ctrl, so the whole expression collapses to
+        (15.5 + Win) / 2 as long as the four Ctrl / Alt keys are equal. Win is
+        1.0u and they are all 1.25u, so the centre is 8.25u, exactly where it
+        sat when two 1.5u Sym keys flanked a 6.0u bar on a 14.6u row.
 
-        What moved instead is Ctrl / Win / Alt, 1.5u outward on both sides.
-        That is the trade, taken deliberately: the space bar is pressed after
-        every word and those five are not.
+        That is what makes the widening free rather than something to relearn:
+        every click that landed on the space bar before still lands on it, and
+        the new target is added at both ends. What moved instead is Ctrl / Win
+        / Alt, outward on both sides, which is the trade, taken deliberately:
+        the space bar is pressed after every word and those five are not.
+
+        The rule to keep if these widths are ever retuned: Win stays 1.0u and
+        the four Ctrl / Alt keys stay equal to each other. Nothing else about
+        the row matters to the centre.
         """
         rows = _load(f"{name}.json")["rows"]
         row = self._space_row(name)
@@ -215,8 +220,8 @@ class TestTheFullSizeSpaceRow:
 
         space_index = next(i for i, k in enumerate(row["keys"]) if k.get("action") == "space")
         space = row["keys"][space_index]
-        assert space["width"] == pytest.approx(9.0), (
-            f"{name}: the space bar is {space['width']}u, not 9.0u"
+        assert space["width"] == pytest.approx(9.5), (
+            f"{name}: the space bar is {space['width']}u, not 9.5u"
         )
 
         x = (widest - _row_units(row)) / 2.0
@@ -262,26 +267,103 @@ class TestTheFullSizeSpaceRow:
         assert len(widest["keys"]) - 1 == 14, "gap count feeds layoutFixedPixels"
 
 
+class TestEveryFullSizeRowIsFlush:
+    """Every row totals exactly 15.5u, so all four edges of the grid are straight.
+
+    `Main.qml` centres each row against the widest one, so a row that totals
+    less than the widest sits inside it by half the difference at each end.
+    With five different totals the keyboard's left and right edges stepped in
+    and out five times, by up to 0.6u (about 9 px at the default window), which
+    is what read as lumpy: nothing was wrong with any single key, but no two
+    rows began in the same place.
+
+    This is the rule Compact View has enforced from the start, where
+    `TestCompactLayout::test_every_row_is_exactly_13_units` states it in the
+    same shape and for the same reason. Full size never got it. Adding it here
+    means the two views are held to one rule rather than to two, and it is why
+    the widths below are derived from each row's own middle-key budget rather
+    than chosen: the top and bottom rows split what is left evenly (so both are
+    symmetric), and the home row gives Caps whatever Tab has and Enter the
+    remainder.
+    """
+
+    @pytest.mark.parametrize("name", FULL_SIZE)
+    def test_every_row_is_exactly_15_5_units(self, name: str) -> None:
+        ragged = {
+            r["id"]: _row_units(r)
+            for r in _load(f"{name}.json")["rows"]
+            if abs(_row_units(r) - 15.5) > 1e-9
+        }
+        assert not ragged, (
+            f"{name}: {ragged} do not total 15.5u, so they are centred inside the "
+            "grid and the keyboard's edges step in and out at those rows"
+        )
+
+    @pytest.mark.parametrize("name", FULL_SIZE)
+    def test_the_top_and_bottom_rows_are_symmetric(self, name: str) -> None:
+        """Tab matches backslash, and the two Shifts match each other.
+
+        Not decoration: on a flush row the only freedom left is how the
+        leftover budget is split between the two outer keys, and splitting it
+        evenly is what stops one end of a row looking heavier than the other.
+        The home row is deliberately exempt, because Caps is pinned to Tab's
+        width by the letter alignment below and Enter takes what is left.
+        """
+        rows = {r["id"]: r for r in _load(f"{name}.json")["rows"]}
+        for rid in ("top", "bottom"):
+            keys = rows[rid]["keys"]
+            first, last = keys[0].get("width", 1.0), keys[-1].get("width", 1.0)
+            assert first == pytest.approx(last), (
+                f"{name}/{rid}: outer keys are {first}u and {last}u, so the row is lopsided"
+            )
+
+    @pytest.mark.parametrize("name", FULL_SIZE)
+    def test_the_big_keys_share_one_width(self, name: str) -> None:
+        """Enter and both Shifts are all 2.75u; Tab, Caps and backslash all 1.75u.
+
+        A consequence of the two rules above rather than a target in its own
+        right, but worth pinning, because it is the thing a reader sees: the
+        whole keyboard is built from 1.0u, 1.75u and 2.75u keys plus Backspace
+        and the space bar. A retune that breaks this has almost certainly
+        broken the flush rule or the alignment as well.
+        """
+        rows = {r["id"]: r for r in _load(f"{name}.json")["rows"]}
+        assert {
+            rows["home"]["keys"][-1]["width"],
+            rows["bottom"]["keys"][0]["width"],
+            rows["bottom"]["keys"][-1]["width"],
+        } == {2.75}, f"{name}: Enter and the Shifts no longer share a width"
+        assert {
+            rows["top"]["keys"][0]["width"],
+            rows["top"]["keys"][-1]["width"],
+            rows["home"]["keys"][0]["width"],
+        } == {1.75}, f"{name}: Tab, Caps and backslash no longer share a width"
+
+
 class TestTheLetterColumnsLineUp:
     """W sits directly above S on the full-size layouts, for WASD gaming.
 
-    Main.qml centres every row against the widest one (each row is a `Row`
-    with `Layout.alignment: Qt.AlignHCenter`), so a row's horizontal offset
-    is `(widest_units - row_units) / 2` and its first letter's left edge is
-    that offset plus the leading modifier's width.  The top row used to
-    carry a Del key past the backslash, which made it 0.9u wider than the
-    home row and so pushed the whole letter block four fifths of a key
-    left: W landed between A and S.  On a pointer-driven keyboard that
+    Main.qml centres every row against the widest one, so a row's first
+    letter sits at `(widest_units - row_units) / 2` plus the leading
+    modifier's width. Now that every row is flush at 15.5u (see
+    TestEveryFullSizeRowIsFlush) the first term is zero on both rows, so the
+    alignment reduces to a single rule: **Tab and Caps must be the same
+    width**, and they are, both 1.75u.
+
+    That is a much sturdier arrangement than the one it replaced. Before, the
+    rows had different totals and the differing indents happened to cancel the
+    differing Tab and Caps widths, so the alignment held by arithmetic
+    coincidence between four numbers and any one of them moving broke it. It
+    did break: the top row carried a Del key past the backslash, which made it
+    0.9u wider than the home row and pushed the whole letter block four fifths
+    of a key left, landing W between A and S. On a pointer-driven keyboard that
     turns every W->S in a WASD pair into a diagonal drag, which is the one
     movement slow motor input is worst at.
 
-    Del leaves the main grid altogether: it already sits above the arrows
-    on the Navigation panel, which is shown by default, and the space row
-    has no room for it, since the space bar took the 3.0u the symbol
-    layer's two Sym keys used to hold (see TestTheFullSizeSpaceRow).
-    Enter grew 1.8u -> 2.3u (standard ANSI is 2.25u) to take back the
-    half-unit the top row lost. Both halves are needed: dropping Del alone
-    leaves W a quarter-key short, and widening Enter alone overshoots.
+    Del stays off the main grid: it already sits above the arrows on the
+    Navigation panel, which is shown by default, and the space row has no room
+    for it, since the space bar took the 3.0u the symbol layer's two Sym keys
+    used to hold (see TestTheFullSizeSpaceRow).
 
     These assertions are in key-width units and deliberately ignore
     `keySpacing`: the top row carries one more gap than the home row, so
@@ -334,10 +416,27 @@ class TestTheLetterColumnsLineUp:
 
     @pytest.mark.parametrize("name", LAYOUTS)
     def test_the_space_row_still_costs_no_window_width(self, name: str) -> None:
-        # Del is free only while the space row stays clear of the widest
-        # row; past that it would widen the whole keyboard.
+        """The space row may match the widest row but must never drive it.
+
+        This used to be a strict `<`, which was right while the rows had
+        different totals: the space row had slack, and Del was free only
+        while it kept it. Under the flush rule the space row is *tied* with
+        every other row at 15.5u, which is the intended state rather than a
+        regression, so the units check is now `<=`.
+
+        The half that still bites is the gap count. `Main.qml` derives
+        `layoutFixedPixels` from `_widestRow.gaps`, and it takes that from
+        whichever row has the most keys rather than from the widest row, so a
+        key added to the space row costs the window a whole `keySpacing` even
+        though the row's unit total cannot change. The number row's 15 keys
+        set that budget today; the space row's 6 must stay well under it.
+        """
         rows, widest = self._rows(name)
-        assert _row_units(rows["space"]) < widest
+        assert _row_units(rows["space"]) <= widest
+        assert len(rows["space"]["keys"]) < len(rows["number"]["keys"]), (
+            f"{name}: the space row now has the most keys, so it sets the "
+            "window's gap budget instead of the number row"
+        )
 
 
 class TestCompactLayout:

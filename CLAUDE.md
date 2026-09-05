@@ -23,7 +23,7 @@ Owen is a wheelchair user with muscular dystrophy. Typing is hard - be proactive
 - Releases: `src/__version__.py` is the single source of version truth; publish to the separate `owenpkent/alpha-osk-releases` repo with an explicit `--repo` (the updater API URL is hard-pinned there); the installer asset name must be exactly `Alpha-OSK-Setup-{version}.exe`. The marketing site is a **third** repo, `owenpkent/alpha-osk-website`, and a release deliberately does not touch it: it reads the latest tag from the releases API at page load, so there is no version to bump there and no step to forget (see *The website*).
 - The install path is computed, never read from the registry: every silent install passes an explicit `/S /D=<dir>` from `updater.py::_install_target_dir()`. NSIS requires `/D=` last on the command line and unquoted even when the path has spaces, so don't reorder or requote the installer arguments (full reasoning under *Auto-Update*).
 - `run.py::ensure_admin_windows()` runs after dependency installation, not as the first statement in `main()`, so `pip install` never executes with an admin token; `--dashboard` never elevates at all. The repo tree is still user-writable, so this narrows the blast radius rather than closing it.
-- Load-bearing invariants: merge-strategy default MUST stay `"rank"`; `NgramPredictor._user_total == sum(user_vocab.values())`; `NgramPredictor.bigrams[p][w] >= round(_user_bigrams[p][w])` (the merged context tables never drop below the user's share, and only that share is ever persisted, see *Context tables*); window height is content-bound (never persist or assign it); every `KeyButton` needs a share of the gap around it (`hitMarginH` / `hitMarginV`) or the strip between it and its neighbour is dead; every analytics metric needs both a session and an `_alltime_*` form; Windows subprocess calls need `CREATE_NO_WINDOW` when they suppress output *or* may run without a console to inherit (a git hook, a frozen GUI build).
+- Load-bearing invariants: merge-strategy default MUST stay `"rank"`; `NgramPredictor._user_total == sum(user_vocab.values())`; `NgramPredictor.bigrams[p][w] >= round(_user_bigrams[p][w])` (the merged context tables never drop below the user's share, and only that share is ever persisted, see *Context tables*); window height is content-bound (never persist or assign it); every full-size layout row must total exactly 15.5u and every compact row 13.0u, or that row is centred inside the grid and the keyboard's edges go ragged (see *Full-size rows are flush*); every `KeyButton` needs a share of the gap around it (`hitMarginH` / `hitMarginV`) or the strip between it and its neighbour is dead; every analytics metric needs both a session and an `_alltime_*` form; Windows subprocess calls need `CREATE_NO_WINDOW` when they suppress output *or* may run without a console to inherit (a git hook, a frozen GUI build).
 
 ## Stack & layout
 
@@ -1088,8 +1088,8 @@ child outside its parent's bounds, which is what the whole approach rests on.
 
 `qwerty` / `dvorak` / `colemak` briefly carried one symbol page of 34 glyphs
 (`° × ÷ ± € £ © ™ … → ¿`), reached from a `Sym` key at each end of the
-space row. It was removed on 2026-09-05, and the 3.0u those two keys held went
-to the space bar (6.0u -> 9.0u). Both halves had shipped together in #51.
+space row. It was removed on 2026-09-05, and the room those two keys held went
+to the space bar. Both halves had shipped together in #51.
 
 **Why.** Every one of the 34 is also in the Symbols & Emoji window below,
 which is one click away in the suggestion bar on every layout, so the layer
@@ -1115,14 +1115,18 @@ whichever layer is being read, which is what compact needs and what full size
 needed before this page existed. All of it is recoverable in full from the
 commit before the removal.
 
-**The one thing that must not be undone.** The widening is symmetric *about
-the space bar's own centre*, and that is what makes it free rather than a
-relearning cost: the two `Sym` keys flanked the row, so removing both and
-spending all 3.0u on the space bar leaves the row at 14.6u and the bar centred
-exactly where it already was. No click that landed on the space bar before can
-miss now; 1.5u of fresh target appears at each end. What moved instead is
-Ctrl / Win / Alt, 1.5u outward on both sides, which is the trade, taken
-deliberately. Pinned by `tests/test_layouts.py::TestTheFullSizeSpaceRow`.
+**The one thing that must not be undone.** The space bar's centre stays at
+8.25u, which is what makes the widening free rather than something to relearn:
+every click that landed on it before still lands on it, and the new target is
+added at both ends. On a flush row that centre is `(15.5 + left - right) / 2`,
+and since `left` is Ctrl + Win + Alt and `right` is Alt + Ctrl, the whole
+expression collapses to `(15.5 + Win) / 2` **as long as the four Ctrl / Alt
+keys are equal**. So the rule to keep if these widths are ever retuned is just
+that: Win stays 1.0u, and the four Ctrl / Alt keys stay equal to each other.
+Nothing else about the row matters to the centre. What moved instead is
+Ctrl / Win / Alt, outward on both sides, taken deliberately: the space bar is
+pressed after every word and those five are not. Pinned by
+`tests/test_layouts.py::TestTheFullSizeSpaceRow`.
 
 Two things this deliberately did **not** touch. Del stays off the full-size
 grid and Enter stays at 2.3u: those were the other half of the same commit and
@@ -1131,6 +1135,54 @@ are what puts Q over A (see *Why nothing moves* under
 **not** removable by the same argument: 13 units cannot hold letters and
 digits at once, so compact has no other route to either, and the picker is not
 a substitute for a digit.
+
+## Full-size rows are flush (every row is 15.5u)
+
+`Main.qml` centres each row against the widest one, so a row totalling less
+than the widest sits inside it by half the difference at each end. The
+full-size rows used to total 15.5 / 14.3 / 14.9 / 14.3 / 14.6, so the
+keyboard's left and right edges stepped in and out five times, by up to 0.6u
+(about 9 px at the default window). Reported as the keyboard looking "lumpy",
+which is the right word: nothing was wrong with any single key, but no two
+rows began in the same place.
+
+**This is the rule Compact View has enforced from the start** (*every row in a
+compact layout must total the same unit count*, see that section), applied to
+full size at last. The two views are now held to one rule rather than two.
+
+The widths are **derived from each row's own middle-key budget, not chosen**,
+which is why they come out as tidily as they do. The middles are 12.0u, 11.0u
+and 10.0u, leaving 3.5u, 4.5u and 5.5u for the outer keys:
+
+- **top** splits its budget evenly, so Tab and `\` are both **1.75u**;
+- **home** must give Caps exactly what Tab has (see below), leaving Enter the
+  remainder, **2.75u**;
+- **bottom** splits evenly, so both Shifts are **2.75u**;
+- **space** is Ctrl / Win / Alt at 1.25 / 1.0 / 1.25 and the bar takes the
+  rest, **9.5u**.
+
+So the whole keyboard is 1.0u, 1.75u and 2.75u keys plus Backspace (1.5u) and
+the space bar. `TestEveryFullSizeRowIsFlush` pins the rule, the two symmetric
+rows, and that shared-width consequence.
+
+**The letter alignment got sturdier, and the mechanism changed.** W over S (for
+WASD) reduces to `inset_top + Tab == inset_home + Caps`. With the rows flush
+both insets are zero, so it is now simply **Tab and Caps must be the same
+width**. Before, the rows had different totals and the differing indents
+happened to cancel the differing Tab and Caps widths, so the alignment held by
+a coincidence between four numbers, and any one of them moving broke it. It did
+break once: a Del key past the backslash made the top row 0.9u wider than the
+home row and landed W between A and S. Del stays off the grid for that reason;
+see `TestTheLetterColumnsLineUp`.
+
+One thing that is *not* implied by the flush rule: the window's width budget
+comes from `_widestRow`, which tracks max units and max **gap count**
+independently rather than reading both off one row. So the tie the flush rule
+creates is harmless, and the gap budget still comes from the number row's 15
+keys. A row that gained keys would cost a `keySpacing` even though its unit
+total cannot change, which is the half
+`TestTheLetterColumnsLineUp::test_the_space_row_still_costs_no_window_width`
+still guards.
 
 ## Symbols & Emoji window
 
