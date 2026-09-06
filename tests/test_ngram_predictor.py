@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+import logging
 import os
 from pathlib import Path
 
@@ -934,3 +936,56 @@ class TestReinforceContext:
         p = NgramPredictor()
         p.reinforce_context("hello", "World")
         assert p.bigrams["hello"]["world"] == 1
+
+
+class TestTheModelLoggerNeverWritesAWord:
+    """``alpha-osk.log`` is the file users attach to bug reports.
+
+    These six paths all take a word the user typed or was offered, and
+    they log at INFO, so they reach that file in every ordinary session.
+    ``forget_token`` deliberately logs nothing at all for exactly this
+    reason; these were the inconsistency.  Each case asserts the shape is
+    still reported, so a fix that simply deleted the logging would not
+    pass.
+    """
+
+    @pytest.mark.parametrize(
+        "action",
+        [
+            lambda p: p.blacklist_word("hunter2"),
+            lambda p: p.unblacklist_word("hunter2"),
+            lambda p: p.mark_bad("hunter2"),
+            lambda p: p.mark_good("hunter2"),
+        ],
+    )
+    def test_the_word_is_not_in_the_log_record(self, action, caplog) -> None:
+        predictor = NgramPredictor()
+        with caplog.at_level(logging.INFO, logger="NgramPredictor"):
+            action(predictor)
+
+        emitted = " ".join(r.getMessage() for r in caplog.records)
+        assert "hunter2" not in emitted
+        assert "len=7" in emitted
+
+    def test_removing_a_dispreference_reports_only_the_shape(self, caplog) -> None:
+        predictor = NgramPredictor()
+        predictor.mark_bad("hunter2")
+        caplog.clear()
+        with caplog.at_level(logging.INFO, logger="NgramPredictor"):
+            predictor.remove_dispreference("hunter2")
+
+        emitted = " ".join(r.getMessage() for r in caplog.records)
+        assert "hunter2" not in emitted
+        assert "len=7" in emitted
+
+    def test_rolling_back_a_boost_reports_only_the_shape(self, caplog) -> None:
+        predictor = NgramPredictor()
+        predictor.mark_good("hunter2")
+        caplog.clear()
+        with caplog.at_level(logging.INFO, logger="NgramPredictor"):
+            predictor.unprefer("hunter2")
+
+        emitted = " ".join(r.getMessage() for r in caplog.records)
+        assert "hunter2" not in emitted
+        assert "len=7" in emitted
+
