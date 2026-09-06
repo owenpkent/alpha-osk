@@ -469,3 +469,37 @@ class TestShortWordsAreOfferedAsNextWords:
         """A sentence-start "To" is judged as a word, not as a capital."""
         assert _short_word_allowed("To")
         assert _short_word_allowed("I")
+
+
+class TestTaughtAcronymsReachTheBar:
+    """The other half of the acronym exemption.
+
+    Letting "pr" into the vocabulary is not enough on its own: the
+    next-word gate above would still drop it for being two characters
+    and not on a shipped English list, which is the position the pill is
+    worth the most ("opened a " -> PR).  So the gate consults the same
+    taught-acronym evidence the shape filter does.
+    """
+
+    @staticmethod
+    def _teach(predictor: HybridPredictor, phrase: str, *acronyms: str) -> None:
+        for word in acronyms:
+            predictor._ngram.learn_capitalization(word, allow_uppercase=True)
+        for _ in range(4):
+            predictor._ngram.learn(phrase)
+
+    def test_a_taught_acronym_is_offered_as_a_next_word(self, predictor) -> None:
+        self._teach(predictor, "opened a PR today", "PR")
+        assert predictor._next_word_allowed("pr")
+        assert "PR" in predictor.predict("opened a ")
+
+    def test_it_is_offered_in_its_taught_form_not_the_mirrored_one(self, predictor) -> None:
+        """Without this the pill reads "Pr" and the user retypes it anyway."""
+        self._teach(predictor, "i reviewed two PRs today", "PRs")
+        assert "PRs" in predictor.predict("i reviewed two pr")
+
+    def test_an_untaught_fragment_is_still_gated(self, predictor) -> None:
+        """The inverse: dropping the gate outright would pass the two above."""
+        predictor._ngram.learn_capitalization("Th", allow_uppercase=True)
+        assert not predictor._next_word_allowed("th")
+        assert not predictor._next_word_allowed("zz")

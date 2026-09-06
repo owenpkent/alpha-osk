@@ -938,6 +938,196 @@ class TestReinforceContext:
         assert p.bigrams["hello"]["world"] == 1
 
 
+class TestTaughtAcronymsAreLearnable:
+    """A deliberately-capitalised acronym is exempt from the shape filter.
+
+    "PR" and "PRs" failed it for the same reason "th" and "xqz" do: two
+    characters with no vowel, and three characters with no vowel.  The
+    filter cannot tell an acronym from a slip by shape, so the evidence
+    is what the user paid to type it: two or more capitals with Caps
+    Lock off means shifting or right-clicking each letter individually.
+
+    Every positive case below is paired with the near-miss it must
+    still reject, because a rule that only ever says yes is the way
+    this exemption turns back into no filter at all.
+    """
+
+    @staticmethod
+    def _teach(p: NgramPredictor, word: str) -> None:
+        """What the bridge does at the space boundary for a typed word."""
+        p.learn_capitalization(word, allow_uppercase=True)
+
+    def test_a_taught_acronym_enters_the_vocabulary(self):
+        p = NgramPredictor()
+        assert not p._is_plausible_word("pr")
+        assert not p._is_plausible_word("prs")
+        self._teach(p, "PR")
+        self._teach(p, "PRs")
+        for _ in range(3):
+            p.learn("opened a PR and two PRs today")
+        assert "pr" in p.user_vocab
+        assert "prs" in p.user_vocab
+
+    def test_an_untaught_acronym_is_still_a_fragment(self):
+        """The inverse: typing it lowercase teaches nothing and learns nothing."""
+        p = NgramPredictor()
+        for _ in range(5):
+            p.learn("opened a pr and two prs today")
+        assert "pr" not in p.user_vocab
+        assert "prs" not in p.user_vocab
+
+    def test_one_capital_is_not_evidence(self):
+        """A leading capital is what every sentence start carries.
+
+        "Th" from an interrupted word reaches ``learn_capitalization``
+        exactly as an acronym does, so a one-capital rule would let the
+        fragment class this filter exists for straight back in.
+        """
+        p = NgramPredictor()
+        self._teach(p, "Th")
+        assert p.capitalization.get("th") == "Th"
+        assert not p.is_taught_acronym("th")
+        for _ in range(5):
+            p.learn("Th Th Th")
+        assert "th" not in p.user_vocab
+
+    def test_caps_lock_is_not_evidence(self):
+        """All-caps under Caps Lock is one click, not one per letter."""
+        p = NgramPredictor()
+        p.learn_capitalization("PR", allow_uppercase=False)
+        assert not p.is_taught_acronym("pr")
+        for _ in range(5):
+            p.learn("opened a PR today")
+        assert "pr" not in p.user_vocab
+
+    def test_the_acronym_survives_a_save_and_load(self, tmp_path: Path):
+        """The strip on load asks the same filter, so the order matters.
+
+        ``capitalization`` used to be merged *after* the fragment strip,
+        which would have deleted every learned acronym on the way back
+        in and left the model unable to hold one across a restart.
+        """
+        p = NgramPredictor()
+        self._teach(p, "PR")
+        for _ in range(3):
+            p.learn("opened a PR today")
+        # A fragment from an older model file, which must still be stripped.
+        p.unigrams["th"] = 9
+        p.save(tmp_path / "model.json")
+
+        q = NgramPredictor()
+        q.load(tmp_path / "model.json")
+        assert "pr" in q.user_vocab
+        assert "th" not in q.unigrams
+
+    def test_a_taught_acronym_is_displayed_in_its_taught_form(self):
+        p = NgramPredictor()
+        self._teach(p, "PRs")
+        assert p.get_capitalized("prs") == "PRs"
+
+    def test_a_shipped_word_keeps_its_own_casing(self):
+        """The first guard that keeps this from being the removed Tier 3.
+
+        Tier 3 was wrong because it fired on ordinary words.  "us" is
+        one, however the user once typed it, so it stays lowercase.
+        """
+        p = NgramPredictor()
+        self._teach(p, "US")
+        assert p.is_taught_acronym("us")
+        assert p.get_capitalized("us") == "us"
+
+    def test_the_shipped_proper_noun_list_buys_no_exemption(self):
+        """The provenance half, and the reason a set exists at all.
+
+        ``_load_proper_nouns`` writes ``data/proper_nouns.txt`` straight
+        into ``capitalization`` with none of the Caps-Lock guards
+        ``learn_capitalization`` applies, so reading that dict alone
+        cannot tell a taught acronym from a shipped one.  Today the
+        shipped file's acronym-shaped entries (HBO, IBM, LG, NASA) are
+        all base-dictionary words and are excluded further down by
+        accident; this pins the rule rather than the accident, using a
+        name that is deliberately *not* in the base dictionary, which is
+        what the next such addition (ATM, USA, URL) would look like.
+        """
+        p = NgramPredictor()
+        # Exactly what _load_proper_nouns does, and nothing else.
+        p.capitalization["zqacme"] = "ZQAcme"
+        assert not p.is_taught_acronym("zqacme"), (
+            "an entry the shipped list put there was granted the "
+            "exemption, which is the removed proper-noun tier arriving "
+            "through the side door"
+        )
+        assert p.get_capitalized("zqacme") == "zqacme"
+
+    def test_the_same_word_taught_by_the_user_does_get_it(self):
+        """The inverse, without which the test above passes vacuously.
+
+        A rule that answered False for everything would satisfy it.
+        """
+        p = NgramPredictor()
+        p.capitalization["zqacme"] = "ZQAcme"
+        assert not p.is_taught_acronym("zqacme")
+        self._teach(p, "ZQAcme")
+        assert p.is_taught_acronym("zqacme")
+
+    def test_provenance_survives_a_save_and_load(self, tmp_path):
+        """Otherwise the exemption is lost on the next launch."""
+        p = NgramPredictor()
+        self._teach(p, "ZQAcme")
+        assert p.is_taught_acronym("zqacme")
+
+        path = tmp_path / "ngram_model.json"
+        p.save(path)
+
+        q = NgramPredictor()
+        q.load(path)
+        assert q.is_taught_acronym("zqacme")
+
+    def test_a_legacy_model_file_adopts_no_provenance(self, tmp_path):
+        """Fails closed, and that direction is the load-bearing one.
+
+        ``capitalization`` is saved with the shipped proper nouns
+        already merged in, so a file written before the provenance key
+        existed cannot be adopted wholesale: doing so would mark every
+        shipped noun as taught and hand each one the exemption.  The
+        cost of failing closed is that an upgrading user re-teaches an
+        acronym once.
+        """
+        import json
+
+        path = tmp_path / "ngram_model.json"
+        path.write_text(
+            json.dumps({"unigrams": {}, "capitalization": {"zqacme": "ZQAcme"}}),
+            encoding="utf-8",
+        )
+
+        q = NgramPredictor()
+        q.load(path)
+        assert q.capitalization.get("zqacme") == "ZQAcme"
+        assert not q.is_taught_acronym("zqacme")
+
+    def test_clearing_user_data_drops_the_provenance_too(self):
+        p = NgramPredictor()
+        self._teach(p, "ZQAcme")
+        assert p.is_taught_acronym("zqacme")
+        p.clear_user_data()
+        assert not p.is_taught_acronym("zqacme")
+
+    def test_a_mixed_case_brand_keeps_its_own_casing(self):
+        """The second guard, and the reason the rule is acronym-shaped.
+
+        ``_display_cased`` already renders "ZigZaqCorp" correctly from
+        the typed prefix, because the user types those capitals on the
+        way in.  An acronym is the case that mirror cannot reach: every
+        capital after the first falls outside any prefix short enough to
+        still want a pill.
+        """
+        p = NgramPredictor()
+        self._teach(p, "ZigZaqCorp")
+        assert p.is_taught_acronym("zigzaqcorp")
+        assert p.get_capitalized("zigzaqcorp") == "zigzaqcorp"
+
+
 class TestTheModelLoggerNeverWritesAWord:
     """``alpha-osk.log`` is the file users attach to bug reports.
 
