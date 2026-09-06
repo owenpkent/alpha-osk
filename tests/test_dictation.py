@@ -168,6 +168,34 @@ class TestTheKeyNeverLeavesTheMachine:
     fix and would ship a key inside every backup a user makes.
     """
 
+    def test_formatting_the_config_never_prints_the_key(self):
+        """A generated repr would carry the key into any line that formats it.
+
+        Nothing formats the config today, which is the reason this is a
+        test and not a comment: the leak arrives with the first
+        ``_logger.debug("%s", cfg)`` somebody adds, and it lands in the
+        diagnostic log, which is the file users attach to bug reports.
+        """
+        secret = "sk-supersecret-0123456789abcdef01234567"
+        cfg = DictationConfig(api_key=secret, enabled=True)
+
+        for rendered in (repr(cfg), str(cfg), f"{cfg}", "%s" % (cfg,)):
+            assert secret not in rendered
+            assert "supersecret" not in rendered
+
+    def test_the_redacted_repr_still_says_whether_a_key_is_set(self):
+        """The inverse: redaction that erases the distinction is useless.
+
+        A repr that simply dropped the field would satisfy the test above
+        while leaving anyone reading a bug report unable to tell a missing
+        key from a wrong one, which is the first question dictation
+        support asks.  The ``model`` assertion pins the other half: the
+        hand-written repr still has to render the fields it is not hiding.
+        """
+        assert "api_key=<set>" in repr(DictationConfig(api_key="k" * 40))
+        assert "api_key=<unset>" in repr(DictationConfig())
+        assert "model='nova-3'" in repr(DictationConfig())
+
     def test_dictation_json_is_not_in_the_export_manifest(self):
         from src import data_export
 
