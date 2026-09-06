@@ -293,8 +293,10 @@ Three things, in order:
    are inert. The counts could be loaded by the existing seed loaders with
    small changes; the backoff weights need `NgramPredictor.predict` to use
    them, which is the actual gap #3 work.
-2. **An evaluation set that can decide this.** `scripts/bench/ksr.py` measures
-   against 30 hand-written sentences, which cannot resolve the differences
-   this would move, and there is no external reference for whether our 55%
-   keystroke savings is good. The AAC dev/test sets above are both.
+2. ~~An evaluation set that can decide this.~~ **Done.**
+   `scripts/bench/ksr.py --corpus aac-dev` / `aac-test` runs against the AAC
+   splits, and `PREDICTION_NOTES.md` records the cold-start baselines: 47.3%
+   and 48.7% KSR, against 54.9% on the 30 hand-written sentences the bench
+   used to have. The two AAC splits differ from each other by 1.4 points,
+   which is the noise floor any claimed improvement has to clear.
 3. **A decision on trigrams**, made on (2).

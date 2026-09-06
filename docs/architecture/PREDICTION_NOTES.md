@@ -27,7 +27,40 @@ Deep-dive design docs for each algorithm: `FUZZY_RECOGNITION.md` (spatial model 
 2. **Spatial edit costs in ranking** — Key-distance weights from fuzzy_recognizer should feed into final prediction ranking, not just candidate generation.
 3. **Katz / Stupid Backoff for sparse contexts** — The linear-interpolation formula above gives λ₃·P_tri even when the trigram table has never seen this 2-word prefix (P_tri = 0). Katz backoff discounts seen events and redistributes the mass to the bigram/unigram fallback. Better behaviour on rare contexts. Larger lift (~100 lines).
 4. **A real public n-gram source for the seed tables**: `data/common_bigrams.txt` and `common_trigrams.txt` are 754 and 740 hand-written entries against a ~20k vocabulary, so the base context model is thousands of times smaller than the vocabulary it has to condition. The licence constrains the source more than the quality does: shipping alongside MIT means public domain, CC0 or CC BY only, never BY-SA (share-alike conflicts with MIT redistribution), BY-NC (MIT grants commercial use) or BY-ND (counts are a derivative). That rules out COCA, which is not redistributable at all, and Wikipedia-derived lists, which are BY-SA. What is clean: Keith Vertanen's text-entry language models (CC BY 4.0, ARPA format, a 64k-word 3-gram at 4.0 MB / 39.9 MB / 400 MB trained on 504M words of forum, blog and social text, plus an AAC-specific corpus and dev/test sets at aactext.org), the Open American National Corpus (~15M words, unrestricted, includes spoken transcripts), and Google Books Ngrams v3 (CC BY 3.0, huge but the wrong register). The work is not the download: ARPA carries log-probs and backoff weights while the base tables carry counts that `_context_probs` normalises, and a table this size cannot be rebuilt into Python dicts at every launch. The saving grace is that the bar shows at most ~5 pills, so pruning to the top ~10 continuations per prefix at build time collapses it. Do gap #5 first: the current benchmark cannot measure whether this helped. Full write-up, including the ARPA format itself, the licence rule and the measured sizes: `NGRAM_SEEDS.md`. The converter is `scripts/gen_seed_ngrams.py`.
-5. **A held-out evaluation set big enough to decide anything**: `scripts/bench/ksr.py` measures against 30 hand-written sentences. Recent changes were argued on 1-2 point KSR differences, which a sample that size cannot resolve, and the resulting number has no external reference: nothing says whether 55% is good for this class of keyboard. Vertanen's AAC dev/test sets (551 and 563 communications, CC BY 4.0) are the standard text-entry evaluation sets and would supply both. Note that most of that release is CC BY 4.0 but two files, the Switchboard and communication-situations test sets, carry different terms from their original contributors, so take the main dev/test sets and leave those two.
+
+## Benchmark baselines
+
+`scripts/bench/ksr.py --corpus <name>`, cold-start engine, no personal
+learning, 5 pills. Every number below is a fraction of an idealised user who
+clicks the instant the intended word appears, so treat them as an upper bound
+and as *relative* measures between conditions.
+
+| corpus | sentences | words | KSR | next-word hit | never predicted |
+|---|---|---|---|---|---|
+| `builtin` | 30 | 313 | 54.9% | 32.6% | 8.6% |
+| `aac-dev` | 557 | 2,956 | 47.3% | 22.9% | 15.0% |
+| `aac-test` | 566 | 2,730 | 48.7% | 25.2% | 14.3% |
+
+Three things to take from this.
+
+**Every historical figure in this repo is on the `builtin` set**, including the
+52.5 / 53.6 / 55.0% keystroke-savings numbers quoted here and in `CLAUDE.md`
+for the context split, the prefix beam and the PPM removal. They are still
+correct and still comparable to each other; they are not comparable to
+anything measured on the AAC sets.
+
+**The `builtin` set flatters the engine by six to seven points.** It is 30
+sentences written by hand in this repo, so its register sits close to the
+curated seeds and the training corpus. Real crowdsourced AAC communications
+are more varied and more telegraphic ("wheres dad", "end it"), and the share
+of words the engine never predicts at any prefix length nearly doubles, from
+8.6% to about 14.7%.
+
+**The gap between `aac-dev` and `aac-test` is 1.4 points**, and those are two
+same-sized splits of one corpus separated only by which workers wrote them.
+That is a usable noise floor: a one-point difference is not evidence even on
+these sets, and it is certainly not evidence on 30 sentences. Tune against
+`aac-dev` and report `aac-test`.
 
 ## Reference implementations
 - **LatinIME (AOSP)**: trie-based dictionary with weighted edit distance, n-gram LM scoring. Open source.
