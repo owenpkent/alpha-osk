@@ -3521,8 +3521,20 @@ class KeyboardBridge(QObject):
 
     @Slot()
     def savePredictionModel(self) -> None:
-        """Save the prediction model to disk."""
-        self._predictor.save()
+        """Save the prediction model to disk.
+
+        Failures are logged rather than raised.  This runs from the
+        Settings "Save Now" button and from ``aboutToQuit``, and a raise
+        on the quit path leaves the rest of the shutdown sequence
+        (analytics, telemetry, modifier release) unrun.  It also has to
+        survive ``atomic_write_json`` refusing a non-finite count, which
+        it now does deliberately: refusing leaves the previous good file
+        on disk, which is the outcome worth protecting.
+        """
+        try:
+            self._predictor.save()
+        except Exception as exc:  # noqa: BLE001 - never break the quit path
+            _logger.error("Saving the prediction model failed: %s", exc)
 
     # ------------------------------------------------------------------
     #  Diagnostic log (the file users attach to a bug report)
