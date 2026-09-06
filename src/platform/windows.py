@@ -83,6 +83,7 @@ import logging
 import time
 from typing import Dict, List, Optional, Tuple
 
+from . import powershell_path
 from .base import KeySynthesizerBase
 
 _logger = logging.getLogger("WindowsKeySynthesizer")
@@ -1288,7 +1289,10 @@ def create_shortcut(
         import subprocess
 
         result = subprocess.run(
-            ["powershell", "-NoProfile", "-Command", ps_script],
+            # Absolute path, never the bare name: CreateProcess searches
+            # the CWD before System32, so a planted powershell.exe in
+            # whatever folder we were launched from would run instead.
+            [powershell_path(), "-NoProfile", "-Command", ps_script],
             capture_output=True,
             text=True,
             timeout=10,
