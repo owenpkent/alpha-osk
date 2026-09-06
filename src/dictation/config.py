@@ -35,6 +35,7 @@ import json
 import logging
 import sys
 from dataclasses import dataclass, field
+from dataclasses import fields as dataclass_fields
 from pathlib import Path
 from typing import Any
 
@@ -242,6 +243,23 @@ class DictationConfig:
     #: When off, the transcript accumulates in the suggestion bar and is
     #: inserted in one go when the user stops.
     stream_inserts: bool = True
+
+    # Hand-written rather than dataclass-generated.  A generated repr puts
+    # the key into every log line, f-string and traceback that formats this
+    # object, and the diagnostic log is the file users attach to bug
+    # reports.  The docstring above says nothing here is ever logged, which
+    # is true of today's call sites and is exactly the kind of promise the
+    # next one breaks in silence; this makes it true by construction rather
+    # than by everyone remembering.  It walks the fields rather than naming
+    # them so a field added later is carried without a second edit.
+    def __repr__(self) -> str:
+        parts = []
+        for f in dataclass_fields(self):
+            if f.name == "api_key":
+                parts.append(f"api_key={'<set>' if self.api_key else '<unset>'}")
+            else:
+                parts.append(f"{f.name}={getattr(self, f.name)!r}")
+        return f"{type(self).__name__}({', '.join(parts)})"
 
     @property
     def has_key(self) -> bool:

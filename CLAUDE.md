@@ -23,7 +23,7 @@ Owen is a wheelchair user with muscular dystrophy. Typing is hard - be proactive
 - Releases: `src/__version__.py` is the single source of version truth; publish to the separate `owenpkent/alpha-osk-releases` repo with an explicit `--repo` (the updater API URL is hard-pinned there); the installer asset name must be exactly `Alpha-OSK-Setup-{version}.exe`. The marketing site is a **third** repo, `owenpkent/alpha-osk-website`, and a release deliberately does not touch it: it reads the latest tag from the releases API at page load, so there is no version to bump there and no step to forget (see *The website*).
 - The install path is computed, never read from the registry: every silent install passes an explicit `/S /D=<dir>` from `updater.py::_install_target_dir()`. NSIS requires `/D=` last on the command line and unquoted even when the path has spaces, so don't reorder or requote the installer arguments (full reasoning under *Auto-Update*).
 - `run.py::ensure_admin_windows()` runs after dependency installation, not as the first statement in `main()`, so `pip install` never executes with an admin token; `--dashboard` never elevates at all. The repo tree is still user-writable, so this narrows the blast radius rather than closing it.
-- Load-bearing invariants: merge-strategy default MUST stay `"rank"`; `NgramPredictor._user_total == sum(user_vocab.values())`; `NgramPredictor.bigrams[p][w] >= round(_user_bigrams[p][w])` (the merged context tables never drop below the user's share, and only that share is ever persisted, see *Context tables*); window height is content-bound (never persist or assign it); every `KeyButton` needs a share of the gap around it (`hitMarginH` / `hitMarginV`) or the strip between it and its neighbour is dead; every analytics metric needs both a session and an `_alltime_*` form; Windows subprocess calls need `CREATE_NO_WINDOW` when they suppress output *or* may run without a console to inherit (a git hook, a frozen GUI build).
+- Load-bearing invariants: merge-strategy default MUST stay `"rank"`; `NgramPredictor._user_total == sum(user_vocab.values())`; `NgramPredictor.bigrams[p][w] >= round(_user_bigrams[p][w])` (the merged context tables never drop below the user's share, and only that share is ever persisted, see *Context tables*); window height is content-bound (never persist or assign it); every full-size layout row must total exactly 15.5u and every compact row 13.0u, or that row is centred inside the grid and the keyboard's edges go ragged (see *Full-size rows are flush*); every `KeyButton` needs a share of the gap around it (`hitMarginH` / `hitMarginV`) or the strip between it and its neighbour is dead; every analytics metric needs both a session and an `_alltime_*` form; Windows subprocess calls need `CREATE_NO_WINDOW` when they suppress output *or* may run without a console to inherit (a git hook, a frozen GUI build).
 
 ## Stack & layout
 
@@ -113,7 +113,7 @@ How it works now:
 - **Legacy files** carrying `bigrams` / `trigrams` are adopted wholesale as user history (`_adopt_user_context`): the halves cannot be separated after the fact, adopting keeps every ranking exactly as it was, and decay retires the inherited seed mass over the following weeks while the base is re-seeded cleanly underneath. The next save writes the new keys; an older build reading a new file loses only user context, since it re-seeds base itself.
 - **`HybridPredictor.reload_from_disk` must call `_reseed_context()` after `load()`.** It used to work by accident, because the persisted table already carried the (inflated) seeds. `clear_user_data` wipes both halves and the hybrid re-seeds, as before. The reseed re-links the corpus through `learn_corpus_context`, which applies the same known-or-third-sighting gate as `learn(corpus=True)` (reading the candidate pool, never writing it), so a reload rebuilds the base share a launch would; its first version linked every plausible word, and a reload grew edges for rare corpus words that a fresh start withholds (`TestTheMergedViewStaysHonest::test_reseeding_the_corpus_gates_rare_words_exactly_as_a_launch_does`).
 
-Known follow-ups, deliberately not bundled: the training corpus's *unigrams* are still learned as user typing on every launch (pre-existing, bounded by decay, and why a fresh `user_vocab` is not empty); the seed weight of 50 now only matters relative to the corpus's +1 and could come down; the cross-order interpolation weights are fixed at 0.5/0.3/0.2 (renormalising when a table is silent would not reorder anything, since the bigram-to-unigram ratio is unchanged; evidence-weighted interpolation across orders is the change that would). Benchmarks: `scripts/bench/ksr.py` (keystroke savings, ablations, `--learn-half`) and `scripts/bench/fuzzy.py`; both run against a temporary model directory, never the live one.
+Known follow-ups, deliberately not bundled: the training corpus's *unigrams* are still learned as user typing on every launch (pre-existing, bounded by decay, and why a fresh `user_vocab` is not empty); the seed weight of 50 now only matters relative to the corpus's +1 and could come down; the cross-order interpolation weights are fixed at 0.5/0.3/0.2 (renormalising when a table is silent would not reorder anything, since the bigram-to-unigram ratio is unchanged; evidence-weighted interpolation across orders is the change that would). Benchmarks: `scripts/bench/ksr.py` (keystroke savings, ablations, `--learn-half`) and `scripts/bench/fuzzy.py`; both run against a temporary model directory, never the live one. **Every keystroke-savings figure quoted in this file (52.5, 53.6, 55.0%) is on `ksr.py`'s `builtin` corpus**, 30 sentences written by hand in this repo. They stay correct and comparable to each other, and are not comparable to anything measured since: `--corpus aac-dev` / `aac-test` (real held-out AAC communications, added 2026-09-05) read 47.3% and 48.7% for the same engine, because the hand-written set sits close to the curated seeds and the training corpus. The generated context seeds landed the same day and took those to **49.1% and 50.4%**, at 28.7% and 30.4% next-word hit; see *Measured result* in `docs/architecture/NGRAM_SEEDS.md`. Quote the corpus with the number from now on, and treat anything under 1.4 points as noise, which is what the two AAC splits disagree by with nothing else changed. See *Benchmark baselines* in `docs/architecture/PREDICTION_NOTES.md`.
 
 ## Prefix beam (mid-word fuzzy completion)
 
@@ -640,25 +640,318 @@ Guarded by `tests/test_qml_prediction_bar.py::TestTheClearButtonIcon`, which is 
 
 **Parity**: mirrored 1:1 on the `cpp-rewrite` branch, not on `main` (`KeyboardBridge::lockModifier` / `clearLock`, the `m_*Locked` members, the guarded `releaseStickyAll()` + `pressSpecialKey` + edit-mode blocks, and the `*Locked` Q_PROPERTY/signals). Bridge behaviour is covered by `tests/test_keyboard_bridge.py::TestModifierLock` on the Python side.
 
+## Function Keys F13-F24 and Programmable Keys
+
+Two features that arrived together and answer different halves of the same
+request. **F13-F24** are more raw keys to bind *in other apps*;
+**programmable actions** turn a click here into a chord or a phrase that
+works everywhere immediately, with nothing to bind. Neither subsumes the
+other, which is why both shipped: an unbound F13 does nothing until the
+target app is taught to listen for it, and teaching every app is not
+something a mouse-driven user should have to do.
+
+### The extra keys are real keys
+`VK_F13`-`VK_F24` (0x7C-0x87) on Windows, the `F13`-`F24` X11 keysyms on
+Linux (which pass straight through `xdotool`, so `platform/linux.py` needed
+no change). **macOS stops at F20**: Carbon names `kVK_F13` through
+`kVK_F20` and there is no virtual keycode for F21-F24 at all, so they are
+deliberately absent from `_VK_SPECIAL` rather than guessed - an invented
+code would post some *other* key. A programmed action on F21-F24 still
+works there, because that path never reaches the map.
+
+They are worth having precisely because nothing binds them: no collision
+with an app's own F5 or Alt+F4, so a game, OBS or AutoHotkey can take one
+outright. `UNBOUND_FUNCTION_KEYS` is that set, surfaced to the editor so it
+can say which keys are free before the user commits (reassigning F5 costs
+them refresh in every app; reassigning F17 costs nothing).
+
+### Its own panel toggle, not a second line in the F1-F12 row
+*Settings -> Function Keys -> Show -> "Extra Function Keys (F13-F24)"*,
+independent of the F1-F12 toggle. Someone who wants only the twelve macro
+keys must not have to spend the height of the standard row to get them.
+The extra row renders **above** F1-F12 so toggling it never moves the row
+with muscle memory attached.
+
+### `src/key_actions.py` owns the whole action vocabulary
+The bridge switches on **nothing**. `KeyActionStore.execute` dispatches
+through a registry of `KeyActionType` records, each of which knows its own
+id, how to sanitise its payload, how to describe itself in one line, and
+how to execute itself against an `ActionExecutor` (a two-method surface the
+bridge implements: `send_chord`, `send_text`). Adding `launch` or `macro`
+from the `MODULAR_LAYOUTS.md` vocabulary is **one entry there plus one
+method on the executor**, with no branch in `pressSpecialKey` and no QML
+edit: the editor builds its picker from `getKeyActionTypes()`, and switches
+on the entry's `fields` to decide which inputs to show.
+
+Three types ship:
+- **`key`** - sends its own keystroke, and exists so a key can take a
+  *custom keycap label without changing what it does*. That is the case
+  for a key the user bound inside another app (Discord push-to-talk, an OBS
+  scene): they need to find it on screen, and swallowing the keystroke here
+  would silently break the very binding the label documents. Its `execute`
+  returns **False**, which is what lets it be a peer in the registry rather
+  than a special case the bridge has to know about.
+- **`hotkey`** - one click fires Ctrl+Shift+S.
+- **`text`** - inserts a stored phrase verbatim.
+
+**`execute` returning a bool ("did I handle this tap") is the whole
+interface.** False means the key falls through to its own keystroke.
+
+### Where the dispatch sits, and why
+Inside `pressSpecialKey`, at the point the keystroke would have been sent,
+**not** at the top of the slot with an early return. Everything downstream
+then still sees an ordinary special-key press: the sticky auto-release, the
+`_NAV_KEYS` exception and the context bookkeeping. Returning early would
+skip the auto-release, and a Shift the user tapped once would stay held at
+the OS level for every keystroke after it. Guarded by
+`tests/test_keyboard_bridge.py::TestProgrammableFunctionKeys::test_a_sticky_modifier_still_auto_releases_after_a_chord`,
+paired with the locked-modifier inverse.
+
+**A chord merges the user's held modifiers rather than replacing them**
+(`_send_key(..., extra_modifiers=...)`). A macro key bound to Ctrl+S,
+tapped while Shift is held, sends Ctrl+Shift+S, exactly as a physical macro
+key would. The merge happens inside `_send_key` so the
+`_note_own_keystroke` bookkeeping stays in one place; setting those flags
+anywhere else is what once made the caret polls read our own inserts as the
+user clicking elsewhere.
+
+**A text action *is* `_commit_verbatim_insert`, not a copy of it.**
+`_send_text_action` is a one-line call, because a programmed phrase is a
+purely literal insert with nothing to add on either end, which is exactly
+what that helper is for and what `insertSnippet` and `insertGlyph` already
+call. So it inherits the whole prologue rather than restating it:
+`_release_sticky_modifiers()` **before** the insert (a held Shift would
+otherwise deliver the phrase in capitals, and `_make_char_scancode_events`
+cannot cancel a standing hold), the send inside `_without_held_modifiers()`
+via `_send_literal_text`, a deferred auto-space settled as prose, an armed
+auto-capital spent, and the seven fields both other callers reset. It was
+written out inline first, before the helper existed, and the copy was
+already one field behind (`_word_prefix_lost`, which arrived with the
+helper): parallel blocks drifting is the failure this file warns about for
+sticky-modifier release, and this is the same shape. Not gated on privacy
+mode: the user tapped the key, so the text must reach the app either way,
+and nothing on this path learns or logs its content.
+
+**`pressSpecialKey`'s name map is hoisted to the class**
+(`_SPECIAL_KEY_NAMES`) because a programmed chord resolves its action key
+through the same map, so `"return"` reaches the synth as `"Return"`. A
+second copy inside the slot would be one more pair of parallel blocks to
+keep in sync, which is the failure mode this file warns about for the
+sticky-modifier release.
+
+### Storage
+`key_actions.json` in the config dir, saved synchronously on every mutation
+(atomic tempfile-then-rename), same shape and same tolerance as
+`snippets.json`: a missing, oversized (256 KB cap), corrupt or partially
+invalid file leaves the affected keys unassigned rather than raising, and a
+bad entry is dropped **individually** so one unusable assignment does not
+cost the eleven the user got right. An unassigned function key still works,
+so this path is never allowed to block startup.
+
+**Sanitisation is allow-list, not deny-list**, for the usual reason: a
+chord's modifiers and action key are handed to the platform synthesiser,
+which on Linux turns them into argv for `xdotool`. Modifiers come from
+`MODIFIERS` and are stored in canonical order (so two spellings of one
+chord never read as two chords); an action key must be a name from
+`CHORD_SPECIAL_KEYS` or a single printable ASCII character, because the
+platform layers translate that range and have nothing to say about a
+control character or an emoji. A hotkey with **no** action key is refused
+outright rather than stored: it would leave a key that looks programmed and
+does nothing when tapped, which is indistinguishable from a tap that failed
+to register, so the user taps it again. Text follows
+`snippets._clean_value` exactly (newline and tab kept, every other C0
+control character and DEL stripped, capped).
+
+`setKeyAction` **returns a bool and QML honours it** - the editor flashes
+"Saved" only on True, and its failure toast otherwise. A green confirmation
+over a write that never happened is the failure `setSnippet` and
+`acceptSnippetOffer` were both given bool returns for.
+
+**The slot's bool and `KeyActionStore.set`'s bool are not the same
+question, and the slot must not just forward it.** The store answers "did
+anything change", which is what decides whether the file is rewritten and
+`keyActionsChanged` emitted, so it is False for a valid payload identical
+to the one already stored. The slot answers "did my save stick". Those
+differ in exactly one case, re-saving an unchanged action, which is an
+ordinary thing to do (open the editor on a key that already does what you
+want, tap Save) and which read as a red "could not be saved" over state
+that was exactly right. The slot therefore re-validates and treats an
+unchanged assignment as success, emitting nothing since nothing moved.
+Guarded by
+`tests/test_keyboard_bridge.py::TestProgrammableFunctionKeys::test_saving_an_unchanged_action_still_reports_success`,
+paired with the inverse that a refused key, an invalid payload and an
+unknown action type are all still reported as failures: a slot that simply
+returned True would satisfy the first on its own.
+
+**Deliberately NOT in the Data Backup archive.** Adding a fourth file to
+`_MODEL_FILES` means bumping `data_export.SCHEMA_VERSION` and writing the
+back-compatible import path, which this project requires alignment on
+before changing. Until then it is machine-local, like the Qt settings layer.
+
+### The editor, and the two routes into it
+`qml/components/KeyActionEditor.qml`, a Popup (not the floating Window the
+snippets editor uses: that window exists to be dragged clear of the field
+being filled in, and this one is not editing anything in the app behind
+us). It is kept **short and parked at the top** for the reason that does
+apply: the user clicks OSK keys to type a label, so the editor must not
+cover the letter grid it is being typed with.
+
+Same two invariants as the prediction-edit popup, both easy to undo:
+`modal: false` (a modal popup installs an event-blocking overlay, so no OSK
+key would fire and the field could never be typed into) and
+`closePolicy: Popup.CloseOnEscape` **only** (every OSK key click is a
+press-outside). Keystrokes arrive through the bridge's edit-mode intercept,
+never Qt focus. `closePolicyBits` is a plain-int mirror of `closePolicy`
+that exists only so the headless test can read it: PySide has no converter
+for `QFlags<QQuickPopup::ClosePolicyFlag>`, so an assertion on the real
+property errors instead of guarding anything.
+
+**It has to supply the text-box behaviour the window flags take away, and
+that is the same three things the snippets editor lists.** Clicks reach the
+fields (the `MouseArea` recording which box is being typed into sets
+`mouse.accepted = false` and passes the press down, so caret placement,
+double-click-for-a-word and drag-select all still work), Tab changes field,
+and **Shift with an arrow selects rather than moving the caret**
+(`_moveCaret`, reading the injected `shiftOn`). None of the three come for
+free: this window never holds OS focus, so Qt's own key handling never sees
+the modifier, and without the third there is no way at all to select a range
+in a 500-character phrase with an imprecise pointer. `shiftOn` is still true
+at that point because the bridge's edit-mode intercept emits and returns
+*before* its auto-release block. Guarded by
+`tests/test_qml_function_row.py::TestTheEditor`, where the Shift case is
+paired with the inverse that a bare arrow still just moves the caret: an
+unconditional `moveCursorSelection` would satisfy the first on its own.
+
+**Chord capture is a mode, not a field.** Tapping the "Key" slot sets
+`editTarget = "chord"`, and the next key pressed *on the OSK* becomes the
+chord's action key - which is the only way to name Enter or an arrow
+without a second picker listing every key we can send. The modifier chips
+are ordinary buttons in the popup.
+
+**Right-click an F-key opens its editor, and that must never be the only
+route.** A dwell-click, switch-access, head- or eye-tracker pointer, and a
+single-button adaptive mouse all have no right button, so right-click alone
+would let such a user press an F-key and never program one. The left-click
+route is ***Settings -> Function Keys***, which lists all twenty-four with
+what each one currently does and opens the editor on a tap.
+
+**That page replaced an Edit toggle on the row itself**, which flipped both
+rows into an assign mode where a left-click opened the editor. The list
+answers the same requirement strictly better: its rows are far bigger
+targets than a 36 px keycap, there is no mode to get into or out of (the
+mode's only exit was the same key that entered it, sitting one pixel from
+F12), and it is the only surface that shows an assignment the user has
+forgotten making, which twelve identical keycaps cannot. Removing the
+toggle also gave the row its thirteenth key's width back. **Don't put a
+mode toggle back on the row without first checking that page is gone.**
+
+**Tapping a row hands off to the editor on the keyboard window, and hides
+the settings window to do it.** The editor is typed into with the OSK's own
+keys and the settings window cannot hold OS focus, so the editor cannot
+live inside it (the Deepgram key field carries the same note); leaving a
+360x540 window parked mid-screen would cover the editor, the letter grid it
+is typed with, or both. `root.settingsReturnView` brings settings back on
+the same page afterwards, which is the one documented exception to
+"re-opening Settings always lands on the home grid" (see *Settings Panel
+Structure*). The inverse matters as much and is tested: an editor opened by
+right-clicking a key must **not** pop the settings window open behind it.
+
+**Every key takes its share of the gap around it.**
+`FunctionRow`'s `hitMarginH` / `hitMarginV` default to 0 and there is no
+cascade, so a `KeyButton` whose caller forgets to pass them leaves the
+strip between it and its neighbour dead (see *Dead space between keys*).
+A new key added to an existing row is the likeliest place for that to be
+missed, because the row around it already works. The same applies to the
+whole F13-F24 panel, which is a second instance of this component and so
+needs its own bindings from `Main.qml`. Guarded by
+`tests/test_qml_compact_view.py::TestNoDeadStripBetweenKeys::test_every_key_in_every_panel_takes_a_share_too`,
+which walks the tree with both function rows switched on and fails on any
+key holding a zero margin.
+
+### Geometry: the keys fill the grid, the group gap never gives
+
+**The row spans the keyboard grid exactly, and it is the key width that
+absorbs the leftover.** `FunctionRow._fillKeyW` divides `maxWidth` (the
+grid width, passed by `Main.qml`) between the twelve keys after taking out
+9 internal gaps and 2 group gaps; `_groupGap` is a fixed `keySpacing * 4`.
+At a 940 px window that makes an F-key 75.6 px against the 58.7 px key
+directly below it, about 29% wider.
+
+**This reverses the earlier decision, on purpose and with the picture in
+front of us.** The row used to draw each F-key exactly one grid column wide
+and centre the result, which is what the original note in `FunctionRow.qml`
+defended against three rejected redesigns that each tried to fill the width
+by stretching keys. That note said not to revisit the inset "without
+rendering the result next to the number row", which is exactly what was
+done the second time, and stretching won: on a keyboard driven by an
+imprecise pointer, a quarter more target width outranks lining up with the
+column below. The accepted cost is that no F-key lines up with the key
+under it any more, and at 29% wider and 30% shorter the row reads a little
+bar-like. **The rule survives, pointing the other way: don't change this
+back without rendering it next to the number row.**
+
+**The group gap is fixed because a gap that gives is a gap that disappears
+exactly when the row is tightest.** It used to be the thing that gave, and
+while the Edit toggle made this row 13 keys against compact's 13-unit grid
+there were 3 px of slack, so it clamped to `keySpacing` and 4-4-4 rendered
+as one undifferentiated run, on the view where telling twelve identical
+keys apart matters most. The grouping now survives in both views.
+
+`tests/test_qml_compact_view.py::TestPanelsSitFlushWithTheGrid::test_function_row_fills_the_widest_keyboard_row`
+pins three things, and the last two are what a width check alone cannot
+see: the panel is flush with the grid; the fill width accounts for 12 keys
+plus 9 internal gaps plus 2 group gaps (so a wrong key count or a changed
+gap moves it); and the group gap holds at the 4-4-4 width in **both**
+views. It used to assert that no key ever grew, which is the assertion this
+change reverses.
+
+### Testing notes
+`tests/test_key_actions.py` (store, registry, sanitisers, dispatch against a
+five-line recording executor), `tests/test_keyboard_bridge.py::TestExtraFunctionKeys`
+/ `TestProgrammableFunctionKeys`, and `tests/test_qml_function_row.py`
+(headless Main.qml). Every positive case is paired with the near-miss it
+must reject, and the pairs that bite are the ones where a payload *looks*
+valid: a hotkey with no action key, a modifier name the synth layer has
+never heard of, a key name we cannot send.
+
+Two Qt-side traps worth knowing before adding an assertion here:
+- **The editor is a `Popup`, so `findChild(QQuickItem, ...)` returns None**
+  and every assertion after it silently never runs. `QQuickPopup` is not an
+  Item; search for `QObject`.
+- **A QML `var` holding a JS array or object arrives as a `QJSValue`**,
+  which Python cannot iterate or index. Call `.toVariant()`. This applies to
+  the two key registries and to the editor's `chordMods`.
+
+`KeyActionStore` binds `get_config_dir` at module scope, exactly like
+`src/snippets.py`, so `tests/conftest.py::_stay_off_the_real_config_dir`
+patches `src.key_actions.get_config_dir` by name. Without that line the
+suite rewrites the developer's own key assignments, which is the same
+failure the snippet store already had once.
+
 ## Settings Panel Structure
 
-`UnifiedSettingsPanel.qml` is a drill-down menu, not a long scrolling list. The home view shows five category cards; clicking a card swaps the body to that category's sub-view. The header swaps in a back arrow (<) and the category title; the close X stays put.
+`UnifiedSettingsPanel.qml` is a drill-down menu, not a long scrolling list. The home view shows six category cards; clicking a card swaps the body to that category's sub-view. The header swaps in a back arrow (<) and the category title; the close X stays put.
 
-State is held in a single string property: `currentView` is one of {`"home"`, `"appearance"`, `"typing"`, `"dictation"`, `"model"`, `"data"`}. The Flickable contains six sibling `ColumnLayout`s, each with `visible: unifiedSettings.currentView === "<id>"`; only one renders at a time. Scroll position is reset to the top on every view change (a `Connections` block on `currentView`) so a drilled-in view never opens mid-section.
+State is held in a single string property: `currentView` is one of {`"home"`, `"appearance"`, `"typing"`, `"fkeys"`, `"dictation"`, `"model"`, `"data"`}. The Flickable contains seven sibling `ColumnLayout`s, each with `visible: unifiedSettings.currentView === "<id>"`; only one renders at a time. Scroll position is reset to the top on every view change (a `Connections` block on `currentView`) so a drilled-in view never opens mid-section.
 
 The parent (`Main.qml`'s settings popup window) calls `settingsPanel.resetToHome()` in `onVisibleChanged` so re-opening Settings always lands on the home grid, not whatever sub-page the user last visited. Don't break that - landing on a deep page reads as "the menu changed."
+
+**The one exception is `root.settingsReturnView`, and it is a return rather than a re-open.** Tapping a key in *Function Keys* hides the settings window and opens the key editor, which lives on the **keyboard** window because it is typed into with the OSK's own keys and the settings window cannot hold OS focus (the Deepgram key field carries the same note). Leaving a 360x540 window parked mid-screen would cover the editor, the letter grid it is typed with, or both. `settingsWindow.onVisibleChanged` consumes `settingsReturnView` when it is set and calls `resetToHome()` otherwise, so only that hand-off lands deep; coming back to the home grid there would lose the user's place in a list of twenty-four. Guarded by `tests/test_qml_function_row.py::TestTheSettingsListIsTheLeftClickRoute`, whose inverse half asserts an editor opened by right-clicking a key does **not** pop the settings window open behind it.
 
 ### Where each section lives
 
 | Top-level | Section | What's inside |
 |-----------|---------|---------------|
-| **Appearance** | Panels | Compact View / Function row / Navigation / Numpad toggles. Compact View leads the section because it gates the two below it: it forces Navigation + Numpad off (restoring them on exit) and renders their toggles disabled. There is no Number Row toggle - `Main.qml::showNumberRow` derives from whether the active layout JSON already carries a `number` row, so the standalone panel appears exactly on the compact layouts, which lack one. |
+| **Appearance** | Panels | Compact View / Navigation / Numpad toggles. The two function-row toggles are deliberately **not** here: they moved to the Function Keys category, which owns the whole feature (showing a row and deciding what is on it are one job). Compact View leads the section because it gates the two below it: it forces Navigation + Numpad off (restoring them on exit) and renders their toggles disabled. There is no Number Row toggle - `Main.qml::showNumberRow` derives from whether the active layout JSON already carries a `number` row, so the standalone panel appears exactly on the compact layouts, which lack one. |
 | | Keyboard Layout | qwerty / dvorak / colemak picker (compact variants are filtered out - see *Compact View*) |
 | | Theme | 9-theme color picker |
 | | Sound & Opacity | Key click sound, opacity slider |
 | **Smart Typing** | Suggestions | Show suggestions, auto-space, intelligent spacing, auto-cap, max count |
 | | Suggestion Engine | Merge strategy 4-card picker (rank / rrf / linear / loglinear) |
 | | Input | Right-click shift, key preview popup, Compatibility Mode picker, repeat delay & interval |
+| **Function Keys** | Show | Function Keys (F1-F12) and Extra Function Keys (F13-F24) row toggles, moved here from Appearance -> Panels |
+| | F13-F24 | One row per key: the label on its cap, a one-line description of what tapping it does, and a tap to program it. Listed **before** F1-F12 because these are the keys the feature is for, and scrolling past twelve keys nobody should reassign on every visit is the wrong default |
+| | F1-F12 | The same list for the standard keys, under a note that reassigning F5 costs the user refresh in every app |
 | **Dictation** | Voice Input | Enable Dictation, Type As You Speak |
 | | Transcription Service | Deepgram API key, model, language |
 | | Microphone | Input device picker |
@@ -1142,114 +1435,149 @@ lying strictly between two key slots. That last part is the half that matters:
 no geometric assertion can tell you whether Qt still delivers a press to a
 child outside its parent's bounds, which is what the whole approach rests on.
 
-## Symbol Layer (full-size layouts)
+## Removed: the full-size symbol layer
 
-`qwerty` / `dvorak` / `colemak` carry one symbol page, reached from a `Sym`
-key at each end of the space row. Compact View had `?123` and `=\<` from the
-start and the full-size layouts had nothing, so every glyph outside a
-physical keyboard's printing (`° × ÷ ± € £ © ™ … → ¿`) was reachable in one
-view and not the other. Data plus QML only, like Compact View: the backends
-never see a layer.
+`qwerty` / `dvorak` / `colemak` briefly carried one symbol page of 34 glyphs
+(`° × ÷ ± € £ © ™ … → ¿`), reached from a `Sym` key at each end of the
+space row. It was removed on 2026-09-05, and the room those two keys held went
+to the space bar. Both halves had shipped together in #51.
 
-**One page, not two.** Compact needs two because a 13u row cannot hold the
-ASCII symbols *and* the extended ones. Full size already has every ASCII
-symbol on the base layer, printed on a key or as a shifted variant that both
-Shift and right-click reach, so the page is only worth a hop for glyphs that
-have nowhere else to come from. That is 34 slots, and the long tail
-(accented letters, `∞ √ π † ★`, emoji) belongs in the Symbols & Emoji window,
-which has categories and a Recent page. A second page here would be duplicating that
-window's job in layout JSON. `TestFullSizeSymbolLayer::test_no_symbol_repeats_what_the_base_layer_already_types`
-is the rule stated as a property: it is the same thing
-`TestNoDuplicateGlyphsWithinALayer` asserts within one page, applied across
-the hop.
+**Why.** Every one of the 34 is also in the Symbols & Emoji window below,
+which is one click away in the suggestion bar on every layout, so the layer
+was a second route to a set that already had one, and it charged the two
+widest keys on the space row after the space bar for it. The two surfaces are
+genuinely different, which is why the layer was built: the picker is a
+*browsing* surface (categories, paging, a Recent page, a window that floats
+over the app you are typing into), the layer was a *positional* one (two
+clicks, nothing covering the screen, findable by memory). That distinction is
+not worth a fifth of the space row to a pointer that reaches for the space bar
+after every word.
 
-The 34: **`sym-top`** dashes, ellipsis, curly quotes, arrows, inverted marks;
-**`sym-home`** currency, section, pilcrow, bullet, copyright, registered,
-trademark, degree; **`sym-bottom`** the maths set. Everything on it is Latin-1
-Supplement, General Punctuation, Arrows or Math Operators, all text
-presentation. **Keep it that way**: the geometric-shape and dingbat ranges
-(`✓ ✗ ★`) resolve through Segoe UI Emoji on Windows, which renders in colour
-and ignores the `color` property outright, which is the same reason the lock
-badge and the clear-context ring are not glyphs (see *Right-Click to Lock*).
+**What went with it**: the `sym-top` / `sym-home` / `sym-bottom` rows and the
+`"layer": "base"` fields on the three letter rows across the three full-size
+layout files (both were added by the same feature, so the files are back to
+declaring no layers at all), the two `Sym` keys, the `symLayer` case in
+`Main.qml`'s `isActive` switch, and the "a layer key whose target is already
+showing goes back to base" branch beside it. That branch existed only for
+`Sym`, whose entry key sat on the always-visible space row; every other layer
+key in the project targets something it is not on, so it was dead for them.
+`TestNoDuplicateGlyphsWithinALayer`'s helper still folds an unlayered row into
+whichever layer is being read, which is what compact needs and what full size
+needed before this page existed. All of it is recoverable in full from the
+commit before the removal.
 
-### Why nothing moves
+**The one thing that must not be undone.** The space bar's centre stays at
+8.25u, which is what makes the widening free rather than something to relearn:
+every click that landed on it before still lands on it, and the new target is
+added at both ends. On a flush row that centre is `(15.5 + left - right) / 2`,
+and since `left` is Ctrl + Win + Alt and `right` is Alt + Ctrl, the whole
+expression collapses to `(15.5 + Win) / 2` **as long as the four Ctrl / Alt
+keys are equal**. So the rule to keep if these widths are ever retuned is just
+that: Win stays 1.0u, and the four Ctrl / Alt keys stay equal to each other.
+Nothing else about the row matters to the centre. What moved instead is
+Ctrl / Win / Alt, outward on both sides, taken deliberately: the space bar is
+pressed after every word and those five are not. Pinned by
+`tests/test_layouts.py::TestTheFullSizeSpaceRow`.
 
-**Only the three letter rows swap.** `number` and `space` carry no `layer`
-field, so they render on every page: digits stay one tap away instead of
-going behind the hop the way Compact View has to put them, and the space bar
-never leaves the screen. Each `sym-*` row matches the row it replaces both in
-unit total and in key count, so `keyW`, the window width and every column
-position are identical across the hop. Tab, Caps and Enter keep their
-exact slots, which is the payoff for full size having room compact does not:
-a comma typed on the symbol page does not cost a hop back to reach Enter.
+Two things this deliberately did **not** touch. Del stays off the full-size
+grid and Enter stays at 2.3u: those were the other half of the same commit and
+are what puts Q over A (see *Why nothing moves* under
+`TestTheLetterColumnsLineUp`). And Compact View's `?123` / `=\<` pages are
+**not** removable by the same argument: 13 units cannot hold letters and
+digits at once, so compact has no other route to either, and the picker is not
+a substitute for a digit.
 
-**Del is not on the full-size grid at all.** It sits above the arrows on the
-Navigation panel (shown by default), which is where a physical keyboard puts
-it. The top row used to carry it past the backslash, which made that row 0.9u
-wider than the home row and, because rows are centred individually, pushed
-the whole letter block left until W sat between A and S. Removing it and
-growing Enter to 2.3u is what puts Q over A. The space row cannot take it
-either: with a `Sym` at each end a third key there is 15.6u, past the number
-row, and the window widens to fit. Guarded by
-`tests/test_layouts.py::TestTheLetterColumnsLineUp`.
+## Full-size rows are flush (every row is 15.5u)
 
-**Two `Sym` keys, not one, and that is arithmetic rather than taste.** Rows
-are centred individually, so adding equal width to *both* ends of a centred
-row leaves every key already in it exactly where it was. A single key
-appended to either end would have slid Ctrl, Win, Alt and the space bar
-sideways by half a key width on the row the user clicks most. The space row
-goes 11.6u to 14.6u and stays under the number row's 15.5u, so the window
-width is untouched.
+`Main.qml` centres each row against the widest one, so a row totalling less
+than the widest sits inside it by half the difference at each end. The
+full-size rows used to total 15.5 / 14.3 / 14.9 / 14.3 / 14.6, so the
+keyboard's left and right edges stepped in and out five times, by up to 0.6u
+(about 9 px at the default window). Reported as the keyboard looking "lumpy",
+which is the right word: nothing was wrong with any single key, but no two
+rows began in the same place.
 
-**The `sym-*` rows must sit before the `space` row in the JSON array.**
-`visibleRows` filters in array order, so with them appended at the end the
-symbol page rendered `number, space, sym-top, sym-home, sym-bottom` and the
-space bar jumped three rows up the keyboard. Guarded by
-`TestTheFullSizeSymbolPage::test_the_space_bar_does_not_move`, which measures
-from the top-left corner of the key grid rather than in scene coordinates:
-the first tap on any non-char key settles the chrome above the keyboard by
-one pixel (Caps does it too, and did before this feature existed), so a
-scene-y assertion fails by 1 px for a reason that has nothing to do with the
-grid.
+**This is the rule Compact View has enforced from the start** (*every row in a
+compact layout must total the same unit count*, see that section), applied to
+full size at last. The two views are now held to one rule rather than two.
 
-### Why the keys are `literal`
+The widths are **derived from each row's own middle-key budget, not chosen**,
+which is why they come out as tidily as they do. The middles are 12.0u, 11.0u
+and 10.0u, leaving 3.5u, 4.5u and 5.5u for the outer keys:
 
-Every char key on the page sets `"literal": true`, which routes it through
-`pressKeyLiteral` instead of `pressKey`. `pressKey` applies shift / caps-lock
-case normalisation, a layer switch deliberately leaves Caps Lock alone (it
-only affects letters, and this page has none), and Python's `str.upper()` is
-not the identity on every non-ASCII character: Caps Lock plus the micro sign
-typed a Greek capital Mu, so the key emitted one glyph while the cap
-displayed another. That is the same disagreement the symbol pages carry no
-Shift key in order to avoid, arriving through the other toggle.
+- **top** splits its budget evenly, so Tab and `\` are both **1.75u**;
+- **home** must give Caps exactly what Tab has (see below), leaving Enter the
+  remainder, **2.75u**;
+- **bottom** splits evenly, so both Shifts are **2.75u**;
+- **space** is Ctrl / Win / Alt at 1.25 / 1.0 / 1.25 and the bar takes the
+  rest, **9.5u**.
 
-The page therefore carries **no Shift key** either, per the existing rule; the
-two Shift slots on `sym-bottom` hold `ABC` keys instead, which is the phone
-convention and puts a wide exit target where a hand reaching for Shift out of
-habit already is.
+So the whole keyboard is 1.0u, 1.75u and 2.75u keys plus Backspace (1.5u) and
+the space bar. `TestEveryFullSizeRowIsFlush` pins the rule, the two symmetric
+rows, and that shared-width consequence.
 
-### The `Sym` key is both the way in and the way out
+**Equal units are not equal pixels, and the second half is the one that
+bites.** A row measures `units * keyW + (keys - 1) * keySpacing`, and the rows
+carry very different key counts: 15, 14, 13, 12 and 6. The space row is
+therefore nine gaps short of the number row, which at the default window is
+18 px, and since each row is centred on its own it sat 9 px inside the grid at
+each end. Making the unit totals equal straightened four edges and left the
+fifth visibly short, which is exactly what was reported. Compact View has the
+same shape at a smaller scale (10 to 12 gaps across its rows).
 
-It sits on the space row, which renders on every page, so it cannot be a
-one-way door the way compact's layer keys are. `Main.qml` therefore sends a
-layer key whose target is **already showing** back to `base`. Every other
-layer key in the project targets something it is not on, so that branch is
-dead for them and their behaviour is unchanged. `stateKey: "symLayer"` lights
-the key while the page is up, which is the only thing on screen that says
-which page the letters were swapped for.
+So **each row absorbs its own gap shortfall into its own keys**: the `Row`
+delegate in `Main.qml` derives `rowKeyW` as
+`keyW + (_widestRow.gaps - (keys - 1)) * keySpacing / rowUnits`. Three things
+follow, and each was a live alternative:
 
-Guarded by `tests/test_layouts.py::TestFullSizeSymbolLayer` (the data) and
-`tests/test_qml_compact_view.py::TestTheFullSizeSymbolPage` (the live QML).
-`TestNoDuplicateGlyphsWithinALayer`'s helpers now fold a row with no `layer`
-into **every** layer rather than into `base` alone: that was correct while
-full size had a single layer, and one layer too few the moment it had two.
+- **Gaps stay identical everywhere.** Widening each row's `spacing` to fill
+  would also have squared the edges, and would have given the space row 5.6 px
+  gutters against 2 px elsewhere. Absorbing into the keys is invisible: about
+  1 px on a 60 px key.
+- **The widest row is unchanged by construction** (its shortfall is zero), so
+  `keyW`, the side panels and the window's width budget are all exactly what
+  they were. That is why this needed no change to `totalKeyUnits` or
+  `layoutFixedPixels`.
+- **It cannot be made exact, and the residual is the positioner's.** Qt Quick
+  snaps child positions to whole pixels, so a row of fractionally-wide keys
+  accumulates rounding along its length and its centred origin can land a pixel
+  either side of its neighbour's. Non-compact comes out exact; two of compact's
+  four rows sit 1 px across. `TestEveryGridRowIsPixelFlush` therefore asserts
+  equal *widths* exactly and equal *origins* to within a pixel, and keeps the
+  two apart deliberately, so a row that went genuinely short fails loudly
+  instead of hiding under the tolerance.
+
+One measurement trap that cost a while: a `Repeater` is itself a zero-sized
+`QQuickItem` sitting in the positioner beside its delegates, so a `Row`'s own
+`width` can carry a phantom pixel past the last key that draws nothing. Measure
+from the first key's left edge to the last key's right edge, not the row's
+bounding box, or two compact rows read as 1 px wider than they render.
+
+**The letter alignment got sturdier, and the mechanism changed.** W over S (for
+WASD) reduces to `inset_top + Tab == inset_home + Caps`. With the rows flush
+both insets are zero, so it is now simply **Tab and Caps must be the same
+width**. Before, the rows had different totals and the differing indents
+happened to cancel the differing Tab and Caps widths, so the alignment held by
+a coincidence between four numbers, and any one of them moving broke it. It did
+break once: a Del key past the backslash made the top row 0.9u wider than the
+home row and landed W between A and S. Del stays off the grid for that reason;
+see `TestTheLetterColumnsLineUp`.
+
+One thing that is *not* implied by the flush rule: the window's width budget
+comes from `_widestRow`, which tracks max units and max **gap count**
+independently rather than reading both off one row. So the tie the flush rule
+creates is harmless, and the gap budget still comes from the number row's 15
+keys. A row that gained keys would cost a `keySpacing` even though its unit
+total cannot change, which is the half
+`TestTheLetterColumnsLineUp::test_the_space_row_still_costs_no_window_width`
+still guards.
 
 ## Symbols & Emoji window
 
-The long tail behind the symbol layer above. That layer carries the 34 glyphs
-worth a single click; this window carries the rest, because categories, a
+The only route to a glyph outside a physical keyboard's printing, on every
+layout, since the full-size symbol layer above was removed. Categories, a
 Recent page and several hundred glyphs do not fit on a key grid at a size an
-imprecise pointer can hit. Opened from a smile button in the suggestion bar,
+imprecise pointer can hit, which is why this is a window and not a layer. Opened from a smile button in the suggestion bar,
 immediately left of the Snippets bookmark, with a title-bar twin
 (`symbolsTitleBarButton`) visible only when `suggestionsEnabled` is false, for
 the reason the Snippets pair documents: the suggestion bar collapses to zero

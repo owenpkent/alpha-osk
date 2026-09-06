@@ -19,7 +19,18 @@ import logging
 import time
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Collection, Dict, Iterable, Iterator, List, Optional, Set, Tuple
+from typing import (
+    Any,
+    Collection,
+    Dict,
+    Iterable,
+    Iterator,
+    List,
+    Optional,
+    Sequence,
+    Set,
+    Tuple,
+)
 
 from PySide6.QtCore import Property, QObject, QTimer, QUrl, Signal, Slot
 
@@ -36,6 +47,15 @@ from .analytics import TypingAnalytics
 from .dictation import DictationConfig, DictationController
 from .glyphs import MAX_RECENT
 from .glyphs import categories as glyph_categories
+from .key_actions import (
+    FUNCTION_KEYS,
+    UNBOUND_FUNCTION_KEYS,
+    ActionExecutor,
+    KeyActionStore,
+    action_type_info,
+    clean_action,
+    describe_action,
+)
 from .platform import CURRENT_PLATFORM, create_key_synthesizer
 from .platform.base import KeySynthesizerBase
 from .platform.password_detect import (
@@ -619,6 +639,12 @@ class KeyboardBridge(QObject):
     # move) so the Snippets popup re-queries getSnippets() and rebuilds
     # its rows.
     snippetsChanged = Signal(list)
+    # Emitted after any assignment changes so the function rows re-read
+    # their keycap labels.  Carries the whole map rather than the one key
+    # that changed, for the same reason ``snippetsChanged`` carries the
+    # whole list: QML rebuilds its keys from it, and a delta would need
+    # the rows to hold state that can drift from the store.
+    keyActionsChanged = Signal(dict)
 
     # Emitted when a just-typed email / phone / address looks worth
     # saving: (kind, label, value).  QML shows a one-tap offer and calls
@@ -730,6 +756,8 @@ class KeyboardBridge(QObject):
         # mutation, so there is no on-quit save path to wire up.
         self._snippets = SnippetStore()
         self._snippets.load()
+        self._key_actions = KeyActionStore()
+        self._key_actions.load()
 
         # Context tracking for predictions
         self._context_buffer = ""
@@ -990,7 +1018,12 @@ class KeyboardBridge(QObject):
         self._keystroke_since_poll = True
         self._keystroke_since_click_poll = True
 
-    def _send_key(self, key_name: str, hold_seconds: float = 0.0) -> None:
+    def _send_key(
+        self,
+        key_name: str,
+        hold_seconds: float = 0.0,
+        extra_modifiers: Optional[Sequence[str]] = None,
+    ) -> None:
         """
         Send a single key event via the platform synthesizer.
 
@@ -999,6 +1032,15 @@ class KeyboardBridge(QObject):
 
         ``hold_seconds`` > 0 holds the key down briefly (game-compat path,
         see ``_key_hold_seconds`` / ``WindowsKeySynthesizer.send_key``).
+
+        ``extra_modifiers`` are merged on top of the sticky ones rather
+        than replacing them, which is what a programmed hotkey needs: a
+        macro key bound to Ctrl+S, tapped while the user is holding
+        Shift, should send Ctrl+Shift+S, exactly as a physical macro key
+        would.  Merging here rather than at the call site keeps the
+        ``_note_own_keystroke`` bookkeeping in one place; setting those
+        flags anywhere else is what made the caret polls read our own
+        inserts as the user clicking elsewhere.
         """
         # Gather active modifiers
         modifiers = []
@@ -1010,6 +1052,10 @@ class KeyboardBridge(QObject):
             modifiers.append("alt")
         if self._win_active:
             modifiers.append("win")
+
+        for extra in extra_modifiers or ():
+            if extra not in modifiers:
+                modifiers.append(extra)
 
         mods = modifiers if modifiers else None
         self._note_own_keystroke()
@@ -1277,6 +1323,65 @@ class KeyboardBridge(QObject):
         return replacement
 
     # --- QML Slots ---
+
+    # Platform-neutral name for every special key the rows can send.
+    # Hoisted to the class because a programmed hotkey resolves its
+    # action key through the same map (see ``_send_chord_action``): a
+    # second copy inside ``pressSpecialKey`` would be one more pair of
+    # parallel blocks to keep in sync, which is the failure mode this
+    # file warns about for the sticky-modifier release.
+    _SPECIAL_KEY_NAMES: Dict[str, str] = {
+        "backspace": "BackSpace",
+        "return": "Return",
+        "space": "space",
+        "tab": "Tab",
+        "escape": "Escape",
+        "left": "Left",
+        "right": "Right",
+        "up": "Up",
+        "down": "Down",
+        "delete": "Delete",
+        "home": "Home",
+        "end": "End",
+        "pageup": "Page_Up",
+        "pagedown": "Page_Down",
+        "insert": "Insert",
+        # Function keys
+        "f1": "F1",
+        "f2": "F2",
+        "f3": "F3",
+        "f4": "F4",
+        "f5": "F5",
+        "f6": "F6",
+        "f7": "F7",
+        "f8": "F8",
+        "f9": "F9",
+        "f10": "F10",
+        "f11": "F11",
+        "f12": "F12",
+        # F13-F24 have no physical key on any mainstream keyboard,
+        # which is the point: nothing binds them, so they are free
+        # for the user to bind inside a game, OBS or AutoHotkey.
+        # Windows and X11 both carry real codes for them; macOS
+        # stops at F20 (see the note in platform/macos.py).
+        "f13": "F13",
+        "f14": "F14",
+        "f15": "F15",
+        "f16": "F16",
+        "f17": "F17",
+        "f18": "F18",
+        "f19": "F19",
+        "f20": "F20",
+        "f21": "F21",
+        "f22": "F22",
+        "f23": "F23",
+        "f24": "F24",
+        # Other special keys
+        "print": "Print",
+        "scrolllock": "Scroll_Lock",
+        "pause": "Pause",
+        "numlock": "Num_Lock",
+    }
 
     # Punctuation that should not have a space before them
     _NO_SPACE_BEFORE = {"?", "!", ".", ",", ";", ":", ")", "]", "}"}
@@ -1714,42 +1819,7 @@ class KeyboardBridge(QObject):
         # all settle the question themselves, and inserting ours on top
         # would be the one outcome none of them asked for.
         self._deferred_auto_space = ""
-        key_map = {
-            "backspace": "BackSpace",
-            "return": "Return",
-            "space": "space",
-            "tab": "Tab",
-            "escape": "Escape",
-            "left": "Left",
-            "right": "Right",
-            "up": "Up",
-            "down": "Down",
-            "delete": "Delete",
-            "home": "Home",
-            "end": "End",
-            "pageup": "Page_Up",
-            "pagedown": "Page_Down",
-            "insert": "Insert",
-            # Function keys
-            "f1": "F1",
-            "f2": "F2",
-            "f3": "F3",
-            "f4": "F4",
-            "f5": "F5",
-            "f6": "F6",
-            "f7": "F7",
-            "f8": "F8",
-            "f9": "F9",
-            "f10": "F10",
-            "f11": "F11",
-            "f12": "F12",
-            # Other special keys
-            "print": "Print",
-            "scrolllock": "Scroll_Lock",
-            "pause": "Pause",
-            "numlock": "Num_Lock",
-        }
-        xdotool_key = key_map.get(key_name, key_name)
+        xdotool_key = self._SPECIAL_KEY_NAMES.get(key_name, key_name)
 
         # Space-time autocorrect runs *before* the space hits the wire:
         # if the typed word matches a known misspelling or has a high-
@@ -1794,9 +1864,18 @@ class KeyboardBridge(QObject):
                 autocorrected = True
 
         if not autocorrected:
-            # Game mode holds the key down briefly so a polling game catches
-            # it (arrows, F-keys, space, Return are common in-game commands).
-            self._send_key(xdotool_key, hold_seconds=self._key_hold_seconds())
+            # A programmed function key runs its action *instead of*
+            # sending itself.  The dispatch sits here rather than at the
+            # top of the slot so everything downstream is unchanged: the
+            # sticky auto-release, the `_NAV_KEYS` exception and the
+            # context bookkeeping all still see an ordinary special-key
+            # press, which is what they should see.  A key with no
+            # assignment, and one assigned the "key" action (a relabelled
+            # keycap), both fall through to the send below.
+            if not self._run_key_action(key_name):
+                # Game mode holds the key down briefly so a polling game catches
+                # it (arrows, F-keys, space, Return are common in-game commands).
+                self._send_key(xdotool_key, hold_seconds=self._key_hold_seconds())
 
         # Privacy mode — send the key but don't track context or learn
         if self._privacy_mode:
@@ -2964,6 +3043,163 @@ class KeyboardBridge(QObject):
         if self._snippets.move(index, direction):
             self.snippetsChanged.emit(self._snippets.get_all())
 
+    # --- Programmable function keys ------------------------------------
+    #
+    # The bridge deliberately knows *nothing* about what action types
+    # exist.  ``KeyActionStore.execute`` dispatches through the registry
+    # in ``src/key_actions.py`` and calls back into the two methods
+    # below, so adding a ``launch`` or ``macro`` type is one entry there
+    # plus one method here, with no branch in ``pressSpecialKey`` and no
+    # change in QML (the editor builds its picker from
+    # ``getKeyActionTypes``).
+
+    class _Executor(ActionExecutor):
+        """Binds an action type's needs to this bridge instance.
+
+        A tiny adapter rather than making ``KeyboardBridge`` itself the
+        executor: the action types then depend on a two-method surface
+        that a recording double can implement in five lines, instead of
+        on a bridge that loads a 20k-word dictionary to construct.
+        """
+
+        def __init__(self, bridge: "KeyboardBridge") -> None:
+            self._bridge = bridge
+
+        def send_chord(self, key: str, modifiers: Sequence[str]) -> None:
+            self._bridge._send_chord_action(key, modifiers)
+
+        def send_text(self, text: str) -> None:
+            self._bridge._send_text_action(text)
+
+    def _send_chord_action(self, key: str, modifiers: Sequence[str]) -> None:
+        """Fire a programmed chord.
+
+        The action's modifiers are merged with any the user is holding
+        rather than replacing them (see ``_send_key``), and the sticky
+        ones are deliberately *not* released here: ``pressSpecialKey``'s
+        own auto-release block runs after this returns and is the single
+        place that decides which holds survive a keystroke.  Releasing
+        here as well would drop a right-click lock, which that block is
+        careful to keep.
+        """
+        # The chord's own key goes through the same name map the row's
+        # keystrokes use, so "return" reaches the synth as "Return".
+        self._send_key(
+            self._SPECIAL_KEY_NAMES.get(key, key),
+            hold_seconds=self._key_hold_seconds(),
+            extra_modifiers=modifiers,
+        )
+
+    def _send_text_action(self, text: str) -> None:
+        """Type a programmed phrase verbatim, then reset the typing context.
+
+        This is a purely literal insert with nothing to add on either
+        end, which is exactly what ``_commit_verbatim_insert`` is for, so
+        it goes through that rather than restating it: sticky modifiers
+        released *before* the send (a held Shift would otherwise deliver
+        the whole phrase in capitals, and ``_make_char_scancode_events``
+        cannot cancel a standing hold), a deferred auto-space settled as
+        prose, an armed auto-capital spent rather than left to land on
+        some later unrelated character, the text sent inside
+        ``_without_held_modifiers`` so a right-click lock survives it,
+        and the buffers that mirror the screen cleared so the phrase's
+        punctuation cannot corrupt the next pill's prefix matching.  The
+        two other purely-literal inserts, ``insertSnippet`` and
+        ``insertGlyph``, are the same call.
+
+        Not gated on privacy mode, the same rule every insert path
+        carries: the user tapped the key, so the text must reach the app
+        either way, and nothing here learns or logs its content.
+        """
+        self._commit_verbatim_insert(text)
+
+    def _run_key_action(self, key_name: str) -> bool:
+        """Run *key_name*'s programmed action.  True if it handled the tap.
+
+        False for an unprogrammed key and for one carrying only a custom
+        label, both of which then send their own keystroke as before.
+        """
+        if key_name not in FUNCTION_KEYS:
+            return False
+        return self._key_actions.execute(key_name, self._Executor(self))
+
+    @Slot(result="QVariantMap")
+    def getKeyActions(self) -> Dict[str, dict]:
+        """Return every key assignment, keyed by key id ("f13")."""
+        return self._key_actions.get_all()
+
+    @Slot(result="QVariantList")
+    def getKeyActionTypes(self) -> List[Dict[str, object]]:
+        """Describe the action-type registry for the editor's picker.
+
+        QML builds the picker from this rather than from a hardcoded
+        list, so a new type in ``key_actions.ACTION_TYPES`` shows up in
+        the UI without a QML edit.  ``fields`` is what the editor
+        switches on to decide which inputs to show.
+        """
+        return action_type_info()
+
+    @Slot(result="QStringList")
+    def getProgrammableKeys(self) -> List[str]:
+        """Return every key id that may carry an action ("f1".."f24")."""
+        return list(FUNCTION_KEYS)
+
+    @Slot(result="QStringList")
+    def getUnboundFunctionKeys(self) -> List[str]:
+        """Return the key ids nothing binds by default ("f13".."f24").
+
+        The editor says so on those keys: reassigning F5 costs the user
+        refresh in every app, and reassigning F17 costs nothing, which is
+        the difference worth surfacing before they commit.
+        """
+        return list(UNBOUND_FUNCTION_KEYS)
+
+    @Slot(str, result=str)
+    def describeKeyAction(self, key_name: str) -> str:
+        """One-line description of what *key_name* does, or "" if default."""
+        action = self._key_actions.get(key_name)
+        return describe_action(action) if action else ""
+
+    @Slot(str, "QVariantMap", result=bool)
+    def setKeyAction(self, key_name: str, payload: Dict[str, object]) -> bool:
+        """Assign an action to *key_name*.  False if it did not stick.
+
+        **The return value is load-bearing.**  The store refuses an
+        unknown key id and a payload that fails validation (a hotkey with
+        no action key, say), and QML must flash its confirmation only on
+        True: a green "Saved" over a write that never happened is the
+        exact failure ``setSnippet`` and ``acceptSnippetOffer`` were both
+        given bool returns for.
+
+        ``KeyActionStore.set`` answers a *different* question, though,
+        and forwarding it straight through is a bug: it reports whether
+        anything **changed**, which is what decides whether the file is
+        rewritten and the signal emitted, so it is False for a valid
+        payload identical to the one already stored.  Opening the editor
+        on a key that already does what you want and tapping Save is an
+        ordinary thing to do, and that False put a red "could not be
+        saved" over state that was exactly right.  An unchanged
+        assignment therefore reports success here, with no signal, since
+        nothing moved.
+        """
+        if self._key_actions.set(key_name, dict(payload)):
+            self.keyActionsChanged.emit(self._key_actions.get_all())
+            return True
+        # Nothing was written. That is success only when what is stored
+        # is already exactly what was asked for. An unprogrammable key
+        # and a payload that fails validation both land here too, and
+        # both are real failures the user has to be told about.
+        cleaned = clean_action(dict(payload))
+        return cleaned is not None and self._key_actions.get(key_name) == cleaned
+
+    @Slot(str, result=bool)
+    def clearKeyAction(self, key_name: str) -> bool:
+        """Drop *key_name*'s assignment, restoring the plain keystroke."""
+        if not self._key_actions.clear(key_name):
+            return False
+        self.keyActionsChanged.emit(self._key_actions.get_all())
+        return True
+
     # --- Properties for QML ---
 
     def _get_shift_active(self) -> bool:
@@ -3521,8 +3757,20 @@ class KeyboardBridge(QObject):
 
     @Slot()
     def savePredictionModel(self) -> None:
-        """Save the prediction model to disk."""
-        self._predictor.save()
+        """Save the prediction model to disk.
+
+        Failures are logged rather than raised.  This runs from the
+        Settings "Save Now" button and from ``aboutToQuit``, and a raise
+        on the quit path leaves the rest of the shutdown sequence
+        (analytics, telemetry, modifier release) unrun.  It also has to
+        survive ``atomic_write_json`` refusing a non-finite count, which
+        it now does deliberately: refusing leaves the previous good file
+        on disk, which is the outcome worth protecting.
+        """
+        try:
+            self._predictor.save()
+        except Exception as exc:  # noqa: BLE001 - never break the quit path
+            _logger.error("Saving the prediction model failed: %s", exc)
 
     # ------------------------------------------------------------------
     #  Diagnostic log (the file users attach to a bug report)
@@ -4273,8 +4521,18 @@ class KeyboardBridge(QObject):
     def clearUserData(self) -> None:
         """Clear user-learned vocabulary and overwrite saved models on disk."""
         self._predictor.clear_user_data()
-        # Save immediately so stale model files don't restore old data on restart
-        self._predictor.save()
+        # Save immediately so stale model files don't restore old data on
+        # restart.  Guarded for the same reason savePredictionModel is:
+        # save() can refuse a write, and this is the third of its three
+        # call sites, so leaving it bare is how the three drift apart.
+        # The clear itself has already happened in memory either way, so
+        # a failure here means the on-disk files are stale, which is
+        # exactly what the log line needs to stop claiming.
+        try:
+            self._predictor.save()
+        except Exception as exc:  # noqa: BLE001 - the clear already happened
+            _logger.error("Clearing user data succeeded but the save failed: %s", exc)
+            return
         _logger.info("User data cleared and model files overwritten")
 
     @Slot()

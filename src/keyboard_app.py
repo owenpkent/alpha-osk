@@ -665,8 +665,14 @@ def main() -> int:
     _install_exception_hooks()
     if log_path is not None:
         _logger.info("Log file: %s", log_path)
-    # Enable debug logging for prediction to see sources
-    logging.getLogger("HybridPredictor").setLevel(logging.DEBUG)
+    # NOTE: do not force any logger to DEBUG here.  The prediction path
+    # logs its candidate words at DEBUG (see HybridPredictor._merge_*),
+    # and the handlers installed above carry no level of their own, so a
+    # logger pinned to DEBUG writes those words straight into
+    # alpha-osk.log -- the file users attach to bug reports.  DEBUG is
+    # the sanctioned place for typed content precisely because it is off
+    # in normal operation; turning it on unconditionally is what broke
+    # that.  Raise the level by hand while debugging, never in main().
 
     # Platform-specific environment setup (must happen before QApp)
     _setup_platform_env()

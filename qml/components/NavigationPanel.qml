@@ -21,6 +21,11 @@ Item {
     // caller doesn't pass them through.
     property int repeatDelay: 500
     property int repeatInterval: 120
+    // The gutter above the arrow cluster. A physical keyboard separates the
+    // nav block from the arrows, and without it the six-key nav block and the
+    // arrows read as one undifferentiated field of keys, so the arrows have to
+    // be found by reading rather than by shape.
+    property real arrowGap: keySpacing * 4
 
     implicitWidth: navGrid.implicitWidth
     implicitHeight: navGrid.implicitHeight
@@ -157,25 +162,41 @@ Item {
             onKeyPressed: keyboard.pressSpecialKey("pagedown")
         }
 
-        // Row 4: [spacer], Up, [spacer]
+        // Row 4: [spacer], Up, [spacer].
+        //
+        // All three cells are `arrowGap` taller than a key, and Up is anchored
+        // to the BOTTOM of its cell, so the extra height opens above the arrow
+        // cluster rather than below it. A Grid aligns a cell's content to the
+        // top, so growing the cells alone would have put the gutter between Up
+        // and the Left/Down/Right row, splitting the cluster it is meant to
+        // separate from the block above.
+        //
+        // The key itself stays exactly cellH, so its hit area is unchanged and
+        // the gutter is dead space by construction. That is deliberate here,
+        // unlike the gaps between keys: this one is a separator the eye uses,
+        // the same trade FunctionRow makes for its group spacing.
         Item {
-            width: navGrid.cellW; height: navGrid.cellH
-        }
-        KeyButton {
-            keyText: "up"; displayText: "↑"
-            keyWidth: navGrid.cellW; keyHeight: navGrid.cellH
-            fontSize: 16; isSpecial: true; keyColor: navPanel.keyColor
-            keyPressedColor: navPanel.keyPressedColor
-            keyTextColor: navPanel.keyTextColor
-            accentColor: navPanel.accentColor
-            borderColor: navPanel.borderColor
-            hitMarginH: navPanel.hitMarginH
-            hitMarginV: navPanel.hitMarginV
-            enableRepeat: true; repeatDelay: navPanel.repeatDelay; repeatInterval: navPanel.repeatInterval
-            onKeyPressed: keyboard.pressSpecialKey("up")
+            width: navGrid.cellW; height: navGrid.cellH + navPanel.arrowGap
         }
         Item {
-            width: navGrid.cellW; height: navGrid.cellH
+            width: navGrid.cellW; height: navGrid.cellH + navPanel.arrowGap
+            KeyButton {
+                anchors.bottom: parent.bottom
+                keyText: "up"; displayText: "↑"
+                keyWidth: navGrid.cellW; keyHeight: navGrid.cellH
+                fontSize: 16; isSpecial: true; keyColor: navPanel.keyColor
+                keyPressedColor: navPanel.keyPressedColor
+                keyTextColor: navPanel.keyTextColor
+                accentColor: navPanel.accentColor
+                borderColor: navPanel.borderColor
+                hitMarginH: navPanel.hitMarginH
+                hitMarginV: navPanel.hitMarginV
+                enableRepeat: true; repeatDelay: navPanel.repeatDelay; repeatInterval: navPanel.repeatInterval
+                onKeyPressed: keyboard.pressSpecialKey("up")
+            }
+        }
+        Item {
+            width: navGrid.cellW; height: navGrid.cellH + navPanel.arrowGap
         }
 
         // Row 5: Left, Down, Right

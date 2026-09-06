@@ -2,10 +2,11 @@
 
 Commercial keyboards (Gboard/LatinIME, Presage) treat prediction and spell-check as **one unified system**, not two. During a single dictionary trie traversal, they generate both completions and corrections scored together. The literal typed word competes against alternatives — autocorrect only fires if a correction scores 1.5–2x higher.
 
-Deep-dive design docs for each algorithm: `FUZZY_RECOGNITION.md` (spatial model + tunable constants), `PPM.md` (variable-order character model + PPMD escape), `HYBRID_MERGING.md` (merge weights + validation + capitalization).
+Deep-dive design docs for each algorithm: `FUZZY_RECOGNITION.md` (spatial model + tunable constants), `PPM.md` (variable-order character model + PPMD escape), `HYBRID_MERGING.md` (merge weights + validation + capitalization). Where the base context tables come from, and the ARPA format they are derived from: `NGRAM_SEEDS.md`.
 
 ## What Alpha-OSK does now
 - **Hybrid prediction**: n-gram + fuzzy in the merge (same layered approach as Presage); PPM is trained and persisted but its word candidates left the merge on 2026-09-03, see the bullet below
+- **SymSpell index for whole-word correction**: `src/prediction/symspell.py` precomputes deletion variants at index time, so a lookup is a hash hit rather than a scan (Garbe, 2012). `SymSpell.add_word` updates a built index in place, which is what lets a word learned this session become fuzzy-matchable without the ~0.5 s rebuild.
 - **Spatial error correction**: `fuzzy_recognizer.py` considers nearby keys (same concept as LatinIME's key-distance weighting)
 - **Three-tier capitalization**: always-capitalize ("I"), sentence-start-only (ambiguous names), always (proper nouns). NOTE: the live pill-facing behaviour is now "I"-family only — see the *Auto-Capitalization & Proper Nouns* section in `CLAUDE.md` for why Tiers 2/3 are inert.
 - **Linear-interpolation n-gram scoring**: `NgramPredictor.predict()` ranks candidates with `score(w) = λ₃·P(w|w₋₂,w₋₁) + λ₂·P(w|w₋₁) + λ₁·P_uni(w)` (λ = 0.5 / 0.3 / 0.2). Trigram / bigram / unigram all live in probability space, so bigram evidence can actually beat the global unigram favourite after a trained context (e.g. "I want " → "to", not "the"). When there's no preceding word, the formula collapses to `P_uni` at full weight so partial-prefix completion isn't flattened. (Pre-fix bug: bigram added `freq·2`, unigram added `p·100_000` — unigram dominated by 1000×.)
@@ -22,11 +23,49 @@ Deep-dive design docs for each algorithm: `FUZZY_RECOGNITION.md` (spatial model 
 - **Click position and a learned pointer bias** (2026-09-03): `KeyButton.qml` reports where inside the key a press landed, the bridge keeps that parallel to the current word, and the prefix beam scores the continuous position with a learned per-slot bias (`src/prediction/pointer_model.py`, persisted under `pointer` in `ngram_model.json`) taken out. Measured end to end it is worth a few tenths of a point of keystroke savings (more for a systematic pointer than a scattered one), because the beam already recovers most single-key errors from the reported key; the *Click position* section of `CLAUDE.md` has the sweep and the reasoning.
 
 ## Known gaps (future work, priority order)
-1. **SymSpell for fuzzy matching** — Replace Levenshtein edit-distance in `fuzzy_recognizer.py` with SymSpell's precomputed-deletion approach. ~1000x faster, O(1) lookup, ~30MB RAM. (Garbe, 2012)
-2. **Unified scoring** — Make the literal typed word compete against corrections in the same ranked list with an explicit score, so the system knows when NOT to correct. The two-tier autocorrect threshold above is a partial proxy; full unified scoring is the proper fix. Reference implementation worth studying: `willwade/noisy-channel-correction` (Python, MIT, AAC-focused). It ranks candidates as `log P(intended) + log P(noisy | intended)` using a PPM language model plus a learned character-level confusion matrix. The interesting bit is the confusion matrix (built by simulating realistic errors against the target input modality), not the library itself; integration as a runtime dep would pull in NumPy + Levenshtein and the surface is CLI-script-shaped, so the realistic move is to port the scoring formula and confusion-matrix concept into `fuzzy_recognizer.py` rather than vendor the project.
-3. **Spatial edit costs in ranking** — Key-distance weights from fuzzy_recognizer should feed into final prediction ranking, not just candidate generation.
-4. **Katz / Stupid Backoff for sparse contexts** — The linear-interpolation formula above gives λ₃·P_tri even when the trigram table has never seen this 2-word prefix (P_tri = 0). Katz backoff discounts seen events and redistributes the mass to the bigram/unigram fallback. Better behaviour on rare contexts. Larger lift (~100 lines).
-5. **Even larger n-gram corpus from a real public source** — the ~700/700 curated lists cover a lot of conversational English, but seeding from COCA top-100k bigrams or Google n-gram exports would dwarf that. Easy win, doesn't require algorithm changes — just more data.
+1. **Unified scoring** — Make the literal typed word compete against corrections in the same ranked list with an explicit score, so the system knows when NOT to correct. The two-tier autocorrect threshold above is a partial proxy; full unified scoring is the proper fix. Reference implementation worth studying: `willwade/noisy-channel-correction` (Python, MIT, AAC-focused). It ranks candidates as `log P(intended) + log P(noisy | intended)` using a PPM language model plus a learned character-level confusion matrix. The interesting bit is the confusion matrix (built by simulating realistic errors against the target input modality), not the library itself; integration as a runtime dep would pull in NumPy + Levenshtein and the surface is CLI-script-shaped, so the realistic move is to port the scoring formula and confusion-matrix concept into `fuzzy_recognizer.py` rather than vendor the project.
+2. **Spatial edit costs in ranking** — Key-distance weights from fuzzy_recognizer should feed into final prediction ranking, not just candidate generation.
+3. **Katz / Stupid Backoff for sparse contexts** — The linear-interpolation formula above gives λ₃·P_tri even when the trigram table has never seen this 2-word prefix (P_tri = 0). Katz backoff discounts seen events and redistributes the mass to the bigram/unigram fallback. Better behaviour on rare contexts. Larger lift (~100 lines).
+4. ~~**A real public n-gram source for the seed tables**~~ **Done (2026-09-05).**: `data/common_bigrams.txt` and `common_trigrams.txt` are 754 and 740 hand-written entries against a ~20k vocabulary, so the base context model is thousands of times smaller than the vocabulary it has to condition. The licence constrains the source more than the quality does: shipping alongside MIT means public domain, CC0 or CC BY only, never BY-SA (share-alike conflicts with MIT redistribution), BY-NC (MIT grants commercial use) or BY-ND (counts are a derivative). That rules out COCA, which is not redistributable at all, and Wikipedia-derived lists, which are BY-SA. What is clean: Keith Vertanen's text-entry language models (CC BY 4.0, ARPA format, a 64k-word 3-gram at 4.0 MB / 39.9 MB / 400 MB trained on 504M words of forum, blog and social text, plus an AAC-specific corpus and dev/test sets at aactext.org), the Open American National Corpus (~15M words, unrestricted, includes spoken transcripts), and Google Books Ngrams v3 (CC BY 3.0, huge but the wrong register). The work is not the download: ARPA carries log-probs and backoff weights while the base tables carry counts that `_context_probs` normalises, and a table this size cannot be rebuilt into Python dicts at every launch. The saving grace is that the bar shows at most ~5 pills, so pruning to the top ~10 continuations per prefix at build time collapses it. Landed: `data/seed_bigrams.txt` and `seed_trigrams.txt` are generated from Vertanen and Kristensson's forum model (CC BY 4.0) by `scripts/gen_seed_ngrams.py`, and are worth +1.8 and +1.7 points of keystroke savings and +5.8 and +5.2 points of next-word hit rate on the two AAC splits, for 2.56 MB and 121 ms at launch. The ARPA format, the licence rule, the probability-to-count conversion and the full measurement are in `NGRAM_SEEDS.md`.
+
+## Benchmark baselines
+
+`scripts/bench/ksr.py --corpus <name>`, cold-start engine, no personal
+learning, 5 pills. Every number below is a fraction of an idealised user who
+clicks the instant the intended word appears, so treat them as an upper bound
+and as *relative* measures between conditions.
+
+| corpus | sentences | words | KSR | next-word hit | never predicted |
+|---|---|---|---|---|---|
+| `builtin` | 30 | 313 | 54.9% | 32.6% | 8.6% |
+| `aac-dev` | 557 | 2,956 | 49.1% | 28.7% | 13.6% |
+| `aac-test` | 566 | 2,730 | 50.4% | 30.4% | 13.0% |
+
+The AAC rows are with `data/seed_bigrams.txt` and `seed_trigrams.txt` in
+place (2026-09-05). Before those landed the same engine read 47.3% and 48.7%
+KSR at 22.9% and 25.2% next-word hit; `NGRAM_SEEDS.md` has the full
+before-and-after and what each layer bought.
+
+Three things to take from this.
+
+**Every historical figure in this repo is on the `builtin` set**, including the
+52.5 / 53.6 / 55.0% keystroke-savings numbers quoted here and in `CLAUDE.md`
+for the context split, the prefix beam and the PPM removal. They are still
+correct and still comparable to each other; they are not comparable to
+anything measured on the AAC sets.
+
+**The `builtin` set flatters the engine by six to seven points.** It is 30
+sentences written by hand in this repo, so its register sits close to the
+curated seeds and the training corpus. Real crowdsourced AAC communications
+are more varied and more telegraphic ("wheres dad", "end it"), and the share
+of words the engine never predicts at any prefix length nearly doubles, from
+8.6% to about 14.7%.
+
+**The gap between `aac-dev` and `aac-test` is 1.4 points**, and those are two
+same-sized splits of one corpus separated only by which workers wrote them.
+That is a usable noise floor: a one-point difference is not evidence even on
+these sets, and it is certainly not evidence on 30 sentences. Tune against
+`aac-dev` and report `aac-test`.
 
 ## Reference implementations
 - **LatinIME (AOSP)**: trie-based dictionary with weighted edit distance, n-gram LM scoring. Open source.

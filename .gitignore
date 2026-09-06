@@ -25,6 +25,8 @@ _draft_*
 .cascade/
 .cursor/
 .claude/settings.local.json
+# Scratch git worktrees; a checkout of another branch is not this branch's content.
+.claude/worktrees/
 
 # OS
 .DS_Store

@@ -46,6 +46,8 @@ See also: ``docs/architecture/PLATFORM_ARCHITECTURE.md`` for detailed design rat
 from __future__ import annotations
 
 import logging
+import ntpath
+import os
 import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -216,6 +218,34 @@ def get_log_path() -> Path:
     return get_config_dir() / LOG_FILENAME
 
 
+def powershell_path() -> str:
+    """Return an absolute path to Windows PowerShell.
+
+    Never invoke ``powershell`` by bare name.  ``CreateProcess`` with no
+    explicit application name searches the launching process's own
+    directory and then **the current working directory** before it
+    reaches System32, so a ``powershell.exe`` dropped into whichever
+    folder we happen to be running from wins over the real one.  That
+    matters most on the auto-update path, where the PowerShell call is
+    the whole Authenticode trust gate: a planted binary that prints a
+    convincing ``Valid|<thumbprint>|<CN>|<version>`` line defeats
+    signature verification outright.
+
+    ``shutil.which`` is deliberately not used as a fallback -- on Windows
+    it prepends the current directory to the search path, which is the
+    exact hole this closes.  If the resolved path does not exist the
+    caller's ``subprocess`` raises ``FileNotFoundError`` and every caller
+    here already treats that as failure, so the trust gate fails closed
+    rather than falling back to a name lookup.
+    """
+    system_root = os.environ.get("SystemRoot") or r"C:\Windows"
+    # ``ntpath``, not ``os.path``: this builds a Windows path whatever the
+    # host is, so the result is well formed (and recognisably absolute)
+    # when the tests exercise it on Linux.  On Windows the two are the
+    # same module.
+    return ntpath.join(system_root, "System32", "WindowsPowerShell", "v1.0", "powershell.exe")
+
+
 def _check_ui_access() -> bool:
     """
     Check whether the current process has UIAccess privileges on Windows.
@@ -295,5 +325,6 @@ __all__ = [
     "get_platform_info",
     "get_config_dir",
     "get_log_path",
+    "powershell_path",
     "get_model_dir",
 ]

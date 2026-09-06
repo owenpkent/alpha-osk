@@ -669,3 +669,40 @@ class TestPillTextNeverAutoDetectsHtml:
                 "a prediction pill is not forced to Text.PlainText -- an "
                 "imported pack word containing markup could auto-render as HTML"
             )
+
+
+class TestThePillTooltipNeverAutoDetectsHtml:
+    """The hover tooltip is the other half of the pill, and it was missed.
+
+    ``predText`` pins ``Text.PlainText`` (see the class above).  The
+    tooltip that reveals the *same* string did not, because it was written
+    with the ``ToolTip.text`` attached property, which exposes no
+    ``textFormat`` and so inherits Qt's ``AutoText`` HTML sniffing.
+
+    That is not a lesser surface than the pill itself, it is a sharper
+    one: per the bar's own fitter the only pill ever truncated is a single
+    word wider than the whole bar, and the tooltip is shown only when
+    truncated, so the one string it renders is the overlong one -- exactly
+    the shape a hostile ``dictionary.txt`` entry has.
+    """
+
+    def test_the_tooltip_content_is_plain_text(self, qml_root):
+        root, warnings, _ = qml_root
+        _show(root, ["hello", "<b>world</b>", "world"])
+        pills = expect_pills(root)
+
+        for pill in pills:
+            ctx = QQmlEngine.contextForObject(pill)
+            is_plain, is_undefined = QQmlExpression(
+                ctx, pill, "predTip.contentItem.textFormat === Text.PlainText"
+            ).evaluate()
+            assert is_undefined is False, (
+                "predTip.contentItem could not be resolved -- the tooltip is "
+                "probably back on the ToolTip.text attached property, which "
+                "has no textFormat to pin"
+            )
+            assert is_plain is True, (
+                "the prediction tooltip is not forced to Text.PlainText -- an "
+                "imported pack word containing markup could auto-render as "
+                "HTML and beacon out on hover"
+            )

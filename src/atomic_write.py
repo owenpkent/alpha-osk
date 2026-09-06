@@ -75,6 +75,17 @@ def atomic_write_json(
     Serialisation happens before any file is touched, so a value that
     ``json.dumps`` refuses (a non-serialisable object, a circular
     reference) never creates a temp file at all.
+
+    ``allow_nan=False`` is deliberate and load-bearing.  ``json.load``
+    accepts bare ``NaN`` / ``Infinity`` (they are not legal JSON, but
+    Python emits and reads them by default), and every store here is
+    replace-on-import from an archive the user picked.  With the default
+    ``allow_nan=True`` a NaN count smuggled in through one import is
+    read into memory, survives scoring as a value that compares False
+    against everything, and is then **written straight back out** on the
+    next save -- so a single hostile or corrupt archive corrupts the
+    user's real model permanently, across restarts.  Refusing at the
+    write boundary turns that into a loud, recoverable failure instead.
     """
-    text = json.dumps(data, indent=indent, ensure_ascii=ensure_ascii)
+    text = json.dumps(data, indent=indent, ensure_ascii=ensure_ascii, allow_nan=False)
     atomic_write_text(path, text, mode=mode)

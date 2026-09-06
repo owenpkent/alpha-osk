@@ -30,6 +30,10 @@ from .vocabulary_pack import PackManager
 
 _logger = logging.getLogger("HybridPredictor")
 
+#: Repository data directory, holding the wordlists and the base context
+#: seeds. One constant because three separate rebuild paths read it.
+_DATA_DIR = Path(__file__).parent.parent.parent / "data"
+
 
 def _short_word_allowed(word: str, profile: LanguageProfile = ENGLISH) -> bool:
     """True if *word* may be offered as a next-word prediction.
@@ -122,6 +126,12 @@ class HybridPredictor(QObject):
         # Load common bigrams and trigrams for next-word prediction
         self._ngram.load_common_bigrams()
         self._ngram.load_common_trigrams()
+        # The generated seeds go on last so the curated pairs are what a
+        # context appearing in both is anchored to; both are additive, so
+        # the order does not change the result, only which file is the
+        # one you go and edit when a pair is wrong.
+        self._ngram.load_seed_ngrams()
+        self._ngram.load_seed_ngrams(_DATA_DIR / "seed_trigrams.txt")
         _logger.info("N-gram predictor initialized")
 
         # Initialize PPM predictor (character-level, Dasher algorithm)
@@ -149,7 +159,7 @@ class HybridPredictor(QObject):
         self._fuzzy = FuzzyRecognizer()
         # One click-offset table, persisted with the n-gram model.
         self._fuzzy.pointer = self._ngram.pointer
-        data_dir = Path(__file__).parent.parent.parent / "data"
+        data_dir = _DATA_DIR
         self._fuzzy.load_dictionary(profile.dictionary)
         # Load common-misspellings fast-path table for autocorrect.
         self._misspellings = CommonMisspellings()
@@ -975,6 +985,12 @@ class HybridPredictor(QObject):
         """
         self._ngram.load_common_bigrams()
         self._ngram.load_common_trigrams()
+        # The generated seeds go on last so the curated pairs are what a
+        # context appearing in both is anchored to; both are additive, so
+        # the order does not change the result, only which file is the
+        # one you go and edit when a pair is wrong.
+        self._ngram.load_seed_ngrams()
+        self._ngram.load_seed_ngrams(_DATA_DIR / "seed_trigrams.txt")
         text = self._read_training_corpus()
         if text:
             self._ngram.learn_corpus_context(text)
@@ -1180,6 +1196,12 @@ class HybridPredictor(QObject):
         self._ngram.load_base_dictionary()
         self._ngram.load_common_bigrams()
         self._ngram.load_common_trigrams()
+        # The generated seeds go on last so the curated pairs are what a
+        # context appearing in both is anchored to; both are additive, so
+        # the order does not change the result, only which file is the
+        # one you go and edit when a pair is wrong.
+        self._ngram.load_seed_ngrams()
+        self._ngram.load_seed_ngrams(_DATA_DIR / "seed_trigrams.txt")
         # Reset PPM models — reinitialise from scratch
         if self._enable_ppm:
             self._ppm = PPMPredictor(max_order=self._ppm.max_order)
