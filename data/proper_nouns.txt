@@ -1,7 +1,13 @@
-## Common proper nouns — one per line, preferred capitalization.
-## The prediction engine uses this to auto-capitalize known names,
-## places, brands, and other proper nouns.  Users can also teach
-## custom capitalization by editing predictions (right-click → Edit).
+## Common proper nouns, one per line, preferred capitalization.
+##
+## NOTE: this file is loaded into NgramPredictor.capitalization but is
+## currently INERT for predictions.  get_capitalized() only auto-caps the
+## "I" family (language.ENGLISH.always_capitalize); every other pill takes
+## its casing from what the user typed.  The old three-tier proper-noun
+## auto-cap fired on too many ordinary words ("will", "may", "rose") and
+## was removed.  The data is kept so a future opt-in switch would not have
+## to re-teach from scratch.  See the Auto-Capitalization & Proper Nouns
+## section of CLAUDE.md before wiring it back up.
 ##
 ## Categories: names, places, tech, brands, days/months
 
