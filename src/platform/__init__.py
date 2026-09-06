@@ -46,6 +46,7 @@ See also: ``docs/architecture/PLATFORM_ARCHITECTURE.md`` for detailed design rat
 from __future__ import annotations
 
 import logging
+import ntpath
 import os
 import sys
 from pathlib import Path
@@ -238,7 +239,11 @@ def powershell_path() -> str:
     rather than falling back to a name lookup.
     """
     system_root = os.environ.get("SystemRoot") or r"C:\Windows"
-    return os.path.join(system_root, "System32", "WindowsPowerShell", "v1.0", "powershell.exe")
+    # ``ntpath``, not ``os.path``: this builds a Windows path whatever the
+    # host is, so the result is well formed (and recognisably absolute)
+    # when the tests exercise it on Linux.  On Windows the two are the
+    # same module.
+    return ntpath.join(system_root, "System32", "WindowsPowerShell", "v1.0", "powershell.exe")
 
 
 def _check_ui_access() -> bool:

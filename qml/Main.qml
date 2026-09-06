@@ -2303,8 +2303,8 @@ Window {
                             // come from an imported vocabulary pack's
                             // unsanitised dictionary.txt (predText says the
                             // same, which is why it pins PlainText), and the
-                            // only pill that is ever truncated — so the only
-                            // one this tooltip shows — is a single word wider
+                            // only pill that is ever truncated (so the only
+                            // one this tooltip shows) is a single word wider
                             // than the whole bar, i.e. exactly the crafted
                             // one. An <img> in it would make Qt fetch the URL
                             // on hover, from an app whose whole promise is

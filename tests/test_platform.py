@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import os
+import ntpath
 import subprocess
 import sys
 from pathlib import Path
@@ -1093,7 +1093,10 @@ class TestPowerShellIsNeverInvokedByBareName:
         from src.platform import powershell_path
 
         resolved = powershell_path()
-        assert os.path.isabs(resolved)
+        # ntpath, not os.path: the helper builds a Windows path on every
+        # host, and posixpath.isabs() does not recognise a drive letter,
+        # so os.path.isabs() would fail this on the Linux CI shard.
+        assert ntpath.isabs(resolved)
         assert resolved.lower().endswith("powershell.exe")
         assert "system32" in resolved.lower()
 
