@@ -840,36 +840,32 @@ class TestPanelsSitFlushWithTheGrid:
             )
         assert _real_warnings(warnings) == []
 
-    def test_function_row_matches_the_widest_keyboard_row(self, qml_root) -> None:
-        """Real geometry, not the identity assertion this replaced.
+    def test_function_row_fills_the_widest_keyboard_row(self, qml_root) -> None:
+        """The row spans the grid exactly, and it is the keys that fill it.
 
-        `keyWidth: fnRow.keyW` binds straight through to `root.keyW`, and a
-        plain `Row` never resizes a child, so `key.width() == root.keyW` by
-        construction: reading that value from both sides and comparing them
-        cannot fail. This measures something that can: the row's rendered
-        total width against the width its own documented geometry implies,
-        built from the SAME `keyW`/`keySpacing` the keyboard grid below it
-        uses.
+        This reverses what this test used to assert. The row drew each
+        F-key exactly one grid column wide and centred the result, and the
+        property pinned here was that no key ever grew. Both were
+        reconsidered with the alternatives rendered next to the number row
+        (the rule the old geometry note left behind), and filling the width
+        won on target size: every key gains 18% at full size, which on a
+        keyboard driven by an imprecise pointer outranks lining up with the
+        column below.
 
-        What has to hold is the row's own formula: 13 keys (the twelve
-        F-keys plus the assign toggle), 9 ordinary gaps inside the three
-        4-key groups, and 3 group gaps (two between the groups, one before
-        the toggle). A wrong key count, a resized toggle, or a changed group
-        gap all move the rendered width off that formula.
+        Three properties, and the last two are what a width check on its
+        own cannot see:
 
-        **The group gap is derived, not fixed, and the sweep below is what
-        makes that meaningful.** The three rejected redesigns all tried to
-        fill the grid width by *stretching keys*, which is why the row is
-        still measured in whole grid columns here. The toggle spends the
-        row's trailing empty space instead, and that space runs out on the
-        compact layouts: 13 keys against a 13-unit grid leaves only the
-        group gaps to give, so they compress to the ordinary key spacing and
-        the row lands exactly flush with the grid, the way the Number Row
-        does. On the full-size layouts the slack is most of a key width, the
-        clamp never bites, and the 4-4-4 shape is byte-identical to what it
-        was. Hence `<=` rather than the `<` this assertion used to carry:
-        the property that actually distinguishes this from the rejected
-        redesigns is that no key ever grew, not that the panel stayed inset.
+        * The panel is flush with the grid, the way the Number Row is.
+        * The *key* width accounts for it: 13 keys (the twelve F-keys plus
+          the assign toggle), 9 ordinary gaps inside the three 4-key
+          groups, and 3 group gaps. A wrong key count, a resized toggle or
+          a changed group gap all move that number.
+        * The group gap is fixed at the 4-4-4 width in **both** views. It
+          used to be the thing that gave, which on compact (13 keys over a
+          13-unit grid, 3 px of slack) collapsed 4-4-4 into one
+          undifferentiated run. Filling with the keys is what pays for the
+          grouping surviving there, and it costs each compact key
+          `9 * keySpacing / 13`.
         """
         root, warnings, _ = qml_root
         root.setProperty("showNavigation", False)
@@ -887,34 +883,48 @@ class TestPanelsSitFlushWithTheGrid:
                 grid = self._widest_layout_row(root)
                 key_w = root.property("keyW")
                 key_spacing = root.property("keySpacing")
-                # 12 F-keys + the assign toggle, all exactly one grid
-                # column wide, and 9 gaps inside the three groups.
-                rigid = 13 * key_w + 9 * key_spacing
-                # The group gap is whatever is left over, capped at the
-                # 4-4-4 gap and floored at an ordinary key gap.
-                gap = max(key_spacing, min(4 * key_spacing, (grid - rigid) / 3))
-                expected = rigid + 3 * gap
 
-                assert panel.width() == pytest.approx(expected, abs=1.0), (
-                    f"function row is {panel.width() - expected:+.1f} px off "
-                    f"its own geometry at window width {width} "
-                    f"(compact={compact}): {panel.width():.1f} vs "
-                    f"{expected:.1f} expected from 13 keys + 9 internal gaps + "
-                    "3 group gaps. Catches a wrong key count, a resized "
-                    "toggle or a changed group gap, none of which the "
-                    "identity assertion this replaced could see."
+                assert panel.width() == pytest.approx(grid, abs=1.0), (
+                    f"function row is {panel.width() - grid:+.1f} px off the "
+                    f"keyboard grid at window width {width} (compact={compact}): "
+                    f"{panel.width():.1f} vs {grid:.1f}. It fills the grid "
+                    "exactly, the way the Number Row does."
                 )
-                # Every key is still exactly one grid column: this, not
-                # the panel staying inset, is what the three rejected
-                # redesigns broke.
-                assert gap <= 4 * key_spacing + 1e-6, (
-                    f"group gap grew past 4*keySpacing at window width {width} (compact={compact})"
+
+                # 13 keys, 9 gaps inside the groups, 3 group gaps of
+                # 4 * keySpacing: 21 * keySpacing of the grid is not key.
+                fill = panel.property("_fillKeyW")
+                assert fill == pytest.approx((grid - 21 * key_spacing) / 13, abs=0.2), (
+                    f"the fill width does not account for the row at window "
+                    f"width {width} (compact={compact}): {fill:.2f} px per key "
+                    "against 13 keys + 9 internal gaps + 3 group gaps."
                 )
+                assert panel.property("_groupGap") == pytest.approx(4 * key_spacing), (
+                    f"group gap is no longer the 4-4-4 width at window width "
+                    f"{width} (compact={compact}); it is the keys that give, "
+                    "not the gap. On compact this is the only thing stopping "
+                    "the three groups rendering as one run."
+                )
+
+                if compact:
+                    # 13 keys over a 13-unit grid, so the three group gaps
+                    # come out of the keys: a hair under a column each.
+                    assert key_w - fill == pytest.approx(9 * key_spacing / 13, abs=0.2), (
+                        "compact keys should give up exactly the three group "
+                        f"gaps between them, gave up {key_w - fill:.2f} px at "
+                        f"window width {width}"
+                    )
+                else:
+                    assert fill > key_w, (
+                        f"F-key ({fill:.1f}) is not wider than the key below "
+                        f"it ({key_w:.1f}) at window width {width}; filling "
+                        "the grid is the whole point of this geometry."
+                    )
+
                 assert panel.width() <= grid + self.SLOP_PX, (
-                    f"function row ({panel.width():.1f}) overhangs the "
-                    f"widest keyboard row ({grid:.1f}) at window "
-                    f"width {width} (compact={compact}); the group gap is "
-                    "supposed to compress before that can happen."
+                    f"function row ({panel.width():.1f}) overhangs the widest "
+                    f"keyboard row ({grid:.1f}) at window width {width} "
+                    f"(compact={compact}); it fills the grid, never exceeds it."
                 )
         assert _real_warnings(warnings) == []
 

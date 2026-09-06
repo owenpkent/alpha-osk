@@ -2608,8 +2608,8 @@ Window {
                         keySpacing: root.keySpacing
                         hitMarginH: root.keyHitMarginH
                         hitMarginV: root.keyHitMarginV
-                        // The keyboard grid this row sits above: the row
-                        // compresses its group gaps rather than overhang it.
+                        // The keyboard grid this row fills; see the
+                        // geometry note in FunctionRow.qml.
                         maxWidth: root._widestRow.units * root.keyW
                                   + root._widestRow.gaps * root.keySpacing
                         actions: root.keyActions
@@ -2633,12 +2633,11 @@ Window {
                         keySpacing: root.keySpacing
                         hitMarginH: root.keyHitMarginH
                         hitMarginV: root.keyHitMarginV
-                        // Centred rather than filling the grid width, which
-                        // leaves visible space at both ends. That is the
-                        // chosen shape, not an oversight: see the geometry
-                        // note in FunctionRow.qml before changing it.
-                        // The keyboard grid this row sits above: the row
-                        // compresses its group gaps rather than overhang it.
+                        // The keyboard grid this row fills. Not an upper
+                        // bound any more: the row stretches its keys to
+                        // exactly this width, which is what put an end to
+                        // the inset at both ends. Read the geometry note in
+                        // FunctionRow.qml before changing it back.
                         maxWidth: root._widestRow.units * root.keyW
                                   + root._widestRow.gaps * root.keySpacing
                         actions: root.keyActions

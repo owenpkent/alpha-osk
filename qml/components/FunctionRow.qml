@@ -15,10 +15,11 @@ Item {
     property real keyH: 36
     property real keySpacing: 2
     // Each key's share of the gap around it; see KeyButton's
-    // `hitMarginH`.  The deliberate `keySpacing * 4` between the three
-    // groups keeps a dead strip in the middle of it, which is the same
-    // trade as the gutter between two panels: it is a separator rather
-    // than a gap nobody meant to leave.
+    // `hitMarginH`.  A key reaches half an ordinary gap past its own
+    // slot, so the wider `keySpacing * 4` between the three groups keeps
+    // a dead strip in the middle of it.  That is the same trade as the
+    // gutter between two panels: a separator, not a gap nobody meant to
+    // leave.
     property real hitMarginH: 0
     property real hitMarginV: 0
     property color keyColor: "#333333"
@@ -83,10 +84,11 @@ Item {
         return !!a && a.type !== "key"
     }
 
-    // The width this row must not exceed: the keyboard grid it sits
-    // above.  0 means unconstrained (tests and any caller that has not
-    // wired it).  Only the group gap gives, never a key width, which is
-    // what keeps the geometry argument below true.
+    // The width this row fills: the keyboard grid it sits above.  0
+    // means unwired (a test that builds this component on its own), and
+    // falls back to one grid column per key.  It is not an upper bound
+    // the row happens to stay under, it is the width the keys are sized
+    // from; see the geometry note below.
     property real maxWidth: 0
 
     readonly property int _keyCount: {
@@ -100,23 +102,31 @@ Item {
     // between the groups and one before the toggle).
     readonly property int _withinGaps: _keyCount - 1 - keyGroups.length
 
-    // The 4-4-4 group gap is the first thing to give, and the only thing.
+    // **The group gap never gives.  The keys do.**
     //
-    // Adding the assign toggle made this row 13 keys wide, which is
-    // exactly the compact grid's 13 units: the keys themselves fit, and
-    // it was the group gaps that pushed the panel past the keyboard
-    // underneath it.  Compressing them down to the ordinary key spacing
-    // lands the row flush with the grid on compact (where the groups
-    // merge into one continuous run, which reads fine against a uniform
-    // 13-key grid) while leaving the full-size layouts untouched: there
-    // the slack is most of a key width, so the clamp never bites and the
-    // 4-4-4 shape is exactly what it was.
-    readonly property real _groupGap: {
+    // It used to be the other way round, and that is what erased the
+    // 4-4-4 shape on compact: 13 keys against a 13-unit grid leaves 3 px
+    // of slack, so the gap clamped to `keySpacing` and twelve identical
+    // keys rendered as one undifferentiated run, on the view where
+    // telling them apart matters most.  Fixing the gap at the 4-4-4 width
+    // and letting the key width absorb the remainder keeps the grouping
+    // in both views; it costs each compact key `9 * keySpacing / 13`,
+    // which is 0.7 px at the spacing this keyboard actually uses.
+    readonly property real _groupGap: keySpacing * 4
+
+    // The rendered width of every key in this row, the assign toggle
+    // included.  The row spans the keyboard grid exactly, so what used to
+    // sit as empty margin at both ends is divided between the thirteen
+    // keys instead.
+    //
+    // `maxWidth <= 0` means no caller wired the grid width (a test that
+    // builds this component on its own), and falls back to one grid
+    // column per key, which is what this row drew before.
+    readonly property real _fillKeyW: {
         if (maxWidth <= 0)
-            return keySpacing * 4
-        var slack = maxWidth - (_keyCount * keyW + _withinGaps * keySpacing)
-        return Math.max(keySpacing,
-                        Math.min(keySpacing * 4, slack / Math.max(1, keyGroups.length)))
+            return keyW
+        var w = (maxWidth - _withinGaps * keySpacing - keyGroups.length * _groupGap) / _keyCount
+        return w > 0 ? w : keyW
     }
 
     function _activate(name) {
@@ -128,28 +138,36 @@ Item {
         keyboard.pressSpecialKey(name.toLowerCase())
     }
 
-    // **The geometry here is deliberate and was chosen after trying the
-    // alternatives on screen.**  Each F-key is exactly one grid column
-    // wide and the row is centred, which leaves visible space at both ends
-    // on a full-size layout, because the row is 12 keys against a grid of
-    // 15.5 columns (13 on the compact layouts).
+    // **The row fills the keyboard grid, and that reverses an earlier
+    // decision on purpose.**
     //
-    // That inset was reported as a bug and three different ways of filling
-    // the width were built and rendered: spending the leftover on the two
-    // group gaps (108 px chasms, the keys in islands), capping that gap
-    // (still visibly inset, so it fixed nothing), and stretching all
-    // twelve keys to fill (a third wider than the number key directly
-    // below while staying 30% shorter, which reads as flat bars).
+    // It used to draw each F-key exactly one grid column wide and centre
+    // the result, which left a visible margin at both ends: 12 keys
+    // against a 15.5-column grid, then 13 once the assign toggle joined
+    // the run, so 61 px a side at a 940 px window.  That shape was chosen
+    // the first time this came up, over three ways of filling the width
+    // (spending the leftover on the group gaps, which made 108 px chasms;
+    // capping that gap, which left it visibly inset and so fixed nothing;
+    // and stretching the keys).  The note left behind said not to revisit
+    // the inset without rendering the result next to the number row.
     //
-    // Shown side by side, the original won: an F-key that is the same
-    // width as the key under it belongs to the same keyboard, and the
-    // empty space at the ends costs nothing.  **Do not "fix" the inset
-    // again without rendering the result next to the number row.**  The
-    // 4-4-4 grouping is part of that shape, not decoration.
+    // That is exactly what was done the second time, and stretching won.
+    // Every key gains 18% of target width, and on a keyboard driven by an
+    // imprecise pointer that outranks the alignment argument; the panel
+    // also reads as part of the keyboard's outline rather than a strip
+    // floating above it.
     //
-    // The assign toggle spends some of that leftover space rather than
-    // changing any key's width, which is what keeps the argument above
-    // intact: the F-keys still line up with the grid below.
+    // **The cost was accepted with the picture in front of us**: at full
+    // size an F-key is 18% wider than the key directly below it while
+    // staying 30% shorter, so the row no longer lines up with the grid
+    // column by column.  Do not "fix" that back without rendering it next
+    // to the number row, which is the same rule as before, pointing the
+    // other way.
+    //
+    // The invariant that survived both decisions: this row must never be
+    // wider than the grid it sits above.  It is now exactly that width,
+    // so anything that adds a key or widens a gap has to come out of
+    // `_fillKeyW` and never out of `maxWidth`.
     implicitWidth: fnLayout.implicitWidth
     implicitHeight: fnLayout.implicitHeight
 
@@ -194,15 +212,19 @@ Item {
 
                         keyText: modelData.toLowerCase()
                         displayText: fnRow._capFor(modelData)
-                        keyWidth: fnRow.keyW
+                        keyWidth: fnRow._fillKeyW
                         keyHeight: fnRow.keyH
                         hitMarginH: fnRow.hitMarginH
                         hitMarginV: fnRow.hitMarginV
                         // A custom label is a word, not a two-character key
-                        // name, so it takes the smaller size rather than
-                        // overflowing the cap.  The store caps the label at
-                        // 12 characters for the same reason.
-                        fontSize: displayText.length > 3 ? 8 : 10
+                        // name, so a long one takes the smaller size rather
+                        // than overflowing the cap.  The store caps the label
+                        // at 12 characters for the same reason.  The
+                        // threshold is 8 rather than 3 because the fill above
+                        // bought 18% more width: at 10 px eight characters
+                        // clear the cap and twelve do not, so only the
+                        // longest labels still step down.
+                        fontSize: displayText.length > 8 ? 9 : 10
                         isSpecial: true
                         enableRepeat: false
                         // In assign mode every key is a target for the
@@ -245,7 +267,7 @@ Item {
 
             keyText: "assign"
             displayText: fnRow.assignMode ? "Done" : "Edit"
-            keyWidth: fnRow.keyW
+            keyWidth: fnRow._fillKeyW
             keyHeight: fnRow.keyH
             hitMarginH: fnRow.hitMarginH
             hitMarginV: fnRow.hitMarginV
