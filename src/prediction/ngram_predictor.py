@@ -1473,9 +1473,17 @@ class NgramPredictor:
                     len(self.bigrams),
                     len(self.trigrams),
                 )
+            # Rebuild the incremental running total BEFORE publishing
+            # either field.  A non-numeric count in a crafted or corrupt
+            # file makes sum() raise, and assigning user_vocab first left
+            # it holding the poisoned data while _user_total kept its
+            # stale value -- durably breaking the
+            # `_user_total == sum(user_vocab.values())` invariant for the
+            # rest of the session, since nothing recomputes it.  Computing
+            # into a local makes the pair atomic against that raise.
+            user_total = sum(user_vocab_clean.values())
             self.user_vocab = defaultdict(int, user_vocab_clean)
-            # Rebuild incremental running total from loaded counts.
-            self._user_total = sum(self.user_vocab.values())
+            self._user_total = user_total
             self.total_words = data.get("total_words", 0)
             self.blacklist = set(data.get("blacklist", []))
             self.dispreference = defaultdict(int, data.get("dispreference", {}))

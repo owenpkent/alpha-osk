@@ -989,3 +989,40 @@ class TestTheModelLoggerNeverWritesAWord:
         assert "hunter2" not in emitted
         assert "len=7" in emitted
 
+
+class TestACraftedModelCannotDesyncTheUserTotal:
+    """``_user_total == sum(user_vocab.values())`` is a stated invariant.
+
+    ``load`` used to publish ``user_vocab`` and *then* compute the total
+    from it, so a non-numeric count made ``sum`` raise into the blanket
+    handler and left the poisoned table in place beside a stale total.
+    Nothing recomputes it, so the invariant stayed broken for the rest of
+    the session and every later increment compounded on a wrong baseline.
+    """
+
+    def test_a_non_numeric_count_leaves_the_invariant_intact(self, tmp_path: Path) -> None:
+        predictor = NgramPredictor()
+        predictor.user_vocab["real"] = 4
+        predictor._user_total = 4
+
+        hostile = tmp_path / "ngram_model.json"
+        hostile.write_text(
+            json.dumps({"unigrams": {}, "user_vocab": {"hello": "not-a-number"}}),
+            encoding="utf-8",
+        )
+        predictor.load(hostile)
+
+        assert predictor._user_total == sum(predictor.user_vocab.values())
+
+    def test_a_well_formed_file_still_loads(self, tmp_path: Path) -> None:
+        """The inverse half: the guard must not refuse a good file."""
+        predictor = NgramPredictor()
+        good = tmp_path / "ngram_model.json"
+        good.write_text(
+            json.dumps({"unigrams": {}, "user_vocab": {"hello": 3, "there": 2}}),
+            encoding="utf-8",
+        )
+        predictor.load(good)
+
+        assert predictor._user_total == 5
+        assert predictor._user_total == sum(predictor.user_vocab.values())
