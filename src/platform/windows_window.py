@@ -289,9 +289,84 @@ def apply_extended_styles(root: QWindow, *, taskbar_button: bool = False) -> Non
                 kernel32.GetLastError(),
             )
 
+        _prefer_dwm_rounded_corners(hwnd)
+
         _logger.info("Applied WS_EX_NOACTIVATE and placed the window in the topmost band")
     except Exception as e:
         _logger.warning("Failed to apply Windows extended styles: %s", e)
+
+
+def _prefer_dwm_rounded_corners(hwnd: object) -> None:
+    """Ask Windows to round this window's corners, rather than doing it here.
+
+    Every window in this app is frameless *and* ``WS_EX_LAYERED``, and it
+    used to draw its own rounded corner as a ``radius`` on the QML
+    background rectangle.  That leaves the pixels outside the arc unpainted,
+    and on a layered window those do not composite the desktop the way a
+    transparent pixel should: they come back **white**.  What the user sees
+    is a small bright notch biting into one corner of the keyboard, whose
+    visibility depends on what happens to be behind it.
+
+    Measured against a magenta backdrop placed behind all four corners, with
+    the window otherwise configured exactly as it ships:
+
+    ==========================================  ======================
+    configuration                               corner pixel
+    ==========================================  ======================
+    radius 10, DWM default                      ``#ffffff``
+    radius 10, DWMWCP_DONOTROUND                ``#ffffff``
+    radius 0, DWMWCP_ROUND                      the backdrop, correctly
+    ==========================================  ======================
+
+    So turning Windows' own rounding *off* fixes nothing: the notch is the
+    unpainted region, not the rounding.  The fix is to stop leaving a region
+    unpainted at all.  The QML side squares its background off on Windows
+    (see ``Main.qml``'s ``selfRoundedCorners``) and this hands the corner to
+    DWM, which masks an opaque window cleanly and antialiases it properly.
+
+    Best-effort by design.  ``DWMWA_WINDOW_CORNER_PREFERENCE`` is Windows 11
+    (build 22000) and later; on Windows 10 the call simply fails and the
+    window keeps the square corners the QML side gave it, which is what
+    every other window on a Windows 10 desktop looks like anyway.  A window
+    that fails to round is a cosmetic difference, never a reason to fail
+    startup, so nothing here is allowed to raise.
+
+    Guarded on ``sys.platform`` like every other function in this file, so
+    mypy prunes the ``ctypes.windll`` body under ``--platform linux``.
+    """
+    if sys.platform != "win32":
+        return
+
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        DWMWA_WINDOW_CORNER_PREFERENCE = 33
+        DWMWCP_ROUND = 2
+
+        dwmapi = ctypes.windll.dwmapi
+        preference = ctypes.c_int(DWMWCP_ROUND)
+        dwmapi.DwmSetWindowAttribute.argtypes = [
+            wintypes.HWND,
+            wintypes.DWORD,
+            ctypes.c_void_p,
+            wintypes.DWORD,
+        ]
+        dwmapi.DwmSetWindowAttribute.restype = ctypes.c_long
+        hresult = dwmapi.DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_WINDOW_CORNER_PREFERENCE,
+            ctypes.byref(preference),
+            ctypes.sizeof(preference),
+        )
+        if hresult != 0:
+            # Expected on Windows 10, where the attribute does not exist.
+            _logger.debug(
+                "DWM corner rounding unavailable (hr=0x%08x); square corners",
+                hresult & 0xFFFFFFFF,
+            )
+    except Exception as e:  # pragma: no cover - defensive
+        _logger.debug("Could not set the DWM corner preference: %s", e)
 
 
 def set_app_user_model_id(app_id: str) -> None:

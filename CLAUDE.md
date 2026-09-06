@@ -9,6 +9,7 @@ Owen is a wheelchair user with muscular dystrophy. Typing is hard - be proactive
 ## Key rules (non-obvious, cross-cutting)
 
 - The keyboard must NEVER steal OS focus: `WS_EX_NOACTIVATE` on Windows (`keyboard_app.py::_apply_window_flags` dispatches to `src/platform/windows_window.py::apply_extended_styles`), `WindowDoesNotAcceptFocus` elsewhere. Because our window cannot hold focus, route in-app text entry (prediction-edit popup, snippets editor, any future input slot) through `setEditMode(true)` plus the `editKeyTyped` / `editSpecialPressed` signals, never Qt focus. Set edit mode on open and clear it on close.
+- **Nothing here rounds its own window corners on Windows.** Every window in this app is frameless and `WS_EX_LAYERED`, and the pixels a QML `radius` leaves outside the arc do not composite the desktop on a layered window: they come back white, as a bright notch in one corner. `Main.qml::selfRoundedCorners` squares the background off on Windows and `windows_window.py::_prefer_dwm_rounded_corners` hands the corner to DWM instead. See *Who rounds the window corners*.
 - Sticky-modifier auto-release lives in one place, `KeyboardBridge._release_sticky_modifiers(names=_MODIFIERS, *, keep=())`: every keystroke path (`_press_char`'s edit intercept, chord branch and char-path end; `_release_edit_chord_modifiers`; `pressSpecialKey`) calls it instead of hand-copying the block. `names` restricts which modifiers a call considers (the edit intercept passes only `("shift",)`); `keep` exempts specific active modifiers from an otherwise-eligible release (`pressSpecialKey` passes `keep=("shift", "ctrl")` on `_NAV_KEYS` so Shift/Ctrl survive arrow-key selection). A new keystroke path must call this rather than write its own copy.
 - Linux `LinuxKeySynthesizer.hold_modifier()` MUST skip `win`/`super`: holding Super triggers a WM pointer grab that swallows every click, including clicks on the OSK itself. Do not "fix" it to hold Super. Windows still holds `VK_LWIN`.
 - Pill-facing casing comes only from `KeyboardBridge._display_cased`, which mirrors every uppercase position of the typed prefix onto the pill, unconditionally (including fuzzy/autocorrect candidates). Auto-capitalisation is the "I" family (in the language profile, `language.ENGLISH.always_capitalize`, rather than in `ngram_predictor`) plus taught acronyms (see *Taught acronyms*); do NOT reintroduce the removed three-tier proper-noun auto-cap as a default. Every pill emit site must route through `_display_cased`.
@@ -1975,6 +1976,61 @@ are in *Key rules* at the top of this file.
 - **Games need a held key, not a zero-gap tap.** Games read the keyboard by *polling* state once per render frame (DirectInput / Raw Input / `GetAsyncKeyState`), so a key-down+key-up injected in one `SendInput` batch can land entirely between two polls and be missed: the keystroke does nothing in-game even though it works everywhere else. Auto game-compat fixes this: when `_window_is_game(hwnd)` is true, `_game_auto_active` flips on (set in the same 250 ms foreground poll as compat auto-detect) and single keys are sent with `hold_seconds = _GAME_KEY_HOLD_SECONDS` (50 ms). `WindowsKeySynthesizer.send_key` then splits the injection into a down-batch, a real `time.sleep`, and an up-batch (modifiers wrap the held key). Non-game keystrokes keep the zero-latency atomic path. `_window_is_game` uses three signals (`keyboard_bridge.py`): (1) the owning-process exe is in `_GAME_PROCESS_NAMES` (seeded with the Age of Empires family plus `unrealeditor.exe`; extend like `_COMPAT_PROCESS_NAMES`), which catches games even in windowed mode; (2) the exe ends with one of `_GAME_EXE_SUFFIXES`, which matches a whole **engine family** rather than a title: every packaged Unreal game ships a `<Project>-Win64-Shipping.exe`, so one suffix covers any UE title, windowed included, without anyone having to add it to a list; (3) a **borderless-fullscreen heuristic** (`_window_is_borderless_fullscreen`: window rect covers the whole monitor *and* the window has no `WS_CAPTION`) as a zero-config catch-all for unlisted games. The heuristic is deliberately skipped for exes in `_COMPAT_PROCESS_NAMES` (IDEs / remote-desktop clients), which are sometimes run fullscreen and must not get the typing-lag hold. Requiring "no caption" excludes normal maximized windows (which keep their title bar); the remaining false positives (fullscreen video players, slideshows) are harmless because a 50 ms hold doesn't hurt there. **The Unreal Editor is listed deliberately, editor and all.** Play-in-editor polls input exactly like a shipped game and the editor runs windowed, so neither of the other two signals reaches it. The cost is that the editor's own text fields (asset rename, content-browser search) take the 50 ms hold too, which is latency rather than lost input, while without it viewport and PIE keys are dropped entirely. Any future entry that is an authoring tool rather than a game owes the same trade in the same direction, and it is only worth taking where the tool polls input. Coverage for both new signals is in `tests/test_keyboard_bridge.py::TestGameKeyHold` (`test_unreal_editor_windowed_is_game`, `test_unreal_shipping_suffix_is_game`), each with the fullscreen heuristic stubbed **off** so it cannot be what makes them pass. This is unrelated to UIAccess: a signed Program-Files install still hit it because the keystrokes *reach* the game, they're just too brief to be polled.
 - **`pressKey` lowercases its input** - use `pressKeyLiteral` when QML already resolved the final character (right-click shifted variant, etc.).
 - **QML `Text` defaults to `AutoText`, which sniffs the string for HTML and can trigger an outbound request just from being displayed.** Any `Text` rendering a value that ultimately came from imported or otherwise untrusted data (a vocabulary pack's `name`/`description`, anything read from a file the user picked) must set `textFormat: Text.PlainText` explicitly, or an `<img src=...>` planted in that string makes Qt fetch it the moment the Settings page renders. 23 `Text` elements across 7 QML files (`Main.qml`, `UnifiedSettingsPanel.qml`, `DebugPanel.qml`, `AnalyticsDashboard.qml`, `ModelVisualization.qml`, `KeyButton.qml`, `SettingsToggle.qml`) now set it explicitly; new `Text` elements displaying untrusted strings must too. **Known gap**: the attached-property `ToolTip.text` idiom has no `textFormat` to set, so a tooltip built from untrusted text is not covered.
+
+## Who rounds the window corners
+
+Every window here is frameless and, on Windows, `WS_EX_LAYERED`. They used
+to round their own corners with a `radius` on the QML background rectangle,
+which leaves the pixels outside the arc unpainted, and **on a layered window
+those do not composite the desktop the way a transparent pixel should: they
+come back white**. What the user sees is a small bright notch biting into a
+corner of the keyboard, appearing and disappearing depending on what happens
+to be behind it, which is why it looks intermittent and unrelated to
+anything.
+
+Measured on the real `Main.qml`, against a magenta backdrop placed behind
+all four corners:
+
+| configuration | corner pixel |
+|---|---|
+| radius 10, Windows 11 default rounding | `#ffffff` |
+| radius 10, `DWMWCP_DONOTROUND` | `#ffffff` |
+| radius 0, `DWMWCP_ROUND` | the backdrop, correctly |
+
+**Turning Windows' own rounding off fixes nothing, and that is the part
+worth remembering**: the notch is the unpainted region, not the rounding.
+The fix is to leave nothing unpainted. `Main.qml::selfRoundedCorners` is
+false on Windows, which takes `windowRadius` to 0 for the background, the
+title bar and the shadow, and
+`windows_window.py::_prefer_dwm_rounded_corners` sets
+`DWMWA_WINDOW_CORNER_PREFERENCE` to `DWMWCP_ROUND` so the compositor masks
+an opaque window, which it antialiases properly.
+
+Four things follow:
+
+- **The title bar's radius has to follow the background's.** Rounding it
+  while the background behind it is square swaps the notch for a lighter
+  wedge in each top corner, since what shows through is then the background
+  rather than the desktop.
+- **The two floating windows are the same shape and needed the same fix.**
+  `SnippetsWindow` and `SymbolsWindow` are both `color: "transparent"` with
+  a radius-8 background, so a fix reaching only the keyboard would have left
+  the notch on the two windows that float over whatever the user is typing
+  into. They take `selfRoundedCorners` as a required property from
+  `Main.qml` rather than each reading `Qt.platform.os`, so the rule is
+  stated once.
+- **The DWM call is best-effort and must stay that way.**
+  `DWMWA_WINDOW_CORNER_PREFERENCE` is Windows 11 and later; on Windows 10 it
+  fails and the window keeps the square corners QML gave it, which is what
+  every other window on that desktop looks like. A window that fails to
+  round is cosmetic, never a reason to fail startup.
+- **The offscreen render was correct the whole time the bug was on screen.**
+  `assets/screenshots/dark-theme-keyboard.png` had a properly antialiased
+  alpha-0 corner while the live window showed the notch, so a test that
+  rendered the corner and looked at it would have passed against the bug.
+  `tests/test_window_corners.py` therefore pins the checkable half (which
+  side is asked to round, that all three windows agree, and that the DWM
+  call cannot raise) and says in its docstring why it cannot pin the rest.
 
 ## Title-bar window menu, and click-free Move
 

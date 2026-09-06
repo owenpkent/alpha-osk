@@ -1164,12 +1164,36 @@ Window {
         }
     }
 
+    // Who rounds the window's corners.
+    //
+    // Everywhere but Windows we round them ourselves, with a `radius` on the
+    // background below.  On Windows that is exactly what produced the white
+    // notch in the top-left corner: every window here is frameless and
+    // WS_EX_LAYERED, and the pixels a `radius` leaves outside the arc do not
+    // composite the desktop on a layered window, they come back white.
+    //
+    // Measured against a magenta backdrop behind all four corners: with
+    // radius 10 the corner pixel is #ffffff whether Windows' own rounding is
+    // on or off, and with radius 0 plus DWMWCP_ROUND it is the backdrop.  So
+    // the notch is the unpainted region rather than the rounding, and the
+    // fix is to leave nothing unpainted: square the background off and let
+    // DWM mask an opaque window, which it antialiases properly.
+    // `windows_window.py::_prefer_dwm_rounded_corners` is the other half.
+    //
+    // On Windows 10 that DWM call fails and the corners stay square, which
+    // is what every other window on that desktop looks like.
+    readonly property bool selfRoundedCorners: Qt.platform.os !== "windows"
+    readonly property real windowRadius: selfRoundedCorners ? 10 : 0
+
     // Main background — uses Qt.rgba so only the background becomes transparent
     // while keys and text remain fully opaque
     Rectangle {
         id: background
+        // Lets the corner test measure the rendered radius rather than
+        // re-reading the property that sets it.
+        objectName: "windowBackground"
         anchors.fill: parent
-        radius: 10
+        radius: root.windowRadius
         color: Qt.rgba(root.themeBackground.r, root.themeBackground.g, root.themeBackground.b, root.windowOpacity)
         border.color: Qt.rgba(root.themeBorder.r, root.themeBorder.g, root.themeBorder.b, root.windowOpacity)
         border.width: 1
@@ -1180,7 +1204,7 @@ Window {
         Rectangle {
             anchors.fill: parent
             anchors.margins: -1
-            radius: 11
+            radius: root.windowRadius > 0 ? root.windowRadius + 1 : 0
             color: "transparent"
             border.color: Qt.rgba(0, 0, 0, 0.5)
             border.width: 1
@@ -1201,7 +1225,10 @@ Window {
             height: 48
             property color baseColor: Qt.darker(root.themeBackground, 1.1)
             color: Qt.rgba(baseColor.r, baseColor.g, baseColor.b, root.windowOpacity)
-            radius: 10
+            // Follows the background: rounding this while the background
+            // behind it is square would show a lighter wedge in each top
+            // corner instead of a notch.
+            radius: root.windowRadius
 
             // Only round top corners
             Rectangle {
@@ -3682,6 +3709,7 @@ Window {
         // rather than a Popup, the three-view split, and why a tap copies
         // to the clipboard rather than types.
         Comp.SnippetsWindow {
+            selfRoundedCorners: root.selfRoundedCorners
             id: snippetsWindow
             applyEditChord: root.applyEditChord
             clampedWindowPos: root.clampedWindowPos
@@ -3712,6 +3740,7 @@ Window {
         // itself and the full rationale -- it deliberately shares its
         // shell with the Snippets window above.
         Comp.SymbolsWindow {
+            selfRoundedCorners: root.selfRoundedCorners
             id: symbolsWindow
             clampedWindowPos: root.clampedWindowPos
             themeAccent: root.themeAccent
