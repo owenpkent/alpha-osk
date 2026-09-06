@@ -78,6 +78,9 @@ project's MIT licence. In practice that means public domain, CC0, or CC BY
 usable**: the share-alike condition conflicts with MIT redistribution, and the
 non-commercial condition conflicts with MIT outright. Record the source of
 any new file in `THIRD_PARTY_NOTICES.md` at the same time you add it.
+`docs/architecture/NGRAM_SEEDS.md` has the full rule, the sources that
+qualify, and the converter that turns a public language model into the
+bigram and trigram seeds.
 
 ## Vocabulary packs
 
