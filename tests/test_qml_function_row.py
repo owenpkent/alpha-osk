@@ -32,7 +32,13 @@ pytest.importorskip("PySide6")
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 try:
-    from PySide6.QtCore import QCoreApplication, QObject, QSettings, QUrl  # noqa: E402
+    from PySide6.QtCore import (  # noqa: E402
+        QCoreApplication,
+        QMetaObject,
+        QObject,
+        QSettings,
+        QUrl,
+    )
     from PySide6.QtGui import QGuiApplication  # noqa: E402
     from PySide6.QtQml import QQmlApplicationEngine  # noqa: E402
     from PySide6.QtQuick import QQuickItem  # noqa: E402,F401
@@ -141,21 +147,6 @@ def _keys(panel) -> dict[str, QQuickItem]:
     return found
 
 
-def _toggle(panel):
-    def walk(item):
-        for child in item.childItems():
-            if child.objectName() == "fnAssignToggle":
-                return child
-            hit = walk(child)
-            if hit is not None:
-                return hit
-        return None
-
-    found = walk(panel)
-    assert found is not None, "no assign toggle in this row"
-    return found
-
-
 class TestTheExtraRowExists:
     """F13-F24 render, and only when their own toggle is on."""
 
@@ -255,59 +246,148 @@ class TestKeycapLabels:
         assert _real_warnings(warnings) == []
 
 
-class TestAssignModeIsTheLeftClickRoute:
+class TestTheSettingsListIsTheLeftClickRoute:
     """Right-click alone would be a reachability regression.
 
     A dwell-click, switch-access, head- or eye-tracker pointer, and a
-    single-button adaptive mouse all have no right button, so without this
-    mode such a user could press an F-key and never program one. That is
-    the same hole the snippets grid documents having closed with its
-    Manage toggle.
+    single-button adaptive mouse all have no right button, so without a
+    second route such a user could press an F-key and never program one.
+
+    That route used to be an Edit toggle on the row itself, which put
+    every key into "tap to program". It is now *Settings -> Function
+    Keys*, which answers the same requirement better: the rows are far
+    bigger targets than a keycap, there is no mode to get into or out of,
+    and it is the only surface that shows an assignment the user has
+    forgotten making. Removing the toggle also gave the row back the
+    thirteenth key's width.
     """
 
-    def test_every_visible_row_carries_a_toggle(self, qml_root) -> None:
+    @staticmethod
+    def _rows(root):
+        """`fkeyRows` is a `property var` holding a JS array, so it comes
+        back as a QJSValue rather than a list; reading it without the
+        conversion raises rather than quietly returning nothing."""
+        return root.property("fkeyRows").toVariant()
+
+    @staticmethod
+    def _settings(root):
+        panel = root.findChild(QQuickItem, "settingsPanel")
+        assert panel is not None, "no settings panel"
+        return panel
+
+    @staticmethod
+    def _editor(root):
+        # QObject, not QQuickItem: a QML `Popup` is a QQuickPopup, which is
+        # not an Item, so an Item-typed findChild silently returns None and
+        # every assertion after it never runs.
+        editor = root.findChild(QObject, "keyActionEditor")
+        assert editor is not None, "no key action editor"
+        return editor
+
+    def test_the_list_carries_every_programmable_key(self, qml_root) -> None:
         root, warnings, _, _ = qml_root
-        root.setProperty("showFunctionRow", True)
+        _pump()
+        rows = self._rows(root)
+        assert [r["name"] for r in rows] == [f"F{n}" for n in range(1, 25)]
+        # The split the two sections render from. F13-F24 are the keys
+        # nothing binds, which is the whole reason they are listed first.
+        unbound = [r["name"] for r in rows if r["unbound"]]
+        assert unbound == [f"F{n}" for n in range(13, 25)]
+        assert _real_warnings(warnings) == []
+
+    def test_a_row_says_what_the_key_does(self, qml_root) -> None:
+        """The label and the description both, or the list is 24 identical
+        rows and no better than the twelve identical keycaps it exists to
+        tell apart."""
+        root, warnings, bridge, _ = qml_root
+        assert bridge.setKeyAction("f17", {"type": "text", "label": "Email", "text": "hi"})
+        _pump()
+        rows = {r["name"]: r for r in self._rows(root)}
+        assert rows["F17"]["label"] == "Email"
+        assert rows["F17"]["detail"] != ""
+        assert rows["F17"]["programmed"] is True
+        # An untouched key carries neither, so the row falls back to
+        # saying it sends itself.
+        assert rows["F18"]["label"] == ""
+        assert rows["F18"]["programmed"] is False
+        assert _real_warnings(warnings) == []
+
+    def test_tapping_a_row_opens_the_editor_and_gets_settings_out_of_the_way(
+        self, qml_root
+    ) -> None:
+        """The hand-off is the half that can silently half-work.
+
+        The editor is typed into with the OSK's own keys, and the settings
+        window is parked in the middle of the screen at 360x540, so an
+        editor opened behind it is an editor that cannot be used.
+        """
+        root, warnings, _, _ = qml_root
+        root.setProperty("showSettings", True)
+        _pump()
+        panel = self._settings(root)
+        panel.setProperty("currentView", "fkeys")
+        _pump()
+
+        panel.editKeyRequested.emit("f17")
+        _pump()
+
+        editor = self._editor(root)
+        assert editor.property("keyId") == "f17"
+        assert editor.property("opened") is True
+        assert root.property("showSettings") is False, (
+            "the settings window is still up; it can cover both the editor "
+            "and the letter grid the editor is typed with"
+        )
+        assert _real_warnings(warnings) == []
+
+    def test_closing_the_editor_returns_to_the_same_page(self, qml_root) -> None:
+        """A drill-down, so it comes back where it left.
+
+        Settings normally resets to its home grid on open, because landing
+        on a deep page reads as "the menu changed". Returning from the
+        editor is the exception: dumping the user at the home grid loses
+        their place in a list of twenty-four.
+        """
+        root, warnings, _, _ = qml_root
+        root.setProperty("showSettings", True)
+        _pump()
+        panel = self._settings(root)
+        panel.setProperty("currentView", "fkeys")
+        _pump()
+        panel.editKeyRequested.emit("f17")
+        _pump()
+
+        QMetaObject.invokeMethod(self._editor(root), "close")
+        _pump()
+
+        assert root.property("showSettings") is True
+        assert panel.property("currentView") == "fkeys"
+        assert _real_warnings(warnings) == []
+
+    def test_an_editor_opened_from_a_key_does_not_open_settings(self, qml_root) -> None:
+        """The inverse half. Without it, "always re-show settings" passes,
+        and right-clicking a key would pop a settings window over the
+        editor it just opened."""
+        root, warnings, _, _ = qml_root
         root.setProperty("showExtraFunctionRow", True)
         _pump()
-        assert _toggle(_panel(root, "functionRowPanel")) is not None
-        assert _toggle(_panel(root, "extraFunctionRowPanel")) is not None
+        assert root.property("showSettings") is False
+        root.openKeyActionEditor("f13")
+        _pump()
+        QMetaObject.invokeMethod(self._editor(root), "close")
+        _pump()
+        assert root.property("showSettings") is False
         assert _real_warnings(warnings) == []
 
-    def test_the_toggle_is_never_absent_when_only_one_row_shows(self, qml_root) -> None:
-        """The toggle must not live on one row and vanish with it."""
-        root, warnings, _, _ = qml_root
-        root.setProperty("showFunctionRow", True)
-        root.setProperty("showExtraFunctionRow", False)
-        _pump()
-        assert _toggle(_panel(root, "functionRowPanel")) is not None
-        assert _real_warnings(warnings) == []
+    def test_a_left_tap_on_a_key_types_it(self, qml_root) -> None:
+        """No mode can intercept this any more.
 
-    def test_toggling_one_row_puts_both_in_assign_mode(self, qml_root) -> None:
-        root, warnings, _, _ = qml_root
-        root.setProperty("showFunctionRow", True)
-        root.setProperty("showExtraFunctionRow", True)
-        _pump()
-        _panel(root, "functionRowPanel").assignToggled.emit()
-        _pump()
-        assert root.property("fkeyAssignMode") is True
-        assert _panel(root, "extraFunctionRowPanel").property("assignMode") is True
-        _panel(root, "extraFunctionRowPanel").assignToggled.emit()
-        _pump()
-        assert root.property("fkeyAssignMode") is False
-        assert _real_warnings(warnings) == []
-
-    def test_a_tap_in_assign_mode_opens_the_editor_instead_of_typing(self, qml_root) -> None:
-        """The dispatch is a named function so it can be driven directly.
-
-        A synthetic click cannot be delivered to a Repeater delegate
-        reliably here (the offscreen window's layout has not settled, so
-        every key maps to the same scene point), which is how the snippets
-        suite ended up with a dispatch that had no coverage at all.
+        This used to be the inverse of assign mode; with the mode gone it
+        is unconditional, which is what fails if a "tap to program" toggle
+        is ever put back on the row without reading why it left.
         """
         root, warnings, _, synth = qml_root
         root.setProperty("showExtraFunctionRow", True)
-        root.setProperty("fkeyAssignMode", True)
         _pump()
         synth.reset_mock()
         keys = _keys(_panel(root, "extraFunctionRowPanel"))
@@ -316,29 +396,10 @@ class TestAssignModeIsTheLeftClickRoute:
         # emits, so this drives the real branch rather than a helper.
         keys["f13"].keyPressed.emit()
         _pump()
-        # QObject, not QQuickItem: a QML `Popup` is a QQuickPopup, which
-        # is not an Item, so an Item-typed findChild silently returns
-        # None and every assertion after it never runs.
-        editor = root.findChild(QObject, "keyActionEditor")
-        assert editor is not None
-        assert editor.property("keyId") == "f13"
-        assert editor.property("opened") is True
-        assert not synth.send_key.called
-        assert _real_warnings(warnings) == []
-
-    def test_a_tap_outside_assign_mode_types_the_key(self, qml_root) -> None:
-        """The inverse half, without which "always open the editor" passes."""
-        root, warnings, _, synth = qml_root
-        root.setProperty("showExtraFunctionRow", True)
-        root.setProperty("fkeyAssignMode", False)
-        _pump()
-        synth.reset_mock()
-        keys = _keys(_panel(root, "extraFunctionRowPanel"))
-        assert keys
-        keys["f13"].keyPressed.emit()
-        _pump()
         assert synth.send_key.called
         assert synth.send_key.call_args[0][0] == "F13"
+        editor = root.findChild(QObject, "keyActionEditor")
+        assert editor is None or editor.property("opened") is not True
         assert _real_warnings(warnings) == []
 
 

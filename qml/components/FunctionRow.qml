@@ -1,7 +1,6 @@
 import QtQuick 2.15
 
-// A row of function keys, 4-4-4 grouped, plus the toggle that puts the
-// row into assign mode.
+// A row of function keys, 4-4-4 grouped.
 //
 // Instantiated twice by Main.qml: once for F1-F12 (the standard keys
 // every app already binds) and once for F13-F24, which exist because
@@ -48,19 +47,20 @@ Item {
     // editFn(keyId) -> open the action editor for that key.
     property var editFn: null
 
-    // Assign mode is the **left-click route into the editor**, and it is
-    // not a convenience duplicate of the right-click one.  Right-click is
-    // unreachable for a dwell-click, switch-access, head- or eye-tracker
-    // pointer, and for a single-button adaptive mouse: without this, such
-    // a user could press an F-key and never program one.  That is the
-    // same reachability regression the snippets grid documents, which is
-    // why this mirrors its Manage mode rather than inventing a gesture.
+    // **This row has no left-click route into the editor, on purpose.**
     //
-    // Owned by Main.qml (both rows share one mode), so the toggle emits
-    // rather than assigning: writing to the property here would break the
-    // binding that keeps the two rows agreeing.
-    property bool assignMode: false
-    signal assignToggled()
+    // It used to carry an Edit toggle that put every key into "tap to
+    // program" mode, because right-click is unreachable for a dwell-click,
+    // switch-access, head- or eye-tracker pointer and for a single-button
+    // adaptive mouse, and without a second route such a user could press
+    // an F-key and never program one.  That argument still holds; what
+    // changed is where it is answered.  *Settings -> Function Keys* lists
+    // all twenty-four with what each one does and opens the editor on a
+    // tap, which is a bigger target than any key on this row, needs no
+    // mode to get into or out of, and is the only surface that shows an
+    // assignment you have forgotten.  **Do not put a mode toggle back on
+    // the row without first checking that page is gone**, or the row pays
+    // a key's width for a duplicate.
 
     function _actionFor(name) {
         var a = fnRow.actions ? fnRow.actions[name.toLowerCase()] : undefined
@@ -95,29 +95,29 @@ Item {
         var n = 0
         for (var i = 0; i < keyGroups.length; ++i)
             n += keyGroups[i].length
-        return n + 1  // + the assign toggle
+        return n
     }
-    // Gaps *inside* the groups; the gaps *between* them are the outer
-    // Row's spacing, one per group (three groups, three gaps: two
-    // between the groups and one before the toggle).
-    readonly property int _withinGaps: _keyCount - 1 - keyGroups.length
+    // Gaps *inside* the groups (three per group of four), and the gaps
+    // *between* them, which are the outer Row's own spacing: one fewer
+    // than there are groups.
+    readonly property int _withinGaps: _keyCount - keyGroups.length
+    readonly property int _groupGaps: Math.max(0, keyGroups.length - 1)
 
     // **The group gap never gives.  The keys do.**
     //
     // It used to be the other way round, and that is what erased the
-    // 4-4-4 shape on compact: 13 keys against a 13-unit grid leaves 3 px
-    // of slack, so the gap clamped to `keySpacing` and twelve identical
-    // keys rendered as one undifferentiated run, on the view where
-    // telling them apart matters most.  Fixing the gap at the 4-4-4 width
-    // and letting the key width absorb the remainder keeps the grouping
-    // in both views; it costs each compact key `9 * keySpacing / 13`,
-    // which is 0.7 px at the spacing this keyboard actually uses.
+    // 4-4-4 shape on compact: with the Edit toggle in the run this was 13
+    // keys against a 13-unit grid, 3 px of slack, so the gap clamped to
+    // `keySpacing` and twelve identical keys rendered as one
+    // undifferentiated run, on the view where telling them apart matters
+    // most.  The toggle has since moved to Settings and the row is twelve
+    // keys again, but the rule stays: a gap that gives is a gap that
+    // disappears exactly when the row is tightest.
     readonly property real _groupGap: keySpacing * 4
 
-    // The rendered width of every key in this row, the assign toggle
-    // included.  The row spans the keyboard grid exactly, so what used to
-    // sit as empty margin at both ends is divided between the thirteen
-    // keys instead.
+    // The rendered width of every key in this row.  The row spans the
+    // keyboard grid exactly, so what used to sit as empty margin at both
+    // ends is divided between the twelve keys instead.
     //
     // `maxWidth <= 0` means no caller wired the grid width (a test that
     // builds this component on its own), and falls back to one grid
@@ -125,16 +125,11 @@ Item {
     readonly property real _fillKeyW: {
         if (maxWidth <= 0)
             return keyW
-        var w = (maxWidth - _withinGaps * keySpacing - keyGroups.length * _groupGap) / _keyCount
+        var w = (maxWidth - _withinGaps * keySpacing - _groupGaps * _groupGap) / _keyCount
         return w > 0 ? w : keyW
     }
 
     function _activate(name) {
-        if (fnRow.assignMode) {
-            if (fnRow.editFn)
-                fnRow.editFn(name.toLowerCase())
-            return
-        }
         keyboard.pressSpecialKey(name.toLowerCase())
     }
 
@@ -142,9 +137,9 @@ Item {
     // decision on purpose.**
     //
     // It used to draw each F-key exactly one grid column wide and centre
-    // the result, which left a visible margin at both ends: 12 keys
-    // against a 15.5-column grid, then 13 once the assign toggle joined
-    // the run, so 61 px a side at a 940 px window.  That shape was chosen
+    // the result, which left a visible margin at both ends: twelve keys
+    // against a 15.5-column grid, so most of two key widths a side at a
+    // 940 px window.  That shape was chosen
     // the first time this came up, over three ways of filling the width
     // (spending the leftover on the group gaps, which made 108 px chasms;
     // capping that gap, which left it visibly inset and so fixed nothing;
@@ -227,13 +222,10 @@ Item {
                         fontSize: displayText.length > 8 ? 9 : 10
                         isSpecial: true
                         enableRepeat: false
-                        // In assign mode every key is a target for the
-                        // editor, so the whole row takes the accent the
-                        // snippets grid uses for the same state.  Outside
-                        // it, only a reassigned key is marked, so the user
-                        // can see at a glance which keys no longer send
-                        // what their cap used to say.
-                        isActive: fnRow.assignMode || fnRow._isProgrammed(modelData)
+                        // A reassigned key is marked, so the user can see
+                        // at a glance which keys no longer send what their
+                        // cap used to say.
+                        isActive: fnRow._isProgrammed(modelData)
                         keyColor: fnRow.keyColor
                         keyPressedColor: fnRow.keyPressedColor
                         keyTextColor: fnRow.keyTextColor
@@ -241,46 +233,14 @@ Item {
                         borderColor: fnRow.borderColor
                         onKeyPressed: fnRow._activate(modelData)
                         // The fast route for a pointer that can right-click.
-                        // Never the only route: see `assignMode` above.
+                        // Never the only route: *Settings -> Function Keys*
+                        // is the one that needs no right button.  See the
+                        // note at the top of this file.
                         onKeyRightPressed: if (fnRow.editFn)
                             fnRow.editFn(modelData.toLowerCase())
                     }
                 }
             }
-        }
-
-        // The assign toggle.  One key-width, at the end of the row, drawn
-        // through KeyButton so it debounces, flashes and sizes exactly
-        // like the keys beside it rather than being a second kind of
-        // target for an imprecise pointer to learn.  Its width does not
-        // follow its label (Edit / Done are both four characters, but the
-        // rule matters anyway): a control that resizes under a pointer
-        // already travelling toward it is the trap the snippets Manage
-        // button documents.
-        KeyButton {
-            id: assignToggle
-            objectName: "fnAssignToggle"
-
-            // Same shape the keys beside it carry, so anything reading a
-            // key description off this row sees one kind, not two.
-            readonly property var kd: ({ type: "special", action: "assign" })
-
-            keyText: "assign"
-            displayText: fnRow.assignMode ? "Done" : "Edit"
-            keyWidth: fnRow._fillKeyW
-            keyHeight: fnRow.keyH
-            hitMarginH: fnRow.hitMarginH
-            hitMarginV: fnRow.hitMarginV
-            fontSize: 8
-            isSpecial: true
-            enableRepeat: false
-            isActive: fnRow.assignMode
-            keyColor: fnRow.keyColor
-            keyPressedColor: fnRow.keyPressedColor
-            keyTextColor: fnRow.keyTextColor
-            accentColor: fnRow.accentColor
-            borderColor: fnRow.borderColor
-            onKeyPressed: fnRow.assignToggled()
         }
     }
 }

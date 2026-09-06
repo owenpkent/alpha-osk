@@ -910,17 +910,63 @@ Window {
     property var keyActions: ({})
     property var keyActionTypes: []
     property var unboundFunctionKeys: []
-    // One assign mode across both rows: the toggle at the end of either
-    // row puts every function key into "tap to program" until it is
-    // turned off, which is the left-click route into the editor for a
-    // pointer that cannot right-click.
-    property bool fkeyAssignMode: false
+    // One row per programmable key, for the Settings -> Function Keys
+    // list: the key's name, the word on its cap, and a one-line
+    // description of what tapping it does.
+    //
+    // Built here rather than bound per row inside the panel, because the
+    // description is a bridge call: twenty-four of them behind bindings
+    // would re-query on every unrelated property change, and this
+    // recomputes exactly when the assignments do.
+    property var fkeyRows: []
 
     function refreshKeyActions() {
         if (!keyboard) return
         root.keyActions = keyboard.getKeyActions()
         root.keyActionTypes = keyboard.getKeyActionTypes()
         root.unboundFunctionKeys = keyboard.getUnboundFunctionKeys()
+        root.fkeyRows = root.buildKeyActionRows()
+    }
+
+    function buildKeyActionRows() {
+        if (!keyboard) return []
+        var rows = []
+        var ids = keyboard.getProgrammableKeys()
+        for (var i = 0; i < ids.length; ++i) {
+            var id = ids[i]
+            var action = root.keyActions ? root.keyActions[id] : null
+            rows.push({
+                keyId: id,
+                name: id.toUpperCase(),
+                // "Carries an action" is not "has an entry": the `key`
+                // type keeps the keystroke and only renames the cap, so
+                // marking it as reassigned would be a lie, exactly as it
+                // is on the keycap itself (FunctionRow._isProgrammed).
+                label: (action && action.label) ? action.label : "",
+                detail: keyboard.describeKeyAction(id),
+                programmed: !!action && action.type !== "key",
+                unbound: root.unboundFunctionKeys.indexOf(id) >= 0
+            })
+        }
+        return rows
+    }
+
+    // Editing a key from Settings hands off to the editor on the keyboard
+    // window, and the settings window has to get out of the way first.
+    //
+    // Not a nicety.  The editor is typed into with the OSK's own keys,
+    // and the settings window is a 360x540 window parked in the middle of
+    // the screen, so leaving it up can cover the editor, the letter grid
+    // it is typed with, or both.  Hiding it also makes this a drill-down,
+    // which is why settings comes back on the same page afterwards rather
+    // than dumping the user at the home grid: losing your place in a list
+    // of twenty-four is not the same as re-opening a menu.
+    property string settingsReturnView: ""
+
+    function editKeyFromSettings(keyId) {
+        root.settingsReturnView = "fkeys"
+        root.showSettings = false
+        root.openKeyActionEditor(keyId)
     }
 
     function openKeyActionEditor(keyId) {
@@ -931,7 +977,10 @@ Window {
 
     Connections {
         target: keyboard
-        function onKeyActionsChanged(actions) { root.keyActions = actions }
+        function onKeyActionsChanged(actions) {
+            root.keyActions = actions
+            root.fkeyRows = root.buildKeyActionRows()
+        }
     }
 
     // Bounding box of every monitor, in virtual-desktop coordinates.
@@ -2614,8 +2663,6 @@ Window {
                                   + root._widestRow.gaps * root.keySpacing
                         actions: root.keyActions
                         editFn: root.openKeyActionEditor
-                        assignMode: root.fkeyAssignMode
-                        onAssignToggled: root.fkeyAssignMode = !root.fkeyAssignMode
                         keyColor: Qt.darker(root.themeKeyColor, 1.15)
                         keyPressedColor: root.themeKeyPressed
                         keyTextColor: root.themeTextColor
@@ -2642,8 +2689,6 @@ Window {
                                   + root._widestRow.gaps * root.keySpacing
                         actions: root.keyActions
                         editFn: root.openKeyActionEditor
-                        assignMode: root.fkeyAssignMode
-                        onAssignToggled: root.fkeyAssignMode = !root.fkeyAssignMode
                         keyColor: Qt.darker(root.themeKeyColor, 1.15)
                         keyPressedColor: root.themeKeyPressed
                         keyTextColor: root.themeTextColor
@@ -3548,10 +3593,10 @@ Window {
         }
 
         // Editor for one programmable function key. Opened by right-
-        // clicking an F-key, or by left-clicking one while the row's
-        // Edit toggle is on -- the second route is not a duplicate, it is
-        // the only one a dwell-click / switch-access / eye-tracker
-        // pointer has (see the assignMode note in FunctionRow.qml).
+        // clicking an F-key, or from *Settings -> Function Keys*, which
+        // is not a duplicate route: it is the only one a dwell-click /
+        // switch-access / eye-tracker pointer has, and the only surface
+        // that shows an assignment the user has forgotten about.
         Comp.KeyActionEditor {
             id: keyActionEditor
             objectName: "keyActionEditor"
@@ -3569,6 +3614,17 @@ Window {
             inkColor: root.themeTextColor
             accentColor: root.themeAccent
             borderColor: root.themeBorder
+        }
+
+        // The return leg of `editKeyFromSettings`. Guarded on the return
+        // view being set, so an editor opened by right-clicking a key
+        // does not pop the settings window open behind it.
+        Connections {
+            target: keyActionEditor
+            function onClosed() {
+                if (root.settingsReturnView !== "")
+                    root.showSettings = true
+            }
         }
 
         // Snippets: the user's saved quick text (name, email, phone,
@@ -4510,7 +4566,18 @@ Window {
             if (visible) {
                 settingsWindow.x = Screen.width / 2 - settingsWindow.width / 2
                 settingsWindow.y = Screen.height / 2 - settingsWindow.height / 2
-                if (settingsPanel) settingsPanel.resetToHome()
+                // Home every time, so re-opening settings never lands
+                // on a deep page ("the menu changed"). The one exception
+                // is coming back from the key editor, which is a
+                // drill-down rather than a re-open.
+                if (settingsPanel) {
+                    if (root.settingsReturnView !== "") {
+                        settingsPanel.currentView = root.settingsReturnView
+                        root.settingsReturnView = ""
+                    } else {
+                        settingsPanel.resetToHome()
+                    }
+                }
                 root.refreshDictation(true)
             }
         }
@@ -4522,6 +4589,7 @@ Window {
 
         Comp.UnifiedSettingsPanel {
             id: settingsPanel
+            objectName: "settingsPanel"
             anchors.fill: parent
 
             // Dictation.  Everything except `dictationEnabled` is pulled
@@ -4534,6 +4602,7 @@ Window {
 
             showFunctionRow: root.showFunctionRow
             showExtraFunctionRow: root.showExtraFunctionRow
+            keyActionRows: root.fkeyRows
             showNavigation: root.showNavigation
             showNumpad: root.showNumpad
             currentTheme: root.currentTheme
@@ -4713,6 +4782,7 @@ Window {
             }
 
             onCloseRequested: root.showSettings = false
+            onEditKeyRequested: function(keyId) { root.editKeyFromSettings(keyId) }
             onShowHelpRequested: root.showHelp = true
             onShowVisualizationRequested: root.showVisualization = true
             onCheckForUpdatesNowRequested: {

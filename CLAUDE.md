@@ -608,7 +608,7 @@ can say which keys are free before the user commits (reassigning F5 costs
 them refresh in every app; reassigning F17 costs nothing).
 
 ### Its own panel toggle, not a second line in the F1-F12 row
-*Settings -> Appearance -> Panels -> "Extra Function Keys (F13-F24)"*,
+*Settings -> Function Keys -> Show -> "Extra Function Keys (F13-F24)"*,
 independent of the F1-F12 toggle. Someone who wants only the twelve macro
 keys must not have to spend the height of the standard row to get them.
 The extra row renders **above** F1-F12 so toggling it never moves the row
@@ -773,14 +773,32 @@ are ordinary buttons in the popup.
 **Right-click an F-key opens its editor, and that must never be the only
 route.** A dwell-click, switch-access, head- or eye-tracker pointer, and a
 single-button adaptive mouse all have no right button, so right-click alone
-would let such a user press an F-key and never program one. The **Edit
-toggle at the end of every visible function row** is the left-click route:
-it flips both rows into assign mode, where a left-click on any F-key opens
-its editor. This mirrors the snippets grid's Manage mode rather than
-inventing a gesture, and it is on *every* visible row so it can neither
-vanish with a row nor move under a pointer already travelling toward it.
+would let such a user press an F-key and never program one. The left-click
+route is ***Settings -> Function Keys***, which lists all twenty-four with
+what each one currently does and opens the editor on a tap.
 
-**The toggle takes its share of the gap around it, like every other key.**
+**That page replaced an Edit toggle on the row itself**, which flipped both
+rows into an assign mode where a left-click opened the editor. The list
+answers the same requirement strictly better: its rows are far bigger
+targets than a 36 px keycap, there is no mode to get into or out of (the
+mode's only exit was the same key that entered it, sitting one pixel from
+F12), and it is the only surface that shows an assignment the user has
+forgotten making, which twelve identical keycaps cannot. Removing the
+toggle also gave the row its thirteenth key's width back. **Don't put a
+mode toggle back on the row without first checking that page is gone.**
+
+**Tapping a row hands off to the editor on the keyboard window, and hides
+the settings window to do it.** The editor is typed into with the OSK's own
+keys and the settings window cannot hold OS focus, so the editor cannot
+live inside it (the Deepgram key field carries the same note); leaving a
+360x540 window parked mid-screen would cover the editor, the letter grid it
+is typed with, or both. `root.settingsReturnView` brings settings back on
+the same page afterwards, which is the one documented exception to
+"re-opening Settings always lands on the home grid" (see *Settings Panel
+Structure*). The inverse matters as much and is tested: an editor opened by
+right-clicking a key must **not** pop the settings window open behind it.
+
+**Every key takes its share of the gap around it.**
 `FunctionRow`'s `hitMarginH` / `hitMarginV` default to 0 and there is no
 cascade, so a `KeyButton` whose caller forgets to pass them leaves the
 strip between it and its neighbour dead (see *Dead space between keys*).
@@ -792,25 +810,42 @@ needs its own bindings from `Main.qml`. Guarded by
 which walks the tree with both function rows switched on and fails on any
 key holding a zero margin.
 
-### Geometry: the group gap gives, never a key width
-Adding the Edit toggle made the row **13 keys**, which is exactly the
-compact grid's 13 units. The keys fit; it was the 4-4-4 group gaps that
-pushed the panel past the keyboard underneath it. `FunctionRow._groupGap`
-is therefore derived from a `maxWidth` the caller passes (the keyboard grid
-width), clamped between one ordinary key gap and the historical
-`keySpacing * 4`. On compact it bottoms out and the row lands exactly flush
-with the grid, the way the Number Row does; on the full-size layouts the
-slack is most of a key width, the clamp never bites, and the 4-4-4 shape is
-byte-identical to what it was.
+### Geometry: the keys fill the grid, the group gap never gives
 
-**This is not one of the three rejected redesigns.** Those each tried to
-fill the grid width by *stretching keys*, and were reverted after being
-photographed side by side; the note in `FunctionRow.qml` still stands. The
-property that distinguishes this from them is that **no key ever grew** -
-an F-key is still exactly one grid column, the same width as the key under
-it. `tests/test_qml_compact_view.py::TestPanelsSitFlushWithTheGrid` was
-updated to assert that (and `<=` the grid rather than the old strict `<`,
-which was written when the row was 12 keys with nothing else in it).
+**The row spans the keyboard grid exactly, and it is the key width that
+absorbs the leftover.** `FunctionRow._fillKeyW` divides `maxWidth` (the
+grid width, passed by `Main.qml`) between the twelve keys after taking out
+9 internal gaps and 2 group gaps; `_groupGap` is a fixed `keySpacing * 4`.
+At a 940 px window that makes an F-key 75.6 px against the 58.7 px key
+directly below it, about 29% wider.
+
+**This reverses the earlier decision, on purpose and with the picture in
+front of us.** The row used to draw each F-key exactly one grid column wide
+and centre the result, which is what the original note in `FunctionRow.qml`
+defended against three rejected redesigns that each tried to fill the width
+by stretching keys. That note said not to revisit the inset "without
+rendering the result next to the number row", which is exactly what was
+done the second time, and stretching won: on a keyboard driven by an
+imprecise pointer, a quarter more target width outranks lining up with the
+column below. The accepted cost is that no F-key lines up with the key
+under it any more, and at 29% wider and 30% shorter the row reads a little
+bar-like. **The rule survives, pointing the other way: don't change this
+back without rendering it next to the number row.**
+
+**The group gap is fixed because a gap that gives is a gap that disappears
+exactly when the row is tightest.** It used to be the thing that gave, and
+while the Edit toggle made this row 13 keys against compact's 13-unit grid
+there were 3 px of slack, so it clamped to `keySpacing` and 4-4-4 rendered
+as one undifferentiated run, on the view where telling twelve identical
+keys apart matters most. The grouping now survives in both views.
+
+`tests/test_qml_compact_view.py::TestPanelsSitFlushWithTheGrid::test_function_row_fills_the_widest_keyboard_row`
+pins three things, and the last two are what a width check alone cannot
+see: the panel is flush with the grid; the fill width accounts for 12 keys
+plus 9 internal gaps plus 2 group gaps (so a wrong key count or a changed
+gap moves it); and the group gap holds at the 4-4-4 width in **both**
+views. It used to assert that no key ever grew, which is the assertion this
+change reverses.
 
 ### Testing notes
 `tests/test_key_actions.py` (store, registry, sanitisers, dispatch against a
@@ -837,23 +872,28 @@ failure the snippet store already had once.
 
 ## Settings Panel Structure
 
-`UnifiedSettingsPanel.qml` is a drill-down menu, not a long scrolling list. The home view shows five category cards; clicking a card swaps the body to that category's sub-view. The header swaps in a back arrow (<) and the category title; the close X stays put.
+`UnifiedSettingsPanel.qml` is a drill-down menu, not a long scrolling list. The home view shows six category cards; clicking a card swaps the body to that category's sub-view. The header swaps in a back arrow (<) and the category title; the close X stays put.
 
-State is held in a single string property: `currentView` is one of {`"home"`, `"appearance"`, `"typing"`, `"dictation"`, `"model"`, `"data"`}. The Flickable contains six sibling `ColumnLayout`s, each with `visible: unifiedSettings.currentView === "<id>"`; only one renders at a time. Scroll position is reset to the top on every view change (a `Connections` block on `currentView`) so a drilled-in view never opens mid-section.
+State is held in a single string property: `currentView` is one of {`"home"`, `"appearance"`, `"typing"`, `"fkeys"`, `"dictation"`, `"model"`, `"data"`}. The Flickable contains seven sibling `ColumnLayout`s, each with `visible: unifiedSettings.currentView === "<id>"`; only one renders at a time. Scroll position is reset to the top on every view change (a `Connections` block on `currentView`) so a drilled-in view never opens mid-section.
 
 The parent (`Main.qml`'s settings popup window) calls `settingsPanel.resetToHome()` in `onVisibleChanged` so re-opening Settings always lands on the home grid, not whatever sub-page the user last visited. Don't break that - landing on a deep page reads as "the menu changed."
+
+**The one exception is `root.settingsReturnView`, and it is a return rather than a re-open.** Tapping a key in *Function Keys* hides the settings window and opens the key editor, which lives on the **keyboard** window because it is typed into with the OSK's own keys and the settings window cannot hold OS focus (the Deepgram key field carries the same note). Leaving a 360x540 window parked mid-screen would cover the editor, the letter grid it is typed with, or both. `settingsWindow.onVisibleChanged` consumes `settingsReturnView` when it is set and calls `resetToHome()` otherwise, so only that hand-off lands deep; coming back to the home grid there would lose the user's place in a list of twenty-four. Guarded by `tests/test_qml_function_row.py::TestTheSettingsListIsTheLeftClickRoute`, whose inverse half asserts an editor opened by right-clicking a key does **not** pop the settings window open behind it.
 
 ### Where each section lives
 
 | Top-level | Section | What's inside |
 |-----------|---------|---------------|
-| **Appearance** | Panels | Compact View / Function row (F1-F12) / Extra function row (F13-F24) / Navigation / Numpad toggles. Compact View leads the section because it gates the two below it: it forces Navigation + Numpad off (restoring them on exit) and renders their toggles disabled. There is no Number Row toggle - `Main.qml::showNumberRow` derives from whether the active layout JSON already carries a `number` row, so the standalone panel appears exactly on the compact layouts, which lack one. |
+| **Appearance** | Panels | Compact View / Navigation / Numpad toggles. The two function-row toggles are deliberately **not** here: they moved to the Function Keys category, which owns the whole feature (showing a row and deciding what is on it are one job). Compact View leads the section because it gates the two below it: it forces Navigation + Numpad off (restoring them on exit) and renders their toggles disabled. There is no Number Row toggle - `Main.qml::showNumberRow` derives from whether the active layout JSON already carries a `number` row, so the standalone panel appears exactly on the compact layouts, which lack one. |
 | | Keyboard Layout | qwerty / dvorak / colemak picker (compact variants are filtered out - see *Compact View*) |
 | | Theme | 9-theme color picker |
 | | Sound & Opacity | Key click sound, opacity slider |
 | **Smart Typing** | Suggestions | Show suggestions, auto-space, intelligent spacing, auto-cap, max count |
 | | Suggestion Engine | Merge strategy 4-card picker (rank / rrf / linear / loglinear) |
 | | Input | Right-click shift, key preview popup, Compatibility Mode picker, repeat delay & interval |
+| **Function Keys** | Show | Function Keys (F1-F12) and Extra Function Keys (F13-F24) row toggles, moved here from Appearance -> Panels |
+| | F13-F24 | One row per key: the label on its cap, a one-line description of what tapping it does, and a tap to program it. Listed **before** F1-F12 because these are the keys the feature is for, and scrolling past twelve keys nobody should reassign on every visit is the wrong default |
+| | F1-F12 | The same list for the standard keys, under a note that reassigning F5 costs the user refresh in every app |
 | **Dictation** | Voice Input | Enable Dictation, Type As You Speak |
 | | Transcription Service | Deepgram API key, model, language |
 | | Microphone | Input device picker |
