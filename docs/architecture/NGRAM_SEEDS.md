@@ -285,18 +285,82 @@ starting point; trigrams are a separate decision that should be made on
 measured prediction quality rather than on the fact that the file can be
 generated.
 
+## Measured result
+
+`scripts/bench/ksr.py --corpus aac-dev` / `aac-test`, cold-start engine, five
+pills. Each row adds to the one above it.
+
+| | dev KSR | test KSR | dev next-word | test next-word | never predicted |
+|---|---|---|---|---|---|
+| curated seeds only | 47.3% | 48.7% | 22.9% | 25.2% | 15.0 / 14.3% |
+| + `seed_bigrams.txt` | 48.4% | 49.8% | 26.3% | 28.4% | 13.8 / 13.3% |
+| **+ `seed_trigrams.txt` (shipped)** | **49.1%** | **50.4%** | **28.7%** | **30.4%** | **13.6 / 13.0%** |
+| + trigrams at 50k contexts | 49.1% | 50.7% | 28.9% | 31.1% | 13.6 / 13.0% |
+
+**+1.8 and +1.7 points of keystroke savings, and +5.8 and +5.2 points of
+next-word hit rate.** The next-word figure is the one to watch: it is the
+metric these tables directly address, and it moved four times as far as KSR
+did, because KSR averages it in with the mid-word completions the prefix beam
+was already handling.
+
+The two splits move together on every row, which is what makes this readable
+as a real effect rather than noise. A single split's 1.4-point disagreement
+with the other is the right yardstick for whether *one* number generalises; it
+is the wrong one for a paired before-and-after on the same text, which holds
+everything but the change constant, and it would be the wrong one twice over
+for a change that reproduces on the second split.
+
+**Trigrams stop at 20,000 contexts.** Going to 50,000 costs 2.5x the file
+(3.47 MB against 1.38 MB) and 67 ms more at launch, and buys +0.0 on dev and
++0.3 on test. The frequency-ranked context prune works, in other words: the
+contexts worth shipping really are the frequent ones, and the tail is tail.
+
+Cost of the whole thing: **2.56 MB on disk and 121 ms at launch**, against
+1.8 ms for the curated seeds alone. Per-keystroke latency went from 2.1 ms to
+2.6 ms at p50.
+
+## Sentence-start: a negative result, and a caveat that outweighs it
+
+The `<s>` row conditions the first word of a sentence, replacing a fallback to
+raw unigram frequency. **On the benchmark it is worth exactly nothing**: 170
+of 557 first words in the top five either way, byte-identical KSR. The reason
+is that the top five unigrams (`i, you, to, the, it`) already contain the
+common sentence openers, and the metric only asks whether the word is in the
+set, not where.
+
+It ships anyway, and the reason is that the benchmark cannot see the case it
+is for. Each line of the AAC sets is a single sentence and `normalise` strips
+the punctuation, so *every* sentence start in the bench is the empty-context
+case. The other case is a second sentence in the same field, where the engine
+used to condition the next word on the last word of the previous sentence:
+
+```
+context                                 before                      after
+'i am tired. '                          of, and, to, from, but      I, the, it, if, you
+'thanks for the help. '                 me, you, with, to, the      I, the, it, if, you
+'can you help me? '                     with, the, a, know, and     I, the, it, if, you
+```
+
+"of" is not a word anybody starts a sentence with. Measuring this needs an
+evaluation corpus of multi-sentence text with its punctuation intact, which
+is a different corpus than the one we have, so the honest summary is: no
+measured gain, an obvious defect fixed, and a gap in the benchmark recorded
+rather than papered over.
+
+`NgramPredictor.use_sentence_start_context` turns it off, and
+`ksr.py --conditions no-sentence-start` is the bench condition. It is inert
+when no `<s>` row was loaded, so a model built without the seeds behaves
+exactly as before.
+
 ## Not done yet
 
-Three things, in order:
+**Backoff weights.** The generated files carry a `\backoff:` section and
+nothing reads it; `load_seed_ngrams` skips it deliberately rather than paying
+load time for a table no caller uses. That is still
+[known gap #3](PREDICTION_NOTES.md), and it is now a *smaller* prize than it
+was: the seeds fill in 13,437 bigram and 20,000 trigram contexts directly, so
+the sparse-context case backoff exists to rescue is much rarer than it was
+before. Worth doing on its own merits and its own measurement, not worth
+bundling here.
 
-1. **A loader.** Nothing reads the `\backoff:` section, so the generated files
-   are inert. The counts could be loaded by the existing seed loaders with
-   small changes; the backoff weights need `NgramPredictor.predict` to use
-   them, which is the actual gap #3 work.
-2. ~~An evaluation set that can decide this.~~ **Done.**
-   `scripts/bench/ksr.py --corpus aac-dev` / `aac-test` runs against the AAC
-   splits, and `PREDICTION_NOTES.md` records the cold-start baselines: 47.3%
-   and 48.7% KSR, against 54.9% on the 30 hand-written sentences the bench
-   used to have. The two AAC splits differ from each other by 1.4 points,
-   which is the noise floor any claimed improvement has to clear.
-3. **A decision on trigrams**, made on (2).
+**A multi-sentence evaluation corpus**, per the sentence-start caveat above.

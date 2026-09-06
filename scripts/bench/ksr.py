@@ -149,6 +149,7 @@ VALID_CONDITIONS = {
     "no-ppm",
     "no-fuzzy",
     "legacy-fuzzy",
+    "no-sentence-start",
     "ppm-merge",
     "rank",
     "rrf",
@@ -345,6 +346,18 @@ def apply_condition(hp: HybridPredictor, name: str) -> Iterator[None]:
             yield
         finally:
             hp._fuzzy.get_fuzzy_predictions = real_get_fuzzy  # type: ignore[method-assign]
+        return
+    if name == "no-sentence-start":
+        # Condition the first word of a sentence on raw unigram frequency,
+        # the way the engine did before data/seed_bigrams.txt supplied a
+        # <s> row. Roughly one word in five starts a sentence in the AAC
+        # sets, so this is not a small slice of the corpus.
+        previous_start = hp._ngram.use_sentence_start_context
+        hp._ngram.use_sentence_start_context = False
+        try:
+            yield
+        finally:
+            hp._ngram.use_sentence_start_context = previous_start
         return
     if name == "ppm-merge":
         # Put the character model's word candidates back into the merge, the
