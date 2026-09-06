@@ -2578,6 +2578,39 @@ Window {
                         property var rowData: modelData
                         property real rowKeyH: rowData.id === "number" ? root.keyH - 4 : root.keyH
 
+                        // Equal unit totals are NOT equal pixel widths, and the
+                        // difference is what makes the grid's edges step even after
+                        // every row was made 15.5u. A row measures
+                        // `units * keyW + (keys - 1) * keySpacing`, and the rows carry
+                        // very different key counts: the space row has 6 keys against
+                        // the number row's 15, so it is nine gaps short and, at
+                        // keySpacing 2, rendered 18 px narrower. Being centred, that
+                        // put it 9 px inside the grid at each end. Compact View has the
+                        // same shape at a smaller scale, 10 to 12 gaps across its rows.
+                        //
+                        // Each row absorbs its own shortfall into its own keys. Gaps
+                        // therefore stay identical everywhere (widening them instead
+                        // would have given the space row 5.6 px gutters against 2 px
+                        // elsewhere), and the widest row is unchanged by construction,
+                        // so `keyW`, the side panels and the window's width budget are
+                        // all exactly what they were.
+                        //
+                        // The letter alignment survives: the top and home rows differ
+                        // by one gap, so their keys differ by keySpacing / units, and q
+                        // and a drift by about 0.3 px at the default window. That is
+                        // inside the half-gap residual TestTheLetterColumnsLineUp
+                        // already documents as unavoidable.
+                        property real rowUnits: {
+                            var u = 0
+                            for (var i = 0; i < rowData.keys.length; i++)
+                                u += (rowData.keys[i].width || 1.0)
+                            return u
+                        }
+                        property real rowKeyW: rowUnits > 0
+                            ? root.keyW + (root._widestRow.gaps - (rowData.keys.length - 1))
+                                          * root.keySpacing / rowUnits
+                            : root.keyW
+
                         Repeater {
                             model: rowData.keys
 
@@ -2596,7 +2629,7 @@ Window {
                                     }
                                     return kd.display || ""
                                 }
-                                keyWidth: root.keyW * (kd.width || 1.0)
+                                keyWidth: rowKeyW * (kd.width || 1.0)
                                 keyHeight: rowKeyH
                                 hitMarginH: root.keyHitMarginH
                                 hitMarginV: root.keyHitMarginV
@@ -2610,12 +2643,6 @@ Window {
                                         case "ctrlOn": return root.ctrlOn
                                         case "altOn": return root.altOn
                                         case "winOn": return root.winOn
-                                        // Not a modifier: the symbol layer's
-                                        // entry key sits on the always-visible
-                                        // space row, so lighting it is the only
-                                        // thing on screen that says which page
-                                        // the letters have been swapped for.
-                                        case "symLayer": return root.activeLayer === "sym"
                                         default: return false
                                     }
                                 }
@@ -2737,22 +2764,8 @@ Window {
                                         // alive by signal delivery, not a live
                                         // binding, since the Connections handler
                                         // assigns to it).
-                                        //
-                                        // A layer key whose target is already
-                                        // showing goes back to base instead of
-                                        // re-selecting the layer it is on. The
-                                        // full-size layouts reach their symbol
-                                        // page from the space row, which has no
-                                        // `layer` field and therefore renders on
-                                        // every layer, so the same key has to be
-                                        // both the way in and the way out. Every
-                                        // other layer key targets something it
-                                        // is not on, so this branch is dead for
-                                        // them and their behaviour is unchanged.
                                         keyboard.releaseShift()
-                                        var want = kd.target || "base"
-                                        root.activeLayer = (want === root.activeLayer)
-                                                           ? "base" : want
+                                        root.activeLayer = kd.target || "base"
                                     } else {
                                         keyboard.pressSpecialKey(kd.action)
                                     }

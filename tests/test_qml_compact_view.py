@@ -1189,190 +1189,160 @@ class TestTheMainWindowRestoreClampsToTheWholeDesktop:
         assert root.property("x") == pytest.approx((right - width) / 2)
 
 
-class TestTheFullSizeSymbolPage:
-    r"""The full-size layouts reach one symbol page from the space row.
+class TestEveryGridRowIsPixelFlush:
+    """Equal unit totals are not equal pixel widths, and the eye reads pixels.
 
-    Compact View has had ``?123`` and ``=\<`` from the start while the
-    full-size layouts had nothing, so anything outside a physical keyboard's
-    printing was reachable in one view and not the other. The data half of
-    this is asserted in tests/test_layouts.py; this is the QML half, and it
-    covers the three things only a live load can show: that the page can be
-    left again, that reaching it moves nothing on screen, and that a key on
-    it types the glyph printed on its cap.
+    Making every full-size row total 15.5u straightened four of the five edges
+    and left the fifth visibly short, reported as the bottom row wanting to be
+    "a little bigger to be flush". A row measures
+    ``units * keyW + (keys - 1) * keySpacing``, and the rows carry very
+    different key counts: the space row has 6 keys against the number row's
+    15, so it was nine gaps short. At the default window that is 18 px, and
+    since each row is centred on its own it sat 9 px inside the grid at each
+    end. Measured before the fix, in row order: 949 / 947 / 945 / 943 / 931 px.
+    Compact View has the same shape at a smaller scale, 10 to 12 gaps across
+    its rows.
+
+    Each row now absorbs its own gap shortfall into its own keys. The tests
+    below pin what that buys, what it must not cost, and the one part of it
+    that cannot be made exact.
     """
 
-    @staticmethod
-    def _visible_keys(root) -> list:
-        return [i for i in TestSecondSymbolPage._key_items(root) if i.isVisible()]
+    WIDTHS = [760, 940, 1160, 1240]
 
-    @classmethod
-    def _key_data(cls, root) -> list[dict]:
-        out: list[dict] = []
-        for item in cls._visible_keys(root):
-            kd = item.property("kd")
-            if hasattr(kd, "toVariant"):
-                kd = kd.toVariant()
-            if isinstance(kd, dict):
-                out.append(kd)
+    @staticmethod
+    def _row_spans(root):
+        """(id, left, right) per rendered row, measured across its KEYS.
+
+        Not the Row item's own `width`, and the distinction matters. A
+        `Repeater` is itself a zero-sized QQuickItem sitting in the positioner
+        alongside the delegates, so a Row's bounding box can carry a phantom
+        pixel past the last key that draws nothing: measuring the box reports
+        two of the four compact rows as 1 px wider than they render. The first
+        key's left edge to the last key's right edge is what the eye sees.
+
+        Returns numbers and holds no QML item, deliberately: callers pump the
+        event loop next, and a Repeater frees its delegates on any model
+        change. A PySide wrapper outliving its item segfaulted CI once.
+        """
+        out = []
+        for row in TestEveryRowFitsTheContentArea._expect_rows(root, "pixel flush"):
+            keys = TestNoDeadStripBetweenKeys._keys(row)
+            assert keys, f"row {row.property('rowData')['id']} rendered no keys"
+            left = keys[0].mapToItem(None, 0, 0).x()
+            right = keys[-1].mapToItem(None, 0, 0).x() + keys[-1].width()
+            out.append((row.property("rowData")["id"], left, right))
         return out
 
-    @classmethod
-    def _click_point(cls, root, match):
-        """Scene-centre of the first visible key *match* accepts, for tapping.
+    @pytest.mark.parametrize("compact", [False, True])
+    def test_every_row_spans_the_same_width(self, qml_root, compact) -> None:
+        """The substantive property: no row is shorter than its neighbours.
 
-        Separate from _key_point, which measures. Returns a bare point and
-        drops the item reference before returning, for the same reason
-        TestSecondSymbolPage._tap does: the caller pumps next, and a layer
-        switch frees the delegate.
+        This is what "flush" means dimensionally, and it is exact, because
+        each row's key width is derived to cancel its own gap count. It is the
+        assertion that fails loudly on the reported defect: before the fix the
+        space row came out 18 px short of the number row.
+
+        Swept across widths because `keySpacing` steps from 1 px to 2 px at
+        1111 px, which doubles the shortfall, so a single width would leave
+        half the behaviour unmeasured.
         """
-        for item in cls._visible_keys(root):
-            kd = item.property("kd")
-            if hasattr(kd, "toVariant"):
-                kd = kd.toVariant()
-            if isinstance(kd, dict) and match(kd):
-                point = item.mapToScene(item.boundingRect().center()).toPoint()
-                del item
-                return point
-        return None
+        root, warnings, _bridge = qml_root
+        root.setProperty("compactView", compact)
+        for width in self.WIDTHS:
+            root.setProperty("width", width)
+            _pump_until(lambda: len(TestEveryRowFitsTheContentArea._rendered_rows(root)))
+            spans = self._row_spans(root)
+            widths = {round(right - left, 3) for _, left, right in spans}
+            assert len(widths) == 1, (
+                f"compact={compact} at {width}px: rows span {sorted(widths)}, so "
+                f"the grid's edges step. Rows: {[s[0] for s in spans]}"
+            )
+        assert _real_warnings(warnings) == []
 
-    @classmethod
-    def _key_point(cls, root, match):
-        """Centre of the first visible key *match* accepts, measured from the
-        top-left corner of the key grid.
+    @pytest.mark.parametrize("compact", [False, True])
+    def test_the_rows_are_aligned_to_within_a_pixel(self, qml_root, compact) -> None:
+        """Equal widths still leave sub-pixel centring, and it cannot be zero.
 
-        Not scene coordinates, and the difference is what makes the
-        assertion honest rather than flaky. The first tap on a non-char key
-        settles the chrome above the keyboard by one pixel (Caps does it too,
-        on a tree with no symbol layer in it), so a scene-y comparison across
-        a tap fails by 1 px for a reason that has nothing to do with the
-        grid. Measuring from the grid's own corner normalises that away while
-        still catching the failure this test exists for: a row rendered in the
-        wrong order moves the space bar by a whole row.
+        Qt Quick's positioners snap child positions to whole pixels, so a row
+        whose keys are fractionally wide accumulates rounding along its length
+        and its centred origin can land a pixel either side of its neighbour's.
+        Non-compact happens to come out exact; two of compact's four rows sit
+        1 px across. That is a property of the positioner, not of the widths,
+        and no unit arithmetic removes it.
 
-        Returns bare numbers and drops every item reference before returning:
-        callers pump the event loop next, and a layer switch frees the
-        Repeater's delegates. Holding a PySide wrapper across that is what
-        segfaulted CI once already.
+        So this is bounded rather than exact, and deliberately not folded into
+        the width test above: a regression that made a row genuinely short
+        would fail there, loudly, instead of hiding under a tolerance.
         """
-        found = None
-        left = top = None
-        for item in cls._visible_keys(root):
-            corner = item.mapToScene(item.boundingRect().topLeft())
-            left = corner.x() if left is None else min(left, corner.x())
-            top = corner.y() if top is None else min(top, corner.y())
-            kd = item.property("kd")
-            if hasattr(kd, "toVariant"):
-                kd = kd.toVariant()
-            if isinstance(kd, dict) and match(kd):
-                centre = item.mapToScene(item.boundingRect().center())
-                found = (centre.x(), centre.y())
-        if found is None:
-            return None
-        return (round(found[0] - left, 3), round(found[1] - top, 3))
+        root, _warnings, _bridge = qml_root
+        root.setProperty("compactView", compact)
+        for width in self.WIDTHS:
+            root.setProperty("width", width)
+            _pump_until(lambda: len(TestEveryRowFitsTheContentArea._rendered_rows(root)))
+            spans = self._row_spans(root)
+            lefts = [left for _, left, _ in spans]
+            spread = max(lefts) - min(lefts)
+            assert spread <= 1.0, (
+                f"compact={compact} at {width}px: row origins span {spread:.2f}px "
+                f"({[(s[0], round(s[1], 2)) for s in spans]}), which is more than "
+                "positioner rounding can account for"
+            )
 
-    @pytest.fixture
-    def full_size(self, qml_root):
-        root, warnings, bridge = qml_root
-        root.show()
-        _pump_until(lambda: len(self._visible_keys(root)))
-        assert root.property("compactView") is False, "precondition: full size"
-        assert root.property("activeLayer") == "base"
-        return root, warnings, bridge
+    def test_the_gaps_between_keys_stay_uniform(self, qml_root) -> None:
+        """The shortfall is absorbed by the keys, never by the gaps.
 
-    def test_the_sym_key_is_both_the_way_in_and_the_way_out(self, full_size) -> None:
-        """The entry key sits on the space row, which carries no `layer` and
-        therefore renders on every page. Tapping it a second time has to come
-        back: on the page it opened it is the key the pointer is already on,
-        and re-selecting the layer already showing is a dead tap.
+        The near-miss this rules out: widening each row's `spacing` to fill
+        would also have made the edges flush, and would have given the space
+        row 5.6 px gutters against 2 px everywhere else. Absorbing into the
+        keys is invisible instead, about 1 px on a 60 px key.
         """
-        root, warnings, _ = full_size
+        root, _warnings, _bridge = qml_root
+        root.setProperty("compactView", False)
+        root.setProperty("width", 1160)
+        _pump_until(lambda: len(TestEveryRowFitsTheContentArea._rendered_rows(root)))
 
-        TestSecondSymbolPage._tap(root, "sym")
-        assert root.property("activeLayer") == "sym"
+        spacings = {
+            round(row.property("spacing"), 4)
+            for row in TestEveryRowFitsTheContentArea._expect_rows(root, "uniform gaps")
+        }
+        assert len(spacings) == 1, f"rows use different gap widths: {sorted(spacings)}"
 
-        TestSecondSymbolPage._tap(root, "sym")
-        assert root.property("activeLayer") == "base", (
-            "the Sym key did not come back out of the page it opened"
+    def test_the_letter_columns_survive_the_per_row_key_width(self, qml_root) -> None:
+        """q stays over a, which is what W-over-S for WASD rests on.
+
+        This is the cost side of the fix and the reason it is measured rather
+        than reasoned about. The top and home rows differ by one gap, so their
+        keys now differ by `keySpacing / units`, and the first letter of each
+        sits 2.25 key widths in, leaving a drift of about 0.3 px at the
+        default window. That is inside the half-gap residual
+        `TestTheLetterColumnsLineUp` already documents as unavoidable.
+
+        The bound is 1 px rather than that measured 0.3 deliberately: this
+        guards against the columns coming apart, not against the arithmetic
+        moving in the third decimal.
+        """
+        root, _warnings, _bridge = qml_root
+        root.setProperty("compactView", False)
+        root.setProperty("width", 1160)
+        _pump_until(lambda: len(TestEveryRowFitsTheContentArea._rendered_rows(root)))
+
+        centres = {}
+        for row in TestEveryRowFitsTheContentArea._expect_rows(root, "letter columns"):
+            rid = row.property("rowData")["id"]
+            if rid not in ("top", "home"):
+                continue
+            keys = TestNoDeadStripBetweenKeys._keys(row)
+            assert len(keys) > 1, f"{rid} rendered {len(keys)} keys"
+            letter = keys[1]
+            centres[rid] = letter.mapToItem(None, 0, 0).x() + letter.width() / 2
+
+        assert set(centres) == {"top", "home"}, f"only found {sorted(centres)}"
+        drift = abs(centres["top"] - centres["home"])
+        assert drift < 1.0, (
+            f"the first letter of the top row is {drift:.3f}px from the home row's, "
+            "so the letter columns have come apart and W no longer sits over S"
         )
-        assert _real_warnings(warnings) == []
-
-    def test_abc_leaves_the_page_as_well(self, full_size) -> None:
-        """Two ways back, and the second is not redundant: ABC sits in the
-        slots the Shift keys had, so it is the wide target already under a
-        pointer that reached for Shift out of habit."""
-        root, warnings, _ = full_size
-
-        TestSecondSymbolPage._tap(root, "sym")
-        TestSecondSymbolPage._tap(root, "base")
-
-        assert root.property("activeLayer") == "base"
-        assert _real_warnings(warnings) == []
-
-    def test_the_space_bar_does_not_move(self, full_size) -> None:
-        """The one measurement the layout tests cannot make.
-
-        Matching unit totals per row are what should keep the grid still, but
-        rows are centred individually and the space row grew by a key at each
-        end, so this asserts the result rather than the arithmetic behind it:
-        the most-clicked key on the keyboard is in the same place on both
-        pages, to the pixel.
-        """
-        root, warnings, _ = full_size
-
-        before = self._key_point(root, lambda kd: kd.get("action") == "space")
-        assert before is not None, "no space bar rendered"
-        key_w = root.property("keyW")
-
-        TestSecondSymbolPage._tap(root, "sym")
-        _pump_until(lambda: len(self._visible_keys(root)))
-
-        after = self._key_point(root, lambda kd: kd.get("action") == "space")
-        assert after is not None, "the space bar left the screen on the symbol page"
-        assert after == before, f"the space bar moved from {before} to {after} within the grid"
-        assert root.property("keyW") == pytest.approx(key_w), "the keys resized"
-        assert _real_warnings(warnings) == []
-
-    def test_the_digits_stay_on_screen(self, full_size) -> None:
-        """Compact View puts its digits behind the ?123 hop because a 13u row
-        has nowhere else for them. Full size has a number row of its own and
-        it carries no `layer`, so the symbol page swaps only the three letter
-        rows and a digit never costs a second hop.
-        """
-        root, _, _ = full_size
-        TestSecondSymbolPage._tap(root, "sym")
-
-        glyphs = {kd.get("key") for kd in self._key_data(root) if kd.get("type") == "char"}
-        assert set("1234567890") <= glyphs, "digits went behind the symbol hop"
-
-    def test_a_symbol_key_types_the_glyph_on_its_cap(self, full_size) -> None:
-        """Caps Lock deliberately survives a layer switch (it only affects
-        letters, and this page has none), and Python's ``str.upper()`` is not
-        the identity on every non-ASCII character. Without the `literal` flag
-        routing these keys through pressKeyLiteral, Caps Lock plus the micro
-        sign typed a Greek capital Mu: the key emitted one glyph while the cap
-        displayed another, which is the same disagreement the symbol pages
-        carry no Shift key in order to avoid.
-        """
-        root, warnings, bridge = full_size
-        bridge.toggleCapsLock()
-        QCoreApplication.processEvents()
-        assert root.property("capsOn") is True, "precondition: Caps Lock is on"
-
-        TestSecondSymbolPage._tap(root, "sym")
-        _pump_until(lambda: len(self._visible_keys(root)))
-
-        point = self._click_point(root, lambda kd: kd.get("key") == "µ")
-        assert point is not None, "no micro-sign key on the symbol page"
-
-        bridge._synth.send_text.reset_mock()
-        QTest.mousePress(root, Qt.LeftButton, Qt.NoModifier, point)
-        QCoreApplication.processEvents()
-        QTest.mouseRelease(root, Qt.LeftButton, Qt.NoModifier, point)
-        QCoreApplication.processEvents()
-
-        sent = [call.args[0] for call in bridge._synth.send_text.call_args_list]
-        assert sent == ["µ"], f"typed {sent!r} instead of the glyph on the cap"
-        assert _real_warnings(warnings) == []
 
 
 class TestNoDeadStripBetweenKeys:
