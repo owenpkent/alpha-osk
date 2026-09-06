@@ -2264,7 +2264,14 @@ Item {
 
                                             Rectangle {
                                                 id: modelPill
-                                                implicitWidth: modelPillText.implicitWidth + 20
+                                                // Flow wraps *between* chips but cannot shrink one:
+                                                // a single label wider than the window still overhangs
+                                                // it, which is the other half of the same bug. The cap
+                                                // is read off flickArea (sized by the window, never by
+                                                // its content) so there is no child-to-parent loop.
+                                                readonly property real maxTextW:
+                                                    flickArea.width - 34 - 12 - 28 - 20
+                                                implicitWidth: modelPillText.width + 20
                                                 height: 28
                                                 radius: 5
                                                 property bool isCurrent: unifiedSettings.dictationModel === modelData.id
@@ -2275,6 +2282,8 @@ Item {
                                                 Text {
                                                     id: modelPillText
                                                     anchors.centerIn: parent
+                                                    width: Math.min(implicitWidth, modelPill.maxTextW)
+                                                    elide: Text.ElideRight
                                                     text: modelData.label
                                                     textFormat: Text.PlainText
                                                     color: modelPill.isCurrent ? "#fff" : "#ccc"
@@ -2316,7 +2325,10 @@ Item {
 
                                             Rectangle {
                                                 id: langPill
-                                                implicitWidth: langPillText.implicitWidth + 20
+                                                // Same cap as the model chip above, same reason.
+                                                readonly property real maxTextW:
+                                                    flickArea.width - 34 - 12 - 28 - 20
+                                                implicitWidth: langPillText.width + 20
                                                 height: 28
                                                 radius: 5
                                                 property bool isCurrent: unifiedSettings.dictationLanguage === modelData.id
@@ -2327,6 +2339,8 @@ Item {
                                                 Text {
                                                     id: langPillText
                                                     anchors.centerIn: parent
+                                                    width: Math.min(implicitWidth, langPill.maxTextW)
+                                                    elide: Text.ElideRight
                                                     text: modelData.label
                                                     textFormat: Text.PlainText
                                                     color: langPill.isCurrent ? "#fff" : "#ccc"

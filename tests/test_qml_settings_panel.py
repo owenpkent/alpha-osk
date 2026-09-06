@@ -462,10 +462,21 @@ class TestALongModelLabelIsContainedByFlow:
     sticks for the rest of the test with nothing to put it back.
     """
 
+    # Deliberately far longer than any label could need, because the
+    # first version of this was not.  At 67 characters it sat on a knife
+    # edge: wide enough to overflow on the CI font stacks (by 75px on
+    # ubuntu, 10px on windows) and narrow enough to fit on a developer's
+    # Windows box, so the same commit passed locally and failed on CI.
+    # A label nothing can render inside 360px makes the assertion mean
+    # the same thing on every machine, which is what the class claims.
     LONG_MODELS = [
         {
             "id": "m1",
-            "label": "A model with an extremely long descriptive label that will not fit",
+            "label": (
+                "A model with an extremely long descriptive label that will "
+                "not fit inside the settings window on any font, at any "
+                "size, no matter how narrow the glyphs happen to be"
+            ),
         },
         {"id": "m2", "label": "Another quite long descriptive model label here too"},
     ]
