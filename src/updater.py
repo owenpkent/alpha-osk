@@ -44,10 +44,12 @@ Downgrade attack  Strict semver        Older or equal versions are
 Tag confusion    ``releases/latest``   We never trust an arbitrary
                   endpoint             tag — only the repository's own
                                        "latest" pointer.
-TOCTOU on        Atomic temp file      Downloaded to a private temp
-download          (umask 0700)         dir we own, signature check
-                                       runs against the same handle
-                                       we then exec.
+TOCTOU on        Private temp dir      Downloaded to a per-user temp
+download          + a held handle      dir, then held open denying
+                                       writes and deletes from before
+                                       the signature check until after
+                                       the launch, so the bytes we
+                                       verified are the bytes that run.
 Release-notes    Sanitisation          ``_sanitize_notes`` strips
 injection                              control chars + caps length
                                        before reaching QML.
@@ -60,6 +62,8 @@ require a build-pipeline / cert-rotation response.
 
 from __future__ import annotations
 
+import contextlib
+import ctypes
 import json
 import logging
 import os
@@ -69,6 +73,7 @@ import sys
 import tempfile
 import urllib.error
 import urllib.request
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional, Tuple
@@ -527,6 +532,105 @@ def _verify_signature(exe_path: Path, expected_version: str) -> bool:
 # ---------------------------------------------------------------------------
 
 
+_GENERIC_READ = 0x80000000
+_FILE_SHARE_READ = 0x00000001
+_OPEN_EXISTING = 3
+_FILE_ATTRIBUTE_NORMAL = 0x80
+_INVALID_HANDLE_VALUE = ctypes.c_void_p(-1).value
+
+
+def _open_denying_writes(path: Path) -> Optional[int]:
+    """Open *path* for reading while denying every writer and deleter.
+
+    ``FILE_SHARE_READ`` alone is the whole trick.  Other processes may
+    still *read* the file, which is required (the signature check shells
+    out to PowerShell, which opens it by path, and the image loader opens
+    it again to execute it), but ``FILE_SHARE_WRITE`` and
+    ``FILE_SHARE_DELETE`` are both withheld, so for as long as this
+    handle lives nobody can overwrite the file, rename another file over
+    it, or unlink it.
+
+    Returns the raw handle, or ``None`` if it could not be opened.
+    """
+    if sys.platform != "win32":
+        return None
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    # Pin the signature: an undeclared restype is c_int, which truncates
+    # a 64-bit handle and would make the close silently miss.
+    kernel32.CreateFileW.restype = ctypes.c_void_p
+    kernel32.CreateFileW.argtypes = [
+        ctypes.c_wchar_p,
+        ctypes.c_uint32,
+        ctypes.c_uint32,
+        ctypes.c_void_p,
+        ctypes.c_uint32,
+        ctypes.c_uint32,
+        ctypes.c_void_p,
+    ]
+    handle = kernel32.CreateFileW(
+        str(path),
+        _GENERIC_READ,
+        _FILE_SHARE_READ,
+        None,
+        _OPEN_EXISTING,
+        _FILE_ATTRIBUTE_NORMAL,
+        None,
+    )
+    if handle == _INVALID_HANDLE_VALUE or handle is None:
+        _logger.error(
+            "Could not pin the installer for execution (error %d)",
+            ctypes.get_last_error(),
+        )
+        return None
+    return int(handle)
+
+
+def _close_handle(handle: int) -> None:
+    """Release a handle from :func:`_open_denying_writes`."""
+    if sys.platform != "win32":
+        return
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
+    kernel32.CloseHandle(ctypes.c_void_p(handle))
+
+
+@contextlib.contextmanager
+def _pinned_for_execution(path: Path) -> Iterator[bool]:
+    """Hold *path* unswappable for the whole check-then-exec sequence.
+
+    Signature verification and the elevated launch each open the
+    installer by path, and between them sit a relauncher spawn and a
+    callback that deliberately blocks for over a second so a toast can
+    paint.  Without this, that gap is a TOCTOU window: a process running
+    as the user can replace the verified installer with its own binary,
+    and ``_launch_installer`` then hands it to ShellExecuteW with
+    ``runas``, so it executes elevated under a UAC prompt the user is
+    expecting.  The EV signature check, which is the one thing standing
+    between a swapped payload and an elevated silent install, ran against
+    bytes that are no longer there.
+
+    Yields True when the file is pinned.  Off Windows it yields True
+    without doing anything: the install path is ShellExecuteW-based and
+    Windows-only, so there is nothing to defend there.
+    """
+    if sys.platform != "win32":
+        yield True
+        return
+
+    handle = _open_denying_writes(path)
+    if handle is None:
+        # Fail closed.  We just wrote this file ourselves, so failing to
+        # reopen it means something already has it locked or it is gone,
+        # and neither is a state to hand to an elevated exec.
+        yield False
+        return
+    try:
+        yield True
+    finally:
+        _close_handle(handle)
+
+
 def _make_private_tempdir() -> Path:
     """Create a tempdir only the current user can read/write."""
     d = Path(tempfile.mkdtemp(prefix="alpha-osk-update-"))
@@ -793,42 +897,55 @@ def download_and_install(
         if not ok:
             return False, "Download failed (see log)"
 
-        if not _verify_signature(dest, info.version):
-            _logger.error("Aborting install — signature verification failed")
-            return False, "Signature check failed (see log)"
+        # Everything from here to the launch runs with the installer
+        # pinned: no other process can overwrite it, rename over it or
+        # delete it. The signature check and the elevated launch each
+        # open it by path, and between them sit the relauncher spawn and
+        # a callback that deliberately blocks for over a second, so
+        # without the pin that gap is a window in which the verified
+        # bytes and the executed bytes can differ. See
+        # _pinned_for_execution.
+        with _pinned_for_execution(dest) as pinned:
+            if not pinned:
+                _logger.error("Aborting install: could not pin the installer")
+                return False, "Could not secure the installer (see log)"
 
-        # Spawn the detached user-IL relauncher BEFORE elevation. This
-        # is the primary mechanism for restarting the OSK after the
-        # install completes; the in-installer Exec explorer.exe trick
-        # is now a fallback (it silently fails on some Windows configs
-        # because of integrity-level rules around elevated parents
-        # spawning user-mode children). See _spawn_relauncher.
-        _spawn_relauncher(info.version)
+            if not _verify_signature(dest, info.version):
+                _logger.error("Aborting install — signature verification failed")
+                return False, "Signature check failed (see log)"
 
-        # Notify the live OSK that the installer is about to launch so
-        # it can flash a toast warning the user. The callback is
-        # expected to block briefly (~1.5 s) so the toast actually
-        # paints before the installer's taskkill arrives. A callback
-        # raise is never fatal — falling through to the install is
-        # better than aborting because a UI signal misfired.
-        if on_installer_launching is not None:
-            try:
-                on_installer_launching(info.version)
-            except Exception as exc:  # noqa: BLE001
-                _logger.warning(
-                    "on_installer_launching callback raised: %s",
-                    exc,
-                )
+            # Spawn the detached user-IL relauncher BEFORE elevation. This
+            # is the primary mechanism for restarting the OSK after the
+            # install completes; the in-installer Exec explorer.exe trick
+            # is now a fallback (it silently fails on some Windows configs
+            # because of integrity-level rules around elevated parents
+            # spawning user-mode children). See _spawn_relauncher.
+            _spawn_relauncher(info.version)
 
-        # /S = NSIS silent install; the installer kills the running
-        # alpha-osk.exe, runs the old uninstaller, and installs the
-        # new build. The relauncher we just spawned will pick up the
-        # new exe and launch it once the install completes.
-        _logger.info("Launching signed installer: %s", dest)
-        ok, err = _launch_installer(dest)
-        if not ok:
-            return False, err
-        return True, ""
+            # Notify the live OSK that the installer is about to launch so
+            # it can flash a toast warning the user. The callback is
+            # expected to block briefly (~1.5 s) so the toast actually
+            # paints before the installer's taskkill arrives. A callback
+            # raise is never fatal — falling through to the install is
+            # better than aborting because a UI signal misfired.
+            if on_installer_launching is not None:
+                try:
+                    on_installer_launching(info.version)
+                except Exception as exc:  # noqa: BLE001
+                    _logger.warning(
+                        "on_installer_launching callback raised: %s",
+                        exc,
+                    )
+
+            # /S = NSIS silent install; the installer kills the running
+            # alpha-osk.exe, runs the old uninstaller, and installs the
+            # new build. The relauncher we just spawned will pick up the
+            # new exe and launch it once the install completes.
+            _logger.info("Launching signed installer: %s", dest)
+            ok, err = _launch_installer(dest)
+            if not ok:
+                return False, err
+            return True, ""
     except Exception as e:  # noqa: BLE001
         _logger.error("Install failed: %s", e)
         return False, f"Install failed: {e}"

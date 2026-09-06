@@ -9,8 +9,10 @@ is a regression that ships arbitrary code on every user's machine.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
+from pathlib import Path
 from unittest import mock
 
 import pytest
@@ -536,6 +538,19 @@ class TestPowerShellSingleQuoteEscaping:
 # ---------------------------------------------------------------------------
 
 
+def _fake_download(url, dest, **kwargs):
+    """Stand in for a successful download by creating the file.
+
+    ``download_and_install`` pins the installer open across the whole
+    check-then-exec sequence, so a stub that reports success without
+    producing a file leaves nothing to pin and the install correctly
+    refuses.  Producing the file is what a real download does anyway.
+    """
+    Path(dest).parent.mkdir(parents=True, exist_ok=True)
+    Path(dest).write_bytes(b"MZ not a real installer")
+    return True
+
+
 class TestDownloadAndInstall:
     def test_aborts_when_signature_check_fails(self, monkeypatch, tmp_path):
         # Stand up a successful download but a failing signature — the
@@ -549,7 +564,7 @@ class TestDownloadAndInstall:
         monkeypatch.setattr(
             updater,
             "_download_with_cap",
-            lambda *a, **kw: True,
+            _fake_download,
         )
         monkeypatch.setattr(updater, "_verify_signature", lambda p, v: False)
         popen_calls = []
@@ -574,7 +589,7 @@ class TestDownloadAndInstall:
         monkeypatch.setattr(
             updater,
             "_download_with_cap",
-            lambda *a, **kw: True,
+            _fake_download,
         )
         monkeypatch.setattr(updater, "_verify_signature", lambda p, v: True)
         launch_calls = []
@@ -599,7 +614,7 @@ class TestDownloadAndInstall:
             asset_name="Alpha-OSK-Setup-1.0.3.exe",
             notes="",
         )
-        monkeypatch.setattr(updater, "_download_with_cap", lambda *a, **kw: True)
+        monkeypatch.setattr(updater, "_download_with_cap", _fake_download)
         monkeypatch.setattr(updater, "_verify_signature", lambda p, v: True)
         # Simulate the user declining the UAC prompt.
         monkeypatch.setattr(
@@ -651,7 +666,7 @@ class TestInstallerLaunchingCallback:
         )
 
     def _stub_happy_path(self, monkeypatch):
-        monkeypatch.setattr(updater, "_download_with_cap", lambda *a, **kw: True)
+        monkeypatch.setattr(updater, "_download_with_cap", _fake_download)
         monkeypatch.setattr(updater, "_verify_signature", lambda p, v: True)
         monkeypatch.setattr(updater, "_spawn_relauncher", lambda v: True)
         monkeypatch.setattr(updater, "_launch_installer", lambda dest: (True, ""))
@@ -686,7 +701,7 @@ class TestInstallerLaunchingCallback:
         assert events[0][1] == "1.2.3"
 
     def test_callback_does_not_fire_when_signature_fails(self, monkeypatch):
-        monkeypatch.setattr(updater, "_download_with_cap", lambda *a, **kw: True)
+        monkeypatch.setattr(updater, "_download_with_cap", _fake_download)
         monkeypatch.setattr(updater, "_verify_signature", lambda p, v: False)
         called: list[str] = []
         monkeypatch.setattr(updater, "_spawn_relauncher", lambda v: True)
@@ -888,3 +903,142 @@ class TestRelauncherSpawnHasNoConsole:
         assert flags & sp.CREATE_NEW_PROCESS_GROUP, (
             "it must stay out of our console group so the installer's taskkill cannot sweep it up"
         )
+
+
+def _swap_succeeds(target: Path) -> bool:
+    """Attempt the swap an attacker running as the user would attempt.
+
+    Writes a payload beside *target* and renames it over the top, which
+    is the realistic vector: it is atomic, needs no write access to the
+    existing file, and leaves the path pointing at different bytes.
+    Returns True if the swap landed.
+    """
+    evil = target.parent / "evil.bin"
+    evil.write_bytes(b"MZ swapped payload")
+    try:
+        os.replace(evil, target)
+        return True
+    except OSError:
+        evil.unlink()
+        return False
+
+
+class TestTheInstallerCannotBeSwappedBetweenCheckAndUse:
+    """The verified bytes must be the executed bytes.
+
+    ``_verify_signature`` and ``_launch_installer`` each open the
+    installer by path, and between them sit ``_spawn_relauncher`` and a
+    callback documented to block for over a second so a toast can paint.
+    Without a pin that gap is a TOCTOU window: a process running as the
+    user replaces the verified installer, and ShellExecuteW hands the
+    replacement to ``runas``, so it runs elevated under a UAC prompt the
+    user is expecting.
+
+    The precondition is same-user code execution, which is why this is
+    escalation rather than initial access -- but escalation is exactly
+    what the EV signature check exists to deny.
+    """
+
+    def _info(self):
+        return UpdateInfo(
+            version="1.0.3",
+            download_url=(
+                "https://github.com/owenpkent/alpha-osk-releases/releases/"
+                "download/v1.0.3/Alpha-OSK-Setup-1.0.3.exe"
+            ),
+            asset_name="Alpha-OSK-Setup-1.0.3.exe",
+            notes="",
+        )
+
+    @pytest.mark.skipif(sys.platform != "win32", reason="pin is a Win32 share-mode")
+    def test_an_unpinned_file_can_be_swapped(self, tmp_path):
+        """The inverse half: without the pin the attack works.
+
+        Without this the blocked-swap assertions below could pass on a
+        filesystem that refuses the rename for some unrelated reason, and
+        would prove nothing about the pin.
+        """
+        target = tmp_path / "Alpha-OSK-Setup-1.0.3.exe"
+        target.write_bytes(b"MZ genuine signed installer")
+
+        assert _swap_succeeds(target) is True
+        assert target.read_bytes() == b"MZ swapped payload"
+
+    @pytest.mark.skipif(sys.platform != "win32", reason="pin is a Win32 share-mode")
+    def test_the_swap_is_blocked_at_both_the_check_and_the_use(self, monkeypatch, tmp_path):
+        """Pinned across the whole sequence, not merely around one call."""
+        monkeypatch.setattr(updater, "_make_private_tempdir", lambda: tmp_path)
+        monkeypatch.setattr(updater, "_download_with_cap", _fake_download)
+        monkeypatch.setattr(updater, "_spawn_relauncher", lambda v: True)
+
+        dest = tmp_path / "Alpha-OSK-Setup-1.0.3.exe"
+        swapped_at = {}
+
+        def fake_verify(path, version):
+            swapped_at["verify"] = _swap_succeeds(dest)
+            return True
+
+        def fake_launch(path):
+            swapped_at["launch"] = _swap_succeeds(dest)
+            return True, ""
+
+        monkeypatch.setattr(updater, "_verify_signature", fake_verify)
+        monkeypatch.setattr(updater, "_launch_installer", fake_launch)
+
+        ok, err = updater.download_and_install(self._info())
+
+        assert ok is True, err
+        assert swapped_at["verify"] is False, "installer was swappable during the check"
+        assert swapped_at["launch"] is False, "installer was swappable at the launch"
+
+    @pytest.mark.skipif(sys.platform != "win32", reason="pin is a Win32 share-mode")
+    def test_the_pin_still_allows_readers(self, tmp_path):
+        """The pin must not break the two things that need the file.
+
+        Signature verification shells out to PowerShell, which opens the
+        installer by path, and the image loader opens it again to execute
+        it.  Denying FILE_SHARE_READ as well would close the window and
+        break the update.
+        """
+        target = tmp_path / "installer.exe"
+        target.write_bytes(b"MZ genuine")
+
+        with updater._pinned_for_execution(target) as pinned:
+            assert pinned is True
+            assert target.read_bytes() == b"MZ genuine"
+
+    @pytest.mark.skipif(sys.platform != "win32", reason="pin is a Win32 share-mode")
+    def test_the_pin_is_released_afterwards(self, tmp_path):
+        """A leaked handle would make the file undeletable for the session."""
+        target = tmp_path / "installer.exe"
+        target.write_bytes(b"MZ genuine")
+
+        with updater._pinned_for_execution(target) as pinned:
+            assert pinned is True
+
+        assert _swap_succeeds(target) is True
+
+    def test_a_file_that_cannot_be_pinned_is_never_launched(self, monkeypatch, tmp_path):
+        """Fail closed.
+
+        We wrote the file ourselves moments earlier, so failing to reopen
+        it means something else holds it or it is gone.  Neither is a
+        state to hand to an elevated exec, so the install aborts rather
+        than proceeding unprotected.
+        """
+        monkeypatch.setattr(updater, "_make_private_tempdir", lambda: tmp_path)
+        monkeypatch.setattr(updater, "_download_with_cap", _fake_download)
+        monkeypatch.setattr(updater, "_verify_signature", lambda p, v: True)
+        monkeypatch.setattr(updater, "_open_denying_writes", lambda p: None)
+        monkeypatch.setattr(sys, "platform", "win32")
+
+        launched = []
+        monkeypatch.setattr(
+            updater, "_launch_installer", lambda d: (launched.append(d), (True, ""))[1]
+        )
+
+        ok, err = updater.download_and_install(self._info())
+
+        assert ok is False
+        assert launched == [], "installer launched despite an unpinnable file"
+        assert "secure" in err.lower(), f"error should name the failed step, got {err!r}"
