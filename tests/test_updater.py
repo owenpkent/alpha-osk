@@ -8,6 +8,8 @@ is a regression that ships arbitrary code on every user's machine.
 
 from __future__ import annotations
 
+import contextlib
+import hashlib
 import json
 import os
 import subprocess
@@ -545,10 +547,15 @@ def _fake_download(url, dest, **kwargs):
     check-then-exec sequence, so a stub that reports success without
     producing a file leaves nothing to pin and the install correctly
     refuses.  Producing the file is what a real download does anyway.
+
+    Returns the SHA-256 of what it wrote, matching the real function's
+    contract: the caller re-checks that digest once the file is pinned,
+    so a stub returning a bool (or the wrong digest) aborts the install.
     """
+    payload = b"MZ not a real installer"
     Path(dest).parent.mkdir(parents=True, exist_ok=True)
-    Path(dest).write_bytes(b"MZ not a real installer")
-    return True
+    Path(dest).write_bytes(payload)
+    return hashlib.sha256(payload).hexdigest()
 
 
 class TestDownloadAndInstall:
@@ -637,7 +644,7 @@ class TestDownloadAndInstall:
         monkeypatch.setattr(
             updater,
             "_download_with_cap",
-            lambda *a, **kw: False,
+            lambda *a, **kw: None,
         )
         verify_calls = []
         monkeypatch.setattr(
@@ -1042,3 +1049,134 @@ class TestTheInstallerCannotBeSwappedBetweenCheckAndUse:
         assert ok is False
         assert launched == [], "installer launched despite an unpinnable file"
         assert "secure" in err.lower(), f"error should name the failed step, got {err!r}"
+
+
+class TestTheDownloadedBytesAreTheBytesThatRun:
+    """The pin has an edge, and the digest covers it.
+
+    ``_pinned_for_execution`` makes the installer unswappable from before
+    the signature check until after the launch.  But it is taken a moment
+    after ``_download_with_cap`` releases its own write handle, and that
+    sliver is still a window.  Nothing can *prevent* a swap inside it, so
+    it is detected instead: the download reports the SHA-256 of the bytes
+    it actually wrote, and the comparison happens once the file is
+    pinned, which is what makes the comparison itself unraceable.
+
+    Unlike the pin, this half is not Windows-specific, so these run
+    everywhere.
+    """
+
+    def _info(self):
+        return UpdateInfo(
+            version="1.0.3",
+            download_url=(
+                "https://github.com/owenpkent/alpha-osk-releases/releases/"
+                "download/v1.0.3/Alpha-OSK-Setup-1.0.3.exe"
+            ),
+            asset_name="Alpha-OSK-Setup-1.0.3.exe",
+            notes="",
+        )
+
+    def _install(self, monkeypatch, tmp_path, launched):
+        monkeypatch.setattr(updater, "_make_private_tempdir", lambda: tmp_path)
+        monkeypatch.setattr(updater, "_download_with_cap", _fake_download)
+        monkeypatch.setattr(updater, "_verify_signature", lambda p, v: True)
+        monkeypatch.setattr(updater, "_spawn_relauncher", lambda v: True)
+
+        def fake_launch(dest):
+            launched.append(dest)
+            return True, ""
+
+        monkeypatch.setattr(updater, "_launch_installer", fake_launch)
+        return updater.download_and_install(self._info())
+
+    def test_a_swap_inside_the_gap_aborts_the_install(self, monkeypatch, tmp_path):
+        """An attacker who wins the race still does not get executed."""
+        real_pin = updater._pinned_for_execution
+
+        @contextlib.contextmanager
+        def swap_then_pin(path):
+            # Exactly the sliver: after the download let go of its write
+            # handle, before the pin is taken.
+            Path(path).write_bytes(b"MZ swapped payload")
+            with real_pin(path) as pinned:
+                yield pinned
+
+        monkeypatch.setattr(updater, "_pinned_for_execution", swap_then_pin)
+
+        launched: list = []
+        ok, err = self._install(monkeypatch, tmp_path, launched)
+
+        assert ok is False
+        assert launched == [], "a swapped installer was launched"
+        assert "changed" in err.lower(), f"error should name the failed step, got {err!r}"
+
+    def test_an_untampered_download_still_installs(self, monkeypatch, tmp_path):
+        """The inverse half.
+
+        A digest check that rejected everything would satisfy the test
+        above and silently break auto-update for everyone.
+        """
+        launched: list = []
+        ok, err = self._install(monkeypatch, tmp_path, launched)
+
+        assert ok is True, err
+        assert len(launched) == 1
+
+    def test_a_truncated_file_is_caught_too(self, monkeypatch, tmp_path):
+        """The same check catches a bad write, not only a hostile one."""
+        real_pin = updater._pinned_for_execution
+
+        @contextlib.contextmanager
+        def truncate_then_pin(path):
+            Path(path).write_bytes(b"MZ not a real install")  # a byte short
+            with real_pin(path) as pinned:
+                yield pinned
+
+        monkeypatch.setattr(updater, "_pinned_for_execution", truncate_then_pin)
+
+        launched: list = []
+        ok, _ = self._install(monkeypatch, tmp_path, launched)
+
+        assert ok is False
+        assert launched == []
+
+    def test_the_digest_is_of_the_bytes_actually_written(self, monkeypatch, tmp_path):
+        """The contract the whole defence rests on.
+
+        Exercises the real ``_download_with_cap`` rather than the stub, so
+        a digest computed over the wrong thing (or a stale re-read) fails
+        here rather than passing everywhere by agreement with the stub.
+        """
+        payload = b"MZ" + bytes(5000) + b"tail"
+        url = (
+            "https://github.com/owenpkent/alpha-osk-releases/releases/"
+            "download/v1.0.3/Alpha-OSK-Setup-1.0.3.exe"
+        )
+
+        resp = mock.MagicMock()
+        resp.__enter__.return_value.read.side_effect = [
+            payload[:1000],
+            payload[1000:],
+            b"",
+        ]
+        resp.__enter__.return_value.geturl.return_value = url
+        resp.__enter__.return_value.headers = {"Content-Length": str(len(payload))}
+
+        monkeypatch.setattr(updater.urllib.request, "urlopen", lambda *a, **kw: resp)
+
+        dest = tmp_path / "Alpha-OSK-Setup-1.0.3.exe"
+        returned = updater._download_with_cap(url, dest, timeout=5, progress=None)
+
+        assert returned == hashlib.sha256(payload).hexdigest()
+        assert returned == hashlib.sha256(dest.read_bytes()).hexdigest()
+
+    def test_a_failed_download_reports_none(self, tmp_path):
+        """None, not False: the contract changed and callers branch on it."""
+        returned = updater._download_with_cap(
+            "https://evil.example.com/Alpha-OSK-Setup-1.0.3.exe",
+            tmp_path / "out.exe",
+            timeout=5,
+            progress=None,
+        )
+        assert returned is None
