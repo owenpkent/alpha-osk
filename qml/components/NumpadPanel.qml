@@ -19,6 +19,16 @@ Item {
     property color enterKeyColor: "#2a5a2a"
     property color accentColor: "#4a9eff"
     property color borderColor: "#505050"
+    // Key Colours table from Main.qml; null (the default) leaves every
+    // key on the colours above.  See KeyButton.role.
+    property var roleColors: null
+    // No gutter anywhere in this panel: a physical numpad has none, and a
+    // gap after the third row (tried once, to line these rows up with the
+    // nav cluster's) reads as a seam splitting the digits from the 0 key.
+    // The five rows divide the panel's height evenly instead.  Kept as a
+    // property rather than dropped so the height arithmetic below stays
+    // readable and a caller can still ask for one.
+    property real blockGap: 0
     // Hold-to-repeat. Two different populations share this grid depending on
     // NumLock: with it on every key but Enter/NumLock types a character, so
     // those follow `characterRepeat` exactly like the main grid's letters
@@ -35,8 +45,24 @@ Item {
     property int repeatDelay: 500
     property int repeatInterval: 120
 
-    implicitWidth: numGrid.implicitWidth
-    implicitHeight: numGrid.implicitHeight
+    // Derived from the key size rather than read back off the grid: the
+    // grid's height depends on `rowH`, `rowH` depends on the height the
+    // layout hands us, and the layout falls back to this when given none,
+    // so reading the grid here would close a binding loop.  `Math.ceil`
+    // matches what a `Row` actually reports (see NavigationPanel).
+    implicitWidth: 4 * keyW + 3 * keySpacing
+    implicitHeight: 5 * Math.ceil(keyH) + 4 * keySpacing + blockGap
+
+    // The height of one row of keys.  Main.qml hands this panel the
+    // keyboard grid's height, and five rows plus four gaps plus the block
+    // gap divide it exactly, so the panel is flush with the grid on both
+    // rails.  Handed no height it resolves to `keyH` and the panel renders
+    // as it always did.
+    readonly property real rowH: {
+        var avail = numpadPanel.height - 4 * numpadPanel.keySpacing
+                    - numpadPanel.blockGap
+        return avail > 0 ? Math.max(numpadPanel.keyH, avail / 5) : numpadPanel.keyH
+    }
 
     // Plain Column-of-Rows, NOT a GridLayout. See the "plain Row, NOT a
     // RowLayout" note in NumberRow.qml: QtQuick.Layouts rounds every child up
@@ -56,7 +82,9 @@ Item {
             KeyButton {
                 displayText: numpadPanel.numLockOn ? "7" : "Home"
                 keyWidth: numpadPanel.keyW
-                keyHeight: numpadPanel.keyH
+                keyHeight: numpadPanel.rowH
+                role: numpadPanel.numLockOn ? "digit" : "nav"
+                roleColors: numpadPanel.roleColors
                 fontSize: numpadPanel.numLockOn ? 14 : 12
                 keyColor: numpadPanel.keyColor
                 keyPressedColor: numpadPanel.keyPressedColor
@@ -77,7 +105,9 @@ Item {
             KeyButton {
                 displayText: numpadPanel.numLockOn ? "8" : "↑"
                 keyWidth: numpadPanel.keyW
-                keyHeight: numpadPanel.keyH
+                keyHeight: numpadPanel.rowH
+                role: numpadPanel.numLockOn ? "digit" : "nav"
+                roleColors: numpadPanel.roleColors
                 fontSize: 14
                 keyColor: numpadPanel.keyColor
                 keyPressedColor: numpadPanel.keyPressedColor
@@ -95,7 +125,9 @@ Item {
             KeyButton {
                 displayText: numpadPanel.numLockOn ? "9" : "PgUp"
                 keyWidth: numpadPanel.keyW
-                keyHeight: numpadPanel.keyH
+                keyHeight: numpadPanel.rowH
+                role: numpadPanel.numLockOn ? "digit" : "nav"
+                roleColors: numpadPanel.roleColors
                 fontSize: numpadPanel.numLockOn ? 14 : 12
                 keyColor: numpadPanel.keyColor
                 keyPressedColor: numpadPanel.keyPressedColor
@@ -114,7 +146,9 @@ Item {
                 keyText: "/"
                 displayText: "/"
                 keyWidth: numpadPanel.keyW
-                keyHeight: numpadPanel.keyH
+                keyHeight: numpadPanel.rowH
+                role: "op"
+                roleColors: numpadPanel.roleColors
                 fontSize: 14
                 keyColor: numpadPanel.specialKeyColor
                 keyPressedColor: numpadPanel.keyPressedColor
@@ -137,7 +171,9 @@ Item {
             KeyButton {
                 displayText: numpadPanel.numLockOn ? "4" : "←"
                 keyWidth: numpadPanel.keyW
-                keyHeight: numpadPanel.keyH
+                keyHeight: numpadPanel.rowH
+                role: numpadPanel.numLockOn ? "digit" : "nav"
+                roleColors: numpadPanel.roleColors
                 fontSize: 14
                 keyColor: numpadPanel.keyColor
                 keyPressedColor: numpadPanel.keyPressedColor
@@ -155,7 +191,9 @@ Item {
             KeyButton {
                 displayText: numpadPanel.numLockOn ? "5" : ""
                 keyWidth: numpadPanel.keyW
-                keyHeight: numpadPanel.keyH
+                keyHeight: numpadPanel.rowH
+                role: numpadPanel.numLockOn ? "digit" : "nav"
+                roleColors: numpadPanel.roleColors
                 fontSize: 14
                 keyColor: numpadPanel.keyColor
                 keyPressedColor: numpadPanel.keyPressedColor
@@ -175,7 +213,9 @@ Item {
             KeyButton {
                 displayText: numpadPanel.numLockOn ? "6" : "→"
                 keyWidth: numpadPanel.keyW
-                keyHeight: numpadPanel.keyH
+                keyHeight: numpadPanel.rowH
+                role: numpadPanel.numLockOn ? "digit" : "nav"
+                roleColors: numpadPanel.roleColors
                 fontSize: 14
                 keyColor: numpadPanel.keyColor
                 keyPressedColor: numpadPanel.keyPressedColor
@@ -194,7 +234,9 @@ Item {
                 keyText: "*"
                 displayText: "*"
                 keyWidth: numpadPanel.keyW
-                keyHeight: numpadPanel.keyH
+                keyHeight: numpadPanel.rowH
+                role: "op"
+                roleColors: numpadPanel.roleColors
                 fontSize: 14
                 keyColor: numpadPanel.specialKeyColor
                 keyPressedColor: numpadPanel.keyPressedColor
@@ -217,7 +259,9 @@ Item {
             KeyButton {
                 displayText: numpadPanel.numLockOn ? "1" : "End"
                 keyWidth: numpadPanel.keyW
-                keyHeight: numpadPanel.keyH
+                keyHeight: numpadPanel.rowH
+                role: numpadPanel.numLockOn ? "digit" : "nav"
+                roleColors: numpadPanel.roleColors
                 fontSize: numpadPanel.numLockOn ? 14 : 12
                 keyColor: numpadPanel.keyColor
                 keyPressedColor: numpadPanel.keyPressedColor
@@ -237,7 +281,9 @@ Item {
             KeyButton {
                 displayText: numpadPanel.numLockOn ? "2" : "↓"
                 keyWidth: numpadPanel.keyW
-                keyHeight: numpadPanel.keyH
+                keyHeight: numpadPanel.rowH
+                role: numpadPanel.numLockOn ? "digit" : "nav"
+                roleColors: numpadPanel.roleColors
                 fontSize: 14
                 keyColor: numpadPanel.keyColor
                 keyPressedColor: numpadPanel.keyPressedColor
@@ -255,7 +301,9 @@ Item {
             KeyButton {
                 displayText: numpadPanel.numLockOn ? "3" : "PgDn"
                 keyWidth: numpadPanel.keyW
-                keyHeight: numpadPanel.keyH
+                keyHeight: numpadPanel.rowH
+                role: numpadPanel.numLockOn ? "digit" : "nav"
+                roleColors: numpadPanel.roleColors
                 fontSize: numpadPanel.numLockOn ? 14 : 12
                 keyColor: numpadPanel.keyColor
                 keyPressedColor: numpadPanel.keyPressedColor
@@ -274,7 +322,9 @@ Item {
                 keyText: "-"
                 displayText: "-"
                 keyWidth: numpadPanel.keyW
-                keyHeight: numpadPanel.keyH
+                keyHeight: numpadPanel.rowH
+                role: "op"
+                roleColors: numpadPanel.roleColors
                 fontSize: 14
                 keyColor: numpadPanel.specialKeyColor
                 keyPressedColor: numpadPanel.keyPressedColor
@@ -291,13 +341,27 @@ Item {
             }
         }
 
+        // The block gap, if a caller asks for one.  A Column puts its own
+        // `spacing` on both sides of a spacer, so the spacer is
+        // `blockGap - keySpacing` and the gap that renders is exactly
+        // `blockGap`; the height arithmetic above depends on that.  Zero
+        // by default, and an Item of zero height still costs a `spacing`,
+        // so it is hidden rather than merely empty.
+        Item {
+            width: 1
+            visible: numpadPanel.blockGap > 0
+            height: Math.max(0, numpadPanel.blockGap - numpadPanel.keySpacing)
+        }
+
         // Row 4: 0/Ins (2 cells wide), ./Del, +
         Row {
             spacing: numpadPanel.keySpacing
             KeyButton {
                 displayText: numpadPanel.numLockOn ? "0" : "Ins"
                 keyWidth: numpadPanel.keyW * 2 + numpadPanel.keySpacing
-                keyHeight: numpadPanel.keyH
+                keyHeight: numpadPanel.rowH
+                role: numpadPanel.numLockOn ? "digit" : "nav"
+                roleColors: numpadPanel.roleColors
                 fontSize: numpadPanel.numLockOn ? 14 : 12
                 keyColor: numpadPanel.keyColor
                 keyPressedColor: numpadPanel.keyPressedColor
@@ -318,7 +382,9 @@ Item {
             KeyButton {
                 displayText: numpadPanel.numLockOn ? "." : "Del"
                 keyWidth: numpadPanel.keyW
-                keyHeight: numpadPanel.keyH
+                keyHeight: numpadPanel.rowH
+                role: numpadPanel.numLockOn ? "punct" : "kill"
+                roleColors: numpadPanel.roleColors
                 fontSize: numpadPanel.numLockOn ? 14 : 12
                 keyColor: numpadPanel.keyColor
                 keyPressedColor: numpadPanel.keyPressedColor
@@ -336,7 +402,9 @@ Item {
             KeyButton {
                 displayText: "+"
                 keyWidth: numpadPanel.keyW
-                keyHeight: numpadPanel.keyH
+                keyHeight: numpadPanel.rowH
+                role: "op"
+                roleColors: numpadPanel.roleColors
                 fontSize: 14
                 keyColor: numpadPanel.specialKeyColor
                 keyPressedColor: numpadPanel.keyPressedColor
@@ -359,7 +427,9 @@ Item {
             KeyButton {
                 displayText: "Enter"
                 keyWidth: numpadPanel.keyW * 3 + numpadPanel.keySpacing * 2
-                keyHeight: numpadPanel.keyH
+                keyHeight: numpadPanel.rowH
+                role: "commit"
+                roleColors: numpadPanel.roleColors
                 fontSize: 14
                 isSpecial: true
                 keyColor: numpadPanel.enterKeyColor
@@ -378,7 +448,9 @@ Item {
                 keyText: "numlock"
                 displayText: "Num"
                 keyWidth: numpadPanel.keyW
-                keyHeight: numpadPanel.keyH
+                keyHeight: numpadPanel.rowH
+                role: "toggle"
+                roleColors: numpadPanel.roleColors
                 fontSize: 12
                 isSpecial: true
                 isActive: numpadPanel.numLockOn

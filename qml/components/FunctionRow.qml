@@ -26,6 +26,9 @@ Item {
     property color keyTextColor: "#e0e0e0"
     property color accentColor: "#4a9eff"
     property color borderColor: "#505050"
+    // Key Colours table from Main.qml; null (the default) leaves every
+    // key on `keyColor` above.  See KeyButton.role.
+    property var roleColors: null
 
     // Which keys this row draws.  Settable so the same component serves
     // F1-F12 and F13-F24; the 4-4-4 shape is the row's, the contents are
@@ -226,6 +229,8 @@ Item {
                         // at a glance which keys no longer send what their
                         // cap used to say.
                         isActive: fnRow._isProgrammed(modelData)
+                        role: "fn"
+                        roleColors: fnRow.roleColors
                         keyColor: fnRow.keyColor
                         keyPressedColor: fnRow.keyPressedColor
                         keyTextColor: fnRow.keyTextColor

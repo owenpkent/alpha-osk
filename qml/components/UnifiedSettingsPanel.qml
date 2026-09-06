@@ -3,6 +3,7 @@ import QtQuick.Layouts 1.15
 import QtQuick.Controls 2.15
 import QtQuick.Window 2.15
 import Qt.labs.platform 1.1 as Platform
+import "../palette.js" as Palette
 
 Item {
     id: unifiedSettings
@@ -14,6 +15,25 @@ Item {
     property bool showNumpad: false
     property string currentTheme: "dark"
     property var themeData: ({})
+    // Which Key Colours scheme paints the keycaps; see qml/palette.js.
+    property string keyColorScheme: "off"
+    // The pickable schemes, in order of how much ink they spend. Names are
+    // what the user sees, so they say what the scheme looks like rather
+    // than what the code calls it.
+    readonly property var keyColorSchemes: [
+        { id: "off", name: "Default",
+          blurb: "Keys are tinted by which part of the keyboard they sit on, the way they always have been." },
+        { id: "mono", name: "Monochrome",
+          blurb: "No hue at all. A key's job is a step lighter or darker than the letters." },
+        { id: "twotone", name: "Two-Tone",
+          blurb: "One boundary: keys that type a character, and keys that do something." },
+        { id: "bands", name: "Function",
+          blurb: "A colour per family. Modifiers, editing, navigation and the F-keys each get their own, rotated off this theme's accent." },
+        { id: "ink", name: "Ink",
+          blurb: "One flat keyboard. The colour is on the letter and a hairline under it, instead of the key." },
+        { id: "signal", name: "Signal",
+          blurb: "Flat except the three places a wrong click costs you: held modifiers, Backspace and Del, Enter." }
+    ]
     property real windowOpacity: 1.0
     property string currentLayout: "qwerty"
     property bool compactView: false
@@ -679,6 +699,149 @@ Item {
                                             anchors.horizontalCenter: parent.horizontalCenter
                                         }
                                     }
+                                }
+                            }
+                        }
+
+                        // -- Key Colours --
+                        // Under Appearance rather than Smart Typing: the
+                        // question it answers is "what should the keyboard
+                        // look like", and every colour it offers is derived
+                        // from the Theme picker directly above it, so the
+                        // two belong in eyeshot of each other.
+                        SettingsSection {
+                            title: "Key Colours"
+                            Layout.fillWidth: true
+
+                            ColumnLayout {
+                                Layout.fillWidth: true
+                                spacing: 6
+
+                                Text {
+                                    Layout.fillWidth: true
+                                    text: "Colour a key by what it does. Every colour is derived from the theme above, so each scheme looks different on each theme."
+                                    color: "#888"
+                                    font.pixelSize: 11
+                                    wrapMode: Text.WordWrap
+                                    textFormat: Text.PlainText
+                                }
+
+                                Flow {
+                                    Layout.fillWidth: true
+                                    spacing: 6
+
+                                    Repeater {
+                                        model: unifiedSettings.keyColorSchemes
+
+                                        Column {
+                                            spacing: 3
+                                            property var sch: modelData
+                                            property bool isCurrent: unifiedSettings.keyColorScheme === sch.id
+                                            property var t: unifiedSettings.themeData[unifiedSettings.currentTheme]
+                                                            || unifiedSettings.themeData["dark"] || ({})
+                                            // The real table the keyboard
+                                            // would paint with, so a swatch
+                                            // cannot promise a colour the
+                                            // board does not produce.
+                                            property var map: (t && t.keyColor)
+                                                ? Palette.roleMap(sch.id, Palette.hex(t.keyColor),
+                                                                  Palette.hex(t.background),
+                                                                  Palette.hex(t.textColor),
+                                                                  Palette.hex(t.accent))
+                                                : null
+
+                                            Rectangle {
+                                                width: 100
+                                                height: 34
+                                                radius: 7
+                                                color: t.background || "#1a1a1a"
+                                                border.color: isCurrent ? (t.accent || "#4a9eff")
+                                                            : schemeMa.containsMouse ? "#888" : "#555"
+                                                border.width: isCurrent ? 2 : 1
+                                                anchors.horizontalCenter: parent.horizontalCenter
+
+                                                // One keycap per role the
+                                                // schemes actually differ
+                                                // on: a letter, a modifier,
+                                                // a destructive key, Enter,
+                                                // an arrow.
+                                                Row {
+                                                    anchors.centerIn: parent
+                                                    spacing: 2
+
+                                                    Repeater {
+                                                        model: ["alpha", "mod", "kill", "commit", "nav"]
+
+                                                        Rectangle {
+                                                            width: 16
+                                                            height: 20
+                                                            radius: 3
+                                                            color: map ? map[modelData].fill : (t.keyColor || "#3a3a3a")
+
+                                                            Text {
+                                                                anchors.centerIn: parent
+                                                                text: "A"
+                                                                textFormat: Text.PlainText
+                                                                color: map ? map[modelData].ink : (t.textColor || "#e0e0e0")
+                                                                font.pixelSize: 9
+                                                                font.bold: true
+                                                            }
+
+                                                            // The role stripe,
+                                                            // which only the Ink
+                                                            // scheme draws.
+                                                            Rectangle {
+                                                                visible: map && map[modelData].bar.a > 0
+                                                                anchors.left: parent.left
+                                                                anchors.right: parent.right
+                                                                anchors.bottom: parent.bottom
+                                                                anchors.margins: 2
+                                                                height: 2
+                                                                radius: 1
+                                                                color: map ? map[modelData].bar : "transparent"
+                                                            }
+                                                        }
+                                                    }
+                                                }
+
+                                                MouseArea {
+                                                    id: schemeMa
+                                                    anchors.fill: parent
+                                                    hoverEnabled: true
+                                                    cursorShape: Qt.PointingHandCursor
+                                                    onClicked: unifiedSettings.settingChanged("keyColorScheme", sch.id)
+                                                }
+                                            }
+
+                                            Text {
+                                                text: sch.name
+                                                textFormat: Text.PlainText
+                                                color: isCurrent ? "#ddd" : "#888"
+                                                font.pixelSize: 9
+                                                font.weight: isCurrent ? Font.DemiBold : Font.Normal
+                                                anchors.horizontalCenter: parent.horizontalCenter
+                                            }
+                                        }
+                                    }
+                                }
+
+                                // One blurb for the selected scheme rather
+                                // than six on the cards: six will not fit
+                                // beside a 100 px swatch and would turn the
+                                // picker into a wall of text.
+                                Text {
+                                    Layout.fillWidth: true
+                                    text: {
+                                        var list = unifiedSettings.keyColorSchemes
+                                        for (var i = 0; i < list.length; i++)
+                                            if (list[i].id === unifiedSettings.keyColorScheme)
+                                                return list[i].blurb
+                                        return ""
+                                    }
+                                    color: "#aaa"
+                                    font.pixelSize: 11
+                                    wrapMode: Text.WordWrap
+                                    textFormat: Text.PlainText
                                 }
                             }
                         }

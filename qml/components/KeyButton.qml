@@ -148,6 +148,38 @@ Item {
     // transient UI such as the key-preview bubble.
     signal keyReleased()
 
+    // ===== Colour by role =====
+    //
+    // `role` is what this key *does*: "alpha", "digit", "punct",
+    // "mod", "edit", "kill", "commit", "nav", "fn", "op", "toggle".
+    // `roleColors` is
+    // `roleColors` is the {role: {fill, ink, bar}} table Main.qml derives
+    // from the active theme and the user's Key Colours setting.
+    //
+    // The resolution lives HERE rather than at each call site on purpose.
+    // Five surfaces draw keys (the main grid, both function rows, the
+    // number row, and the two side panels) and between them they hold
+    // about fifty keys; resolving per site would be fifty copies of one
+    // rule, which is the parallel-blocks failure this project keeps paying
+    // for. A surface passes the table down once and names each key's job.
+    //
+    // Both are optional, and a missing or unknown role falls back to the
+    // colours the surface passed in. That is what makes the "off"
+    // scheme byte-identical to the board that shipped before this
+    // existed: Main.qml simply hands down a null table.
+    property string role: ""
+    property var roleColors: null
+
+    readonly property var _roleFace: (keyRoot.roleColors && keyRoot.role
+                                      && keyRoot.roleColors[keyRoot.role])
+                                     ? keyRoot.roleColors[keyRoot.role] : null
+    readonly property color _roleFill: keyRoot._roleFace ? keyRoot._roleFace.fill
+                                                         : keyRoot.keyColor
+    readonly property color _roleInk: keyRoot._roleFace ? keyRoot._roleFace.ink
+                                                        : keyRoot.keyTextColor
+    readonly property color _roleBar: keyRoot._roleFace ? keyRoot._roleFace.bar
+                                                        : "transparent"
+
     // Where inside the key the current press landed, as fractions of the
     // key's width and height from its centre (-0.5 to 0.5).  Set on press
     // and handed to the bridge with the character, so the fuzzy beam can
@@ -307,8 +339,8 @@ Item {
         clip: true
         color: keyRoot._visualPressed ? keyPressedColor
              : isActive ? accentColor
-             : mouseArea.containsMouse ? Qt.lighter(keyColor, 1.25)
-             : keyColor
+             : mouseArea.containsMouse ? Qt.lighter(keyRoot._roleFill, 1.25)
+             : keyRoot._roleFill
 
         border.color: isActive ? Qt.lighter(accentColor, 1.3)
                     : mouseArea.containsMouse ? Qt.lighter(borderColor, 1.4)
@@ -366,12 +398,38 @@ Item {
             // up top, so the label and the lock bar can never disagree about
             // what is legible on a given theme.  The resting key keeps the
             // theme's own text colour.
-            color: (keyRoot._visualPressed || isActive) ? keyRoot._onFillColor : keyTextColor
+            color: (keyRoot._visualPressed || isActive) ? keyRoot._onFillColor
+                                                        : keyRoot._roleInk
             font.pixelSize: keyRoot.fontSize
             font.family: "Segoe UI, Inter, Ubuntu, Noto Sans, sans-serif"
             font.weight: isSpecial ? Font.DemiBold : Font.DemiBold
             horizontalAlignment: Text.AlignHCenter
             verticalAlignment: Text.AlignVCenter
+        }
+
+        // Role stripe: a hairline along the bottom edge naming the key's
+        // job, for the one Key Colours scheme that spends its colour on the
+        // legend instead of the fill.  Every other scheme leaves `_roleBar`
+        // transparent and this never draws.
+        //
+        // Hidden whenever the key is pressed, active or locked: those
+        // states repaint the fill underneath it, and a stripe inked for the
+        // resting colour is not guaranteed legible on the accent.  Locked
+        // also draws its own bar in the same place, and two bars stacked
+        // would read as one thick smear rather than as the lock cue.
+        Rectangle {
+            objectName: "keyRoleBar"
+            visible: keyRoot._roleBar.a > 0 && !keyRoot.isLocked
+                     && !keyRoot.isActive && !keyRoot._visualPressed
+            height: 2
+            radius: height / 2
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.bottom: parent.bottom
+            anchors.leftMargin: Math.max(4, keyRoot.radius * 0.75)
+            anchors.rightMargin: anchors.leftMargin
+            anchors.bottomMargin: 3
+            color: keyRoot._roleBar
         }
 
         // Right-click "lock" indicator: a solid bar along the bottom edge,

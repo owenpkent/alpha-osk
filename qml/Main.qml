@@ -4,6 +4,7 @@ import QtQuick.Layouts 1.15
 import QtQuick.Window 2.15
 import QtCore
 import "components" as Comp
+import "palette.js" as Palette
 
 Window {
     id: root
@@ -37,6 +38,13 @@ Window {
         // a user who only wants macros the vertical space of both.
         property bool savedShowExtraFunctionRow: false
         property string savedTheme: "dark"
+        // Which Key Colours scheme paints the keycaps.  "mono" ships as the
+        // default: it is the only scheme that cannot clash on any theme
+        // (no hue anywhere but the modifiers, which take the theme's own
+        // accent) while still telling the typing keys apart from the ones
+        // that do something.  "off" restores the historical per-surface
+        // tinting.
+        property string savedKeyColorScheme: "mono"
         property bool savedSuggestionsEnabled: true
         property real savedWindowOpacity: 1.0
         property string savedLayout: "qwerty"
@@ -772,6 +780,48 @@ Window {
     // and height follows.  No height-budget arithmetic needed.
     property real keyH: Math.max(34, keyW * 0.89)
 
+    // ===== Section heights: the three sections share one =====
+    //
+    // The keyboard grid, the nav cluster and the numpad used to be three
+    // different heights that the RowLayout centred against one another, so
+    // the board carried five top edges and five bottom ones.  Measured at a
+    // 1400 px window with both panels on: separators 105-433, grid 115-423,
+    // nav 130-408, numpad 134-404.  Nothing was wrong with any one section;
+    // no two of them simply began or ended in the same place, and the arrow
+    // cluster floated 19 px clear of the bottom instead of landing on it.
+    //
+    // Every section now lays out to `sectionHeight`, and the two panels
+    // absorb the difference into their own key heights rather than into
+    // their gaps.  Three consequences worth knowing:
+    //
+    //  * The arrows land on the bottom rail with nothing positioning them
+    //    there.  `arrowGap` already opened ABOVE the Up key, so once the
+    //    panel is as tall as the grid the cluster is flush by construction.
+    //  * Nav and numpad keys come out taller than the letters (about 12%
+    //    at the default width).  That is a gain, not a cost: those are the
+    //    arrows and the numpad, and a taller target is a cheaper click.
+    //  * The nav cluster keeps its arrow gutter and the numpad has none,
+    //    so their rows do NOT line up with each other.  That was tried
+    //    the other way (a matching gap after the numpad's third row) and
+    //    reversed: a physical numpad has no seam there, and one splitting
+    //    the digits off the 0 key is more obviously wrong than two panels
+    //    whose rows drift by a pixel or two.
+    //
+    // Taken as a MAX rather than simply the grid's height, because the grid
+    // is not always the tallest: with the function row hidden the panels
+    // are, by about 12 px, and shrinking their keys to match would trade a
+    // straight edge for smaller targets.  `Math.ceil` on the key height is
+    // not slop: a `Row` reports a height ceiled above its tallest key (see
+    // `keyHitMarginV`), so a panel's natural height is the ceiled one and
+    // computing it any other way leaves the panels a pixel short.
+    readonly property real panelBlockGap: keySpacing * 4
+    readonly property real _panelNaturalH: 5 * Math.ceil(keyH) + 4 * keySpacing
+                                           + panelBlockGap
+    readonly property real sectionHeight: Math.max(
+        mainKeyboard.implicitHeight,
+        showNavigation ? _panelNaturalH : 0,
+        showNumpad ? _panelNaturalH : 0)
+
     // Safety net: if the window width ever drops below minimumWidth (e.g. via
     // OS window-snap, DPI change, or panel toggle), clamp it back up.
     onWidthChanged: {
@@ -1051,29 +1101,74 @@ Window {
     // A border sits beside the label rather than behind it, so it can be the
     // full-strength accent on every theme without costing any contrast.
     // The same "muted, not raw" reasoning is why Enter uses "#2a5a2a".
+    // These three now delegate to palette.js, which is the single copy of
+    // the WCAG maths in the project.  They keep their signatures because
+    // the wash is called from here and from the compact view's accent keys,
+    // and because two copies of a contrast rule is exactly how the two
+    // drift apart (see the `luminance` note above, which this file already
+    // paid for once).
     function relativeLuminance(c) {
-        function channel(v) {
-            return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4)
-        }
-        return 0.2126 * channel(c.r) + 0.7152 * channel(c.g) + 0.0722 * channel(c.b)
+        return Palette.relativeLuminance(c)
     }
     function contrastRatio(a, b) {
-        var la = root.relativeLuminance(a)
-        var lb = root.relativeLuminance(b)
-        return (Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05)
+        return Palette.contrastRatio(a, b)
     }
     function accentWashFor(key, accent, text) {
-        for (var a = 0.35; a > 0.005; a -= 0.01) {
-            var candidate = Qt.tint(key, Qt.rgba(accent.r, accent.g, accent.b, a))
-            if (root.contrastRatio(text, candidate) >= 4.5)
-                return candidate
-        }
-        return key
+        return Palette.washFor(key, accent, 0.35, text)
     }
     readonly property color accentKeyColor: root.accentWashFor(
         root.themeKeyColor, root.themeAccent, root.themeTextColor)
     readonly property color accentKeyBorder: root.themeAccent
     property color themeBorder: activeTheme.border
+
+    // ===== Key colouring by role =====
+    //
+    // Settings -> Appearance -> Key Colours.  A key's fill can encode what
+    // the key *does* rather than only which surface it sits on.  The whole
+    // colour engine lives in `qml/palette.js`; this is the wiring.
+    //
+    // Read that file before changing a scheme.  Two things there are
+    // load-bearing and neither is obvious from here: every family hue is
+    // rotated off the ACTIVE THEME'S accent rather than being a literal
+    // (nine themes ship, and a fixed hex is unreadable on about half of
+    // them), and the rotation happens in OKLCh rather than HSL, because
+    // rotating hue in HSL holds the number constant while perceived
+    // lightness swings, which produces bands where some shout and others
+    // whisper.
+    //
+    // `keyRoles` is null for the default "off" scheme, and every surface
+    // reads null as "keep your own historical tint".  That is what makes
+    // the shipped board byte-identical to the one before this existed, and
+    // it is why there is no per-surface "off" branch anywhere.
+    property string keyColorScheme: appSettings.savedKeyColorScheme
+
+    readonly property var keyRoles: Palette.roleMap(
+        root.keyColorScheme, root.themeKeyColor, root.themeBackground,
+        root.themeTextColor, root.themeAccent)
+
+    // A key description from the layout JSON -> the role it belongs to.
+    function keyRoleFor(kd) {
+        return Palette.roleForKey(kd)
+    }
+
+    // The prediction pills take a role of their own rather than sitting on
+    // `themeKeyColor` for ever.  They were the one surface a scheme did not
+    // reach, which made them the only thing on screen that did not change
+    // when the board did.  A pill is an offer to commit a word, so the
+    // schemes that use hue give it the commit hue at reduced strength:
+    // related to Enter without competing with it.
+    //
+    // The border is the FULL theme accent on every scheme.  It was briefly
+    // blended toward the fill so a coloured pill would read as outlined
+    // rather than ringed, and that washed the whole row out: the pills are
+    // the one thing on the board the user is meant to reach for, and the
+    // ring is what says so.  A scheme may tint the fill; it may not soften
+    // the ring.
+    readonly property color predPillFill: root.keyRoles ? root.keyRoles.pill.fill
+                                                        : root.themeKeyColor
+    readonly property color predPillInk: root.keyRoles ? root.keyRoles.pill.ink
+                                                       : root.themeTextColor
+    readonly property color predPillBorder: root.themeAccent
 
     // Update state when bridge emits signals
     Connections {
@@ -2340,8 +2435,10 @@ Window {
                                    : predBar.predMinWidth
                             height: predBar.predPillHeight
                             radius: Math.max(4, predBar.predPillHeight * 0.22)
-                            color: predMouse.containsMouse ? Qt.lighter(root.themeKeyColor, 1.3) : root.themeKeyColor
-                            border.color: predMouse.containsMouse ? Qt.lighter(root.themeAccent, 1.2) : root.themeAccent
+                            color: predMouse.containsMouse ? Qt.lighter(root.predPillFill, 1.3)
+                                                          : root.predPillFill
+                            border.color: predMouse.containsMouse ? Qt.lighter(root.themeAccent, 1.2)
+                                                                  : root.predPillBorder
                             border.width: predMouse.containsMouse ? 2 : 1
 
                             // Subtle gradient for depth
@@ -2374,7 +2471,8 @@ Window {
                                 // unsanitised: force plain text so a crafted
                                 // entry can't auto-render as HTML.
                                 textFormat: Text.PlainText
-                                color: predMouse.containsMouse ? Qt.lighter(root.themeTextColor, 1.3) : root.themeTextColor
+                                color: predMouse.containsMouse ? Qt.lighter(root.predPillInk, 1.3)
+                                                               : root.predPillInk
                                 font.pixelSize: predBar.predFontSize
                                 font.weight: Font.Medium
                                 font.family: "Ubuntu, Noto Sans, sans-serif"
@@ -2685,6 +2783,7 @@ Window {
                         keySpacing: root.keySpacing
                         hitMarginH: root.keyHitMarginH
                         hitMarginV: root.keyHitMarginV
+                        roleColors: root.keyRoles
                         keyColor: Qt.darker(root.themeKeyColor, 1.3)
                         accentKeyColor: root.accentKeyColor
                         keyPressedColor: root.themeKeyPressed
@@ -2727,6 +2826,7 @@ Window {
                                   + root._widestRow.gaps * root.keySpacing
                         actions: root.keyActions
                         editFn: root.openKeyActionEditor
+                        roleColors: root.keyRoles
                         keyColor: Qt.darker(root.themeKeyColor, 1.15)
                         keyPressedColor: root.themeKeyPressed
                         keyTextColor: root.themeTextColor
@@ -2753,6 +2853,7 @@ Window {
                                   + root._widestRow.gaps * root.keySpacing
                         actions: root.keyActions
                         editFn: root.openKeyActionEditor
+                        roleColors: root.keyRoles
                         keyColor: Qt.darker(root.themeKeyColor, 1.15)
                         keyPressedColor: root.themeKeyPressed
                         keyTextColor: root.themeTextColor
@@ -2850,6 +2951,11 @@ Window {
                                         default: return false
                                     }
                                 }
+                                // What this key does, for Key Colours.
+                                // Ignored while the scheme is "off", which
+                                // is when `keyColor` below is what shows.
+                                role: root.keyRoleFor(kd)
+                                roleColors: root.keyRoles
                                 keyColor: {
                                     switch(kd.style || "default") {
                                         case "secondary": return Qt.darker(root.themeKeyColor, 1.3)
@@ -3017,7 +3123,10 @@ Window {
             // ===== Navigation Panel (toggleable) =====
             Rectangle {
                 visible: root.showNavigation
-                Layout.fillHeight: true
+                // Matched to the sections it divides rather than filling
+                // the row: `fillHeight` ran it 10 px past the board at each
+                // end, which is two more edges that line up with nothing.
+                Layout.preferredHeight: root.sectionHeight
                 Layout.preferredWidth: 1
                 color: "#333"
             }
@@ -3025,6 +3134,11 @@ Window {
             Comp.NavigationPanel {
                 objectName: "navigationPanel"
                 visible: root.showNavigation
+                // Flush with the grid on both rails; the panel divides
+                // this between its five rows itself.
+                Layout.preferredHeight: root.sectionHeight
+                arrowGap: root.panelBlockGap
+                roleColors: root.keyRoles
                 // Vertically off `keySpacing`, not `rowSpacing`: this
                 // panel lays its own rows out on it.
                 hitMarginH: root.keyHitMarginH
@@ -3044,7 +3158,7 @@ Window {
             // ===== Numpad (toggleable) =====
             Rectangle {
                 visible: root.showNumpad
-                Layout.fillHeight: true
+                Layout.preferredHeight: root.sectionHeight
                 Layout.preferredWidth: 1
                 color: "#333"
             }
@@ -3052,6 +3166,8 @@ Window {
             Comp.NumpadPanel {
                 objectName: "numpadPanel"
                 visible: root.showNumpad
+                Layout.preferredHeight: root.sectionHeight
+                roleColors: root.keyRoles
                 // Vertically off `keySpacing`, not `rowSpacing`: this
                 // panel lays its own rows out on it.
                 hitMarginH: root.keyHitMarginH
@@ -4686,6 +4802,7 @@ Window {
             showNumpad: root.showNumpad
             currentTheme: root.currentTheme
             themeData: root.themeData
+            keyColorScheme: root.keyColorScheme
             windowOpacity: root.windowOpacity
             currentLayout: root.currentLayout
             compactView: root.compactView
@@ -4735,6 +4852,9 @@ Window {
                 } else if (setting === "theme") {
                     root.currentTheme = value
                     appSettings.savedTheme = value
+                } else if (setting === "keyColorScheme") {
+                    root.keyColorScheme = value
+                    appSettings.savedKeyColorScheme = value
                 } else if (setting === "windowOpacity") {
                     root.windowOpacity = value
                     appSettings.savedWindowOpacity = value
