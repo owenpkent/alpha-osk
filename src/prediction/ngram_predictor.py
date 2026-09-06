@@ -22,6 +22,16 @@ from .token_predictor import TokenPredictor
 
 _logger = logging.getLogger("NgramPredictor")
 
+#: Context key standing for "the start of a sentence", borrowed from the ARPA
+#: convention.  It is deliberately a shape ``_tokenize`` cannot produce (the
+#: word regex has no ``<`` or ``>``), so a row stored under it is unreachable
+#: unless something asks for it by name, and no amount of typing can collide
+#: with it.
+SENTENCE_START = "<s>"
+
+#: Characters that end a sentence, so the next word starts one.
+_SENTENCE_ENDERS = ".!?"
+
 
 class NgramPredictor:
     """
@@ -30,6 +40,14 @@ class NgramPredictor:
     Uses unigram (word frequency) and bigram (word pairs) models
     to predict the next word based on context.
     """
+
+    #: Whether the first word of a sentence is conditioned on
+    #: :data:`SENTENCE_START` rather than falling back to raw unigram
+    #: frequency.  A class attribute, like ``FuzzyRecognizer.prefix_completion``
+    #: and for the same reason: it exists so the benchmark can measure the
+    #: before and after, not as a user setting.  Inert unless the generated
+    #: seeds supplied a ``<s>`` row.
+    use_sentence_start_context: bool = True
 
     def __init__(
         self,
@@ -624,17 +642,38 @@ class NgramPredictor:
         ends_with_space = context.endswith(" ")
 
         context_clean = context.lower().strip()
-        if not context_clean:
-            return self._top_unigrams_with_scores(n)
-
-        words = self._tokenize(context_clean)
 
         # Check if user is mid-word (no trailing space in original)
         partial_word = ""
-        if not ends_with_space and words:
-            partial_word = words[-1]
-            words = words[:-1]
-        # else: user finished word (space at end) — predict next word
+        if not context_clean:
+            words: List[str] = []
+        else:
+            words = self._tokenize(context_clean)
+            if not ends_with_space and words:
+                partial_word = words[-1]
+                words = words[:-1]
+            # else: user finished word (space at end) — predict next word
+
+        # A word that begins a sentence is conditioned on the sentence
+        # boundary, not on the tail of the previous sentence: after "i am
+        # tired." the useful pills are sentence openers, and "tired" is
+        # actively misleading.  The empty context is the same case (the first
+        # word of anything), and it used to fall straight through to raw
+        # unigram frequency, which offers "the, of, and, to" to a user about
+        # to type "i" or "can".  Both are routed to the SENTENCE_START row
+        # instead, which is an ordinary bigram row and so needs no special
+        # scoring.  Guarded because the row only exists when the generated
+        # seeds are present, and gated by the attribute so the benchmark can
+        # measure with and without.
+        if self.use_sentence_start_context and not partial_word:
+            starting = not words or (
+                ends_with_space and context_clean and context_clean[-1] in _SENTENCE_ENDERS
+            )
+            if starting and self.bigrams.get(SENTENCE_START):
+                words = [SENTENCE_START]
+
+        if not words and not partial_word:
+            return self._top_unigrams_with_scores(n)
 
         # Conditional trigram probabilities for this 2-word prefix.
         # Normalising by the prefix-total turns raw counts into
@@ -1605,6 +1644,76 @@ class NgramPredictor:
             return True
         except Exception as e:
             _logger.warning("Failed to load common bigrams: %s", e)
+            return False
+
+    def load_seed_ngrams(self, seeds_path: Optional[Path] = None) -> bool:
+        """Load the generated base context seeds (``data/seed_bigrams.txt``).
+
+        The curated ``common_bigrams.txt`` covers a few hundred prefixes; this
+        file is derived from a public language model and covers most of the
+        vocabulary.  Counts arrive already scaled to the curated weight (each
+        context carries the same total mass a single curated pair does), so
+        they are added to the base tables exactly as the curated loaders add
+        theirs, and a context appearing in both simply accumulates.
+
+        Format and provenance: ``docs/architecture/NGRAM_SEEDS.md``.  The
+        generator is ``scripts/gen_seed_ngrams.py``.
+
+        The ``\\backoff:`` section is deliberately skipped.  Nothing scores
+        with backoff weights yet, and parsing them would cost load time for a
+        table no caller reads.
+
+        Sentence-start rows are kept under the :data:`SENTENCE_START` key,
+        which ``_tokenize`` can never produce (it strips ``<`` and ``>``), so
+        the row is unreachable unless :meth:`predict_with_scores` asks for it
+        by name.  That keeps the data and the behaviour separable.
+        """
+        if seeds_path is None:
+            seeds_path = Path(__file__).parent.parent.parent / "data" / "seed_bigrams.txt"
+
+        if not seeds_path.exists():
+            _logger.debug("Seed n-grams file not found: %s", seeds_path)
+            return False
+
+        try:
+            count = 0
+            order = 2
+            in_seeds = False
+            with open(seeds_path, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line or line.startswith("#"):
+                        continue
+                    if line.startswith("\\"):
+                        # Section marker: only the seed rows are consumed.
+                        in_seeds = line == "\\seeds:"
+                        continue
+                    if not in_seeds:
+                        if line.startswith("order="):
+                            order = int(line.partition("=")[2] or 2)
+                        continue
+                    # A row is "<context words...> <continuation> <count>",
+                    # so an order-N file has N + 1 fields.
+                    parts = line.split()
+                    if len(parts) != order + 1:
+                        continue
+                    try:
+                        weight = int(parts[order])
+                    except ValueError:
+                        continue
+                    if weight <= 0:
+                        continue
+                    context = " ".join(
+                        p if p == SENTENCE_START else p.lower() for p in parts[: order - 1]
+                    )
+                    table = self.trigrams if order == 3 else self.bigrams
+                    table[context][parts[order - 1].lower()] += weight
+                    count += 1
+
+            _logger.info("Seed %d-grams loaded: %d edges", order, count)
+            return True
+        except Exception as e:
+            _logger.warning("Failed to load seed n-grams: %s", e)
             return False
 
     def load_common_trigrams(self, trigrams_path: Optional[Path] = None) -> bool:

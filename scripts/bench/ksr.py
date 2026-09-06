@@ -10,21 +10,32 @@ prints the next-word hit rate at an empty prefix, the share of words the
 engine never predicted at any prefix length, the median prefix length at
 first hit, and predict() latency (p50/p95).
 
-What the numbers do NOT mean: the held-out sentences are a small, hand-written
-sample (30 sentences), not logged real-world typing, and the "instant click"
-model is an upper bound, a real user reads and clicks slower and sometimes
-misses a pill that was there. This script never injects typing errors; for
-error-corruption recall see ``scripts/bench/fuzzy.py``. Unless ``--model-dir``
-is given, every run builds a brand-new model in a fresh temporary directory,
-so numbers reflect a cold-start engine with no personal learning (except
-where ``--learn-half`` explicitly simulates some), and the live model under
-the user's config dir is never read or written.
+``--corpus`` picks the evaluation set, and the choice matters more than any
+flag here. ``builtin`` is 30 hand-written sentences: enough to catch a gross
+regression, far too few to resolve the one and two point differences this
+bench is routinely used to argue, and with no external reference for whether
+its result is good. ``aac-dev`` and ``aac-test`` are the held-out splits of a
+crowdsourced corpus of AAC-like communications (Vertanen and Kristensson,
+EMNLP 2011, CC BY 4.0), which is the standard evaluation material for text
+entry and is split by author rather than by sentence. **Tune against
+``aac-dev`` and report ``aac-test``**, or the test split stops being held out.
+
+What the numbers do NOT mean: the "instant click" model is an upper bound, a
+real user reads and clicks slower and sometimes misses a pill that was there.
+This script never injects typing errors; for error-corruption recall see
+``scripts/bench/fuzzy.py``. Unless ``--model-dir`` is given, every run builds a
+brand-new model in a fresh temporary directory, so numbers reflect a
+cold-start engine with no personal learning (except where ``--learn-half``
+explicitly simulates some), and the live model under the user's config dir is
+never read or written.
 
 Usage:
     python scripts/bench/ksr.py
+    python scripts/bench/ksr.py --corpus aac-dev
+    python scripts/bench/ksr.py --corpus aac-test --mis-click
     python scripts/bench/ksr.py --pills 3 --conditions full,no-ppm,no-fuzzy
     python scripts/bench/ksr.py --conditions rank,rrf,linear,loglinear
-    python scripts/bench/ksr.py --learn-half
+    python scripts/bench/ksr.py --learn-half --corpus aac-dev
     python scripts/bench/ksr.py --model-dir C:\\scratch\\some-model-dir
 """
 
@@ -55,6 +66,7 @@ logging.disable(logging.CRITICAL)  # keep INFO-level engine-init noise off the t
 
 from src.prediction.fuzzy_recognizer import SpatialKeyModel  # noqa: E402
 from src.prediction.hybrid_predictor import HybridPredictor  # noqa: E402
+from src.prediction.language import ENGLISH  # noqa: E402
 
 # 30 held-out everyday sentences. Written by hand, not drawn from
 # data/training_corpus.txt, so the engine has never seen them at construction.
@@ -91,11 +103,53 @@ it might rain later so bring an umbrella just in case
 i will send you the updated version first thing tomorrow
 """.strip().splitlines()
 
+#: Evaluation corpora shipped beside this script.  These are held-out sets, so
+#: they live under ``scripts/`` rather than ``data/``: the PyInstaller spec
+#: bundles ``data/`` wholesale, and there is no reason to ship an evaluation
+#: set to users.
+_CORPUS_DIR = Path(__file__).resolve().parent / "data"
+
+CORPORA: dict[str, str] = {
+    "builtin": "30 hand-written everyday sentences (small; cannot resolve small differences)",
+    "aac-dev": "AAC-like communications, development split (Vertanen & Kristensson, CC BY 4.0)",
+    "aac-test": "AAC-like communications, test split (Vertanen & Kristensson, CC BY 4.0)",
+}
+
+_CORPUS_FILES = {"aac-dev": "aac_dev.txt", "aac-test": "aac_test.txt"}
+
+
+def normalise(line: str) -> str:
+    """Reduce a raw sentence to the tokens the word engine actually models.
+
+    The AAC sets carry real punctuation, capitals and digits, while
+    ``measure`` matches a prediction against ``sentence.split()`` exactly.
+    Feeding it ``dinner.`` would score a miss the engine could never have
+    hit, so each line is put through the *engine's own* word rule
+    (``profile.word_re`` over the lowercased text, which is what
+    ``NgramPredictor._tokenize`` uses) rather than a second, hand-rolled
+    idea of what a word is.  Digits fall out with it, which is correct
+    here: they are the token predictor's job, not the word model's.
+    """
+    return " ".join(ENGLISH.word_re.findall(line.lower()))
+
+
+def load_corpus(name: str) -> list[str]:
+    """The evaluation sentences for a named corpus, normalised and non-empty."""
+    if name == "builtin":
+        return list(HELD_OUT)
+    path = _CORPUS_DIR / _CORPUS_FILES[name]
+    if not path.exists():
+        raise SystemExit(f"corpus file missing: {path}")
+    lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    return [s for s in (normalise(line) for line in lines) if s]
+
+
 VALID_CONDITIONS = {
     "full",
     "no-ppm",
     "no-fuzzy",
     "legacy-fuzzy",
+    "no-sentence-start",
     "ppm-merge",
     "rank",
     "rrf",
@@ -117,7 +171,7 @@ class KsrResult:
     p95_latency_ms: float
 
 
-def _warmup(hp: HybridPredictor, calls: int = 100) -> None:
+def _warmup(hp: HybridPredictor, sentences: Sequence[str], calls: int = 100) -> None:
     """Absorb the engine's cold-cache cost before any timed measurement.
 
     The first ~100 predict() calls against a freshly built predictor run
@@ -126,7 +180,7 @@ def _warmup(hp: HybridPredictor, calls: int = 100) -> None:
     whichever condition happens to run first.
     """
     done = 0
-    for sentence in HELD_OUT:
+    for sentence in sentences:
         for i in range(len(sentence) + 1):
             hp.predict(sentence[:i], 5)
             done += 1
@@ -293,6 +347,18 @@ def apply_condition(hp: HybridPredictor, name: str) -> Iterator[None]:
         finally:
             hp._fuzzy.get_fuzzy_predictions = real_get_fuzzy  # type: ignore[method-assign]
         return
+    if name == "no-sentence-start":
+        # Condition the first word of a sentence on raw unigram frequency,
+        # the way the engine did before data/seed_bigrams.txt supplied a
+        # <s> row. Roughly one word in five starts a sentence in the AAC
+        # sets, so this is not a small slice of the corpus.
+        previous_start = hp._ngram.use_sentence_start_context
+        hp._ngram.use_sentence_start_context = False
+        try:
+            yield
+        finally:
+            hp._ngram.use_sentence_start_context = previous_start
+        return
     if name == "ppm-merge":
         # Put the character model's word candidates back into the merge, the
         # way the engine ran before 2026-09-03.
@@ -343,19 +409,20 @@ def print_table(results: Sequence[KsrResult]) -> None:
         print(_format_row(r))
 
 
-def run_learn_half(model_dir: Path, top: int) -> None:
-    """Learn sentences 1-15 once, test on 16-30, and report before/after/oracle.
+def run_learn_half(model_dir: Path, top: int, sentences: Sequence[str]) -> None:
+    """Learn the first half once, test on the second, report before/after/oracle.
 
     "oracle" learns the test half into a second, otherwise-identical model
     (once, the same way "after" learns the train half) so the before/after
     gap can be read against an upper bound: what one pass over the exact
     test material itself buys, rather than an arbitrary ceiling.
     """
-    train, test = HELD_OUT[:15], HELD_OUT[15:]
-    print(f"learn-half: train on sentences 1-15, test on sentences 16-30 (n={len(test)})\n")
+    half = len(sentences) // 2
+    train, test = list(sentences[:half]), list(sentences[half:])
+    print(f"learn-half: train on 1-{half}, test on {half + 1}-{len(sentences)} (n={len(test)})\n")
 
     hp = HybridPredictor(model_dir=model_dir / "before-after", enable_llm=False)
-    _warmup(hp)
+    _warmup(hp, test)
     before = measure(hp, "before learning", test, top)
 
     for sentence in train:
@@ -363,7 +430,7 @@ def run_learn_half(model_dir: Path, top: int) -> None:
     after = measure(hp, "after learning train half", test, top)
 
     hp_oracle = HybridPredictor(model_dir=model_dir / "oracle", enable_llm=False)
-    _warmup(hp_oracle)
+    _warmup(hp_oracle, test)
     for sentence in test:
         hp_oracle.learn(sentence)
     oracle = measure(hp_oracle, "oracle (learned test half)", test, top)
@@ -383,6 +450,13 @@ def build_parser() -> argparse.ArgumentParser:
         type=str,
         default="full",
         help=f"comma-separated list from {sorted(VALID_CONDITIONS)} (default: full)",
+    )
+    parser.add_argument(
+        "--corpus",
+        choices=sorted(CORPORA),
+        default="builtin",
+        help="evaluation set (default: builtin). "
+        + "; ".join(f"{k}: {v}" for k, v in CORPORA.items()),
     )
     parser.add_argument(
         "--model-dir",
@@ -435,8 +509,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         model_dir = Path(tempfile.mkdtemp(prefix="alpha-osk-bench-ksr-"))
         print(f"model dir: {model_dir}  (fresh temp dir, the live model is never touched)")
 
+    sentences = load_corpus(args.corpus)
+
     if args.learn_half:
-        run_learn_half(model_dir, args.pills)
+        run_learn_half(model_dir, args.pills, sentences)
         return 0
     pointer_spec: tuple[float, float, float] | None = None
     if args.pointer:
@@ -452,17 +528,20 @@ def main(argv: Sequence[str] | None = None) -> int:
         f"model: {len(ng.unigrams)} unigrams, {len(ng.bigrams)} bigram prefixes "
         f"({sum(len(v) for v in ng.bigrams.values())} edges), {len(ng.trigrams)} trigram prefixes"
     )
-    print(f"held-out: {len(HELD_OUT)} sentences, {sum(len(s.split()) for s in HELD_OUT)} words\n")
+    print(
+        f"held-out: {args.corpus}, {len(sentences)} sentences, "
+        f"{sum(len(s.split()) for s in sentences)} words\n"
+    )
 
-    _warmup(hp)
+    _warmup(hp, sentences)
 
     results: list[KsrResult] = []
     for name in conditions:
         with apply_condition(hp, name):
             if pointer_spec is None:
-                results.append(measure(hp, name, HELD_OUT, args.pills))
+                results.append(measure(hp, name, sentences, args.pills))
             if args.mis_click:
-                results.append(measure(hp, name + " +slip", HELD_OUT, args.pills, slip_at=1))
+                results.append(measure(hp, name + " +slip", sentences, args.pills, slip_at=1))
             if pointer_spec is not None:
                 bias_x, bias_y, noise = pointer_spec
                 for suffix, fwd, learn in (
@@ -478,7 +557,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                         measure(
                             hp,
                             name + suffix,
-                            HELD_OUT,
+                            sentences,
                             args.pills,
                             pointer=ptr,
                             forward_offsets=fwd,
