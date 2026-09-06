@@ -64,6 +64,7 @@ from __future__ import annotations
 
 import contextlib
 import ctypes
+import hashlib
 import json
 import logging
 import os
@@ -323,11 +324,20 @@ def _download_with_cap(
     *,
     timeout: float,
     progress: Optional[ProgressCb],
-) -> bool:
-    """Stream the URL into ``dest`` with a hard byte cap."""
+) -> Optional[str]:
+    """Stream the URL into ``dest`` with a hard byte cap.
+
+    Returns the SHA-256 of the bytes actually written, or ``None`` if the
+    download failed.  The caller re-checks that digest once the file is
+    pinned, which is what closes the sliver between this function
+    releasing its write handle and the pin being taken; see
+    :func:`_pinned_for_execution` for the larger window either side of
+    it.  Returning the digest rather than a bool is the whole point of
+    the contract: only this function ever sees the bytes as they arrive.
+    """
     if not _is_safe_download_url(url):
         _logger.error("Refusing download from disallowed URL: %s", url)
-        return False
+        return None
 
     req = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
     try:
@@ -336,7 +346,7 @@ def _download_with_cap(
             final_url = resp.geturl()
             if not _is_safe_download_url(final_url):
                 _logger.error("Refusing post-redirect host: %s", final_url)
-                return False
+                return None
 
             length_hdr = resp.headers.get("Content-Length")
             total = int(length_hdr) if length_hdr and length_hdr.isdigit() else None
@@ -346,10 +356,14 @@ def _download_with_cap(
                     total,
                     _MAX_DOWNLOAD_BYTES,
                 )
-                return False
+                return None
 
             written = 0
             chunk_size = 1 << 16  # 64 KB
+            # Hashed as it streams rather than by re-reading afterwards:
+            # a re-read is a second look at the file, and the gap between
+            # the two looks is exactly the thing being closed.
+            digest = hashlib.sha256()
             with open(dest, "wb") as fh:
                 while True:
                     chunk = resp.read(chunk_size)
@@ -361,14 +375,15 @@ def _download_with_cap(
                             "Aborting download — exceeded cap %d",
                             _MAX_DOWNLOAD_BYTES,
                         )
-                        return False
+                        return None
+                    digest.update(chunk)
                     fh.write(chunk)
                     if progress is not None:
                         progress(written, total)
-        return True
+        return digest.hexdigest()
     except (urllib.error.URLError, TimeoutError, OSError) as e:
         _logger.error("Download failed: %s", e)
-        return False
+        return None
 
 
 def _ps_single_quote_escape(value: str) -> str:
@@ -631,6 +646,25 @@ def _pinned_for_execution(path: Path) -> Iterator[bool]:
         _close_handle(handle)
 
 
+def _file_digest(path: Path) -> Optional[str]:
+    """SHA-256 of *path*, or ``None`` if it could not be read.
+
+    Only meaningful once the file is pinned.  Reading by path is safe
+    there precisely because the pin denies rename-over and delete, so the
+    name cannot have come to mean a different file since; without the pin
+    this would be one more racy look.
+    """
+    digest = hashlib.sha256()
+    try:
+        with open(path, "rb") as fh:
+            for chunk in iter(lambda: fh.read(1 << 16), b""):
+                digest.update(chunk)
+    except OSError as e:
+        _logger.error("Could not re-read the installer: %s", e)
+        return None
+    return digest.hexdigest()
+
+
 def _make_private_tempdir() -> Path:
     """Create a tempdir only the current user can read/write."""
     d = Path(tempfile.mkdtemp(prefix="alpha-osk-update-"))
@@ -888,13 +922,13 @@ def download_and_install(
     dest = work_dir / info.asset_name
 
     try:
-        ok = _download_with_cap(
+        downloaded_digest = _download_with_cap(
             info.download_url,
             dest,
             timeout=timeout,
             progress=progress,
         )
-        if not ok:
+        if downloaded_digest is None:
             return False, "Download failed (see log)"
 
         # Everything from here to the launch runs with the installer
@@ -909,6 +943,25 @@ def download_and_install(
             if not pinned:
                 _logger.error("Aborting install: could not pin the installer")
                 return False, "Could not secure the installer (see log)"
+
+            # The pin closes the window around the check-then-exec
+            # sequence, but it is taken a moment after the download let
+            # go of its own write handle, and that sliver is still a
+            # window. Nothing can prevent a swap inside it, so detect one
+            # instead: the download reported the digest of the bytes it
+            # actually wrote, and the file is immutable from here, so
+            # this comparison cannot itself be raced. A mismatch means
+            # either something replaced the file or the write was
+            # corrupted, and neither is a thing to hand to an elevated
+            # exec.
+            pinned_digest = _file_digest(dest)
+            if pinned_digest != downloaded_digest:
+                _logger.error(
+                    "Aborting install: installer changed after download (expected %s, found %s)",
+                    downloaded_digest,
+                    pinned_digest,
+                )
+                return False, "Installer changed after download (see log)"
 
             if not _verify_signature(dest, info.version):
                 _logger.error("Aborting install — signature verification failed")
