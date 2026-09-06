@@ -907,7 +907,7 @@ def download_and_install(
         # _pinned_for_execution.
         with _pinned_for_execution(dest) as pinned:
             if not pinned:
-                _logger.error("Aborting install — could not pin the installer")
+                _logger.error("Aborting install: could not pin the installer")
                 return False, "Could not secure the installer (see log)"
 
             if not _verify_signature(dest, info.version):
