@@ -9,6 +9,7 @@ Item {
 
     // Layout properties
     property bool showFunctionRow: false
+    property bool showExtraFunctionRow: false
     property bool showNavigation: false
     property bool showNumpad: false
     property string currentTheme: "dark"
@@ -101,7 +102,134 @@ Item {
 
     function resetToHome() { currentView = "home" }
 
+    // The two halves of the key list.  A function rather than two
+    // properties so the split is stated once; the binding that calls it
+    // re-evaluates when `keyActionRows` changes, because QML tracks the
+    // property reads a called function makes.
+    function keyRowsFor(unbound) {
+        var out = []
+        for (var i = 0; i < keyActionRows.length; ++i) {
+            if (!!keyActionRows[i].unbound === !!unbound)
+                out.push(keyActionRows[i])
+        }
+        return out
+    }
+
+    // One row of the key list.  A shared Component rather than two copies
+    // inside the two sections, which is the duplication this codebase
+    // keeps paying for elsewhere.
+    Component {
+        id: keyActionRowDelegate
+
+        Rectangle {
+            id: keyRow
+            Layout.fillWidth: true
+            implicitHeight: keyRowContent.implicitHeight + 14
+            radius: 6
+            color: keyRowArea.containsMouse ? "#33333a" : "#28282c"
+            // A programmed key is outlined rather than filled, the same
+            // contrast argument the compact accent keys make: a fill this
+            // size competes with the text sitting on it.
+            border.color: modelData.programmed ? "#5fd0c8" : "#3c3c42"
+            border.width: 1
+
+            // What the row says, in priority order: the word the user put
+            // on the cap, else what an untouched key does.  `detail` is
+            // the bridge's own one-line description, so it never has to
+            // be reproduced here.
+            readonly property string primaryText: modelData.label !== ""
+                ? modelData.label
+                : qsTr("Sends %1").arg(modelData.name)
+            readonly property string detailText:
+                (modelData.detail !== "" && modelData.detail !== primaryText)
+                    ? modelData.detail : ""
+
+            RowLayout {
+                id: keyRowContent
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.verticalCenter: parent.verticalCenter
+                anchors.leftMargin: 10
+                anchors.rightMargin: 10
+                spacing: 10
+
+                // Fixed width, so twenty-four rows scanned by eye share
+                // one left edge for their text: F1 and F24 are three
+                // characters apart and would otherwise stagger it.
+                Rectangle {
+                    Layout.preferredWidth: 38
+                    Layout.preferredHeight: 22
+                    radius: 4
+                    color: modelData.programmed ? "#1e3a38" : "#33333a"
+                    border.color: modelData.programmed ? "#5fd0c8" : "#45454c"
+                    border.width: 1
+
+                    Text {
+                        anchors.centerIn: parent
+                        text: modelData.name
+                        textFormat: Text.PlainText
+                        color: modelData.programmed ? "#8fe4dd" : "#9a9a9e"
+                        font.pixelSize: 11
+                        font.weight: Font.DemiBold
+                    }
+                }
+
+                ColumnLayout {
+                    Layout.fillWidth: true
+                    spacing: 1
+
+                    Text {
+                        Layout.fillWidth: true
+                        text: keyRow.primaryText
+                        // The label is user-entered text, so it must not
+                        // be sniffed for markup: see the AutoText note in
+                        // GOTCHAS.
+                        textFormat: Text.PlainText
+                        color: modelData.programmed ? "#fff" : "#c8c8cc"
+                        font.pixelSize: 13
+                        elide: Text.ElideRight
+                    }
+                    Text {
+                        Layout.fillWidth: true
+                        visible: keyRow.detailText !== ""
+                        text: keyRow.detailText
+                        textFormat: Text.PlainText
+                        color: "#8a8a8e"
+                        font.pixelSize: 10
+                        elide: Text.ElideRight
+                    }
+                }
+
+                Text {
+                    text: "\u203a"
+                    color: keyRowArea.containsMouse ? "#5fd0c8" : "#666"
+                    font.pixelSize: 20
+                }
+            }
+
+            MouseArea {
+                id: keyRowArea
+                anchors.fill: parent
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                onClicked: unifiedSettings.editKeyRequested(modelData.keyId)
+            }
+        }
+    }
+
+    // One entry per programmable key, built by Main.qml: keyId, name,
+    // label, detail, programmed, unbound.  Handed over as data rather
+    // than queried here, because the detail line is a bridge call and
+    // twenty-four of them behind bindings would re-query on every
+    // unrelated property change.
+    property var keyActionRows: []
+
     signal settingChanged(string setting, var value)
+    // Program one key.  The editor lives on the keyboard window, not in
+    // here: it is typed into with the OSK's own keys, and this window
+    // cannot hold OS focus, so a text field in it cannot be typed into
+    // at all (see the note on the Deepgram key field below).
+    signal editKeyRequested(string keyId)
     signal checkForUpdatesNowRequested()
     signal closeRequested()
     signal showHelpRequested()
@@ -177,6 +305,7 @@ Item {
                             switch (unifiedSettings.currentView) {
                                 case "appearance": return qsTr("Appearance")
                                 case "typing": return qsTr("Smart Typing")
+                                case "fkeys": return qsTr("Function Keys")
                                 case "dictation": return qsTr("Dictation")
                                 case "model": return qsTr("Your Language Model")
                                 case "data": return qsTr("Data & Privacy")
@@ -289,6 +418,12 @@ Item {
                                     title: qsTr("Smart Typing"),
                                     subtitle: qsTr("Suggestions, prediction engine, input behaviour and timing"),
                                     accent: "#9eda6e"
+                                },
+                                {
+                                    id: "fkeys",
+                                    title: qsTr("Function Keys"),
+                                    subtitle: qsTr("Show F1-F24, and give any key a shortcut or a phrase"),
+                                    accent: "#5fd0c8"
                                 },
                                 {
                                     id: "dictation",
@@ -414,13 +549,15 @@ Item {
                                     onToggled: function(c) { unifiedSettings.settingChanged("compactView", c) }
                                 }
 
-                                SettingsToggle {
-                                    Layout.fillWidth: true
-                                    text: "Function Keys (F1–F12)"
-                                    checked: unifiedSettings.showFunctionRow
-                                    onToggled: function(c) { unifiedSettings.settingChanged("functionRow", c) }
-                                }
-
+                                // The two function-row toggles used to sit
+                                // here.  They moved to the Function Keys
+                                // category, which owns the whole feature:
+                                // showing a row and deciding what is on it
+                                // are one job, and a category named for the
+                                // keys that cannot show them reads as a
+                                // category with a hole in it.  What is left
+                                // here is panel *layout*, which is what
+                                // Compact View gates.
                                 SettingsToggle {
                                     Layout.fillWidth: true
                                     enabled: !unifiedSettings.compactView
@@ -2068,6 +2205,113 @@ Item {
                                 text: "Debug Mode"
                                 checked: unifiedSettings.debugMode
                                 onToggled: function(c) { unifiedSettings.settingChanged("debugMode", c) }
+                            }
+                        }
+                    }
+
+                    // ============================================================
+                    // FUNCTION KEYS view -- show the rows, and program a key
+                    //
+                    // This page is the **left-click route into the key
+                    // editor**, and it replaced one: the rows used to carry
+                    // an Edit toggle that put every key into "tap to
+                    // program".  Right-click is unreachable for a
+                    // dwell-click, switch-access, head- or eye-tracker
+                    // pointer and for a single-button adaptive mouse, so a
+                    // second route is not optional.  A list beats a mode on
+                    // every count that matters here: the rows are far bigger
+                    // targets than a 36 px keycap, there is no mode to get
+                    // stuck in, and it is the only surface that shows an
+                    // assignment the user has forgotten making.  It also
+                    // gave the rows their thirteenth key back.
+                    // ============================================================
+                    ColumnLayout {
+                        Layout.fillWidth: true
+                        spacing: 16
+                        visible: unifiedSettings.currentView === "fkeys"
+
+                        SettingsSection {
+                            title: "Show"
+                            Layout.fillWidth: true
+
+                            ColumnLayout {
+                                Layout.fillWidth: true
+                                spacing: 6
+
+                                SettingsToggle {
+                                    Layout.fillWidth: true
+                                    text: "Function Keys (F1–F12)"
+                                    checked: unifiedSettings.showFunctionRow
+                                    onToggled: function(c) { unifiedSettings.settingChanged("functionRow", c) }
+                                }
+
+                                // Its own toggle rather than a second line
+                                // inside the row above: these twelve are the
+                                // macro keys, and someone who wants only
+                                // those should not have to spend the height
+                                // of the standard row to get them.
+                                SettingsToggle {
+                                    Layout.fillWidth: true
+                                    text: "Extra Function Keys (F13–F24)"
+                                    checked: unifiedSettings.showExtraFunctionRow
+                                    onToggled: function(c) { unifiedSettings.settingChanged("extraFunctionRow", c) }
+                                }
+                            }
+                        }
+
+                        // F13-F24 first, ahead of the numerically earlier
+                        // keys, because these are the ones the feature is
+                        // for: nothing binds them, so they are the ones a
+                        // user comes here to program.  Putting F1-F12 first
+                        // would mean scrolling past twelve keys nobody
+                        // should reassign, every visit.
+                        SettingsSection {
+                            title: "F13–F24 · free to assign"
+                            Layout.fillWidth: true
+
+                            ColumnLayout {
+                                Layout.fillWidth: true
+                                spacing: 6
+
+                                Text {
+                                    Layout.fillWidth: true
+                                    text: "Nothing binds these by default, so giving one a job "
+                                        + "cannot collide with a shortcut you already use."
+                                    textFormat: Text.PlainText
+                                    color: "#888"
+                                    font.pixelSize: 10
+                                    wrapMode: Text.WordWrap
+                                }
+
+                                Repeater {
+                                    model: unifiedSettings.keyRowsFor(true)
+                                    delegate: keyActionRowDelegate
+                                }
+                            }
+                        }
+
+                        SettingsSection {
+                            title: "F1–F12 · already bound in most apps"
+                            Layout.fillWidth: true
+
+                            ColumnLayout {
+                                Layout.fillWidth: true
+                                spacing: 6
+
+                                Text {
+                                    Layout.fillWidth: true
+                                    text: "Most programs already use these. Reassigning F5 costs "
+                                        + "you refresh everywhere, so prefer F13–F24 where you can."
+                                    textFormat: Text.PlainText
+                                    color: "#888"
+                                    font.pixelSize: 10
+                                    wrapMode: Text.WordWrap
+                                }
+
+                                Repeater {
+                                    model: unifiedSettings.keyRowsFor(false)
+                                    delegate: keyActionRowDelegate
+                                }
                             }
                         }
                     }

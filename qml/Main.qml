@@ -31,6 +31,11 @@ Window {
         property bool savedShowNavigation: true
         property bool savedShowNumpad: false
         property bool savedShowFunctionRow: false
+        // F13-F24, their own toggle rather than a second line inside the
+        // F1-F12 row: the twelve macro keys are the ones worth showing
+        // on their own, and yoking them to the standard row would cost
+        // a user who only wants macros the vertical space of both.
+        property bool savedShowExtraFunctionRow: false
         property string savedTheme: "dark"
         property bool savedSuggestionsEnabled: true
         property real savedWindowOpacity: 1.0
@@ -295,6 +300,8 @@ Window {
         root.showNavigation = appSettings.savedShowNavigation && !root.compactView
         root.showNumpad = appSettings.savedShowNumpad && !root.compactView
         root.showFunctionRow = appSettings.savedShowFunctionRow
+        root.showExtraFunctionRow = appSettings.savedShowExtraFunctionRow
+        root.refreshKeyActions()
         root.currentTheme = appSettings.savedTheme
         root.suggestionsEnabled = appSettings.savedSuggestionsEnabled
 
@@ -634,6 +641,7 @@ Window {
         return true
     }
     property bool showFunctionRow: false
+    property bool showExtraFunctionRow: false
     property bool showNavigation: false
     property bool showNumpad: false
     property bool showSettings: false
@@ -891,6 +899,88 @@ Window {
         else if (name === "redo") field.redo()
         else return false
         return true
+    }
+
+    // --- Programmable function keys -----------------------------------
+    //
+    // The bridge's assignment map, held here rather than queried per key
+    // so both function rows read one value and re-render together when it
+    // changes.  Reassigning the whole map (rather than mutating it) is
+    // what makes the keycap bindings in FunctionRow.qml re-evaluate.
+    property var keyActions: ({})
+    property var keyActionTypes: []
+    property var unboundFunctionKeys: []
+    // One row per programmable key, for the Settings -> Function Keys
+    // list: the key's name, the word on its cap, and a one-line
+    // description of what tapping it does.
+    //
+    // Built here rather than bound per row inside the panel, because the
+    // description is a bridge call: twenty-four of them behind bindings
+    // would re-query on every unrelated property change, and this
+    // recomputes exactly when the assignments do.
+    property var fkeyRows: []
+
+    function refreshKeyActions() {
+        if (!keyboard) return
+        root.keyActions = keyboard.getKeyActions()
+        root.keyActionTypes = keyboard.getKeyActionTypes()
+        root.unboundFunctionKeys = keyboard.getUnboundFunctionKeys()
+        root.fkeyRows = root.buildKeyActionRows()
+    }
+
+    function buildKeyActionRows() {
+        if (!keyboard) return []
+        var rows = []
+        var ids = keyboard.getProgrammableKeys()
+        for (var i = 0; i < ids.length; ++i) {
+            var id = ids[i]
+            var action = root.keyActions ? root.keyActions[id] : null
+            rows.push({
+                keyId: id,
+                name: id.toUpperCase(),
+                // "Carries an action" is not "has an entry": the `key`
+                // type keeps the keystroke and only renames the cap, so
+                // marking it as reassigned would be a lie, exactly as it
+                // is on the keycap itself (FunctionRow._isProgrammed).
+                label: (action && action.label) ? action.label : "",
+                detail: keyboard.describeKeyAction(id),
+                programmed: !!action && action.type !== "key",
+                unbound: root.unboundFunctionKeys.indexOf(id) >= 0
+            })
+        }
+        return rows
+    }
+
+    // Editing a key from Settings hands off to the editor on the keyboard
+    // window, and the settings window has to get out of the way first.
+    //
+    // Not a nicety.  The editor is typed into with the OSK's own keys,
+    // and the settings window is a 360x540 window parked in the middle of
+    // the screen, so leaving it up can cover the editor, the letter grid
+    // it is typed with, or both.  Hiding it also makes this a drill-down,
+    // which is why settings comes back on the same page afterwards rather
+    // than dumping the user at the home grid: losing your place in a list
+    // of twenty-four is not the same as re-opening a menu.
+    property string settingsReturnView: ""
+
+    function editKeyFromSettings(keyId) {
+        root.settingsReturnView = "fkeys"
+        root.showSettings = false
+        root.openKeyActionEditor(keyId)
+    }
+
+    function openKeyActionEditor(keyId) {
+        if (!keyboard) return
+        var existing = root.keyActions ? root.keyActions[keyId] : null
+        keyActionEditor.loadFor(keyId, existing ? existing : null)
+    }
+
+    Connections {
+        target: keyboard
+        function onKeyActionsChanged(actions) {
+            root.keyActions = actions
+            root.fkeyRows = root.buildKeyActionRows()
+        }
     }
 
     // Bounding box of every monitor, in virtual-desktop coordinates.
@@ -2547,6 +2637,39 @@ Window {
                         hidePreviewFn: root.hideKeyPreview
                     }
 
+                    // ===== Extra Function Row (F13-F24) =====
+                    //
+                    // Above F1-F12 rather than below it, so it lands where
+                    // a physical keyboard's extra row would and never
+                    // pushes the standard row (the one with muscle memory
+                    // attached) to a different height when it is toggled.
+                    Comp.FunctionRow {
+                        objectName: "extraFunctionRowPanel"
+                        visible: root.showExtraFunctionRow
+                        Layout.alignment: Qt.AlignHCenter
+                        keyGroups: [
+                            ["F13", "F14", "F15", "F16"],
+                            ["F17", "F18", "F19", "F20"],
+                            ["F21", "F22", "F23", "F24"]
+                        ]
+                        keyW: root.keyW
+                        keyH: root.keyH * 0.7
+                        keySpacing: root.keySpacing
+                        hitMarginH: root.keyHitMarginH
+                        hitMarginV: root.keyHitMarginV
+                        // The keyboard grid this row fills; see the
+                        // geometry note in FunctionRow.qml.
+                        maxWidth: root._widestRow.units * root.keyW
+                                  + root._widestRow.gaps * root.keySpacing
+                        actions: root.keyActions
+                        editFn: root.openKeyActionEditor
+                        keyColor: Qt.darker(root.themeKeyColor, 1.15)
+                        keyPressedColor: root.themeKeyPressed
+                        keyTextColor: root.themeTextColor
+                        accentColor: root.themeAccent
+                        borderColor: root.themeBorder
+                    }
+
                     // ===== Function Row (F1-F12) =====
                     Comp.FunctionRow {
                         objectName: "functionRowPanel"
@@ -2557,10 +2680,15 @@ Window {
                         keySpacing: root.keySpacing
                         hitMarginH: root.keyHitMarginH
                         hitMarginV: root.keyHitMarginV
-                        // Centred rather than filling the grid width, which
-                        // leaves visible space at both ends. That is the
-                        // chosen shape, not an oversight: see the geometry
-                        // note in FunctionRow.qml before changing it.
+                        // The keyboard grid this row fills. Not an upper
+                        // bound any more: the row stretches its keys to
+                        // exactly this width, which is what put an end to
+                        // the inset at both ends. Read the geometry note in
+                        // FunctionRow.qml before changing it back.
+                        maxWidth: root._widestRow.units * root.keyW
+                                  + root._widestRow.gaps * root.keySpacing
+                        actions: root.keyActions
+                        editFn: root.openKeyActionEditor
                         keyColor: Qt.darker(root.themeKeyColor, 1.15)
                         keyPressedColor: root.themeKeyPressed
                         keyTextColor: root.themeTextColor
@@ -3474,6 +3602,41 @@ Window {
                         onClicked: predEditPopup.close()
                     }
                 }
+            }
+        }
+
+        // Editor for one programmable function key. Opened by right-
+        // clicking an F-key, or from *Settings -> Function Keys*, which
+        // is not a duplicate route: it is the only one a dwell-click /
+        // switch-access / eye-tracker pointer has, and the only surface
+        // that shows an assignment the user has forgotten about.
+        Comp.KeyActionEditor {
+            id: keyActionEditor
+            objectName: "keyActionEditor"
+            actionTypes: root.keyActionTypes
+            unboundKeys: root.unboundFunctionKeys
+            chordFn: root.applyEditChord
+            shiftOn: root.shiftOn
+            inkOnFn: root.inkOn
+            savedFn: function() { editSavedToast.flash() }
+            problemFn: function() {
+                snippetProblemToast.flash(qsTr("That key action could not be saved"))
+            }
+            bgColor: Qt.darker(root.themeBackground, 1.08)
+            fieldColor: Qt.darker(root.themeKeyColor, 1.25)
+            inkColor: root.themeTextColor
+            accentColor: root.themeAccent
+            borderColor: root.themeBorder
+        }
+
+        // The return leg of `editKeyFromSettings`. Guarded on the return
+        // view being set, so an editor opened by right-clicking a key
+        // does not pop the settings window open behind it.
+        Connections {
+            target: keyActionEditor
+            function onClosed() {
+                if (root.settingsReturnView !== "")
+                    root.showSettings = true
             }
         }
 
@@ -4416,7 +4579,18 @@ Window {
             if (visible) {
                 settingsWindow.x = Screen.width / 2 - settingsWindow.width / 2
                 settingsWindow.y = Screen.height / 2 - settingsWindow.height / 2
-                if (settingsPanel) settingsPanel.resetToHome()
+                // Home every time, so re-opening settings never lands
+                // on a deep page ("the menu changed"). The one exception
+                // is coming back from the key editor, which is a
+                // drill-down rather than a re-open.
+                if (settingsPanel) {
+                    if (root.settingsReturnView !== "") {
+                        settingsPanel.currentView = root.settingsReturnView
+                        root.settingsReturnView = ""
+                    } else {
+                        settingsPanel.resetToHome()
+                    }
+                }
                 root.refreshDictation(true)
             }
         }
@@ -4428,6 +4602,7 @@ Window {
 
         Comp.UnifiedSettingsPanel {
             id: settingsPanel
+            objectName: "settingsPanel"
             anchors.fill: parent
 
             // Dictation.  Everything except `dictationEnabled` is pulled
@@ -4439,6 +4614,8 @@ Window {
             dictationEnabled: root.dictationEnabled
 
             showFunctionRow: root.showFunctionRow
+            showExtraFunctionRow: root.showExtraFunctionRow
+            keyActionRows: root.fkeyRows
             showNavigation: root.showNavigation
             showNumpad: root.showNumpad
             currentTheme: root.currentTheme
@@ -4474,6 +4651,9 @@ Window {
                 if (setting === "functionRow") {
                     root.showFunctionRow = value
                     appSettings.savedShowFunctionRow = value
+                } else if (setting === "extraFunctionRow") {
+                    root.showExtraFunctionRow = value
+                    appSettings.savedShowExtraFunctionRow = value
                 } else if (setting === "navigation") {
                     // Compact forbids the side panels, and it enforces that
                     // only at the moment it is switched on.  The Settings
@@ -4615,6 +4795,7 @@ Window {
             }
 
             onCloseRequested: root.showSettings = false
+            onEditKeyRequested: function(keyId) { root.editKeyFromSettings(keyId) }
             onShowHelpRequested: root.showHelp = true
             onShowVisualizationRequested: root.showVisualization = true
             onCheckForUpdatesNowRequested: {

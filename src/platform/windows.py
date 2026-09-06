@@ -155,6 +155,22 @@ VK_F9 = 0x78
 VK_F10 = 0x79
 VK_F11 = 0x7A
 VK_F12 = 0x7B
+# F13-F24 are real virtual-key codes (0x7C-0x87) that no mainstream
+# keyboard exposes a physical key for, which is exactly why they are
+# worth synthesising: nothing binds them by default, so they are free
+# targets for a macro the user binds inside a game, OBS or AutoHotkey.
+VK_F13 = 0x7C
+VK_F14 = 0x7D
+VK_F15 = 0x7E
+VK_F16 = 0x7F
+VK_F17 = 0x80
+VK_F18 = 0x81
+VK_F19 = 0x82
+VK_F20 = 0x83
+VK_F21 = 0x84
+VK_F22 = 0x85
+VK_F23 = 0x86
+VK_F24 = 0x87
 VK_NUMLOCK = 0x90
 VK_SCROLL = 0x91  # Scroll Lock
 
@@ -271,6 +287,18 @@ _KEY_MAP: Dict[str, int] = {
     "F10": VK_F10,
     "F11": VK_F11,
     "F12": VK_F12,
+    "F13": VK_F13,
+    "F14": VK_F14,
+    "F15": VK_F15,
+    "F16": VK_F16,
+    "F17": VK_F17,
+    "F18": VK_F18,
+    "F19": VK_F19,
+    "F20": VK_F20,
+    "F21": VK_F21,
+    "F22": VK_F22,
+    "F23": VK_F23,
+    "F24": VK_F24,
     # Lock / misc keys
     "Num_Lock": VK_NUMLOCK,
     "Scroll_Lock": VK_SCROLL,
