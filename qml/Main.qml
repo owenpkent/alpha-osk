@@ -2384,9 +2384,45 @@ Window {
                             // Reveal the full word on hover when the pill
                             // clipped it — predText.truncated is true only
                             // when ElideRight actually had to chop.
-                            ToolTip.visible: predMouse.containsMouse && predText.truncated
-                            ToolTip.text: modelData
-                            ToolTip.delay: 400
+                            //
+                            // Declared as a real ToolTip rather than through
+                            // the `ToolTip.text` attached property, because
+                            // the attached idiom gives no way to set
+                            // textFormat and Qt's default is AutoText, which
+                            // sniffs the string for HTML. A prediction can
+                            // come from an imported vocabulary pack's
+                            // unsanitised dictionary.txt (predText says the
+                            // same, which is why it pins PlainText), and the
+                            // only pill that is ever truncated (so the only
+                            // one this tooltip shows) is a single word wider
+                            // than the whole bar, i.e. exactly the crafted
+                            // one. An <img> in it would make Qt fetch the URL
+                            // on hover, from an app whose whole promise is
+                            // that nothing leaves the machine.
+                            ToolTip {
+                                id: predTip
+                                visible: predMouse.containsMouse && predText.truncated
+                                delay: 400
+                                contentItem: Text {
+                                    text: modelData
+                                    textFormat: Text.PlainText
+                                    // The flat theme properties, not
+                                    // root.theme.*: a Popup's contentItem is
+                                    // built in its own scope and the grouped
+                                    // object reads as undefined there, which
+                                    // the QML-warning gate catches as a
+                                    // TypeError on every pill.
+                                    color: root.themeTextColor
+                                    font.pixelSize: predBar.predFontSize
+                                    font.family: "Ubuntu, Noto Sans, sans-serif"
+                                }
+                                background: Rectangle {
+                                    color: root.themeKeyColor
+                                    border.color: root.themeBorder
+                                    border.width: 1
+                                    radius: 4
+                                }
+                            }
 
                             // Smooth hover animation
                             Behavior on color { ColorAnimation { duration: 100 } }

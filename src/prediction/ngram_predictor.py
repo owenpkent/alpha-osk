@@ -1086,25 +1086,29 @@ class NgramPredictor:
         """Permanently suppress a word from predictions."""
         self.blacklist.add(word.lower())
         self._blacklist_type_count.pop(word.lower(), None)
-        _logger.info("Blacklisted word: %s", word)
+        _logger.info("Blacklisted a word (len=%d)", len(word))
 
     def unblacklist_word(self, word: str) -> None:
         """Re-enable a previously blacklisted word."""
         self.blacklist.discard(word.lower())
         self._blacklist_type_count.pop(word.lower(), None)
-        _logger.info("Unblacklisted word: %s", word)
+        _logger.info("Unblacklisted a word (len=%d)", len(word))
 
     def mark_bad(self, word: str) -> None:
         """Downweight a word in future predictions."""
         self.dispreference[word.lower()] += 1
-        _logger.info("Marked bad: %s (weight now %d)", word, self.dispreference[word.lower()])
+        _logger.info(
+            "Marked a word bad (len=%d, weight now %d)",
+            len(word),
+            self.dispreference[word.lower()],
+        )
 
     def remove_dispreference(self, word: str) -> None:
         """Remove dispreference penalty from a word."""
         word_lower = word.lower()
         if word_lower in self.dispreference:
             del self.dispreference[word_lower]
-            _logger.info("Removed dispreference: %s", word)
+            _logger.info("Removed a dispreference (len=%d)", len(word))
 
     def mark_good(self, word: str) -> None:
         """Boost a word and record the boost so it can be undone.
@@ -1119,7 +1123,11 @@ class NgramPredictor:
             return
         self.learn_word(word_lower)
         self.preferred[word_lower] += 5
-        _logger.info("Marked good: %s (boost now %d)", word, self.preferred[word_lower])
+        _logger.info(
+            "Marked a word good (len=%d, boost now %d)",
+            len(word),
+            self.preferred[word_lower],
+        )
 
     def unprefer(self, word: str) -> None:
         """Roll back an explicit user boost.
@@ -1145,7 +1153,7 @@ class NgramPredictor:
             if self.unigrams.get(word_lower, 0) <= 0:
                 self.unigrams.pop(word_lower, None)
         del self.preferred[word_lower]
-        _logger.info("Unpreferred: %s (rolled back %d)", word, rollback)
+        _logger.info("Unpreferred a word (len=%d, rolled back %d)", len(word), rollback)
 
     def get_preference(self, word: str) -> int:
         """Get the explicit boost count for a word (0 if not boosted)."""
@@ -1173,8 +1181,8 @@ class NgramPredictor:
             if self._blacklist_type_count[word_lower] >= self._rehabilitate_threshold:
                 self.unblacklist_word(word_lower)
                 _logger.info(
-                    "Auto-rehabilitated word: %s (typed %d times)",
-                    word_lower,
+                    "Auto-rehabilitated a word (len=%d, typed %d times)",
+                    len(word_lower),
                     self._rehabilitate_threshold,
                 )
                 return word_lower
@@ -1465,9 +1473,17 @@ class NgramPredictor:
                     len(self.bigrams),
                     len(self.trigrams),
                 )
+            # Rebuild the incremental running total BEFORE publishing
+            # either field.  A non-numeric count in a crafted or corrupt
+            # file makes sum() raise, and assigning user_vocab first left
+            # it holding the poisoned data while _user_total kept its
+            # stale value -- durably breaking the
+            # `_user_total == sum(user_vocab.values())` invariant for the
+            # rest of the session, since nothing recomputes it.  Computing
+            # into a local makes the pair atomic against that raise.
+            user_total = sum(user_vocab_clean.values())
             self.user_vocab = defaultdict(int, user_vocab_clean)
-            # Rebuild incremental running total from loaded counts.
-            self._user_total = sum(self.user_vocab.values())
+            self._user_total = user_total
             self.total_words = data.get("total_words", 0)
             self.blacklist = set(data.get("blacklist", []))
             self.dispreference = defaultdict(int, data.get("dispreference", {}))

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+import logging
 import os
 from pathlib import Path
 
@@ -934,3 +936,93 @@ class TestReinforceContext:
         p = NgramPredictor()
         p.reinforce_context("hello", "World")
         assert p.bigrams["hello"]["world"] == 1
+
+
+class TestTheModelLoggerNeverWritesAWord:
+    """``alpha-osk.log`` is the file users attach to bug reports.
+
+    These six paths all take a word the user typed or was offered, and
+    they log at INFO, so they reach that file in every ordinary session.
+    ``forget_token`` deliberately logs nothing at all for exactly this
+    reason; these were the inconsistency.  Each case asserts the shape is
+    still reported, so a fix that simply deleted the logging would not
+    pass.
+    """
+
+    @pytest.mark.parametrize(
+        "action",
+        [
+            lambda p: p.blacklist_word("hunter2"),
+            lambda p: p.unblacklist_word("hunter2"),
+            lambda p: p.mark_bad("hunter2"),
+            lambda p: p.mark_good("hunter2"),
+        ],
+    )
+    def test_the_word_is_not_in_the_log_record(self, action, caplog) -> None:
+        predictor = NgramPredictor()
+        with caplog.at_level(logging.INFO, logger="NgramPredictor"):
+            action(predictor)
+
+        emitted = " ".join(r.getMessage() for r in caplog.records)
+        assert "hunter2" not in emitted
+        assert "len=7" in emitted
+
+    def test_removing_a_dispreference_reports_only_the_shape(self, caplog) -> None:
+        predictor = NgramPredictor()
+        predictor.mark_bad("hunter2")
+        caplog.clear()
+        with caplog.at_level(logging.INFO, logger="NgramPredictor"):
+            predictor.remove_dispreference("hunter2")
+
+        emitted = " ".join(r.getMessage() for r in caplog.records)
+        assert "hunter2" not in emitted
+        assert "len=7" in emitted
+
+    def test_rolling_back_a_boost_reports_only_the_shape(self, caplog) -> None:
+        predictor = NgramPredictor()
+        predictor.mark_good("hunter2")
+        caplog.clear()
+        with caplog.at_level(logging.INFO, logger="NgramPredictor"):
+            predictor.unprefer("hunter2")
+
+        emitted = " ".join(r.getMessage() for r in caplog.records)
+        assert "hunter2" not in emitted
+        assert "len=7" in emitted
+
+
+class TestACraftedModelCannotDesyncTheUserTotal:
+    """``_user_total == sum(user_vocab.values())`` is a stated invariant.
+
+    ``load`` used to publish ``user_vocab`` and *then* compute the total
+    from it, so a non-numeric count made ``sum`` raise into the blanket
+    handler and left the poisoned table in place beside a stale total.
+    Nothing recomputes it, so the invariant stayed broken for the rest of
+    the session and every later increment compounded on a wrong baseline.
+    """
+
+    def test_a_non_numeric_count_leaves_the_invariant_intact(self, tmp_path: Path) -> None:
+        predictor = NgramPredictor()
+        predictor.user_vocab["real"] = 4
+        predictor._user_total = 4
+
+        hostile = tmp_path / "ngram_model.json"
+        hostile.write_text(
+            json.dumps({"unigrams": {}, "user_vocab": {"hello": "not-a-number"}}),
+            encoding="utf-8",
+        )
+        predictor.load(hostile)
+
+        assert predictor._user_total == sum(predictor.user_vocab.values())
+
+    def test_a_well_formed_file_still_loads(self, tmp_path: Path) -> None:
+        """The inverse half: the guard must not refuse a good file."""
+        predictor = NgramPredictor()
+        good = tmp_path / "ngram_model.json"
+        good.write_text(
+            json.dumps({"unigrams": {}, "user_vocab": {"hello": 3, "there": 2}}),
+            encoding="utf-8",
+        )
+        predictor.load(good)
+
+        assert predictor._user_total == 5
+        assert predictor._user_total == sum(predictor.user_vocab.values())

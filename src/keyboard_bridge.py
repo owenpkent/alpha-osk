@@ -3757,8 +3757,20 @@ class KeyboardBridge(QObject):
 
     @Slot()
     def savePredictionModel(self) -> None:
-        """Save the prediction model to disk."""
-        self._predictor.save()
+        """Save the prediction model to disk.
+
+        Failures are logged rather than raised.  This runs from the
+        Settings "Save Now" button and from ``aboutToQuit``, and a raise
+        on the quit path leaves the rest of the shutdown sequence
+        (analytics, telemetry, modifier release) unrun.  It also has to
+        survive ``atomic_write_json`` refusing a non-finite count, which
+        it now does deliberately: refusing leaves the previous good file
+        on disk, which is the outcome worth protecting.
+        """
+        try:
+            self._predictor.save()
+        except Exception as exc:  # noqa: BLE001 - never break the quit path
+            _logger.error("Saving the prediction model failed: %s", exc)
 
     # ------------------------------------------------------------------
     #  Diagnostic log (the file users attach to a bug report)
@@ -4509,8 +4521,18 @@ class KeyboardBridge(QObject):
     def clearUserData(self) -> None:
         """Clear user-learned vocabulary and overwrite saved models on disk."""
         self._predictor.clear_user_data()
-        # Save immediately so stale model files don't restore old data on restart
-        self._predictor.save()
+        # Save immediately so stale model files don't restore old data on
+        # restart.  Guarded for the same reason savePredictionModel is:
+        # save() can refuse a write, and this is the third of its three
+        # call sites, so leaving it bare is how the three drift apart.
+        # The clear itself has already happened in memory either way, so
+        # a failure here means the on-disk files are stale, which is
+        # exactly what the log line needs to stop claiming.
+        try:
+            self._predictor.save()
+        except Exception as exc:  # noqa: BLE001 - the clear already happened
+            _logger.error("Clearing user data succeeded but the save failed: %s", exc)
+            return
         _logger.info("User data cleared and model files overwritten")
 
     @Slot()

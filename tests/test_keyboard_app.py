@@ -95,6 +95,34 @@ class TestPurgePreFixLogs:
         assert removed == 0
 
 
+@pytest.fixture
+def _restore_root_logging() -> Iterator[None]:
+    """``_configure_logging`` replaces the root handlers process-wide.
+
+    The suite shards with xdist, so leaving them swapped would break
+    whatever ran next in this worker (caplog included).  The handler it
+    opened is also closed here, or Windows will not let tmp_path be
+    cleaned up afterwards.  Shared by every class in this file that runs
+    the real logging setup.
+    """
+    root = logging.getLogger()
+    original = list(root.handlers)
+    level = root.level
+    named = logging.getLogger("HybridPredictor")
+    named_level = named.level
+    try:
+        yield
+    finally:
+        for handler in list(root.handlers):
+            root.removeHandler(handler)
+            if handler not in original:
+                handler.close()
+        for handler in original:
+            root.addHandler(handler)
+        root.setLevel(level)
+        named.setLevel(named_level)
+
+
 class TestTheLogGoesWhereTheUIPointsUsers:
     """*Settings -> Data & Privacy -> Diagnostics* shows a path.
 
@@ -103,29 +131,6 @@ class TestTheLogGoesWhereTheUIPointsUsers:
     nothing writes is worse than no panel, so this pins the two
     together rather than asserting either one on its own.
     """
-
-    @pytest.fixture
-    def _restore_root_logging(self) -> Iterator[None]:
-        """``_configure_logging`` replaces the root handlers process-wide.
-
-        The suite shards with xdist, so leaving them swapped would break
-        whatever ran next in this worker (caplog included).  The handler
-        it opened is also closed here, or Windows will not let tmp_path
-        be cleaned up afterwards.
-        """
-        root = logging.getLogger()
-        original = list(root.handlers)
-        level = root.level
-        try:
-            yield
-        finally:
-            for handler in list(root.handlers):
-                root.removeHandler(handler)
-                if handler not in original:
-                    handler.close()
-            for handler in original:
-                root.addHandler(handler)
-            root.setLevel(level)
 
     def test_the_handler_writes_the_file_the_panel_names(
         self,
@@ -144,6 +149,61 @@ class TestTheLogGoesWhereTheUIPointsUsers:
         assert opened == platform_mod.get_log_path()
         assert opened is not None
         assert "a record" in opened.read_text(encoding="utf-8")
+
+
+class TestTypedContentNeverReachesTheLog:
+    """The prediction path logs its candidate words at DEBUG.
+
+    That is allowed: DEBUG is the sanctioned home for typed content
+    precisely because it is off in an ordinary session.  What is not
+    allowed is pinning that logger to DEBUG at startup, which ``main()``
+    used to do unconditionally -- the handlers ``_configure_logging``
+    installs carry no level of their own, so every pill row the engine
+    produced was written into the file users attach to bug reports.
+
+    Two tests, because neither alone is honest.  The first states the
+    property end to end; the second is what actually catches the line
+    coming back, since the property test cannot run ``main()``.
+    """
+
+    def test_a_prediction_debug_record_does_not_reach_the_log_file(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        _restore_root_logging: None,
+    ) -> None:
+        """A default session must not write engine DEBUG records to disk."""
+        import src.platform as platform_mod
+
+        monkeypatch.setattr(platform_mod, "get_config_dir", lambda: tmp_path)
+        monkeypatch.setattr(keyboard_app, "get_config_dir", lambda: tmp_path)
+
+        opened = _configure_logging()
+        assert opened is not None
+
+        # Exactly what HybridPredictor emits on every keystroke.
+        logging.getLogger("HybridPredictor").debug("MERGED result: %s", ["hunter2", "passphrase"])
+        # An INFO record on the same logger proves the file is live, so a
+        # test that passed because nothing was written at all would fail.
+        logging.getLogger("HybridPredictor").info("engine ready")
+
+        written = opened.read_text(encoding="utf-8")
+        assert "engine ready" in written
+        assert "hunter2" not in written
+        assert "MERGED result" not in written
+
+    def test_main_pins_no_logger_to_debug(self) -> None:
+        """Source-level guard, deliberately.
+
+        ``main()`` builds a QApplication and enters an event loop, so the
+        property test above cannot execute it, and the defect lived in a
+        single statement there.  Asserting on the source is brittle in
+        the usual way but it is the only thing that fails if the line is
+        restored, which is the whole point of the guard.
+        """
+        source = Path(keyboard_app.__file__).read_text(encoding="utf-8")
+        body = source.split("def main(", 1)[1]
+        assert "setLevel(logging.DEBUG)" not in body
 
 
 def _boom() -> tuple:

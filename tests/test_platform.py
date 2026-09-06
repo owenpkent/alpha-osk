@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ntpath
 import subprocess
 import sys
 from pathlib import Path
@@ -1071,3 +1072,49 @@ class TestPlatformInfo:
 
         info = get_platform_info()
         assert "python" in info
+
+
+class TestPowerShellIsNeverInvokedByBareName:
+    """``CreateProcess`` searches the CWD before System32.
+
+    With no explicit application name, Windows resolves a bare
+    ``powershell`` against the launching process's own directory and then
+    the current working directory, ahead of System32.  The updater's
+    signature check is a PowerShell call, and it is the entire
+    Authenticode trust gate for auto-update: a planted ``powershell.exe``
+    that prints a convincing ``Valid|<thumbprint>|<CN>|<version>`` line
+    defeats it outright.  So the path has to be absolute at every call
+    site, and ``shutil.which`` is not an acceptable fallback because on
+    Windows it prepends the current directory to the search path -- the
+    exact hole being closed.
+    """
+
+    def test_the_helper_returns_an_absolute_system32_path(self) -> None:
+        from src.platform import powershell_path
+
+        resolved = powershell_path()
+        # ntpath, not os.path: the helper builds a Windows path on every
+        # host, and posixpath.isabs() does not recognise a drive letter,
+        # so os.path.isabs() would fail this on the Linux CI shard.
+        assert ntpath.isabs(resolved)
+        assert resolved.lower().endswith("powershell.exe")
+        assert "system32" in resolved.lower()
+
+    def test_the_helper_follows_system_root(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Not hardcoded to C:, for hosts installed on another volume."""
+        from src.platform import powershell_path
+
+        monkeypatch.setenv("SystemRoot", r"D:\Windows")
+        assert powershell_path().startswith(r"D:\Windows")
+
+    @pytest.mark.parametrize(
+        "source",
+        ["src/updater.py", "src/platform/windows.py"],
+    )
+    def test_no_call_site_passes_a_bare_name(self, source: str) -> None:
+        """The guard that fails if either call site regresses."""
+        text = Path(source).read_text(encoding="utf-8")
+        assert '"powershell"' not in text, (
+            f"{source} invokes powershell by bare name; use "
+            "platform.powershell_path() so CWD cannot win"
+        )

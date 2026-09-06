@@ -80,6 +80,7 @@ from typing import Callable, Optional, Tuple
 from urllib.parse import urlparse
 
 from .__version__ import __version__ as CURRENT_VERSION
+from .platform import powershell_path
 
 _logger = logging.getLogger("Updater")
 
@@ -469,7 +470,10 @@ def _verify_signature(exe_path: Path, expected_version: str) -> bool:
 
     try:
         result = subprocess.run(
-            ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps_script],
+            # Absolute path, never the bare name: CreateProcess searches
+            # the CWD before System32, and this call *is* the signature
+            # check.  See platform.powershell_path.
+            [powershell_path(), "-NoProfile", "-NonInteractive", "-Command", ps_script],
             capture_output=True,
             text=True,
             timeout=30,
