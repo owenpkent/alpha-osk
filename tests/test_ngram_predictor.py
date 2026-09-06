@@ -1034,6 +1034,83 @@ class TestTaughtAcronymsAreLearnable:
         assert p.is_taught_acronym("us")
         assert p.get_capitalized("us") == "us"
 
+    def test_the_shipped_proper_noun_list_buys_no_exemption(self):
+        """The provenance half, and the reason a set exists at all.
+
+        ``_load_proper_nouns`` writes ``data/proper_nouns.txt`` straight
+        into ``capitalization`` with none of the Caps-Lock guards
+        ``learn_capitalization`` applies, so reading that dict alone
+        cannot tell a taught acronym from a shipped one.  Today the
+        shipped file's acronym-shaped entries (HBO, IBM, LG, NASA) are
+        all base-dictionary words and are excluded further down by
+        accident; this pins the rule rather than the accident, using a
+        name that is deliberately *not* in the base dictionary, which is
+        what the next such addition (ATM, USA, URL) would look like.
+        """
+        p = NgramPredictor()
+        # Exactly what _load_proper_nouns does, and nothing else.
+        p.capitalization["zqacme"] = "ZQAcme"
+        assert not p.is_taught_acronym("zqacme"), (
+            "an entry the shipped list put there was granted the "
+            "exemption, which is the removed proper-noun tier arriving "
+            "through the side door"
+        )
+        assert p.get_capitalized("zqacme") == "zqacme"
+
+    def test_the_same_word_taught_by_the_user_does_get_it(self):
+        """The inverse, without which the test above passes vacuously.
+
+        A rule that answered False for everything would satisfy it.
+        """
+        p = NgramPredictor()
+        p.capitalization["zqacme"] = "ZQAcme"
+        assert not p.is_taught_acronym("zqacme")
+        self._teach(p, "ZQAcme")
+        assert p.is_taught_acronym("zqacme")
+
+    def test_provenance_survives_a_save_and_load(self, tmp_path):
+        """Otherwise the exemption is lost on the next launch."""
+        p = NgramPredictor()
+        self._teach(p, "ZQAcme")
+        assert p.is_taught_acronym("zqacme")
+
+        path = tmp_path / "ngram_model.json"
+        p.save(path)
+
+        q = NgramPredictor()
+        q.load(path)
+        assert q.is_taught_acronym("zqacme")
+
+    def test_a_legacy_model_file_adopts_no_provenance(self, tmp_path):
+        """Fails closed, and that direction is the load-bearing one.
+
+        ``capitalization`` is saved with the shipped proper nouns
+        already merged in, so a file written before the provenance key
+        existed cannot be adopted wholesale: doing so would mark every
+        shipped noun as taught and hand each one the exemption.  The
+        cost of failing closed is that an upgrading user re-teaches an
+        acronym once.
+        """
+        import json
+
+        path = tmp_path / "ngram_model.json"
+        path.write_text(
+            json.dumps({"unigrams": {}, "capitalization": {"zqacme": "ZQAcme"}}),
+            encoding="utf-8",
+        )
+
+        q = NgramPredictor()
+        q.load(path)
+        assert q.capitalization.get("zqacme") == "ZQAcme"
+        assert not q.is_taught_acronym("zqacme")
+
+    def test_clearing_user_data_drops_the_provenance_too(self):
+        p = NgramPredictor()
+        self._teach(p, "ZQAcme")
+        assert p.is_taught_acronym("zqacme")
+        p.clear_user_data()
+        assert not p.is_taught_acronym("zqacme")
+
     def test_a_mixed_case_brand_keeps_its_own_casing(self):
         """The second guard, and the reason the rule is acronym-shaped.
 

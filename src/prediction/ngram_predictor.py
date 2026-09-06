@@ -108,6 +108,14 @@ class NgramPredictor:
 
         # Capitalization: lowercase → preferred form (e.g. "owen" → "Owen")
         self.capitalization: Dict[str, str] = {}
+        # Which of the above the *user* taught us, as opposed to the
+        # shipped proper-noun list.  `capitalization` is written by
+        # both `_load_proper_nouns` (no guards at all) and
+        # `learn_capitalization` (Caps-Lock gated), and
+        # `is_taught_acronym` grants an exemption that is only ever
+        # safe for the second, so the two cannot share one dict as
+        # their only record.  See is_taught_acronym.
+        self.taught_capitalization: set[str] = set()
         # Structured tokens (phone numbers, zips, house numbers, emails).
         # `_tokenize` strips every digit and symbol, so these cannot live
         # in the vocabulary above; the store is owned here purely so it
@@ -507,10 +515,12 @@ class NgramPredictor:
         if word != lower and word != lower.capitalize():
             # Unusual casing like "iPhone", "McDonald" — always learn
             self.capitalization[lower] = word
+            self.taught_capitalization.add(lower)
         elif word[0].isupper() and word[1:].islower():
             # Standard proper noun casing: "Owen", "Paris"
             # Learn it (may override existing entry with user preference)
             self.capitalization[lower] = word
+            self.taught_capitalization.add(lower)
         else:
             return False
         return self.capitalization.get(lower) != existing
@@ -774,8 +784,27 @@ class NgramPredictor:
         carries, so "Th" left by an interrupted word would otherwise buy
         itself an exemption and land back in the vocabulary, which is
         the fragment class the filter exists to reject.
+
+        **The entry has to be one the user taught**, which is why
+        this consults ``taught_capitalization`` and not the dict
+        alone.  ``_load_proper_nouns`` writes the shipped
+        ``proper_nouns.txt`` into ``self.capitalization`` with none
+        of the guards above, so that dict on its own cannot tell
+        'the user right-clicked every letter' from 'it came with
+        the app'.  Today the shipped file's only acronym-shaped
+        entries (HBO, IBM, LG, NASA) are all base-dictionary words
+        and get excluded downstream by accident rather than by
+        design; the next one that is not (ATM, USA, URL) would
+        capitalise itself for every user having been taught
+        nothing, which is the proper-noun tier this project removed
+        on purpose.  An entry of unknown provenance therefore reads
+        as *not* taught: the cost is re-teaching an acronym after an
+        upgrade, set against silently reinstating that tier.
         """
-        stored = self.capitalization.get(word.lower())
+        lower = word.lower()
+        if lower not in self.taught_capitalization:
+            return False
+        stored = self.capitalization.get(lower)
         if not stored:
             return False
         return sum(1 for c in stored if c.isupper()) >= 2
@@ -1397,6 +1426,10 @@ class NgramPredictor:
             "preferred": dict(self.preferred),
             "blacklist_type_count": dict(self._blacklist_type_count),
             "capitalization": dict(self.capitalization),
+            # Which of those the user taught, so the acronym exemption
+            # survives a restart without the shipped proper nouns
+            # inheriting it.  See is_taught_acronym.
+            "taught_capitalization": sorted(self.taught_capitalization),
             "tokens": self.tokens.to_dict(),
             "pointer": self.pointer.to_dict(),
             "candidate_counts": dict(self._candidate_counts),
@@ -1520,6 +1553,22 @@ class NgramPredictor:
             # every learned acronym on the way back in and the model
             # could never hold one across a restart.
             self.capitalization.update(caps)
+
+            # Provenance for the above.  A file written before this
+            # key existed gets an empty set rather than having its
+            # `capitalization` adopted wholesale: that dict is saved
+            # with the shipped proper nouns already merged into it,
+            # so adopting it would mark all ~8,000 of them as taught
+            # and hand every one the acronym exemption.  Failing
+            # closed costs an upgrading user a re-teach; failing open
+            # reinstates the proper-noun tier wholesale.
+            taught = data.get("taught_capitalization", [])
+            if isinstance(taught, list):
+                self.taught_capitalization.update(
+                    w.lower()
+                    for w in taught[: self._MAX_CAPITALIZATIONS]
+                    if isinstance(w, str) and w
+                )
 
             # Strip fragments from older saved models. The dictionary
             # loaders apply this filter at startup so fresh installs
@@ -1732,6 +1781,7 @@ class NgramPredictor:
         self._learn_count = 0
         # Clear learned capitalization so user-typed forms don't persist
         self.capitalization.clear()
+        self.taught_capitalization.clear()
         # Learned phone numbers / addresses / emails are user data too,
         # and "clear my learned data" has to mean all of it.
         self.tokens.clear()
