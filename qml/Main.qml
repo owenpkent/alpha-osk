@@ -1168,21 +1168,20 @@ Window {
     //
     // Everywhere but Windows we round them ourselves, with a `radius` on the
     // background below.  On Windows that is exactly what produced the white
-    // notch in the top-left corner: every window here is frameless and
-    // WS_EX_LAYERED, and the pixels a `radius` leaves outside the arc do not
-    // composite the desktop on a layered window, they come back white.
+    // notch in a corner: this window is transparent and therefore
+    // WS_EX_LAYERED, and the pixels a `radius` leaves outside the arc come
+    // back white on a layered window rather than showing the desktop.  So
+    // the background is squared off there and DWM masks the corner instead
+    // (`windows_window.py::_prefer_dwm_rounded_corners`).  The measurements
+    // and the reasoning are under "Who rounds the window corners" in
+    // CLAUDE.md.  The two pickers and the dashboard bind to this rather than
+    // reading Qt.platform.os themselves, so the rule is stated once.
     //
-    // Measured against a magenta backdrop behind all four corners: with
-    // radius 10 the corner pixel is #ffffff whether Windows' own rounding is
-    // on or off, and with radius 0 plus DWMWCP_ROUND it is the backdrop.  So
-    // the notch is the unpainted region rather than the rounding, and the
-    // fix is to leave nothing unpainted: square the background off and let
-    // DWM mask an opaque window, which it antialiases properly.
-    // `windows_window.py::_prefer_dwm_rounded_corners` is the other half.
-    //
-    // On Windows 10 that DWM call fails and the corners stay square, which
-    // is what every other window on that desktop looks like.
-    readonly property bool selfRoundedCorners: Qt.platform.os !== "windows"
+    // Not readonly, for one caller: `scripts/capture_screenshots.py` renders
+    // through the offscreen plugin, where Qt.platform.os still reads
+    // "windows" but there is no compositor to round anything, so it sets
+    // this back to true to keep the screenshots' corners.
+    property bool selfRoundedCorners: Qt.platform.os !== "windows"
     readonly property real windowRadius: selfRoundedCorners ? 10 : 0
 
     // Main background — uses Qt.rgba so only the background becomes transparent
@@ -1204,7 +1203,7 @@ Window {
         Rectangle {
             anchors.fill: parent
             anchors.margins: -1
-            radius: root.windowRadius > 0 ? root.windowRadius + 1 : 0
+            radius: root.selfRoundedCorners ? root.windowRadius + 1 : 0
             color: "transparent"
             border.color: Qt.rgba(0, 0, 0, 0.5)
             border.width: 1
@@ -1230,8 +1229,10 @@ Window {
             // corner instead of a notch.
             radius: root.windowRadius
 
-            // Only round top corners
+            // Only round top corners.  Nothing to square off when the bar
+            // is already square.
             Rectangle {
+                visible: root.selfRoundedCorners
                 anchors.bottom: parent.bottom
                 anchors.left: parent.left
                 anchors.right: parent.right
@@ -3709,8 +3710,8 @@ Window {
         // rather than a Popup, the three-view split, and why a tap copies
         // to the clipboard rather than types.
         Comp.SnippetsWindow {
-            selfRoundedCorners: root.selfRoundedCorners
             id: snippetsWindow
+            selfRoundedCorners: root.selfRoundedCorners
             applyEditChord: root.applyEditChord
             clampedWindowPos: root.clampedWindowPos
             inkOn: root.inkOn
@@ -3740,8 +3741,8 @@ Window {
         // itself and the full rationale -- it deliberately shares its
         // shell with the Snippets window above.
         Comp.SymbolsWindow {
-            selfRoundedCorners: root.selfRoundedCorners
             id: symbolsWindow
+            selfRoundedCorners: root.selfRoundedCorners
             clampedWindowPos: root.clampedWindowPos
             themeAccent: root.themeAccent
             themeBackground: root.themeBackground
@@ -4903,6 +4904,9 @@ Window {
     // ===== Model Visualization Window =====
     Window {
         id: vizWindow
+        // Found by name from keyboard_app.py::_wire_floating_windows, which
+        // hands its corners to DWM once it is shown (see selfRoundedCorners).
+        objectName: "vizWindow"
         title: "Your Language Model"
         visible: root.showVisualization
         width: 720
@@ -4925,6 +4929,8 @@ Window {
 
         Comp.ModelVisualization {
             id: vizContent
+            objectName: "vizContent"
+            selfRoundedCorners: root.selfRoundedCorners
             anchors.fill: parent
             onCloseRequested: root.showVisualization = false
         }

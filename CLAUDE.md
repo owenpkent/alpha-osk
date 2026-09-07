@@ -9,7 +9,7 @@ Owen is a wheelchair user with muscular dystrophy. Typing is hard - be proactive
 ## Key rules (non-obvious, cross-cutting)
 
 - The keyboard must NEVER steal OS focus: `WS_EX_NOACTIVATE` on Windows (`keyboard_app.py::_apply_window_flags` dispatches to `src/platform/windows_window.py::apply_extended_styles`), `WindowDoesNotAcceptFocus` elsewhere. Because our window cannot hold focus, route in-app text entry (prediction-edit popup, snippets editor, any future input slot) through `setEditMode(true)` plus the `editKeyTyped` / `editSpecialPressed` signals, never Qt focus. Set edit mode on open and clear it on close.
-- **Nothing here rounds its own window corners on Windows.** Every window in this app is frameless and `WS_EX_LAYERED`, and the pixels a QML `radius` leaves outside the arc do not composite the desktop on a layered window: they come back white, as a bright notch in one corner. `Main.qml::selfRoundedCorners` squares the background off on Windows and `windows_window.py::_prefer_dwm_rounded_corners` hands the corner to DWM instead. See *Who rounds the window corners*.
+- **No transparent window here rounds its own corners on Windows.** The keyboard, the Snippets and Symbols pickers and the Dashboard are all frameless and `color: "transparent"`, which makes them `WS_EX_LAYERED`, and the pixels a QML `radius` leaves outside the arc do not composite the desktop on a layered window: they come back white, as a bright notch in one corner. `Main.qml::selfRoundedCorners` squares their backgrounds off on Windows and `windows_window.py::_prefer_dwm_rounded_corners` hands the corner to DWM instead. A new floating window with a transparent background must bind to that property and be named in `keyboard_app.py::_wire_floating_windows`. See *Who rounds the window corners*.
 - Sticky-modifier auto-release lives in one place, `KeyboardBridge._release_sticky_modifiers(names=_MODIFIERS, *, keep=())`: every keystroke path (`_press_char`'s edit intercept, chord branch and char-path end; `_release_edit_chord_modifiers`; `pressSpecialKey`) calls it instead of hand-copying the block. `names` restricts which modifiers a call considers (the edit intercept passes only `("shift",)`); `keep` exempts specific active modifiers from an otherwise-eligible release (`pressSpecialKey` passes `keep=("shift", "ctrl")` on `_NAV_KEYS` so Shift/Ctrl survive arrow-key selection). A new keystroke path must call this rather than write its own copy.
 - Linux `LinuxKeySynthesizer.hold_modifier()` MUST skip `win`/`super`: holding Super triggers a WM pointer grab that swallows every click, including clicks on the OSK itself. Do not "fix" it to hold Super. Windows still holds `VK_LWIN`.
 - Pill-facing casing comes only from `KeyboardBridge._display_cased`, which mirrors every uppercase position of the typed prefix onto the pill, unconditionally (including fuzzy/autocorrect candidates). Auto-capitalisation is the "I" family (in the language profile, `language.ENGLISH.always_capitalize`, rather than in `ngram_predictor`) plus taught acronyms (see *Taught acronyms*); do NOT reintroduce the removed three-tier proper-noun auto-cap as a default. Every pill emit site must route through `_display_cased`.
@@ -1979,14 +1979,17 @@ are in *Key rules* at the top of this file.
 
 ## Who rounds the window corners
 
-Every window here is frameless and, on Windows, `WS_EX_LAYERED`. They used
-to round their own corners with a `radius` on the QML background rectangle,
-which leaves the pixels outside the arc unpainted, and **on a layered window
-those do not composite the desktop the way a transparent pixel should: they
-come back white**. What the user sees is a small bright notch biting into a
-corner of the keyboard, appearing and disappearing depending on what happens
-to be behind it, which is why it looks intermittent and unrelated to
-anything.
+Every window here is frameless, and four of them (the keyboard, the Snippets
+and Symbols pickers, and the Dashboard) are `color: "transparent"`, which on
+Windows makes them `WS_EX_LAYERED`. They used to round their own corners
+with a `radius` on the QML background rectangle, which leaves the pixels
+outside the arc unpainted, and **on a layered window those do not composite
+the desktop the way a transparent pixel should: they come back white**. What
+the user sees is a small bright notch biting into a corner of the keyboard,
+appearing and disappearing depending on what happens to be behind it, which
+is why it looks intermittent and unrelated to anything. (Settings and Help
+are opaque `#1e1e1e` windows with a rounded panel inside; their corners show
+the window's own dark colour rather than white, so they are left alone.)
 
 Measured on the real `Main.qml`, against a magenta backdrop placed behind
 all four corners:
@@ -2006,31 +2009,51 @@ title bar and the shadow, and
 `DWMWA_WINDOW_CORNER_PREFERENCE` to `DWMWCP_ROUND` so the compositor masks
 an opaque window, which it antialiases properly.
 
-Four things follow:
+Six things follow:
 
 - **The title bar's radius has to follow the background's.** Rounding it
   while the background behind it is square swaps the notch for a lighter
   wedge in each top corner, since what shows through is then the background
-  rather than the desktop.
-- **The two floating windows are the same shape and needed the same fix.**
-  `SnippetsWindow` and `SymbolsWindow` are both `color: "transparent"` with
-  a radius-8 background, so a fix reaching only the keyboard would have left
-  the notch on the two windows that float over whatever the user is typing
-  into. They take `selfRoundedCorners` as a required property from
-  `Main.qml` rather than each reading `Qt.platform.os`, so the rule is
-  stated once.
+  rather than the desktop. The Dashboard's header is the same case.
+- **The three floating windows are the same shape and needed the same fix.**
+  `SnippetsWindow`, `SymbolsWindow` and the Dashboard (`vizWindow`, whose
+  `ModelVisualization` panel draws the background) are all transparent with
+  a rounded background, so a fix reaching only the keyboard would have left
+  the notch on the windows that float over whatever the user is typing into.
+  The Dashboard was in fact missed by the first version. They take
+  `selfRoundedCorners` as a required property from `Main.qml` rather than
+  each reading `Qt.platform.os`, so the rule is stated once, and
+  `keyboard_app.py::_wire_floating_windows` names all three so the DWM call
+  reaches them once they are shown. The Dashboard gets only that call: it is
+  allowed to take focus (it has no keys on it), so it must not go through
+  `apply_extended_styles` and pick up `WS_EX_NOACTIVATE` with the corner.
+- **The DWM call runs before the style writes, not after.** Each of those
+  returns early on failure and is logged, and the corner needs nothing they
+  compute, so it must not be lost with them.
 - **The DWM call is best-effort and must stay that way.**
   `DWMWA_WINDOW_CORNER_PREFERENCE` is Windows 11 and later; on Windows 10 it
   fails and the window keeps the square corners QML gave it, which is what
   every other window on that desktop looks like. A window that fails to
   round is cosmetic, never a reason to fail startup.
+- **The screenshot script takes the rounding back.** `Qt.platform.os` still
+  reads `"windows"` under the offscreen plugin, but there is no compositor
+  behind it, so `scripts/capture_screenshots.py` sets `selfRoundedCorners`
+  back to true after loading `Main.qml` or every screenshot regenerated on
+  the Windows dev machine comes out with hard square corners. That is why
+  the property is not `readonly`.
 - **The offscreen render was correct the whole time the bug was on screen.**
   `assets/screenshots/dark-theme-keyboard.png` had a properly antialiased
   alpha-0 corner while the live window showed the notch, so a test that
   rendered the corner and looked at it would have passed against the bug.
   `tests/test_window_corners.py` therefore pins the checkable half (which
-  side is asked to round, that all three windows agree, and that the DWM
-  call cannot raise) and says in its docstring why it cannot pin the rest.
+  side is asked to round, that every transparent window agrees, what the DWM
+  call asks for and that it cannot raise) and says in its docstring why it
+  cannot pin the rest.
+
+Not yet checked on a real desktop: the background keeps its 1 px theme
+border while its radius is 0, so along the corner arc DWM's mask clips that
+border and draws its own. If that reads wrong on a light theme, the answer
+is `DWMWA_BORDER_COLOR`, not a radius on the QML side.
 
 ## Title-bar window menu, and click-free Move
 

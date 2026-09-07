@@ -26,10 +26,7 @@ Window {
     // problem toast (which must stay on the keyboard window) can
     // still fire from here.
     // Whether this window rounds its own corners, or leaves them to the
-    // compositor.  Bound from Main.qml's `selfRoundedCorners`, which carries
-    // the reasoning: on Windows a `radius` on a layered window's background
-    // leaves pixels that come back white instead of transparent, so the
-    // background is squared off there and DWM masks the corner instead.
+    // compositor.  Bound from Main.qml's `selfRoundedCorners`; see there.
     required property bool selfRoundedCorners
     required property var clampedWindowPos
     required property color themeAccent
