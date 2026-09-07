@@ -12,6 +12,7 @@ legacy path it has to beat.
 from __future__ import annotations
 
 import random
+import string
 from pathlib import Path
 
 import pytest
@@ -70,7 +71,11 @@ class TestCompletesThroughAnError:
         for word in ("hello", "because", "different", "information", "documentation"):
             assert top(fr, word)[0] == word
 
-    def test_too_short_a_prefix_is_left_to_the_exact_completer(self, fr):
+    def test_a_short_live_prefix_is_left_to_the_exact_completer(self, fr):
+        # A *live* prefix is the half of the short-input guard that stands:
+        # the n-gram completes "he" exactly, so the beam has nothing to add
+        # and every case that works today must be untouched.  The dead-prefix
+        # half is TestATwoLetterMisClickDoesNotEmptyTheBar below.
         assert top(fr, "he") == []
         assert top(fr, "h") == []
 
@@ -222,3 +227,64 @@ class TestWhatWasTypedIsEvidence:
         index = PrefixIndex({"zorblat": 3.0, "spent": 9000.0, "spend": 8000.0})
         beam = PrefixBeam(index, SpatialEmissions(QWERTY_POSITIONS))
         assert [w for w, _ in beam.complete("zorb", 3)] == ["zorblat", "spent", "spend"]
+
+
+class TestATwoLetterMisClickDoesNotEmptyTheBar:
+    """A two-character run that spells nothing left the bar blank until the third.
+
+    The short-input guard deferred to the n-gram's exact-prefix match, which
+    for a run no word starts with does not exist, so a single slip in either
+    of the first two characters emptied the suggestion bar outright and the
+    pills only came back on the third keystroke.  Measured over the shipped
+    list, 298 of the 676 two-letter runs were in that state.  On a keyboard
+    driven by an imprecise pointer that is frequent enough to read as the
+    suggestions being unreliable rather than as a mis-click.
+
+    Every case here is paired with the near-miss it must leave alone, and the
+    inverse is the load-bearing half: the rescue is only allowed to fire where
+    the exact source found nothing, so it can never displace a completion the
+    user is already getting.
+    """
+
+    @pytest.mark.parametrize(
+        "typed, intended",
+        [
+            ("yh", "the"),  # "th", t -> y
+            ("wq", "water"),  # "wa", a -> q
+            ("qg", "again"),  # "ag", a -> q
+            ("wg", "what"),  # "wh", h -> g
+            ("pw", "people"),  # "pe", e -> w
+        ],
+    )
+    def test_a_slip_in_the_first_two_characters_still_fills_the_bar(self, fr, typed, intended):
+        offered = top(fr, typed)
+        assert offered, f"{typed!r} left the bar empty"
+        assert intended in offered, f"{typed!r} offered {offered}"
+
+    def test_a_live_two_letter_prefix_is_still_the_exact_completers_alone(self, fr):
+        # The inverse, and the reason this change cannot regress the common
+        # path: wherever the typed run is somebody's opening, the beam stays
+        # silent exactly as it did before.
+        beam = fr.word_generator._prefix_beam
+        assert beam is not None
+        speaking = [
+            a + b
+            for a in string.ascii_lowercase
+            for b in string.ascii_lowercase
+            if beam.index.is_live(a + b) and beam.complete(a + b, 5)
+        ]
+        assert speaking == []
+
+    def test_a_single_character_is_still_too_little_to_act_on(self, fr):
+        # One character is one click and carries no evidence of anything; the
+        # floor moved to two, not to nothing.
+        beam = fr.word_generator._prefix_beam
+        assert beam is not None
+        assert [c for c in string.ascii_lowercase if beam.complete(c, 5)] == []
+        assert beam.complete("", 5) == []
+
+    def test_the_rescue_is_dead_prefixes_only_not_a_lower_floor(self):
+        index = PrefixIndex({"spent": 9000.0, "spend": 8000.0})
+        beam = PrefixBeam(index, SpatialEmissions(QWERTY_POSITIONS))
+        assert beam.complete("sp", 3) == []  # live: the exact completer's job
+        assert [w for w, _ in beam.complete("ap", 3)] == ["spent", "spend"]

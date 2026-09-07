@@ -4,6 +4,9 @@ All notable changes to Alpha-OSK are documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+- **Two letters no longer leave the suggestion bar empty.** If either of the first two letters of a word landed on the wrong key, nothing at all was offered until the third letter arrived, and then the suggestions appeared as normal. The mid-word error correction was switched off below three letters, on the reasoning that two letters carry no evidence of a mistake and the plain prefix match is the better answer at that length. Both halves of that are wrong for a pair of letters no word actually begins with: spelling nothing is the clearest evidence of a mistake there is, and the plain prefix match has nothing to offer. 298 of the 676 possible two-letter combinations were in that state. Suggestions now appear for all of them, while a pair of letters that really does begin a word is answered exactly as before, so nothing that already worked has changed.
+
 ## [1.4.0] (2026-09-07)
 
 ### Added

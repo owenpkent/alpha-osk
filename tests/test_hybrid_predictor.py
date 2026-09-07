@@ -8,6 +8,7 @@ to avoid needing a full Qt event loop.
 
 from __future__ import annotations
 
+import string
 from pathlib import Path
 
 import pytest
@@ -503,3 +504,44 @@ class TestTaughtAcronymsReachTheBar:
         predictor._ngram.learn_capitalization("Th", allow_uppercase=True)
         assert not predictor._next_word_allowed("th")
         assert not predictor._next_word_allowed("zz")
+
+
+class TestTwoLettersAlwaysFillTheBar:
+    """Reported as "two letters shows nothing until you type a third".
+
+    The mid-word fuzzy source was gated off below three typed characters,
+    deferring to the n-gram's exact-prefix completion, which for a
+    two-character run that spells no word's opening does not exist.  So a
+    single slip in either of the first two characters emptied the
+    suggestion bar and the pills only returned on the third keystroke:
+    298 of the 676 two-letter runs were in that state against the shipped
+    dictionary.
+
+    These drive the whole engine rather than the beam, because that is the
+    surface the report is about, and the inverse test is the one that
+    matters most: the fix may only add pills where there were none.
+    """
+
+    @pytest.mark.parametrize("typed", ["yh", "wq", "qg", "wg", "pw", "ek"])
+    def test_a_mistyped_two_letter_prefix_still_offers_something(
+        self, predictor: HybridPredictor, typed: str
+    ):
+        assert predictor.predict(typed, n=5), f"{typed!r} left the bar empty"
+
+    def test_no_two_letter_run_leaves_the_bar_empty(self, predictor: HybridPredictor):
+        empty = [
+            a + b
+            for a in string.ascii_lowercase
+            for b in string.ascii_lowercase
+            if not predictor.predict(a + b, n=5)
+        ]
+        assert empty == []
+
+    def test_an_exact_two_letter_prefix_still_completes_exactly(self, predictor: HybridPredictor):
+        # The inverse.  Where the run is a real opening the fuzzy source
+        # stays silent as before, so these pills are the n-gram's alone and
+        # every one of them still continues what was typed.
+        for typed in ("th", "he", "wo", "pe"):
+            offered = predictor.predict(typed, n=5)
+            assert offered
+            assert all(w.lower().startswith(typed) for w in offered), (typed, offered)
