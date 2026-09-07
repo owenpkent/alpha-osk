@@ -976,6 +976,140 @@ class TestPanelsSitFlushWithTheGrid:
         assert _real_warnings(warnings) == []
 
 
+class TestTheRowsStackLikeAPhysicalKeyboard:
+    """F-keys above the digits, digits directly above the letters.
+
+    The Number Row is a QML panel rather than a layout row, and it used to
+    be declared first in the column, above both function rows. On the
+    compact layouts, which are the only ones that show it (`showNumberRow`
+    derives from the layout JSON carrying no `number` row of its own), that
+    put F1-F12 *between* the digits and the letters: nothing else on a
+    desk stacks that way, and it read as the F-keys having been dropped
+    into the middle of the keyboard.
+
+    Full size never had the fault, because there the digits are the first
+    of the data-driven rows and so already sit under both panels. That is
+    what makes this worth pinning rather than just moving: the two views
+    build the same stack out of different pieces and agree only by
+    construction, so either one can drift on its own.
+
+    Ordering on its own would be satisfied by a build that stopped
+    rendering the number row at all, so every case first insists the row
+    it is about is on screen.
+    """
+
+    @staticmethod
+    def _top(item) -> float:
+        return item.mapToItem(None, 0, 0).y()
+
+    @staticmethod
+    def _panel(root, name: str):
+        panel = root.findChild(QQuickItem, name)
+        assert panel is not None, f"no panel named {name!r}"
+        return panel
+
+    @staticmethod
+    def _settled(root, compact: bool):
+        """Both function rows on, one frame rendered, panels off.
+
+        The frame is not optional: Qt Quick Layouts recompute in a polish
+        step that only runs on render, and the offscreen window renders
+        none by itself, so a test that toggles a row and measures without
+        one measures the state before its own toggle. See `_relayout` in
+        test_qml_key_colors.py, and the ragged board it passed against.
+        """
+        root.setProperty("showNavigation", False)
+        root.setProperty("showNumpad", False)
+        root.setProperty("compactView", compact)
+        root.setProperty("showFunctionRow", True)
+        root.setProperty("showExtraFunctionRow", True)
+        _pump_until(lambda: root.findChild(QQuickItem, "functionRowPanel").width() > 0)
+        root.grabWindow()
+        QCoreApplication.processEvents()
+
+    def _digits(self, root, compact: bool):
+        """Whichever item is carrying the digits in this view.
+
+        Compact has no `number` row in its layout JSON, which is exactly
+        why the panel exists; full size has no panel, for the same reason.
+        """
+        if compact:
+            panel = self._panel(root, "numberRowPanel")
+            assert panel.isVisible() and panel.width() > 0, (
+                "the number row panel is not rendered, so every ordering "
+                "assertion here would be vacuous"
+            )
+            return panel
+        rows = [
+            r
+            for r in TestEveryRowFitsTheContentArea._expect_rows(root, "full size")
+            if r.property("rowData")["id"] == "number"
+        ]
+        assert rows, "the full-size layout rendered no number row"
+        return rows[0]
+
+    def _letters_top(self, root, compact: bool) -> float:
+        """The topmost letter row: `top` full size, `base-1` compact.
+
+        Taken as the highest row that is not the number row rather than by
+        id, so this does not have to be told about a new layout's naming.
+        """
+        rows = [
+            r
+            for r in TestEveryRowFitsTheContentArea._expect_rows(root, "letters")
+            if r.property("rowData")["id"] != "number"
+        ]
+        assert rows, "no letter rows rendered"
+        return min(self._top(r) for r in rows)
+
+    @pytest.mark.parametrize("compact", (True, False))
+    def test_the_function_rows_sit_above_the_digits(self, qml_root, compact) -> None:
+        root, warnings, _ = qml_root
+        self._settled(root, compact)
+
+        digits = self._top(self._digits(root, compact))
+        for name in ("extraFunctionRowPanel", "functionRowPanel"):
+            panel = self._panel(root, name)
+            assert panel.isVisible() and panel.width() > 0, f"{name} not rendered"
+            assert self._top(panel) < digits, (
+                f"{name} renders at y={self._top(panel):.0f}, below the digits "
+                f"at y={digits:.0f} (compact={compact}). The F-keys belong "
+                "above the number row, where a physical keyboard puts them."
+            )
+
+        assert self._top(self._panel(root, "extraFunctionRowPanel")) < self._top(
+            self._panel(root, "functionRowPanel")
+        ), "F13-F24 must stay above F1-F12, so toggling it never moves F1-F12"
+        assert _real_warnings(warnings) == []
+
+    @pytest.mark.parametrize("compact", (True, False))
+    def test_the_digits_sit_directly_above_the_letters(self, qml_root, compact) -> None:
+        """And nothing renders in between.
+
+        The gap between two rows is one `rowSpacing` plus the positioner's
+        sub-pixel rounding, so a whole row wedged in there is nowhere near
+        a near miss: an F-row alone is 0.7 of a key tall.
+        """
+        root, warnings, _ = qml_root
+        self._settled(root, compact)
+
+        digits = self._digits(root, compact)
+        letters = self._letters_top(root, compact)
+        assert self._top(digits) < letters, (
+            f"the digits (y={self._top(digits):.0f}) are not above the letters "
+            f"(y={letters:.0f}) with compact={compact}"
+        )
+
+        gap = letters - (self._top(digits) + digits.height())
+        spacing = root.property("rowSpacing")
+        assert gap <= spacing + 2, (
+            f"{gap:.0f} px sits between the digits and the letters with "
+            f"compact={compact}, against a {spacing:.0f} px row gap. "
+            "Something is rendering between them."
+        )
+        assert _real_warnings(warnings) == []
+
+
 class TestCompactViewForbidsTheSidePanels:
     """Compact view and the Navigation / Numpad panels are exclusive.
 

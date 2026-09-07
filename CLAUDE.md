@@ -1376,6 +1376,18 @@ Load-bearing rules:
   off the layout rather than `compactView` matters because a letter arrangement
   with no compact variant silently falls back to full size. Its leading key
   is **Esc, not `` ` ``** (backtick lives on `?123` row 2).
+- **The panel is declared BELOW both function rows in `Main.qml`'s column**,
+  so the stack reads F13-F24, F1-F12, digits, letters. It was declared first
+  for one release, which on compact put F1-F12 between the digits and the
+  letters: nothing on a desk stacks that way, and it read as the F-keys
+  having been dropped into the middle of the keyboard. Full size never had
+  the fault, because there the digits are the first of the data-driven rows
+  and so already sit under both panels, which is exactly why this is worth
+  pinning: the two views build the same stack out of different pieces and
+  agree only by construction. Guarded by
+  `tests/test_qml_compact_view.py::TestTheRowsStackLikeAPhysicalKeyboard`,
+  which runs both views, and whose full-size half passes either way on
+  purpose, as the guard against them parting.
 - **The nav column reads Home / PgUp / PgDn / End top to bottom** (a scroll
   ladder: top, page up, page down, bottom; Owen asked for Home above PgUp).
   Pinned by
