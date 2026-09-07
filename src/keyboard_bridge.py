@@ -4748,7 +4748,28 @@ class KeyboardBridge(QObject):
             )
 
     def _in_game_mode(self) -> bool:
-        """Whether the foreground app is a known polling game."""
+        """Whether the foreground app is a known polling game.
+
+        Always off while a study trial is capturing, for the same reason
+        ``_in_compat_mode`` is, and with a sharper failure.  The hold exists
+        so a key survives a game's per-frame input poll, and a trial types
+        into a recorder that polls nothing.  Leaving it on silently drops
+        characters from the transcript: the game path sends through
+        ``_send_key``, which attaches the active sticky modifiers, while
+        ``RecordingSynthesizer.send_key`` only counts a single character as
+        typing when no modifier came with it (anything else is a command).
+        So every capital and every shifted mark would record as a "special",
+        which still counts as an input action but contributes no character,
+        inflating KSPC and deflating realised savings on a trial the
+        participant typed perfectly.
+
+        The trigger is not exotic.  ``_window_is_game`` fires on any
+        captionless window covering the monitor, which is a fullscreen
+        browser or video call, i.e. the likeliest thing to be sitting behind
+        the keyboard during a remote session.
+        """
+        if self._study_synth is not None:
+            return False
         return self._game_auto_active
 
     def _key_hold_seconds(self) -> float:

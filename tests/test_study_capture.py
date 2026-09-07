@@ -294,6 +294,61 @@ class TestTheBridgeSwapsAndRestores:
         bridge.end_study_capture()
         assert bridge._in_compat_mode() is True
 
+    def test_game_mode_is_forced_off_while_capturing(self, bridge) -> None:  # type: ignore[no-untyped-def]
+        """The per-key hold exists so a key survives a game's input poll, and
+        a recorder polls nothing. Leaving it on drops characters: the game
+        path sends through ``_send_key``, which attaches the sticky
+        modifiers, and the recorder only counts a single character as typing
+        when none came with it.
+        """
+        bridge._game_auto_active = True
+        assert bridge._in_game_mode() is True
+        bridge.begin_study_capture(RecordingSynthesizer())
+        assert bridge._in_game_mode() is False
+        bridge.end_study_capture()
+        assert bridge._in_game_mode() is True
+
+    def test_a_shifted_character_is_recorded_as_typing_while_capturing(self, bridge) -> None:  # type: ignore[no-untyped-def]
+        """The failure the guard above prevents, driven end to end.
+
+        With a game detected behind the keyboard, a capital used to reach
+        ``RecordingSynthesizer.send_key`` carrying "shift", miss its
+        single-character branch and land as a "special": absent from the
+        transcript, but still counted as an input action. That inflates KSPC
+        and deflates realised savings on a trial typed perfectly.
+        """
+        recorder = RecordingSynthesizer()
+        bridge._game_auto_active = True
+        bridge.begin_study_capture(recorder)
+        try:
+            bridge.toggleShift()
+            bridge.pressKey("h")
+        finally:
+            bridge.end_study_capture()
+
+        assert recorder.transcript == "H"
+        assert [e.kind for e in recorder.events] == ["char"]
+
+    def test_a_real_chord_is_still_not_typing_while_capturing(self, bridge) -> None:  # type: ignore[no-untyped-def]
+        """The near-miss the test above must not swallow.
+
+        Ctrl+C is a command, not a character, and must stay out of the
+        transcript however the game flag is set. A recorder that simply
+        inserted every single character it was handed would pass the shifted
+        case and fail this one.
+        """
+        recorder = RecordingSynthesizer()
+        bridge._game_auto_active = True
+        bridge.begin_study_capture(recorder)
+        try:
+            bridge.toggleCtrl()
+            bridge.pressKey("c")
+        finally:
+            bridge.end_study_capture()
+
+        assert recorder.transcript == ""
+        assert "char" not in [e.kind for e in recorder.events]
+
 
 class TestTheOffConditionBlanksTheBarWithoutMovingIt:
     """Protocol section 5.1.
