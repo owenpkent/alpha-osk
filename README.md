@@ -112,7 +112,7 @@ That covers ~90% of day-to-day use. The rest of this README and the [white paper
 
 *Amethyst theme. Nine themes ship in total: Dark, Light, Ocean, Forest, Amethyst, Vaporwave, Blackboard, Typewriter, Spaceship.*
 
-<img src="assets/screenshots/compact-view-keyboard.png" alt="Alpha-OSK in Compact View: a 13x4 grid with a number row, function row, and navigation column" width="810" />
+<img src="assets/screenshots/compact-view-keyboard.png" alt="Alpha-OSK in Compact View: a 13x4 grid with a number row, function row, and navigation column" width="808" />
 
 *Compact View: a denser 13x4 grid for small screens, with digits on their own panel and symbols one tap away on `?123`. The editing keys are accent-tinted because a uniform grid gives no size cue to find them by.*
 
@@ -123,8 +123,8 @@ That covers ~90% of day-to-day use. The rest of this README and the [white paper
 <br /><em>Appearance: Compact View plus the function row, extra function row, navigation, and numpad panel toggles; pick QWERTY / Dvorak / Colemak; pick a theme; adjust opacity.</em>
 </td>
 <td width="50%" align="center">
-<img src="assets/screenshots/settings-data-privacy.png" alt="Data and Privacy settings: data backup export and import, telemetry opt-in, auto-update toggle" width="100%" />
-<br /><em>Data & Privacy: one-click export and import of your model, lifetime stats, and vocabulary packs; opt-in anonymous telemetry; auto-update.</em>
+<img src="assets/screenshots/settings-data-privacy.png" alt="Data and Privacy settings: data backup export and import, opt-ins for saving detected emails and phone numbers and for anonymous telemetry, research study invitation, auto-update toggle" width="100%" />
+<br /><em>Data & Privacy: one-click export and import of your model, lifetime stats, and vocabulary packs; opt-in saving of emails, phones and addresses you type, and opt-in anonymous telemetry; an invitation to the research study; auto-update.</em>
 </td>
 </tr>
 <tr>
