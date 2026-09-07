@@ -16,6 +16,9 @@ Item {
     property color keyTextColor: "#e0e0e0"
     property color accentColor: "#4a9eff"
     property color borderColor: "#505050"
+    // Key Colours table from Main.qml; null (the default) leaves every key
+    // on `keyColor` above.  See KeyButton.role.
+    property var roleColors: null
     // Hold-to-repeat timing, driven by user-tunable values in Main.qml.
     // Defaults match KeyButton.qml's hardcoded values for safety if a
     // caller doesn't pass them through.
@@ -27,8 +30,36 @@ Item {
     // be found by reading rather than by shape.
     property real arrowGap: keySpacing * 4
 
-    implicitWidth: navGrid.implicitWidth
-    implicitHeight: navGrid.implicitHeight
+    // Derived from the key size rather than read back off the grid, and
+    // that is what keeps `rowH` below from being a binding loop: the grid's
+    // own height depends on `rowH`, `rowH` depends on the height the layout
+    // hands us, and the layout falls back to this when it is given nothing.
+    //
+    // `Math.ceil` is not slop: a `Row` reports a height ceiled above its
+    // tallest key (see `keyHitMarginV` in Main.qml), so this is the height
+    // the grid actually renders at.
+    implicitWidth: 3 * keyW + 2 * keySpacing
+    implicitHeight: 5 * Math.ceil(keyH) + 4 * keySpacing + arrowGap
+
+    // The height of one row of keys.
+    //
+    // Main.qml gives this panel the same height as the keyboard grid
+    // (`sectionHeight`), and the five rows plus their four gaps and the
+    // arrow gutter divide it exactly, so the panel is flush with the grid
+    // on both rails and the arrow cluster lands on the bottom one.  With a
+    // function row showing the keys come out taller than the letters,
+    // which is the point: these are the arrows, and a taller target is a
+    // cheaper click.  Without one they come out about 2 px shorter, the
+    // gutter's share of a grid that is then the shorter section; there is
+    // deliberately no floor, because a floor is a panel that overhangs the
+    // grid by exactly that much (see `sectionHeight` in Main.qml).
+    //
+    // Handed no height, this resolves to the panel's own implicit row and
+    // it renders as it always did, so the component still stands alone.
+    readonly property real rowH: {
+        var avail = navPanel.height - 4 * navPanel.keySpacing - navPanel.arrowGap
+        return avail > 0 ? avail / 5 : navPanel.keyH
+    }
 
     // A plain Grid, NOT a GridLayout. See the "plain Row, NOT a RowLayout"
     // note in NumberRow.qml: QtQuick.Layouts rounds every child up to a whole
@@ -43,7 +74,7 @@ Item {
         columnSpacing: navPanel.keySpacing
 
         property real cellW: navPanel.keyW
-        property real cellH: navPanel.keyH
+        property real cellH: navPanel.rowH
 
         // Row 1: PrtSc, ScrLk, Pause — full cell height, same as Ins/Home/PgUp
         KeyButton {
@@ -56,6 +87,8 @@ Item {
             borderColor: navPanel.borderColor
             hitMarginH: navPanel.hitMarginH
             hitMarginV: navPanel.hitMarginV
+            role: "nav"
+            roleColors: navPanel.roleColors
             onKeyPressed: keyboard.pressSpecialKey("print")
         }
         KeyButton {
@@ -68,6 +101,8 @@ Item {
             borderColor: navPanel.borderColor
             hitMarginH: navPanel.hitMarginH
             hitMarginV: navPanel.hitMarginV
+            role: "nav"
+            roleColors: navPanel.roleColors
             onKeyPressed: keyboard.pressSpecialKey("scrolllock")
         }
         KeyButton {
@@ -80,6 +115,8 @@ Item {
             borderColor: navPanel.borderColor
             hitMarginH: navPanel.hitMarginH
             hitMarginV: navPanel.hitMarginV
+            role: "nav"
+            roleColors: navPanel.roleColors
             onKeyPressed: keyboard.pressSpecialKey("pause")
         }
 
@@ -94,6 +131,8 @@ Item {
             borderColor: navPanel.borderColor
             hitMarginH: navPanel.hitMarginH
             hitMarginV: navPanel.hitMarginV
+            role: "nav"
+            roleColors: navPanel.roleColors
             onKeyPressed: keyboard.pressSpecialKey("insert")
         }
         KeyButton {
@@ -106,6 +145,8 @@ Item {
             borderColor: navPanel.borderColor
             hitMarginH: navPanel.hitMarginH
             hitMarginV: navPanel.hitMarginV
+            role: "nav"
+            roleColors: navPanel.roleColors
             onKeyPressed: keyboard.pressSpecialKey("home")
         }
         KeyButton {
@@ -118,6 +159,8 @@ Item {
             borderColor: navPanel.borderColor
             hitMarginH: navPanel.hitMarginH
             hitMarginV: navPanel.hitMarginV
+            role: "nav"
+            roleColors: navPanel.roleColors
             enableRepeat: true; repeatDelay: navPanel.repeatDelay; repeatInterval: navPanel.repeatInterval
             onKeyPressed: keyboard.pressSpecialKey("pageup")
         }
@@ -133,6 +176,8 @@ Item {
             borderColor: navPanel.borderColor
             hitMarginH: navPanel.hitMarginH
             hitMarginV: navPanel.hitMarginV
+            role: "kill"
+            roleColors: navPanel.roleColors
             enableRepeat: true; repeatDelay: navPanel.repeatDelay; repeatInterval: navPanel.repeatInterval
             onKeyPressed: keyboard.pressSpecialKey("delete")
         }
@@ -146,6 +191,8 @@ Item {
             borderColor: navPanel.borderColor
             hitMarginH: navPanel.hitMarginH
             hitMarginV: navPanel.hitMarginV
+            role: "nav"
+            roleColors: navPanel.roleColors
             onKeyPressed: keyboard.pressSpecialKey("end")
         }
         KeyButton {
@@ -158,6 +205,8 @@ Item {
             borderColor: navPanel.borderColor
             hitMarginH: navPanel.hitMarginH
             hitMarginV: navPanel.hitMarginV
+            role: "nav"
+            roleColors: navPanel.roleColors
             enableRepeat: true; repeatDelay: navPanel.repeatDelay; repeatInterval: navPanel.repeatInterval
             onKeyPressed: keyboard.pressSpecialKey("pagedown")
         }
@@ -191,6 +240,8 @@ Item {
                 borderColor: navPanel.borderColor
                 hitMarginH: navPanel.hitMarginH
                 hitMarginV: navPanel.hitMarginV
+                role: "nav"
+                roleColors: navPanel.roleColors
                 enableRepeat: true; repeatDelay: navPanel.repeatDelay; repeatInterval: navPanel.repeatInterval
                 onKeyPressed: keyboard.pressSpecialKey("up")
             }
@@ -210,6 +261,8 @@ Item {
             borderColor: navPanel.borderColor
             hitMarginH: navPanel.hitMarginH
             hitMarginV: navPanel.hitMarginV
+            role: "nav"
+            roleColors: navPanel.roleColors
             enableRepeat: true; repeatDelay: navPanel.repeatDelay; repeatInterval: navPanel.repeatInterval
             onKeyPressed: keyboard.pressSpecialKey("left")
         }
@@ -223,6 +276,8 @@ Item {
             borderColor: navPanel.borderColor
             hitMarginH: navPanel.hitMarginH
             hitMarginV: navPanel.hitMarginV
+            role: "nav"
+            roleColors: navPanel.roleColors
             enableRepeat: true; repeatDelay: navPanel.repeatDelay; repeatInterval: navPanel.repeatInterval
             onKeyPressed: keyboard.pressSpecialKey("down")
         }
@@ -236,6 +291,8 @@ Item {
             borderColor: navPanel.borderColor
             hitMarginH: navPanel.hitMarginH
             hitMarginV: navPanel.hitMarginV
+            role: "nav"
+            roleColors: navPanel.roleColors
             enableRepeat: true; repeatDelay: navPanel.repeatDelay; repeatInterval: navPanel.repeatInterval
             onKeyPressed: keyboard.pressSpecialKey("right")
         }

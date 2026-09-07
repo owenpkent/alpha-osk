@@ -4,6 +4,12 @@ All notable changes to Alpha-OSK are documented in this file.
 
 ## [Unreleased]
 
+### Added
+- **Key Colours.** *Settings -> Appearance -> Key Colours* colours a key by what it does rather than by which part of the keyboard it sits on. Six schemes: **Monochrome** (the new default: no hue, a key's job is a step lighter or darker than the letters), Two-Tone (keys that type against keys that do something), Function (a colour per family), Ink (the colour on the legend and a hairline under it, the keycaps flat), Signal (flat except the three places a wrong click costs you: held modifiers, Backspace and Del, Enter), and Default, which restores the board exactly as it was. Every colour is derived from the theme above it, rotated off the theme's own accent in a perceptually uniform colour space, so each scheme looks different on each theme, and every fill and every hover is held to 4.5:1 against its legend on all nine themes. The prediction pills follow the scheme too.
+
+### Changed
+- **The keyboard grid, the navigation cluster and the numpad share one height.** They were three different heights that the layout centred against one another, so the board had five top edges and five bottom edges and the arrow cluster floated clear of the bottom rail. The two side panels now fit the grid exactly, dividing its height between their own rows: with a function row showing, the arrows and the numpad keys come out about 12% taller than the letters, and without one about 2 px shorter. The main grid itself is untouched.
+
 ### Fixed
 - **The white notch in a corner of the keyboard on Windows is gone.** It came and went with whatever was behind the window, which is why it read as intermittent. Every transparent window here (the keyboard, the Snippets and Symbols pickers, the Dashboard) rounded its own corners, and on a layered window the pixels outside that arc come back white rather than showing the desktop. On Windows the corners are now left square and the compositor is asked to round them, which it does with proper antialiasing. Windows 10 has no such request to make, so there the corners stay square, like every other window on that desktop. Nothing changes on Linux or macOS.
 

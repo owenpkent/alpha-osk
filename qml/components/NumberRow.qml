@@ -49,6 +49,9 @@ Item {
     // component still looks right if a caller does not set it.
     property color accentKeyColor: keyColor
     property color borderColor: "#505050"
+    // Key Colours table from Main.qml; null (the default) leaves every
+    // key on the colours above.  See KeyButton.role.
+    property var roleColors: null
 
     property bool shiftOn: false
     property bool rightClickShift: true
@@ -117,6 +120,13 @@ Item {
                 hitMarginV: numRow.hitMarginV
                 fontSize: kd.special ? 11 : 14
                 isSpecial: !!kd.special
+                // This panel's keyDefs are its own shape rather than the
+                // layout JSON's, so the role is read here instead of
+                // through Main.qml's keyRoleFor.  Esc is an editing key;
+                // "-" and "=" are punctuation, not digits.
+                role: kd.special ? "edit"
+                                 : (kd.key >= "0" && kd.key <= "9" ? "digit" : "punct")
+                roleColors: numRow.roleColors
                 // Digits follow the same setting the letters do, so
                 // holding "0" behaves like holding "o". Esc opts out
                 // whatever the setting says: a repeating Esc on a slow

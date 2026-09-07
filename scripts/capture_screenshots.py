@@ -99,6 +99,13 @@ QSettings("alpha-osk-screenshots", "Alpha-OSK-Screenshots").clear()
 
 from src import keyboard_bridge  # noqa: E402
 
+# The single place both QML context properties are registered. It lives
+# under tests/ because the headless QML test fixtures were its first
+# seven callers, but it is not test-only: anything that loads Main.qml
+# outside the app needs exactly this, and a second copy here is how the
+# two drift.
+from tests.qml_context import install_context_properties  # noqa: E402
+
 # Demo vocabulary for the model-facing shots.  Deliberately bland: it is
 # rendered into a public README, so it must not be anybody's real typing.
 # Repetition is what gives the word cloud and the top-words chart their
@@ -239,7 +246,14 @@ def main() -> int:
         warnings: list[str] = []
         engine = QQmlApplicationEngine()
         engine.warnings.connect(lambda errs: warnings.extend(e.toString() for e in errs))
-        engine.rootContext().setContextProperty("keyboard", bridge)
+        # Both context properties Main.qml reads, through the one helper
+        # that registers them. Registering only `keyboard` here left
+        # Data & Privacy raising "telemetry is not defined" at load, so
+        # the consent toggle failed to bind in a screenshot that goes
+        # into the public README. The helper also parents the
+        # TelemetryBridge to the KeyboardBridge, without which it is
+        # garbage-collected the moment this call returns.
+        install_context_properties(engine, bridge)
         engine.load(QUrl.fromLocalFile(str(REPO / "qml" / "Main.qml")))
         if not engine.rootObjects():
             print("Main.qml failed to load:")
