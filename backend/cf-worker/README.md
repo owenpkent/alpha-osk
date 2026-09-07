@@ -145,11 +145,27 @@ nothing.
 
 3. **Set the `TELEMETRY_ENDPOINT` repository variable** (not a secret: it is
    a public URL) so `.github/workflows/telemetry-aggregate.yml` starts
-   appending a dated row to `docs/research/data/telemetry-aggregate.csv`.
-   The endpoint returns current totals and keeps no history, so this
-   workflow is the only thing that turns it into a time series. Skip it and
-   the history for the period before you notice does not exist and cannot be
-   reconstructed.
+   appending a dated row to the series. The endpoint returns current totals
+   and keeps no history, so this workflow is the only thing that turns it
+   into a time series. Skip it and the history for the period before you
+   notice does not exist and cannot be reconstructed.
+
+   **The series lives on the orphan branch `telemetry-data`, not on main.**
+   main is protected and requires status checks, which a bot pushing a
+   one-line CSV append cannot satisfy, so the push is rejected with GH006
+   and the row is lost. Opening a pull request per day would run the full
+   eight-job suite against a two-line data change 365 times a year; granting
+   the bot a protection bypass would weaken main for the sake of a
+   machine-generated file. Read the series at:
+
+   ```
+   https://raw.githubusercontent.com/owenpkent/alpha-osk/telemetry-data/docs/research/data/telemetry-aggregate.csv
+   ```
+
+   Verify it by dispatching the workflow by hand rather than by reading it.
+   Both bugs this step has had were invisible from the source: the first
+   made the run report success and commit nothing, the second failed only
+   at the push.
 
 4. **Ship a build carrying the installer invitation** (the participation
    page in `build/windows/build.py`). Its checkbox is unchecked by default
