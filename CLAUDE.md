@@ -37,7 +37,7 @@ Owen is a wheelchair user with muscular dystrophy. Typing is hard - be proactive
 ## Build, run, test
 
 - Run: `python run.py` (creates venv, installs deps, launches the keyboard).
-- Test: `python -m pytest` (around 1,900 tests; `python -m pytest --collect-only -q` prints the live count, so don't restate it elsewhere; also `-k fuzzy`, `-k property`, or a single file like `tests/test_keyboard_bridge.py`).
+- Test: `python -m pytest` (around 2,250 tests; `python -m pytest --collect-only -q` prints the live count, so don't restate it elsewhere; also `-k fuzzy`, `-k property`, or a single file like `tests/test_keyboard_bridge.py`).
 - Pre-push gate, the same checks as CI (`ruff check`, `ruff format --check`, `mypy` under **both** `--platform linux` and `--platform win32`, `pytest`): `python check.py` (~60s); `python check.py --full` adds the `--cov-fail-under=60` coverage gate (~110s, full CI parity). `python check.py --install-hook` wires it to `git push` so it runs automatically rather than by hand (`--no-verify` skips it once). CI additionally runs `osv-scanner` over the lockfiles. Formatting is gated separately from linting because `ruff check` ignores layout; fix a format failure with `ruff format src/ tests/`. The two mypy passes are both required and neither substitutes for the other: `linux` is what the runner uses (typeshed gates whole symbols on platform, so `ctypes.WinDLL` degrades to `Any` there and trips `warn_return_any`), and `win32` is the only thing that type-checks the `if sys.platform == "win32"` bodies at all, since mypy prunes them as unreachable under the other.
 
 ## Conventions

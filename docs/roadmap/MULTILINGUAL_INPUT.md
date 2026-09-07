@@ -115,7 +115,6 @@ prerequisite for the other two.
 | Wordlist paths | Hardcoded `data/base_dictionary.txt` and `data/google-10000-...` | **Now `profile.dictionary` / `profile.frequency`**, the latter optional for a language whose dictionary already carries counts. |
 | `fuzzy_recognizer.py` key positions | Was hardcoded to `QWERTY_POSITIONS` with nothing ever passing `positions`, so Dvorak and Colemak users were corrected against a QWERTY board | **Fixed.** `positions_from_layout` derives the grid from the layout JSON and the bridge pushes it on every `setLayout`. AZERTY inherits it for free. |
 | `fuzzy_recognizer.py:528`, `ppm_predictor.py:613`, `transformer_predictor.py:138` | `c.isalpha() or c == "'"` filters | Unicode-safe for French by accident (`é`.isalpha() is True), but the apostrophe rule is English contraction logic, not French elision logic. |
-| `swipe_recognizer.py:99` | `k.isalpha()` over single characters | Fine for French. Structurally meaningless for a kana or pinyin layout. |
 | `symspell.py` | `.lower()` and a character-agnostic deletion index | Actually works for French unmodified, but accent-insensitive lookup needs the index built on the folded form. Meaningless for CJK. |
 | `autocorrect.py` + `data/common_misspellings.txt` | English misspellings | Needs a French table or to be disabled. |
 | `text_patterns.py:109` `_PHONE_GROUPINGS` | `(10,)`, `(3,3,4)`, `(3,4)`, `(1,3,3,4)`, all NANP | French mobile numbers are `06 12 34 56 78`, grouping `(2,2,2,2,2)`. Never detected today. |
@@ -270,7 +269,7 @@ segmenter.
 **What has to be turned off for Chinese**, all of it profile-driven:
 auto-space (Chinese has no inter-word spaces), auto-capitalisation, the
 short-word filter, the vowel shape filter, `_display_cased` in its
-entirety, swipe typing, and the spatial fuzzy recogniser. Punctuation
+entirety, and the spatial fuzzy recogniser. Punctuation
 should map to full-width forms (`，。！？；：（）`), which is a
 per-profile substitution table on the punctuation keys rather than new
 logic.

@@ -1,0 +1,234 @@
+% Alpha-OSK: A Predictive On-Screen Keyboard for Motor-Impaired Users
+%
+% Build:  python docs/paper/build.py
+% Source: docs/WHITEPAPER.md is authoritative. body.tex and abstract.tex are
+%         GENERATED from it by build.py and must not be hand-edited: edit the
+%         markdown and rebuild, or the next build silently discards your work.
+
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
+\usepackage[margin=1in]{geometry}
+\usepackage{microtype}
+
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{array}
+\usepackage{multirow}
+\usepackage{graphicx}
+\usepackage{float}
+\usepackage{caption}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{textcomp}
+\usepackage{upquote}
+\usepackage{fancyvrb}
+\usepackage{calc}
+
+\usepackage{xcolor}
+\definecolor{linkblue}{HTML}{1A4F8A}
+\usepackage[colorlinks=true,linkcolor=linkblue,citecolor=linkblue,urlcolor=linkblue]{hyperref}
+\usepackage{url}
+
+% Pandoc emits these for its list, code and image output. They are defined
+% only inside pandoc's own template, and we supply our own preamble, so
+% without them the build dies on the first figure with "undefined control
+% sequence" rather than on anything to do with the content.
+\providecommand{\tightlist}{\setlength{\itemsep}{0pt}\setlength{\parskip}{0pt}}
+\providecommand{\passthrough}[1]{#1}
+\newcommand{\euro}{\texteuro}
+
+% \pandocbounded shrinks an oversized image to the text block instead of
+% letting it run into the margin. This is pandoc's own definition.
+\makeatletter
+\newsavebox\pandoc@box
+\providecommand*\pandocbounded[1]{%
+  \sbox\pandoc@box{#1}%
+  \Gscale@div\@tempa{\textheight}{\dimexpr\ht\pandoc@box+\dp\pandoc@box\relax}%
+  \Gscale@div\@tempb{\linewidth}{\wd\pandoc@box}%
+  \ifdim\@tempb\p@<\@tempa\p@\let\@tempa\@tempb\fi%
+  \ifdim\@tempa\p@<\p@\scalebox{\@tempa}{\usebox\pandoc@box}%
+  \else\usebox{\pandoc@box}%
+  \fi%
+}
+\makeatother
+
+% Inline code should not overflow the measure on a long identifier.
+\usepackage{listings}
+\lstset{
+  basicstyle=\small\ttfamily,
+  breaklines=true,
+  breakatwhitespace=false,
+  columns=fullflexible,
+  frame=none,
+  xleftmargin=1em,
+}
+
+% Pandoc marks an uncaptioned longtable with \LTcaptype{none} so the table
+% counter does not advance. With the caption package loaded that resolves to
+% a counter named "none", which does not exist, and the build dies on the
+% first plain table. Defining it, printing as nothing, is the whole fix.
+\newcounter{none}
+\renewcommand{\thenone}{}
+
+% This paper is full of long file paths and identifiers set in \texttt, and
+% typewriter text is unhyphenated by default, so a single
+% "google/osv-scanner-action@9a49..." runs 340pt into the margin. Allowing
+% hyphenation inside \texttt plus a generous emergency stretch keeps every
+% line inside the measure; the alternative is manual \allowbreak in prose,
+% which the next edit to the markdown would undo.
+\usepackage[htt]{hyphenat}
+\sloppy
+\emergencystretch=3em
+\hbadness=10000
+
+\captionsetup{font=small,labelfont=bf,width=.9\textwidth}
+\setlength{\parskip}{0.55em}
+\setlength{\parindent}{0pt}
+\setcounter{tocdepth}{2}
+\setcounter{secnumdepth}{3}
+
+\title{\bfseries Alpha-OSK: A Predictive On-Screen Keyboard\\for Motor-Impaired Users}
+
+\author{Owen Kent\\[.3em]
+  \normalsize\texttt{owenpkent@gmail.com}\\
+  \normalsize\url{https://github.com/owenpkent/alpha-osk}}
+
+\date{September 2026\\[.3em]
+  \normalsize Describing Alpha-OSK 1.3.0}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+\input{abstract.tex}
+\end{abstract}
+
+\tableofcontents
+\bigskip
+
+\input{body.tex}
+
+% ---------------------------------------------------------------------------
+% References. Author-year, cited in prose in the body, so the list is
+% alphabetical by first author.
+% ---------------------------------------------------------------------------
+\bibliographystyle{plainnat}
+\begin{thebibliography}{99}
+
+\bibitem{cleary1984}
+Cleary, J.~G. and Witten, I.~H. (1984).
+Data Compression Using Adaptive Coding and Partial String Matching.
+\emph{IEEE Transactions on Communications}, 32(4), 396--402.
+
+\bibitem{garbe2012}
+Garbe, W. (2012).
+\emph{SymSpell: 1000x faster spelling correction}.
+\url{https://github.com/wolfgarbe/SymSpell}.
+
+\bibitem{higginbotham2007}
+Higginbotham, D.~J., Shane, H., Russell, S. and Caves, K. (2007).
+Access to AAC: Present, past, and future.
+\emph{Augmentative and Alternative Communication}, 23(3), 243--257.
+
+\bibitem{klakow1998}
+Klakow, D. (1998).
+Log-linear interpolation of language models.
+\emph{Proceedings of ICSLP}.
+
+\bibitem{kristensson2004}
+Kristensson, P.~O. and Zhai, S. (2004).
+SHARK\textsuperscript{2}: A Large Vocabulary Shorthand Writing System for Pen-based Computers.
+\emph{Proceedings of UIST}, 43--52.
+
+\bibitem{mackenzie2002}
+MacKenzie, I.~S. and Soukoreff, R.~W. (2002).
+Text Entry for Mobile Computing: Models and Methods, Theory and Practice.
+\emph{Human-Computer Interaction}, 17(2--3), 147--198.
+
+\bibitem{trnka2008}
+Trnka, K. and McCoy, K.~F. (2008).
+Evaluating Word Prediction: Framing Keystroke Savings.
+\emph{Proceedings of ACL-08: HLT, Short Papers}, 261--264.
+
+\bibitem{vertanen2011}
+Vertanen, K. and Kristensson, P.~O. (2011).
+The Imagination of Crowds: Conversational AAC Language Modeling using Crowdsourcing and Large Data Sources.
+\emph{Proceedings of EMNLP}, 700--711.
+
+\bibitem{vertanen2015}
+Vertanen, K., Memmi, H., Emge, J., Reyal, S. and Kristensson, P.~O. (2015).
+VelociTap: Investigating Fast Mobile Text Entry using Sentence-Based Decoding of Touchscreen Keyboard Input.
+\emph{Proceedings of CHI}, 659--668.
+
+\bibitem{vescovi}
+Vescovi, M.
+\emph{Presage: An intelligent predictive text entry platform}.
+\url{https://presage.sourceforge.io}.
+
+\bibitem{ward2000}
+Ward, D.~J., Blackwell, A.~F. and MacKay, D.~J.~C. (2000).
+Dasher: A Data Entry Interface Using Continuous Gestures and Language Models.
+\emph{Proceedings of UIST}, 129--137.
+
+\bibitem{latinime}
+\emph{AOSP LatinIME source}.
+Android Open Source Project.
+Reference implementation for trie-based dictionaries, weighted edit distance,
+and letting the literal typed word compete against corrections.
+
+\bibitem{uia}
+Microsoft.
+\emph{UI Automation overview}.
+\url{https://learn.microsoft.com/en-us/windows/win32/winauto/}.
+
+\bibitem{atspi}
+\emph{AT-SPI 2: Accessibility Toolkit Service Provider Interface}.
+GNOME Project.
+
+\end{thebibliography}
+
+\appendix
+
+\section{Reproducing the evaluation}
+
+Every figure in Section~8 comes from \texttt{scripts/bench/ksr.py} in the
+source repository, which builds a cold-start engine in a fresh temporary
+directory and never reads the developer's own model. The corpus and its
+provenance are documented in \texttt{scripts/bench/data/README.md}.
+
+\begin{lstlisting}
+# Table 2, main results
+python scripts/bench/ksr.py --corpus aac-dev
+python scripts/bench/ksr.py --corpus aac-test
+
+# Table 3, source ablation
+python scripts/bench/ksr.py --corpus aac-test \
+    --conditions full,no-fuzzy,legacy-fuzzy,ppm-merge
+
+# Merge strategies
+python scripts/bench/ksr.py --corpus aac-test \
+    --conditions rank,rrf,linear,loglinear
+
+# Table 5, robustness to an uncorrected pointer slip
+python scripts/bench/ksr.py --corpus aac-test --mis-click \
+    --conditions full,legacy-fuzzy
+
+# Table 6, a systematically biased pointer simulated end to end
+python scripts/bench/ksr.py --corpus aac-test --pointer 0.35,0.25,0.15
+
+# Table 7, personalisation
+python scripts/bench/ksr.py --corpus aac-dev --learn-half
+\end{lstlisting}
+
+The per-component design documents referenced throughout are in
+\texttt{docs/architecture/}: \texttt{PPM.md}, \texttt{FUZZY\_RECOGNITION.md},
+\texttt{HYBRID\_MERGING.md}, \texttt{NGRAM\_SEEDS.md}, \texttt{DICTATION.md},
+\texttt{TELEMETRY.md}, \texttt{PLATFORM\_ARCHITECTURE.md} and
+\texttt{COMPACT\_VIEW.md}; build and distribution detail is in
+\texttt{docs/build/}.
+
+\end{document}

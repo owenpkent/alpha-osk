@@ -42,7 +42,7 @@
 
 ## Phase 3: AI Prediction ✅
 
-- [x] **Word prediction engine** — Hybrid n-gram + PPM + fuzzy, entirely local (the DistilGPT-2 re-ranker in `transformer_predictor.py` is constructed disabled and is not reachable from the app)
+- [x] **Word prediction engine** — Hybrid n-gram + fuzzy, entirely local (the DistilGPT-2 re-ranker in `transformer_predictor.py` is constructed disabled and is not reachable from the app)
 - [x] **Prediction integration** — Connected to QML UI with real-time updates
 - [x] **Personal vocabulary** — Learns from typed words and selections
 - [ ] **Abbreviation expansion** — Custom shortcuts (e.g., "omw" → "on my way")
@@ -50,9 +50,9 @@
 ## Phase 4: Voice Dictation
 
 - [ ] **Whisper integration** — Local speech-to-text
-- [ ] **Real-time transcription** — Streaming audio input
+- [x] **Real-time transcription** — Streaming audio input (Deepgram over a websocket, shipped 1.3.0)
 - [ ] **Voice commands** — "Delete word", "New line", etc.
-- [ ] **Hybrid mode** — Switch between voice and keyboard
+- [x] **Hybrid mode** — Switch between voice and keyboard (the mic toggles; the keys never stop working)
 
 ## Phase 5: Federated Learning
 
@@ -69,7 +69,7 @@
 ## Backlog
 
 - [ ] Multi-language support
-- [x] Emoji and symbol panels (shipped as the Symbols & Emoji window plus the full-size symbol layer)
+- [x] Emoji and symbol panels (shipped as the Symbols & Emoji window; the full-size symbol layer it briefly shared the job with was removed in 1.3.0, see CHANGELOG)
 - [ ] Macro recording
 - [ ] Integration with AAC software
 - [ ] Eye-tracking support
@@ -118,7 +118,7 @@
 - [x] Key synthesis via xdotool/ydotool (Linux) and SendInput (Windows)
 - [x] Dark theme with press animations
 - [x] Draggable window (stays on top, no focus steal)
-- [x] Hybrid prediction engine (n-gram + LLM)
+- [x] Hybrid prediction engine (n-gram + fuzzy, entirely local; there is no LLM in the merge)
 - [x] Function row (F1-F12)
 - [x] Escape key always visible in number row
 - [x] Navigation panel (PrtSc, ScrLk, Pause, Ins, Del, Home, End, PgUp, PgDn, Arrows)

@@ -95,21 +95,26 @@ alpha-osk/
 ### Prediction Architecture
 
 ```
-User types key → Fuzzy Recognition (spatial correction)
-                      ↓
+User types key → Fuzzy Recognition (spatial correction,
+                      ↓          incl. the mid-word prefix beam)
               ┌───────┴───────┐
               ↓               ↓
-           N-gram           PPM
-         (word freq)    (char context)
+           N-gram          Tokens
+         (word freq)   (numbers, emails)
               ↓               ↓
               └───────┬───────┘
                       ↓
               Weighted Merge
                       ↓
               Final Predictions
+
+PPM (a character model) still trains and persists alongside these, but its
+word candidates have been out of the merge since 2026-09-03: taking them out
+raised keystroke savings and cut per-keystroke latency from 21 ms to 3 ms.
+See "Fuzzy dictionary refresh, and PPM out of the merge" in CLAUDE.md.
 ```
 
-**Why no AI?** N-gram + PPM + Fuzzy provides excellent predictions without:
+**Why no AI?** N-gram + Fuzzy provides excellent predictions without:
 - 300MB model download
 - 10-second startup delay
 - GPU/memory overhead

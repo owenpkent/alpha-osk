@@ -1,6 +1,6 @@
 # Alpha-OSK: A Predictive On-Screen Keyboard for Motor-Impaired Users
 
-**Document revision:** 1.1 (May 2026)
+**Document revision:** 2.0 (September 2026), describing Alpha-OSK 1.3.0
 **Audience:** Software engineers, accessibility researchers, assistive-technology practitioners
 
 > *App version references inline (e.g. "1.1.0+" in §5.6) denote the first release in which a feature ships. The single source of truth for the current installed version is `src/__version__.py`.*
@@ -9,9 +9,9 @@
 
 ## Abstract
 
-> *The smartest keyboard you'll never touch.*
+Alpha-OSK is an on-screen keyboard (OSK) for Windows and Linux designed for users whose primary input device is a mouse or pointer rather than a physical keyboard. It targets people with motor impairments (muscular dystrophy, ALS, spinal cord injury, severe arthritis, post-stroke hemiparesis) for whom every avoided keystroke is meaningful. The system pairs a Qt Quick (QML) UI with a Python bridge, synthesises keystrokes through OS-native APIs (`SendInput` on Windows, `xdotool`/`ydotool` on Linux), and runs a hybrid CPU-only prediction engine (word n-gram plus a spatial model that completes a typed prefix through a mis-clicked key) that learns the user's vocabulary on-device. There is no GPU, no cloud round-trip, and no LLM dependency. The system is **off-network by default**: predictions, learning, and analytics are local-only. The one optional egress is an off-by-default usage-stats client that would submit ten lifetime counters weekly and never any content; its endpoint is undeployed, so it currently no-ops every submit (§5.6).
 
-Alpha-OSK is an on-screen keyboard (OSK) for Windows and Linux designed for users whose primary input device is a mouse or pointer rather than a physical keyboard. It targets people with motor impairments (muscular dystrophy, ALS, spinal cord injury, severe arthritis, post-stroke hemiparesis) for whom every avoided keystroke is meaningful. The system pairs a Qt Quick (QML) UI with a Python bridge, synthesises keystrokes through OS-native APIs (`SendInput` on Windows, `xdotool`/`ydotool` on Linux), and runs a hybrid CPU-only prediction engine (n-gram + variable-order PPM + spatial fuzzy recognition) that learns the user's vocabulary on-device. There is no GPU, no cloud round-trip, and no LLM dependency. The system is **off-network by default**: predictions, learning, and analytics are local-only. As of 1.1.0, an opt-in usage-stats client (a small weekly POST of lifetime counters; never any content) is wired into the application as the future path for a public community-impact aggregate; the submission endpoint is not yet deployed, so the client silently no-ops every submit regardless of the toggle, and the feature is off by default. The pipeline, the kill-switch behaviour, and the threat model are described in §5.6. This paper describes the architecture, the prediction stack, the accessibility-driven engineering trade-offs that shaped the system, the privacy and security model, and the open work.
+On held-out data from a crowdsourced corpus of AAC-like communications, the engine avoids 49.1% and 50.4% of keystrokes on the two splits, offering the correct next word before any of its letters are typed about three times in ten, at a median 2.9 ms per keystroke. Two of our results are negative and are reported as such: on clean input the spatial layer is worth nothing, and the character model we inherited from the Dasher lineage contributed nothing to word prediction while costing five times the latency. The spatial layer earns its place only under pointer error, where it is worth eight to nine points of keystroke savings, which is the condition this population actually types in. This paper describes the architecture, the prediction stack, the accessibility-driven engineering trade-offs that shaped the system, the privacy and security model, the evaluation, and its substantial limitations: there is no user study, and the system has one long-term user.
 
 ---
 
@@ -33,13 +33,27 @@ Alpha-OSK is shaped by five goals, in priority order:
 4. **Spatial errors must be corrected without punishing deliberate typing.** A user with hand tremor will land off-centre on keys; a user typing "thru" deliberately must not be autocorrected to "throw".
 5. **Every interaction must be reachable from the mouse.** Keyboard shortcuts, modal dialogs that require Enter, and physical-keyboard fallbacks are non-options.
 
-### 1.3 What this paper covers
+### 1.3 Related work
 
-Section 2 lays out the runtime architecture and the two boundaries that dominate the design (QML↔Python and Python↔OS). Section 3 describes the prediction engine in depth. Section 4 walks through the accessibility-driven engineering decisions whose constraints rippled through the architecture. Section 5 covers privacy and security. Section 6 discusses performance. Section 7 covers distribution and updates. Section 8 enumerates the open work and the known gaps relative to commercial keyboards. The deeper algorithm-level design docs are cross-referenced inline rather than reproduced.
+Four bodies of work bear directly on this system, and the gaps between them are where it sits.
+
+**Rate enhancement in AAC.** Word prediction as an access technology, rather than as a convenience, comes out of the augmentative and alternative communication literature (Higginbotham et al., 2007). That literature is also the source of the field's central methodological caution: keystroke savings measured by simulation is an upper bound on benefit, not a measure of it, because selecting a prediction has a cognitive and visual-search cost that typing the next letter does not (Trnka and McCoy, 2008). We adopt their keystroke-savings rate as our primary metric and inherit that caveat explicitly; section 9 states what our numbers do and do not claim.
+
+**Statistical decoding of noisy input.** Modern mobile keyboards do not treat a touch as a keypress; they treat it as evidence, and decode a whole word or sentence against a joint spatial and language model (Kristensson and Zhai, 2004; Vertanen et al., 2015). Alpha-OSK's mid-word prefix beam (section 3.1) is a small member of that family: a beam over live dictionary prefixes with a Gaussian emission over key positions. The difference is the input device. VelociTap decodes a finger on glass, where the noise is large, roughly isotropic and drawn from a population of users. Our noise comes from one pointer, driven by one person's motor system, and is therefore small, systematically biased, and learnable per user. Section 8.4 measures what that last property is worth, and the answer is less than one might expect.
+
+**Character-level models for accessible input.** Dasher (Ward et al., 2000) established the variable-order character model as the workhorse of accessible text entry, using the PPM construction of Cleary and Witten (1984). Alpha-OSK trains the same class of model, and section 8.3 reports the result of taking its word candidates out of the merge, which is one of the few places where our measurements disagree with an inherited assumption.
+
+**Production keyboard stacks.** Presage (Vescovi) supplies the layered framing this engine follows: several redundant predictors, merged. AOSP's LatinIME supplies the reference treatment of weighted edit distance and of letting the literal typed word compete against corrections. SymSpell (Garbe, 2012) supplies the deletion-index lookup used in the whole-word correction path.
+
+**What is not covered by any of them.** All four assume the software may hold input focus. A desktop on-screen keyboard cannot: it is a window on the same desktop as the application being typed into, and taking focus to accept a click would take it away from the text field the keystroke is destined for. Nearly every non-obvious decision in section 4 descends from that one constraint, and we are not aware of a published treatment of it. The desktop OSK category itself is thinly covered: the systems users actually have (`osk.exe`, GNOME's on-screen keyboard, Onboard) predate the prediction quality described above, and the open-source tools that approach it have stalled.
+
+### 1.4 What this paper covers
+
+Section 2 lays out the runtime architecture and the two boundaries that dominate the design (QML to Python, and Python to the OS). Section 3 describes the prediction engine in depth. Section 4 walks through the accessibility-driven engineering decisions, which is the material least represented in the literature. Section 5 covers privacy and security, section 6 the resource envelope, and section 7 distribution. Section 8 is the evaluation, section 9 states its limitations, and section 10 enumerates the open work. The deeper algorithm-level design documents are cross-referenced inline rather than reproduced.
 
 <p align="center">
   <img src="../assets/screenshots/dark-theme-keyboard.png" alt="Alpha-OSK full keyboard in the Dark theme, showing function row, QWERTY block, navigation cluster, and numpad." width="900" />
-  <br /><em>Figure 1. Full keyboard surface. Left to right: function row (F1–F12), QWERTY block with sticky modifier keys, navigation cluster (PrtSc / ScrLk / Pause / Ins / Home / PgUp / Del / End / PgDn / arrows), and numpad. Title bar carries (right side) the update indicator, the Learning privacy switch, settings, minimize, and close; the clear-context button (⟲) sits at the right end of the suggestion bar. Width is user-resizable from either edge; height auto-fits content. (Screenshot predates the Delete key on the QWERTY row and the switch-style Learning control.)</em>
+  <br /><em>Figure 1. Full keyboard surface. Left to right: function row (F1–F12), QWERTY block with sticky modifier keys, navigation cluster (PrtSc / ScrLk / Pause / Ins / Home / PgUp / Del / End / PgDn / arrows), and numpad. Title bar carries (right side) the update indicator, the Learning privacy switch, settings, minimize, and close; the clear-context button (⟲) sits at the right end of the suggestion bar. Width is user-resizable from either edge; height auto-fits content. This figure is from 1.1.0 and is retained because the surface it shows is unchanged in layout; 1.3.0 adds a Delete key to the QWERTY row, a switch-style Learning control, and microphone and picker buttons at the ends of the suggestion bar.</em>
 </p>
 
 ---
@@ -65,7 +79,7 @@ QML drives all rendering and gesture detection. Python owns all state and side e
 3. The bridge emits a `Signal` (`predictionsChanged`, `capsLockActiveChanged`, `editKeyTyped`, …).
 4. QML bindings react and re-render.
 
-This is deliberately the *only* coupling between the layers. There are no shared Qt models, no `QQmlListProperty`, no QML access to Python attributes other than `@Property`-decorated ones. The reason is testability: the Python side has 640+ pytest tests that exercise prediction, capitalization, modifier semantics, and persistence without spinning up a Qt event loop.
+This is deliberately the *only* coupling between the layers. There are no shared Qt models, no `QQmlListProperty`, no QML access to Python attributes other than `@Property`-decorated ones. The reason is testability: the Python side has around 2,250 pytest tests that exercise prediction, capitalization, modifier semantics, and persistence without spinning up a Qt event loop.
 
 ### 2.3 Platform abstraction
 
@@ -139,7 +153,7 @@ This layered approach mirrors Presage's "natural language as a combination of re
 
 **`PPMPredictor` and `PPMWordPredictor` (`ppm_predictor.py`).** Two cooperating classes. `PPMPredictor` is the raw character model. A variable-order Markov chain with PPMD escape, following Cleary & Witten's original construction. It learns from a stream of characters and predicts a probability distribution over the next character given the last N (where N is the model order, default 5). `PPMWordPredictor` wraps it: it walks the character distribution into the most likely full-word completions of the partial prefix the user has typed. The wrapping matters because the merge layer takes word predictions, not character distributions.
 
-**`FuzzyRecognizer` (`fuzzy_recognizer.py`).** Owns a `SpatialKeyModel` (Gaussian distribution over neighbouring keys keyed by Euclidean distance on the QWERTY layout, σ = `spatial_uncertainty / 2`, default σ = 0.7) and a `FuzzyWordGenerator` that combines the spatial beam search with a SymSpell-backed edit-distance lookup (`src/prediction/symspell.py`). Two query paths: `get_fuzzy_predictions(context, n)` returns ranked candidates for the merge, and `should_autocorrect(typed, candidate)` runs the two-tier threshold (§3.7) when the system has to decide whether to *commit* a correction (e.g. on space) versus merely *suggest* it. The recogniser is the most numerically tuned component. Its constants are spelled out in §3.6.
+**`FuzzyRecognizer` (`fuzzy_recognizer.py`).** Owns a `SpatialKeyModel` (Gaussian distribution over neighbouring keys keyed by Euclidean distance on the QWERTY layout, σ = `spatial_uncertainty / 2`, default σ = 0.7) and a `FuzzyWordGenerator` that combines the spatial beam search with a SymSpell-backed edit-distance lookup (`src/prediction/symspell.py`). The per-edit penalties quoted in §3.6 are the recogniser's own (`fuzzy_recognizer.py`), not the index's. Two query paths: `get_fuzzy_predictions(context, n)` returns ranked candidates for the merge, and `should_autocorrect(typed, candidate)` runs the two-tier threshold (§3.7) when the system has to decide whether to *commit* a correction (e.g. on space) versus merely *suggest* it. The recogniser is the most numerically tuned component. Its constants are spelled out in §3.6.
 
 **`HybridPredictor` (`hybrid_predictor.py`).** The orchestrator. Holds references to one `NgramPredictor`, one `PPMWordPredictor`, one `FuzzyRecognizer`, one `PackManager`, and (optionally) one `TransformerPredictor`. The `predict()` entry point runs the n-gram and fuzzy predictors in sequence (PPM's word list has been empty by default since 2026-09-03; `_ppm_in_merge` restores it), and it runs them (not in threads. Python's GIL would defeat parallelism here, and each predictor is fast enough that single-threaded sequential is simpler and still meets the <30 ms latency budget). It then dispatches to a strategy-specific scorer (`_score_rank` / `_score_rrf` / `_score_linear` / `_score_loglinear`) keyed on the user's selection in *Settings → Smart Typing → Suggestion Engine*; default is `rank`. Source weights are shared across every strategy (`_source_weights` returns 3.0/0.3/0.6 for next-word, 1.0/0.8/0.6 for mid-word completion). The default rank strategy scores each candidate as the sum of `weight / (rank + 1)` from every source it appeared in. Consensus boost (RRF) substitutes `weight / (60 + rank + 1)` so the rank-1 vs rank-2 gap shrinks and consensus across sources matters more. Confidence-weighted (linear) normalises each source's raw scores into a sum-to-1 distribution and combines `Σ w_i · P_i(w)`. Multiplicative (log-linear) does the same per-source normalisation but combines `Σ w_i · log P_i(w)` with a 1e-6 floor for words missing from a source. Equivalent to `Π P_i(w)^w_i`. Klakow (1998) showed log-linear beats linear interpolation by ~20% relative perplexity on n-gram smoothing. Across every strategy, the spatial-bigram cross-talk (`1 + log1p(bigram_count) / 2`) re-weights fuzzy candidates against the previous word's bigram table. The only context signal fuzzy has access to. Dispreference penalties divide the score by `(1 + count · 0.5)` and capitalisation is applied last (`_finalize_scores`), so all internal scoring is case-insensitive. Full strategy trade-offs and migration history live in `architecture/HYBRID_MERGING.md`.
 
@@ -176,22 +190,25 @@ Total wall-clock budget for steps 4–5 on a 2018 laptop is comfortably under 30
 
 `NgramPredictor.predict()` ranks candidate words by
 
-```
-score(w) = λ₃·P(w | w₋₂, w₋₁)  +  λ₂·P(w | w₋₁)  +  λ₁·P_uni(w)
-```
+$$\mathrm{score}(w) = \lambda_3 \, P(w \mid w_{-2}, w_{-1})
++ \lambda_2 \, P(w \mid w_{-1})
++ \lambda_1 \, P_{\mathrm{uni}}(w)$$
 
 with λ = (0.5, 0.3, 0.2). All three terms live in probability space, so a strong bigram signal can override a higher-frequency unigram. After typing "I want", "to" beats "the" because `P(to | want)` ≫ `P(the)`. This is the textbook Jelinek–Mercer interpolation applied at three orders.
 
-When there is no preceding word (start of input, or after a context reset), the trigram and bigram terms collapse to zero and `P_uni` is taken at full weight, so partial-prefix completion is not attenuated. An earlier implementation added bigram and unigram counts in raw frequency space (`freq·2` for bigram, `p·100_000` for unigram), which made unigram dominate by three orders of magnitude. Bigram evidence was effectively dead weight. The fix to a proper interpolated formula is one of the larger quality wins in the engine.
+When there is no preceding word (start of input, or after a context reset), the trigram and bigram terms collapse to zero and `P_uni` is taken at full weight, so partial-prefix completion is not attenuated.
 
-### 3.3 Cold-start signal: curated bigram / trigram corpus
+**The context tables are two tables, not one.** Each of `bigrams` and `trigrams` is a merged view over a *base* share, rebuilt from the shipped data files at every launch, and a *user* share, which is the only part persisted. The split exists because the single merged table was both persisted and re-seeded on top of itself at each launch, so seed counts grew without bound: a live model held `i -> want` at 1,037 against 63 on a fresh install. Worse, a personal phrase could not compete with the seeds at all. `the bus`, typed once, scored 0.0004 against 2,600 of seed mass and would have needed 55 consecutive typings to surface, which at once a day meant never. Scoring now trusts the user's distribution for a prefix in proportion to its evidence, blending it with the base distribution at weight `U / (U + 5 + 0.02 B)` for user evidence `U` and base count `B`. With no user evidence this is the plain interpolated row above, byte for byte, which is what makes a fresh install score identically to the previous design; with it, a phrase reaches the suggestion bar after two typings. Decay retires only the user share, so the curated seeds survive however long a session runs, and a model file written by an older build is adopted wholesale as user history rather than being split after the fact, which keeps every existing ranking intact across the upgrade. An earlier implementation added bigram and unigram counts in raw frequency space (`freq·2` for bigram, `p·100_000` for unigram), which made unigram dominate by three orders of magnitude. Bigram evidence was effectively dead weight. The fix to a proper interpolated formula is one of the larger quality wins in the engine.
 
-Linear interpolation only helps when the higher-order tables have data. To avoid a cold-start period where the engine learns from scratch, the n-gram loader seeds two curated corpora at first launch:
+### 3.3 Cold-start signal: seeded context tables
 
-- `data/common_bigrams.txt`: ~750 hand-picked English bigrams with weight 50 each.
-- `data/common_trigrams.txt`: ~740 trigrams with weight 50 each, plus 10 reinforcement on each of the two internal bigrams (`w₁→w₂` and `w₂→w₃`).
+Linear interpolation only helps when the higher-order tables have data, so the base share of §3.2 is built from two sources at every launch.
 
-The seed corpora cover conversational English (subject–verb–object skeletons, common discourse markers, frequent prepositions). They are deliberately small enough to be hand-audited; the next planned scale-up is COCA top-100k bigrams or Google n-gram exports (see §8).
+A small curated layer, hand-audited, covers conversational English skeletons: `data/common_bigrams.txt` (~750 pairs at weight 50) and `data/common_trigrams.txt` (~740 triples at weight 50, plus 10 reinforcement on each of the two internal bigrams `w₁→w₂` and `w₂→w₃`).
+
+A generated layer, added in 1.3.0, supplies the bulk: `data/seed_bigrams.txt` covers 13,437 contexts over 65,694 edges, and `data/seed_trigrams.txt` a further 20,000 contexts, 125,302 edges in total. Both are pruned from the forum language model published alongside this paper's evaluation corpus (Vertanen and Kristensson, 2011, CC BY 4.0), restricted to the words this keyboard ships, then to the most frequent contexts, then to the top continuations of each: five for bigrams, three for trigrams, on the reasoning that a five-pill bar cannot show a longer tail. That is 2.56 MB on disk, 17 MB resident, and 414 ms of the startup budget. §8.3 measures what they are worth: +1.8 and +1.7 points of keystroke savings on the two held-out splits, and +5.8 and +5.2 points of next-word hit rate, which is the largest single quality win in the engine's history.
+
+Neither layer is ever written back to disk. Both are rebuilt from the data files at launch, which is the invariant that makes the base and user shares separable in the first place.
 
 ### 3.4 Fragment filter on learning
 
@@ -238,6 +255,18 @@ A fully unified scoring model (where the literal typed word has an explicit prob
 Users can right-click a prediction pill to *remove from vocabulary* (adds to a blacklist) or mark as *bad suggestion* (increments a dispreference counter that downweights the word by `1 / (1 + count · 0.5)`). Both lists persist in `ngram_model.json` and apply at merge time in `hybrid_predictor._merge_predictions`.
 
 Auto-rehabilitation handles the case where the user changes their mind: typing a blacklisted word three times (each completed with space) restores it. The counter is tracked in `_blacklist_type_count` and persisted alongside the blacklist itself. Users can also restore words manually from the Model Visualization dashboard.
+
+---
+
+### 3.9 The click's position, and a learned pointer bias
+
+Every component above treats a keystroke as the identity of a key. The pointer supplies more than that: it lands somewhere *inside* the key, and where it lands is not uniform. A user whose hand drifts down and right will land low and right on most keys, consistently, and that bias is a property of the person rather than of the letter.
+
+Two mechanisms follow. Each press reports its offset from the key's centre as a fraction of the key's width and height, and the prefix beam of §3.1 scores that continuous position against its Gaussian emission rather than assuming the key's centre. Separately, `pointer_model.py` accumulates per *physical slot* (the key's row and column, so the bias belongs to the pointer and survives a Dvorak or Colemak remap) the count and sum of observed offsets, and estimates each slot's bias as its own mean shrunk toward the global mean with ten pseudo-observations. That estimate is subtracted before scoring.
+
+The emission carries two widths, and the relationship between them is the part worth keeping. When only the key is known the uncertainty is 0.85 key-widths; when the position inside it is known it is 0.55. The second was set by sweep, and sharper values measured *worse*: at 0.3 the engine lost 1.6 points of keystroke savings and at 0.22 it lost 6, because scatter then places the intended key on the expensive side of the observed click more often than the extra precision helps.
+
+The table is owned by the n-gram predictor, so it lives in the one file that already holds everything the user taught the engine, with the load caps, the backup archive and the Clear Learned Data path already built around it. Learning is suppressed in privacy mode like every other learning path (§5.2), offsets are clamped to one key, and nothing is logged. §8.4 measures the whole feature at 0.9 points of keystroke savings for a systematically biased pointer, of which 0.4 comes from the learned bias, which is smaller than the per-key simulation predicted and is reported in §8.4 as such.
 
 ---
 
@@ -372,6 +401,18 @@ Voice input is the obvious complement to a keyboard driven one click at a time, 
 
 ---
 
+### 4.11 One route is not a route: redundancy in reachable controls
+
+A recurring failure in this system's own history is a control reachable by exactly one gesture, where that gesture is one some users do not have. Three instances, all fixed the same way, are worth stating as a single principle because the principle is what generalises.
+
+**Right-click cannot be the only way in.** Dwell-click software, switch access, head and eye trackers, and single-button adaptive mice all produce a left click and nothing else. Alpha-OSK uses right-click for three genuinely useful shortcuts: the shifted variant of a character key (§4.4), locking a modifier held (§4.2), and opening the editor for a programmable function key. Each of the three has a left-click route as well, and the third is the instructive one: the function-key editor is reachable from a Settings page listing all twenty-four keys, which turned out to be strictly better than the right-click it backs up, because its rows are far larger targets than a 36 px keycap and it is the only surface that shows an assignment the user has forgotten making.
+
+**A setting must not be able to remove the only route to an unrelated feature.** Turning suggestions off collapses the suggestion bar to zero height, and the bar carries the buttons for dictation, the symbol picker, snippets and clearing context. Each of those has a title-bar mirror that appears exactly when the bar is hidden. The general form of the bug is a container whose visibility is controlled by one feature's setting while holding another feature's only entry point.
+
+**Colour may encode meaning only if it survives every theme.** Nine themes ship, several with pale accents and one light throughout, so any fixed colour is illegible on roughly half of them. The key-colouring scheme added in 1.3.0 therefore derives every hue by rotation from the active theme's own accent in a perceptually uniform space (OKLCh, because rotating hue in HSL holds the lightness *number* constant while perceived lightness swings), and then walks each fill's strength down until the theme's own text colour clears a 4.5:1 contrast ratio against it. A scheme that would bury a legend on some theme yields instead. The property is enforced by a test sweeping every scheme against every theme against every role, 540 combinations at rest and hovered, paired with an inverse assertion that the schemes remain distinguishable from one another, since a scheme that collapsed every key to one colour would satisfy a contrast sweep perfectly.
+
+---
+
 ## 5. Privacy and Security
 
 ### 5.1 Off-network by default
@@ -434,11 +475,11 @@ Regression coverage for the validation properties is in `tests/test_data_export.
 
 Alpha-OSK has a community-impact pipeline designed to let users contribute to a shared "X million keystrokes saved" aggregate. **It is off by default, and currently a no-op even when on**, because `DEFAULT_ENDPOINT` is the empty string in `src/telemetry.py` and the backend Cloudflare Worker is not yet deployed to a production URL. The client, the consent toggle, and the dashboard surface are present in 1.1.0 so the wiring can be validated against the agreed schema before the endpoint goes live; the client begins actually submitting only when `DEFAULT_ENDPOINT` is set in a future release. Both the user-facing data policy (`PRIVACY.md`) and the design (`architecture/TELEMETRY.md`) are versioned in the repo.
 
-The toggle lives in *Settings → Data & Privacy → Privacy → "Share anonymous usage stats"*. When on, a weekly POST sends nine integer fields: a randomly-generated `anon_id` (UUID4), `app_version`, `os` (`windows` / `linux`), and the seven lifetime counters that already render on the in-app dashboard (`keystrokes`, `words`, `predictions`, `keystrokes_saved`, `minutes`, `sessions`, `prediction_offers`). **Nothing else.** The pipeline never sends content, word frequencies, key frequencies, IP, hostname, machine identifiers, or per-session breakdowns. The privacy-mode interaction is implicit: privacy mode (§5.2) suppresses learning and counter increments at the analytics layer, so password-field activity never enters the lifetime totals in the first place. The telemetry layer just forwards what the dashboard would show.
+The toggle lives in *Settings → Data & Privacy → Privacy → "Share anonymous usage stats"*. When on, a weekly POST sends ten fields, of which seven are the lifetime counters and three identify the build: a randomly-generated `anon_id` (UUID4), `app_version`, `os` (`windows` / `linux`), and the seven lifetime counters that already render on the in-app dashboard (`keystrokes`, `words`, `predictions`, `keystrokes_saved`, `minutes`, `sessions`, `prediction_offers`). **Nothing else.** The pipeline never sends content, word frequencies, key frequencies, IP, hostname, machine identifiers, or per-session breakdowns. The privacy-mode interaction is implicit: privacy mode (§5.2) suppresses learning and counter increments at the analytics layer, so password-field activity never enters the lifetime totals in the first place. The telemetry layer just forwards what the dashboard would show.
 
 The `anon_id` is generated on first opt-in and **cleared on opt-out**, so opt-in/opt-out cycles produce unlinkable contributions. A user who wants their already-submitted row removed can use the "Delete my contributed data" button in the same Settings section, which POSTs to `/v1/forget` (the server returns 204 regardless of whether the id existed, so request-pattern probing yields no information). Reinstallation or deletion of the per-user config directory also produces a fresh id; the old row becomes orphaned and is garbage-collected by the daily cron after 365 days of inactivity.
 
-The submission cadence is enforced by an hourly QTimer in the bridge that calls `maybe_submit()`; the function short-circuits unless the consent flag is on, the endpoint is configured, an `anon_id` exists, and at least seven days have elapsed since the last successful submission. A second hook (`submit_on_quit` from `KeyboardBridge.shutdown`) covers the case where the user runs the app for less than a week between sessions; it bypasses the weekly window with a 60 s anti-spam guard. Failures (HTTP 5xx, 429, network error) retry with backoff `[5 s, 30 s, 120 s]` and then drop until the next cycle. There are no user-visible error toasts: a network failure is not the user's problem.
+The submission cadence is enforced by an hourly QTimer owned by `TelemetryBridge`, which is registered to QML as its own context property rather than through `KeyboardBridge` that calls `maybe_submit()`; the function short-circuits unless the consent flag is on, the endpoint is configured, an `anon_id` exists, and at least seven days have elapsed since the last successful submission. A second hook (`submit_on_quit` from `KeyboardBridge.shutdown`) covers the case where the user runs the app for less than a week between sessions; it bypasses the weekly window with a 60 s anti-spam guard. Failures (HTTP 5xx, 429, network error) retry with backoff `[5 s, 30 s, 120 s]` and then drop until the next cycle. There are no user-visible error toasts: a network failure is not the user's problem.
 
 The backend is a Cloudflare Worker (`backend/cf-worker/`) backed by D1. Two tables: `users(anon_id PK, first_seen, last_seen, app_version, os)` and `submissions_latest(anon_id PK, ts, …counters…)`. The latest submission overwrites the previous because lifetime counters are monotonic. Three routes: `POST /v1/submit` validates each counter against a sanity ceiling (e.g. 10⁹ keystrokes) and upserts both tables; `GET /v1/aggregate` returns sums across `submissions_latest`, cached at the edge for five minutes; `POST /v1/forget` deletes the user's row. A daily cron prunes users whose `last_seen` is older than 365 days, with `ON DELETE CASCADE` cleaning up the child row.
 
@@ -466,14 +507,16 @@ Auto-update fetches from the release repository `owenpkent/alpha-osk-releases`, 
 
 Alpha-OSK is intended to run unobtrusively on hardware that motor-impaired users typically have: older laptops, low-power desktops, sometimes tablet hybrids. The performance envelope reflects this.
 
-| Metric | Target |
-|--------|--------|
-| Cold start | < 2 s on a 2018-era laptop |
-| Per-keystroke prediction latency | < 30 ms typical, < 100 ms worst-case |
-| Resident set size | < 200 MB after warm-up |
-| Disk footprint (installed) | ~120 MB Windows / ~150 MB Linux (PyInstaller bundle) |
-| GPU | Not used |
-| Network | Update check on startup only (opt-out) |
+| Metric | Budget | Measured |
+|--------|--------|----------|
+| Per-keystroke prediction latency | < 30 ms typical, < 100 ms worst-case | **2.9 ms p50, 11.4 ms p95** (§8.6) |
+| Cold start | < 2 s on a 2018-era laptop | not systematically measured |
+| Resident set size | < 200 MB after warm-up | not systematically measured |
+| Installer size (Windows) | as small as Qt allows | 93 MB |
+| GPU | not used | none required |
+| Network | update check on startup only (opt-out) | as budgeted |
+
+**Only the latency row is a measurement.** It comes from every `predict()` call in the benchmark runs of §8, on one development machine. The rest of the table is a design budget that the system is believed to meet and that no instrumentation currently verifies, and it is presented as such because the hardware target of the paragraph above is exactly the hardware on which nobody has measured it. §9 lists this among the limitations.
 
 The prediction engine is pure Python with no native extensions. The hot paths (n-gram lookup, fuzzy candidate generation) operate on plain dicts and lists rather than NumPy or compiled tries. This is deliberate: the working-set size is small enough (tens of thousands of words) that Python dict performance is adequate, and a native dependency would complicate cross-platform builds.
 
@@ -529,26 +572,120 @@ The hard part is **input delivery**. Naïve `CGEventPost(kCGHIDEventTap, ev)` po
 
 ---
 
-## 8. Evaluation, Known Gaps, and Future Work
+## 8. Evaluation
 
-### 8.1 In-app analytics dashboard
+### 8.1 Method
 
-`src/analytics.py` records the lifetime counters that drive the in-app analytics dashboard and the §5.6 telemetry payload. Counters are session and `_alltime_*` paired; persisted to `<config_dir>/analytics.json` on shutdown and on explicit save; loaded at launch and incremented in-place. Persisted fields: keystrokes, words, predictions, keystrokes_saved, sessions, minutes, backspaces, prediction_offers, prediction_rank_sum, prediction_rank_count, top_pick_count, plus capped word_freq and key_freq Counters (top 5,000 entries retained on both load and save, and the file itself is capped at 5 MB, so the file stays bounded over years of typing and a crafted `analytics.json` from an imported backup can't grow the in-memory counters unboundedly).
+We measure **keystroke savings rate** (KSR), the standard word-prediction metric (Trnka and McCoy, 2008), with the harness in `scripts/bench/ksr.py`.
 
-The dashboard (`qml/components/AnalyticsDashboard.qml`) presents four impact tiles in a single 2×2 grid with a Lifetime / This Session toggle:
+**Protocol.** For each word in a held-out sentence, the simulated user asks the engine for its top five predictions at every prefix length, starting from the empty prefix, and accepts the intended word the first time it appears. A word accepted after *i* typed letters costs *i* + 1 clicks: the letters, plus one click on the suggestion. A word never predicted costs its full length plus one for the following space, which is also the baseline every word is scored against. KSR is then
 
-- **Keystrokes Saved**: absolute count, the headline number ("keys you didn't have to press").
-- **Time Saved**. `keystrokes_saved × user's own seconds per keystroke` (`alltime_minutes × 60 / alltime_keystrokes`, fallback 0.5 s/key for new installs). Using the user's own pace makes the number honest: a slow OSK user genuinely saves more wall-clock time per avoided keystroke than a fast one.
-- **Effort Saved**: savings as a percentage of total typing effort (`keystrokes_saved / (keystrokes + keystrokes_saved)`), the percentage view of the same engine value as Time Saved.
-- **Acceptance**. `prediction_hits / prediction_offers`, asking "when the keyboard offered a suggestion, how often was it useful enough to take". Distinct from the keystroke-share metric Effort Saved measures.
+$$\mathrm{KSR} = 1 - \frac{\text{clicks with prediction}}{\text{clicks without prediction}}$$
 
-Earlier builds also surfaced a composite 0–100 "Prediction Quality" score (weighted: 40% savings, 25% hit rate, 20% rank-1 accuracy, 15% low backspace rate). It was removed in 1.1.0 because the number wasn't actionable: a user can act on "you've saved 4.2 hours" or "67% of your picks were the first suggestion" but a "73/100" composite hides which lever moved. Per-component metrics are still tracked and exposed in `getAnalytics()` (`predictionHitRate`, `topPickRate`, `backspaceRate`, etc.) for the Model Visualization panel and downstream callers; only the composite was retired. Don't reintroduce the composite as a primary surface; if a single internal scoring number is needed for ranking-strategy comparisons, compute it ad-hoc in tests rather than baking it back into `get_session_stats`.
+Alongside it we report **next-word hit rate** (the share of words already present in the bar before any letter of them is typed, which is the metric the context tables directly address), **never predicted** (the share of words the engine never offers at any prefix), and per-keystroke latency as p50 and p95 over every `predict()` call in the run.
 
-These metrics track regressions and improvements over time but are not a substitute for benchmark comparisons against other keyboards. We do not yet have a published benchmark; building one is open work.
+**Corpus.** The evaluation sets are the development and test splits of *A Crowdsourced Corpus of AAC-like Communications* (Vertanen and Kristensson, 2011), used under CC BY 4.0: 557 and 566 sentences, 2,956 and 2,730 words. The corpus was collected by asking crowd workers to invent communications as if using a scanning interface, which makes it the closest public proxy for this system's population. **The splits are by worker rather than by sentence**, so no author's writing appears in more than one split. The corresponding training split is deliberately absent from the repository: a training set sitting beside the test set is a standing invitation to seed the model from it and report against the match.
+
+**Model state.** Every run builds a cold-start engine in a fresh temporary directory, so the developer's own learned model is never involved: 18,990 unigrams, 13,440 bigram prefixes over 67,697 edges, and 20,947 trigram prefixes, all of it from the shipped data files. Section 8.5 is the one exception, and says so.
+
+**What this measures, and what it does not.** KSR is a property of the engine under an idealised user who notices every suggestion the instant it appears and never mis-clicks the pill. Real users scan the bar, sometimes miss an offer, and pay a visual-search cost that typing the next letter does not carry. The number is therefore an upper bound on benefit rather than an estimate of it, and the gap between the two is exactly what a user study would measure. Section 9 returns to this.
+
+### 8.2 Main results
+
+| Split | Sentences | Words | KSR | Next-word hit | Never predicted |
+|---|---|---|---|---|---|
+| `aac-dev` | 557 | 2,956 | 49.1% | 28.7% | 13.6% |
+| `aac-test` | 566 | 2,730 | 50.4% | 30.4% | 13.0% |
+
+Roughly half of the clicks a user would spend typing these sentences are avoidable, and the engine offers the correct next word before a single letter of it is typed about three times in ten. The two splits sit 1.3 points apart with nothing else changed, which sets the noise floor for every comparison below: **we treat differences under about 1.4 points as not meaningful.**
+
+For calibration, the same harness scores 56.9% on the 30 hand-written sentences that were this project's original benchmark. That set is easier than either AAC split because it was written in this repository and sits close to the curated seeds and the training corpus. Earlier internal figures on it, up to 55.0%, predate the generated context seeds of section 3.3 and are not directly comparable to this one. It is reported here only to relate those earlier numbers to the current engine; every number in this section is on held-out data.
+
+### 8.3 What each source contributes
+
+Each row removes or restores one component of the merge. All other settings are held at their shipped defaults.
+
+| Condition | dev KSR | test KSR | test p50 |
+|---|---|---|---|
+| **Full system (shipped)** | **49.1%** | **50.4%** | **2.9 ms** |
+| Fuzzy source removed | 49.4% | 50.5% | 2.3 ms |
+| Pre-1.3.0 whole-word fuzzy | 47.4% | 49.2% | 3.4 ms |
+| PPM word candidates restored | 48.5% | 49.9% | 15.9 ms |
+
+Three results, and two of them are negative.
+
+**The mid-word prefix beam is worth about two points.** Replacing it with the whole-word fuzzy source that preceded it costs 1.7 points on dev and 1.2 on test. That source could only emit candidates as long as the letters typed so far, so mid-word it could not complete a word at all once a click had slipped; the beam completes the typed prefix *through* the error. Section 8.4 is where this component earns its keep properly.
+
+**On clean input the fuzzy source is not worth anything.** Removing it entirely scores 0.3 points *above* the full system on dev and 0.1 above on test. Both differences are inside the noise floor, so the honest statement is that spatial correction is free rather than beneficial when every click lands where it was aimed. It is insurance, and section 8.4 prices the premium.
+
+**Taking PPM's word candidates out of the merge cost nothing and bought a great deal of latency.** Restoring them moves KSR by −0.6 and −0.5 points, both inside the noise floor, while median per-keystroke latency rises from 2.9 ms to 15.9 ms, a factor of five and a half. The character model was constructed without a dictionary, so its word path emitted fragments rather than words. It still trains and persists, because a fusion inside the prefix beam is the obvious next step and would need it, but it no longer votes.
+
+**Seeded context tables are the largest single win in the engine's history.** Measured in the same harness while the seeds were being built (`architecture/NGRAM_SEEDS.md`), each row adding to the one above it:
+
+| | dev KSR | test KSR | dev next-word | test next-word |
+|---|---|---|---|---|
+| Curated seeds only (~750 bigrams, ~740 trigrams) | 47.3% | 48.7% | 22.9% | 25.2% |
+| + generated seed bigrams (~79,000) | 48.4% | 49.8% | 26.3% | 28.4% |
+| **+ generated seed trigrams (~80,000, shipped)** | **49.1%** | **50.4%** | **28.7%** | **30.4%** |
+
++1.8 and +1.7 points of KSR, and +5.8 and +5.2 points of next-word hit rate. The next-word figure is the one to watch: it is what these tables directly address, and it moved more than three times as far as KSR, which averages it in with mid-word completions the prefix beam was already handling. The seeds are pruned from the forum language model published with the evaluation corpus (Vertanen and Kristensson, 2011); §3.3 gives the pruning. They cost 2.56 MB in the installed bundle and 414 ms at startup.
+
+One caution about this row, which we state rather than leave for a reader to find: the seeds and the evaluation splits derive from the same research programme. The language model is built from web forum text and the evaluation sets from crowd-written AAC-like sentences, so they are different corpora collected for different purposes, and the splits remain held out from our engine in the sense that matters here, namely that nothing in them was used to fit anything. But a seed table drawn from the same authors' modelling of conversational English is closer to this test material than an arbitrary external corpus would be, and the +1.7 points should be read with that in mind.
+
+**The merge strategy barely matters.** The four user-selectable scorers on `aac-test` score 50.4% (rank, the default), 50.5% (reciprocal rank fusion), 49.9% (linear), and 50.5% (log-linear). The whole spread is 0.6 points, inside the noise floor. This is a negative result about a user-facing setting, and it is worth stating plainly: the setting exists, it is defensible on the grounds that different strategies fail differently on individual queries, but we cannot demonstrate that any choice beats the default on aggregate.
+
+### 8.4 Robustness to pointer error
+
+The population this system targets does not click where it aims. `--mis-click` models the simplest version of that: one click per word, on the second character of every word of four letters or more, lands on a physically adjacent key and is never corrected by the user. The question is what the suggestion bar does about it.
+
+| Condition | dev clean | dev + slip | test clean | test + slip |
+|---|---|---|---|---|
+| **Full system** | 49.1% | **44.7%** | 50.4% | **46.3%** |
+| Pre-1.3.0 whole-word fuzzy | 47.4% | 35.7% | 49.2% | 38.1% |
+
+One uncorrected slip per word costs the shipped engine 4.4 points on dev and 4.1 on test. It cost the previous engine 11.7 and 11.1. **The prefix beam is worth 9.0 and 8.2 points under pointer error**, against nothing at all on clean input, which is the clearest single argument in this evaluation for building a spatial model into a keyboard for this population. The share of words never predicted at any prefix tells the same story more starkly: it roughly doubles under slip with the old source, from 14.6% to 29.8% on dev, and moves from 13.6% to 16.2% with the beam.
+
+**Learning the pointer's bias helps, but much less than the per-key simulation suggested.** `--pointer` simulates a pointer end to end: where each click lands, which key gets reported, and the presses the bias model learns from. For a systematically biased pointer (0.35 and 0.25 key-widths of offset, 0.15 of Gaussian scatter, so roughly a fifth of clicks land on the wrong key) on `aac-test`:
+
+| | KSR | Never predicted |
+|---|---|---|
+| Reported keys only | 46.1% | 18.1% |
+| + the click's position inside the key | 46.6% | 17.4% |
+| + a learned per-position bias | 47.0% | 16.8% |
+
+0.9 points from the whole feature, of which 0.4 comes from the learned bias. An earlier per-key simulation had measured intended-key recovery rising from 75% to 86.5% with a learned bias, which did not translate, because the prefix beam and the dictionary between them already recover most single-key errors from the reported key alone. We report it because it is the honest size of the effect and because the direction is consistent, not because it is large.
+
+### 8.5 Personalisation
+
+Every result above is cold start. `--learn-half` measures what the user's own typing is worth by training on the first half of a split and testing on the second, on `aac-dev` (n = 279 held-out sentences):
+
+| | KSR | Next-word hit |
+|---|---|---|
+| Before learning | 49.3% | 29.4% |
+| After learning the training half | 51.5% | 34.1% |
+| Oracle: the test half already learned | 67.6% | 65.7% |
+
+Learning in-domain material is worth 2.2 points of KSR and 4.7 points of next-word hit rate, which is a real effect and above the noise floor. The oracle row is the more interesting one. An engine that had already seen the exact sentences it is asked to predict reaches 67.6%, so **roughly 16 points of headroom separate the shipped engine from a perfect model of this user**. That number bounds what any amount of further personalisation can buy on this corpus, and it is the strongest argument in this paper for the federated-learning direction of section 10.2: the gap is large, and it is a vocabulary gap rather than an algorithmic one.
+
+### 8.6 Latency
+
+Median per-keystroke latency is 2.9 to 4.1 ms across conditions, with p95 between 10 and 16 ms, measured over every `predict()` call in a run on the author's development machine. The budget in section 7 is 30 ms typical, so the engine sits roughly an order of magnitude inside it. The only condition that approaches the budget is the restored PPM merge, at 15.9 ms median on test and 24.5 ms on dev with a p95 of 44.3 ms, which is what made removing it an easy decision once its contribution measured as zero.
+
+These figures are a single machine and should be read as an order of magnitude rather than a specification. What they establish is the shape of the claim: the engine is not the reason the interface would feel slow, and there is no cloud round-trip on the path.
+
+### 8.7 Deployment instrumentation
+
+The offline benchmark measures the engine. The application separately instruments itself, which is what produces the only longitudinal evidence the project has, and section 9 is explicit about the weight that evidence can carry.
+
+`src/analytics.py` maintains session and lifetime counters in `<config_dir>/analytics.json`: keystrokes, words, predictions offered and accepted, keystrokes saved, backspaces, sessions, minutes, the rank of each accepted suggestion, and capped word and key frequency tables. Nothing leaves the machine (section 5.1). The dashboard presents four framings of the same engine output, because in use they land differently on different days: keystrokes saved as an absolute count, the same figure converted to wall-clock at the user's own measured seconds per keystroke, the same figure as a share of total effort, and acceptance rate, which is the one genuinely separate signal because it asks how often an offered suggestion was worth taking rather than how much typing was avoided.
+
+An earlier build surfaced a composite 0 to 100 "prediction quality" score, weighting savings, hit rate, rank-1 accuracy and backspace rate. It was removed because it was not actionable: a user can act on "you have saved four hours" and cannot act on "73 out of 100", which hides which term moved. The components are still tracked and exposed; only the composite was retired.
+
+**These are one installation's numbers.** The lifetime figures shown below come from the author's own machine, computed by the software under evaluation, and they are reported here as evidence that the system has been in sustained real use rather than as a measurement of its benefit. Section 9 states the case against reading them as a result.
 
 <p align="center">
   <img src="../assets/screenshots/analytics-dashboard.png" alt="Lifetime analytics dashboard showing 16.8k keystrokes saved, 153.1 hours saved, 50% effort saved, 28% acceptance, top words bar chart, and vocabulary / bigram / trigram counts." width="720" />
-  <br /><em>Figure 4. Lifetime view of the in-app analytics dashboard. The four impact tiles (Keystrokes Saved, Time Saved, Effort Saved, Acceptance) are surfaced together because each lands differently with different mindsets: absolute count, wall-clock, percentage of effort, and engine-quality. The Lifetime / This Session toggle pivots every tile and chart from `_alltime_*` counters to in-session counters. The five framed cards below (Vocabulary, Bigrams, Trigrams, Top Pick, Saved) make the user's personal language model legible as raw counts rather than abstract scores.</em>
+  <br /><em>Figure 4. Lifetime view of the in-app analytics dashboard, from the author's own installation (n = 1, self-reported, unblinded; see section 9). The four impact tiles (Keystrokes Saved, Time Saved, Effort Saved, Acceptance) are surfaced together because each lands differently with different mindsets: absolute count, wall-clock, percentage of effort, and engine-quality. The Lifetime / This Session toggle pivots every tile and chart from `_alltime_*` counters to in-session counters. The five framed cards below (Vocabulary, Bigrams, Trigrams, Top Pick, Saved) make the user's personal language model legible as raw counts rather than abstract scores.</em>
 </p>
 
 <p align="center">
@@ -556,28 +693,52 @@ These metrics track regressions and improvements over time but are not a substit
   <br /><em>Figure 5. Word Cloud tab of the Your Language Model panel. Each bubble is a learned word, sized by unigram frequency. The visualization is built from `getVisualizationData()` over the live n-gram tables; clicking any bubble drills into that word's bigram predecessors, successors, and trigram windows. The Word Flow tab presents the same data as a network graph of bigram edges. Both surfaces pulse the matching node and edge when the user is actively typing, providing a live view of which part of their personal model is firing.</em>
 </p>
 
-### 8.2 Known gaps relative to commercial keyboards
+---
+
+## 9. Limitations
+
+The evidence in section 8 is entirely of one kind: simulation against held-out text. That supports claims about the prediction engine and supports nothing about the system as an interface. The distinction matters enough to enumerate.
+
+**There is no user study.** No participants, no task battery, no measured entry rate, no comparison against `osk.exe` or a commercial alternative with real users. Everything reported here about the interface, and section 4 is almost entirely about the interface, rests on design argument and on one person's daily use rather than on measurement. A study with motor-impaired participants is the single most valuable piece of missing work, and it is missing for the ordinary reasons: recruitment in this population is slow, and the project has no institutional affiliation to run it through.
+
+**Keystroke savings is an upper bound, not a benefit.** The simulated user accepts a suggestion the instant it appears. A real user has to notice it, read it, decide, and land a pointer on it, and each of those has a cost that typing the next letter does not. Trnka and McCoy's finding that measured savings and observed rate improvement diverge substantially applies directly to every number in section 8. Our figures should be read as an ordering over engine configurations, which is what we use them for, rather than as a prediction of how much faster anyone types.
+
+**The system has one long-term user, who is also its author.** He has muscular dystrophy and uses it daily as his primary text input, which is genuinely unusual as a design constraint and is why section 4 exists. It is also a sample of one, with all the selection effects that implies: the interface has been shaped, over years, to one motor profile, one set of habits, and one language. Where this paper says a decision was reversed after use, that is one person's experience reported honestly, not a finding.
+
+**The longitudinal counters are self-reported and unblinded.** The lifetime figures in the analytics dashboard come from that same user's installation. They are the system's own accounting of its own behaviour, computed by the code under evaluation, from a single participant who knows what the numbers mean and wrote them. They are reported in section 8.7 as an existence proof of sustained real use, and should be read as nothing more.
+
+**The evaluation corpus is a proxy.** The AAC corpus is crowd-written by workers imagining a scanning interface, not collected from people using this or any other keyboard. It is the closest public match available and its split-by-worker construction is sound, but the register of invented AAC-like sentences is not guaranteed to match the register of the correspondence, code, and medical communication this system is used for.
+
+**Scope.** English only. Every language-specific rule now sits behind a profile object (section 3), but no second profile exists, and the tokeniser, the short-word list, the capitalisation rules, the phone and address matchers and the spatial model are all English and mostly American. Windows and Linux only, with macOS in progress. Password-field detection fails open by design, so on any platform or application where the accessibility APIs do not report a secure field, the user's manual control is the only protection.
+
+**Single-machine performance figures.** Section 8.6 and the resource envelope in section 7 are measured or budgeted on one developer machine. No systematic measurement across the older, lower-power hardware the paper claims as its target has been done.
+
+---
+
+## 10. Known Gaps and Future Work
+
+### 10.1 Known gaps relative to commercial keyboards
 
 In rough priority order:
 
 1. **Unified prediction-and-correction scoring.** LatinIME and Gboard score the literal typed word and all corrections in a single ranked list with a shared probability scale. The two-tier autocorrect threshold (§3.7) is a partial proxy; full unification is the proper fix and would clean up several classes of edge cases (deliberate-typing protection, low-confidence corrections that currently surface as suggestions but should not).
 2. **Spatial edit costs in final ranking.** Key-distance weights from `fuzzy_recognizer` currently feed candidate *generation* but not the final rank. Folding them into the merge layer would let the engine prefer "the" over "rhe" in ambiguous contexts based on the fact that `r` is far from `t` in QWERTY.
 3. **Katz / stupid backoff for sparse contexts.** Linear interpolation gives `λ₃·P_tri = 0` weight to the trigram term when the trigram has never been seen, which is correct but pessimistic. Katz backoff would discount seen events and redistribute mass to lower-order fallbacks. Larger-lift change (~100 lines) with a measurable quality gain on rare contexts.
-4. **Larger seed corpus.** The ~750 / ~740 curated bigram/trigram lists are hand-audited but small. Seeding from COCA top-100k bigrams or Google n-gram exports would dwarf them. Easy win, no algorithm changes. Just more data.
+4. **Seeding the context tables from a larger corpus.** Closed in 1.3.0 by the generated seed layer of §3.3, worth +1.8 and +1.7 points of keystroke savings and +5.8 and +5.2 of next-word hit rate (§8.3). What remains open is narrower: trigram seeding stops at the 20,000 most frequent contexts, and going to 50,000 moved the test split a further 0.3 points, inside the noise floor, for 2.5 times the file size and 315 ms more startup. The frequency-ranked prune works, in other words, and the tail really is tail.
 5. **Vocabulary-pack disable undoes injection.** The current `PackManager.disable_pack` only clears the pack's own in-memory copy; it does not revert the per-word entries the pack pushed into the predictor's `unigrams` / `bigrams` / `trigrams` (which were merged with `max()`, see §3.1.2). Toggling a pack off therefore leaves its words ranking until the process restarts. Effectively invisible today because no built-in packs ship and very few users import their own; becomes a real correctness issue if built-ins return or imports become common. The clean fix is to track per-pack `(word, prior_value)` tuples at apply time and revert on disable, guarded so words that organic learning piled on top of (current value > pack's contribution) are not clobbered.
 
 #### Closed gaps
 
-- ~~**Structured CycloneDX SBOM at release time.**~~ Implemented (§7.4). `build/{windows,linux}/build.py::emit_sbom` writes a CycloneDX 1.6 SBOM alongside the plaintext lockfile on every build via `python -m cyclonedx_py environment --output-reproducible`. The worker side uses `@cyclonedx/cyclonedx-npm` via `npm run sbom`, chained before `wrangler deploy` by a `predeploy` script. A CI `osv-scan` job pinned to `google/osv-scanner-action` v2.3.8 reads both lockfiles and queries OSV on every push/PR, gating merges (`fail-on-vuln: true`) once the previously known Wrangler-3.x dev CVEs and the transitive `lxml` advisory were resolved (Wrangler 4 upgrade + `lxml>=6.1.0` pin). Meets the structured-SBOM bar that US Executive Order 14028 and most hospital / pharma / defence procurement asks for.
-- ~~**SymSpell for fuzzy matching.**~~ Implemented. `src/prediction/symspell.py` provides a precomputed-deletion index with Damerau-Levenshtein post-filter. The previous candidate generator was capped at edit distance 1 and did not enumerate substitutions; the new path defaults to edit distance 2 and adds substitution coverage, so two-edit corrections (e.g. "becouase" → "because") and non-adjacent substitutions (e.g. "rxample" → "example") now surface. Lookup latency dropped from ~30 ms to ~0.75 ms on the 10K-word base dictionary; one-time index build is ~216 ms, paid eagerly during `FuzzyWordGenerator.set_frequencies` so the cost lands in startup instead of the user's first keystroke. See §3.6 for the integration; `tests/test_symspell.py` for the algorithm-level tests.
+- **Structured CycloneDX SBOM at release time.** Implemented (§7.4). `build/{windows,linux}/build.py::emit_sbom` writes a CycloneDX 1.6 SBOM alongside the plaintext lockfile on every build via `python -m cyclonedx_py environment --output-reproducible`. The worker side uses `@cyclonedx/cyclonedx-npm` via `npm run sbom`, chained before `wrangler deploy` by a `predeploy` script. A CI `osv-scan` job pinned to `google/osv-scanner-action` v2.3.8 reads both lockfiles and queries OSV on every push/PR, gating merges (`fail-on-vuln: true`) once the previously known Wrangler-3.x dev CVEs and the transitive `lxml` advisory were resolved (Wrangler 4 upgrade + `lxml>=6.1.0` pin). Meets the structured-SBOM bar that US Executive Order 14028 and most hospital / pharma / defence procurement asks for.
+- **SymSpell for fuzzy matching.** Implemented. `src/prediction/symspell.py` provides a precomputed-deletion index with Damerau-Levenshtein post-filter. The previous candidate generator was capped at edit distance 1 and did not enumerate substitutions; the new path defaults to edit distance 2 and adds substitution coverage, so two-edit corrections (e.g. "becouase" → "because") and non-adjacent substitutions (e.g. "rxample" → "example") now surface. Lookup latency dropped from ~30 ms to ~0.75 ms on the 10K-word base dictionary; one-time index build is ~200 ms, paid eagerly during `FuzzyWordGenerator.set_frequencies` so the cost lands in startup instead of the user's first keystroke. See §3.6 for the integration; `tests/test_symspell.py` for the algorithm-level tests.
 
-### 8.3 Federated learning
+### 10.2 Federated learning
 
 Federated learning would let users contribute to a shared model without sending raw keystrokes anywhere. The design is in `roadmap/FEDERATED_LEARNING.md`. Phase 1 (local delta computation. The user's machine produces a "diff" against the base model that summarises learned vocabulary) is the next step. Phases 2 and 3 (secure aggregation, differential privacy budgets) follow.
 
 The motivation is strongest for the disability-community vocabulary case: users with rare conditions, specific medical equipment, or specialised AAC needs benefit disproportionately from shared vocabulary, but the same users have the strongest privacy concerns about raw keystroke data. Federated learning is the standard answer.
 
-### 8.4 Ecosystem integration
+### 10.3 Ecosystem integration
 
 Alpha-OSK is one of four tools in an adaptive-input platform (see `roadmap/ECOSYSTEM.md`):
 
@@ -592,9 +753,9 @@ All four target the same mouse-driven, accessibility-first user. Integration pha
 
 ---
 
-## 9. Conclusion
+## 11. Conclusion
 
-Alpha-OSK is what happens when an accessibility-first OSK is built from scratch with a hard requirement that prediction quality match modern mobile keyboards on commodity hardware without a cloud round-trip. The architecture (a Qt Quick UI on top of a Python bridge, with a hybrid n-gram + PPM + fuzzy prediction stack) is conventional in its parts, but the constraints from the user population (no focus stealing, no lost modifiers, no destructive prediction insertion, no GPU, off-network by default with the only optional egress being the explicitly opted-in usage-stats pipeline) shape the implementation in ways that diverge consistently from how a mainstream keyboard would be built.
+Alpha-OSK is what happens when an accessibility-first OSK is built from scratch with a hard requirement that prediction quality match modern mobile keyboards on commodity hardware without a cloud round-trip. The architecture (a Qt Quick UI on top of a Python bridge, with a word n-gram merged with a spatial prefix decoder) is conventional in its parts, but the constraints from the user population (no focus stealing, no lost modifiers, no destructive prediction insertion, no GPU, off-network by default with the only optional egress being the explicitly opted-in usage-stats pipeline) shape the implementation in ways that diverge consistently from how a mainstream keyboard would be built.
 
 The prediction stack is honest about its limits. It does not match Gboard's quality on rare contexts, it does not yet have unified scoring that lets the literal typed word compete against corrections in a single ranked frame, and the seed corpus is small. Each of these has a documented path forward and a rough cost estimate. None of them require fundamentally rethinking the architecture.
 
@@ -602,31 +763,41 @@ The accessibility-driven engineering decisions (the non-focus invariant, sticky 
 
 ---
 
-## References and Further Reading
+## References
 
-### Internal design docs
+### Works cited
 
-- `architecture/PPM.md`: variable-order character model with PPMD escape.
-- `architecture/FUZZY_RECOGNITION.md`: spatial model and tunable constants.
-- `architecture/HYBRID_MERGING.md`: merge weights, validation, capitalisation pipeline.
-- `build/AUTO_UPDATE.md`: update flow, threat model, defences.
-- `architecture/DICTATION.md`: voice input. Capture format, provider seam, state machine, insert path, key storage.
-- `architecture/TELEMETRY.md`: opt-in usage stats. Payload schema, anon_id lifecycle, backend, deployment workflow.
-- `PRIVACY.md`: user-facing data policy.
-- `architecture/PLATFORM_ARCHITECTURE.md`: cross-platform abstraction details.
-- `roadmap/FEDERATED_LEARNING.md`: federated-learning roadmap (separate from §5.6 telemetry; not yet implemented).
-- `roadmap/ECOSYSTEM.md`: four-tool adaptive-input platform.
-- `research/SECURITY_AUDIT.md`: pack-import hardening, model load caps.
-- `build/LINUX.md` / `build/WINDOWS.md`: platform-specific build and packaging.
+Cleary, J. G. and Witten, I. H. (1984). Data Compression Using Adaptive Coding and Partial String Matching. *IEEE Transactions on Communications*, 32(4), 396-402. The PPM construction used by `ppm_predictor.py`.
 
-### External references
+Garbe, W. (2012). *SymSpell: 1000x faster spelling correction*. github.com/wolfgarbe/SymSpell. The symmetric-delete index in `symspell.py` (§3.6).
 
-- Vescovi, M. *Presage: An intelligent predictive text entry platform*. presage.sourceforge.io. Open-source predictor library; influence on the layered hybrid approach (multiple predictors merged by linear interpolation).
-- Cleary, J. G., Witten, I. H. (1984). *Data Compression Using Adaptive Coding and Partial String Matching*. IEEE Transactions on Communications, 32(4), 396–402. Original PPM paper.
-- Garbe, W. (2012). *1000× faster spelling correction algorithm*. github.com/wolfgarbe/SymSpell. Symmetric Delete approach; future-work reference.
-- AOSP LatinIME source. Reference implementation for trie-based dictionary, weighted edit distance, n-gram LM scoring.
-- Microsoft. *UI Automation overview*. learn.microsoft.com/en-us/windows/win32/winauto/. Used for password-field detection.
-- AT-SPI 2. *Accessibility Toolkit Service Provider Interface*. Used for Linux password-field detection.
+Higginbotham, D. J., Shane, H., Russell, S. and Caves, K. (2007). Access to AAC: Present, past, and future. *Augmentative and Alternative Communication*, 23(3), 243-257. Rate enhancement as an access technology (§1.3).
+
+Klakow, D. (1998). Log-linear interpolation of language models. *ICSLP*. The basis for the log-linear merge strategy (§3.1.2).
+
+Kristensson, P. O. and Zhai, S. (2004). SHARK²: A Large Vocabulary Shorthand Writing System for Pen-based Computers. *UIST*, 43-52. Shape writing, and why it does not transfer to this population (§1.3, §4).
+
+MacKenzie, I. S. and Soukoreff, R. W. (2002). Text Entry for Mobile Computing: Models and Methods, Theory and Practice. *Human-Computer Interaction*, 17(2-3), 147-198. Evaluation methodology for text entry (§8.1).
+
+Trnka, K. and McCoy, K. F. (2008). Evaluating Word Prediction: Framing Keystroke Savings. *Proceedings of ACL-08: HLT, Short Papers*, 261-264. The keystroke-savings metric and the gap between simulated savings and observed benefit (§8.1, §9).
+
+Vertanen, K. and Kristensson, P. O. (2011). The Imagination of Crowds: Conversational AAC Language Modeling using Crowdsourcing and Large Data Sources. *EMNLP*, 700-711. The evaluation corpus (§8.1) and the forum language model the shipped context seeds are pruned from (§3.3), both used under CC BY 4.0.
+
+Vertanen, K., Memmi, H., Emge, J., Reyal, S. and Kristensson, P. O. (2015). VelociTap: Investigating Fast Mobile Text Entry using Sentence-Based Decoding of Touchscreen Keyboard Input. *CHI*, 659-668. Joint spatial and language decoding (§1.3).
+
+Vescovi, M. *Presage: An intelligent predictive text entry platform*. presage.sourceforge.io. The layered-predictor framing this engine follows (§3.1.1).
+
+Ward, D. J., Blackwell, A. F. and MacKay, D. J. C. (2000). Dasher: A Data Entry Interface Using Continuous Gestures and Language Models. *UIST*, 129-137. The character model as an accessible-input technique (§1.3).
+
+AOSP LatinIME source. Reference implementation for trie-based dictionaries, weighted edit distance, and letting the literal typed word compete against corrections (§3.7).
+
+Microsoft. *UI Automation overview*. learn.microsoft.com/en-us/windows/win32/winauto/. Password-field detection on Windows (§5.2).
+
+AT-SPI 2. *Accessibility Toolkit Service Provider Interface*. Password-field detection on Linux (§5.2).
+
+### Implementation documentation
+
+The repository carries per-component design documents that this paper cross-references rather than reproduces: `architecture/PPM.md`, `FUZZY_RECOGNITION.md`, `HYBRID_MERGING.md`, `NGRAM_SEEDS.md`, `DICTATION.md`, `TELEMETRY.md`, `PLATFORM_ARCHITECTURE.md`, `COMPACT_VIEW.md`; `build/AUTO_UPDATE.md`, `WINDOWS.md`, `LINUX.md`; `research/SECURITY_AUDIT.md`; `roadmap/FEDERATED_LEARNING.md`, `ECOSYSTEM.md`; and `PRIVACY.md`. The benchmark harness is `scripts/bench/ksr.py` and `scripts/bench/fuzzy.py`, and the evaluation corpus and its provenance are described in `scripts/bench/data/README.md`.
 
 ---
 
