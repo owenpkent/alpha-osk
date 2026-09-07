@@ -1,8 +1,8 @@
 name: Publish telemetry aggregate
 
-# Appends one dated row of the public opt-in telemetry aggregate to a CSV in
-# this repo, so the number quoted anywhere (the study page, the whitepaper, a
-# paper) is one anybody can check, and so the history exists at all.
+# Appends one dated row of the public opt-in telemetry aggregate to a CSV, so
+# the number quoted anywhere (the study page, the whitepaper, a paper) is one
+# anybody can check, and so the history exists at all.
 #
 # The worker's /v1/aggregate endpoint returns CURRENT totals and keeps no
 # history: it is a SUM over the latest row per install, and D1 stores one row
@@ -11,8 +11,28 @@ name: Publish telemetry aggregate
 # It also means a gap in the series is visible as a missing date rather than
 # silently interpolated.
 #
+# THE SERIES LIVES ON THE ORPHAN BRANCH `telemetry-data`, NOT ON main, AND
+# THAT IS DELIBERATE.
+#
+# main is protected and requires status checks. A bot pushing a one-line CSV
+# append cannot satisfy them, so the push is rejected with GH006 and the row
+# is lost. Both alternatives are worse. Opening a pull request per day would
+# run the full eight-job suite against a two-line data change, 365 times a
+# year, and would make the series hostage to a flaky shard. Granting the bot
+# a branch-protection bypass would weaken main's guarantees for the sake of a
+# file that is machine-generated data rather than code.
+#
+# An orphan branch carries none of main's tree, holds only the series, cannot
+# be mistaken for a feature branch, and cannot be merged into main by
+# accident. Read it at:
+#
+#   https://raw.githubusercontent.com/owenpkent/alpha-osk/telemetry-data/docs/research/data/telemetry-aggregate.csv
+#
+# If you are here to move this back onto main, the push failure that put it
+# here is worth reading first.
+#
 # No credentials anywhere. The endpoint is public, unauthenticated and returns
-# no personal data, which is what makes this workflow three lines of curl
+# no personal data, which is what makes this workflow a few lines of curl
 # instead of a secrets problem.
 
 on:
@@ -36,8 +56,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Full history. The data branch is fetched and pushed below, and a
+          # shallow clone can have its push rejected as a shallow update.
+          fetch-depth: 0
 
-      - name: Fetch and append
+      - name: Append a dated row to the series
         env:
           # Repository variable, not a secret: it is a public URL and putting
           # it in a secret would only make it harder to see what this does.
@@ -45,16 +69,20 @@ jobs:
           # mirroring src/telemetry.py's empty DEFAULT_ENDPOINT, which
           # silently no-ops every submit for the same reason.
           ENDPOINT: ${{ vars.TELEMETRY_ENDPOINT }}
+          BRANCH: telemetry-data
         run: |
           set -euo pipefail
+
           if [ -z "${ENDPOINT:-}" ]; then
             echo "TELEMETRY_ENDPOINT is not set, worker is not deployed yet. Nothing to do."
             exit 0
           fi
 
           out=docs/research/data/telemetry-aggregate.csv
-          mkdir -p "$(dirname "$out")"
 
+          # Read the endpoint BEFORE touching git, so a bad response fails the
+          # run without leaving a half-switched checkout behind.
+          #
           # --fail so an HTML error page never gets parsed as data and
           # committed as a row of zeros, which is worse than no row.
           body=$(curl --fail --silent --show-error --max-time 30 "${ENDPOINT%/}/v1/aggregate")
@@ -67,6 +95,23 @@ jobs:
             ] | @csv
           ')
 
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # Switch to the data branch, creating it the first time. A fresh
+          # orphan keeps the current tree staged, so clear it: this branch
+          # holds the series and nothing else. "|| true" tolerates an already
+          # empty tree rather than failing the run under "set -e".
+          if git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null 2>&1; then
+            git fetch origin "$BRANCH"
+            git checkout -B "$BRANCH" "origin/$BRANCH"
+          else
+            echo "Creating the $BRANCH branch for the first time."
+            git checkout --orphan "$BRANCH"
+            git rm -rf . >/dev/null 2>&1 || true
+          fi
+
+          mkdir -p "$(dirname "$out")"
           if [ ! -f "$out" ]; then
             echo 'date,users,keystrokes,words,predictions,keystrokes_saved,minutes,sessions,prediction_offers' > "$out"
           fi
@@ -80,16 +125,9 @@ jobs:
           fi
           printf '%s\n' "$row" >> "$out"
 
-      - name: Commit
-        run: |
-          set -euo pipefail
-          out=docs/research/data/telemetry-aggregate.csv
-          [ -f "$out" ] || exit 0
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           # Stage first, then ask the INDEX whether anything moved. A plain
           # "git diff" reports only tracked files, so on the very first run
-          # the freshly created CSV is untracked, the diff is empty, and the
+          # the freshly created CSV is untracked, the diff is empty, and this
           # step exited "No change." before ever reaching git add: the series
           # could never start. Staging first makes the untracked and the
           # modified cases read the same.
@@ -98,5 +136,7 @@ jobs:
             echo "No change."
             exit 0
           fi
-          git commit -m "chore: telemetry aggregate for $(date -u +%Y-%m-%d)"
-          git push
+
+          git commit -m "chore: telemetry aggregate for ${today}"
+          git push origin "$BRANCH"
+          echo "Appended: ${row}"
