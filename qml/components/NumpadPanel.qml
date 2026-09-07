@@ -22,13 +22,10 @@ Item {
     // Key Colours table from Main.qml; null (the default) leaves every
     // key on the colours above.  See KeyButton.role.
     property var roleColors: null
-    // No gutter anywhere in this panel: a physical numpad has none, and a
-    // gap after the third row (tried once, to line these rows up with the
-    // nav cluster's) reads as a seam splitting the digits from the 0 key.
-    // The five rows divide the panel's height evenly instead.  Kept as a
-    // property rather than dropped so the height arithmetic below stays
-    // readable and a caller can still ask for one.
-    property real blockGap: 0
+    // What the digit keys are doing right now.  With NumLock off the
+    // digits ARE the navigation keys, so a colour saying "digit" over a
+    // key that pages up would be a lie.  One property, not ten ternaries.
+    readonly property string numRole: numLockOn ? "digit" : "nav"
     // Hold-to-repeat. Two different populations share this grid depending on
     // NumLock: with it on every key but Enter/NumLock types a character, so
     // those follow `characterRepeat` exactly like the main grid's letters
@@ -51,17 +48,19 @@ Item {
     // so reading the grid here would close a binding loop.  `Math.ceil`
     // matches what a `Row` actually reports (see NavigationPanel).
     implicitWidth: 4 * keyW + 3 * keySpacing
-    implicitHeight: 5 * Math.ceil(keyH) + 4 * keySpacing + blockGap
+    implicitHeight: 5 * Math.ceil(keyH) + 4 * keySpacing
 
     // The height of one row of keys.  Main.qml hands this panel the
-    // keyboard grid's height, and five rows plus four gaps plus the block
-    // gap divide it exactly, so the panel is flush with the grid on both
-    // rails.  Handed no height it resolves to `keyH` and the panel renders
-    // as it always did.
+    // keyboard grid's height, and five rows plus four gaps divide it
+    // exactly, so the panel is flush with the grid on both rails.  No
+    // gutter anywhere: a physical numpad has none, and a gap after the
+    // third row (tried once, to line these rows up with the nav cluster's)
+    // reads as a seam splitting the digits from the 0 key.  No floor
+    // either, for the reason NavigationPanel gives.  Handed no height it
+    // resolves to its own implicit row and renders as it always did.
     readonly property real rowH: {
         var avail = numpadPanel.height - 4 * numpadPanel.keySpacing
-                    - numpadPanel.blockGap
-        return avail > 0 ? Math.max(numpadPanel.keyH, avail / 5) : numpadPanel.keyH
+        return avail > 0 ? avail / 5 : numpadPanel.keyH
     }
 
     // Plain Column-of-Rows, NOT a GridLayout. See the "plain Row, NOT a
@@ -83,7 +82,7 @@ Item {
                 displayText: numpadPanel.numLockOn ? "7" : "Home"
                 keyWidth: numpadPanel.keyW
                 keyHeight: numpadPanel.rowH
-                role: numpadPanel.numLockOn ? "digit" : "nav"
+                role: numpadPanel.numRole
                 roleColors: numpadPanel.roleColors
                 fontSize: numpadPanel.numLockOn ? 14 : 12
                 keyColor: numpadPanel.keyColor
@@ -106,7 +105,7 @@ Item {
                 displayText: numpadPanel.numLockOn ? "8" : "↑"
                 keyWidth: numpadPanel.keyW
                 keyHeight: numpadPanel.rowH
-                role: numpadPanel.numLockOn ? "digit" : "nav"
+                role: numpadPanel.numRole
                 roleColors: numpadPanel.roleColors
                 fontSize: 14
                 keyColor: numpadPanel.keyColor
@@ -126,7 +125,7 @@ Item {
                 displayText: numpadPanel.numLockOn ? "9" : "PgUp"
                 keyWidth: numpadPanel.keyW
                 keyHeight: numpadPanel.rowH
-                role: numpadPanel.numLockOn ? "digit" : "nav"
+                role: numpadPanel.numRole
                 roleColors: numpadPanel.roleColors
                 fontSize: numpadPanel.numLockOn ? 14 : 12
                 keyColor: numpadPanel.keyColor
@@ -172,7 +171,7 @@ Item {
                 displayText: numpadPanel.numLockOn ? "4" : "←"
                 keyWidth: numpadPanel.keyW
                 keyHeight: numpadPanel.rowH
-                role: numpadPanel.numLockOn ? "digit" : "nav"
+                role: numpadPanel.numRole
                 roleColors: numpadPanel.roleColors
                 fontSize: 14
                 keyColor: numpadPanel.keyColor
@@ -192,7 +191,7 @@ Item {
                 displayText: numpadPanel.numLockOn ? "5" : ""
                 keyWidth: numpadPanel.keyW
                 keyHeight: numpadPanel.rowH
-                role: numpadPanel.numLockOn ? "digit" : "nav"
+                role: numpadPanel.numRole
                 roleColors: numpadPanel.roleColors
                 fontSize: 14
                 keyColor: numpadPanel.keyColor
@@ -214,7 +213,7 @@ Item {
                 displayText: numpadPanel.numLockOn ? "6" : "→"
                 keyWidth: numpadPanel.keyW
                 keyHeight: numpadPanel.rowH
-                role: numpadPanel.numLockOn ? "digit" : "nav"
+                role: numpadPanel.numRole
                 roleColors: numpadPanel.roleColors
                 fontSize: 14
                 keyColor: numpadPanel.keyColor
@@ -260,7 +259,7 @@ Item {
                 displayText: numpadPanel.numLockOn ? "1" : "End"
                 keyWidth: numpadPanel.keyW
                 keyHeight: numpadPanel.rowH
-                role: numpadPanel.numLockOn ? "digit" : "nav"
+                role: numpadPanel.numRole
                 roleColors: numpadPanel.roleColors
                 fontSize: numpadPanel.numLockOn ? 14 : 12
                 keyColor: numpadPanel.keyColor
@@ -282,7 +281,7 @@ Item {
                 displayText: numpadPanel.numLockOn ? "2" : "↓"
                 keyWidth: numpadPanel.keyW
                 keyHeight: numpadPanel.rowH
-                role: numpadPanel.numLockOn ? "digit" : "nav"
+                role: numpadPanel.numRole
                 roleColors: numpadPanel.roleColors
                 fontSize: 14
                 keyColor: numpadPanel.keyColor
@@ -302,7 +301,7 @@ Item {
                 displayText: numpadPanel.numLockOn ? "3" : "PgDn"
                 keyWidth: numpadPanel.keyW
                 keyHeight: numpadPanel.rowH
-                role: numpadPanel.numLockOn ? "digit" : "nav"
+                role: numpadPanel.numRole
                 roleColors: numpadPanel.roleColors
                 fontSize: numpadPanel.numLockOn ? 14 : 12
                 keyColor: numpadPanel.keyColor
@@ -341,18 +340,6 @@ Item {
             }
         }
 
-        // The block gap, if a caller asks for one.  A Column puts its own
-        // `spacing` on both sides of a spacer, so the spacer is
-        // `blockGap - keySpacing` and the gap that renders is exactly
-        // `blockGap`; the height arithmetic above depends on that.  Zero
-        // by default, and an Item of zero height still costs a `spacing`,
-        // so it is hidden rather than merely empty.
-        Item {
-            width: 1
-            visible: numpadPanel.blockGap > 0
-            height: Math.max(0, numpadPanel.blockGap - numpadPanel.keySpacing)
-        }
-
         // Row 4: 0/Ins (2 cells wide), ./Del, +
         Row {
             spacing: numpadPanel.keySpacing
@@ -360,7 +347,7 @@ Item {
                 displayText: numpadPanel.numLockOn ? "0" : "Ins"
                 keyWidth: numpadPanel.keyW * 2 + numpadPanel.keySpacing
                 keyHeight: numpadPanel.rowH
-                role: numpadPanel.numLockOn ? "digit" : "nav"
+                role: numpadPanel.numRole
                 roleColors: numpadPanel.roleColors
                 fontSize: numpadPanel.numLockOn ? 14 : 12
                 keyColor: numpadPanel.keyColor

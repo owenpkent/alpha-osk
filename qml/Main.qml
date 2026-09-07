@@ -790,16 +790,19 @@ Window {
     // no two of them simply began or ended in the same place, and the arrow
     // cluster floated 19 px clear of the bottom instead of landing on it.
     //
-    // Every section now lays out to `sectionHeight`, and the two panels
-    // absorb the difference into their own key heights rather than into
-    // their gaps.  Three consequences worth knowing:
+    // The grid's height is the section's height, and the two panels fit it
+    // by dividing it between their own five rows, so the difference goes
+    // into their key heights rather than their gaps.  Consequences:
     //
     //  * The arrows land on the bottom rail with nothing positioning them
     //    there.  `arrowGap` already opened ABOVE the Up key, so once the
     //    panel is as tall as the grid the cluster is flush by construction.
-    //  * Nav and numpad keys come out taller than the letters (about 12%
-    //    at the default width).  That is a gain, not a cost: those are the
+    //  * With a function row showing, nav and numpad keys come out taller
+    //    than the letters (about 12% at the default width): those are the
     //    arrows and the numpad, and a taller target is a cheaper click.
+    //    Without one, which is what a fresh install shows, the panels'
+    //    natural height exceeds the grid's by the nav gutter plus rounding,
+    //    so their keys come out about 2 px shorter than the letters.
     //  * The nav cluster keeps its arrow gutter and the numpad has none,
     //    so their rows do NOT line up with each other.  That was tried
     //    the other way (a matching gap after the numpad's third row) and
@@ -807,20 +810,15 @@ Window {
     //    the digits off the 0 key is more obviously wrong than two panels
     //    whose rows drift by a pixel or two.
     //
-    // Taken as a MAX rather than simply the grid's height, because the grid
-    // is not always the tallest: with the function row hidden the panels
-    // are, by about 12 px, and shrinking their keys to match would trade a
-    // straight edge for smaller targets.  `Math.ceil` on the key height is
-    // not slop: a `Row` reports a height ceiled above its tallest key (see
-    // `keyHitMarginV`), so a panel's natural height is the ceiled one and
-    // computing it any other way leaves the panels a pixel short.
-    readonly property real panelBlockGap: keySpacing * 4
-    readonly property real _panelNaturalH: 5 * Math.ceil(keyH) + 4 * keySpacing
-                                           + panelBlockGap
-    readonly property real sectionHeight: Math.max(
-        mainKeyboard.implicitHeight,
-        showNavigation ? _panelNaturalH : 0,
-        showNumpad ? _panelNaturalH : 0)
+    // This was first written as a MAX of the grid's height and the panels'
+    // natural heights, to keep the panel keys at full height with the
+    // function row hidden, and that cannot work: the grid's own implicit
+    // height is what defines the section, so it cannot grow into a larger
+    // one, and it sat centred 6 px inside the panels in exactly the
+    // configuration a fresh install ships with, which is the ragged edge
+    // this exists to remove.  The panels are the side that can fit, so
+    // they fit.
+    readonly property real sectionHeight: mainKeyboard.implicitHeight
 
     // Safety net: if the window width ever drops below minimumWidth (e.g. via
     // OS window-snap, DPI change, or panel toggle), clamp it back up.
@@ -1101,18 +1099,11 @@ Window {
     // A border sits beside the label rather than behind it, so it can be the
     // full-strength accent on every theme without costing any contrast.
     // The same "muted, not raw" reasoning is why Enter uses "#2a5a2a".
-    // These three now delegate to palette.js, which is the single copy of
-    // the WCAG maths in the project.  They keep their signatures because
-    // the wash is called from here and from the compact view's accent keys,
-    // and because two copies of a contrast rule is exactly how the two
-    // drift apart (see the `luminance` note above, which this file already
-    // paid for once).
-    function relativeLuminance(c) {
-        return Palette.relativeLuminance(c)
-    }
-    function contrastRatio(a, b) {
-        return Palette.contrastRatio(a, b)
-    }
+    // The wash delegates to palette.js, which is the single copy of the
+    // WCAG maths in the project: two copies of a contrast rule is exactly
+    // how the two drift apart (see the `luminance` note above, which this
+    // file already paid for once).  Anything else needing that maths
+    // imports palette.js directly rather than going through here.
     function accentWashFor(key, accent, text) {
         return Palette.washFor(key, accent, 0.35, text)
     }
@@ -1169,6 +1160,13 @@ Window {
     readonly property color predPillInk: root.keyRoles ? root.keyRoles.pill.ink
                                                        : root.themeTextColor
     readonly property color predPillBorder: root.themeAccent
+    // The hover lift, guarded: a role fill sits where the wash left it,
+    // which can be exactly 4.5:1, and Qt.lighter on that overshoots the
+    // bar (Ink on Light measured 2.9:1 under the pointer).  The ink is not
+    // lifted with it, since lightening both toward each other is what
+    // drains the contrast; the lift and the thicker ring are the cue.
+    readonly property color predPillHoverFill: Palette.hoverFill(
+        root.predPillFill, root.predPillInk, 1.3)
 
     // Update state when bridge emits signals
     Connections {
@@ -2435,7 +2433,7 @@ Window {
                                    : predBar.predMinWidth
                             height: predBar.predPillHeight
                             radius: Math.max(4, predBar.predPillHeight * 0.22)
-                            color: predMouse.containsMouse ? Qt.lighter(root.predPillFill, 1.3)
+                            color: predMouse.containsMouse ? root.predPillHoverFill
                                                           : root.predPillFill
                             border.color: predMouse.containsMouse ? Qt.lighter(root.themeAccent, 1.2)
                                                                   : root.predPillBorder
@@ -2471,8 +2469,8 @@ Window {
                                 // unsanitised: force plain text so a crafted
                                 // entry can't auto-render as HTML.
                                 textFormat: Text.PlainText
-                                color: predMouse.containsMouse ? Qt.lighter(root.predPillInk, 1.3)
-                                                               : root.predPillInk
+                                // Not lifted on hover; see predPillHoverFill.
+                                color: root.predPillInk
                                 font.pixelSize: predBar.predFontSize
                                 font.weight: Font.Medium
                                 font.family: "Ubuntu, Noto Sans, sans-serif"
@@ -3137,7 +3135,6 @@ Window {
                 // Flush with the grid on both rails; the panel divides
                 // this between its five rows itself.
                 Layout.preferredHeight: root.sectionHeight
-                arrowGap: root.panelBlockGap
                 roleColors: root.keyRoles
                 // Vertically off `keySpacing`, not `rowSpacing`: this
                 // panel lays its own rows out on it.

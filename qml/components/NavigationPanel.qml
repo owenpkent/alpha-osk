@@ -46,15 +46,19 @@ Item {
     // Main.qml gives this panel the same height as the keyboard grid
     // (`sectionHeight`), and the five rows plus their four gaps and the
     // arrow gutter divide it exactly, so the panel is flush with the grid
-    // on both rails and the arrow cluster lands on the bottom one.  The
-    // keys therefore come out taller than the letters, which is the point:
-    // these are the arrows, and a taller target is a cheaper click.
+    // on both rails and the arrow cluster lands on the bottom one.  With a
+    // function row showing the keys come out taller than the letters,
+    // which is the point: these are the arrows, and a taller target is a
+    // cheaper click.  Without one they come out about 2 px shorter, the
+    // gutter's share of a grid that is then the shorter section; there is
+    // deliberately no floor, because a floor is a panel that overhangs the
+    // grid by exactly that much (see `sectionHeight` in Main.qml).
     //
-    // Handed no height, this resolves to exactly `keyH` and the panel
-    // renders as it always did, so the component still stands alone.
+    // Handed no height, this resolves to the panel's own implicit row and
+    // it renders as it always did, so the component still stands alone.
     readonly property real rowH: {
         var avail = navPanel.height - 4 * navPanel.keySpacing - navPanel.arrowGap
-        return avail > 0 ? Math.max(navPanel.keyH, avail / 5) : navPanel.keyH
+        return avail > 0 ? avail / 5 : navPanel.keyH
     }
 
     // A plain Grid, NOT a GridLayout. See the "plain Row, NOT a RowLayout"

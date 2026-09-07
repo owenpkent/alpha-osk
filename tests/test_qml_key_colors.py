@@ -8,14 +8,19 @@ did). Both live entirely in QML, so the Python suite cannot reach either.
 The geometry half asserts against *measured* item positions rather than
 recomputing the rectangle from the same properties the QML sets, for the
 reason `TestNoDeadStripBetweenKeys` gives: an assertion that repeats the
-implementation's arithmetic passes whatever that arithmetic does.
+implementation's arithmetic passes whatever that arithmetic does. It also
+forces a frame after every toggle (`_relayout`), because a Qt Quick Layout
+recomputes in a polish step the offscreen window never runs on its own; the
+first version of the no-function-row test measured the board *before* its
+own toggle had taken effect, and passed against a 6 px ragged edge.
 
 The colour half's load-bearing test is `TestEveryLegendStaysReadable`. Nine
 themes ship, several with a pale accent and one light outright, and the
 whole promise of `qml/palette.js` is that no scheme can cost legibility on
 any of them. That promise is worth exactly what the test that checks it is
 worth, so it sweeps every scheme x every theme x every role rather than
-spot-checking the theme the developer happens to run.
+spot-checking the theme the developer happens to run, and it sweeps the
+hovered fill as well as the resting one.
 """
 
 from __future__ import annotations
@@ -37,9 +42,9 @@ try:
 
     # Imported for the side effect: without QQuickItem somewhere in the
     # module, reading `root.contentItem` raises "Can't find converter for
-    # 'QQuickItem*'". Walking the visual tree is the only way to reach a
-    # Repeater's delegates.
-    from PySide6.QtQuick import QQuickItem  # noqa: E402
+    # 'QQuickItem*'", and without QQuickWindow the root comes back as a
+    # plain QWindow with no grabWindow(), which `_relayout` depends on.
+    from PySide6.QtQuick import QQuickItem, QQuickWindow  # noqa: E402,F401
 except ImportError as exc:  # pragma: no cover - environment-dependent
     pytest.skip(
         f"Qt GUI libraries unavailable ({exc}); install libegl1/libgl1 to run "
@@ -100,9 +105,10 @@ def qapp():
 def qml_root(qapp):
     """Load Main.qml with both side panels and the function row showing.
 
-    The function row matters: with it hidden the keyboard grid is no longer
-    the tallest section, which is the branch `sectionHeight` takes its max
-    for. `TestTheSectionsShareOneHeight` exercises both.
+    The function row matters: with it hidden the panels' natural height is
+    the larger one, which is the configuration a fresh install ships with
+    and the one the first version of `sectionHeight` got wrong.
+    `TestTheSectionsShareOneHeight` exercises both.
     """
     warnings: list[str] = []
     QSettings(TEST_ORG, TEST_APP).clear()
@@ -139,7 +145,7 @@ def qml_root(qapp):
 
 
 def _settle(passes: int = 12) -> None:
-    """Flush Qt Quick's delegate creation and layout.
+    """Flush Qt Quick's delegate creation and bindings.
 
     Anything that re-resolves the layout (a theme change, a scheme change)
     tears delegates down and rebuilds them, and one pass does not reliably
@@ -147,6 +153,22 @@ def _settle(passes: int = 12) -> None:
     """
     for _ in range(passes):
         QCoreApplication.processEvents()
+
+
+def _relayout(root) -> None:
+    """Force a layout pass after something inside the grid changes.
+
+    Qt Quick Layouts recompute in a polish step that runs before a frame is
+    rendered, and the offscreen window renders no frame on its own: after
+    hiding the function row, `mainKeyboard.implicitHeight` sat at its old
+    value through 300 event-loop passes and moved only once a frame was
+    forced. A test that toggled a row and then measured was measuring the
+    state before its own toggle, and passed against a ragged board.
+    `grabWindow` renders one frame, which runs the polish.
+    """
+    _settle()
+    root.grabWindow()
+    _settle()
 
 
 def _content(item):
@@ -179,6 +201,11 @@ def _keys(item) -> list:
 def _rect(item) -> tuple[float, float, float, float]:
     p = item.mapToItem(None, 0, 0)
     return p.x(), p.y(), item.width(), item.height()
+
+
+def _span(item) -> tuple[float, float]:
+    _, y, _, h = _rect(item)
+    return round(y, 1), round(y + h, 1)
 
 
 def _sections(root) -> dict:
@@ -225,13 +252,8 @@ class TestTheSectionsShareOneHeight:
     def test_all_three_sections_share_a_top_and_bottom_edge(self, qml_root) -> None:
         root, warnings = qml_root
         sections = _sections(root)
-        tops, bottoms = set(), set()
-        for item in sections.values():
-            _, y, _, h = _rect(item)
-            tops.add(round(y, 1))
-            bottoms.add(round(y + h, 1))
-        assert len(tops) == 1, f"sections start at different heights: {sorted(tops)}"
-        assert len(bottoms) == 1, f"sections end at different heights: {sorted(bottoms)}"
+        spans = {name: _span(item) for name, item in sections.items()}
+        assert len(set(spans.values())) == 1, f"sections are ragged: {spans}"
         assert _real_warnings(warnings) == []
 
     def test_the_separators_match_the_sections_they_divide(self, qml_root) -> None:
@@ -283,16 +305,29 @@ class TestTheSectionsShareOneHeight:
         gaps = [rows[i + 1][0] - (rows[i][0] + rows[i][1]) for i in range(4)]
         assert max(gaps) - min(gaps) < 1.5, f"the numpad rows are unevenly spaced: {gaps}"
 
-    def test_panel_keys_are_never_shorter_than_the_letters(self, qml_root) -> None:
-        # Filling the height must only ever grow a target. A version that
-        # divided the height without the `Math.max` floor shrank them by
-        # about 2 px whenever the panels were the taller section.
+    def test_panel_keys_grow_with_a_function_row_and_give_up_little_without(self, qml_root) -> None:
+        # With the function row on the grid is the taller section and the
+        # panels' keys grow to fill it: the arrows and the numpad become
+        # cheaper targets. With it off the panels' natural height exceeds
+        # the grid's by the nav gutter plus rounding, and their keys give
+        # up that share, about 2 px. A version that floored the row at the
+        # letters' height kept the keys and overhung the grid instead.
         root, _ = qml_root
         sections = _sections(root)
         letter_height = min(k.height() for k in _keys(sections["grid"]))
         for name in ("nav", "numpad"):
             for key in _keys(sections[name]):
-                assert key.height() >= letter_height - 0.01
+                assert key.height() > letter_height + 1
+
+        root.setProperty("showFunctionRow", False)
+        _relayout(root)
+        letter_height = min(k.height() for k in _keys(sections["grid"]))
+        for name in ("nav", "numpad"):
+            for key in _keys(sections[name]):
+                assert key.height() >= letter_height - 3, (
+                    f"a {name} key gave up more than the gutter's share: "
+                    f"{key.height()} against letters at {letter_height}"
+                )
 
     def test_the_keyboard_grid_rows_are_still_flush(self, qml_root) -> None:
         # The grid was already straight; this change must not disturb it.
@@ -311,17 +346,35 @@ class TestTheSectionsShareOneHeight:
         assert len(edges) == 1, f"grid rows no longer share their edges: {sorted(edges)}"
 
     def test_the_sections_still_line_up_without_the_function_row(self, qml_root) -> None:
-        # The branch `sectionHeight` takes its max for: with the function
-        # row hidden the panels are the tallest section, not the grid.
+        # The configuration the first version got wrong: the panels'
+        # natural height is the larger one here, and a section height
+        # taken as the max of the three left the grid centred 6 px inside
+        # them. The grid's span has to actually move for this to have
+        # tested anything, so that is asserted too.
+        root, warnings = qml_root
+        sections = _sections(root)
+        before = _span(sections["grid"])
+        root.setProperty("showFunctionRow", False)
+        _relayout(root)
+        spans = {name: _span(item) for name, item in sections.items()}
+        assert spans["grid"] != before, "the toggle never took; nothing was measured"
+        assert len(set(spans.values())) == 1, f"ragged with no function row: {spans}"
+        assert _real_warnings(warnings) == []
+
+    def test_the_shipped_defaults_line_up(self, qml_root) -> None:
+        # A fresh install shows the nav cluster alone, with no function row
+        # and no numpad. Measured at 1400 px before this: grid 134-463
+        # against nav 128-469, 6 px ragged at each end.
         root, warnings = qml_root
         root.setProperty("showFunctionRow", False)
-        _settle()
+        root.setProperty("showNumpad", False)
+        _relayout(root)
         sections = _sections(root)
-        spans = {
-            name: (round(_rect(i)[1], 1), round(_rect(i)[1] + _rect(i)[3], 1))
-            for name, i in sections.items()
-        }
-        assert len(set(spans.values())) == 1, f"ragged with no function row: {spans}"
+        assert not sections["numpad"].isVisible()
+        assert _span(sections["grid"]) == _span(sections["nav"]), (
+            f"the shipped default is ragged: grid {_span(sections['grid'])}, "
+            f"nav {_span(sections['nav'])}"
+        )
         assert _real_warnings(warnings) == []
 
 
@@ -338,6 +391,15 @@ class TestTheDefaultScheme:
         # a per-surface branch anywhere.
         root, _ = qml_root
         root.setProperty("keyColorScheme", "off")
+        _settle()
+        assert root.property("keyRoles") is None
+
+    def test_an_unknown_scheme_is_off(self, qml_root) -> None:
+        # A settings file from a build that knew a scheme this one does not
+        # must land on the historical board, not on an empty table that
+        # every surface would index into.
+        root, _ = qml_root
+        root.setProperty("keyColorScheme", "neon")
         _settle()
         assert root.property("keyRoles") is None
 
@@ -388,13 +450,14 @@ class TestTheDefaultScheme:
 
 
 class TestSchemesRepaintTheBoard:
-    @pytest.mark.parametrize("scheme", COLOURED_SCHEMES)
-    def test_selecting_a_scheme_builds_a_table(self, qml_root, scheme) -> None:
+    def test_selecting_a_scheme_builds_a_table(self, qml_root) -> None:
         root, warnings = qml_root
-        root.setProperty("keyColorScheme", scheme)
-        _settle()
-        table = root.property("keyRoles")
-        assert table is not None, f"{scheme} produced no role table"
+        for scheme in COLOURED_SCHEMES:
+            root.setProperty("keyColorScheme", scheme)
+            _settle()
+            table = root.property("keyRoles")
+            assert table is not None, f"{scheme} produced no role table"
+            assert set(table.toVariant()) == set(ROLES), f"{scheme} is missing a role"
         assert _real_warnings(warnings) == []
 
     def test_a_fill_scheme_actually_changes_keycaps(self, qml_root) -> None:
@@ -458,17 +521,18 @@ class TestThePredictionPillsFollowTheScheme:
         assert root.property("predPillInk") == root.property("themeTextColor")
         assert root.property("predPillBorder") == root.property("themeAccent")
 
-    @pytest.mark.parametrize("scheme", COLOURED_SCHEMES)
-    def test_a_scheme_repaints_the_pills(self, qml_root, scheme) -> None:
+    def test_a_scheme_repaints_the_pills(self, qml_root) -> None:
         root, warnings = qml_root
-        root.setProperty("keyColorScheme", scheme)
-        _settle()
-        fill = root.property("predPillFill")
-        assert fill is not None
-        # The ring is what marks a pill as the thing to reach for, so it
-        # stays the full theme accent whatever the fill does. Blending it
-        # toward the fill was tried once and washed the whole row out.
-        assert root.property("predPillBorder") == root.property("themeAccent")
+        for scheme in COLOURED_SCHEMES:
+            root.setProperty("keyColorScheme", scheme)
+            _settle()
+            fill = root.property("predPillFill")
+            assert fill is not None
+            # The ring is what marks a pill as the thing to reach for, so
+            # it stays the full theme accent whatever the fill does.
+            # Blending it toward the fill was tried once and washed the
+            # whole row out.
+            assert root.property("predPillBorder") == root.property("themeAccent")
         assert _real_warnings(warnings) == []
 
     def test_monochrome_pills_match_the_letters(self, qml_root) -> None:
@@ -480,6 +544,10 @@ class TestThePredictionPillsFollowTheScheme:
         assert root.property("predPillFill") == root.property("themeKeyColor")
 
     def test_the_pill_legend_stays_readable_on_every_theme(self, qml_root) -> None:
+        # At rest and under the pointer. The hover lift used to be a plain
+        # Qt.lighter on both the fill and the ink, which on a fill the wash
+        # had left at exactly 4.5:1 dropped the Ink scheme on Light to
+        # 2.9:1 the moment the user reached for the word.
         root, _ = qml_root
         themes = root.property("themeData").toVariant()
         for theme in themes:
@@ -487,40 +555,67 @@ class TestThePredictionPillsFollowTheScheme:
             for scheme in COLOURED_SCHEMES:
                 root.setProperty("keyColorScheme", scheme)
                 _settle(3)
-                ratio = _contrast(root.property("predPillInk"), root.property("predPillFill"))
-                assert ratio >= 4.49, f"{scheme} on {theme}: the pill label is only {ratio:.2f}:1"
+                ink = root.property("predPillInk")
+                for state, fill in (
+                    ("resting", root.property("predPillFill")),
+                    ("hovered", root.property("predPillHoverFill")),
+                ):
+                    ratio = _contrast(ink, fill)
+                    assert ratio >= 4.49, (
+                        f"{scheme} on {theme}: the {state} pill label is only {ratio:.2f}:1"
+                    )
+
+    def test_the_hover_lift_still_happens_where_there_is_room(self, qml_root) -> None:
+        # The guard must not turn into "no hover at all": on the historical
+        # board the fill has headroom on every theme, and a pill that does
+        # not react to the pointer reads as disabled.
+        root, _ = qml_root
+        root.setProperty("keyColorScheme", "off")
+        themes = root.property("themeData").toVariant()
+        lifted = 0
+        for theme in themes:
+            root.setProperty("currentTheme", theme)
+            _settle(3)
+            fill = root.property("predPillFill")
+            if fill.name() == "#ffffff":
+                # Light's keys are pure white, which nothing can lighten;
+                # that pill has never had a fill lift, only the ring.
+                continue
+            assert root.property("predPillHoverFill") != fill, (
+                f"the pills lost their hover lift on {theme}"
+            )
+            lifted += 1
+        assert lifted >= 8
 
 
 class TestKeysAreGivenTheRightJob:
     """Paired with the near-miss each rule has to keep rejecting."""
 
-    @pytest.mark.parametrize(
-        "key_text,expected",
-        [
-            ("backspace", "kill"),
-            ("return", "commit"),
-            ("tab", "edit"),
-            ("escape", "edit"),
-            ("space", "edit"),
-            ("shift", "mod"),
-            ("ctrl", "mod"),
-            ("caps", "mod"),
-            ("a", "alpha"),
-            ("5", "digit"),
-            (";", "punct"),
-        ],
-    )
-    def test_the_main_grid_names_each_key_its_job(self, qml_root, key_text, expected) -> None:
+    def test_the_main_grid_names_each_key_its_job(self, qml_root) -> None:
         root, _ = qml_root
         grid = _sections(root)["grid"]
-        matches = [k for k in _keys(grid) if k.property("keyText") == key_text]
-        assert matches, f"no {key_text!r} key on the grid"
-        for key in matches:
-            assert key.property("role") == expected
+        expected = {
+            "backspace": "kill",
+            "return": "commit",
+            "tab": "edit",
+            "escape": "edit",
+            "space": "edit",
+            "shift": "mod",
+            "ctrl": "mod",
+            "caps": "mod",
+            "a": "alpha",
+            "5": "digit",
+            ";": "punct",
+        }
+        for key_text, role in expected.items():
+            matches = [k for k in _keys(grid) if k.property("keyText") == key_text]
+            assert matches, f"no {key_text!r} key on the grid"
+            for key in matches:
+                assert key.property("role") == role, f"{key_text!r} is not {role}"
 
     def test_a_letter_is_never_treated_as_destructive(self, qml_root) -> None:
         # The inverse of the Backspace case: a rule that returned "kill"
-        # for everything would satisfy the parametrised test above.
+        # for everything would satisfy the test above.
         root, _ = qml_root
         grid = _sections(root)["grid"]
         letters = [
@@ -530,6 +625,24 @@ class TestKeysAreGivenTheRightJob:
         ]
         assert len(letters) > 20
         assert all(k.property("role") == "alpha" for k in letters)
+
+    def test_the_compact_grid_embeds_its_nav_column_as_navigation(self, qml_root) -> None:
+        # The compact layouts carry Home / PgUp / PgDn / End / the arrows /
+        # Insert in the grid itself, as special keys. They are the same job
+        # NavigationPanel names "nav", and the first rule read every special
+        # key it did not know as editing, which painted Home the same as
+        # Tab on the one layout that carries them this way.
+        root, _ = qml_root
+        root.setProperty("compactView", True)
+        _relayout(root)
+        grid = _sections(root)["grid"]
+        roles = {}
+        for key in _keys(grid):
+            roles.setdefault(key.property("keyText"), set()).add(key.property("role"))
+        for name in ("home", "end", "pageup", "pagedown"):
+            assert roles.get(name) == {"nav"}, f"compact {name} is {roles.get(name)}"
+        assert roles.get("delete") == {"kill"}, "Del stays destructive on the compact grid"
+        assert roles.get("tab") == {"edit"}
 
     def test_the_function_rows_are_function_keys(self, qml_root) -> None:
         root, _ = qml_root
@@ -602,6 +715,31 @@ class TestEveryLegendStaysReadable:
                     )
         assert worst[0] >= 4.49, worst
         assert _real_warnings(warnings) == []
+
+    def test_the_hovered_keycap_keeps_its_legend_readable(self, qml_root) -> None:
+        # The resting sweep above is where the promise was checked, and
+        # the hover lift is where it was broken: a plain Qt.lighter on a
+        # fill the wash had left at 4.5:1 put Monochrome's Enter on
+        # Blackboard at 3.1:1 under the pointer, which is the key the user
+        # is about to press. The bar here is whatever the key cleared at
+        # rest, capped at 4.5, so the historical board's own sub-4.5
+        # surfaces (if any) keep their lift rather than being held to a
+        # promise they never made.
+        root, _ = qml_root
+        themes = root.property("themeData").toVariant()
+        for theme in themes:
+            root.setProperty("currentTheme", theme)
+            for scheme in SCHEMES:
+                root.setProperty("keyColorScheme", scheme)
+                _settle(3)
+                for key in _keys(root):
+                    ink = key.property("_roleInk")
+                    resting = _contrast(ink, key.property("_roleFill"))
+                    hovered = _contrast(ink, key.property("_hoverFill"))
+                    assert hovered >= min(4.49, resting - 0.01), (
+                        f"{scheme} on {theme}: {key.property('keyText')!r} drops to "
+                        f"{hovered:.2f}:1 under the pointer from {resting:.2f}:1"
+                    )
 
     def test_the_coloured_roles_stay_tellable_apart(self, qml_root) -> None:
         # A scheme whose bands all collapsed to one colour would satisfy

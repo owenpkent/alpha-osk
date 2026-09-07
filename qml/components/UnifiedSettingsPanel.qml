@@ -16,7 +16,9 @@ Item {
     property string currentTheme: "dark"
     property var themeData: ({})
     // Which Key Colours scheme paints the keycaps; see qml/palette.js.
-    property string keyColorScheme: "off"
+    // Main.qml binds it; the default only matches its shipped default so
+    // a standalone load of this panel does not show the wrong swatch.
+    property string keyColorScheme: "mono"
     // The pickable schemes, in order of how much ink they spend. Names are
     // what the user sees, so they say what the scheme looks like rather
     // than what the code calls it.

@@ -21,7 +21,7 @@ Owen is a wheelchair user with muscular dystrophy. Typing is hard - be proactive
 - `pressPrediction` and `editPrediction` call `_check_password_field_sync()` before anything else, then gate `record_prediction_selected`, `learn_from_selection`, `learn_capitalization` and `set_capitalization` behind `if not self._privacy_mode`. The insertion itself (BackSpace+retype, `_send_literal_text`, suffix insert, `replace_text`) is deliberately NOT gated: the user tapped the pill, so the word must still reach the target app regardless of privacy mode. Any new pill-click or prediction-edit path must mirror both halves.
 - Telemetry is OFF by default and `DEFAULT_ENDPOINT` in `src/telemetry.py` ships empty (silent no-op). `TelemetryClient` is the source of truth for the consent flag; do NOT mirror it into `appSettings`. The Data Backup archive deliberately excludes `telemetry.json`.
 - Key colouring is a role -> colour table (`qml/palette.js`) that `Main.qml` hands to every keyboard surface, and `KeyButton` resolves; the default scheme hands down `null`, which every surface reads as "keep your own tint" (Monochrome is the shipped default). No hue is ever a literal: family hues are rotated off the active theme's accent in **OKLCh** (HSL swings perceived lightness), and every fill goes through the same wash that walks its strength down until the theme's `textColor` clears 4.5:1. See *Key Colours by role*.
-- The grid, the nav cluster, the numpad and both separators all lay out to `Main.qml::sectionHeight`; the panels absorb the difference into their **key heights**, never their gaps, and their `implicitHeight` must stay derived from `keyH` rather than read off their own grid or it is a binding loop. See *The three sections share one height*.
+- The grid, the nav cluster, the numpad and both separators all lay out to `Main.qml::sectionHeight`, which is the grid's own implicit height and nothing else: the panels fit it, absorbing the difference into their **key heights**, never their gaps, and their `implicitHeight` must stay derived from `keyH` rather than read off their own grid or it is a binding loop. A max over the three natural heights was tried and cannot work, because the grid cannot grow into a height its own implicit height defines. See *The three sections share one height*.
 - Adding a setting requires the full 8-step wiring (see "Settings Panel Structure"): `Settings{}` savedFoo + root prop in `Main.qml`, prop + `SettingsToggle` in the correct sub-view of `UnifiedSettingsPanel.qml`, pass-through, `onSettingChanged`, optional `@Slot` on `keyboard_bridge.py`, and load in `Component.onCompleted`.
 - Releases: `src/__version__.py` is the single source of version truth; publish to the separate `owenpkent/alpha-osk-releases` repo with an explicit `--repo` (the updater API URL is hard-pinned there); the installer asset name must be exactly `Alpha-OSK-Setup-{version}.exe`. The marketing site is a **third** repo, `owenpkent/alpha-osk-website`, and a release deliberately does not touch it: it reads the latest tag from the releases API at page load, so there is no version to bump there and no step to forget (see *The website*).
 - The install path is computed, never read from the registry: every silent install passes an explicit `/S /D=<dir>` from `updater.py::_install_target_dir()`. NSIS requires `/D=` last on the command line and unquoted even when the path has spaces, so don't reorder or requote the installer arguments (full reasoning under *Auto-Update*).
@@ -1609,44 +1609,63 @@ Five things about it are load-bearing:
   `keyHitMarginV` carries half a pixel for), so the ceiled figure is what
   the grid actually renders at and anything else leaves the panel a pixel
   short.
-- **`sectionHeight` is a `Math.max`, not simply the grid's height.** With
-  the function row hidden the grid is *not* the tallest section: the panels
-  are, by about 12 px. Taking the grid's height would have shrunk their keys
-  to fit, trading a straight edge for smaller targets, which is the wrong
-  direction on this keyboard. `rowH` also floors at `keyH` for the same
-  reason, so filling a height can only ever grow a target.
+- **`sectionHeight` is the grid's implicit height, and the panels fit it;
+  there is no max and no floor.** It was first written as a `Math.max` over
+  the grid and the panels' natural heights, with each panel's `rowH`
+  floored at `keyH`, to keep the panel keys at full height when the
+  function row is hidden (the panels are then the taller section, by the
+  nav gutter plus rounding). That cannot work: the grid's own implicit
+  height is what defines the section, so the grid cannot grow into a
+  larger one, and it sat centred 6 px inside the panels in exactly the
+  configuration a fresh install ships with (nav on, no function row, no
+  numpad), which is the ragged edge this exists to remove. The panels are
+  the side that can fit, so they fit, and with the function row hidden
+  their keys come out about 2 px shorter than the letters. That is the
+  trade: a straight edge for 2 px, in the one configuration where the
+  choice arises at all.
 - **The arrows land on the bottom rail with nothing positioning them there.**
   `arrowGap` already opened *above* the Up key (a Grid aligns cell content
   to the top, so the gutter had to be built that way), so once the panel is
   as tall as the grid the cluster is flush by construction. Don't add a
   bottom anchor; there is nothing to fix.
 - **The nav cluster keeps its arrow gutter and the numpad has none**, so
-  their rows do *not* line up with each other. Both panels briefly shared
-  one rhythm (a matching `blockGap` after the numpad's third row, fed from
-  `root.panelBlockGap`) so their rows would align; it was reversed on
-  sight. A physical numpad has no seam there, and one splitting the digits
-  off the `0` key is more obviously wrong than two panels whose rows drift
-  a pixel or two apart. `NumpadPanel.blockGap` survives at 0 for a caller
-  that wants one, implemented as a spacer `Item` sized
-  `blockGap - keySpacing` (a Column puts its own `spacing` on both sides of
-  a spacer, and the height arithmetic depends on the rendered gap being
-  exactly `blockGap`) and hidden at zero, because an `Item` of zero height
-  still costs a `spacing`.
+  their rows do *not* line up with each other, and their keys differ in
+  height by the gutter's share (about 1.6 px). Both panels briefly shared
+  one rhythm (a matching gap after the numpad's third row) so their rows
+  would align; it was reversed on sight. A physical numpad has no seam
+  there, and one splitting the digits off the `0` key is more obviously
+  wrong than two panels whose rows drift a pixel or two apart. The property
+  that carried the gap lingered at zero for one revision "for a caller that
+  wants one" and was removed: nothing read it, and a field nothing reads is
+  worse than a field that does not exist yet.
 - **The separators take `Layout.preferredHeight: root.sectionHeight`**, not
   `fillHeight`. `mainLayout` runs about 20 px taller than its contents
   (the window's height is `outerLayout.implicitHeight + 80` against 60 px of
   chrome), so filling ran them 10 px past the board at each end.
 
-The consequence to know: **nav and numpad keys are now taller than the
-letters**, about 12% at the default width. That is a gain rather than a
-cost, and it is the reason "grow the keys" was chosen over "grow the gaps":
-those are the arrows and the numpad, and a taller target is a cheaper click.
-The main grid is untouched in the default configuration, so `keyW`, the
-window's width budget and every row's flush edges are exactly what they
-were. Guarded by `tests/test_qml_key_colors.py::TestTheSectionsShareOneHeight`,
-which measures live item positions rather than recomputing them from the
-properties the QML sets, and whose last case hides the function row so the
-`Math.max` branch is exercised rather than assumed.
+The consequence to know: **with a function row showing, nav and numpad
+keys are taller than the letters**, about 12% at the default width. That
+is a gain rather than a cost, and it is the reason "grow the keys" was
+chosen over "grow the gaps": those are the arrows and the numpad, and a
+taller target is a cheaper click. The main grid is untouched in every
+configuration, so `keyW`, the window's width budget and every row's flush
+edges are exactly what they were. Guarded by
+`tests/test_qml_key_colors.py::TestTheSectionsShareOneHeight`, which
+measures live item positions rather than recomputing them from the
+properties the QML sets, and which covers the function row hidden and the
+shipped default configuration as well as the fixture's everything-on one.
+
+**A test that toggles a row has to force a frame before it measures**
+(`_relayout` in that file, which calls `grabWindow`). Qt Quick Layouts
+recompute in a polish step that runs before a frame is rendered, and the
+offscreen window renders none on its own: after hiding the function row,
+`mainKeyboard.implicitHeight` sat at its old value through 300 event-loop
+passes and moved only once a frame was forced. The first version of the
+no-function-row test settled with `processEvents` alone, measured the
+board *before* its own toggle had taken effect, and passed against the 6
+px ragged edge above. The live app is unaffected, since it renders frames
+continuously; only a headless test can measure a layout that has not
+happened yet. The test now also asserts the grid's span actually moved.
 
 ## Key Colours by role
 
@@ -1727,9 +1746,14 @@ does it worst exactly where the requested chroma is unreachable.
 until the theme's own `textColor` clears 4.5:1.** A scheme therefore cannot
 cost legibility on any theme: where a wash would bury the label, it yields.
 This is the same rule and the same walk `accentWashFor` already used for the
-compact view's editing keys, which is why `Main.qml`'s `relativeLuminance` /
-`contrastRatio` / `accentWashFor` now **delegate to `palette.js`** rather
-than keeping a second copy of the WCAG maths.
+compact view's editing keys, which is why `Main.qml`'s `accentWashFor` now
+**delegates to `palette.js`** rather than keeping a second copy of the WCAG
+maths (its `relativeLuminance` / `contrastRatio` wrappers went with it:
+nothing called them, and anything needing the maths imports `palette.js`).
+"Every fill" includes the lightness `step` toward the background that
+Monochrome and Function are built from; it skipped the wash at first,
+which happened to pass on nine themes and was a promise the code did not
+keep.
 
 The trap: a colour that is not a fill is easy to forget. The `ink` scheme
 dims punctuation rather than hueing it, and the ungated version put
@@ -1737,11 +1761,29 @@ Vaporwave's punctuation at 4.32:1, under the bar the rest of the file
 promises. `_dimmedInk` guards it. The *stripe* under a key is deliberately
 not guarded, because it is not text and owes no ratio.
 
+**The hover lift is guarded too, and was the second place the promise
+broke.** `KeyButton` and the pills used to lift the fill with a plain
+`Qt.lighter` under the pointer, which on a fill the wash had left at
+exactly 4.5:1 overshoots the bar: Monochrome's Enter on Blackboard measured
+3.1:1 hovered, the Ink scheme's pill on Light 2.9:1, on the key the user is
+about to press. `palette.js::hoverFill` walks the lift down until the
+legend still clears what it cleared at rest, capped at 4.5 so a surface the
+theme itself put under the bar keeps its lift rather than losing it. The
+pill's *ink* is no longer lifted with the fill, since lightening both
+toward each other is what drains the contrast; the lift and the thicker
+ring are the cue. `legibleInk` picks its pole at `INK_POLE_LUMINANCE`
+(0.179, where black and white contrast equally with the ground), not at
+the 0.35 first used, which for a ground between the two walked toward the
+pole that cannot reach 4.5:1 and fell through to the fallback unchecked;
+no shipped theme sits in that band, so only a future one would have hit
+it.
+
 Guarded by `tests/test_qml_key_colors.py::TestEveryLegendStaysReadable`,
-which sweeps every scheme x every theme x every role (297 combinations)
-rather than spot-checking the developer's own theme, and whose paired
-inverse asserts the bands stay *tellable apart* -- a scheme whose colours
-all collapsed to one fill would satisfy a contrast sweep perfectly.
+which sweeps every scheme x every theme x every role (540 combinations,
+resting and hovered) rather than spot-checking the developer's own theme,
+and whose paired inverse asserts the bands stay *tellable apart* -- a
+scheme whose colours all collapsed to one fill would satisfy a contrast
+sweep perfectly.
 
 ### Roles
 
@@ -1776,16 +1818,27 @@ tint the fill; it may not soften the ring.
 `roleForKey` reads the layout JSON's `type` **plus the key itself**, because
 the JSON says `char` for a letter, a digit and a bracket alike and those are
 three different jobs. `alpha` / `digit` / `punct` / `mod` / `edit` / `kill`
-/ `commit` / `nav` / `fn` / `op` / `toggle`.
+/ `commit` / `nav` / `fn` / `op` / `toggle`. The schemes themselves are one
+builder each in `roleMap`'s `builders` object, and the set of ids the
+engine knows *is* that object's keys, so an unknown id (a settings file
+from a build with a scheme this one lacks) reads as `off` rather than as an
+empty table every surface would index into.
 
-Two role assignments are worth knowing:
+Three role assignments are worth knowing:
 
 - **The numpad's roles follow NumLock.** With it off the digits *are* the
   navigation keys and `.` *is* Delete, so a colour saying "digit" over a key
-  that pages up would be a lie. The role is a ternary on `numLockOn`.
+  that pages up would be a lie. The role is `NumpadPanel.numRole`, one
+  property on the panel rather than a ternary on each of ten keys.
 - **`NumberRow` reads its own role inline** rather than through
   `keyRoleFor`, because its `keyDefs` are its own shape rather than the
   layout JSON's. Esc is `edit`; `-` and `=` are `punct`, not digits.
+- **The compact layouts embed the nav column in the grid**, as `special`
+  keys with `home` / `end` / `pageup` / `pagedown` / `insert` / arrow
+  actions, and `roleForKey` names those `nav`. Its first version read every
+  special key it did not know as `edit`, which painted Home the same as Tab
+  on the one layout that carries them this way. Guarded by
+  `TestKeysAreGivenTheRightJob::test_the_compact_grid_embeds_its_nav_column_as_navigation`.
 
 `KeyButton`'s role stripe hides itself whenever the key is pressed, active
 or locked: those states repaint the fill underneath it, and the lock bar

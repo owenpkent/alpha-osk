@@ -1,5 +1,6 @@
 import QtQuick 2.15
 import QtQuick.Controls 2.15
+import "../palette.js" as Palette
 
 Item {
     id: keyRoot
@@ -152,7 +153,6 @@ Item {
     //
     // `role` is what this key *does*: "alpha", "digit", "punct",
     // "mod", "edit", "kill", "commit", "nav", "fn", "op", "toggle".
-    // `roleColors` is
     // `roleColors` is the {role: {fill, ink, bar}} table Main.qml derives
     // from the active theme and the user's Key Colours setting.
     //
@@ -170,15 +170,22 @@ Item {
     property string role: ""
     property var roleColors: null
 
-    readonly property var _roleFace: (keyRoot.roleColors && keyRoot.role
-                                      && keyRoot.roleColors[keyRoot.role])
-                                     ? keyRoot.roleColors[keyRoot.role] : null
+    readonly property var _roleFace: (keyRoot.roleColors && keyRoot.role)
+                                     ? (keyRoot.roleColors[keyRoot.role] || null)
+                                     : null
     readonly property color _roleFill: keyRoot._roleFace ? keyRoot._roleFace.fill
                                                          : keyRoot.keyColor
     readonly property color _roleInk: keyRoot._roleFace ? keyRoot._roleFace.ink
                                                         : keyRoot.keyTextColor
     readonly property color _roleBar: keyRoot._roleFace ? keyRoot._roleFace.bar
                                                         : "transparent"
+    // The hover lift, guarded.  A role fill sits where the wash left it,
+    // which can be exactly 4.5:1 against its legend, and Qt.lighter on
+    // that overshoots the bar (Monochrome's Enter on Blackboard measured
+    // 3.1:1 under the pointer).  The lift walks down until the legend
+    // still clears whatever it cleared at rest.
+    readonly property color _hoverFill: Palette.hoverFill(keyRoot._roleFill,
+                                                          keyRoot._roleInk, 1.25)
 
     // Where inside the key the current press landed, as fractions of the
     // key's width and height from its centre (-0.5 to 0.5).  Set on press
@@ -339,7 +346,7 @@ Item {
         clip: true
         color: keyRoot._visualPressed ? keyPressedColor
              : isActive ? accentColor
-             : mouseArea.containsMouse ? Qt.lighter(keyRoot._roleFill, 1.25)
+             : mouseArea.containsMouse ? keyRoot._hoverFill
              : keyRoot._roleFill
 
         border.color: isActive ? Qt.lighter(accentColor, 1.3)

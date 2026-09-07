@@ -51,10 +51,17 @@ function mixToward(base, target, t) {
 
 // ------------------------------------------------------- WCAG contrast
 //
-// The single copy in the project: Main.qml's relativeLuminance /
-// contrastRatio / accentWashFor all delegate here. Two copies of a
-// luminance rule is how the two drift apart, which this codebase has
-// already paid for once (see the `luminance` note in Main.qml).
+// The single copy in the project: Main.qml's accentWashFor delegates here
+// and KeyButton reads hoverFill directly. Two copies of a luminance rule
+// is how the two drift apart, which this codebase has already paid for
+// once (see the `luminance` note in Main.qml).
+
+// The relative luminance at which black and white ink contrast equally
+// with a ground: (L + 0.05) / 0.05 == 1.05 / (L + 0.05). Above it black
+// is the ink that can reach 4.5:1, below it white. A cruder 0.35 was used
+// first, and for a ground between 0.18 and 0.35 it walked toward the pole
+// that cannot get there and fell through to the fallback unchecked.
+var INK_POLE_LUMINANCE = 0.1791
 
 function relativeLuminance(c) {
     function channel(v) {
@@ -80,6 +87,22 @@ function washFor(base, hue, start, text) {
             return candidate
     }
     return base
+}
+
+// The hover lift for a fill, guarded the same way. A fill the wash left at
+// exactly 4.5:1 has no headroom, and Qt.lighter on it overshoots the bar
+// (Monochrome's Enter on Blackboard measured 3.1:1 under the pointer, the
+// Ink scheme's pill on Light 2.9:1). The lift walks down until the legend
+// still clears what it cleared at rest, capped at 4.5 so a surface the
+// theme itself put under the bar keeps its lift rather than losing it.
+function hoverFill(fill, ink, factor) {
+    var floor = Math.min(4.5, contrastRatio(ink, fill))
+    for (var f = factor; f > 1.001; f -= 0.05) {
+        var candidate = Qt.lighter(fill, f)
+        if (contrastRatio(ink, candidate) >= floor)
+            return candidate
+    }
+    return fill
 }
 
 // ------------------------------------------------------------- OKLab
@@ -271,8 +294,8 @@ function roleHues(key, accent) {
 // the ground's opposite pole until it clears 4.5:1, so it is the same
 // promise the washes make, made the other way round.
 function legibleInk(hue, ground, fallback) {
-    var toward = relativeLuminance(ground) > 0.35 ? Qt.rgba(0, 0, 0, 1)
-                                                  : Qt.rgba(1, 1, 1, 1)
+    var toward = relativeLuminance(ground) > INK_POLE_LUMINANCE ? Qt.rgba(0, 0, 0, 1)
+                                                                : Qt.rgba(1, 1, 1, 1)
     for (var a = 0; a <= 0.92; a += 0.04) {
         var c = mixToward(hue, toward, a)
         if (contrastRatio(c, ground) >= 4.5)
@@ -294,22 +317,23 @@ function _dimmedInk(text, ground, strength) {
 
 // ------------------------------------------------------------- schemes
 
-var SCHEMES = ["off", "mono", "twotone", "bands", "ink", "signal"]
-
-var ROLES = ["alpha", "digit", "punct", "mod", "edit", "kill",
-             "commit", "nav", "fn", "op", "toggle", "pill"]
-
 // Build the {role: {fill, ink, bar}} table for one scheme and one theme.
-// Returns null for "off", which every surface reads as "keep your own
-// historical tint": that is what makes the default byte-identical to the
-// board that shipped before this existed.
+// Returns null for "off", and for any id no builder below knows, which
+// every surface reads as "keep your own historical tint": that is what
+// makes "off" byte-identical to the board that shipped before this existed.
 function roleMap(scheme, key, background, text, accent) {
-    if (!scheme || scheme === "off" || SCHEMES.indexOf(scheme) < 0)
-        return null
-
     var clear = Qt.rgba(0, 0, 0, 0)
-    var hues = roleHues(key, accent)
     var map = {}
+
+    // The family hues cost a dispersion sweep and seven gamut fits, and
+    // two of the five schemes never ask for one (Monochrome, the default,
+    // among them), so they are built on first use rather than up front.
+    var hues = null
+    function hueOf(role) {
+        if (!hues)
+            hues = roleHues(key, accent)
+        return hues[role]
+    }
 
     function put(role, fill, ink, bar) {
         map[role] = {
@@ -320,112 +344,127 @@ function roleMap(scheme, key, background, text, accent) {
     }
     // A lightness step toward the page behind the keys. Direction-agnostic:
     // on a light theme it lightens, on a dark one it darkens, and either
-    // way it reads as one step away from the alpha field.
-    function step(t) { return mixToward(key, background, t) }
-    function tint(role, strength) { return washFor(key, hues[role], strength, text) }
+    // way it reads as one step away from the alpha field. Through the same
+    // wash as every other fill, so the promise below holds for it too.
+    function step(t) { return washFor(key, background, t, text) }
+    function tint(role, strength) { return washFor(key, hueOf(role), strength, text) }
     function accented(strength) { return washFor(key, accent, strength, text) }
 
-    if (scheme === "mono") {
-        // No hue at all: a key's job is a lightness step. The safest scheme
-        // on every theme, and the least learnable at a glance.
-        put("alpha", key)
-        put("digit", key)
-        put("punct", step(0.30))
-        put("nav", step(0.30))
-        put("op", step(0.30))
-        // Modifiers took a theme-accent wash here for one revision and it
-        // was reversed on sight: it put a standing blue-grey on Caps and
-        // both Shifts, which is a keyboard with colour on it, not a
-        // monochrome one.  A modifier's THEME COLOUR IS ITS CLICK COLOUR
-        // (KeyButton paints `accentColor` while it is active and
-        // `keyPressedColor` while it is held, both theme-derived), so the
-        // resting cap has no reason to carry it as well.
-        put("mod", step(0.52))
-        put("edit", step(0.52))
-        put("kill", step(0.52))
-        put("fn", step(0.52))
-        // The one key that steps the other way, toward the ink, so the
-        // commit key is the brightest thing on a monochrome board.
-        put("commit", washFor(key, text, 0.20, text))
-        put("toggle", accented(0.55))
-        // Flat, exactly the letters' own colour.  Lifting it toward the ink
-        // (tried at 0.14) greys the pill out against the board and leaves
-        // the row looking faded; the accent border is what says "tappable",
-        // and it does not need help from the fill.
-        put("pill", key)
-    } else if (scheme === "twotone") {
-        // One boundary only: keys that type a character, and keys that do
-        // something. The smallest change that still answers the question.
-        var util = washFor(step(0.42), accent, 0.16, text)
-        put("alpha", key)
-        put("digit", key)
-        put("punct", key)
-        put("mod", util)
-        put("edit", util)
-        put("kill", util)
-        put("nav", util)
-        put("fn", util)
-        put("op", util)
-        put("commit", accented(0.42))
-        put("toggle", accented(0.62))
-        put("pill", accented(0.24))
-    } else if (scheme === "bands") {
-        // A hue per family, every one of them rotated off this theme's own
-        // accent. The most learnable and the most ink.
-        put("alpha", key)
-        put("digit", step(0.20))
-        put("punct", step(0.40))
-        put("mod", tint("mod", 0.34))
-        put("edit", tint("edit", 0.30))
-        put("kill", tint("kill", 0.32))
-        put("nav", tint("nav", 0.30))
-        put("fn", tint("fn", 0.30))
-        put("op", tint("op", 0.28))
-        put("commit", tint("commit", 0.38))
-        put("toggle", accented(0.62))
-        // A pill is an offer to commit a word, so it borrows the commit
-        // hue at about half strength: related to Enter without competing
-        // with it.
-        put("pill", tint("commit", 0.20))
-    } else if (scheme === "ink") {
-        // One flat field; the role rides on the legend colour and a
-        // hairline under it. The calmest board, and the only scheme whose
-        // contrast cannot be affected by the theme's key colour at all.
-        put("alpha", key)
-        put("digit", key)
-        // Punctuation is dimmed rather than hued, so the dim has to be
-        // contrast-guarded like every fill is: an ungated 0.22 put
-        // Vaporwave's punctuation at 4.32:1, under the bar this file
-        // promises everywhere else. The bar under it is not text and owes
-        // no ratio, so it keeps the full dim.
-        put("punct", key, _dimmedInk(text, key, 0.22),
-            mixToward(text, key, 0.55))
-        var inkRoles = ["mod", "edit", "kill", "nav", "fn", "op", "commit"]
-        for (var i = 0; i < inkRoles.length; i++) {
-            var r = inkRoles[i]
-            var ink = legibleInk(hues[r], key, text)
-            put(r, key, ink, ink)
+    // One builder per scheme. The set of ids this engine knows IS the set
+    // of keys here, so a scheme cannot be known to the guard and unknown
+    // to the dispatch, or the other way round.
+    var builders = {
+        mono: function () {
+            // No hue at all: a key's job is a lightness step. The safest
+            // scheme on every theme, and the least learnable at a glance.
+            put("alpha", key)
+            put("digit", key)
+            put("punct", step(0.30))
+            put("nav", step(0.30))
+            put("op", step(0.30))
+            // Modifiers took a theme-accent wash here for one revision and
+            // it was reversed on sight: it put a standing blue-grey on Caps
+            // and both Shifts, which is a keyboard with colour on it, not a
+            // monochrome one.  A modifier's THEME COLOUR IS ITS CLICK
+            // COLOUR (KeyButton paints `accentColor` while it is active and
+            // `keyPressedColor` while it is held, both theme-derived), so
+            // the resting cap has no reason to carry it as well.
+            put("mod", step(0.52))
+            put("edit", step(0.52))
+            put("kill", step(0.52))
+            put("fn", step(0.52))
+            // The one key that steps the other way, toward the ink, so the
+            // commit key is the brightest thing on a monochrome board.
+            put("commit", washFor(key, text, 0.20, text))
+            put("toggle", accented(0.55))
+            // Flat, exactly the letters' own colour.  Lifting it toward the
+            // ink (tried at 0.14) greys the pill out against the board and
+            // leaves the row looking faded; the accent border is what says
+            // "tappable", and it does not need help from the fill.
+            put("pill", key)
+        },
+        twotone: function () {
+            // One boundary only: keys that type a character, and keys that
+            // do something. The smallest change that still answers the
+            // question.
+            var util = washFor(step(0.42), accent, 0.16, text)
+            put("alpha", key)
+            put("digit", key)
+            put("punct", key)
+            put("mod", util)
+            put("edit", util)
+            put("kill", util)
+            put("nav", util)
+            put("fn", util)
+            put("op", util)
+            put("commit", accented(0.42))
+            put("toggle", accented(0.62))
+            put("pill", accented(0.24))
+        },
+        bands: function () {
+            // A hue per family, every one of them rotated off this theme's
+            // own accent. The most learnable and the most ink.
+            put("alpha", key)
+            put("digit", step(0.20))
+            put("punct", step(0.40))
+            put("mod", tint("mod", 0.34))
+            put("edit", tint("edit", 0.30))
+            put("kill", tint("kill", 0.32))
+            put("nav", tint("nav", 0.30))
+            put("fn", tint("fn", 0.30))
+            put("op", tint("op", 0.28))
+            put("commit", tint("commit", 0.38))
+            put("toggle", accented(0.62))
+            // A pill is an offer to commit a word, so it borrows the commit
+            // hue at about half strength: related to Enter without
+            // competing with it.
+            put("pill", tint("commit", 0.20))
+        },
+        ink: function () {
+            // One flat field; the role rides on the legend colour and a
+            // hairline under it. The calmest board, and the only scheme
+            // whose contrast cannot be affected by the theme's key colour
+            // at all.
+            put("alpha", key)
+            put("digit", key)
+            // Punctuation is dimmed rather than hued, so the dim has to be
+            // contrast-guarded like every fill is: an ungated 0.22 put
+            // Vaporwave's punctuation at 4.32:1, under the bar this file
+            // promises everywhere else. The bar under it is not text and
+            // owes no ratio, so it keeps the full dim.
+            put("punct", key, _dimmedInk(text, key, 0.22),
+                mixToward(text, key, 0.55))
+            var inkRoles = ["mod", "edit", "kill", "nav", "fn", "op", "commit"]
+            for (var i = 0; i < inkRoles.length; i++) {
+                var r = inkRoles[i]
+                var ink = legibleInk(hueOf(r), key, text)
+                put(r, key, ink, ink)
+            }
+            put("toggle", accented(0.62))
+            put("pill", key, legibleInk(hueOf("commit"), key, text))
+        },
+        signal: function () {
+            // Flat everywhere except the three places a wrong click costs
+            // something: held state, destroyed text, committed input.
+            put("alpha", key)
+            put("digit", key)
+            put("punct", key)
+            put("nav", key)
+            put("fn", key)
+            put("op", key)
+            put("edit", key)
+            put("mod", tint("mod", 0.26))
+            put("kill", tint("kill", 0.30))
+            put("commit", tint("commit", 0.32))
+            put("toggle", accented(0.62))
+            // Flat, like everything else this scheme does not warn about.
+            put("pill", key)
         }
-        put("toggle", accented(0.62))
-        put("pill", key, legibleInk(hues["commit"], key, text))
-    } else if (scheme === "signal") {
-        // Flat everywhere except the three places a wrong click costs
-        // something: held state, destroyed text, committed input.
-        put("alpha", key)
-        put("digit", key)
-        put("punct", key)
-        put("nav", key)
-        put("fn", key)
-        put("op", key)
-        put("edit", key)
-        put("mod", tint("mod", 0.26))
-        put("kill", tint("kill", 0.30))
-        put("commit", tint("commit", 0.32))
-        put("toggle", accented(0.62))
-        // Flat, like everything else this scheme does not warn about.
-        put("pill", key)
     }
 
+    if (!scheme || !builders.hasOwnProperty(scheme))
+        return null
+    builders[scheme]()
     return map
 }
 
@@ -449,6 +488,20 @@ function roleForKey(kd) {
         case "return":
         case "enter":
             return "commit"
+        // The compact layouts embed the nav column in the grid itself,
+        // as special keys; they are the same job NavigationPanel names
+        // "nav", and reading them as editing keys painted Home the same
+        // as Tab on the one layout that carries them this way.
+        case "home":
+        case "end":
+        case "pageup":
+        case "pagedown":
+        case "insert":
+        case "up":
+        case "down":
+        case "left":
+        case "right":
+            return "nav"
         default:
             return "edit"
         }
