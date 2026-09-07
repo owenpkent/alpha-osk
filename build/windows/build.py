@@ -698,6 +698,9 @@ Page custom StudyInvitePage StudyInviteLeave
 ;  Shortcut Options Page
 ; ============================================================
 Function ShortcutOptionsPage
+  ; Without this the header still reads "Choose Install Location", carried
+  ; over from MUI_PAGE_DIRECTORY: a custom page sets no header of its own.
+  !insertmacro MUI_HEADER_TEXT "Shortcuts" "Choose which shortcuts to create."
   nsDialogs::Create 1018
   Pop $0
   ${{If}} $0 == error
@@ -731,37 +734,49 @@ FunctionEnd
 ; wizard pages, so $StudyInvite stays "" on every auto-update and the
 ; registry seed below is simply never written on that path.
 Function StudyInvitePage
+  ; See the note in ShortcutOptionsPage: without this the header reads
+  ; "Choose Install Location" over a page about research participation.
+  !insertmacro MUI_HEADER_TEXT "Help improve Alpha-OSK" "Optional. Share ten anonymous totals about your typing."
   nsDialogs::Create 1018
   Pop $0
   ${{If}} $0 == error
     Abort
   ${{EndIf}}
 
-  ${{NSD_CreateLabel}} 0 0u 100% 12u "Help improve Alpha-OSK (optional)"
+  ; ---------------------------------------------------------------
+  ; LAYOUT BUDGET: the page area is exactly 140u tall.  A control
+  ; placed past that is clipped by its parent dialog and simply never
+  ; draws -- it still reports itself visible, so this fails silently.
+  ; The "Read more" link shipped at 144u and was invisible for exactly
+  ; that reason.  Nothing below may end past 140u; the guard is
+  ; tests/test_windows_installer.py::TestTheStudyPageFitsItsDialog.
+  ; ---------------------------------------------------------------
+  ; No in-page title: the header set above already reads "Help improve
+  ; Alpha-OSK", and repeating it here cost a line of a page that has none
+  ; to spare.
+  ;
+  ; Say plainly that these are COUNTS before naming any of them.  The
+  ; first wording led with "keystrokes, words, ..." as a bare list, which
+  ; reads as though the typed text itself is sent.
+  ${{NSD_CreateLabel}} 0 0u 100% 26u "Once a week, Alpha-OSK can send ten numbers. Every one is a total: a count of how often something happened. None of them contain anything you typed."
   Pop $1
 
-  ${{NSD_CreateLabel}} 0 16u 100% 28u "Alpha-OSK's predictions are only measured in simulation today. Real usage from people who actually type with it is what would show whether they help in practice."
+  ${{NSD_CreateLabel}} 0 28u 100% 38u "The ten: how many keys you pressed, how many words you finished, how many predictions were offered, how many you accepted, how many keys those saved you, how many minutes you typed, and how many times you opened Alpha-OSK. With a random ID for this install, the app version, and which operating system."
   Pop $2
 
-  ${{NSD_CreateLabel}} 0 48u 100% 42u "Ten numbers, once a week: a random ID, app version, operating system, keystrokes, words, predictions accepted, keystrokes saved, minutes of use, sessions, predictions offered."
+  ${{NSD_CreateLabel}} 0 68u 100% 26u "Never the words you type, your files, your screen, or your IP address. You can change this any time in Settings, or delete everything you have shared."
   Pop $3
 
-  ${{NSD_CreateLabel}} 0 94u 100% 12u "Never the words you type. Never your files, your screen, or your IP address."
+  ${{NSD_CreateLink}} 0 97u 100% 12u "Read more about the study"
   Pop $4
-
-  ${{NSD_CreateLabel}} 0 108u 100% 12u "You can change this at any time in Settings, or delete everything you have shared."
-  Pop $5
+  ${{NSD_OnClick}} $4 StudyInviteLinkClick
 
   ; DEFAULT MUST STAY UNCHECKED. Do not add a ${{NSD_SetState}} ...
   ; ${{BST_CHECKED}} call here: a pre-ticked consent box is not consent,
   ; it is the one thing that would make this data unusable as research
   ; and non-compliant as a privacy control.
-  ${{NSD_CreateCheckbox}} 0 128u 100% 12u "Yes, share anonymous usage statistics"
+  ${{NSD_CreateCheckbox}} 0 112u 100% 12u "Yes, share anonymous usage statistics"
   Pop $StudyInviteCheckboxHwnd
-
-  ${{NSD_CreateLink}} 0 144u 100% 12u "Read more about the study"
-  Pop $6
-  ${{NSD_OnClick}} $6 StudyInviteLinkClick
 
   nsDialogs::Show
 FunctionEnd
