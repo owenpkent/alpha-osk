@@ -2854,39 +2854,6 @@ Window {
                     // so it and `keyHitMarginV` must stay in step.
                     spacing: root.rowSpacing
 
-                    // ===== Number Row (` 1-0 - =) =====
-                    // Above the function row so the digits sit adjacent to
-                    // the letters, the way they do on a physical keyboard.
-                    // Full key height: unlike F-keys these are typed
-                    // constantly, so they get a full-size target.
-                    Comp.NumberRow {
-                        // Lets the panel-width tests find this without
-                        // property-sniffing; see TestPanelsSitFlushWithTheGrid.
-                        objectName: "numberRowPanel"
-                        visible: root.showNumberRow
-                        Layout.alignment: Qt.AlignHCenter
-                        keyW: root.keyW
-                        keyH: root.keyH
-                        keySpacing: root.keySpacing
-                        hitMarginH: root.keyHitMarginH
-                        hitMarginV: root.keyHitMarginV
-                        roleColors: root.keyRoles
-                        keyColor: Qt.darker(root.themeKeyColor, 1.3)
-                        accentKeyColor: root.accentKeyColor
-                        keyPressedColor: root.themeKeyPressed
-                        keyTextColor: root.themeTextColor
-                        accentColor: root.themeAccent
-                        borderColor: root.themeBorder
-                        shiftOn: root.shiftOn
-                        rightClickShift: root.rightClickShift
-                        keyPreviewEnabled: root.keyPreviewEnabled
-                        characterRepeat: root.characterRepeat
-                        repeatDelay: root.repeatDelay
-                        repeatInterval: root.repeatInterval
-                        previewFn: root.showKeyPreview
-                        hidePreviewFn: root.hideKeyPreview
-                    }
-
                     // ===== Extra Function Row (F13-F24) =====
                     //
                     // Above F1-F12 rather than below it, so it lands where
@@ -2947,6 +2914,46 @@ Window {
                         accentColor: root.themeAccent
                         borderColor: root.themeBorder
                     }
+                    // ===== Number Row (` 1-0 - =) =====
+                    //
+                    // Below both function rows, so the digits sit adjacent
+                    // to the letters and the F-keys sit above them, the way
+                    // they do on a physical keyboard. This panel only
+                    // renders on the compact layouts (`showNumberRow` is
+                    // derived from the layout JSON carrying no number row of
+                    // its own), and a full-size layout's own number row is
+                    // the first of the data-driven rows below, so this is
+                    // the position that makes the two views agree.
+                    // Full key height: unlike F-keys these are typed
+                    // constantly, so they get a full-size target.
+                    Comp.NumberRow {
+                        // Lets the panel-width tests find this without
+                        // property-sniffing; see TestPanelsSitFlushWithTheGrid.
+                        objectName: "numberRowPanel"
+                        visible: root.showNumberRow
+                        Layout.alignment: Qt.AlignHCenter
+                        keyW: root.keyW
+                        keyH: root.keyH
+                        keySpacing: root.keySpacing
+                        hitMarginH: root.keyHitMarginH
+                        hitMarginV: root.keyHitMarginV
+                        roleColors: root.keyRoles
+                        keyColor: Qt.darker(root.themeKeyColor, 1.3)
+                        accentKeyColor: root.accentKeyColor
+                        keyPressedColor: root.themeKeyPressed
+                        keyTextColor: root.themeTextColor
+                        accentColor: root.themeAccent
+                        borderColor: root.themeBorder
+                        shiftOn: root.shiftOn
+                        rightClickShift: root.rightClickShift
+                        keyPreviewEnabled: root.keyPreviewEnabled
+                        characterRepeat: root.characterRepeat
+                        repeatDelay: root.repeatDelay
+                        repeatInterval: root.repeatInterval
+                        previewFn: root.showKeyPreview
+                        hidePreviewFn: root.hideKeyPreview
+                    }
+
 
                     // ===== Data-Driven Keyboard Rows =====
                 Repeater {
