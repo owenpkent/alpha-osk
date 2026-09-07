@@ -1071,6 +1071,69 @@ Window {
         }
     }
 
+    // The bounds of the screen a given point sits on, falling back to the
+    // whole desktop when no screen claims it.
+    //
+    // `Screen` inside a Window is the screen that window is on, which is
+    // not knowable before the window has been placed, and `Screen.width` /
+    // `Screen.height` are a size rather than a position.  Walking the
+    // screen list is the only thing that can answer "which display is the
+    // keyboard actually on".
+    function screenBoundsAt(px, py) {
+        var screens = Qt.application.screens
+        if (screens) {
+            for (var i = 0; i < screens.length; ++i) {
+                var s = screens[i]
+                if (px >= s.virtualX && px < s.virtualX + s.width
+                        && py >= s.virtualY && py < s.virtualY + s.height)
+                    return { left: s.virtualX,
+                             top: s.virtualY,
+                             right: s.virtualX + s.width,
+                             bottom: s.virtualY + s.height }
+            }
+        }
+        return root.desktopBounds()
+    }
+
+    // Where a floating panel of (w, h) should open: on the keyboard's own
+    // screen, clear of the keyboard, and entirely on that screen.
+    //
+    // Settings, Help and the Dashboard all used to open at
+    // `Screen.width / 2 - width / 2`, which gets all three wrong:
+    //
+    //  - It centres on the PRIMARY screen whatever screen the keyboard is
+    //    on, so with the keyboard on a second monitor the window opens on
+    //    another display entirely, and a monitor to the LEFT of the primary
+    //    has negative coordinates that a primary-screen centre cannot even
+    //    reach.  This is the same bug the snippets restore documents, one
+    //    window over.
+    //  - It can land on top of the keyboard, which is what the user types
+    //    into these windows with.
+    //  - Neither window has an OS title bar to drag it back by if it opens
+    //    somewhere unreachable: they are frameless, and Settings cannot
+    //    take focus either.
+    //
+    // So: above the keyboard where there is room, below it where there is
+    // not, centred on the screen when it fits neither, and clamped on
+    // screen in every case.
+    function safePanelPos(w, h) {
+        var b = root.screenBoundsAt(root.x + root.width / 2,
+                                    root.y + root.height / 2)
+        var gap = 8
+        var y
+        if (root.y - gap - h >= b.top)
+            y = root.y - gap - h
+        else if (root.y + root.height + gap + h <= b.bottom)
+            y = root.y + root.height + gap
+        else
+            y = b.top + (b.bottom - b.top - h) / 2
+        var x = root.x + (root.width - w) / 2
+        return {
+            x: Math.round(Math.max(b.left, Math.min(x, b.right - w))),
+            y: Math.round(Math.max(b.top, Math.min(y, b.bottom - h)))
+        }
+    }
+
     // Key tint for the "accent" style: the editing keys a user reaches for
     // without looking (Esc, Tab, Shift, Backspace, Del) on the compact
     // layouts, where the grid is uniform and there are no size cues to tell
@@ -1145,21 +1208,31 @@ Window {
     // The prediction pills take a role of their own rather than sitting on
     // `themeKeyColor` for ever.  They were the one surface a scheme did not
     // reach, which made them the only thing on screen that did not change
-    // when the board did.  A pill is an offer to commit a word, so the
-    // schemes that use hue give it the commit hue at reduced strength:
-    // related to Enter without competing with it.
+    // when the board did.
     //
-    // The border is the FULL theme accent on every scheme.  It was briefly
-    // blended toward the fill so a coloured pill would read as outlined
-    // rather than ringed, and that washed the whole row out: the pills are
-    // the one thing on the board the user is meant to reach for, and the
-    // ring is what says so.  A scheme may tint the fill; it may not soften
-    // the ring.
+    // A SCHEME COLOURS THE RING, NEVER THE FILL.  The fill is flat, exactly
+    // the letters' own colour, on every scheme and every theme; the ring is
+    // the scheme's pill colour where it has one (`pill.bar`) and the full
+    // theme accent where it does not.  Both halves are load-bearing and
+    // each was got wrong once:
+    //
+    //  - Hueing the FILL was tried for a release and reversed on sight.
+    //    Eight pills are the widest block of one colour on the board and
+    //    they sit above the keys rather than among them, so a wash across
+    //    all eight reads as a coloured panel rather than as eight things to
+    //    reach for.  The ring carries the scheme perfectly well on its own.
+    //  - Blending the RING toward the fill was tried before that and washed
+    //    the whole row out: the pills are the one thing on the board the
+    //    user is meant to reach for, and the ring is what says so.  A
+    //    scheme may recolour the ring; it may not soften it.
     readonly property color predPillFill: root.keyRoles ? root.keyRoles.pill.fill
                                                         : root.themeKeyColor
     readonly property color predPillInk: root.keyRoles ? root.keyRoles.pill.ink
                                                        : root.themeTextColor
-    readonly property color predPillBorder: root.themeAccent
+    readonly property color predPillBorder: (root.keyRoles
+                                             && root.keyRoles.pill.bar.a > 0)
+                                            ? root.keyRoles.pill.bar
+                                            : root.themeAccent
     // The hover lift, guarded: a role fill sits where the wash left it,
     // which can be exactly 4.5:1, and Qt.lighter on that overshoots the
     // bar (Ink on Light measured 2.9:1 under the pointer).  The ink is not
@@ -2435,8 +2508,9 @@ Window {
                             radius: Math.max(4, predBar.predPillHeight * 0.22)
                             color: predMouse.containsMouse ? root.predPillHoverFill
                                                           : root.predPillFill
-                            border.color: predMouse.containsMouse ? Qt.lighter(root.themeAccent, 1.2)
-                                                                  : root.predPillBorder
+                            border.color: predMouse.containsMouse
+                                          ? Qt.lighter(root.predPillBorder, 1.2)
+                                          : root.predPillBorder
                             border.width: predMouse.containsMouse ? 2 : 1
 
                             // Subtle gradient for depth
@@ -4741,6 +4815,8 @@ Window {
     // ===== Settings Popup Window =====
     Window {
         id: settingsWindow
+        // Reachable by name from tests/test_qml_panel_placement.py.
+        objectName: "settingsWindow"
         title: "Alpha-OSK Settings"
         visible: root.showSettings
         width: 360
@@ -4750,14 +4826,17 @@ Window {
         // Frameless so we can draw our own drag handle; stays on top
         flags: Qt.Window | Qt.WindowStaysOnTopHint | Qt.FramelessWindowHint | Qt.Tool
 
-        // Center on screen when first shown.  Also reset the
+        // Placed clear of the keyboard, on the keyboard's own screen, every
+        // time it is shown (see root.safePanelPos).  Also reset the
         // drill-down panel to its home view -- otherwise re-opening
         // settings would land on whatever sub-page the user was
         // viewing last time, which reads as "the menu changed".
         onVisibleChanged: {
             if (visible) {
-                settingsWindow.x = Screen.width / 2 - settingsWindow.width / 2
-                settingsWindow.y = Screen.height / 2 - settingsWindow.height / 2
+                var pos = root.safePanelPos(settingsWindow.width,
+                                            settingsWindow.height)
+                settingsWindow.x = pos.x
+                settingsWindow.y = pos.y
                 // Home every time, so re-opening settings never lands
                 // on a deep page ("the menu changed"). The one exception
                 // is coming back from the key editor, which is a
@@ -4993,6 +5072,7 @@ Window {
     // ===== Help Popup Window =====
     Window {
         id: helpWindow
+        objectName: "helpWindow"
         title: "Alpha-OSK Help"
         visible: root.showHelp
         width: 400
@@ -5003,8 +5083,9 @@ Window {
 
         onVisibleChanged: {
             if (visible) {
-                helpWindow.x = Screen.width / 2 - helpWindow.width / 2
-                helpWindow.y = Screen.height / 2 - helpWindow.height / 2
+                var pos = root.safePanelPos(helpWindow.width, helpWindow.height)
+                helpWindow.x = pos.x
+                helpWindow.y = pos.y
             }
         }
 
@@ -5034,8 +5115,9 @@ Window {
 
         onVisibleChanged: {
             if (visible) {
-                vizWindow.x = Screen.width / 2 - vizWindow.width / 2
-                vizWindow.y = Screen.height / 2 - vizWindow.height / 2
+                var pos = root.safePanelPos(vizWindow.width, vizWindow.height)
+                vizWindow.x = pos.x
+                vizWindow.y = pos.y
                 vizContent.refresh()
             }
         }

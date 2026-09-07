@@ -608,6 +608,12 @@ def _generate_nsi_script(version: str, installer_name: str) -> str:
 !define APP_URL "https://github.com/owenpkent/alpha-osk"
 !define APP_EXE "alpha-osk.exe"
 !define APP_GUID "alpha-osk-keyboard"
+; The Qt settings organisation, i.e. HKCU\\Software\\${{APP_ORG}}.  MUST match
+; app.setOrganizationName() in src/keyboard_app.py: that key is where every
+; user setting lives, and the uninstaller is the only thing that removes it.
+; Windows registry keys are case-insensitive, so "Alpha-OSK" would resolve to
+; this same key -- do not spell it from ${{APP_NAME}}.
+!define APP_ORG "alpha-osk"
 !define INSTALL_DIR "$PROGRAMFILES64\\Alpha-OSK"
 
 ; --- Installer metadata ---
@@ -808,8 +814,15 @@ Section "Uninstall"
   RMDir /r "$INSTDIR"
 
   ; Remove registry keys
+  ;
+  ; The Add/Remove Programs entry only.  The user's SETTINGS key
+  ; (HKCU\\Software\\${{APP_ORG}}, written by Qt) is deliberately NOT
+  ; deleted here -- see the customUnInstall macro in installer.nsh, which
+  ; removes it only on an interactive uninstall the user answered yes to.
+  ; Deleting it from this section wiped every setting on every upgrade,
+  ; because the Install section above runs the old uninstaller silently
+  ; before extracting.
   DeleteRegKey HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\${{APP_GUID}}"
-  DeleteRegKey HKCU "Software\\${{APP_NAME}}"
 SectionEnd
 """
 

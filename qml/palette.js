@@ -350,6 +350,19 @@ function roleMap(scheme, key, background, text, accent) {
     function tint(role, strength) { return washFor(key, hueOf(role), strength, text) }
     function accented(strength) { return washFor(key, accent, strength, text) }
 
+    // The prediction pills are the one role a scheme colours on the
+    // OUTSIDE. Every builder below leaves `pill.fill` at the flat key
+    // colour and puts its colour in `pill.bar`, which Main.qml draws as
+    // the ring; a scheme with nothing to say there leaves it clear and the
+    // ring stays the theme accent.
+    //
+    // The fill was hued for one release and it was wrong on the surface it
+    // matters most: eight pills are the widest block of colour on the
+    // board, they sit above the keys rather than among them, and a wash
+    // across all eight reads as a coloured panel rather than as eight
+    // things to reach for. The ring is what says "tappable" and it can
+    // carry the scheme on its own.
+    //
     // One builder per scheme. The set of ids this engine knows IS the set
     // of keys here, so a scheme cannot be known to the guard and unknown
     // to the dispatch, or the other way round.
@@ -377,10 +390,9 @@ function roleMap(scheme, key, background, text, accent) {
             // commit key is the brightest thing on a monochrome board.
             put("commit", washFor(key, text, 0.20, text))
             put("toggle", accented(0.55))
-            // Flat, exactly the letters' own colour.  Lifting it toward the
-            // ink (tried at 0.14) greys the pill out against the board and
-            // leaves the row looking faded; the accent border is what says
-            // "tappable", and it does not need help from the fill.
+            // Flat, exactly the letters' own colour, and no ring of its
+            // own, so the pill keeps the theme accent every scheme falls
+            // back to.  See the note on the pill role below.
             put("pill", key)
         },
         twotone: function () {
@@ -399,7 +411,9 @@ function roleMap(scheme, key, background, text, accent) {
             put("op", util)
             put("commit", accented(0.42))
             put("toggle", accented(0.62))
-            put("pill", accented(0.24))
+            // Flat.  This scheme's colour IS the accent, which the ring
+            // already carries.
+            put("pill", key)
         },
         bands: function () {
             // A hue per family, every one of them rotated off this theme's
@@ -416,9 +430,9 @@ function roleMap(scheme, key, background, text, accent) {
             put("commit", tint("commit", 0.38))
             put("toggle", accented(0.62))
             // A pill is an offer to commit a word, so it borrows the commit
-            // hue at about half strength: related to Enter without
-            // competing with it.
-            put("pill", tint("commit", 0.20))
+            // hue: related to Enter without competing with it.  On the RING
+            // only, per the rule below.
+            put("pill", key, text, hueOf("commit"))
         },
         ink: function () {
             // One flat field; the role rides on the legend colour and a
@@ -441,6 +455,10 @@ function roleMap(scheme, key, background, text, accent) {
                 put(r, key, ink, ink)
             }
             put("toggle", accented(0.62))
+            // The legend only. This scheme's pill was flat already, so the
+            // ring keeps the theme accent: giving it the commit hue too was
+            // tried and reversed, because a dim hairline round a dim word is
+            // the one combination that stops reading as a thing to reach for.
             put("pill", key, legibleInk(hueOf("commit"), key, text))
         },
         signal: function () {
@@ -457,7 +475,8 @@ function roleMap(scheme, key, background, text, accent) {
             put("kill", tint("kill", 0.30))
             put("commit", tint("commit", 0.32))
             put("toggle", accented(0.62))
-            // Flat, like everything else this scheme does not warn about.
+            // Flat, like everything else this scheme does not warn about,
+            // and no ring of its own.
             put("pill", key)
         }
     }

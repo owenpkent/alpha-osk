@@ -243,7 +243,8 @@ Edit `always_capitalize` on the language profile in `src/prediction/language.py`
 ## Where User Data Lives
 
 - **Every store writes through `src/atomic_write.py`** (tempfile created in the same directory, flushed and fsynced, then renamed into place), so a crash or power loss mid-write can never leave a truncated file where a good one used to be. A new persistent store must not write with a bare `open()`/`write_text`; route it through `atomic_write_text` or `atomic_write_json` instead.
-- **Settings** (layout, theme, toggles): Managed by Qt `Settings` in QML. Auto-saved on change. Stored in OS registry/config automatically by Qt.
+- **Settings** (layout, theme, toggles): Managed by Qt `Settings` in QML. Auto-saved on change. Stored in OS registry/config automatically by Qt: on Windows that is `HKCU\Software\alpha-osk`, the **organisation** name from `keyboard_app.py::app.setOrganizationName`.
+  - **The Windows uninstaller must not delete that key except behind its own prompt.** It used to delete it from the `.nsi` Uninstall section unconditionally, spelled `Software\${APP_NAME}`, and two things make that wipe every setting on every upgrade rather than only on an uninstall: registry keys are **case-insensitive**, so "Alpha-OSK" resolves to the "alpha-osk" organisation key and takes the whole tree under it, and the installer's Install section runs the previous version's `uninstall.exe /S` before extracting, which is also exactly what the auto-updater drives. So a reinstall and an auto-update both silently reset the theme, layout, panels, opacity and window size to defaults. The deletion now lives in `installer.nsh::customUnInstall`, in the same `IfSilent`-guarded branch as the `%APPDATA%` removal, spelled from a new `APP_ORG` define that must keep matching `setOrganizationName`. Guarded by `tests/test_windows_installer.py`, which expands the `!define`s before comparing, because the bug's own spelling never mentioned the organisation. **The fix cannot protect the upgrade that delivers it**, and that is worth knowing before reading a bug report saying it did not work: the Install section runs `$INSTDIR\uninstall.exe`, the binary the *previous* version wrote, and only calls `WriteUninstaller` afterwards, so every user coming from 1.3.0 or earlier runs the old unconditional `DeleteRegKey` one final time. Only upgrades from the first release carrying this fix are covered.
 - **Prediction model** (learned words/phrases): Saved to disk explicitly or via auto-save on exit.
   - Windows: `%APPDATA%/alpha-osk/models/`
   - Linux: `~/.config/alpha-osk/models/`
@@ -939,6 +940,8 @@ failure the snippet store already had once.
 State is held in a single string property: `currentView` is one of {`"home"`, `"appearance"`, `"typing"`, `"fkeys"`, `"dictation"`, `"model"`, `"data"`}. The Flickable contains seven sibling `ColumnLayout`s, each with `visible: unifiedSettings.currentView === "<id>"`; only one renders at a time. Scroll position is reset to the top on every view change (a `Connections` block on `currentView`) so a drilled-in view never opens mid-section.
 
 The parent (`Main.qml`'s settings popup window) calls `settingsPanel.resetToHome()` in `onVisibleChanged` so re-opening Settings always lands on the home grid, not whatever sub-page the user last visited. Don't break that - landing on a deep page reads as "the menu changed."
+
+**Where it opens is `root.safePanelPos(w, h)`, shared with Help and the Dashboard.** All three used to open at `Screen.width / 2 - width / 2`, which gets three things wrong at once: it centres on the **primary** screen whatever screen the keyboard is on (a monitor to the left has negative coordinates a primary-screen centre cannot even reach, the same bug the snippets restore documents one window over); it can land on top of the keyboard, which is what the user types into these windows with; and none of the three has an OS title bar to drag it back by, while Settings cannot take focus either, so a window that opens somewhere unreachable stays unreachable. `safePanelPos` puts the panel above the keyboard where there is room, below it where there is not, centred on the keyboard's own screen when it fits neither, and clamped on that screen in every case; `screenBoundsAt(px, py)` is the screen lookup, walking `Qt.application.screens` because `Screen` inside a Window is not knowable before the window is placed and `Screen.width` is a size rather than a position. Guarded by `tests/test_qml_panel_placement.py`, which cannot exercise the multi-monitor half (the offscreen plugin gives one screen) and so pins the half a single screen can prove: that the position is derived from the keyboard's geometry rather than the screen's centre, which is exactly the property the old code lacked.
 
 **The one exception is `root.settingsReturnView`, and it is a return rather than a re-open.** Tapping a key in *Function Keys* hides the settings window and opens the key editor, which lives on the **keyboard** window because it is typed into with the OSK's own keys and the settings window cannot hold OS focus (the Deepgram key field carries the same note). Leaving a 360x540 window parked mid-screen would cover the editor, the letter grid it is typed with, or both. `settingsWindow.onVisibleChanged` consumes `settingsReturnView` when it is set and calls `resetToHome()` otherwise, so only that hand-off lands deep; coming back to the home grid there would lose the user's place in a list of twenty-four. Guarded by `tests/test_qml_function_row.py::TestTheSettingsListIsTheLeftClickRoute`, whose inverse half asserts an editor opened by right-clicking a key does **not** pop the settings window open behind it.
 
@@ -1799,21 +1802,36 @@ role but `toggle` is neutral, and
 `test_a_modifiers_click_colour_is_theme_derived` pins the half that is
 actually wanted.
 
-**The prediction pills carry a role too (`pill`).** They were the one
-surface a scheme did not reach, which made them the only thing on screen
-that did not change when the board did. A pill is an offer to commit a word,
-so the schemes that use hue give it the commit hue at reduced strength:
-related to Enter without competing with it. `Main.qml`'s `predPillFill` /
-`predPillInk` / `predPillBorder` are the wiring.
+**The prediction pills carry a role too (`pill`), and a scheme colours
+their RING, never their fill.** They were the one surface a scheme did not
+reach, which made them the only thing on screen that did not change when the
+board did. The fill is **flat, exactly the letter keys' own colour, on every
+scheme and every theme**; a scheme's pill colour goes in `pill.bar`, which
+`Main.qml` draws as the border, and a scheme that leaves it clear keeps the
+full theme accent ring. `Main.qml`'s `predPillFill` / `predPillInk` /
+`predPillBorder` are the wiring. **`bands` is the only scheme with a ring
+colour of its own** (the commit hue, so a pill reads as related to Enter
+without competing with it); `ink` was given one too and it was reversed on
+sight, because that scheme's legend is already a dim hue and a dim hairline
+round a dim word is the one combination that stops reading as something to
+reach for.
 
-**Two things about the pills that were both got wrong once, in the same
-revision, and both read as "washed out".** The border is the **full theme
-accent on every scheme**; blending it toward the fill so a coloured pill
-would read as outlined rather than ringed drained the row, because the ring
-is the only thing marking the pills as what the user is meant to reach for.
-And `mono`'s pill fill is **flat, exactly the letters' colour**; lifting it
-toward the ink (tried at 0.14) greys it out against the board. A scheme may
-tint the fill; it may not soften the ring.
+**Three things about the pills have each been got wrong once, and all three
+read as either "washed out" or "coloured panel".**
+(1) Hueing the **fill** shipped for a release and was reversed on sight:
+eight pills are the widest block of one colour on the board and they sit
+*above* the keys rather than among them, so a wash across all eight reads as
+a coloured panel rather than as eight things to reach for.
+(2) Blending the **ring** toward the fill, so a coloured pill would read as
+outlined rather than ringed, drained the row: the ring is the only thing
+marking the pills as what the user is meant to reach for. A scheme may
+recolour the ring; it may not soften it.
+(3) `mono`'s pill fill was lifted toward the ink (tried at 0.14) and greyed
+out against the board. Flat plus a ring is what reads as crisp.
+Guarded by `tests/test_qml_key_colors.py::TestThePredictionPillsFollowTheScheme`,
+where "the fill never changes" and "the ring always changes" are each paired
+with the inverse, because either on its own is satisfied by a rule that has
+stopped colouring the pills at all.
 
 `roleForKey` reads the layout JSON's `type` **plus the key itself**, because
 the JSON says `char` for a letter, a digit and a bracket alike and those are
