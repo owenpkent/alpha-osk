@@ -15,8 +15,9 @@ from __future__ import annotations
 import logging
 import math
 import threading
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Dict, Iterable, Iterator, List, Optional, Sequence, Tuple
 
 from PySide6.QtCore import QObject, Signal
 
@@ -154,6 +155,17 @@ class HybridPredictor(QObject):
         # before/after.
         self._ppm_in_merge = False
         _logger.info("PPM predictor initialized")
+
+        # Suspends every model mutation.  Off in normal use, and the only
+        # thing that turns it on is a research session (see
+        # docs/research/STUDY_PROTOCOL.md section 5.2): without it the
+        # prediction-on block trains the model that same block is scored
+        # on, which inflates that condition and does so more the later it
+        # runs, so counterbalancing spreads the error around rather than
+        # removing it.  It also keeps a participant's own vocabulary
+        # untouched by a study, which is what makes withdrawal able to
+        # leave no residue.
+        self._learning_frozen = False
 
         # Initialize fuzzy recognizer (spatial error correction)
         self._fuzzy = FuzzyRecognizer()
@@ -768,6 +780,40 @@ class HybridPredictor(QObject):
         assert self._transformer is not None  # Guarded by caller
         self._transformer.rerank_async(context, extended_candidates, on_refined, n)
 
+    # ------------------------------------------------------------------
+    #  Learning freeze
+    #
+    #  Every method below that mutates the model returns early while the
+    #  freeze is on.  Gating each one individually rather than at a single
+    #  choke point is deliberate: there is no single choke point, the seven
+    #  entry points reach three different stores between them, and a gate
+    #  that only covered the obvious one would leave the study measuring a
+    #  model that was still quietly moving underneath it.
+    # ------------------------------------------------------------------
+
+    @property
+    def learning_frozen(self) -> bool:
+        """Whether model mutation is currently suspended."""
+        return self._learning_frozen
+
+    @contextmanager
+    def frozen_learning(self) -> Iterator[None]:
+        """Suspend every model mutation for the duration of the block.
+
+        A context manager rather than a pair of setters, for the same reason
+        the bridge's ``_without_held_modifiers`` is one: the restore has to
+        happen on the exception path too, and a study session that raised
+        part way through would otherwise leave the participant's keyboard
+        permanently unable to learn, with nothing on screen to say so.
+        Nesting restores the previous value rather than thawing outright.
+        """
+        previous = self._learning_frozen
+        self._learning_frozen = True
+        try:
+            yield
+        finally:
+            self._learning_frozen = previous
+
     def learn(self, text: str) -> List[str]:
         """
         Learn from user's text to improve predictions.
@@ -778,6 +824,8 @@ class HybridPredictor(QObject):
         Returns:
             List of words that were new to user vocabulary.
         """
+        if self._learning_frozen:
+            return []
         new_words = self._ngram.learn(text)
         self._refresh_fuzzy_frequencies(self._ngram._tokenize(text))
 
@@ -860,11 +908,15 @@ class HybridPredictor(QObject):
 
     def learn_word(self, word: str) -> None:
         """Learn a single word (e.g., when user types it)."""
+        if self._learning_frozen:
+            return
         self._ngram.learn_word(word)
         self._refresh_fuzzy_frequencies([word])
 
     def unlearn_word(self, word: str) -> bool:
         """Reverse one sighting of a word — see ``NgramPredictor.unlearn_word``."""
+        if self._learning_frozen:
+            return False
         return self._ngram.unlearn_word(word)
 
     # ------------------------------------------------------------------
@@ -880,6 +932,8 @@ class HybridPredictor(QObject):
 
     def learn_token(self, token: str) -> bool:
         """Record a completed structured token.  False if it didn't qualify."""
+        if self._learning_frozen:
+            return False
         return self._ngram.tokens.learn(token)
 
     def predict_tokens(self, prefix: str, n: int = 5) -> List[str]:
@@ -913,6 +967,8 @@ class HybridPredictor(QObject):
             context: The context when prediction was made
             selected_word: The word the user selected
         """
+        if self._learning_frozen:
+            return
         self._ngram.learn_from_pill_click(selected_word)
         self._ngram.reinforce_context(context, selected_word)
         self._refresh_fuzzy_frequencies([selected_word])
@@ -1298,6 +1354,8 @@ class HybridPredictor(QObject):
 
     def mark_good_suggestion(self, word: str) -> None:
         """Boost a word and record the boost for later undo."""
+        if self._learning_frozen:
+            return
         self._ngram.remove_dispreference(word)
         self._ngram.mark_good(word)
         self._refresh_fuzzy_frequencies([word])
@@ -1324,8 +1382,12 @@ class HybridPredictor(QObject):
 
     def learn_capitalization(self, word: str, *, allow_uppercase: bool = False) -> bool:
         """Learn preferred capitalization from user typing."""
+        if self._learning_frozen:
+            return False
         return self._ngram.learn_capitalization(word, allow_uppercase=allow_uppercase)
 
     def set_capitalization(self, word: str, preferred: str) -> None:
         """Explicitly set preferred capitalization (from user edit)."""
+        if self._learning_frozen:
+            return
         self._ngram.capitalization[preferred.lower()] = preferred

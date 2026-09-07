@@ -79,6 +79,10 @@ Only the first works everywhere; the other three are Windows-only. On Linux and 
 
 Settings → Data & Privacy → Privacy has one toggle: **"Share anonymous usage stats"**. It is off by default. If you turn it on, Alpha-OSK sends a small weekly report so we can track total impact across the community (e.g. "X million keystrokes saved across Y users").
 
+**The Windows installer asks the same question**, on its own page, with the box **unchecked**. Ticking it there is the same consent as turning the toggle on, and it is applied the first time you launch the keyboard. Leaving it unchecked, or clicking straight past the page, changes nothing. A silent install, which is what an automatic update runs, never shows the page and never changes what you already chose.
+
+There is one reason beyond curiosity to consider it. Alpha-OSK's word prediction is measured only against replayed text, and that measurement assumes a person who takes every suggestion the instant it appears. Nobody knows how much of it survives real use. These counters are the only evidence that exists at any scale. There is also a separate, much more involved **typing study**, with its own consent form, which you can read about at [alphaosk.com/study](https://alphaosk.com/study). It is a different thing from this toggle and agreeing to one is not agreeing to the other.
+
 ### What's in the report
 
 Nine numbers, sent once a week:

@@ -54,6 +54,14 @@ class TelemetryBridge(QObject):
             app_version=app_version,
             os_name=os_name,
         )
+        # Consume the Windows installer's one-time research-invite seed,
+        # if this machine has one (see TelemetryClient.apply_install_invite
+        # and the study-invite page in build/windows/build.py). This class
+        # is constructed exactly once per session (keyboard_app.py's
+        # startup), which is what makes this the right place to call it:
+        # a no-op after the first successful call, so calling it here on
+        # every launch is cheap and correct.
+        self._telemetry.apply_install_invite()
         self._telemetry_timer = QTimer(self)
         # Hourly tick is plenty: maybe_submit() short-circuits unless
         # the 7-day window has elapsed, and we want the timer to be

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import logging
+import sys
 import time
 import urllib.error
 import urllib.parse
@@ -86,6 +87,7 @@ class TelemetryClient:
         self._enabled = False
         self._anon_id: Optional[str] = None
         self._last_submit_ts: float = 0.0
+        self._invite_applied = False
         self._load_state()
 
     @staticmethod
@@ -112,12 +114,14 @@ class TelemetryClient:
             self._last_submit_ts = float(data.get("last_submit_ts", 0.0))
         except (TypeError, ValueError):
             self._last_submit_ts = 0.0
+        self._invite_applied = bool(data.get("invite_applied", False))
 
     def _save_state(self) -> None:
         data = {
             "enabled": self._enabled,
             "anon_id": self._anon_id,
             "last_submit_ts": self._last_submit_ts,
+            "invite_applied": self._invite_applied,
         }
         try:
             atomic_write_json(self._state_path, data, indent=2)
@@ -155,6 +159,52 @@ class TelemetryClient:
         self._anon_id = None
         self._last_submit_ts = 0.0
         self._save_state()
+
+    def apply_install_invite(self) -> bool:
+        """Consume the Windows installer's one-time research-invite seed.
+
+        The installer runs elevated, and possibly under a different account
+        than the person who will actually use the keyboard, so it cannot
+        write consent into this user's own config directory (this file
+        lives under that user's own profile). Instead it seeds
+        ``HKLM\\Software\\alpha-osk-setup`` \\ ``Invite`` with "accepted" or
+        "declined" (see the study-invite page in build/windows/build.py),
+        and each user's first run consumes that seed exactly once, through
+        the same enable() path a user ticking the Settings toggle takes --
+        so the anon_id is minted exactly as it would be normally.
+
+        Returns True if a seed value was present and consumed by this
+        call, False otherwise. A machine installed before this feature
+        existed has no key at all and must NOT be marked as having
+        answered, so a missing key, an absent value, or an unrecognised
+        one all leave ``_invite_applied`` False and change nothing.
+        """
+        if self._invite_applied:
+            return False
+        # Literal comparison, not a helper call, so mypy prunes this whole
+        # body on the --platform linux pass, the same pattern
+        # src/dictation/config.py uses for its DPAPI calls.
+        if sys.platform != "win32":
+            return False
+
+        import winreg
+
+        try:
+            with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"Software\alpha-osk-setup") as key:
+                value, _ = winreg.QueryValueEx(key, "Invite")
+        except OSError as e:
+            _logger.debug("no install-invite seed present: %s", e)
+            return False
+
+        if value == "accepted":
+            self.enable()
+        elif value != "declined":
+            _logger.debug("unrecognised install-invite value: %r", value)
+            return False
+
+        self._invite_applied = True
+        self._save_state()
+        return True
 
     # --- submit ---
 

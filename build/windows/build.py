@@ -644,6 +644,10 @@ VIAddVersionKey /LANG=1033 "FileDescription" "${{APP_NAME}} Setup"
 Var CreateDesktopShortcut
 Var CreateStartMenuShortcut
 
+; --- Variables for the research-participation invite page below ---
+Var StudyInvite
+Var StudyInviteCheckboxHwnd
+
 ; --- MUI Branding ---
 !define MUI_ABORTWARNING
 {"!define MUI_HEADERIMAGE" if has_header else ""}
@@ -670,6 +674,7 @@ Var CreateStartMenuShortcut
 {license_page_insert}
 !insertmacro MUI_PAGE_DIRECTORY
 Page custom ShortcutOptionsPage ShortcutOptionsLeave
+Page custom StudyInvitePage StudyInviteLeave
 !insertmacro MUI_PAGE_INSTFILES
 !insertmacro MUI_PAGE_FINISH
 
@@ -712,6 +717,63 @@ Function ShortcutOptionsLeave
 FunctionEnd
 
 ; ============================================================
+;  Research Participation Invite Page (optional, opt-in telemetry)
+; ============================================================
+; Never runs during a silent install (/S, which is all the auto-updater
+; ever uses -- see src/updater.py::_launch_installer). A custom page's
+; Show/Leave functions are only invoked when NSIS is actually drawing
+; wizard pages, so $StudyInvite stays "" on every auto-update and the
+; registry seed below is simply never written on that path.
+Function StudyInvitePage
+  nsDialogs::Create 1018
+  Pop $0
+  ${{If}} $0 == error
+    Abort
+  ${{EndIf}}
+
+  ${{NSD_CreateLabel}} 0 0u 100% 12u "Help improve Alpha-OSK (optional)"
+  Pop $1
+
+  ${{NSD_CreateLabel}} 0 16u 100% 28u "Alpha-OSK's predictions are only measured in simulation today. Real usage from people who actually type with it is what would show whether they help in practice."
+  Pop $2
+
+  ${{NSD_CreateLabel}} 0 48u 100% 42u "Ten numbers, once a week: a random ID, app version, operating system, keystrokes, words, predictions accepted, keystrokes saved, minutes of use, sessions, predictions offered."
+  Pop $3
+
+  ${{NSD_CreateLabel}} 0 94u 100% 12u "Never the words you type. Never your files, your screen, or your IP address."
+  Pop $4
+
+  ${{NSD_CreateLabel}} 0 108u 100% 12u "You can change this at any time in Settings, or delete everything you have shared."
+  Pop $5
+
+  ; DEFAULT MUST STAY UNCHECKED. Do not add a ${{NSD_SetState}} ...
+  ; ${{BST_CHECKED}} call here: a pre-ticked consent box is not consent,
+  ; it is the one thing that would make this data unusable as research
+  ; and non-compliant as a privacy control.
+  ${{NSD_CreateCheckbox}} 0 128u 100% 12u "Yes, share anonymous usage statistics"
+  Pop $StudyInviteCheckboxHwnd
+
+  ${{NSD_CreateLink}} 0 144u 100% 12u "Read more about the study"
+  Pop $6
+  ${{NSD_OnClick}} $6 StudyInviteLinkClick
+
+  nsDialogs::Show
+FunctionEnd
+
+Function StudyInviteLinkClick
+  ExecShell "open" "https://alphaosk.com/study"
+FunctionEnd
+
+Function StudyInviteLeave
+  ${{NSD_GetState}} $StudyInviteCheckboxHwnd $0
+  ${{If}} $0 == ${{BST_CHECKED}}
+    StrCpy $StudyInvite "accepted"
+  ${{Else}}
+    StrCpy $StudyInvite "declined"
+  ${{EndIf}}
+FunctionEnd
+
+; ============================================================
 ;  .onInit — runs on installer start
 ; ============================================================
 Function .onInit
@@ -720,6 +782,12 @@ Function .onInit
   ; Default shortcut options to checked
   StrCpy $CreateDesktopShortcut ${{BST_CHECKED}}
   StrCpy $CreateStartMenuShortcut ${{BST_CHECKED}}
+
+  ; Empty unless the study-invite page actually runs and the user leaves
+  ; it (see the page functions above): stays "" for the whole install on
+  ; every silent /S run, which is what keeps an auto-update from ever
+  ; touching the registry seed below.
+  StrCpy $StudyInvite ""
 FunctionEnd
 
 ; ============================================================
@@ -767,6 +835,23 @@ Section "Install"
   ${{GetSize}} "$INSTDIR" "/S=0K" $0 $1 $2
   IntFmt $0 "0x%08X" $0
   WriteRegDWORD HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\${{APP_GUID}}" "EstimatedSize" "$0"
+
+  ; --- Research-participation invite seed ---
+  ; Read once, on this machine's next launch, by
+  ; TelemetryClient.apply_install_invite() in src/telemetry.py. Written
+  ; ONLY when the page actually ran and set $StudyInvite (never on a
+  ; silent auto-update install, see StudyInvitePage above).
+  ;
+  ; The key is "alpha-osk-setup", deliberately NOT "alpha-osk": registry
+  ; keys are case-insensitive, and "alpha-osk" is the Qt settings
+  ; organisation key (see keyboard_app.py's setOrganizationName). CLAUDE.md
+  ; documents a shipped bug where the uninstaller deleted a key spelled
+  ; from ${{APP_NAME}} and it resolved to that same organisation key,
+  ; wiping every user setting on every upgrade. A seed key that collided
+  ; with it here would be one rename away from repeating that.
+  ${{If}} $StudyInvite != ""
+    WriteRegStr HKLM "Software\\alpha-osk-setup" "Invite" "$StudyInvite"
+  ${{EndIf}}
 
   ; Run custom install macros (old version cleanup)
   !insertmacro customInstall

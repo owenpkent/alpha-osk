@@ -1,0 +1,96 @@
+name: Publish telemetry aggregate
+
+# Appends one dated row of the public opt-in telemetry aggregate to a CSV in
+# this repo, so the number quoted anywhere (the study page, the whitepaper, a
+# paper) is one anybody can check, and so the history exists at all.
+#
+# The worker's /v1/aggregate endpoint returns CURRENT totals and keeps no
+# history: it is a SUM over the latest row per install, and D1 stores one row
+# per install rather than a series. Appending a dated row here is what turns
+# that into a time series, and git is the storage. That is the whole design.
+# It also means a gap in the series is visible as a missing date rather than
+# silently interpolated.
+#
+# No credentials anywhere. The endpoint is public, unauthenticated and returns
+# no personal data, which is what makes this workflow three lines of curl
+# instead of a secrets problem.
+
+on:
+  schedule:
+    # 04:10 UTC daily. Off the hour on purpose: GitHub's scheduler is heavily
+    # oversubscribed exactly on the hour and a cron there can slip by tens of
+    # minutes, which for a daily row means occasionally landing on the wrong
+    # date.
+    - cron: "10 4 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: telemetry-aggregate
+  cancel-in-progress: false
+
+jobs:
+  aggregate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch and append
+        env:
+          # Repository variable, not a secret: it is a public URL and putting
+          # it in a secret would only make it harder to see what this does.
+          # Unset means the worker is not deployed yet, and the step no-ops,
+          # mirroring src/telemetry.py's empty DEFAULT_ENDPOINT, which
+          # silently no-ops every submit for the same reason.
+          ENDPOINT: ${{ vars.TELEMETRY_ENDPOINT }}
+        run: |
+          set -euo pipefail
+          if [ -z "${ENDPOINT:-}" ]; then
+            echo "TELEMETRY_ENDPOINT is not set, worker is not deployed yet. Nothing to do."
+            exit 0
+          fi
+
+          out=docs/research/data/telemetry-aggregate.csv
+          mkdir -p "$(dirname "$out")"
+
+          # --fail so an HTML error page never gets parsed as data and
+          # committed as a row of zeros, which is worse than no row.
+          body=$(curl --fail --silent --show-error --max-time 30 "${ENDPOINT%/}/v1/aggregate")
+
+          row=$(printf '%s' "$body" | jq -er '
+            [
+              (now | strftime("%Y-%m-%d")),
+              .users, .keystrokes, .words, .predictions,
+              .keystrokes_saved, .minutes, .sessions, .prediction_offers
+            ] | @csv
+          ')
+
+          if [ ! -f "$out" ]; then
+            echo 'date,users,keystrokes,words,predictions,keystrokes_saved,minutes,sessions,prediction_offers' > "$out"
+          fi
+
+          today=$(date -u +%Y-%m-%d)
+          # A manual re-run on the same day replaces that day's row rather
+          # than adding a second one, so the series stays one row per date
+          # whether it was written by the schedule or by hand.
+          if grep -q "^\"\?${today}" "$out"; then
+            grep -v "^\"\?${today}" "$out" > "$out.tmp" && mv "$out.tmp" "$out"
+          fi
+          printf '%s\n' "$row" >> "$out"
+
+      - name: Commit
+        run: |
+          set -euo pipefail
+          out=docs/research/data/telemetry-aggregate.csv
+          [ -f "$out" ] || exit 0
+          if git diff --quiet -- "$out"; then
+            echo "No change."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "$out"
+          git commit -m "chore: telemetry aggregate for $(date -u +%Y-%m-%d)"
+          git push

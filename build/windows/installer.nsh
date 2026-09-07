@@ -107,10 +107,19 @@
   ; Clean up startup shortcut if it exists
   Delete "$SMSTARTUP\Alpha-OSK.lnk"
 
-  ; Clean up AppData (user config / learned models)
-  ; In silent mode (/S — used during upgrades), skip the prompt and keep AppData.
-  ; Only ask during interactive uninstall.
+  ; Clean up AppData (user config / learned models) and the
+  ; research-invite registry seed. In silent mode (/S, used during
+  ; upgrades), skip this whole branch and keep both: an upgrade must not
+  ; strip settings, and must not erase the once-per-install invite seed
+  ; either (a silent uninstall is what an upgrade runs, same reasoning
+  ; as the AppData keep). Only ask/act during an interactive uninstall.
   IfSilent keepAppData
+  ; Seed key written by the study-invite installer page
+  ; (HKLM\Software\alpha-osk-setup, see build/windows/build.py). NOT
+  ; "alpha-osk": that is the Qt settings organisation key, and deleting
+  ; it here would repeat the exact settings-wipe bug this file already
+  ; guards against for %APPDATA%.
+  DeleteRegKey HKLM "Software\alpha-osk-setup"
   MessageBox MB_YESNO|MB_ICONQUESTION \
     "Would you like to remove Alpha-OSK's learned vocabulary and settings?$\r$\n$\r$\n(Stored in %APPDATA%\alpha-osk)" \
     IDYES removeAppData IDNO keepAppData
