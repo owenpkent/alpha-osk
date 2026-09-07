@@ -599,7 +599,7 @@ Alongside it we report **next-word hit rate** (the share of words already presen
 
 Roughly half of the clicks a user would spend typing these sentences are avoidable, and the engine offers the correct next word before a single letter of it is typed about three times in ten. The two splits sit 1.3 points apart with nothing else changed, which sets the noise floor for every comparison below: **we treat differences under about 1.4 points as not meaningful.**
 
-For calibration, the same harness scores 55.0% on the 30 hand-written sentences that were this project's original benchmark. That set is easier than either AAC split because it was written in this repository and sits close to the curated seeds and the training corpus. It is reported here only to make earlier internal figures comparable; every number in this section is on held-out data.
+For calibration, the same harness scores 56.9% on the 30 hand-written sentences that were this project's original benchmark. That set is easier than either AAC split because it was written in this repository and sits close to the curated seeds and the training corpus. Earlier internal figures on it, up to 55.0%, predate the generated context seeds of section 3.3 and are not directly comparable to this one. It is reported here only to relate those earlier numbers to the current engine; every number in this section is on held-out data.
 
 ### 8.3 What each source contributes
 
