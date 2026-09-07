@@ -8,6 +8,12 @@ Item {
 
     signal closeRequested()
 
+    // Whether this panel rounds the window's corners itself.  Bound from
+    // Main.qml's `selfRoundedCorners`, which carries the reasoning: the
+    // window behind this is transparent, and on Windows a `radius` on a
+    // layered window leaves corner pixels that come back white.
+    required property bool selfRoundedCorners
+
     property var vizData: null
     property int currentTab: 0
 
@@ -71,7 +77,7 @@ Item {
     Rectangle {
         anchors.fill: parent
         color: "#1a1a2e"
-        radius: 10
+        radius: vizPanel.selfRoundedCorners ? 10 : 0
         border.color: "#444"
         border.width: 1
         clip: true
@@ -86,10 +92,12 @@ Item {
                 Layout.fillWidth: true
                 Layout.preferredHeight: 42
                 color: "#16213e"
-                radius: 10
+                // Follows the background, as the keyboard's title bar does.
+                radius: vizPanel.selfRoundedCorners ? 10 : 0
 
                 // Square off bottom corners
                 Rectangle {
+                    visible: vizPanel.selfRoundedCorners
                     anchors.bottom: parent.bottom
                     anchors.left: parent.left
                     anchors.right: parent.right

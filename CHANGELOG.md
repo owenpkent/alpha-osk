@@ -2,6 +2,11 @@
 
 All notable changes to Alpha-OSK are documented in this file.
 
+## [Unreleased]
+
+### Fixed
+- **The white notch in a corner of the keyboard on Windows is gone.** It came and went with whatever was behind the window, which is why it read as intermittent. Every transparent window here (the keyboard, the Snippets and Symbols pickers, the Dashboard) rounded its own corners, and on a layered window the pixels outside that arc come back white rather than showing the desktop. On Windows the corners are now left square and the compositor is asked to round them, which it does with proper antialiasing. Windows 10 has no such request to make, so there the corners stay square, like every other window on that desktop. Nothing changes on Linux or macOS.
+
 ## [1.3.0] (2026-09-06)
 
 ### Added

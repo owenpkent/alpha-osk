@@ -249,6 +249,13 @@ def main() -> int:
         root = engine.rootObjects()[0]
         _settle(800)
 
+        # On Windows the live window leaves its corners to DWM and squares
+        # its own background off (see `selfRoundedCorners` in Main.qml),
+        # but there is no compositor behind the offscreen plugin, so the
+        # rounding has to come from the QML side here or every screenshot
+        # gets hard square corners.
+        root.setProperty("selfRoundedCorners", True)
+
         # Every panel on, so the hero shot shows what the keyboard can be
         # rather than what it is on a fresh install.
         root.setProperty("showFunctionRow", True)

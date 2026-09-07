@@ -1164,12 +1164,35 @@ Window {
         }
     }
 
+    // Who rounds the window's corners.
+    //
+    // Everywhere but Windows we round them ourselves, with a `radius` on the
+    // background below.  On Windows that is exactly what produced the white
+    // notch in a corner: this window is transparent and therefore
+    // WS_EX_LAYERED, and the pixels a `radius` leaves outside the arc come
+    // back white on a layered window rather than showing the desktop.  So
+    // the background is squared off there and DWM masks the corner instead
+    // (`windows_window.py::_prefer_dwm_rounded_corners`).  The measurements
+    // and the reasoning are under "Who rounds the window corners" in
+    // CLAUDE.md.  The two pickers and the dashboard bind to this rather than
+    // reading Qt.platform.os themselves, so the rule is stated once.
+    //
+    // Not readonly, for one caller: `scripts/capture_screenshots.py` renders
+    // through the offscreen plugin, where Qt.platform.os still reads
+    // "windows" but there is no compositor to round anything, so it sets
+    // this back to true to keep the screenshots' corners.
+    property bool selfRoundedCorners: Qt.platform.os !== "windows"
+    readonly property real windowRadius: selfRoundedCorners ? 10 : 0
+
     // Main background — uses Qt.rgba so only the background becomes transparent
     // while keys and text remain fully opaque
     Rectangle {
         id: background
+        // Lets the corner test measure the rendered radius rather than
+        // re-reading the property that sets it.
+        objectName: "windowBackground"
         anchors.fill: parent
-        radius: 10
+        radius: root.windowRadius
         color: Qt.rgba(root.themeBackground.r, root.themeBackground.g, root.themeBackground.b, root.windowOpacity)
         border.color: Qt.rgba(root.themeBorder.r, root.themeBorder.g, root.themeBorder.b, root.windowOpacity)
         border.width: 1
@@ -1180,7 +1203,7 @@ Window {
         Rectangle {
             anchors.fill: parent
             anchors.margins: -1
-            radius: 11
+            radius: root.selfRoundedCorners ? root.windowRadius + 1 : 0
             color: "transparent"
             border.color: Qt.rgba(0, 0, 0, 0.5)
             border.width: 1
@@ -1201,10 +1224,15 @@ Window {
             height: 48
             property color baseColor: Qt.darker(root.themeBackground, 1.1)
             color: Qt.rgba(baseColor.r, baseColor.g, baseColor.b, root.windowOpacity)
-            radius: 10
+            // Follows the background: rounding this while the background
+            // behind it is square would show a lighter wedge in each top
+            // corner instead of a notch.
+            radius: root.windowRadius
 
-            // Only round top corners
+            // Only round top corners.  Nothing to square off when the bar
+            // is already square.
             Rectangle {
+                visible: root.selfRoundedCorners
                 anchors.bottom: parent.bottom
                 anchors.left: parent.left
                 anchors.right: parent.right
@@ -3683,6 +3711,7 @@ Window {
         // to the clipboard rather than types.
         Comp.SnippetsWindow {
             id: snippetsWindow
+            selfRoundedCorners: root.selfRoundedCorners
             applyEditChord: root.applyEditChord
             clampedWindowPos: root.clampedWindowPos
             inkOn: root.inkOn
@@ -3713,6 +3742,7 @@ Window {
         // shell with the Snippets window above.
         Comp.SymbolsWindow {
             id: symbolsWindow
+            selfRoundedCorners: root.selfRoundedCorners
             clampedWindowPos: root.clampedWindowPos
             themeAccent: root.themeAccent
             themeBackground: root.themeBackground
@@ -4874,6 +4904,9 @@ Window {
     // ===== Model Visualization Window =====
     Window {
         id: vizWindow
+        // Found by name from keyboard_app.py::_wire_floating_windows, which
+        // hands its corners to DWM once it is shown (see selfRoundedCorners).
+        objectName: "vizWindow"
         title: "Your Language Model"
         visible: root.showVisualization
         width: 720
@@ -4896,6 +4929,8 @@ Window {
 
         Comp.ModelVisualization {
             id: vizContent
+            objectName: "vizContent"
+            selfRoundedCorners: root.selfRoundedCorners
             anchors.fill: parent
             onCloseRequested: root.showVisualization = false
         }

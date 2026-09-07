@@ -26,6 +26,9 @@ Window {
     // required properties bound in Main.qml, and signals so the
     // toasts (which must stay on the keyboard window, see below) can
     // still fire from here.
+    // Whether this window rounds its own corners, or leaves them to the
+    // compositor.  Bound from Main.qml's `selfRoundedCorners`; see there.
+    required property bool selfRoundedCorners
     required property var applyEditChord
     required property var clampedWindowPos
     required property var inkOn
@@ -456,7 +459,7 @@ Window {
         color: themeBackground
         border.color: themeAccent
         border.width: 1
-        radius: 8
+        radius: snippetsWindow.selfRoundedCorners ? 8 : 0
     }
 
     ColumnLayout {

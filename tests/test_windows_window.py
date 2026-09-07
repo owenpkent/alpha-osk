@@ -55,11 +55,19 @@ class TestAlwaysOnTopIsAppliedAsAZOrderChange:
         user32.SetWindowPos.return_value = 1
         kernel32 = MagicMock()
         kernel32.GetLastError.return_value = 0
+        # apply_extended_styles also asks DWM to round the corners; without
+        # this the call raised AttributeError into its own except clause and
+        # every test here exercised the failure path without saying so.
+        dwmapi = MagicMock()
+        dwmapi.DwmSetWindowAttribute.return_value = 0
 
         import ctypes
 
         monkeypatch.setattr(
-            ctypes, "windll", types.SimpleNamespace(user32=user32, kernel32=kernel32), raising=False
+            ctypes,
+            "windll",
+            types.SimpleNamespace(user32=user32, kernel32=kernel32, dwmapi=dwmapi),
+            raising=False,
         )
         # The real function returns early off Windows so mypy can prune the
         # ctypes body under --platform linux.  The suite runs on Linux too,
@@ -166,11 +174,19 @@ class TestTheKeyboardKeepsItsTaskbarButton:
         user32.SetWindowPos.side_effect = _set_window_pos
         kernel32 = MagicMock()
         kernel32.GetLastError.return_value = 0
+        # apply_extended_styles also asks DWM to round the corners; without
+        # this the call raised AttributeError into its own except clause and
+        # every test here exercised the failure path without saying so.
+        dwmapi = MagicMock()
+        dwmapi.DwmSetWindowAttribute.return_value = 0
 
         import ctypes
 
         monkeypatch.setattr(
-            ctypes, "windll", types.SimpleNamespace(user32=user32, kernel32=kernel32), raising=False
+            ctypes,
+            "windll",
+            types.SimpleNamespace(user32=user32, kernel32=kernel32, dwmapi=dwmapi),
+            raising=False,
         )
         # The real function returns early off Windows so mypy can prune the
         # ctypes body under --platform linux.  The suite runs on Linux too,

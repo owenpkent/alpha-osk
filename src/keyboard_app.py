@@ -258,19 +258,24 @@ def _apply_window_flags(root: QWindow) -> None:
 
 
 def _wire_floating_windows(root: QWindow) -> None:
-    """Apply OSK focus-suppression to the floating Snippets and Symbols windows.
+    """Apply the Win32 styling the floating windows need once they are shown.
 
-    Both are separate top-level ``Window``s declared in Main.qml
-    (objectNames ``snippetsWindow`` and ``symbolsWindow``) so they can
-    float anywhere on the desktop, outside the keyboard. Like the main
-    window they must never steal focus from the app the user is typing
-    into, so on Windows each needs ``WS_EX_NOACTIVATE`` applied via Win32,
-    since the Qt ``WindowDoesNotAcceptFocus`` flag alone doesn't stop
-    click-activation there. The native handle only exists once a window
-    has been shown, so we (re)apply on every visibility change rather
-    than once at startup. A missing window is skipped rather than
-    aborting the rest: one unstyled picker is a smaller problem than
-    both of them going unwired.
+    Three separate top-level ``Window``s are declared in Main.qml so they
+    can float anywhere on the desktop, outside the keyboard: the Snippets
+    and Symbols pickers (objectNames ``snippetsWindow`` and
+    ``symbolsWindow``) and the Dashboard (``vizWindow``). The two pickers
+    must never steal focus from the app the user is typing into, so on
+    Windows each needs ``WS_EX_NOACTIVATE`` applied via Win32, since the
+    Qt ``WindowDoesNotAcceptFocus`` flag alone doesn't stop
+    click-activation there. The Dashboard is allowed to take focus (it
+    has no keys on it) and gets only the corner-rounding half, which all
+    three transparent windows need for the reason under *Who rounds the
+    window corners* in CLAUDE.md.
+
+    The native handle only exists once a window has been shown, so we
+    (re)apply on every visibility change rather than once at startup. A
+    missing window is skipped rather than aborting the rest: one unstyled
+    window is a smaller problem than all of them going unwired.
 
     No-op on non-Windows (the Qt flag is sufficient on X11/Wayland, and
     macOS uses the Accessory activation policy applied app-wide). Silent
@@ -282,28 +287,37 @@ def _wire_floating_windows(root: QWindow) -> None:
     try:
         from PySide6.QtCore import QObject
 
-        for name in ("snippetsWindow", "symbolsWindow"):
+        wiring: dict[str, Callable[[QWindow], None]] = {
+            "snippetsWindow": windows_window.apply_extended_styles,
+            "symbolsWindow": windows_window.apply_extended_styles,
+            "vizWindow": windows_window.prefer_dwm_rounded_corners,
+        }
+        for name, style in wiring.items():
             win = root.findChild(QObject, name)
             if win is None:
-                _logger.warning("%s not found; skipping focus-suppression", name)
+                _logger.warning("%s not found; skipping its window styling", name)
                 continue
             # findChild() is typed to return a bare QObject; the QML side
             # only ever names real top-level Window items here, so this is
             # always a QWindow at runtime.
             win_window = cast(QWindow, win)
 
-            # Bound as a default argument rather than closed over: the loop
-            # variable is rebound on the next pass, so a plain closure would
-            # leave every handler applying styles to the last window found.
-            def _apply(target: QWindow = win_window, label: str = name) -> None:
+            # Bound as default arguments rather than closed over: the loop
+            # variables are rebound on the next pass, so a plain closure
+            # would leave every handler styling the last window found.
+            def _apply(
+                target: QWindow = win_window,
+                label: str = name,
+                apply_style: Callable[[QWindow], None] = style,
+            ) -> None:
                 try:
                     if target.property("visible"):
-                        windows_window.apply_extended_styles(target)
+                        apply_style(target)
                 except Exception as exc:  # pragma: no cover, defensive
                     _logger.debug("%s style apply failed: %s", label, exc)
 
             win_window.visibleChanged.connect(_apply)
-            _logger.info("Wired %s focus-suppression", name)
+            _logger.info("Wired %s window styling", name)
     except Exception as exc:  # pragma: no cover, defensive
         _logger.warning("Failed to wire the floating windows: %s", exc)
 

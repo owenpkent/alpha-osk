@@ -25,6 +25,9 @@ Window {
     // required properties bound in Main.qml, and a signal so the
     // problem toast (which must stay on the keyboard window) can
     // still fire from here.
+    // Whether this window rounds its own corners, or leaves them to the
+    // compositor.  Bound from Main.qml's `selfRoundedCorners`; see there.
+    required property bool selfRoundedCorners
     required property var clampedWindowPos
     required property color themeAccent
     required property color themeBackground
@@ -197,7 +200,7 @@ Window {
     Rectangle {
         anchors.fill: parent
         color: themeBackground
-        radius: 8
+        radius: symbolsWindow.selfRoundedCorners ? 8 : 0
         border.color: themeAccent
         border.width: 1
 
