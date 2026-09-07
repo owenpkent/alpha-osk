@@ -8,6 +8,16 @@ pieces fit.
 
 Implementation: `src/prediction/hybrid_predictor.py`.
 
+> **Read this first.** Everything below that blends a **PPM** source
+> describes the merge as it was before 2026-09-03. PPM's word candidates
+> are out of the merge now (`_ppm_in_merge` defaults to False), so its
+> weight and its branch in every strategy are inert but intact. The model
+> still trains and persists. The body is left as written because it is the
+> reference for how the strategies combine, and reviving PPM inside the
+> prefix beam would need it. See *Status (2026-09-03)* at the end of this
+> file for the measurements, and *Fuzzy dictionary refresh, and PPM out of
+> the merge* in `CLAUDE.md`.
+
 Design philosophy matches Presage and early Gboard/LatinIME: **fast
 complementary predictors that each do one thing well, merged by linear
 interpolation, with the word-level model dominating and the others

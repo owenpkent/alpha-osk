@@ -2,6 +2,8 @@
 
 All notable changes to Alpha-OSK are documented in this file.
 
+## [Unreleased]
+
 ## [1.3.0] (2026-09-06)
 
 ### Added

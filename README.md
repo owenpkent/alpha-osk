@@ -198,7 +198,7 @@ Yes on Windows (Unicode keystroke injection covers anything in BMP and supplemen
 | Anonymous telemetry (opt-in) | Client + UI shipped, endpoint not yet deployed |
 | Analytics dashboard | Shipping |
 | Data backup (export / import) | Shipping |
-| Test suite | ~1,900 tests passing |
+| Test suite | ~2,250 tests passing |
 | macOS port | In progress |
 | Federated learning | Designed, not implemented |
 | Voice dictation (opt-in, bring your own Deepgram key) | Shipping |
@@ -216,6 +216,7 @@ Yes on Windows (Unicode keystroke injection covers anything in BMP and supplemen
 - Function keys F1-F12 plus an optional F13-F24 panel, and any of them can be programmed: one click fires a shortcut like Ctrl+Shift+S, types a stored phrase, or just relabels the keycap for a key you bound inside another app. F13-F24 are the ones worth reassigning, because nothing binds them by default
 - Intelligent spacing: the auto-space after punctuation stands down inside an email, a link, a decimal, a time, or a file path, instead of breaking it in half
 - Snippets for text you type constantly (name, email, address, canned replies), inserted with one tap. Alpha-OSK can spot an email, phone number or address as you type it and offer to save it for you, on your machine only and never while learning is paused
+- Symbols & Emoji picker: 372 glyphs across twelve categories, from dashes and curly quotes to arrows, maths, currency and accented letters. Tapping one types it into whatever app has focus, and the ones you have used recently come back on their own page
 
 ### Voice
 
@@ -251,13 +252,14 @@ Yes on Windows (Unicode keystroke injection covers anything in BMP and supplemen
 - Privacy mode: auto-detects password fields and pauses learning
 - Window never steals focus from the app you're typing into
 - Nine themes including high-contrast options
+- Key Colours: colour a key by what it does rather than by where it sits, so Backspace, Enter and the held modifiers are findable without reading them. Six schemes, every colour derived from the theme above it, and every one held to a 4.5:1 contrast ratio against its own legend on all nine themes
 - Adjustable opacity, key spacing, key sizing
 - Drag-to-resize from either edge (width only; height auto-fits content)
 
 ### Reliability
 
 - Single-instance lock prevents accidental duplicates
-- About 1,900 tests covering prediction, platform abstraction, bridge, vocab packs, dictation, telemetry, data export,
+- About 2,250 tests covering prediction, platform abstraction, bridge, vocab packs, dictation, telemetry, data export,
   including property-based suites that generate adversarial inputs for the archive / pack import
   paths and the prediction-engine invariants
 - CI runs ruff + mypy + pytest + OSV CVE scan on every push and PR

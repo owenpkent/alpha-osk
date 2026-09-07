@@ -16,7 +16,7 @@ The releases repo moved from the `okstudio1` organisation to `owenpkent`. Becaus
 
 Three things follow, and each is a way to break it:
 
-- **Never create a repo named `alpha-osk-releases` under `okstudio1` again.** Reclaiming the name takes the redirect down and strands every pre-v1.2.3 install with no in-app path forward.
+- **Never create a repo named `alpha-osk-releases` under `okstudio1` again.** Reclaiming the name takes the redirect down and strands every pre-v1.3.0 install with no in-app path forward.
 - **`_is_safe_download_url` must stay host-scoped.** It checks `github.com` plus the two release CDN hostnames and deliberately ignores the path, which is what lets an asset URL carrying the *new* owner satisfy a client pinned to the *old* one. Adding a path or owner check here would reject exactly the installs this redirect exists to serve.
 - **Ordering on any future move is transfer first, constant second.** Flipping `GITHUB_API_URL` before the repo exists at the new location ships a build whose updater 404s silently, which looks identical to "no update available".
 

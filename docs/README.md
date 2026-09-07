@@ -15,7 +15,7 @@ For the codebase orientation that pairs with these docs, read [`CLAUDE.md`](../C
 
 Active design docs for the engine, the platform abstraction, and the user-facing extensibility surfaces. Edit when the code in that area changes.
 
-- [`architecture/HYBRID_MERGING.md`](architecture/HYBRID_MERGING.md): how the n-gram, PPM, and fuzzy predictors are combined, the four merge strategies, capitalisation pipeline, validation.
+- [`architecture/HYBRID_MERGING.md`](architecture/HYBRID_MERGING.md): how the n-gram and fuzzy predictors are combined (PPM's word candidates are out of the merge), the four merge strategies, capitalisation pipeline, validation.
 - [`architecture/PPM.md`](architecture/PPM.md): variable-order character model with PPMD escape, used for next-character prediction inside a partial word.
 - [`architecture/FUZZY_RECOGNITION.md`](architecture/FUZZY_RECOGNITION.md): spatial error correction, tunable constants, the relationship to SymSpell.
 - [`architecture/PREDICTION_NOTES.md`](architecture/PREDICTION_NOTES.md): the "unified system" framing across the predictors, fragment filter and repetition gate, autocorrect thresholds, reinforcement and backspace-as-negative-signal, the structured-token store for numbers and email addresses, prioritised future work.

@@ -546,7 +546,7 @@ End-to-end process for shipping a new Windows version. **Do not skip steps** —
 Single source of truth: `src/__version__.py`. `build/windows/build.py` reads from it; the auto-updater compares against it.
 
 ```python
-__version__ = "1.0.8"  # was 1.0.7
+__version__ = "1.3.1"  # was 1.3.0
 ```
 
 This flows into the installer filename (`Alpha-OSK-Setup-1.0.8.exe`), NSIS `APP_VERSION` (Add/Remove Programs), and the registry `DisplayVersion`.
