@@ -118,9 +118,16 @@ class TestTheInviteePageIsPlacedRight:
         assert shortcut < invite < instfiles
 
     def test_the_page_content_names_what_is_sent(self, nsi: str) -> None:
+        """Pins the page's four jobs, not its exact wording.
+
+        This used to assert the literal opening sentence, which made an
+        ordinary copy edit look like a regression while saying nothing about
+        whether the page still explains itself. TestTheStudyPageSaysTheseAreCounts
+        below covers the one claim the wording actually has to make.
+        """
         body = _function_body(nsi, "StudyInvitePage")
         assert "Help improve Alpha-OSK" in body
-        assert "Ten numbers, once a week" in body
+        assert "ten numbers" in body.lower()
         assert "Never the words you type" in body
         assert "Read more about the study" in body
 
@@ -282,3 +289,121 @@ class TestTheInteractiveUninstallStillOffersToRemoveIt:
         label = next(i for i, ln in enumerate(lines) if ln == f"{skip_label}:")
         assert silent < deletion < label, "the settings deletion is not behind IfSilent"
         assert silent < appdata < label, "the AppData removal is not behind IfSilent"
+
+
+# The page area inside nsDialogs::Create 1018 is exactly this tall. Measured
+# from the live dialog: the checkbox that shipped at 128u..140u had its bottom
+# edge exactly on the parent's, and the link at 144u..156u was clipped 39px
+# past it. A control placed below this is silently invisible -- Windows clips a
+# child to its parent, but the control still reports itself visible, so nothing
+# fails and nobody notices until they look at a screenshot.
+PAGE_AREA_UNITS = 140
+
+_NSD_CONTROL = re.compile(r"\$\{NSD_Create(\w+)\}\s+\S+\s+(\d+)u\s+\S+\s+(\d+)u\s+\"([^\"]*)\"")
+
+
+def _controls(nsi_text: str, function_name: str):
+    """(kind, top, height, text) for every control a page function creates."""
+    body = _function_body(nsi_text, function_name)
+    return [
+        (m.group(1), int(m.group(2)), int(m.group(3)), m.group(4))
+        for m in _NSD_CONTROL.finditer(body)
+    ]
+
+
+class TestTheStudyPageFitsItsDialog:
+    """Every control has to end inside the page area or it never draws.
+
+    This is the regression guard for a real defect: "Read more about the
+    study" shipped at 144u, 39px below the page area, and was invisible in
+    the installer while every text-matching test passed.
+    """
+
+    def test_the_page_creates_the_controls_it_is_supposed_to(self, nsi: str) -> None:
+        kinds = [c[0] for c in _controls(nsi, "StudyInvitePage")]
+        assert "Checkbox" in kinds, "the consent checkbox is gone"
+        assert "Link" in kinds, "the read-more link is gone"
+        assert kinds.count("Label") >= 3, f"expected the explanatory labels, got {kinds}"
+
+    def test_no_control_ends_past_the_page_area(self, nsi: str) -> None:
+        overflowing = [
+            (kind, top, height, text[:40])
+            for kind, top, height, text in _controls(nsi, "StudyInvitePage")
+            if top + height > PAGE_AREA_UNITS
+        ]
+        assert not overflowing, (
+            f"these end past {PAGE_AREA_UNITS}u and will be clipped invisible: {overflowing}"
+        )
+
+    def test_the_read_more_link_is_well_inside_the_page(self, nsi: str) -> None:
+        """Named separately from the sweep above: this is the control that
+        actually shipped broken, so it gets an assertion that says so."""
+        link = [c for c in _controls(nsi, "StudyInvitePage") if c[0] == "Link"]
+        assert len(link) == 1, f"expected exactly one link, got {link}"
+        _, top, height, _ = link[0]
+        assert top + height <= PAGE_AREA_UNITS, (
+            f"the read-more link ends at {top + height}u, past the {PAGE_AREA_UNITS}u "
+            "page area, so it is clipped and never renders"
+        )
+
+    def test_controls_do_not_overlap_each_other(self, nsi: str) -> None:
+        """A control laid out on top of another hides it just as thoroughly."""
+        ordered = sorted(_controls(nsi, "StudyInvitePage"), key=lambda c: c[1])
+        for (k1, t1, h1, x1), (k2, t2, _, x2) in zip(ordered, ordered[1:]):
+            assert t1 + h1 <= t2, (
+                f"{k1} {x1[:30]!r} ({t1}u..{t1 + h1}u) overlaps {k2} {x2[:30]!r} starting at {t2}u"
+            )
+
+
+class TestTheCustomPagesSetTheirOwnHeader:
+    """A custom page inherits the previous MUI page's header unless it sets one.
+
+    Both of these read "Choose Install Location" over unrelated content until
+    the MUI_HEADER_TEXT calls were added.
+    """
+
+    @pytest.mark.parametrize("function_name", ["ShortcutOptionsPage", "StudyInvitePage"])
+    def test_the_page_sets_a_header(self, nsi: str, function_name: str) -> None:
+        body = _function_body(nsi, function_name)
+        assert "MUI_HEADER_TEXT" in body, (
+            f"{function_name} sets no header, so it inherits the previous page's"
+        )
+
+    @pytest.mark.parametrize("function_name", ["ShortcutOptionsPage", "StudyInvitePage"])
+    def test_the_header_is_set_before_the_dialog_is_created(
+        self, nsi: str, function_name: str
+    ) -> None:
+        """MUI_HEADER_TEXT after nsDialogs::Show is never reached: Show blocks
+        until the user leaves the page."""
+        body = _function_body(nsi, function_name)
+        assert body.index("MUI_HEADER_TEXT") < body.index("nsDialogs::Show")
+
+    def test_neither_header_still_says_choose_install_location(self, nsi: str) -> None:
+        """The inverse: a header that merely exists but repeats the directory
+        page's text would satisfy the assertions above and fix nothing."""
+        for function_name in ("ShortcutOptionsPage", "StudyInvitePage"):
+            body = _function_body(nsi, function_name)
+            header = re.search(r'MUI_HEADER_TEXT\s+"([^"]*)"', body)
+            assert header, f"{function_name} has no header text"
+            assert "install location" not in header.group(1).lower()
+
+
+class TestTheStudyPageSaysTheseAreCounts:
+    """The numbers are totals, not content, and the page has to say so.
+
+    The first wording opened with a bare list ("keystrokes, words, ...") that
+    read as though the typed text itself is sent. That is the single most
+    important thing this page communicates, so it is pinned.
+    """
+
+    def test_it_says_the_numbers_are_totals_or_counts(self, nsi: str) -> None:
+        text = " ".join(c[3].lower() for c in _controls(nsi, "StudyInvitePage"))
+        assert "total" in text or "count" in text, (
+            "the page never says the ten numbers are counts, so a bare list of "
+            "'keystrokes, words' reads as though the text is sent"
+        )
+
+    def test_it_says_nothing_typed_is_included(self, nsi: str) -> None:
+        text = " ".join(c[3].lower() for c in _controls(nsi, "StudyInvitePage"))
+        assert "never the words you type" in text
+        assert "anything you typed" in text or "nothing you type" in text
