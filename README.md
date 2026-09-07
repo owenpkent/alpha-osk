@@ -123,8 +123,8 @@ That covers ~90% of day-to-day use. The rest of this README and the [white paper
 <br /><em>Appearance: Compact View plus the function row, extra function row, navigation, and numpad panel toggles; pick QWERTY / Dvorak / Colemak; pick a theme; adjust opacity.</em>
 </td>
 <td width="50%" align="center">
-<img src="assets/screenshots/settings-data-privacy.png" alt="Data and Privacy settings: data backup export and import, telemetry opt-in, auto-update toggle" width="100%" />
-<br /><em>Data & Privacy: one-click export and import of your model, lifetime stats, and vocabulary packs; opt-in anonymous telemetry; auto-update.</em>
+<img src="assets/screenshots/settings-data-privacy.png" alt="Data and Privacy settings: data backup export and import, autofill and telemetry opt-ins, research study invitation, auto-update toggle" width="100%" />
+<br /><em>Data & Privacy: one-click export and import of your model, lifetime stats, and vocabulary packs; opt-in autofill and anonymous telemetry; an invitation to the research study; auto-update.</em>
 </td>
 </tr>
 <tr>
