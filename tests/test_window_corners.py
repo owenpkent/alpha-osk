@@ -178,7 +178,9 @@ class TestTheDwmCall:
         monkeypatch.setattr(sys, "platform", "win32")
         fake = MagicMock()
         fake.dwmapi.DwmSetWindowAttribute.return_value = 0
-        with patch("ctypes.windll", fake):
+        # `create`: the attribute only exists on Windows, and these run on
+        # the Linux shards too.
+        with patch("ctypes.windll", fake, create=True):
             yield fake
 
     def test_it_asks_for_round_corners(self, windll: MagicMock) -> None:
