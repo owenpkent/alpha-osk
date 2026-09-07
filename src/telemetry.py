@@ -32,7 +32,7 @@ _logger = logging.getLogger("Telemetry")
 # shipping a release that has the toggle enabled. Empty string disables
 # all network traffic (the client treats it as "endpoint not configured"
 # and silently no-ops every submit).
-DEFAULT_ENDPOINT = ""
+DEFAULT_ENDPOINT = "https://alpha-osk-telemetry.okstudio.workers.dev"
 
 # Submit at most once per WEEK. The first submission lands ~7 days
 # after opt-in, not immediately on toggle, so a user toggling out of

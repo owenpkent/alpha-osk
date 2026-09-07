@@ -85,12 +85,18 @@ jobs:
           set -euo pipefail
           out=docs/research/data/telemetry-aggregate.csv
           [ -f "$out" ] || exit 0
-          if git diff --quiet -- "$out"; then
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # Stage first, then ask the INDEX whether anything moved. A plain
+          # "git diff" reports only tracked files, so on the very first run
+          # the freshly created CSV is untracked, the diff is empty, and the
+          # step exited "No change." before ever reaching git add: the series
+          # could never start. Staging first makes the untracked and the
+          # modified cases read the same.
+          git add "$out"
+          if git diff --cached --quiet -- "$out"; then
             echo "No change."
             exit 0
           fi
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add "$out"
           git commit -m "chore: telemetry aggregate for $(date -u +%Y-%m-%d)"
           git push
