@@ -32,6 +32,7 @@ from typing import Optional
 from PySide6.QtQml import QQmlApplicationEngine
 
 from src.keyboard_bridge import KeyboardBridge
+from src.study_bridge import StudyBridge
 from src.telemetry_bridge import TelemetryBridge
 
 
@@ -40,17 +41,24 @@ def install_context_properties(
     bridge: KeyboardBridge,
     *,
     telemetry: Optional[TelemetryBridge] = None,
+    study: Optional[StudyBridge] = None,
 ) -> TelemetryBridge:
-    """Register ``keyboard`` and ``telemetry`` on ``engine``'s root context.
+    """Register ``keyboard``, ``telemetry`` and ``study`` on the root context.
 
     Returns the ``TelemetryBridge`` that was registered (the one passed
     in, or a freshly built one parented to ``bridge``), so a test that
     wants to drive it directly (toggle consent, force a submit) doesn't
     have to reach back into ``bridge``, which no longer has any telemetry
-    on it.
+    on it. ``study`` is built and parented the same way, for the same
+    reason (an unparented QObject with no Python reference is garbage
+    collected the moment this function returns, and QML's ``study``
+    context property would go null).
     """
     if telemetry is None:
         telemetry = TelemetryBridge(bridge.analytics.get_session_stats, parent=bridge)
+    if study is None:
+        study = StudyBridge(keyboard=bridge, predictor=bridge._predictor, parent=bridge)
     engine.rootContext().setContextProperty("keyboard", bridge)
     engine.rootContext().setContextProperty("telemetry", telemetry)
+    engine.rootContext().setContextProperty("study", study)
     return telemetry

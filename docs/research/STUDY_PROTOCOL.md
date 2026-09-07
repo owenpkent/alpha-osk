@@ -188,6 +188,45 @@ participant meets it on day one, with a cold personal model. That understates wh
 long-term user gets, since the whitepaper's own personalisation figures show the model
 improving with use. The study measures first-contact benefit, and should say so.
 
+### 5.3 The trial types into a recorder, not into an application
+
+A trial needs three things at once: the participant types into a field we own,
+the prediction engine runs exactly as it normally does, and nothing reaches the
+desktop. The obvious mechanism, the existing edit-mode intercept
+(`setEditMode` plus `editKeyTyped`), gives the first and third and explicitly
+not the second. It returns early, skipping "password detection, analytics,
+predictions" in its own comment. Predictions are the thing under study, so a
+trial run through edit mode would measure an engine that was switched off.
+
+So the redirect happens at the **synthesiser** instead.
+`KeyboardBridge` funnels every character, pill, snippet and special key through
+exactly three wrappers (`_send_key`, `_send_text`, `_replace_text`), which is
+already the one place in that file that knows text is leaving the keyboard.
+`begin_study_capture` swaps `_synth` for a `RecordingSynthesizer`, and a trial
+then inherits every invariant in that file for free: suffix-only insertion, the
+sticky-modifier release, the deferred auto-space, auto-capitalisation, the
+context buffers, the pointer-bias model. Nothing had to grow a study branch,
+which matters because `_press_char` is the most invariant-dense function in the
+project and a fourth mode inside it would be a standing hazard.
+
+Three consequences worth knowing before changing any of it:
+
+- **The recorder keeps a caret**, because it has to behave like a text field
+  rather than a log. A participant who presses Left and fixes a letter in the
+  middle of a word is doing an ordinary thing, and a recorder that appended
+  blindly would report a transcript nobody typed and then score it as an error.
+- **Compat mode is forced off while capturing.** It exists to work around
+  applications that intercept synthesised keystrokes, and a trial types into no
+  application. Left on, its BackSpace-and-retype replaces a one-click pill with
+  a run of backspaces, so a participant who happened to have an IDE focused
+  behind the keyboard would score realised savings near zero for a reason that
+  has nothing to do with them or the engine.
+- **Action kind is inferred from what arrived**, not set by a flag a caller has
+  to remember: one click that produced several characters is a pill, one click
+  that produced one character is typing. That distinction is the entire
+  measurement, and a caller who forgot to set a flag would silently score a
+  pill as typing and report savings of zero.
+
 ## 6. Measures
 
 Implemented in `src/study/metrics.py`, one function per row, with the formulas pinned
@@ -411,6 +450,7 @@ the number used in analysis are the same number.
 | Protocol section | Code |
 |---|---|
 | Measures (6) | `src/study/metrics.py`, `tests/test_study_metrics.py` |
+| Trial capture (5.3) | `src/study/capture.py`, `KeyboardBridge.begin_study_capture` |
 | Phrase sets and contamination check (7) | `src/study/phrases.py` |
 | Conditions, counterbalancing, block state (4, 8) | `src/study/session.py` |
 | Consent state, participant code, resume (8, 12) | `src/study/config.py` |

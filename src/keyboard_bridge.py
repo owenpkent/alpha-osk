@@ -693,6 +693,11 @@ class KeyboardBridge(QObject):
         self._current_layer = "lower"  # "lower", "upper", "numbers", "symbols"
         self._edit_mode_active = False  # prediction-edit popup open → redirect OSK keys
 
+        # Set while a research trial is capturing keystrokes instead of
+        # sending them to the desktop.  See begin_study_capture.
+        self._study_synth: Optional[KeySynthesizerBase] = None
+        self._desktop_synth: Optional[KeySynthesizerBase] = None
+
         # Create platform-appropriate key synthesizer
         self._synth: KeySynthesizerBase = create_key_synthesizer()
         if self._synth.is_available():
@@ -1075,6 +1080,48 @@ class KeyboardBridge(QObject):
         """Select the last *backspaces* characters and overwrite with *text*."""
         self._note_own_keystroke()
         self._synth.replace_text(backspaces, text)
+
+    # ------------------------------------------------------------------
+    #  Study capture
+    # ------------------------------------------------------------------
+
+    def begin_study_capture(self, recorder: KeySynthesizerBase) -> None:
+        """Redirect every keystroke into *recorder* instead of the desktop.
+
+        The swap happens here, at the synthesiser, rather than as a fourth
+        mode inside ``_press_char``, and that is the whole point: every
+        invariant in this file (suffix-only insertion, the sticky-modifier
+        release, the deferred auto-space, the context buffers, the
+        pointer-bias model) keeps applying unchanged, and a trial measures
+        the engine as it really behaves rather than as a study-shaped copy
+        of it.  Edit mode cannot serve here because it returns before the
+        prediction path, and predictions are what is being studied.
+
+        Idempotent, and it keeps the desktop synthesiser rather than
+        recreating one on the way out: a study that ended by an exception
+        must not leave the keyboard unable to type.
+        """
+        if self._study_synth is not None:
+            return
+        self._desktop_synth = self._synth
+        self._study_synth = recorder
+        self._synth = recorder
+        # The participant is about to copy a supplied phrase, so anything the
+        # engine believes about what came before it is wrong and would seed
+        # the first word with someone else's context.
+        self._reset_typing_context()
+
+    def end_study_capture(self) -> None:
+        """Put the desktop synthesiser back."""
+        if self._desktop_synth is not None:
+            self._synth = self._desktop_synth
+        self._desktop_synth = None
+        self._study_synth = None
+        self._reset_typing_context()
+
+    @property
+    def study_capture_active(self) -> bool:
+        return self._study_synth is not None
 
     def _suppress_auto_space(self, token_before: str, punct: str) -> bool:
         """Should the punctuation auto-space be skipped this time?
@@ -4644,7 +4691,19 @@ class KeyboardBridge(QObject):
         """Return whether compat mode should currently apply.
 
         Effective state: ``manual OR (auto_enabled AND auto_active)``.
+
+        Always off while a study trial is capturing.  Compat mode exists to
+        work around applications that intercept synthesised keystrokes, and a
+        trial types into a recorder rather than into any application, so it
+        has nothing to work around.  Leaving it on would be worse than
+        pointless: its BackSpace-and-retype replaces a one-click pill with a
+        run of backspaces, and the recorder counts clicks, so a participant
+        who happened to have an IDE focused behind the keyboard would have
+        their realised savings scored near zero for a reason that has nothing
+        to do with them or with the engine.
         """
+        if self._study_synth is not None:
+            return False
         return self._compat_manual or (self._compat_auto_enabled and self._compat_auto_active)
 
     def _update_compat_auto(self, hwnd: int) -> None:

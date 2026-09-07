@@ -192,21 +192,54 @@ def error_taxonomy(trial: Trial) -> ErrorCounts:
 def pill_acceptance_latency_ms(trial: Trial) -> tuple[int, ...]:
     """Gap, in ms, from each pill's most recent matching offer to its tap.
 
-    A pill with no preceding offer that named its text is skipped outright
+    This is the visual-search cost Koester and Levine identified as the
+    reason keystroke savings overstate benefit, measured directly rather
+    than inferred, which is a large part of what makes the study worth
+    running.
+
+    **The match is on the word the pill completed, not on the text it sent.**
+    Insertion is suffix-only: accepting "hello" after typing "hell" sends
+    just "o ", so an offer list holding "hello" never contains the event's
+    own text and a naive content match finds nothing, silently returning no
+    latencies at all rather than failing. The transcript is therefore
+    replayed alongside the events, and each pill is matched against the word
+    standing at the caret once it landed. Matching on content rather than
+    simply taking the most recent offer is what keeps a snippet or a
+    programmed phrase, which are also one-click multi-character inserts,
+    from being attributed to a prediction the participant never took.
+
+    A pill with no preceding offer naming its word is skipped outright
     rather than given a sentinel: there is nothing to measure a latency
     against, and a 0 or a -1 here would silently read as a real value in an
     average.
     """
     gaps: list[int] = []
     last_offer_t_ms: dict[str, int] = {}
+    running: list[str] = []
     for event in trial.events:
         if event.kind == "offer":
             for word in event.offered:
-                last_offer_t_ms[word] = event.t_ms
-        elif event.kind == "pill":
-            offer_t = last_offer_t_ms.get(event.text)
+                last_offer_t_ms[word.lower()] = event.t_ms
+            continue
+        if event.kind == "backspace":
+            if running:
+                running.pop()
+            continue
+        if event.kind == "pill":
+            running.extend(event.text)
+            completed = "".join(running).rstrip().rsplit(" ", 1)[-1]
+            # The completed word first, which is what a suffix insert needs,
+            # then the sent text, which is what a next-word pill (tapped with
+            # nothing typed) produces on its own. Both are content matches, so
+            # a snippet or a programmed phrase still fails to match a
+            # prediction offer and is still correctly left out.
+            offer_t = last_offer_t_ms.get(completed.lower())
+            if offer_t is None:
+                offer_t = last_offer_t_ms.get(event.text.strip().lower())
             if offer_t is not None:
                 gaps.append(event.t_ms - offer_t)
+            continue
+        running.extend(event.text)
     return tuple(gaps)
 
 
