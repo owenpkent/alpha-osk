@@ -107,14 +107,26 @@
   ; Clean up startup shortcut if it exists
   Delete "$SMSTARTUP\Alpha-OSK.lnk"
 
-  ; Clean up AppData (user config / learned models)
-  ; In silent mode (/S — used during upgrades), skip the prompt and keep AppData.
-  ; Only ask during interactive uninstall.
-  IfSilent keepAppData
+  ; Clean up the user's own data: the learned models under %APPDATA% and
+  ; the settings Qt keeps in HKCU\Software\${APP_ORG}.
+  ;
+  ; BOTH are behind the same prompt, and the prompt is skipped in silent
+  ; mode, because an upgrade runs this uninstaller with /S before the new
+  ; files are extracted (see the Install section's same-directory cleanup,
+  ; and src/updater.py, which drives exactly that path).  The settings key
+  ; used to be deleted unconditionally from the Uninstall section instead,
+  ; so every reinstall and every auto-update silently reset the user's
+  ; theme, layout, panels and window size back to defaults.
+  ;
+  ; Note the key is spelled with the organisation name, not the app name:
+  ; registry keys are case-insensitive, so "Software\Alpha-OSK" resolves to
+  ; this same key and takes the whole tree with it.
+  IfSilent keepUserData
   MessageBox MB_YESNO|MB_ICONQUESTION \
-    "Would you like to remove Alpha-OSK's learned vocabulary and settings?$\r$\n$\r$\n(Stored in %APPDATA%\alpha-osk)" \
-    IDYES removeAppData IDNO keepAppData
-  removeAppData:
+    "Would you like to remove Alpha-OSK's learned vocabulary and settings?$\r$\n$\r$\n(Vocabulary in %APPDATA%\alpha-osk, settings in the registry)" \
+    IDYES removeUserData IDNO keepUserData
+  removeUserData:
     RMDir /r "$APPDATA\alpha-osk"
-  keepAppData:
+    DeleteRegKey HKCU "Software\${APP_ORG}"
+  keepUserData:
 !macroend
