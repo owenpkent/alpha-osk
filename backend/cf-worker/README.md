@@ -123,3 +123,45 @@ who compromises this worker can see anon_ids and lifetime counters
 (no IP, no UA, no content) and could try to backfill fake submissions to
 poison the aggregate. That's limited by the per-counter sanity ceilings and
 the rate limiting described above.
+
+## Going live: the four steps are coupled
+
+Each piece below is documented on its own elsewhere, and nothing said they
+have to happen together. They do, and in this order. Doing two of the four
+leaves the system in a state that looks working and silently collects
+nothing.
+
+1. **Deploy the worker** (`npm run deploy`, above) and note the URL it
+   prints. Nothing else works before this, and until it exists every step
+   below is a no-op by design rather than by accident.
+
+2. **Set `DEFAULT_ENDPOINT` in `src/telemetry.py`** to that URL, per the
+   release checklist in `docs/build/WINDOWS.md` step 2a. It ships as the
+   empty string, which the client reads as "not configured" and silently
+   no-ops every submit. **A build shipped without this step has a working
+   consent toggle that sends nothing**, which is the failure mode worth
+   naming because it is invisible from the UI: the user opts in, the switch
+   stays on, and no data ever arrives.
+
+3. **Set the `TELEMETRY_ENDPOINT` repository variable** (not a secret: it is
+   a public URL) so `.github/workflows/telemetry-aggregate.yml` starts
+   appending a dated row to `docs/research/data/telemetry-aggregate.csv`.
+   The endpoint returns current totals and keeps no history, so this
+   workflow is the only thing that turns it into a time series. Skip it and
+   the history for the period before you notice does not exist and cannot be
+   reconstructed.
+
+4. **Ship a build carrying the installer invitation** (the participation
+   page in `build/windows/build.py`). Its checkbox is unchecked by default
+   and must stay that way: a pre-ticked consent box is not consent, and it
+   would make the data unusable as research.
+
+Verify the whole chain end to end after a release by opting in on a clean
+install, waiting for a submit, and checking that `/v1/aggregate` moves.
+Nothing in the client reports a delivery failure to the user, deliberately,
+so this check is the only signal that the chain is intact.
+
+See also `docs/architecture/TELEMETRY.md` (design), `docs/PRIVACY.md` (what
+is promised to users) and `docs/research/STUDY_PROTOCOL.md` section 10 (how
+this channel relates to the user study, which is a separate thing with its
+own consent).

@@ -133,6 +133,11 @@ Window {
         // In the settings layer rather than a file of its own on purpose:
         // see the note on symbolsWindow.recent.
         property string savedRecentGlyphs: ""
+
+        // Research study window position, same sentinel and same
+        // reasoning as Snippets/Symbols above.
+        property int savedStudyX: -1000000
+        property int savedStudyY: -1000000
     }
 
     // Set when Component.onCompleted finishes restoring the saved
@@ -2029,6 +2034,10 @@ Window {
             // ===== Prediction Bar (spans full width including nav/numpad) =====
             Item {
                 id: predBar
+                // Named so a test can measure the bar's own live height
+                // directly rather than recomputing it from the properties
+                // that set it, see TestTheStudyPredictionsOffCondition.
+                objectName: "predictionBar"
                 Layout.fillWidth: true
                 // Pill geometry tracks the main keyboard so the bar stays
                 // proportional when the user resizes the window. At default
@@ -2498,8 +2507,14 @@ Window {
                     }
 
                     Repeater {
+                        // `study.suppressPredictions` blanks the row without
+                        // touching predBar's height (see Layout.preferredHeight
+                        // above, unchanged): the study's predictions-off
+                        // condition must not also change key geometry, which
+                        // `suggestionsEnabled` would (STUDY_PROTOCOL.md 5.1).
                         model: (root.suggestionsEnabled && !root.privacyMode
-                                && !root.dictationActive) ? predRow.fit.words : []
+                                && !root.dictationActive
+                                && !study.suppressPredictions) ? predRow.fit.words : []
                         delegate: Rectangle {
                             width: index < predRow.fit.widths.length
                                    ? predRow.fit.widths[index]
@@ -3944,6 +3959,31 @@ Window {
             onProblem: function(message) { snippetProblemToast.flash(message) }
         }
 
+        // Research study: the participant-facing consent / task / review
+        // flow for the typing study. See qml/components/StudyWindow.qml for
+        // why it never calls keyboard.setEditMode() (the one floating
+        // window here that deliberately does not) and
+        // docs/research/STUDY_PROTOCOL.md for the protocol it drives.
+        Comp.StudyWindow {
+            id: studyWindow
+            selfRoundedCorners: root.selfRoundedCorners
+            clampedWindowPos: root.clampedWindowPos
+            inkOn: root.inkOn
+            luminance: root.luminance
+            themeAccent: root.themeAccent
+            themeBackground: root.themeBackground
+            themeBorder: root.themeBorder
+            themeKeyColor: root.themeKeyColor
+            themeKeyPressed: root.themeKeyPressed
+            themeTextColor: root.themeTextColor
+            keyboardWidth: root.width
+            keyboardX: root.x
+            keyboardY: root.y
+            settings: appSettings
+
+            onProblem: function(message) { snippetProblemToast.flash(message) }
+        }
+
 
         // Post-update toast — shown once on the first launch after the
         // auto-updater applied a new version. Confirms to the user
@@ -4696,7 +4736,14 @@ Window {
             
             logEntries: root.debugLog
             currentContext: root.debugContext
-            currentPredictions: root.predictions
+            // Blanked during a predictions-off trial for the same reason the
+            // pill row is (STUDY_PROTOCOL.md 5.1). This overlay is
+            // developer-only and a participant cannot reach it, but a
+            // researcher piloting the study with Debug Mode left on would
+            // otherwise be shown the suggestions the condition exists to
+            // withhold, and the trial would be silently invalid rather than
+            // visibly broken.
+            currentPredictions: study.suppressPredictions ? [] : root.predictions
             
             onCloseRequested: {
                 root.showDebugPanel = false
@@ -5060,6 +5107,7 @@ Window {
             onEditKeyRequested: function(keyId) { root.editKeyFromSettings(keyId) }
             onShowHelpRequested: root.showHelp = true
             onShowVisualizationRequested: root.showVisualization = true
+            onShowStudyRequested: studyWindow.openStudy()
             onCheckForUpdatesNowRequested: {
                 if (keyboard) {
                     root._lastCheckStatus = "checking"

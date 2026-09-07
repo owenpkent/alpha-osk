@@ -108,20 +108,35 @@
   Delete "$SMSTARTUP\Alpha-OSK.lnk"
 
   ; Clean up the user's own data: the learned models under %APPDATA% and
-  ; the settings Qt keeps in HKCU\Software\${APP_ORG}.
+  ; the settings Qt keeps in HKCU\Software\${APP_ORG}.  The research-invite
+  ; seed under HKLM goes with them, on a slightly different rule, below.
   ;
-  ; BOTH are behind the same prompt, and the prompt is skipped in silent
-  ; mode, because an upgrade runs this uninstaller with /S before the new
-  ; files are extracted (see the Install section's same-directory cleanup,
-  ; and src/updater.py, which drives exactly that path).  The settings key
-  ; used to be deleted unconditionally from the Uninstall section instead,
-  ; so every reinstall and every auto-update silently reset the user's
-  ; theme, layout, panels and window size back to defaults.
+  ; BOTH of the user's stores are behind the same prompt, and the prompt is
+  ; skipped in silent mode, because an upgrade runs this uninstaller with /S
+  ; before the new files are extracted (see the Install section's
+  ; same-directory cleanup, and src/updater.py, which drives exactly that
+  ; path).  The settings key used to be deleted unconditionally from the
+  ; Uninstall section instead, so every reinstall and every auto-update
+  ; silently reset the user's theme, layout, panels and window size back to
+  ; defaults.
   ;
   ; Note the key is spelled with the organisation name, not the app name:
   ; registry keys are case-insensitive, so "Software\Alpha-OSK" resolves to
   ; this same key and takes the whole tree with it.
   IfSilent keepUserData
+
+  ; The study-invite seed written by the installer page
+  ; (HKLM\Software\alpha-osk-setup, see build/windows/build.py).  NOT
+  ; "alpha-osk": that is the Qt settings organisation key immediately above,
+  ; and deleting it here would repeat the exact settings-wipe bug this macro
+  ; now guards against.
+  ;
+  ; It sits after the IfSilent but before the prompt on purpose.  An upgrade
+  ; must not erase a once-per-install seed the user has not consumed yet, so
+  ; it stays behind the silent guard; but it is machine state rather than
+  ; anything the user typed, so a real uninstall removes it whichever way
+  ; they answer a question about their own vocabulary and settings.
+  DeleteRegKey HKLM "Software\alpha-osk-setup"
   MessageBox MB_YESNO|MB_ICONQUESTION \
     "Would you like to remove Alpha-OSK's learned vocabulary and settings?$\r$\n$\r$\n(Vocabulary in %APPDATA%\alpha-osk, settings in the registry)" \
     IDYES removeUserData IDNO keepUserData

@@ -70,6 +70,7 @@ from .platform import (
     macos_window,
     windows_window,
 )
+from .study_bridge import StudyBridge
 from .telemetry_bridge import TelemetryBridge
 
 _logger = logging.getLogger("KeyboardApp")
@@ -260,16 +261,16 @@ def _apply_window_flags(root: QWindow) -> None:
 def _wire_floating_windows(root: QWindow) -> None:
     """Apply the Win32 styling the floating windows need once they are shown.
 
-    Three separate top-level ``Window``s are declared in Main.qml so they
-    can float anywhere on the desktop, outside the keyboard: the Snippets
-    and Symbols pickers (objectNames ``snippetsWindow`` and
-    ``symbolsWindow``) and the Dashboard (``vizWindow``). The two pickers
-    must never steal focus from the app the user is typing into, so on
-    Windows each needs ``WS_EX_NOACTIVATE`` applied via Win32, since the
-    Qt ``WindowDoesNotAcceptFocus`` flag alone doesn't stop
+    Four separate top-level ``Window``s are declared in Main.qml so they
+    can float anywhere on the desktop, outside the keyboard: the Snippets,
+    Symbols and research-study windows (objectNames ``snippetsWindow``,
+    ``symbolsWindow`` and ``studyWindow``) and the Dashboard (``vizWindow``).
+    The three pickers must never steal focus from the app the user is
+    typing into, so on Windows each needs ``WS_EX_NOACTIVATE`` applied via
+    Win32, since the Qt ``WindowDoesNotAcceptFocus`` flag alone doesn't stop
     click-activation there. The Dashboard is allowed to take focus (it
     has no keys on it) and gets only the corner-rounding half, which all
-    three transparent windows need for the reason under *Who rounds the
+    four transparent windows need for the reason under *Who rounds the
     window corners* in CLAUDE.md.
 
     The native handle only exists once a window has been shown, so we
@@ -290,6 +291,7 @@ def _wire_floating_windows(root: QWindow) -> None:
         wiring: dict[str, Callable[[QWindow], None]] = {
             "snippetsWindow": windows_window.apply_extended_styles,
             "symbolsWindow": windows_window.apply_extended_styles,
+            "studyWindow": windows_window.apply_extended_styles,
             "vizWindow": windows_window.prefer_dwm_rounded_corners,
         }
         for name, style in wiring.items():
@@ -761,6 +763,18 @@ def main() -> int:
         parent=bridge,
     )
 
+    # The research study is a third feature surface off the bridge, same
+    # shape as telemetry (STRUCTURAL_REVIEW.md section 3.1). It needs the
+    # bridge (to redirect keystrokes during a trial) and the predictor (to
+    # freeze learning for the session's duration).
+    study = StudyBridge(
+        keyboard=bridge,
+        predictor=bridge._predictor,
+        app_version=__version__,
+        os_name=CURRENT_PLATFORM,
+        parent=bridge,
+    )
+
     if not bridge.synthAvailable:
         if CURRENT_PLATFORM == "linux":
             _logger.warning(
@@ -794,6 +808,7 @@ def main() -> int:
     # Expose bridge to QML
     engine.rootContext().setContextProperty("keyboard", bridge)
     engine.rootContext().setContextProperty("telemetry", telemetry)
+    engine.rootContext().setContextProperty("study", study)
 
     # Load QML
     main_qml = qml_path()
@@ -852,6 +867,10 @@ def main() -> int:
         # relative order it had when it was the first thing bridge.shutdown()
         # did, before bridge.shutdown() tears down its own timers/modifiers.
         telemetry.shutdown()
+        # A quit mid-session must release the capture and the learning
+        # freeze before the bridge itself is torn down, or the freeze
+        # outlives its only caller.
+        study.shutdown()
         bridge.shutdown()
 
     app.aboutToQuit.connect(_on_about_to_quit)

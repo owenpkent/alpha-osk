@@ -256,6 +256,11 @@ Item {
     signal closeRequested()
     signal showHelpRequested()
     signal showVisualizationRequested()
+    // Opens the research-study window, which lives on the keyboard window
+    // for the same reason the key-action editor and the Dashboard do: this
+    // panel cannot type into it (see StudyWindow.qml's own note on why it
+    // never uses edit mode either).
+    signal showStudyRequested()
 
     Rectangle {
         anchors.fill: parent
@@ -2157,6 +2162,35 @@ Item {
                                         }
                                     }
                                 }
+                            }
+                        }
+
+                        // Research study: a quiet way in for someone who was
+                        // invited to take part, not a headline feature -- a
+                        // single low-key row rather than its own section,
+                        // parked beside Privacy because it is the same kind
+                        // of question ("what happens with my data").
+                        Rectangle {
+                            Layout.fillWidth: true
+                            implicitHeight: 30
+                            radius: 5
+                            color: studyBtnArea.containsMouse ? "#3a3a3a" : "#2a2a2a"
+                            border.color: "#4a4a4a"
+                            border.width: 1
+
+                            Text {
+                                anchors.centerIn: parent
+                                text: "Research Study"
+                                color: studyBtnArea.containsMouse ? "#ccc" : "#999"
+                                font.pixelSize: 11
+                            }
+
+                            MouseArea {
+                                id: studyBtnArea
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: unifiedSettings.showStudyRequested()
                             }
                         }
 
