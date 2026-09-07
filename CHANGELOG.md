@@ -2,6 +2,13 @@
 
 All notable changes to Alpha-OSK are documented in this file.
 
+## [Unreleased]
+
+### Fixed
+- **Your settings survive an update.** Installing a new version, by hand or through the auto-updater, reset the theme, the layout, which panels are showing, the opacity and the window size back to defaults every time. The installer runs the previous version's uninstaller before it lays the new files down, and that uninstaller was deleting the registry key every setting lives in. It now only removes it if you uninstall Alpha-OSK properly and answer yes to the prompt that offers to clear your learned vocabulary. Your learned words were never affected: those live in a file the uninstaller already knew to leave alone.
+- **The Key Colours schemes colour the suggestion pills' outline, not their middle.** A scheme used to wash the whole pill, which put the widest block of colour on the screen across the eight suggestions and read as a coloured panel rather than as eight words to reach for. The pills now sit on the same colour as the letter keys, and the scheme's colour goes to the ring around them.
+- **Settings, Help and the Dashboard open somewhere you can reach.** All three were centred on the primary monitor whatever monitor the keyboard was on, which on a multi-monitor desktop opened them on the wrong screen entirely, and they could land on top of the keyboard you type into them with. They now open on the keyboard's own screen, clear of the keyboard where there is room for them, and always fully on screen.
+
 ## [1.3.0] (2026-09-06)
 
 ### Added
