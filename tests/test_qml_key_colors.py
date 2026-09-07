@@ -511,7 +511,13 @@ class TestSchemesRepaintTheBoard:
 
 
 class TestThePredictionPillsFollowTheScheme:
-    """The pills were the one surface a scheme did not reach."""
+    """The pills were the one surface a scheme did not reach.
+
+    It reaches them through the RING only. Every case below is paired with
+    the inverse it has to keep rejecting, because "the fill never changes"
+    and "the ring always changes" are each satisfied by a rule that has
+    stopped colouring the pills at all.
+    """
 
     def test_off_leaves_the_pills_on_the_theme_key_colour(self, qml_root) -> None:
         root, _ = qml_root
@@ -521,19 +527,38 @@ class TestThePredictionPillsFollowTheScheme:
         assert root.property("predPillInk") == root.property("themeTextColor")
         assert root.property("predPillBorder") == root.property("themeAccent")
 
-    def test_a_scheme_repaints_the_pills(self, qml_root) -> None:
+    def test_a_scheme_colours_the_ring_and_never_the_fill(self, qml_root) -> None:
+        # Hueing the FILL was tried for a release and reversed on sight:
+        # eight pills are the widest block of one colour on the board and
+        # they sit above the keys rather than among them, so a wash across
+        # all eight reads as a coloured panel rather than as eight things
+        # to reach for.
         root, warnings = qml_root
+        rings = set()
         for scheme in COLOURED_SCHEMES:
             root.setProperty("keyColorScheme", scheme)
             _settle()
-            fill = root.property("predPillFill")
-            assert fill is not None
-            # The ring is what marks a pill as the thing to reach for, so
-            # it stays the full theme accent whatever the fill does.
-            # Blending it toward the fill was tried once and washed the
-            # whole row out.
-            assert root.property("predPillBorder") == root.property("themeAccent")
+            assert root.property("predPillFill") == root.property("themeKeyColor"), (
+                f"{scheme} tinted the pill fill"
+            )
+            rings.add(root.property("predPillBorder").name())
         assert _real_warnings(warnings) == []
+        # The inverse, and the half that bites: pinning every pill to the
+        # theme's own two colours would satisfy the sweep above perfectly
+        # while quietly putting the pills back outside the schemes' reach.
+        assert len(rings) > 1, "no scheme reaches the pill ring"
+
+    def test_a_scheme_with_nothing_to_say_keeps_the_accent_ring(self, qml_root) -> None:
+        # The ring is what marks a pill as the thing to reach for, so a
+        # scheme that leaves `pill.bar` clear must fall back to the full
+        # theme accent rather than to no ring at all.
+        root, _ = qml_root
+        for scheme in ("mono", "signal"):
+            root.setProperty("keyColorScheme", scheme)
+            _settle()
+            border = root.property("predPillBorder")
+            assert border == root.property("themeAccent"), scheme
+            assert border.alpha() == 255, scheme
 
     def test_monochrome_pills_match_the_letters(self, qml_root) -> None:
         # Lifting the fill toward the ink greys the row out against the
