@@ -656,6 +656,9 @@ Var StudyInviteCheckboxHwnd
 
 ; --- MUI Branding ---
 !define MUI_ABORTWARNING
+; Runs once the installer window exists (MUI2 calls it from .onGUIInit).
+; Must be defined before MUI_LANGUAGE, which is what emits that function.
+!define MUI_CUSTOMFUNCTION_GUIINIT AlphaOskGuiInit
 {"!define MUI_HEADERIMAGE" if has_header else ""}
 {"!define MUI_HEADERIMAGE_BITMAP " + '"' + header_path + '"' if has_header else ""}
 {"!define MUI_HEADERIMAGE_RIGHT" if has_header else ""}
@@ -681,6 +684,9 @@ Var StudyInviteCheckboxHwnd
 !insertmacro MUI_PAGE_DIRECTORY
 Page custom ShortcutOptionsPage ShortcutOptionsLeave
 Page custom StudyInvitePage StudyInviteLeave
+; Asked here, not in .onInit: over a visible window, and only once the user
+; has committed to the install.  See customCloseRunningApp in installer.nsh.
+!define MUI_PAGE_CUSTOMFUNCTION_PRE ConfirmCloseRunningApp
 !insertmacro MUI_PAGE_INSTFILES
 !insertmacro MUI_PAGE_FINISH
 
@@ -809,6 +815,34 @@ Function .onInit
   ; every silent /S run, which is what keeps an auto-update from ever
   ; touching the registry seed below.
   StrCpy $StudyInvite ""
+FunctionEnd
+
+; ============================================================
+;  .onGUIInit: runs once the installer window has been created
+; ============================================================
+Function AlphaOskGuiInit
+  !insertmacro customGuiInit
+FunctionEnd
+
+; ============================================================
+;  INSTFILES page pre: close a running Alpha-OSK before extracting
+; ============================================================
+Function ConfirmCloseRunningApp
+  !insertmacro customCloseRunningApp
+FunctionEnd
+
+; ============================================================
+;  Closing a running Alpha-OSK
+; ============================================================
+; Functions rather than macros because both close paths use them, and a
+; macro inserted twice would declare its labels twice.  Called from
+; .onInit as well as from a page, so neither may touch the GUI.
+Function AlphaOskIsRunning
+  !insertmacro customAlphaOskIsRunning
+FunctionEnd
+
+Function CloseAlphaOsk
+  !insertmacro customCloseAlphaOsk
 FunctionEnd
 
 ; ============================================================
