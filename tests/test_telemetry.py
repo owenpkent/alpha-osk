@@ -10,6 +10,7 @@ import pytest
 
 from src.telemetry import (
     SUBMIT_INTERVAL_SECONDS,
+    USER_AGENT,
     TelemetryClient,
 )
 
@@ -284,6 +285,77 @@ class TestEndpointGuards:
         clock.tick(SUBMIT_INTERVAL_SECONDS + 1)
         assert c.maybe_submit() is False
         assert submit.calls == []
+
+
+class TestTheClientIdentifiesItself:
+    """The submit has to carry a User-Agent of our own, or it never lands.
+
+    Cloudflare's bot protection sits in front of the worker and answers
+    urllib's default "Python-urllib/3.x" with 403 before the request
+    reaches any of our code.  ``_submit_now`` reads 4xx as a permanent
+    client error and drops it, and nothing in the client reports a
+    delivery failure to anyone, so the result is a consent toggle that
+    stays on while no data is ever delivered: the user opts in, the switch
+    says yes, and the database stays empty.
+
+    Measured against the live endpoint with an otherwise identical body:
+    "Python-urllib/3.11" returned 403 where the default curl agent, an
+    empty agent and "Alpha-OSK/1.4.0" each returned 204.
+
+    Each assertion is paired with the near-miss it has to reject, because
+    "sends some User-Agent" is satisfied by the broken default.
+    """
+
+    @staticmethod
+    def _captured_request(monkeypatch: pytest.MonkeyPatch) -> Any:
+        """Drive the real submit function, capturing the Request built."""
+        import urllib.request
+
+        captured: List[Any] = []
+
+        class _Resp:
+            status = 204
+
+            def __enter__(self) -> "_Resp":
+                return self
+
+            def __exit__(self, *a: Any) -> None:
+                return None
+
+        def fake_urlopen(req: Any, timeout: float = 0) -> Any:
+            captured.append(req)
+            return _Resp()
+
+        monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+        TelemetryClient._default_submit_fn("https://example.test/v1/submit", b"{}")
+        assert captured, "the submit function never opened a request"
+        return captured[0]
+
+    def test_the_request_carries_our_own_user_agent(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        req = self._captured_request(monkeypatch)
+        # Request normalises header names to title case.
+        assert req.get_header("User-agent") == USER_AGENT
+
+    def test_it_is_not_urllibs_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The near-miss: sending *a* User-Agent is not the point, this one is.
+
+        Note what this can and cannot see.  urllib fills its default in at
+        send time, inside the handler, not when the Request is built, and
+        ``urlopen`` is mocked here, so with the header dropped the captured
+        Request carries no User-Agent at all rather than the literal
+        "Python-urllib/3.x" a real send would show.  The first assertion is
+        therefore the one that bites; the second pins the intent, and would
+        only fire if somebody set the default string by hand.
+        """
+        req = self._captured_request(monkeypatch)
+        agent = req.get_header("User-agent") or ""
+        assert agent, "no User-Agent at all"
+        assert "python-urllib" not in agent.lower()
+
+    def test_the_agent_names_the_app_and_its_version(self) -> None:
+        from src.__version__ import __version__
+
+        assert USER_AGENT == f"Alpha-OSK/{__version__}"
 
 
 class TestSubmitOnQuit:

@@ -24,6 +24,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 
+from .__version__ import __version__
 from .atomic_write import atomic_write_json
 
 _logger = logging.getLogger("Telemetry")
@@ -33,6 +34,16 @@ _logger = logging.getLogger("Telemetry")
 # all network traffic (the client treats it as "endpoint not configured"
 # and silently no-ops every submit).
 DEFAULT_ENDPOINT = "https://alpha-osk-telemetry.okstudio.workers.dev"
+
+# Identify ourselves rather than letting urllib announce "Python-urllib/3.x".
+# That default is answered with 403 by Cloudflare's bot protection, which sits
+# in front of the worker, so the request never reaches our code at all: the
+# submit is refused at the edge, _submit_now reads 4xx as a permanent client
+# error and drops it, and nothing anywhere reports a failure. The result is a
+# consent toggle that stays on while no data is ever delivered, which is
+# exactly the silent failure the go-live checklist exists to prevent. Any new
+# request this module makes must carry this header for the same reason.
+USER_AGENT = f"Alpha-OSK/{__version__}"
 
 # Submit at most once per WEEK. The first submission lands ~7 days
 # after opt-in, not immediately on toggle, so a user toggling out of
@@ -350,7 +361,7 @@ class TelemetryClient:
         req = urllib.request.Request(
             url,
             data=body,
-            headers={"Content-Type": "application/json"},
+            headers={"Content-Type": "application/json", "User-Agent": USER_AGENT},
             method="POST",
         )
         try:
