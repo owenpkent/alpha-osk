@@ -87,10 +87,20 @@ What follows from that:
   control exists and why the UI says so when auto-detection has no backend.
 - The diagnostic log may never contain typed content. It is the file users
   attach to bug reports.
-- Usage telemetry is off by default, ships with an empty endpoint, and would
-  send only the lifetime counters the user can already read on their own
-  dashboard, never content. The consent checkbox in the installer ships
-  unticked, and that is not negotiable.
+- Usage telemetry is off by default in the app, ships with an empty endpoint,
+  and would send only the lifetime counters the user can already read on their
+  own dashboard, never content. The installer asks separately, and since
+  2026-09-08 its box is ticked: the page pays for that by stating the purpose,
+  printing the exact message field by field, and taking one click to decline.
+  What is not negotiable is that pairing. A ticked box on a page that showed
+  none of it would be a default nobody had been given the means to refuse, and
+  the argument against it is stronger than the usual one about cookies:
+  ePrivacy Art 5(3) reaches software that stores a file locally and then calls
+  an endpoint over the network (EDPB Guidelines 2/2023 v2.0, paras 33 and 44),
+  Planet49 (C-673/17) holds that a pre-checked box is not consent, and EDPB
+  Opinion 5/2019 para 40 rules out legitimate interests for that step. It ships
+  ticked anyway, as a judgement call made with all of that in view rather than
+  in ignorance of it, and the reasoning is recorded where the box is built.
 - The one credential the system holds (a dictation API key) is deliberately
   excluded from the backup archive, because an archive is made to be carried
   between machines.
