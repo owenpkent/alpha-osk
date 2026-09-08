@@ -600,6 +600,8 @@ def _generate_nsi_script(version: str, installer_name: str) -> str:
 !include "MUI2.nsh"
 !include "FileFunc.nsh"
 !include "LogicLib.nsh"
+; WM_SETFONT, for the fixed-pitch sample-payload block on the invite page.
+!include "WinMessages.nsh"
 
 ; --- App metadata ---
 !define APP_NAME "Alpha-OSK"
@@ -653,6 +655,7 @@ Var CreateStartMenuShortcut
 ; --- Variables for the research-participation invite page below ---
 Var StudyInvite
 Var StudyInviteCheckboxHwnd
+Var StudyInviteMonoFont
 
 ; --- MUI Branding ---
 !define MUI_ABORTWARNING
@@ -761,28 +764,104 @@ Function StudyInvitePage
   ; Alpha-OSK", and repeating it here cost a line of a page that has none
   ; to spare.
   ;
-  ; Say plainly that these are COUNTS before naming any of them.  The
-  ; first wording led with "keystrokes, words, ..." as a bare list, which
-  ; reads as though the typed text itself is sent.
-  ${{NSD_CreateLabel}} 0 0u 100% 26u "Once a week, Alpha-OSK can send ten numbers. Every one is a total: a count of how often something happened. None of them contain anything you typed."
+  ; Three jobs, in this order.  Say the numbers are COUNTS before naming
+  ; any of them: the first wording led with "keystrokes, words, ..." as a
+  ; bare list, which reads as though the typed text itself is sent.  Then
+  ; say what they are FOR, because a request with no stated purpose reads
+  ; as collection for its own sake, and this one has a specific answer.
+  ; Then show the message, so none of the first two has to be taken on
+  ; trust.
+  ${{NSD_CreateLabel}} 0 0u 100% 34u "Once a week, Alpha-OSK can send ten numbers. Every one is a total: a count of how often something happened, never anything you typed. They are the only measure of whether the predictions really save you clicks, which settings people can actually use, and whether a release helped or hurt. This is the entire message, exactly as it is sent:"
   Pop $1
 
-  ${{NSD_CreateLabel}} 0 28u 100% 38u "The ten: how many keys you pressed, how many words you finished, how many predictions were offered, how many you accepted, how many keys those saved you, how many minutes you typed, and how many times you opened Alpha-OSK. With a random ID for this install, the app version, and which operating system."
+  ; The sample IS the explanation, so it has to be the real field names
+  ; from src/telemetry.py::_build_payload with plausible values, not an
+  ; abridged or prettified stand-in: this is the one part of the page
+  ; that can be checked against the product, and it is worth nothing if
+  ; it does not match.  app_version is the live define rather than a
+  ; literal, so a sample cannot go stale, and it sits at the end of its
+  ; row because a longer version number would otherwise shift the column
+  ; to its right.
+  ${{NSD_CreateLabel}} 0 36u 100% 54u "anon_id            8f2c1a9e-4d63-4b10-9f27-b4718c0ad5e2$\\r$\\nos                 windows            app_version        ${{APP_VERSION}}$\\r$\\nkeystrokes         48,210             words              7,940$\\r$\\nminutes            1,183              sessions           214$\\r$\\nprediction_offers  12,305             predictions        3,118$\\r$\\nkeystrokes_saved   9,442"
   Pop $2
+  ; Fixed pitch, or the columns above do not line up and the block reads
+  ; as prose rather than as a record.  Deliberately unguarded: if the
+  ; typeface is missing the label keeps the dialog font, which is uglier
+  ; and still correct, and a font lookup must never be able to fail an
+  ; install.
+  CreateFont $StudyInviteMonoFont "Consolas" 8 400
+  SendMessage $2 ${{WM_SETFONT}} $StudyInviteMonoFont 1
 
-  ${{NSD_CreateLabel}} 0 68u 100% 26u "Never the words you type, your files, your screen, or your IP address. You can change this any time in Settings, or delete everything you have shared."
+  ${{NSD_CreateLabel}} 0 92u 100% 17u "Never the words you type, your files, your screen, or your IP address. You can turn this off any time in Settings, or delete everything you have shared."
   Pop $3
 
-  ${{NSD_CreateLink}} 0 97u 100% 12u "Read more about the study"
+  ${{NSD_CreateLink}} 0 110u 100% 10u "Read more about the study"
   Pop $4
   ${{NSD_OnClick}} $4 StudyInviteLinkClick
 
-  ; DEFAULT MUST STAY UNCHECKED. Do not add a ${{NSD_SetState}} ...
-  ; ${{BST_CHECKED}} call here: a pre-ticked consent box is not consent,
-  ; it is the one thing that would make this data unusable as research
-  ; and non-compliant as a privacy control.
-  ${{NSD_CreateCheckbox}} 0 112u 100% 12u "Yes, share anonymous usage statistics"
+  ; TICKED BY DEFAULT, and everything above is what pays for it: the
+  ; purpose is stated, the exact payload is on screen, and one click
+  ; declines.  It shipped unticked until 2026-09-08.
+  ;
+  ; The argument against was checked against the sources rather than
+  ; assumed, and it is stronger than the usual hand-wave about cookies.
+  ; Three findings, each from a primary text:
+  ;   - This is inside ePrivacy Art 5(3) despite there being no browser
+  ;     and no cookie.  EDPB Guidelines 2/2023 v2.0 (7 Oct 2024) para 33
+  ;     describes this app almost exactly: an entity "distributes
+  ;     software on the terminal equipment of the user that is stored and
+  ;     will then proactively call an Application Programming Interface
+  ;     ('API') endpoint over the network.  Such access clearly falls
+  ;     within the scope of Article 5(3) ePD."  Para 44 draws the line
+  ;     where we cross it: local-only use is fine, "but when this
+  ;     information or any derivation of this information is accessed,
+  ;     Article 5(3) ePD would apply."  Writing telemetry.json is the
+  ;     storage limb (para 36, "customized software, regardless of who
+  ;     created or installed" it); the weekly POST is the access limb.
+  ;   - Art 5(3) requires consent, and CJEU C-673/17 (Planet49, 1 Oct
+  ;     2019) holds consent "is not validly constituted if ... permitted
+  ;     by way of a pre-checked checkbox which the user must deselect".
+  ;     GDPR Recital 32 says the same in terms: "Silence, pre-ticked
+  ;     boxes or inactivity should not therefore constitute consent."
+  ;   - The obvious escape is closed.  EDPB Opinion 5/2019 para 40: Art
+  ;     5(3) "shall take precedence over article 6 of the GDPR with
+  ;     regards to the activity of storing or gaining access to this
+  ;     information", so "the controller cannot rely on the full range of
+  ;     possible lawful grounds" -- no legitimate-interests route for the
+  ;     storage/access step.  (Note Art 5(3) bites whether or not the
+  ;     payload is personal data, so the anon_id question does not
+  ;     rescue it either.)
+  ; So for a user in the EU this default is defective, not merely untidy.
+  ;
+  ; Against that, and why it ships anyway: no DPA has been found to have
+  ; enforced against a small or open-source desktop app over usage
+  ; telemetry, and VS Code, Firefox, Docker Desktop, the .NET SDK and
+  ; Homebrew all ship telemetry ON with no box at all, which makes a
+  ; visible ticked box the more conservative position rather than the
+  ; less.  Owen's call, made with both in view.
+  ;
+  ; What this checkbox does NOT do is enrol anyone in the typing study,
+  ; which has its own consent form in the app (docs/research/
+  ; STUDY_CONSENT.md).  An earlier version of this comment said a
+  ; pre-ticked box weakened the study; that was simply wrong, and the
+  ; research objection does not apply to this page at all.
+  ;
+  ; To reverse it, drop the SetState below and flip
+  ; tests/test_windows_installer.py::TestTheCheckboxDefaultsToChecked.
+  ${{NSD_CreateCheckbox}} 0 124u 100% 12u "Yes, share anonymous usage statistics"
   Pop $StudyInviteCheckboxHwnd
+  ; Ticked on the way in, but NOT over a decline the user has already made.
+  ; NSIS rebuilds a custom page's dialog every time the page is entered, so
+  ; an unconditional SetState here re-ticks the box on a return visit: untick
+  ; it, click Back, click Next, and the decline is gone with nothing on screen
+  ; to say so, because StudyInviteLeave then reads the box rather than the
+  ; choice.  Unticked was the safe direction to be wrong in and this was
+  ; harmless while that was the default; ticked, it silently reverses the one
+  ; answer the page exists to collect, which is exactly the defect the note
+  ; above is about.  $StudyInvite is "" until the page has been left once.
+  ${{If}} $StudyInvite != "declined"
+    ${{NSD_SetState}} $StudyInviteCheckboxHwnd ${{BST_CHECKED}}
+  ${{EndIf}}
 
   nsDialogs::Show
 FunctionEnd

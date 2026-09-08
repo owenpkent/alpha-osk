@@ -168,9 +168,15 @@ nothing.
    at the push.
 
 4. **Ship a build carrying the installer invitation** (the participation
-   page in `build/windows/build.py`). Its checkbox is unchecked by default
-   and must stay that way: a pre-ticked consent box is not consent, and it
-   would make the data unusable as research.
+   page in `build/windows/build.py`). Its checkbox is ticked by default as of
+   2026-09-08. The page earns that by stating what the numbers are for and
+   showing the exact payload, and by declining in one click. It was unchecked
+   before then, and the objection is real and verified rather than folklore:
+   ePrivacy Art 5(3) reaches this app (EDPB Guidelines 2/2023 para 33 and 44),
+   requires consent, Planet49 says a pre-ticked box is not consent, and EDPB
+   Opinion 5/2019 para 40 rules out legitimate interests for the storage and
+   access step. It ships ticked anyway; CLAUDE.md carries the full reasoning
+   and the counterweight. Read it before weakening anything that pays for it.
 
 ## Reading the numbers
 
