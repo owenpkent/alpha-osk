@@ -4,6 +4,11 @@ All notable changes to Alpha-OSK are documented in this file.
 
 ## [Unreleased]
 
+### Changed
+- **The installer's usage-statistics page now shows you the message it would send, says what it is for, and arrives with the box ticked.** It listed the ten numbers in prose and left the box empty. Two things were missing from that. It never said what the numbers are *for*, so it read as collection for its own sake; they are the only measure of whether the predictions really save clicks outside a benchmark, which settings people can actually use, and whether a release helped or hurt. And a description of a payload is something you have to take on trust, so the page now prints the payload itself, field by field with example values, in a fixed-pitch block: the field names are the real ones and the version is the version you are installing, so it cannot quietly drift away from what the app sends.
+
+  **The box being ticked is a deliberate reversal**, and the case against it has not gone away: a pre-ticked box is not valid consent under GDPR or ePrivacy for a user in the EU, and someone who did not actively choose to take part is a weaker data point than someone who did. It was ticked anyway, on the grounds that the page states the purpose, shows the exact payload, and declines in one click. Those three are now part of what makes the default defensible rather than decoration, and the tests treat them that way. Unticking still declines, the switch under *Settings -> Data & Privacy* still governs it afterwards, and deleting everything you have shared is still one button. A silent install, which is what the auto-updater runs, still never shows the page and still never changes what you already chose.
+
 ### Fixed
 - **The installer's "Alpha-OSK is currently running" prompt no longer hides behind other windows.** Installing over a running copy asks permission to close it first, and that question was being raised before the setup wizard itself had appeared on screen: it belonged to no window, so Windows was free to leave it behind whatever you were last looking at, and there was nothing else on screen to say the install was waiting on an answer. It is now asked when you click Install, over the wizard, and it stays on top.
 

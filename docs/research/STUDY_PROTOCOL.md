@@ -337,7 +337,7 @@ These are two separate things and the documentation keeps them separate.
 
 | | Telemetry | This study |
 |---|---|---|
-| Consent | Installer checkbox or Settings, unchecked by default | Full consent form in the app |
+| Consent | Installer checkbox (ticked by default since 2026-09-08, on a page that shows the payload) or Settings | Full consent form in the app |
 | Data | Ten lifetime counters, weekly | Per-trial timing and text |
 | Sample | Anyone who opts in | 12 to 20 recruited participants |
 | Answers | Sustained use at scale, RQ-adjacent | RQ1 to RQ4 directly |

@@ -13,10 +13,10 @@ so the bug never had to mention the organisation by name to destroy its
 key, which is why the assertions here expand the !defines before comparing
 rather than matching the source line.
 
-The invite half: the study-participation page must ship its checkbox
-unchecked, must seed HKLM\\Software\\alpha-osk-setup and never the bare
-organisation key next door, and must not run at all during a silent
-install, which is what the auto-updater drives.
+The invite half: the study-participation page must show the real payload
+and say what it is for, must seed HKLM\\Software\\alpha-osk-setup and never
+the bare organisation key next door, and must not run at all during a
+silent install, which is what the auto-updater drives.
 
 The close-prompt half: "Alpha-OSK is currently running, close it?" must be
 asked over a window the user can see. It used to be raised from .onInit,
@@ -164,39 +164,56 @@ class TestTheInviteePageIsPlacedRight:
         assert "Read more about the study" in body
 
 
-class TestTheCheckboxShipsUnchecked:
-    """The single most important guard in this file.
+class TestTheCheckboxDefaultsToChecked:
+    """The consent checkbox ships ticked, and the page has to earn that.
 
-    A pre-ticked consent checkbox is not consent: it is the one thing
-    that would make the collected data unusable as research (participants
-    never chose to be in the study) and non-compliant as a privacy
-    control (opt-in telemetry that is opted in by default is not opt-in).
-    This test fails if anyone "fixes" the checkbox to default to checked,
-    which is the exact regression it exists to catch.
+    It shipped unticked until 2026-09-08. The argument against a
+    pre-ticked box has not stopped being true (it is not valid consent
+    under GDPR/ePrivacy for an EU user, and a participant who did not
+    choose to be in the study weakens it as research); the decision was
+    to tick it and pay for it on the page, which is why this class
+    asserts the tick and the three things beside it -- the stated
+    purpose, the visible payload, and a decline that costs one click --
+    rather than the tick alone. Weakening any of those is what would
+    make this default indefensible.
     """
 
-    def test_no_set_state_checked_call_touches_the_checkbox(self, nsi: str) -> None:
+    def test_the_checkbox_is_set_checked(self, nsi: str) -> None:
         body = _function_body(nsi, "StudyInvitePage")
-        checkbox_line = next(line for line in body.splitlines() if "NSD_CreateCheckbox" in line)
-        assert "share anonymous usage statistics" in checkbox_line.lower()
-        # Everything after the checkbox is created, up to the next Pop,
-        # is where a SetState call for it would live.
-        after = body.split(checkbox_line, 1)[1]
-        after = after.split("Pop $StudyInviteCheckboxHwnd", 1)[1]
-        next_control = after.split("${NSD_Create", 1)[0]
-        assert "NSD_SetState" not in next_control, (
-            "the invite checkbox must default to UNCHECKED -- do not add a "
-            "${NSD_SetState} ... ${BST_CHECKED} call for it"
-        )
+        code = "\n".join(ln for ln in body.splitlines() if not ln.strip().startswith(";"))
+        assert "${NSD_SetState} $StudyInviteCheckboxHwnd ${BST_CHECKED}" in code
 
-    def test_no_set_state_checked_call_anywhere_in_the_page_function(self, nsi: str) -> None:
-        # Belt and suspenders: even a misplaced SetState elsewhere in the
-        # same function would still tick the box by the time it shows.
-        # Comment lines are excluded -- the surrounding "don't do this"
-        # warning names the very call this test forbids.
+    def test_the_tick_comes_after_the_checkbox_exists(self, nsi: str) -> None:
+        """A SetState before the Pop would address whatever handle was in
+        the variable from a previous page, which is nothing, and fail
+        silently: the box would simply show unticked."""
         body = _function_body(nsi, "StudyInvitePage")
-        code_lines = [ln for ln in body.splitlines() if not ln.strip().startswith(";")]
-        assert "NSD_SetState" not in "\n".join(code_lines)
+        pop = body.index("Pop $StudyInviteCheckboxHwnd")
+        tick = body.index("${NSD_SetState} $StudyInviteCheckboxHwnd")
+        assert pop < tick
+
+    def test_declining_is_still_one_click(self, nsi: str) -> None:
+        """The inverse of the tick: a checkbox that could not be cleared,
+        or a Leave function that ignored its state, would satisfy the two
+        assertions above and take away the only thing that makes a ticked
+        default defensible."""
+        page = _function_body(nsi, "StudyInvitePage")
+        assert "NSD_CreateCheckbox" in page, "the box is gone, so there is nothing to untick"
+        assert "NSD_SetState" not in page.split("nsDialogs::Show")[1], (
+            "a SetState after Show never runs, but one that did would re-tick the box"
+        )
+        leave = _function_body(nsi, "StudyInviteLeave")
+        assert "NSD_GetState" in leave, "the page does not read the checkbox back"
+        assert "declined" in leave, "an unticked box has no way to record a refusal"
+
+    def test_an_untouched_page_is_the_only_thing_that_opts_in(self, nsi: str) -> None:
+        """Nothing outside the page may set the seed to accepted: a
+        default that is ticked on screen is a choice the user saw, a
+        default written straight to the registry is not."""
+        section = _install_section(nsi)
+        assert 'StrCpy $StudyInvite "accepted"' not in section
+        assert 'StrCpy $StudyInvite "accepted"' in _function_body(nsi, "StudyInviteLeave")
+        assert 'StrCpy $StudyInvite ""' in _function_body(nsi, ".onInit")
 
 
 class TestTheRegistrySeed:
@@ -418,6 +435,98 @@ class TestTheCustomPagesSetTheirOwnHeader:
             header = re.search(r'MUI_HEADER_TEXT\s+"([^"]*)"', body)
             assert header, f"{function_name} has no header text"
             assert "install location" not in header.group(1).lower()
+
+
+class TestThePageShowsTheMessageItSends:
+    """The sample block is the only claim on this page that can be checked
+    against the product, so it has to match it.
+
+    Every field name in TelemetryClient._build_payload has to appear, and
+    nothing that is not a field may look like one. A sample that drifted
+    from the payload would be worse than no sample: it would be a
+    specific, checkable, wrong promise about what leaves the machine.
+    """
+
+    @staticmethod
+    def _payload_fields() -> list[str]:
+        source = (REPO_ROOT / "src" / "telemetry.py").read_text(encoding="utf-8")
+        body = source.split("def _build_payload", 1)[1]
+        body = body.split("return {", 1)[1].split("}", 1)[0]
+        return re.findall(r'"(\w+)":', body)
+
+    @staticmethod
+    def _sample_text(nsi_text: str) -> str:
+        labels = [c[3] for c in _controls(nsi_text, "StudyInvitePage") if c[0] == "Label"]
+        sample = [t for t in labels if "anon_id" in t]
+        assert len(sample) == 1, f"expected exactly one sample block, got {len(sample)}"
+        return sample[0]
+
+    def test_the_payload_has_the_ten_fields_the_page_promises(self) -> None:
+        # The page says "ten numbers" in prose; if the payload ever grows
+        # an eleventh, that sentence and this sample are both wrong.
+        assert len(self._payload_fields()) == 10
+
+    def test_every_payload_field_appears_in_the_sample(self, nsi: str) -> None:
+        sample = self._sample_text(nsi)
+        missing = [f for f in self._payload_fields() if f not in sample]
+        assert not missing, f"the sample block does not show these fields: {missing}"
+
+    def test_the_sample_invents_no_fields(self, nsi: str) -> None:
+        """The inverse: a sample listing something we do not actually send
+        would satisfy the test above and still misdescribe the message."""
+        fields = set(self._payload_fields())
+        # An NSIS line break is four characters inside the string, a
+        # dollar and a backslash-r then a dollar and a backslash-n, so
+        # tokenising without splitting on it first glues the trailing
+        # n onto the next field name ("nos", "nminutes").
+        sample = re.sub(r"\$\\[rn]", " ", self._sample_text(nsi))
+        # Field-shaped tokens are the snake_case / lowercase words; the
+        # values are digits, a version define, a UUID and "windows".
+        looks_like_a_field = {
+            tok for tok in re.findall(r"[a-z][a-z_]{2,}", sample) if tok not in {"windows"}
+        }
+        assert looks_like_a_field <= fields, (
+            f"the sample names things that are not payload fields: {looks_like_a_field - fields}"
+        )
+
+    def test_the_version_in_the_sample_is_the_live_one(self, nsi: str) -> None:
+        """Hardcoding a version is how a sample goes stale without anyone
+        noticing, and a stale sample is a wrong promise."""
+        assert "${APP_VERSION}" in self._sample_text(nsi)
+
+    def test_the_sample_is_fixed_pitch(self, nsi: str) -> None:
+        """Two columns of key/value pairs only read as a record if they
+        line up; in the dialog's proportional font this block is prose."""
+        body = _function_body(nsi, "StudyInvitePage")
+        assert "CreateFont" in body
+        assert "${WM_SETFONT}" in body
+
+    def test_the_font_include_is_present(self, nsi: str) -> None:
+        """${WM_SETFONT} is undefined without it, and makensis fails the
+        whole build rather than only this page."""
+        assert '!include "WinMessages.nsh"' in nsi
+
+
+class TestThePageSaysWhatTheDataIsFor:
+    """A request with no stated purpose reads as collection for its own
+    sake. With the checkbox now ticked by default, the purpose is not a
+    courtesy: it is half of what makes the default defensible.
+    """
+
+    def test_it_states_a_purpose(self, nsi: str) -> None:
+        text = " ".join(c[3].lower() for c in _controls(nsi, "StudyInvitePage"))
+        assert "measure of whether" in text or "so that" in text or "only way" in text, (
+            "the page never says what the numbers are for"
+        )
+
+    def test_the_purpose_is_about_the_keyboard_not_the_user(self, nsi: str) -> None:
+        text = " ".join(c[3].lower() for c in _controls(nsi, "StudyInvitePage"))
+        assert "predictions" in text and ("save" in text or "clicks" in text)
+
+    def test_it_still_says_the_data_can_be_withdrawn(self, nsi: str) -> None:
+        text = " ".join(c[3].lower() for c in _controls(nsi, "StudyInvitePage"))
+        assert "settings" in text
+        assert "delete everything you have shared" in text
 
 
 class TestTheStudyPageSaysTheseAreCounts:
