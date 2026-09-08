@@ -150,7 +150,7 @@ Alpha-OSK draws technical inspiration from multiple sources. This document provi
 
 1. **Start:** [`PHILOSOPHY.md`](PHILOSOPHY.md)
    - Understand the "why" behind design decisions
-   - Learn core principles from Dasher research
+   - The seven principles, and the list of what we changed our minds about
 
 2. **Then:** [`MOBILE_KEYBOARD_INNOVATIONS.md`](MOBILE_KEYBOARD_INNOVATIONS.md)
    - Familiar features you've likely used
