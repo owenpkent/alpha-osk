@@ -4,6 +4,8 @@ All notable changes to Alpha-OSK are documented in this file.
 
 ## [Unreleased]
 
+## [1.4.1] (2026-09-08)
+
 ### Changed
 - **The installer's usage-statistics page now shows you the message it would send, says what it is for, and arrives with the box ticked.** It listed the ten numbers in prose and left the box empty. Two things were missing from that. It never said what the numbers are *for*, so it read as collection for its own sake; they are the only measure of whether the predictions really save clicks outside a benchmark, which settings people can actually use, and whether a release helped or hurt. And a description of a payload is something you have to take on trust, so the page now prints the payload itself, field by field with example values, in a fixed-pitch block: the field names are the real ones and the version is the version you are installing, so it cannot quietly drift away from what the app sends.
 
