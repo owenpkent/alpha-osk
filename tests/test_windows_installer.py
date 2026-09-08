@@ -164,6 +164,17 @@ class TestTheInviteePageIsPlacedRight:
         assert "Read more about the study" in body
 
 
+def _page_function_names(nsi: str) -> list[str]:
+    """Every Function in the generated script that builds a custom page."""
+    names = [
+        m.group(1)
+        for m in re.finditer(r"^Function (\w+).*?^FunctionEnd", nsi, re.S | re.M)
+        if "nsDialogs::Create" in m.group(0)
+    ]
+    assert names, "no custom page functions found, so the sweep below proves nothing"
+    return names
+
+
 def _strip_comments(code: str) -> str:
     """NSIS comment lines, dropped. The macros and page functions here are
     heavily commented and every word the assertions look for appears in
@@ -811,6 +822,22 @@ class TestTheShortcutBoxesRememberWhatYouChose:
         init = _strip_comments(_function_body(nsi, ".onInit"))
         assert "StrCpy $CreateDesktopShortcut ${BST_CHECKED}" in init
         assert "StrCpy $CreateStartMenuShortcut ${BST_CHECKED}" in init
+
+    def test_every_control_handle_is_popped(self, nsi: str) -> None:
+        """Each ${NSD_Create*} is a nsDialogs::CreateControl that pushes
+        the new control's handle, so one without a Pop strands an item on
+        the stack for the life of the process, once per visit to a page
+        the user can reach more than once. ShortcutOptionsPage created its
+        label and never popped it, and was the only site in the file that
+        did; asserting it across every page is what stops the next one
+        from being written the same way."""
+        stranded = []
+        for name in _page_function_names(nsi):
+            lines = [ln.strip() for ln in _function_body(nsi, name).splitlines()]
+            for i, line in enumerate(lines):
+                if line.startswith("${NSD_Create") and not lines[i + 1].startswith("Pop "):
+                    stranded.append(f"{name}: {line}")
+        assert not stranded, stranded
 
     def test_the_leave_still_reads_the_boxes_back(self, nsi: str) -> None:
         """Seeding the boxes from the variables makes the round trip a

@@ -716,7 +716,13 @@ Function ShortcutOptionsPage
     Abort
   ${{EndIf}}
 
+  ; Popped and discarded, not left on the stack.  Every ${{NSD_Create*}} is a
+  ; nsDialogs::CreateControl call and pushes the control's handle, so an
+  ; unpopped one strands an item for the life of the process and a page the
+  ; user can reach twice strands one per visit.  This was the only such site
+  ; in the file; the invite page pops all five of its controls.
   ${{NSD_CreateLabel}} 0 0 100% 20u "Choose which shortcuts to create:"
+  Pop $0
 
   ; Seeded from the variables, not from a literal BST_CHECKED, for the
   ; reason the consent box next door carries a guard: NSIS rebuilds a
