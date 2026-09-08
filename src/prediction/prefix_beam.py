@@ -232,6 +232,9 @@ class PrefixBeam:
     # act on and the n-gram completer's exact-prefix match is the better
     # source; the same guard ``should_autocorrect`` applies.
     MIN_TYPED = 3
+    # ...unless the run spells no word's opening at all, where both halves
+    # of that reasoning fail at once.  See ``_worth_completing``.
+    MIN_TYPED_DEAD_PREFIX = 2
     # A path costing more than this (one cheap edit: an adjacent slip is
     # -0.69, a diagonal -0.87, a swap -1.0) may not be bought past the
     # completions of the exact typed prefix by frequency alone.
@@ -257,7 +260,7 @@ class PrefixBeam:
         applied on top of the path scores.
         """
         typed = typed.lower()
-        if len(typed) < self.MIN_TYPED or n <= 0:
+        if n <= 0 or not self._worth_completing(typed):
             return []
         emits: List[Optional[Dict[str, float]]] = []
         for i, char in enumerate(typed):
@@ -336,6 +339,37 @@ class PrefixBeam:
         ranked = sorted(scored.items(), key=lambda kv: -kv[1])[:n]
         best = ranked[0][1]
         return [(word, math.exp(value - best)) for word, value in ranked]
+
+    def _worth_completing(self, typed: str) -> bool:
+        """Should the beam run over this typed run at all?
+
+        ``MIN_TYPED`` is the ordinary floor, and it rests on two claims:
+        two characters carry no evidence of an error, and the n-gram's
+        exact-prefix completion is the better source at that length.
+        Both fail together on a two-character run that is not a live
+        prefix.  Spelling no word's opening *is* the evidence -- it is the
+        strongest this module ever gets, since a live prefix at least
+        might be what the user meant -- and the exact source it defers to
+        has nothing to return, so the suggestion bar goes empty and stays
+        empty until a third character arrives.  Against the shipped list a
+        single adjacent slip in either of the first two characters lands
+        there constantly (``bw`` for "be", ``pw`` for "pe", ``yh`` for
+        "th", ``wq`` for "wa", ``pp`` for "pl"), and 298 of the 676
+        two-letter runs offered nothing at all.  Each of them fills the
+        bar at three characters and left it blank at two, which reads as
+        the suggestions being unreliable rather than as a mis-click.
+
+        A *live* two-character prefix is deliberately still refused, and
+        that is what makes this safe rather than a retuning: the rescue
+        can only fire where the exact source found nothing, so it has
+        nothing to displace and every case that works today is untouched
+        by construction.  ``_protect_exact_completions`` is the rule that
+        would otherwise have to arbitrate, and it already returns early on
+        a dead prefix for the same reason.
+        """
+        if len(typed) >= self.MIN_TYPED:
+            return True
+        return len(typed) >= self.MIN_TYPED_DEAD_PREFIX and not self.index.is_live(typed)
 
     def _protect_exact_completions(
         self, typed: str, scored: Dict[str, float], best_path: Dict[str, float]
