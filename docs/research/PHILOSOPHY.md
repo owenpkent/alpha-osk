@@ -1,230 +1,263 @@
 # Alpha-OSK Philosophy
 
-> *"Writing can be described as **zooming in on an alphabetical library, steering as you go**."*  
-> — Dasher Project, University of Cambridge
+This document states what Alpha-OSK believes and why, so that a decision made
+six months from now can be checked against the same reasoning that produced
+the ones already here.
 
-This document captures the design philosophy and guiding principles behind Alpha-OSK, drawing inspiration from decades of assistive technology research and the groundbreaking work of the Dasher Project.
+It is the "why" layer. It deliberately holds no measurements and no
+implementation rules, because both live somewhere better:
 
----
+| For | Read |
+|-----|------|
+| Measurements, evaluation, limitations | [`docs/WHITEPAPER.md`](../WHITEPAPER.md) |
+| The rules a change must not break | [`CLAUDE.md`](../../CLAUDE.md) |
+| Per-algorithm design | [`docs/architecture/`](../architecture/) |
+| Where an idea came from | [`INNOVATION_SOURCES.md`](INNOVATION_SOURCES.md) |
 
-## Core Philosophy
-
-### 1. Information-Efficient Design
-
-**From Dasher:** *"We alter the SIZE of the shelf space devoted to each book in proportion to the probability of the corresponding text."*
-
-Alpha-OSK embraces information theory at its core. Our hybrid prediction system (n-gram + transformer) makes **probable text easier to find** by:
-
-- **Prioritizing likely completions** — The prediction bar shows what you're most likely to type next
-- **Learning from context** — The more you type, the better predictions become
-- **Minimizing cognitive load** — Fewer choices, better choices
-
-**Key Insight:** Don't show all possibilities equally. Make the probable path obvious.
+When this document and any of those disagree, they are right and this is
+stale. Fix it here.
 
 ---
 
-### 2. Accessibility First, Always
+## The constraint everything descends from
 
-**From Dasher:** *"Dasher is highly appropriate for computer users who are unable to use a two-handed keyboard. One-handed users and users with no hands love Dasher. The only ability that is required is sight."*
+Alpha-OSK is a window on the same desktop as the application being typed
+into. **It must never take focus.** Taking focus to accept a click would take
+it away from the text field the keystroke is destined for.
 
-Alpha-OSK is built for **real accessibility needs**, not as an afterthought:
+That single sentence is the origin of most of the non-obvious design in this
+project. It is why in-app text entry (the prediction editor, the snippets
+editor, the key-action editor) is routed through an explicit edit mode and a
+pair of signals rather than through Qt focus. It is why modifiers are sticky
+and lockable rather than chorded. It is why context staleness has to be
+*detected*, through six independent signals, rather than simply observed. It
+is why there is no keyboard shortcut anywhere: the user has no keyboard.
 
-- **Stays on top, never steals focus** — Works alongside any application
-- **Sticky modifiers** — Hold Shift/Ctrl/Alt without simultaneous presses
-- **Toggleable complexity** — Show only what you need (Function keys, Navigation, Numpad)
-- **Compact mode** — Adapts to different screen sizes and motor control needs
-- **Designed by a wheelchair user** — This is a tool I actually need
-
-**Key Insight:** Accessibility isn't a feature. It's the foundation.
-
----
-
-### 3. Continuous, Natural Interaction
-
-**From Dasher:** *"When you watch someone else steering Dasher, you may find it looks difficult, but be assured: it is actually very easy; it's a lot like driving a car."*
-
-While Alpha-OSK uses a traditional keyboard layout (not Dasher's zooming interface), we embrace the principle of **natural, fluid interaction**:
-
-- **Key hold/repeat** — Press and hold for continuous typing
-- **Smooth animations** — Visual feedback that feels responsive
-- **Prediction flow** — Select a word, get next-word suggestions immediately
-- **No mode switching** — Everything accessible from one interface
-
-**Key Insight:** The interface should feel like an extension of thought, not an obstacle.
+Nearly every question of the form "why is this done the hard way" has this as
+its answer. Ask it first.
 
 ---
 
-### 4. Adaptive Learning
+## Principles
 
-**From Dasher:** *"Dasher can be trained on examples of any writing style, and it learns all the time, picking up your personal turns of phrase. This means the more you use Dasher, the better it gets at predicting what you want to write."*
+### 1. Accessibility is the architecture, not a feature
 
-Alpha-OSK's prediction system is designed to **learn and improve**:
+There is no accessibility layer to bolt on, because there is nothing
+underneath it. The keyboard is for people whose primary input is a pointer,
+and the author is one of them: a wheelchair user with muscular dystrophy who
+uses it daily as his only text input.
 
-- **N-gram foundation** — Fast, context-aware character and word predictions
-- **Transformer refinement** — DistilGPT-2 re-ranks suggestions for better accuracy
-- **Hybrid approach** — Instant feedback (<10ms) with intelligent ranking
-- **Future: Personal models** — Train on your writing style for personalized predictions
+The practical test is not "can this be used with a mouse" but "can this be
+used by someone whose pointer is slow, imprecise, and expensive to move."
+Those are different bars. The second one rules out gestures that a mouse can
+technically perform.
 
-**Key Insight:** The keyboard should get better the more you use it.
+### 2. Effort is the currency
 
----
+Every click costs the user something real. That makes effort the unit the
+design optimises, and it decides arguments that would otherwise be aesthetic:
 
-### 5. Transparency and Openness
+- A taller or wider target is a cheaper click, which is why the function row
+  fills the grid rather than lining up with the columns beneath it, and why
+  the three sections share one height so the panel keys grow into it.
+- A click that lands between two keys and types nothing is worse than a click
+  on the wrong key, because a wrong key is recoverable by the prediction
+  engine and a dead click is not. Every key therefore claims a share of the
+  gap around it.
+- A gesture that must be *held* is the one thing a pointer cannot reliably
+  do here. Swipe typing was built and then removed for this reason, and
+  push-to-talk dictation was never built for it. Move mode splits "drag the
+  window" into two clicks with a free hand in between for the same reason.
+- Five readable suggestions beat eight truncated ones, so the prediction bar
+  drops low-ranked pills rather than eliding any of them.
 
-**From Dasher:** *"Dasher is free and open-source software, licensed under the GPL-3.0. The project is maintained by a community of developers and researchers committed to keeping Dasher accessible."*
+### 3. Local-first, and off-network by default
 
-Alpha-OSK follows this tradition:
+Predictions, learning, and analytics never leave the machine. There is no
+cloud round trip on the typing path, no GPU, and no LLM. This is not a
+performance position, it is a privacy one: this is a category where the data
+is unusually sensitive (passwords, medical correspondence, intimate
+messages), and the way to keep it safe is not to send it anywhere.
 
-- **Open source** — All code available, no vendor lock-in
-- **Clear documentation** — Philosophy, architecture, and decisions explained
-- **Community-driven** — Built for real users, with real needs
-- **Research-backed** — Decisions informed by HCI research and information theory
+What follows from that:
 
-**Key Insight:** Assistive technology should be free, open, and accessible to all.
+- Privacy mode suppresses learning *and* the live context signal, so nothing
+  typed into a password field reaches the model, the analytics, or the
+  visualisation. Detection fails open by design, which is why the manual
+  control exists and why the UI says so when auto-detection has no backend.
+- The diagnostic log may never contain typed content. It is the file users
+  attach to bug reports.
+- Usage telemetry is off by default in the app, ships with an empty endpoint,
+  and would send only the lifetime counters the user can already read on their
+  own dashboard, never content. The installer asks separately, and since
+  2026-09-08 its box is ticked: the page pays for that by stating the purpose,
+  printing the exact message field by field, and taking one click to decline.
+  What is not negotiable is that pairing. A ticked box on a page that showed
+  none of it would be a default nobody had been given the means to refuse, and
+  the argument against it is stronger than the usual one about cookies:
+  ePrivacy Art 5(3) reaches software that stores a file locally and then calls
+  an endpoint over the network (EDPB Guidelines 2/2023 v2.0, paras 33 and 44),
+  Planet49 (C-673/17) holds that a pre-checked box is not consent, and EDPB
+  Opinion 5/2019 para 40 rules out legitimate interests for that step. It ships
+  ticked anyway, as a judgement call made with all of that in view rather than
+  in ignorance of it, and the reasoning is recorded where the box is built.
+- The one credential the system holds (a dictation API key) is deliberately
+  excluded from the backup archive, because an archive is made to be carried
+  between machines.
 
----
+### 4. Measure before believing, and report what the measurement says
 
-## Design Principles
+Assumptions inherited from good systems are still assumptions. Several of
+this project's have not survived contact with a benchmark, and the results
+are published rather than quietly dropped:
 
-### Principle 1: Minimize Effort, Maximize Output
+- The character model inherited from the Dasher lineage contributed nothing
+  to word prediction while costing five and a half times the latency. It is
+  out of the merge.
+- The spatial error-correction layer is worth nothing on clean input. It
+  earns its place only under pointer error, which happens to be the condition
+  this population types in.
+- Learning the user's pointer bias, which simulated beautifully, was worth a
+  few tenths of a point end to end. It shipped anyway, for stated reasons,
+  and the modest number is recorded next to it.
+- The four user-selectable merge strategies are separated by less than the
+  noise floor. The setting stays, and the whitepaper says plainly that we
+  cannot demonstrate any choice beats the default.
 
-Every interaction should require the **minimum possible effort** for the **maximum possible result**.
+A negative result about our own work is the most useful kind, because it is
+the only kind that stops the next person spending a week on it.
 
-- **Prediction reduces keystrokes** — Type "th" → get "the", "this", "that"
-- **Sticky modifiers** — One click for Shift, not simultaneous press
-- **Smart defaults** — Most common features visible, advanced features hidden
+### 5. One route is not a route
 
-### Principle 2: Progressive Disclosure
+A control reachable by exactly one gesture is unreachable to anyone without
+that gesture. Dwell-click software, switch access, head and eye trackers, and
+single-button adaptive mice all produce a left click and nothing else.
 
-**From Dasher's approach:** Show what's needed, hide what's not.
+So right-click is always a shortcut and never the only way in, and a setting
+must never be able to remove the only entry point to an unrelated feature.
+Colour obeys the same rule from the other direction: with nine themes
+shipping, a colour that carries meaning has to carry it on all of them, or it
+is decoration on some and information on others.
 
-- **Settings panel** — Toggle Function row, Navigation, Numpad on demand
-- **Compact mode** — Reduce size when screen space is limited
-- **Modular architecture** — Each panel is independent, can be shown/hidden
+### 6. A familiar surface with intelligence underneath
 
-### Principle 3: Fail Gracefully
+This is where Alpha-OSK parts company with its most direct influence. Dasher
+showed that an interface organised by probability can be extraordinarily
+efficient, and paid for it with a novel paradigm the user has to learn.
 
-**From Dasher's multi-input support:** Work with what's available.
+Alpha-OSK takes the opposite trade: an ordinary QWERTY keyboard with nothing
+to learn, and puts the probability underneath, in the prediction bar and in
+the decoder that reads a click as evidence rather than as a keypress. Neither
+choice is better in the abstract. They suit different input devices, and
+Dasher's suits continuous pointing (eyes, head) in a way a key grid never
+will.
 
-- **Prediction degrades gracefully** — Works without LLM, better with it
-- **X11 and Wayland support** — xdotool or ydotool, whichever is available
-- **No hard dependencies** — Core keyboard works with minimal setup
+The corollary is a discipline: novelty on the surface has to justify itself
+against the cost of learning it, and almost never can. Novelty underneath is
+free.
 
-### Principle 4: Speed Through Intelligence
+### 7. Say plainly what is not known
 
-**From Dasher:** *"The key to speed is smooth, continuous motion. Stop-and-start corrections are slower than confident steering toward your target."*
+The system has one long-term user, who is also its author. There is no user
+study. Keystroke savings measured by simulation is an upper bound on benefit
+and not a measure of it, because a real user has to notice a suggestion, read
+it, decide, and land a pointer on it.
 
-For Alpha-OSK:
-- **Instant n-gram predictions** — No waiting, no lag
-- **Background LLM refinement** — Better suggestions without blocking
-- **Next-word prediction** — Anticipate what comes after
-
----
-
-## Quotes to Remember
-
-> *"Imagine a library containing all possible books, ordered alphabetically on a single shelf."*  
-> — Dasher: The Library Concept
-
-> *"In English, after writing 'th', the letter 'e' is much more probable than 'x'. Therefore in Dasher, the box for 'e' will be much larger than the box for 'x', making it easier to steer toward."*  
-> — Dasher: Probability and Size
-
-> *"Don't give up! Most people need about 5-10 minutes of practice before it 'clicks' and becomes natural."*  
-> — Dasher: Tips for Novices
-
-> *"The more you use Dasher, the better it gets at predicting what you want to write."*  
-> — Dasher: Adaptive Learning
-
-> *"Keep moving — Continuous smooth motion is better than stopping and starting."*  
-> — Dasher: Steering Tips
-
----
-
-## What We Learned from Dasher
-
-### 1. **Information Theory Matters**
-Dasher proved that using probability to guide interface design creates more efficient text entry. Alpha-OSK applies this through intelligent prediction ranking.
-
-### 2. **Accessibility Drives Innovation**
-Designing for users with severe disabilities creates better interfaces for everyone. Constraints breed creativity.
-
-### 3. **Context is Everything**
-Dasher's language models make text entry faster by predicting what comes next. Alpha-OSK's hybrid predictor does the same.
-
-### 4. **Documentation is User Respect**
-Dasher's comprehensive documentation (philosophy, research, tutorials, FAQ) shows respect for users. We follow this example.
-
-### 5. **Research-Backed Design**
-Dasher was published in Nature (2002). Good assistive technology is built on solid research, not guesswork.
-
-### 6. **Community Sustainability**
-Open source + active community = long-term viability. Dasher has survived 25+ years because of this.
-
----
-
-## How Alpha-OSK Differs from Dasher
-
-While we deeply respect Dasher's philosophy, Alpha-OSK makes different design choices:
-
-| Aspect | Dasher | Alpha-OSK |
-|--------|--------|-----------|
-| **Interface** | Zooming library (novel paradigm) | Traditional keyboard (familiar) |
-| **Learning Curve** | 5-10 minutes to "click" | Instant familiarity |
-| **Input Method** | Continuous 2D pointing | Click/tap discrete keys |
-| **Best For** | Eye-tracking, head-tracking | Mouse, touchscreen, switch access |
-| **Prediction** | Built into spatial layout | Separate prediction bar |
-| **Platform** | Cross-platform (v6 in progress) | Linux-focused |
-
-**Why the difference?** 
-
-Dasher's zooming interface is brilliant for continuous pointing (eyes, head). Alpha-OSK targets users who need a **familiar keyboard layout** with **intelligent assistance**. Different tools for different needs.
-
----
-
-## Future Directions
-
-Inspired by Dasher's research roadmap, Alpha-OSK aims to:
-
-1. **Personalized Language Models** — Train on user's writing style
-2. **Multi-language Support** — Following Dasher's 60+ language example
-3. **Advanced Input Methods** — Eye-tracking, switch scanning
-4. **Speech Integration** — Text-to-speech output like Dasher
-5. **Research Publication** — Document findings, contribute to HCI research
+All of that is stated in the whitepaper's own limitations section rather than
+buried, and the study protocol and consent form were published before
+enrolment so the analysis cannot be chosen after the data is seen. An
+accessibility tool that overstates its evidence is asking a vulnerable
+population to take its word for something, which is exactly the wrong way
+round.
 
 ---
 
-## For Developers
+## Things we changed our minds about
 
-When working on Alpha-OSK, ask yourself:
+The list matters more than any single entry, because it is the evidence that
+the principles above are load-bearing rather than decorative.
 
-1. **Does this reduce effort?** — Every feature should minimize user work
-2. **Is this accessible?** — Can someone with limited motor control use it?
-3. **Is this intelligent?** — Does it predict and adapt?
-4. **Is this documented?** — Can future developers understand why?
-5. **Is this open?** — Can the community improve it?
+| Removed or reversed | Why |
+|---|---|
+| Swipe / glide typing | A sustained precise drag is the one gesture this user cannot reliably make. Its overlay also owned every press in its bounds, which turned any key it did not know about into a dead tap. |
+| LLM re-ranking on by default | Contradicted local-first, and the n-gram plus spatial stack did not need it. The code remains, disabled, and the dependency is not installed. |
+| PPM word candidates in the merge | Measured worthless, and five and a half times the latency. |
+| Three-tier proper-noun auto-capitalisation | Fired on ordinary English words and on forms the user had typed lowercase. Pills now mirror what was actually typed. |
+| Six built-in vocabulary packs | At 200 to 400 words each they were thinner than the user's own learning after three uses of a phrase. Import still works. |
+| A composite "prediction quality score" | A user can act on "you saved 4.2 hours". Nobody can act on "73 out of 100". |
+| Six named fuzzy-recognition profiles | The user could not tell which one they wanted. One tuned default replaced them. |
+| An edit-mode toggle on the function row | Replaced by a settings page: bigger targets, no mode to escape, and the only surface that shows an assignment the user has forgotten making. |
+| The full-size symbol layer | A second route to a set the symbol picker already reached, charged against the two widest keys on the space row. The space bar got the room. |
 
 ---
 
-## Acknowledgments
+## Influences
 
-This project stands on the shoulders of giants:
+Alpha-OSK is assembled from other people's ideas, and it is worth being
+specific about which. These are paraphrases of the arguments, not quotations.
 
-- **Dasher Project** — University of Cambridge Inference Group, led by David MacKay
-- **GNOME On-Board** — Pioneering Linux on-screen keyboard
-- **The accessibility community** — Users who need these tools and inspire better design
+- **Dasher** (Ward, Blackwell and MacKay, Cambridge Inference Group)
+  established the variable-order character model as the workhorse of
+  accessible text entry, and made the deeper argument this project inherits
+  wholesale: that text entry is a decoding problem, that probability should
+  shape the interface, and that designing for the most constrained user
+  produces a better system for everyone. We train the same class of model.
+  Section 8.3 of the whitepaper reports where our measurements disagree with
+  it, which is itself a form of respect.
+- **AOSP LatinIME** supplies the treatment of weighted edit distance, and the
+  rule that the literal typed word competes against its corrections. This is
+  why "thru" and "lol" survive.
+- **VelociTap and the statistical-decoding line** (Kristensson and Zhai;
+  Vertanen) supply the idea that a touch is evidence rather than a keypress.
+  Our mid-word prefix beam is a small member of that family, with the
+  difference that our noise comes from one person's motor system and is
+  therefore learnable per user.
+- **Presage** supplies the layered framing: several redundant predictors,
+  merged.
+- **SymSpell** (Garbe) supplies the deletion-index lookup in the whole-word
+  correction path.
+- **The AAC rate-enhancement literature** (Higginbotham; Trnka and McCoy)
+  supplies both the primary metric and the caution about it.
+
+---
+
+## For developers
+
+Five questions worth asking of a change, in the order they usually bite:
+
+1. **Does it take focus, or assume we have it?** If yes, it will not work.
+2. **What does it cost in clicks?** Count them for the slowest plausible
+   pointer, not yours.
+3. **Is there a second route to it?** Right-click, hover and drag are
+   shortcuts, never the only way.
+4. **What is the evidence?** For anything touching the prediction engine,
+   run the benchmark. A plausible mechanism is not a result.
+5. **Where is the near-miss test?** Every positive case in this suite is
+   paired with the case it must still reject, because a rule that accepts
+   everything passes a positive-only test perfectly.
+
+And one rule that is not a question, because it is the failure this codebase
+keeps having: **when two places need the same behaviour, they call one
+method.** Parallel blocks drift, and they drift silently. The sticky-modifier
+release, the verbatim-insert prologue, the prediction-bar refresh and the
+typing-context reset were each two hand-written copies that had already
+disagreed with each other before anyone noticed.
 
 ---
 
 ## References
 
-- [Dasher Official Website](https://dasher.at)
-- [Dasher: How It Works](https://dasher.at/docs/concepts/how-dasher-works/)
-- [Dasher Special Needs Documentation](https://dasher.at/docs/special-needs/)
-- [Dasher Research Publications](https://dasher.at/docs/research/publications/)
-- Ward, D. J., Blackwell, A. F., & MacKay, D. J. (2002). *Dasher—a data entry interface using continuous gestures and language models.* UIST '00.
+- Ward, D. J., Blackwell, A. F., and MacKay, D. J. C. (2000). *Dasher: a data
+  entry interface using continuous gestures and language models.* UIST '00.
+- MacKay, D. J. C., and Ward, D. J. (2002). *Fast hands-free writing by gaze
+  direction.* Nature 418, 838.
+- Cleary, J., and Witten, I. (1984). *Data compression using adaptive coding
+  and partial string matching.* IEEE Transactions on Communications.
+- Trnka, K., and McCoy, K. F. (2008). *Evaluating word prediction: framing
+  keystroke savings.* ACL-HLT.
+- Higginbotham, D. J., et al. (2007). *The application of computational
+  linguistics to AAC.* AAC 23(1).
+- Dasher project documentation: <https://dasher.at>
 
----
-
-*"By looking ever more closely at the shelf, the writer can find the book containing the text he wishes to write. Thus writing can be described as zooming in on an alphabetical library, steering as you go."*
-
-**Alpha-OSK:** Making that library easier to navigate, one prediction at a time.
+Alpha-OSK is MIT licensed. Full citations for the prediction stack are in the
+whitepaper's reference list.

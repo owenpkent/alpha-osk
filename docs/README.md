@@ -56,7 +56,7 @@ Forward-looking design docs and active launch planning. Convert entries into `ar
 
 Reference material that informed the design but isn't a living spec. Useful for context; not authoritative for current behaviour.
 
-- [`research/PHILOSOPHY.md`](research/PHILOSOPHY.md): project philosophy and information-theoretic foundations.
+- [`research/PHILOSOPHY.md`](research/PHILOSOPHY.md): what the project believes and why, plus what it changed its mind about. The "why" layer behind the whitepaper's "what".
 - [`research/USER_PERSPECTIVE.md`](research/USER_PERSPECTIVE.md): user-lens framing of the project.
 - [`research/DESIGN.md`](research/DESIGN.md): early overall design notes.
 - [`research/INNOVATION_SOURCES.md`](research/INNOVATION_SOURCES.md): index of innovations drawn from Dasher, Gboard, LatinIME, Presage, etc.

@@ -14,16 +14,18 @@ Quick reference for AI assistants working on Alpha-OSK.
 
 ## Philosophy
 
-> *"Writing can be described as **zooming in on an alphabetical library, steering as you go**."*  
-> — Dasher Project
+Alpha-OSK is a window on the same desktop as the app being typed into, so it
+must never take focus. Almost every non-obvious decision in the codebase
+descends from that one constraint.
 
-Alpha-OSK is built on principles learned from decades of assistive technology research, particularly the [Dasher Project](https://dasher.at) from Cambridge University.
-
-**Core Principles:**
-1. **Information-efficient design** — Make probable text easier to find
-2. **Accessibility first** — Built by a wheelchair user, for real needs
-3. **Adaptive learning** — Gets better the more you use it
-4. **Transparent and open** — Free, documented, community-driven
+**Core principles:**
+1. **Accessibility is the architecture**, not a feature layered on top
+2. **Effort is the currency**: every click costs the user something real
+3. **Local-first, off-network by default**: no cloud, no GPU, no LLM
+4. **Measure before believing**, and publish the negative results too
+5. **One route is not a route**: right-click is never the only way in
+6. **A familiar surface** with the probability underneath it
+7. **Say plainly what is not known**: one long-term user, no user study yet
 
 📖 **Read the full philosophy:** [`PHILOSOPHY.md`](PHILOSOPHY.md)
 
