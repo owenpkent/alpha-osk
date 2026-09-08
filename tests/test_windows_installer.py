@@ -168,14 +168,21 @@ class TestTheCheckboxDefaultsToChecked:
     """The consent checkbox ships ticked, and the page has to earn that.
 
     It shipped unticked until 2026-09-08. The argument against a
-    pre-ticked box has not stopped being true (it is not valid consent
-    under GDPR/ePrivacy for an EU user, and a participant who did not
-    choose to be in the study weakens it as research); the decision was
-    to tick it and pay for it on the page, which is why this class
-    asserts the tick and the three things beside it -- the stated
-    purpose, the visible payload, and a decline that costs one click --
-    rather than the tick alone. Weakening any of those is what would
-    make this default indefensible.
+    pre-ticked box is real and was verified against primary sources:
+    ePrivacy Art 5(3) reaches a desktop app that stores a file locally
+    and then POSTs it (EDPB Guidelines 2/2023 v2.0 para 33 and 44), it
+    requires consent, CJEU C-673/17 (Planet49) holds a pre-checked box
+    is not consent, and EDPB Opinion 5/2019 para 40 rules out
+    legitimate interests for that step. The decision was to tick it and
+    pay for it on the page, which is why this class asserts the tick
+    and the three things beside it -- the stated purpose, the visible
+    payload, and a decline that costs one click -- rather than the tick
+    alone. Weakening any of those is what would make this default
+    indefensible.
+
+    It does NOT enrol anyone in the typing study, which has its own
+    consent form; an earlier version of this docstring said otherwise
+    and was wrong.
     """
 
     def test_the_checkbox_is_set_checked(self, nsi: str) -> None:

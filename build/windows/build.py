@@ -801,12 +801,52 @@ Function StudyInvitePage
 
   ; TICKED BY DEFAULT, and everything above is what pays for it: the
   ; purpose is stated, the exact payload is on screen, and one click
-  ; declines.  It shipped unticked until 2026-09-08 and the argument
-  ; against is worth keeping in view rather than deleting, because it has
-  ; not stopped being true: a pre-ticked box is not valid consent under
-  ; GDPR/ePrivacy for an EU user, and a participant who did not choose to
-  ; be in the study weakens it as research.  Owen's call, made with both
-  ; in view.  To reverse it, drop the SetState below and flip
+  ; declines.  It shipped unticked until 2026-09-08.
+  ;
+  ; The argument against was checked against the sources rather than
+  ; assumed, and it is stronger than the usual hand-wave about cookies.
+  ; Three findings, each from a primary text:
+  ;   - This is inside ePrivacy Art 5(3) despite there being no browser
+  ;     and no cookie.  EDPB Guidelines 2/2023 v2.0 (7 Oct 2024) para 33
+  ;     describes this app almost exactly: an entity "distributes
+  ;     software on the terminal equipment of the user that is stored and
+  ;     will then proactively call an Application Programming Interface
+  ;     ('API') endpoint over the network.  Such access clearly falls
+  ;     within the scope of Article 5(3) ePD."  Para 44 draws the line
+  ;     where we cross it: local-only use is fine, "but when this
+  ;     information or any derivation of this information is accessed,
+  ;     Article 5(3) ePD would apply."  Writing telemetry.json is the
+  ;     storage limb (para 36, "customized software, regardless of who
+  ;     created or installed" it); the weekly POST is the access limb.
+  ;   - Art 5(3) requires consent, and CJEU C-673/17 (Planet49, 1 Oct
+  ;     2019) holds consent "is not validly constituted if ... permitted
+  ;     by way of a pre-checked checkbox which the user must deselect".
+  ;     GDPR Recital 32 says the same in terms: "Silence, pre-ticked
+  ;     boxes or inactivity should not therefore constitute consent."
+  ;   - The obvious escape is closed.  EDPB Opinion 5/2019 para 40: Art
+  ;     5(3) "shall take precedence over article 6 of the GDPR with
+  ;     regards to the activity of storing or gaining access to this
+  ;     information", so "the controller cannot rely on the full range of
+  ;     possible lawful grounds" -- no legitimate-interests route for the
+  ;     storage/access step.  (Note Art 5(3) bites whether or not the
+  ;     payload is personal data, so the anon_id question does not
+  ;     rescue it either.)
+  ; So for a user in the EU this default is defective, not merely untidy.
+  ;
+  ; Against that, and why it ships anyway: no DPA has been found to have
+  ; enforced against a small or open-source desktop app over usage
+  ; telemetry, and VS Code, Firefox, Docker Desktop, the .NET SDK and
+  ; Homebrew all ship telemetry ON with no box at all, which makes a
+  ; visible ticked box the more conservative position rather than the
+  ; less.  Owen's call, made with both in view.
+  ;
+  ; What this checkbox does NOT do is enrol anyone in the typing study,
+  ; which has its own consent form in the app (docs/research/
+  ; STUDY_CONSENT.md).  An earlier version of this comment said a
+  ; pre-ticked box weakened the study; that was simply wrong, and the
+  ; research objection does not apply to this page at all.
+  ;
+  ; To reverse it, drop the SetState below and flip
   ; tests/test_windows_installer.py::TestTheCheckboxDefaultsToChecked.
   ${{NSD_CreateCheckbox}} 0 124u 100% 12u "Yes, share anonymous usage statistics"
   Pop $StudyInviteCheckboxHwnd
