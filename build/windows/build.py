@@ -716,15 +716,31 @@ Function ShortcutOptionsPage
     Abort
   ${{EndIf}}
 
+  ; Popped and discarded, not left on the stack.  Every ${{NSD_Create*}} is a
+  ; nsDialogs::CreateControl call and pushes the control's handle, so an
+  ; unpopped one strands an item for the life of the process and a page the
+  ; user can reach twice strands one per visit.  This was the only such site
+  ; in the file; the invite page pops all five of its controls.
   ${{NSD_CreateLabel}} 0 0 100% 20u "Choose which shortcuts to create:"
+  Pop $0
 
+  ; Seeded from the variables, not from a literal BST_CHECKED, for the
+  ; reason the consent box next door carries a guard: NSIS rebuilds a
+  ; custom page's dialog every time the page is entered, so a literal
+  ; re-ticks both boxes on a return visit and ShortcutOptionsLeave then
+  ; records the default rather than the answer.  Untick Desktop, click
+  ; Back, click Next, and the shortcut was created anyway.
+  ;
+  ; No guard is needed here because .onInit already seeds both variables
+  ; to BST_CHECKED, so the variable IS the default on a first visit and
+  ; the user's own answer on any later one.
   ${{NSD_CreateCheckbox}} 20u 30u 100% 15u "Create Desktop shortcut"
   Pop $1
-  ${{NSD_SetState}} $1 ${{BST_CHECKED}}
+  ${{NSD_SetState}} $1 $CreateDesktopShortcut
 
   ${{NSD_CreateCheckbox}} 20u 50u 100% 15u "Create Start Menu shortcut"
   Pop $2
-  ${{NSD_SetState}} $2 ${{BST_CHECKED}}
+  ${{NSD_SetState}} $2 $CreateStartMenuShortcut
 
   nsDialogs::Show
 FunctionEnd
