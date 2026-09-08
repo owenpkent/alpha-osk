@@ -781,3 +781,41 @@ class TestTheAppIsAskedToCloseBeforeItIsForced:
         assert "!insertmacro customCloseAlphaOsk" in _function_body(nsi, "CloseAlphaOsk")
         assert nsi.count("!insertmacro customCloseAlphaOsk") == 1
         assert nsi.count("!insertmacro customAlphaOskIsRunning") == 1
+
+
+class TestTheShortcutBoxesRememberWhatYouChose:
+    """Untick a shortcut, click Back, click Next, and the box came back
+    ticked, so the shortcut was created against the user's answer.
+
+    The same defect as the consent box on the page after this one, and
+    from the same cause: NSIS rebuilds a custom page's dialog on every
+    entry, and this page set both boxes from a literal BST_CHECKED, so
+    the default overwrote the choice and ShortcutOptionsLeave read the
+    box rather than the answer. The fix is smaller here than there
+    because .onInit already seeds both variables, so seeding the boxes
+    from those variables is the default on a first visit and the user's
+    own answer on any later one.
+    """
+
+    def test_each_box_is_seeded_from_its_variable(self, nsi: str) -> None:
+        code = _strip_comments(_function_body(nsi, "ShortcutOptionsPage"))
+        assert "${NSD_SetState} $1 $CreateDesktopShortcut" in code
+        assert "${NSD_SetState} $2 $CreateStartMenuShortcut" in code
+        assert "${BST_CHECKED}" not in code, "a literal default overwrites the user's choice"
+
+    def test_the_variables_still_default_to_checked(self, nsi: str) -> None:
+        """The inverse, and the half that keeps the fix from silently
+        turning both shortcuts off: seeding a box from a variable that
+        started empty leaves it unticked on the only visit most users
+        make, while satisfying the test above."""
+        init = _strip_comments(_function_body(nsi, ".onInit"))
+        assert "StrCpy $CreateDesktopShortcut ${BST_CHECKED}" in init
+        assert "StrCpy $CreateStartMenuShortcut ${BST_CHECKED}" in init
+
+    def test_the_leave_still_reads_the_boxes_back(self, nsi: str) -> None:
+        """Seeding the boxes from the variables makes the round trip a
+        loop, so a Leave that stopped writing to them would leave the
+        page showing the defaults for ever with nothing else failing."""
+        leave = _strip_comments(_function_body(nsi, "ShortcutOptionsLeave"))
+        assert "${NSD_GetState} $1 $CreateDesktopShortcut" in leave
+        assert "${NSD_GetState} $2 $CreateStartMenuShortcut" in leave
