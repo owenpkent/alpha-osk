@@ -507,21 +507,21 @@ class TestTheSilentInstallStillClosesTheRunningApp:
     prompt out of .onInit must not take the kill with it.
     """
 
-    def test_on_init_kills_it_behind_a_silent_guard(self, nsh: str) -> None:
+    def test_on_init_closes_it_behind_a_silent_guard(self, nsh: str) -> None:
         macro = _macro_code(nsh, "customInit")
         assert "IfSilent 0 skipSilentClose" in macro
-        after_guard = macro.split("IfSilent 0 skipSilentClose", 1)[1]
-        assert "taskkill /F /IM" in after_guard.split("skipSilentClose:", 1)[0]
+        guarded = macro.split("IfSilent 0 skipSilentClose", 1)[1]
+        assert "Call CloseAlphaOsk" in guarded.split("skipSilentClose:", 1)[0]
 
-    def test_an_interactive_install_kills_nothing_there(self, nsh: str) -> None:
-        """The inverse: an unguarded taskkill would satisfy the test above.
+    def test_an_interactive_install_closes_nothing_there(self, nsh: str) -> None:
+        """The inverse: an unguarded close would satisfy the test above.
 
         Interactively the app must survive .onInit, or a user who cancels at
         any page has already lost the keyboard they were typing with.
         """
         macro = _macro_code(nsh, "customInit")
         before_guard = macro.split("IfSilent 0 skipSilentClose", 1)[0]
-        assert "taskkill" not in before_guard
+        assert "CloseAlphaOsk" not in before_guard
 
     def test_the_prompt_stands_down_when_silent(self, nsh: str) -> None:
         macro = _macro_code(nsh, "customCloseRunningApp")
@@ -552,3 +552,80 @@ class TestTheInstallerBringsItselfToTheFront:
         define = "!define MUI_CUSTOMFUNCTION_GUIINIT AlphaOskGuiInit"
         assert define in nsi
         assert nsi.index(define) < nsi.index('!insertmacro MUI_LANGUAGE "English"')
+
+
+class TestTheAppIsAskedToCloseBeforeItIsForced:
+    """``taskkill /F`` is TerminateProcess: nothing in the app gets to run.
+
+    Alpha-OSK writes the learned vocabulary and the analytics counters from
+    ``aboutToQuit`` (``keyboard_app.py``), and releases any OS-held modifier
+    from ``KeyboardBridge.shutdown``. Forcing the process skipped all of it,
+    on every automatic update, so each one cost whatever had been learned
+    since the last save. ``taskkill`` without ``/F`` posts WM_CLOSE instead,
+    which a window carrying this app's flags answers in well under a second.
+
+    The forced kill stays as the fallback: a wedged process must not be able
+    to block the install for ever.
+    """
+
+    def test_the_polite_kill_comes_first(self, nsh: str) -> None:
+        macro = _macro_code(nsh, "customCloseAlphaOsk")
+        kills = [ln.strip() for ln in macro.splitlines() if "taskkill" in ln]
+        assert len(kills) == 2, kills
+        assert "/F" not in kills[0]
+        assert "/F /IM" in kills[1]
+
+    def test_it_waits_for_the_exit_rather_than_guessing(self, nsh: str) -> None:
+        """A flat Sleep would be either too short to save or slow every update.
+
+        The loop leaves as soon as the process is gone, which is why the
+        common path is quicker than the 1.5 s sleep it replaces.
+        """
+        macro = _macro_code(nsh, "customCloseAlphaOsk")
+        wait = macro.split("waitForAppExit:", 1)
+        assert len(wait) == 2, "no wait loop"
+        loop = wait[1]
+        assert "Call AlphaOskIsRunning" in loop
+        assert "Goto appClosed" in loop
+        assert "Goto waitForAppExit" in loop
+
+    def test_the_force_is_still_there_as_a_fallback(self, nsh: str) -> None:
+        """The inverse: dropping it would satisfy the ordering test above.
+
+        Without it a process that never answers WM_CLOSE holds its own files
+        open and the install fails on a locked exe instead.
+        """
+        macro = _macro_code(nsh, "customCloseAlphaOsk")
+        after_loop = macro.split("Goto waitForAppExit", 1)[1]
+        assert "taskkill /F /IM" in after_loop
+
+    def test_both_close_paths_go_through_the_one_function(self, nsh: str) -> None:
+        """Parallel copies of a kill are how the two paths drift apart.
+
+        The silent path is the one that runs on every update and the
+        interactive one is the only one anybody watches, so a fix applied to
+        whichever was being read at the time would miss the other.
+        """
+        for name in ("customInit", "customCloseRunningApp"):
+            macro = _macro_code(nsh, name)
+            assert "Call CloseAlphaOsk" in macro, name
+            assert "taskkill" not in macro, name
+
+    def test_the_running_check_has_one_definition(self, nsi: str, nsh: str) -> None:
+        assert "tasklist" in _macro_code(nsh, "customAlphaOskIsRunning")
+        for name in ("customInit", "customCloseRunningApp", "customCloseAlphaOsk"):
+            macro = _macro_code(nsh, name)
+            assert "tasklist" not in macro, name
+            assert "Call AlphaOskIsRunning" in macro, name
+
+    def test_the_helpers_are_functions_not_macros_at_the_call_sites(self, nsi: str) -> None:
+        """A macro inserted at both call sites would declare its labels twice.
+
+        Which is a compile error rather than a silent fault, but it is the
+        reason these two are shaped differently from every other custom hook
+        in installer.nsh, so it is worth pinning.
+        """
+        assert "!insertmacro customAlphaOskIsRunning" in _function_body(nsi, "AlphaOskIsRunning")
+        assert "!insertmacro customCloseAlphaOsk" in _function_body(nsi, "CloseAlphaOsk")
+        assert nsi.count("!insertmacro customCloseAlphaOsk") == 1
+        assert nsi.count("!insertmacro customAlphaOskIsRunning") == 1

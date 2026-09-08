@@ -10,6 +10,10 @@
 ; - customInstall:         After file extraction. Old-version cleanup, shortcuts
 ; - customUnInstall:       Cleanup on uninstall
 ;
+; customAlphaOskIsRunning and customCloseAlphaOsk are the two helpers both
+; close paths share.  They are Functions rather than hooks (see build.py),
+; because a macro inserted at both call sites would declare its labels twice.
+;
 ; Important UIAccess note:
 ; ========================
 ; Alpha-OSK installs to C:\Program Files\Alpha-OSK by default.
@@ -34,11 +38,9 @@
   ; confirmation getting buried.  It is asked from customCloseRunningApp
   ; instead, over a window that exists and is in front.
   IfSilent 0 skipSilentClose
-    nsExec::ExecToStack 'cmd /c tasklist /FI "IMAGENAME eq alpha-osk.exe" /NH | findstr /I "alpha-osk"'
-    Pop $0
-    ${If} $0 == 0
-      nsExec::ExecToLog 'taskkill /F /IM "alpha-osk.exe"'
-      Sleep 1500
+    Call AlphaOskIsRunning
+    ${If} $0 == 1
+      Call CloseAlphaOsk
     ${EndIf}
   skipSilentClose:
 
@@ -73,9 +75,8 @@
   ; customInit.
   IfSilent skipClosePrompt
 
-  nsExec::ExecToStack 'cmd /c tasklist /FI "IMAGENAME eq alpha-osk.exe" /NH | findstr /I "alpha-osk"'
-  Pop $0
-  ${If} $0 == 0
+  Call AlphaOskIsRunning
+  ${If} $0 == 1
     ; Belt and braces on top of the owner window: MB_SETFOREGROUND asks for
     ; the foreground and MB_TOPMOST keeps the box above non-topmost windows
     ; even where Windows refuses to hand it over.
@@ -89,10 +90,80 @@
     ; the finish page as though it had succeeded.
     Quit
     closeApp:
-      nsExec::ExecToLog 'taskkill /F /IM "alpha-osk.exe"'
-      Sleep 1500
+      Call CloseAlphaOsk
   ${EndIf}
   skipClosePrompt:
+!macroend
+
+!macro customAlphaOskIsRunning
+  ; Sets $0 to 1 while alpha-osk.exe is running and 0 once it is gone.
+  ;
+  ; One definition, three callers (both close paths and the wait loop below),
+  ; rather than the copy of this line each path used to carry.
+  ;
+  ; nsExec::Exec, not ExecToStack: only the exit code is wanted, and
+  ; ExecToStack pushes the command's output as well, which the loop below
+  ; would leave on the stack once per poll.
+  ;
+  ; A tasklist that fails outright reads as "not running", which is the
+  ; behaviour both paths already had.  Being wrong that way costs an install
+  ; over a live process; being wrong the other way would hang the installer
+  ; on a prompt about an app that is not there.
+  nsExec::Exec 'cmd /c tasklist /FI "IMAGENAME eq alpha-osk.exe" /NH | findstr /I "alpha-osk"'
+  Pop $0
+  ${If} $0 == 0
+    StrCpy $0 1
+  ${Else}
+    StrCpy $0 0
+  ${EndIf}
+!macroend
+
+!macro customCloseAlphaOsk
+  ; Ask before forcing, and this is the whole point of the function.
+  ;
+  ; `taskkill` without /F posts WM_CLOSE, which lets Qt run aboutToQuit:
+  ; keyboard_app.py writes the learned vocabulary and the analytics counters
+  ; there, and keyboard_bridge.shutdown() releases any modifier still held
+  ; down at the OS level.  /F is TerminateProcess and skips every bit of it,
+  ; so an update used to cost whatever the model had learned since its last
+  ; save, and could leave Shift or Ctrl stuck desktop-wide afterwards.  The
+  ; auto-updater runs this path on every update, so that was the common case
+  ; rather than the rare one.
+  DetailPrint "Closing Alpha-OSK..."
+  nsExec::ExecToLog 'taskkill /IM "alpha-osk.exe"'
+  Pop $0
+
+  ; Poll for the exit rather than sleeping a fixed interval.  The save is
+  ; normally well under a second and the loop leaves as soon as the process
+  ; is gone, so the common path is now *quicker* than the flat 1.5 s sleep
+  ; that followed the old forced kill.
+  ;
+  ; 30 polls of 200 ms, plus the cost of each check, is roughly 6 to 10
+  ; seconds.  The budget is generous because that same quit path also
+  ; submits telemetry, which blocks on the network and can retry for far
+  ; longer than this; it runs *after* the vocabulary is written, so timing
+  ; out here costs at worst that one submission, which is designed to retry
+  ; next week.  The auto-updater's helper allows 60 s for us to exit, so
+  ; nothing downstream is disturbed by the wait.
+  StrCpy $R0 0
+  waitForAppExit:
+    Sleep 200
+    Call AlphaOskIsRunning
+    ${If} $0 == 0
+      Goto appClosed
+    ${EndIf}
+    IntOp $R0 $R0 + 1
+    ${If} $R0 < 30
+      Goto waitForAppExit
+    ${EndIf}
+
+  ; It would not go: something is wedged, and the install has to proceed.
+  ; The sleep is the one the forced kill always needed, for the file handles.
+  DetailPrint "Alpha-OSK did not close in time; closing it forcibly."
+  nsExec::ExecToLog 'taskkill /F /IM "alpha-osk.exe"'
+  Pop $0
+  Sleep 1500
+  appClosed:
 !macroend
 
 !macro customInstall
@@ -142,8 +213,9 @@
   ; Interactive install: the user can launch the app from the Start
   ; Menu / desktop shortcut, no need to spawn it for them.  Silent
   ; install: triggered by the auto-updater (`/S`), which has already
-  ; killed the running app via customInit's taskkill — so without this,
-  ; the user is left with no keyboard until they manually relaunch.
+  ; closed the running app via customInit's Call to CloseAlphaOsk, so
+  ; without this the user is left with no keyboard until they relaunch
+  ; it by hand.
   ;
   ; Spawn via explorer.exe as the launching parent so the new app
   ; runs at the user's medium integrity level instead of inheriting

@@ -9,7 +9,9 @@ All notable changes to Alpha-OSK are documented in this file.
 
   It is also asked **later** than it used to be. Before, the keyboard was closed before you had picked an install location or agreed to anything, so cancelling further on left you with no on-screen keyboard and nothing installed. Nothing is closed now until you have committed to the install, and answering Cancel stops without touching either the running keyboard or the files on disk.
 
-  The same call that was supposed to pull the wizard itself to the front after the Windows permission prompt had the identical fault and was doing nothing at all. It now runs once the window exists. Automatic updates are unchanged: they never showed this prompt, and still close and reopen the keyboard on their own.
+  The same call that was supposed to pull the wizard itself to the front after the Windows permission prompt had the identical fault and was doing nothing at all. It now runs once the window exists.
+
+- **Updating no longer throws away words learned since the last save.** Installing a new version closed the running keyboard by killing it outright, which gave it no chance to write anything down: every automatic update lost whatever the model had picked up since it last saved, and could leave Shift or Ctrl stuck held down across the whole desktop afterwards, because the keyboard releases those on its way out too. It is now asked to close first, the way clicking the X does, and only forced if it has not gone within a few seconds. In practice it closes in a fraction of a second, so updates are slightly quicker than before as well.
 
 ## [1.4.0] (2026-09-07)
 

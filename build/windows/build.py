@@ -832,6 +832,20 @@ Function ConfirmCloseRunningApp
 FunctionEnd
 
 ; ============================================================
+;  Closing a running Alpha-OSK
+; ============================================================
+; Functions rather than macros because both close paths use them, and a
+; macro inserted twice would declare its labels twice.  Called from
+; .onInit as well as from a page, so neither may touch the GUI.
+Function AlphaOskIsRunning
+  !insertmacro customAlphaOskIsRunning
+FunctionEnd
+
+Function CloseAlphaOsk
+  !insertmacro customCloseAlphaOsk
+FunctionEnd
+
+; ============================================================
 ;  Launch as original (non-elevated) user
 ; ============================================================
 Function LaunchAsUser
