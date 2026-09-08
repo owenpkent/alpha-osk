@@ -1,8 +1,8 @@
-"""The Windows installer: the user's settings, and the research-invite page.
+"""The Windows installer: settings, the research-invite page, the close prompt.
 
-Two independent things this generated script has to get right, tested
-together because they live in the same file and one is a near-miss for the
-other.
+Three independent things this generated script has to get right, tested
+together because they live in the same file and the first two are near-misses
+for each other.
 
 The settings half: the uninstaller must not take the user's settings with
 it. It used to delete the Qt organisation key from its Uninstall section
@@ -17,6 +17,12 @@ The invite half: the study-participation page must ship its checkbox
 unchecked, must seed HKLM\\Software\\alpha-osk-setup and never the bare
 organisation key next door, and must not run at all during a silent
 install, which is what the auto-updater drives.
+
+The close-prompt half: "Alpha-OSK is currently running, close it?" must be
+asked over a window the user can see. It used to be raised from .onInit,
+which runs before the installer window is created, so it was ownerless,
+BringToFront had nothing to act on, and the box could sit behind whatever the
+user was looking at with no wizard on screen to explain the wait.
 """
 
 from __future__ import annotations
@@ -86,6 +92,32 @@ def _function_body(nsi_text: str, name: str) -> str:
     body = nsi_text.split(marker, 1)
     assert len(body) == 2, f"no Function {name} in the generated script"
     return body[1].split("FunctionEnd", 1)[0]
+
+
+def _macro_code(nsh_text: str, name: str) -> str:
+    """One macro's body with its ``;`` comments stripped.
+
+    These macros are heavily commented, and every word the assertions below
+    look for (MessageBox, BringToFront, Abort, taskkill) appears in the
+    comments explaining why it is or is not there. Matching the raw text
+    means a test can pass on the prose while the code says the opposite.
+    """
+    body = nsh_text.split(f"!macro {name}", 1)
+    assert len(body) == 2, f"no !macro {name} in installer.nsh"
+    body = body[1].split("!macroend", 1)[0]
+
+    lines = []
+    for line in body.splitlines():
+        in_string = False
+        for i, ch in enumerate(line):
+            if ch == '"':
+                in_string = not in_string
+            elif ch == ";" and not in_string:
+                line = line[:i]
+                break
+        if line.strip():
+            lines.append(line.rstrip())
+    return "\n".join(lines)
 
 
 def _uninstall_section(nsi: str) -> str:
@@ -407,3 +439,116 @@ class TestTheStudyPageSaysTheseAreCounts:
         text = " ".join(c[3].lower() for c in _controls(nsi, "StudyInvitePage"))
         assert "never the words you type" in text
         assert "anything you typed" in text or "nothing you type" in text
+
+
+class TestTheCloseAppPromptIsAskedOverAVisibleWindow:
+    """The reported bug: the close confirmation appeared behind other windows.
+
+    Its cause was where it was asked, not how it was worded. ``.onInit``
+    runs before NSIS creates the installer window, so ``$HWNDPARENT`` is
+    still 0: a MessageBox raised there has no owner and no window on screen
+    to draw the eye, and ``BringToFront`` is a no-op. The prompt now belongs
+    to the INSTFILES page's pre-function, which runs over a window that is
+    up and in front.
+    """
+
+    def test_on_init_raises_no_message_box(self, nsh: str) -> None:
+        """The whole of the fix. An ownerless box is the bug."""
+        assert "MessageBox" not in _macro_code(nsh, "customInit")
+
+    def test_the_prompt_still_exists(self, nsh: str) -> None:
+        """The inverse: deleting the prompt would satisfy the test above."""
+        macro = _macro_code(nsh, "customCloseRunningApp")
+        assert "MessageBox" in macro
+        assert "Alpha-OSK is currently running" in macro
+
+    def test_it_is_hooked_to_the_page_that_writes_the_files(self, nsi: str) -> None:
+        pages = _pages_block(nsi)
+        hook = "!define MUI_PAGE_CUSTOMFUNCTION_PRE ConfirmCloseRunningApp"
+        assert hook in pages
+        # Immediately before INSTFILES: MUI applies a page define to the next
+        # page it is given, so the line it sits in front of is the whole of
+        # what decides when this runs.
+        after = pages.split(hook, 1)[1].strip().splitlines()
+        assert after[0] == "!insertmacro MUI_PAGE_INSTFILES"
+
+    def test_the_hook_function_defers_to_the_macro(self, nsi: str) -> None:
+        body = _function_body(nsi, "ConfirmCloseRunningApp")
+        assert "!insertmacro customCloseRunningApp" in body
+
+    def test_the_box_asks_for_the_foreground_as_well(self, nsh: str) -> None:
+        """Belt and braces over the owner window.
+
+        MB_SETFOREGROUND asks; MB_TOPMOST keeps the box above non-topmost
+        windows even where Windows refuses to hand the foreground over.
+        """
+        macro = _macro_code(nsh, "customCloseRunningApp")
+        line = next(ln for ln in macro.splitlines() if "MessageBox" in ln)
+        assert "MB_TOPMOST" in line
+        assert "MB_SETFOREGROUND" in line
+
+    def test_cancel_quits_rather_than_aborting(self, nsh: str) -> None:
+        """The near-miss with teeth.
+
+        ``Abort`` in a page pre-function skips the page, not the install, so
+        cancelling would have walked on to the finish page reporting success
+        over an install that never ran. Only ``Quit`` stops the installer.
+        """
+        macro = _macro_code(nsh, "customCloseRunningApp")
+        assert "Quit" in macro.split()
+        assert "Abort" not in macro
+
+
+class TestTheSilentInstallStillClosesTheRunningApp:
+    """The auto-updater's path, which has no window and must not grow a prompt.
+
+    ``src/updater.py`` drives ``/S`` and relies on the installer closing the
+    running keyboard before the files under it are replaced. Moving the
+    prompt out of .onInit must not take the kill with it.
+    """
+
+    def test_on_init_kills_it_behind_a_silent_guard(self, nsh: str) -> None:
+        macro = _macro_code(nsh, "customInit")
+        assert "IfSilent 0 skipSilentClose" in macro
+        after_guard = macro.split("IfSilent 0 skipSilentClose", 1)[1]
+        assert "taskkill /F /IM" in after_guard.split("skipSilentClose:", 1)[0]
+
+    def test_an_interactive_install_kills_nothing_there(self, nsh: str) -> None:
+        """The inverse: an unguarded taskkill would satisfy the test above.
+
+        Interactively the app must survive .onInit, or a user who cancels at
+        any page has already lost the keyboard they were typing with.
+        """
+        macro = _macro_code(nsh, "customInit")
+        before_guard = macro.split("IfSilent 0 skipSilentClose", 1)[0]
+        assert "taskkill" not in before_guard
+
+    def test_the_prompt_stands_down_when_silent(self, nsh: str) -> None:
+        macro = _macro_code(nsh, "customCloseRunningApp")
+        assert "IfSilent skipClosePrompt" in macro
+        assert "skipClosePrompt:" in macro
+
+
+class TestTheInstallerBringsItselfToTheFront:
+    """The same fault one window over, and the reason the comment was wrong.
+
+    ``BringToFront`` acts on ``$HWNDPARENT``, so calling it from .onInit did
+    nothing at all, including the thing its comment claimed: rescuing the
+    wizard from behind another window after UAC elevation.
+    """
+
+    def test_it_is_not_called_before_the_window_exists(self, nsh: str) -> None:
+        assert "BringToFront" not in _macro_code(nsh, "customInit")
+
+    def test_it_is_called_from_gui_init(self, nsi: str, nsh: str) -> None:
+        assert "BringToFront" in _macro_code(nsh, "customGuiInit")
+        assert "!insertmacro customGuiInit" in _function_body(nsi, "AlphaOskGuiInit")
+
+    def test_mui_is_told_to_call_it(self, nsi: str) -> None:
+        """And told before MUI_LANGUAGE, which is what emits .onGUIInit.
+
+        Defined afterwards it compiles cleanly and is simply never called.
+        """
+        define = "!define MUI_CUSTOMFUNCTION_GUIINIT AlphaOskGuiInit"
+        assert define in nsi
+        assert nsi.index(define) < nsi.index('!insertmacro MUI_LANGUAGE "English"')

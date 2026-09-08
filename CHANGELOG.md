@@ -4,6 +4,13 @@ All notable changes to Alpha-OSK are documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+- **The installer's "Alpha-OSK is currently running" prompt no longer hides behind other windows.** Installing over a running copy asks permission to close it first, and that question was being raised before the setup wizard itself had appeared on screen: it belonged to no window, so Windows was free to leave it behind whatever you were last looking at, and there was nothing else on screen to say the install was waiting on an answer. It is now asked when you click Install, over the wizard, and it stays on top.
+
+  It is also asked **later** than it used to be. Before, the keyboard was closed before you had picked an install location or agreed to anything, so cancelling further on left you with no on-screen keyboard and nothing installed. Nothing is closed now until you have committed to the install, and answering Cancel stops without touching either the running keyboard or the files on disk.
+
+  The same call that was supposed to pull the wizard itself to the front after the Windows permission prompt had the identical fault and was doing nothing at all. It now runs once the window exists. Automatic updates are unchanged: they never showed this prompt, and still close and reopen the keyboard on their own.
+
 ## [1.4.0] (2026-09-07)
 
 ### Added
