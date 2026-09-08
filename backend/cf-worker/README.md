@@ -172,8 +172,32 @@ nothing.
    and must stay that way: a pre-ticked consent box is not consent, and it
    would make the data unusable as research.
 
+## Reading the numbers
+
+    python scripts/telemetry.py            # totals, plus the last 14 days
+    python scripts/telemetry.py --days 60
+    python scripts/telemetry.py --json
+
+Both sources it reads are public and need no credentials. It takes the
+endpoint from `src/telemetry.py` rather than a copy, so it cannot drift from
+where the keyboard actually submits.
+
+## Verifying
+
 Verify the whole chain end to end after a release by opting in on a clean
 install, waiting for a submit, and checking that `/v1/aggregate` moves.
+
+**Verify with the client, not with curl.** curl's default User-Agent is not
+blocked, but urllib's is: Cloudflare's bot protection answers
+`Python-urllib/3.x` with 403 before the request reaches the worker, and
+`_submit_now` drops a 4xx silently. Every curl check of this endpoint passed
+while the shipped path was refused at the edge. That is why the client sends
+`Alpha-OSK/<version>` (`USER_AGENT` in `src/telemetry.py`), and why any new
+request this module makes must carry it.
+
+Note also that `_submit_now()` returns True on success, on a 4xx drop and
+after exhausted retries alike, so its return value cannot tell you whether
+anything landed. Read the log line, or the database.
 Nothing in the client reports a delivery failure to the user, deliberately,
 so this check is the only signal that the chain is intact.
 
