@@ -164,6 +164,14 @@ class TestTheInviteePageIsPlacedRight:
         assert "Read more about the study" in body
 
 
+def _strip_comments(code: str) -> str:
+    """NSIS comment lines, dropped. The macros and page functions here are
+    heavily commented and every word the assertions look for appears in
+    that prose too, so a substring test against the raw text passes on the
+    comment that describes the thing rather than the thing."""
+    return "\n".join(ln for ln in code.splitlines() if not ln.strip().startswith(";"))
+
+
 class TestTheCheckboxDefaultsToChecked:
     """The consent checkbox ships ticked, and the page has to earn that.
 
@@ -187,7 +195,7 @@ class TestTheCheckboxDefaultsToChecked:
 
     def test_the_checkbox_is_set_checked(self, nsi: str) -> None:
         body = _function_body(nsi, "StudyInvitePage")
-        code = "\n".join(ln for ln in body.splitlines() if not ln.strip().startswith(";"))
+        code = _strip_comments(body)
         assert "${NSD_SetState} $StudyInviteCheckboxHwnd ${BST_CHECKED}" in code
 
     def test_the_tick_comes_after_the_checkbox_exists(self, nsi: str) -> None:
@@ -212,6 +220,34 @@ class TestTheCheckboxDefaultsToChecked:
         leave = _function_body(nsi, "StudyInviteLeave")
         assert "NSD_GetState" in leave, "the page does not read the checkbox back"
         assert "declined" in leave, "an unticked box has no way to record a refusal"
+
+    def test_a_decline_is_not_re_ticked_on_a_return_visit(self, nsi: str) -> None:
+        """NSIS rebuilds a custom page's dialog every time the page is
+        entered, so an unguarded SetState re-ticks the box for a user who
+        unticked it, clicked Back and came forward again, and
+        StudyInviteLeave then records the tick rather than their answer.
+        Unticked was the safe direction to be wrong in and this was
+        harmless while that was the default; ticked, it silently reverses
+        the one answer the page exists to collect."""
+        body = _function_body(nsi, "StudyInvitePage")
+        code = _strip_comments(body)
+        tick = code.index("${NSD_SetState} $StudyInviteCheckboxHwnd")
+        guard = code.rfind("${If} $StudyInvite", 0, tick)
+        assert guard != -1, "the tick is not guarded by what the user already chose"
+        assert "${EndIf}" in code[tick:], "the guard is never closed"
+
+    def test_a_first_visit_is_still_ticked(self, nsi: str) -> None:
+        """The inverse, and the half that keeps the guard from undoing the
+        default it protects. $StudyInvite is "" until the page has been
+        left once, so a guard written as == "accepted", or one that also
+        excluded "", would leave the box unticked on the only visit most
+        users make while satisfying the test above."""
+        body = _function_body(nsi, "StudyInvitePage")
+        code = _strip_comments(body)
+        tick = code.index("${NSD_SetState} $StudyInviteCheckboxHwnd")
+        guards = [ln.strip() for ln in code[:tick].splitlines() if "${If} $StudyInvite" in ln]
+        assert guards, "the tick is unguarded, so a decline is re-ticked on the way back"
+        assert guards[-1] == '${If} $StudyInvite != "declined"', guards[-1]
 
     def test_an_untouched_page_is_the_only_thing_that_opts_in(self, nsi: str) -> None:
         """Nothing outside the page may set the seed to accepted: a

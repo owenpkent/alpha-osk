@@ -850,7 +850,18 @@ Function StudyInvitePage
   ; tests/test_windows_installer.py::TestTheCheckboxDefaultsToChecked.
   ${{NSD_CreateCheckbox}} 0 124u 100% 12u "Yes, share anonymous usage statistics"
   Pop $StudyInviteCheckboxHwnd
-  ${{NSD_SetState}} $StudyInviteCheckboxHwnd ${{BST_CHECKED}}
+  ; Ticked on the way in, but NOT over a decline the user has already made.
+  ; NSIS rebuilds a custom page's dialog every time the page is entered, so
+  ; an unconditional SetState here re-ticks the box on a return visit: untick
+  ; it, click Back, click Next, and the decline is gone with nothing on screen
+  ; to say so, because StudyInviteLeave then reads the box rather than the
+  ; choice.  Unticked was the safe direction to be wrong in and this was
+  ; harmless while that was the default; ticked, it silently reverses the one
+  ; answer the page exists to collect, which is exactly the defect the note
+  ; above is about.  $StudyInvite is "" until the page has been left once.
+  ${{If}} $StudyInvite != "declined"
+    ${{NSD_SetState}} $StudyInviteCheckboxHwnd ${{BST_CHECKED}}
+  ${{EndIf}}
 
   nsDialogs::Show
 FunctionEnd
