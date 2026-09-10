@@ -22,6 +22,8 @@
 ;
 ; See docs/build/WINDOWS.md for full UIAccess explanation.
 
+!include "${__FILEDIR__}\upgrade_settings.nsh"
+
 !macro customInit
   ; A silent install is the auto-updater (src/updater.py drives `/S`).  It has
   ; no window to prompt over and has already put its own toast on screen, so
@@ -185,7 +187,8 @@
       "A previous version of Alpha-OSK (v$1) was found at:$\r$\n$2$\r$\n$\r$\nWould you like to remove it?$\r$\n(Recommended: Yes)" \
       IDYES removePrevHKCU IDNO skipPrevHKCU
     removePrevHKCU:
-      ExecWait '"$0" /S'
+      Push '"$0" /S _?=$2'
+      Call RunPreviousUninstaller
       Sleep 2000
     skipPrevHKCU:
   ${EndIf}
@@ -202,7 +205,8 @@
       "A previous system-wide installation of Alpha-OSK (v$1) was found at:$\r$\n$2$\r$\n$\r$\nWould you like to remove it?$\r$\n(Recommended: Yes)" \
       IDYES removePrevHKLM IDNO skipPrevHKLM
     removePrevHKLM:
-      ExecWait '"$0" /S'
+      Push '"$0" /S _?=$2'
+      Call RunPreviousUninstaller
       Sleep 2000
     skipPrevHKLM:
   ${EndIf}

@@ -4,6 +4,11 @@ All notable changes to Alpha-OSK are documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+- **CI identifies stalled tests.** Test jobs now report test names and dump all thread stacks before failing a test worker that stalls for five minutes, instead of leaving only progress dots when the job times out.
+- **The telemetry worker's development dependencies use patched releases.** Raise the `js-yaml` override to 4.3.2 and `sharp` to 0.35.4, and refresh the lockfile to resolve the two advisories reported by CI's dependency scan.
+- **Upgrading from an older release now preserves settings too.** The 1.4.0 fix stopped new uninstallers from deleting preferences, but the upgrade delivering that fix still ran the previous version's buggy uninstaller. Setup now copies the complete settings registry tree before running any previous uninstaller and restores it before continuing, including when the old process reports an error. If the copy fails, cleanup never starts. If restoration fails, setup stops and retains the recovery copy rather than launching the keyboard with defaults. This protects settings present at upgrade time; it cannot recover values an earlier update already deleted.
+
 ## [1.4.1] (2026-09-08)
 
 ### Changed
