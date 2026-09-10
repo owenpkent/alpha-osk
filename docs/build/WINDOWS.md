@@ -516,7 +516,7 @@ The build script generates a proper NSIS installer that:
 
 - **Defaults to `C:\Program Files\Alpha-OSK`** — required for UIAccess.
 - **Lets the user choose** a different install directory.
-- **Kills running instances** before upgrading.
+- **Closes the running keyboard** before upgrading, allowing it to save first.
 - **Detects previous installs** at different paths and offers to uninstall.
 - **Creates shortcuts**: Desktop + Start Menu.
 - **Registers in Add/Remove Programs** for clean uninstall.
@@ -530,10 +530,22 @@ same macro patterns as gitconnect's `build/windows/installer.nsh`.
 
 | Scenario | Behavior |
 |----------|----------|
-| Same directory (default `C:\Program Files\Alpha-OSK`) | Silently runs old `uninstall.exe /S` before extracting new files. Preserves `%APPDATA%\alpha-osk` (learned vocabulary). |
-| Different directory | Prompts user: "Remove previous version?" If yes, runs old uninstaller. If no, both coexist. |
-| Running instance detected | Prompts to close, then kills `alpha-osk.exe` via `taskkill`. |
-| Interactive uninstall | Prompts whether to delete `%APPDATA%\alpha-osk` (learned vocabulary and settings). |
+| Same directory (default `C:\Program Files\Alpha-OSK`) | Copies the settings registry tree, silently runs the old uninstaller, and restores settings before extracting new files. Preserves `%APPDATA%\alpha-osk` (learned vocabulary). |
+| Different directory | Prompts user: "Remove previous version?" If yes, protects settings around the old uninstaller with the same helper. If no, both coexist. |
+| Running instance detected | Interactive setup asks before closing; silent setup closes automatically. Both first request a normal exit and force termination only if the app does not exit in time. |
+| Interactive uninstall | Prompts whether to delete `%APPDATA%\alpha-osk` (learned vocabulary) and the settings registry tree. |
+
+`build/windows/upgrade_settings.nsh::RunPreviousUninstaller` protects upgrades
+from releases through 1.3.0, whose uninstallers deleted the Qt settings key even
+with `/S`. It copies values and subkeys directly with `RegCopyTreeW`, including
+their registry types, to a unique sibling under
+`HKCU\Software\alpha-osk-upgrade-backups`. It checks and flushes the copy before
+starting cleanup, and restores it even if the old process reports an error.
+The old command uses `/S _?=<directory>` so setup waits for the actual uninstaller
+instead of its temporary-copy launcher. Copy failure stops setup before cleanup;
+restore failure stops setup and retains the recovery key, reporting its path.
+Successful restoration removes the copy. This protects preferences still present
+at upgrade time, not preferences that an earlier update already erased.
 
 ---
 

@@ -338,6 +338,25 @@ class TestTheUninstallerRemovesTheSeedKeyOnlyWhenInteractive:
 
 
 class TestTheSettingsKeySurvivesAnUpgrade:
+    def test_same_directory_cleanup_uses_the_settings_guard(self, nsi: str) -> None:
+        section = _strip_comments(_install_section(nsi))
+        command = section.index("Push '\"$INSTDIR\\uninstall.exe\" /S _?=$INSTDIR'")
+        guard = section.index("Call RunPreviousUninstaller", command)
+        extraction = (
+            section.index("File /r") if "File /r" in section else section.index("WriteUninstaller")
+        )
+        assert command < guard < extraction
+        assert "ExecWait" not in section
+
+    def test_different_directory_cleanup_also_uses_the_guard(self, nsh: str) -> None:
+        code = _macro_code(nsh, "customInstall")
+        # _?= prevents NSIS's self-copy launcher from returning before the
+        # actual uninstaller has finished deleting keys. The copy must be
+        # restored only after that process, not after its launcher exits.
+        assert code.count("Push '\"$0\" /S _?=$2'") == 2
+        assert code.count("Call RunPreviousUninstaller") == 2
+        assert "ExecWait" not in code
+
     def test_the_uninstall_section_does_not_delete_it(self, nsi: str) -> None:
         section = _uninstall_section(nsi)
         org = _org_name()

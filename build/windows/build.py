@@ -960,7 +960,9 @@ Section "Install"
   ; (Different-directory cleanup is handled in customInstall.)
   IfFileExists "$INSTDIR\\uninstall.exe" 0 skipSameDirCleanup
     DetailPrint "Removing previous installation..."
-    ExecWait '"$INSTDIR\\uninstall.exe" /S _?=$INSTDIR'
+    ; Old uninstallers can erase the Qt settings key even with /S.
+    Push '"$INSTDIR\\uninstall.exe" /S _?=$INSTDIR'
+    Call RunPreviousUninstaller
     Sleep 1500
     ; Delete the old uninstaller itself (_? flag keeps it from self-deleting)
     Delete "$INSTDIR\\uninstall.exe"
