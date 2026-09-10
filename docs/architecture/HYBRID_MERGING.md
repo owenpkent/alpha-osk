@@ -190,12 +190,18 @@ User actions feed back into the models:
 | Word completed with space | n-gram unigrams/bigrams/trigrams, PPM trie, capitalisation (all-caps only learned if Caps Lock was off — see below) |
 | Sentence ended (`.!?`) | Full sentence re-trains n-grams + PPM |
 | Prediction selected | Word boosted (`learn_from_selection`), context→word association recorded |
-| Prediction edited via right-click → "Edit" | Capitalisation recorded permanently (`set_capitalization`) |
+| Prediction edited via right-click → "Edit" | Each confirmed word learned immediately with +5, its context reinforced and fuzzy entries refreshed (`learn_from_selection(..., explicit=True)`), plus preferred capitalisation (`set_capitalization`) |
 | Word right-click → "Remove" | Blacklist entry added |
 | Word right-click → "Bad suggestion" | Dispreference incremented |
 
 All persisted to `ngram_model.json` + `ppm_model.json` on explicit
 save or auto-save-on-exit.
+
+Confirmed edits bypass the unknown-word repetition gate because the user
+has supplied and saved the correction. Ordinary prediction clicks retain
+that gate. Multiword edits are tokenized before learning, so a phrase never
+becomes one dictionary entry. Privacy mode suppresses this learning, and
+the predictor's learning freeze also applies.
 
 ### Capitalisation learning — Caps Lock vs. deliberate caps
 
@@ -229,59 +235,81 @@ entirely. Explicit user edits always win.
 
 ## Personal vs. Base Vocabulary (split-table scoring)
 
-The n-gram unigram score inside `NgramPredictor.predict` blends two
-separate tables in probability space:
+Unigram scoring combines the shipped dictionary, a small conversational
+prior, and the user's actual learning:
 
-| Table | Source | Updated by |
-|-------|--------|-----------|
-| `_base_unigrams` | Google 10K + 20K supplement + `data/base_dictionary.txt` + fallback common words | Loaded at startup / `_learn_base`.  Does not change during use. |
-| `user_vocab` | The user's actual typing | `learn()` / `learn_word()`.  Recency-decayed. |
+| Table | Source | Lifetime |
+|-------|--------|----------|
+| `_base_unigrams` | Google 10K, 20K supplement, and `data/base_dictionary.txt` | Rebuilt at startup |
+| `_corpus_unigrams` | Accepted words in the shipped training corpus | Rebuilt in memory, never saved as personal history |
+| `user_vocab` | Words typed or explicitly taught by the user | Saved and recency-decayed |
 
-Scoring for a partial-prefix candidate:
+For a candidate word `w`:
 
+```text
+alpha = personal_weight (default 0.7)
+q = _CORPUS_PRIOR_WEIGHT (0.1)
+P_typing = (user_vocab[w] + q * corpus[w]) / (user_total + q * corpus_total)
+P_base = base[w] / base_total
+P_uni = alpha * P_typing + (1 - alpha) * P_base
 ```
-alpha   = personal_weight   (default 0.7)
-P_user  = user_vocab[w]    / _user_total
-P_base  = _base_unigrams[w] / _base_total
-score   = SCALE · [ alpha · P_user + (1 − alpha) · P_base ]
-```
 
-`SCALE = 100,000` brings the interpolated probability into the same
-magnitude as the bigram/trigram scores added earlier in `predict`, so
-context bonuses still move the needle.
+A zero denominator contributes zero. The bigram/trigram interpolation uses
+these probabilities directly. Both the n-gram scorer and the fuzzy frequency
+mapping use `_effective_typing_count` and `_effective_typing_total`, keeping
+word completion and correction consistent. Totals are maintained outside the
+prediction loop; `_user_total` always equals `sum(user_vocab.values())`.
 
-**`_user_total` is tracked incrementally** — `learn`, `learn_word`,
-`_apply_decay`, `clear_user_data`, and `load` all keep it equal to
-`sum(user_vocab.values())`.  Don't recompute the sum in `predict()`;
-the invariant is covered by
-`tests/test_ngram_predictor.py::TestUserTotalIncremental`.
+### Shipped examples no longer dilute personal learning (2026-09-10)
 
-### Why the split matters
+Previously, every launch learned the shipped corpus into `user_vocab`.
+A fresh model therefore already contained 2,604 accepted tokens of supposed
+personal typing, and each later launch added another copy. Those examples
+helped ordinary predictions, but a real new word had to compete with their
+accumulated counts.
 
-The old merged scheme stored base-dictionary frequencies and personal
-typing counts in the **same** `unigrams` dict.  The Google 10K seeds
-top words at ~10,000 while a personal word typed 10 times sat at 10.
-The multiplicative user boost `(1 + count · 0.1)` couldn't close that
-gap — a word like "Claude" typed 10 times scored ~10, while "can"
-scored ~5,000.  Personal vocabulary effectively never surfaced.
+`HybridPredictor._load_training_corpus` now loads those words through
+`NgramPredictor.load_corpus_prior`. It uses a local three-sighting gate for
+unknown words, without touching personal counts, pending user candidates, or
+the decay clock. Corpus context remains base evidence. Accepted corpus words
+are known vocabulary for subsequent typing and prediction selections.
 
-Under split-table scoring, `P_user(claude) = 10 / user_total` is
-~0.01 after a few hundred words of typing; at alpha = 0.7 that gives
-7 "units" of score, which beats the top dictionary word's
-`0.3 · 0.002 · 100000 = 60` by an order of magnitude once enough
-personal use accumulates.  The knob to tune this balance is
-`NgramPredictor.personal_weight`.
+With no personal learning, `q` cancels from `P_typing`, preserving the
+conversational distribution. Once the user types or chooses a word, the
+examples carry one tenth their former mass. A confirmed prediction edit also
+teaches each edited word immediately with +5 and reinforces its context;
+ordinary unknown-word typing and pill clicks retain their repetition gate.
 
-### Known limits
+Measured in isolated fresh models with five pills, using the first letter
+as the prefix and no preceding context. Each full-word repetition below is
+one engine `learn(word)` call; each selection is `learn_from_selection`.
+The target is becoming the first pill, rather than merely entering the bar.
 
-- **Early-typing dominance.**  With only a handful of user_vocab
-  entries, any one word has `P_user ≈ 1` and dominates regardless of
-  alpha.  Works itself out after ~100 words of typing; could be
-  smoothed with a `max(user_total, N)` floor if it bites.
-- **Bigrams/trigrams are still merged.**  `bigrams` and `trigrams`
-  hold both base-loaded and user-learned counts together, so the
-  same "base drowns personal" problem exists for context predictions
-  (`hi ___`).  Worth splitting next if the unigram fix helps.
+| Word | Full-word repetitions before / after | Selections before / after |
+|------|--------------------------------------|---------------------------|
+| bamboo | 22 / 3 | 5 / 1 |
+| migraine | more than 30 / 5 | 10 / 1 |
+| cello | 28 / 3 | 6 / 1 |
+
+The full five-pill sentence benchmarks retained their scores after the
+learning change: `aac-dev` 49.1% clean / 45.5% with a mis-click per word,
+and `aac-test` 50.4% / 46.9%. These include the earlier short-prefix fix.
+
+These are fresh-model examples, not a promise for every word or mature
+personal history. Old files mix real typing with past corpus counts, so the
+loader preserves those counts and ordinary decay retires them over time.
+It cannot safely subtract the historical corpus share.
+
+Reload rebuilds the prior against the replacement user history, removing
+words admitted only by the previous history and restoring missing candidates.
+Clear Learned Data rebuilds it even when PPM is disabled. The generic
+`load_corpus` API retains its previous behavior; the dedicated prior loader
+is used for the shipped text. Regression coverage is in
+`tests/test_corpus_prior.py` and the explicit-edit cases in the hybrid and
+keyboard bridge tests.
+
+Base context tables already have their own user/base split and proportional
+trust rule; see the context-table account in `AGENTS.md`.
 
 ## Recency Decay
 
