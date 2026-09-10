@@ -551,6 +551,8 @@ class FuzzyWordGenerator:
         typed: str,
         n: int = 5,
         positions: Optional[Sequence[Optional[Position]]] = None,
+        *,
+        allow_short_prefix: bool = False,
     ) -> List[Tuple[str, float]]:
         """Completions of a possibly mistyped prefix; see ``prefix_beam``.
 
@@ -571,7 +573,9 @@ class FuzzyWordGenerator:
             self._prefix_beam = PrefixBeam(index, SpatialEmissions(self.spatial_model.positions))
             self._prefix_dirty = False
             self._prefix_spatial_id = spatial_id
-        return self._prefix_beam.complete(typed, n, positions)
+        return self._prefix_beam.complete(
+            typed, n, positions, allow_short_prefix=allow_short_prefix
+        )
 
 
 class FuzzyRecognizer:
@@ -676,6 +680,7 @@ class FuzzyRecognizer:
         *,
         positions: Optional[Sequence[Optional[Position]]] = None,
         offsets: Optional[Sequence[Optional[Tuple[float, float]]]] = None,
+        allow_short_prefix: bool = False,
     ) -> List[Tuple[str, float]]:
         """Top-``n`` fuzzy candidates for the current word in ``typed_text``.
 
@@ -686,6 +691,8 @@ class FuzzyRecognizer:
         layer treats fuzzy as a "complete what you're typing" source, not a
         next-word predictor.  ``positions`` optionally carries one click
         position per character of the current word, in key units.
+        ``allow_short_prefix`` lets the hybrid supplement a sparse set of
+        exact two-character completions; a single character stays too short.
         """
         words = typed_text.split()
         current_word = words[-1] if words and not typed_text.endswith(" ") else ""
@@ -694,7 +701,9 @@ class FuzzyRecognizer:
         if self.prefix_completion:
             if positions is None and offsets is not None:
                 positions = self.positions_for(current_word, offsets)
-            return self.word_generator.complete_prefix(current_word, n, positions)
+            return self.word_generator.complete_prefix(
+                current_word, n, positions, allow_short_prefix=allow_short_prefix
+            )
         return self.word_generator.generate_candidates(current_word)[:n]
 
     def should_autocorrect(

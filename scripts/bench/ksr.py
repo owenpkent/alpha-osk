@@ -27,7 +27,8 @@ This script never injects typing errors; for error-corruption recall see
 brand-new model in a fresh temporary directory, so numbers reflect a
 cold-start engine with no personal learning (except where ``--learn-half``
 explicitly simulates some), and the live model under the user's config dir is
-never read or written.
+never read or written. The temporary directory is removed when the run ends,
+including on errors; an explicit ``--model-dir`` is kept.
 
 Usage:
     python scripts/bench/ksr.py
@@ -48,7 +49,7 @@ import statistics
 import sys
 import tempfile
 import time
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterator, Sequence
@@ -502,72 +503,76 @@ def main(argv: Sequence[str] | None = None) -> int:
             f"unknown condition(s): {', '.join(unknown)} (choose from {sorted(VALID_CONDITIONS)})"
         )
 
-    if args.model_dir is not None:
-        model_dir = args.model_dir
-        print(f"model dir: {model_dir}  (user-supplied)")
-    else:
-        model_dir = Path(tempfile.mkdtemp(prefix="alpha-osk-bench-ksr-"))
-        print(f"model dir: {model_dir}  (fresh temp dir, the live model is never touched)")
+    with ExitStack() as cleanup:
+        if args.model_dir is not None:
+            model_dir = args.model_dir
+            print(f"model dir: {model_dir}  (user-supplied)")
+        else:
+            model_dir = Path(
+                cleanup.enter_context(tempfile.TemporaryDirectory(prefix="alpha-osk-bench-ksr-"))
+            )
+            print(f"model dir: {model_dir}  (fresh temp dir, removed after the run)")
 
-    sentences = load_corpus(args.corpus)
+        sentences = load_corpus(args.corpus)
 
-    if args.learn_half:
-        run_learn_half(model_dir, args.pills, sentences)
-        return 0
-    pointer_spec: tuple[float, float, float] | None = None
-    if args.pointer:
-        try:
-            bx, by, nz = (float(v) for v in args.pointer.split(","))
-        except ValueError:
-            parser.error("--pointer expects BIAS_X,BIAS_Y,NOISE, e.g. 0.2,0.15,0.3")
-        pointer_spec = (bx, by, nz)
+        if args.learn_half:
+            run_learn_half(model_dir, args.pills, sentences)
+            return 0
+        pointer_spec: tuple[float, float, float] | None = None
+        if args.pointer:
+            try:
+                bx, by, nz = (float(v) for v in args.pointer.split(","))
+            except ValueError:
+                parser.error("--pointer expects BIAS_X,BIAS_Y,NOISE, e.g. 0.2,0.15,0.3")
+            pointer_spec = (bx, by, nz)
 
-    hp = HybridPredictor(model_dir=model_dir, enable_llm=False)
-    ng = hp._ngram
-    print(
-        f"model: {len(ng.unigrams)} unigrams, {len(ng.bigrams)} bigram prefixes "
-        f"({sum(len(v) for v in ng.bigrams.values())} edges), {len(ng.trigrams)} trigram prefixes"
-    )
-    print(
-        f"held-out: {args.corpus}, {len(sentences)} sentences, "
-        f"{sum(len(s.split()) for s in sentences)} words\n"
-    )
+        hp = HybridPredictor(model_dir=model_dir, enable_llm=False)
+        ng = hp._ngram
+        print(
+            f"model: {len(ng.unigrams)} unigrams, {len(ng.bigrams)} bigram prefixes "
+            f"({sum(len(v) for v in ng.bigrams.values())} edges), "
+            f"{len(ng.trigrams)} trigram prefixes"
+        )
+        print(
+            f"held-out: {args.corpus}, {len(sentences)} sentences, "
+            f"{sum(len(s.split()) for s in sentences)} words\n"
+        )
 
-    _warmup(hp, sentences)
+        _warmup(hp, sentences)
 
-    results: list[KsrResult] = []
-    for name in conditions:
-        with apply_condition(hp, name):
-            if pointer_spec is None:
-                results.append(measure(hp, name, sentences, args.pills))
-            if args.mis_click:
-                results.append(measure(hp, name + " +slip", sentences, args.pills, slip_at=1))
-            if pointer_spec is not None:
-                bias_x, bias_y, noise = pointer_spec
-                for suffix, fwd, learn in (
-                    (" keys only", False, False),
-                    (" +offsets", True, False),
-                    (" +learned bias", True, True),
-                ):
-                    # A fresh pointer per row, so every row sees the same clicks;
-                    # a fresh bias table too, so learning never leaks across rows.
-                    hp._ngram.pointer.clear()
-                    ptr = Pointer(bias_x, bias_y, noise, random.Random(5))
-                    results.append(
-                        measure(
-                            hp,
-                            name + suffix,
-                            sentences,
-                            args.pills,
-                            pointer=ptr,
-                            forward_offsets=fwd,
-                            learn_bias=learn,
+        results: list[KsrResult] = []
+        for name in conditions:
+            with apply_condition(hp, name):
+                if pointer_spec is None:
+                    results.append(measure(hp, name, sentences, args.pills))
+                if args.mis_click:
+                    results.append(measure(hp, name + " +slip", sentences, args.pills, slip_at=1))
+                if pointer_spec is not None:
+                    bias_x, bias_y, noise = pointer_spec
+                    for suffix, fwd, learn in (
+                        (" keys only", False, False),
+                        (" +offsets", True, False),
+                        (" +learned bias", True, True),
+                    ):
+                        # A fresh pointer per row, so every row sees the same clicks;
+                        # a fresh bias table too, so learning never leaks across rows.
+                        hp._ngram.pointer.clear()
+                        ptr = Pointer(bias_x, bias_y, noise, random.Random(5))
+                        results.append(
+                            measure(
+                                hp,
+                                name + suffix,
+                                sentences,
+                                args.pills,
+                                pointer=ptr,
+                                forward_offsets=fwd,
+                                learn_bias=learn,
+                            )
                         )
-                    )
-                hp._ngram.pointer.clear()
+                    hp._ngram.pointer.clear()
 
-    print_table(results)
-    return 0
+        print_table(results)
+        return 0
 
 
 if __name__ == "__main__":

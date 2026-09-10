@@ -4,6 +4,9 @@ All notable changes to Alpha-OSK are documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+- **The telemetry worker's development dependencies use patched releases.** Raise the `js-yaml` override to 4.3.2 and `sharp` to 0.35.4, and refresh the lockfile to resolve the two advisories reported by CI's dependency scan.
+
 ## [1.4.1] (2026-09-08)
 
 ### Changed

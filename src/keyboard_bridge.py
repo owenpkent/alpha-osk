@@ -5551,6 +5551,7 @@ class KeyboardBridge(QObject):
         # Learn the preferred capitalization. Suppressed in privacy mode:
         # this persists into the model, same as pressPrediction's guards.
         if not self._privacy_mode:
+            self._predictor.learn_from_selection(self._context_buffer, edited, explicit=True)
             self._predictor.set_capitalization(edited, edited)
 
         # Insert the edited word (same as pressPrediction but with edited

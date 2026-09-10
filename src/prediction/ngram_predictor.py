@@ -102,6 +102,11 @@ class NgramPredictor:
         # on rank but the base dictionary still shapes the long tail.
         self._base_unigrams: Dict[str, int] = defaultdict(int)
         self._base_total: int = 0
+        # The shipped training corpus is a weak prior for the personal
+        # distribution.  It stays in memory only, so it cannot inflate the
+        # persisted user history on every launch.
+        self._corpus_unigrams: Dict[str, int] = defaultdict(int)
+        self._corpus_total: int = 0
         self.personal_weight: float = 0.7
 
         # User-typed word counts.  Incremented by learn() / learn_word();
@@ -625,6 +630,8 @@ class NgramPredictor:
     # a fresh model scores byte-for-byte as it did before the split.
     _CONTEXT_PRIOR_FLOOR = 5.0
     _CONTEXT_BASE_TRUST = 0.02
+    # Shipped corpus evidence is a weak prior in the personal distribution.
+    _CORPUS_PRIOR_WEIGHT = 0.1
     # A user context count below this after decay is dropped.  At the
     # 0.95 decay factor a single typing survives about 45 decay ticks,
     # roughly a week of ordinary typing, before it is forgotten.
@@ -732,7 +739,7 @@ class NgramPredictor:
             )
 
         alpha = self.personal_weight
-        user_total = self._user_total
+        user_total = self._effective_typing_total()
         base_total = self._base_total
         # Decide the per-component weights.  When there's no context to
         # condition on, use unigram at full strength instead of λ₁·P_uni
@@ -757,6 +764,7 @@ class NgramPredictor:
         seen_words.update(bigram_probs.keys())
         seen_words.update(self._base_unigrams.keys())
         seen_words.update(self.user_vocab.keys())
+        seen_words.update(self._corpus_unigrams.keys())
 
         candidates: Dict[str, float] = {}
         for word in seen_words:
@@ -765,7 +773,7 @@ class NgramPredictor:
             p_tri = trigram_probs.get(word, 0.0)
             p_bi = bigram_probs.get(word, 0.0)
             base_freq = self._base_unigrams.get(word, 0)
-            user_freq = self.user_vocab.get(word, 0)
+            user_freq = self._effective_typing_count(word)
             p_base = (base_freq / base_total) if base_total else 0.0
             p_user = (user_freq / user_total) if user_total else 0.0
             p_uni = alpha * p_user + (1.0 - alpha) * p_base
@@ -801,6 +809,16 @@ class NgramPredictor:
     def _tokenize(self, text: str) -> List[str]:
         """Split text into words, per the active language's word shape."""
         return self.profile.word_re.findall(text.lower())
+
+    def _effective_typing_count(self, word: str) -> float:
+        """Return one word's effective personal count, including corpus prior."""
+        return self.user_vocab.get(word, 0) + self._CORPUS_PRIOR_WEIGHT * self._corpus_unigrams.get(
+            word, 0
+        )
+
+    def _effective_typing_total(self) -> float:
+        """Return the denominator shared by n-gram and fuzzy scoring."""
+        return self._user_total + self._CORPUS_PRIOR_WEIGHT * self._corpus_total
 
     def is_taught_acronym(self, word: str) -> bool:
         """True if the user has taught us *word* as a multi-capital form.
@@ -907,8 +925,8 @@ class NgramPredictor:
              1-/2-letter fragments outright.
           2. Repetition gate — surviving unknown words must be sighted
              ``_candidate_threshold`` times (default 3) before entering
-             user_vocab.  Known base-dict words and words already in
-             user_vocab skip the gate.
+             user_vocab. Known base-dict words, corpus-prior words, and
+             words already in user_vocab skip the gate.
 
         Bigrams and trigrams are only formed between words that actually
         land in the vocabulary on this call, so a gated fragment never
@@ -932,7 +950,11 @@ class NgramPredictor:
                 learned.append(None)
                 continue
 
-            if word in self._base_unigrams or word in self.user_vocab:
+            if (
+                word in self._base_unigrams
+                or word in self.user_vocab
+                or word in self._corpus_unigrams
+            ):
                 # Known word — learn immediately, bypass the gate.
                 was_new = word not in self.user_vocab
                 self.unigrams[word] += 1
@@ -995,7 +1017,7 @@ class NgramPredictor:
                 else:
                     self._bump_user_context(self._user_trigrams, self.trigrams, key, curr)
 
-    def learn_corpus_context(self, text: str) -> None:
+    def learn_corpus_context(self, text: str, *, include_user_candidates: bool = True) -> None:
         """Add a corpus's bigram / trigram pairs to the base share only.
 
         The unigram side is deliberately left alone.  ``reload_from_disk``
@@ -1011,7 +1033,8 @@ class NgramPredictor:
         every rare corpus word that a launch withholds, so the base share
         differed between a fresh start and a post-import reload.
         """
-        sightings: Dict[str, int] = defaultdict(int, self._candidate_counts)
+        initial_sightings = self._candidate_counts if include_user_candidates else {}
+        sightings: Dict[str, int] = defaultdict(int, initial_sightings)
         learned: List[Optional[str]] = []
         for word in self._tokenize(text):
             if not self._is_plausible_word(word):
@@ -1022,6 +1045,50 @@ class NgramPredictor:
                 sightings[word] += 1
                 learned.append(word if sightings[word] >= self._candidate_threshold else None)
         self._link_context(learned, base=True)
+
+    def _install_corpus_unigrams(self) -> None:
+        """Make corpus words visible in the merged vocabulary without user counts."""
+        for word, count in self._corpus_unigrams.items():
+            desired = self._base_unigrams.get(word, 0) + self.user_vocab.get(word, 0) + count
+            current = self.unigrams.get(word, 0)
+            if current < desired:
+                self.unigrams[word] = desired
+                self.total_words += desired - current
+
+    def load_corpus_prior(self, text: str) -> None:
+        """Rebuild the in-memory unigram prior from shipped corpus text.
+
+        This follows the same plausibility and local three-sighting gate as
+        :meth:`learn`, but never touches user counts, candidate state, or the
+        decay clock. Context rows are loaded separately by the HybridPredictor.
+        """
+        self._corpus_unigrams.clear()
+        self._corpus_total = 0
+        sightings: Dict[str, int] = defaultdict(int)
+        for word in self._tokenize(text):
+            if not self._is_plausible_word(word):
+                continue
+            if word in self._base_unigrams or word in self.user_vocab:
+                self._corpus_unigrams[word] += 1
+                self._corpus_total += 1
+                continue
+            sightings[word] += 1
+            if sightings[word] < self._candidate_threshold:
+                continue
+            if sightings[word] == self._candidate_threshold:
+                self._corpus_unigrams[word] += self._candidate_threshold
+                self._corpus_total += self._candidate_threshold
+            else:
+                self._corpus_unigrams[word] += 1
+                self._corpus_total += 1
+        self._install_corpus_unigrams()
+
+    def ensure_corpus_prior(self, text: str) -> None:
+        """Restore corpus-only merged candidates after a model reload."""
+        # A rare corpus word is accepted when user history already knows it.
+        # Rebuild against the replacement history so imports cannot retain
+        # words admitted only by the old model.
+        self.load_corpus_prior(text)
 
     @staticmethod
     def _ri(value: float) -> int:
@@ -1346,7 +1413,7 @@ class NgramPredictor:
     def learn_from_pill_click(self, word: str) -> None:
         """Reinforce a word the user selected from the prediction bar.
 
-        Known words (base dict or already in user_vocab) get the same
+        Known words (base dict, corpus prior, or already in user_vocab) get the same
         +5 boost :meth:`learn_word` applies. Unknown words route through
         the candidate gate: each click is one sighting, recorded in
         ``_candidate_counts`` / ``_candidate_last_seen``; promotion
@@ -1358,7 +1425,7 @@ class NgramPredictor:
         word = word.lower().strip()
         if not word:
             return
-        if word in self._base_unigrams or word in self.user_vocab:
+        if word in self._base_unigrams or word in self.user_vocab or word in self._corpus_unigrams:
             # Known word — reinforce immediately, no gate.
             self.unigrams[word] += self._PILL_CLICK_WEIGHT
             self.user_vocab[word] += self._PILL_CLICK_WEIGHT
@@ -1895,6 +1962,8 @@ class NgramPredictor:
         self._user_trigrams.clear()
         self._base_unigrams.clear()
         self._base_total = 0
+        self._corpus_unigrams.clear()
+        self._corpus_total = 0
         self._user_total = 0
         self.total_words = 0
         self.blacklist.clear()

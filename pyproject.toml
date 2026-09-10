@@ -6,6 +6,7 @@ addopts = [
     "--strict-markers",
     "-q",
 ]
+tmp_path_retention_policy = "none"
 markers = [
     "slow: marks tests that take >1s (deselect with '-m \"not slow\"')",
 ]
