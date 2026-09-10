@@ -30,6 +30,20 @@ Deep-dive design docs for each algorithm: `FUZZY_RECOGNITION.md` (spatial model 
 
 ## Benchmark baselines
 
+The 2026-09-10 learning change separates the shipped corpus from personal
+unigram history and treats its counts as a weak prior. Confirmed prediction
+edits now teach their words and context immediately. Fresh-model learning
+examples and lifecycle guarantees are in `HYBRID_MERGING.md` under
+*Shipped examples no longer dilute personal learning*.
+
+Base word frequencies still come largely from word-list rank. A screening
+experiment on the first 150 `aac-dev` sentences compared the current curve
+with joint rank priors proportional to `rank^-0.7` and `rank^-1.0`, preserving
+vocabulary and overall base mass. The best clean KSR change was only +0.22
+points, with a small next-word-hit regression, so no new curve was adopted.
+A future dictionary-data upgrade should use measured conversational
+frequencies and be evaluated on the full development and held-out sets.
+
 `scripts/bench/ksr.py --corpus <name>`, cold-start engine, no personal
 learning, 5 pills. Every number below is a fraction of an idealised user who
 clicks the instant the intended word appears, so treat them as an upper bound

@@ -232,8 +232,8 @@ class PrefixBeam:
     # act on and the n-gram completer's exact-prefix match is the better
     # source; the same guard ``should_autocorrect`` applies.
     MIN_TYPED = 3
-    # ...unless the run spells no word's opening at all, where both halves
-    # of that reasoning fail at once.  See ``_worth_completing``.
+    # ...unless the run spells no word's opening, or the hybrid asks for
+    # help filling a sparse short-prefix bar. See ``_worth_completing``.
     MIN_TYPED_DEAD_PREFIX = 2
     # A path costing more than this (one cheap edit: an adjacent slip is
     # -0.69, a diagonal -0.87, a swap -1.0) may not be bought past the
@@ -249,6 +249,8 @@ class PrefixBeam:
         typed: str,
         n: int = 5,
         positions: Optional[Sequence[Optional[Position]]] = None,
+        *,
+        allow_short_prefix: bool = False,
     ) -> List[Tuple[str, float]]:
         """Top-``n`` ``(word, score)`` completions of ``typed``.
 
@@ -257,10 +259,12 @@ class PrefixBeam:
         to the reported key's centre.  Scores are relative, in ``(0, 1]``
         with the best at 1.0, so the merge's sum-to-1 normalisation sees
         positives.  See ``_protect_exact_completions`` for the one rule
-        applied on top of the path scores.
+        applied on top of the path scores. ``allow_short_prefix`` also
+        admits live two-character prefixes when the caller lacks enough
+        exact candidates to fill its suggestions.
         """
         typed = typed.lower()
-        if n <= 0 or not self._worth_completing(typed):
+        if n <= 0 or not self._worth_completing(typed, allow_short_prefix=allow_short_prefix):
             return []
         emits: List[Optional[Dict[str, float]]] = []
         for i, char in enumerate(typed):
@@ -340,7 +344,7 @@ class PrefixBeam:
         best = ranked[0][1]
         return [(word, math.exp(value - best)) for word, value in ranked]
 
-    def _worth_completing(self, typed: str) -> bool:
+    def _worth_completing(self, typed: str, *, allow_short_prefix: bool = False) -> bool:
         """Should the beam run over this typed run at all?
 
         ``MIN_TYPED`` is the ordinary floor, and it rests on two claims:
@@ -359,17 +363,18 @@ class PrefixBeam:
         bar at three characters and left it blank at two, which reads as
         the suggestions being unreliable rather than as a mis-click.
 
-        A *live* two-character prefix is deliberately still refused, and
-        that is what makes this safe rather than a retuning: the rescue
-        can only fire where the exact source found nothing, so it has
-        nothing to displace and every case that works today is untouched
-        by construction.  ``_protect_exact_completions`` is the rule that
-        would otherwise have to arbitrate, and it already returns early on
-        a dead prefix for the same reason.
+        A live two-character prefix is refused by default.  The hybrid
+        can opt in with ``allow_short_prefix`` when its valid exact
+        candidates cannot fill the requested pills: entries such as
+        ``wwe`` and ``wwii`` make ``ww`` live but should not prevent
+        offering ``we`` alongside them.  The one-character floor and
+        ``_protect_exact_completions`` still apply.
         """
         if len(typed) >= self.MIN_TYPED:
             return True
-        return len(typed) >= self.MIN_TYPED_DEAD_PREFIX and not self.index.is_live(typed)
+        return len(typed) >= self.MIN_TYPED_DEAD_PREFIX and (
+            allow_short_prefix or not self.index.is_live(typed)
+        )
 
     def _protect_exact_completions(
         self, typed: str, scored: Dict[str, float], best_path: Dict[str, float]

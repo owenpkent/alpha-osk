@@ -77,7 +77,17 @@ class TestCompletesThroughAnError:
         # and every case that works today must be untouched.  The dead-prefix
         # half is TestATwoLetterMisClickDoesNotEmptyTheBar below.
         assert top(fr, "he") == []
+        assert top(fr, "ww") == []
         assert top(fr, "h") == []
+
+    def test_short_live_prefix_can_be_completed_when_the_caller_has_spare_slots(self, fr):
+        offered = top(fr, "ww", 5, allow_short_prefix=True)
+        assert "we" in offered
+        assert top(fr, "w", 5, allow_short_prefix=True) == []
+
+    def test_short_prefix_opt_in_does_not_change_long_prefix_order(self, fr):
+        for typed in ("hel", "docu", "info"):
+            assert top(fr, typed, 5, allow_short_prefix=True) == top(fr, typed, 5)
 
     def test_scores_are_relative_positive_and_descending(self, fr):
         scored = fr.get_fuzzy_predictions("docu", 5)

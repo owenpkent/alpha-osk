@@ -221,3 +221,33 @@ out. Measured on the shipped list with the n-gram's counts, a one-slip
 before) and a clean 4-letter prefix 92% (1.4% before). The whole account,
 including the sweep behind each constant and why there is no user setting,
 is the *Prefix beam* section of `CLAUDE.md`.
+
+### Sparse two-letter prefixes (2026-09-10)
+
+The hybrid also requests fuzzy suggestions for a live two-letter prefix
+when its valid exact candidates cannot fill the requested pills. Previously,
+`ww` offered only `wwe` and `wwii`: those dictionary entries made the prefix
+live, disabling the fuzzy source that could suggest `we`. With five pills,
+the fresh model now offers `wwe`, `we`, `wwii`, `well`, and `want`.
+
+`HybridPredictor.predict` counts candidates through the same validity gate
+used by the merge, so suppressed words cannot prevent this fallback. It
+passes `allow_short_prefix` through the recognizer to `PrefixBeam.complete`.
+The beam still protects exact completions from expensive corrections, and
+prefixes with enough exact candidates retain their previous ranking. The
+standalone fuzzy API keeps its default short-prefix guard. Single characters
+still cannot trigger fuzzy suggestions, and space-triggered autocorrection
+keeps its separate confidence and minimum-length rules.
+
+Fresh-model KSR benchmark, five pills, `scripts/bench/ksr.py` on 2026-09-10:
+
+| Corpus | Clean before / after | Mis-click before / after |
+|---|---|---|
+| `aac-dev` | 49.1% / 49.1% | 45.3% / 45.5% |
+| `aac-test` | 50.4% / 50.4% | 46.7% / 46.9% |
+
+The mis-click condition slips on the second character of each word. These
+small aggregate gains are below the benchmark's noise floor; the concrete
+improvement is making short corrections available where dictionary entries
+previously blocked them. Newly eligible prefixes now incur a fuzzy beam
+search. No dictionary entries, frequencies, or merge weights changed.

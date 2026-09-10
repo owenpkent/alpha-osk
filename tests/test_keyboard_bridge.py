@@ -2274,6 +2274,12 @@ class TestEditPredictionPrivacyMode:
         bridge.editPrediction("iphone", "iPhone")
         bridge._predictor.set_capitalization.assert_not_called()
 
+    def test_privacy_mode_suppresses_explicit_edit_learning(self, bridge: KeyboardBridge):
+        bridge.setPrivacyMode(True)
+        bridge._predictor.learn_from_selection = MagicMock()
+        bridge.editPrediction("iphone", "iPhone")
+        bridge._predictor.learn_from_selection.assert_not_called()
+
     def test_privacy_mode_does_not_grow_context_buffer(self, bridge: KeyboardBridge):
         bridge.setPrivacyMode(True)
         bridge._context_buffer = ""
@@ -2297,6 +2303,16 @@ class TestEditPredictionPrivacyMode:
         bridge._predictor.set_capitalization = MagicMock()
         bridge.editPrediction("iphone", "iPhone")
         bridge._predictor.set_capitalization.assert_called_once_with("iPhone", "iPhone")
+
+    def test_normal_mode_learns_explicit_edit(self, bridge: KeyboardBridge):
+        word = "zzqeditbridge"
+        bridge._context_buffer = "zzqeditcontext "
+
+        bridge.editPrediction("original", word)
+
+        ngram = bridge._predictor._ngram
+        assert ngram.user_vocab[word] == 5
+        assert ngram.bigrams["zzqeditcontext"][word] == 1
 
 
 class TestPasswordDetectionAvailableProperty:

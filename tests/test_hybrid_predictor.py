@@ -73,6 +73,32 @@ class TestHybridLearning:
         predictor.learn_from_selection("I want", "pizza")
         assert predictor._ngram.unigrams["pizza"] > 0
 
+    def test_explicit_selection_learns_unknown_word_and_context(self, predictor: HybridPredictor):
+        word = "zzqeditword"
+        before_edge = predictor._ngram.bigrams["hello"].get(word, 0)
+
+        predictor.learn_from_selection("hello", word, explicit=True)
+
+        assert predictor._ngram.user_vocab[word] == 5
+        assert predictor._ngram._candidate_counts.get(word, 0) == 0
+        assert predictor._ngram.bigrams["hello"][word] == before_edge + 1
+        assert word in predictor._fuzzy.word_generator.dictionary
+
+    def test_explicit_selection_tokenizes_multiword_edit(self, predictor: HybridPredictor):
+        predictor.learn_from_selection("hello", "zzqfirst zzqsecond", explicit=True)
+
+        assert predictor._ngram.user_vocab["zzqfirst"] == 5
+        assert predictor._ngram.user_vocab["zzqsecond"] == 5
+        assert "zzqfirst zzqsecond" not in predictor._ngram.user_vocab
+        assert predictor._ngram.bigrams["zzqfirst"]["zzqsecond"] == 1
+
+    def test_explicit_selection_respects_learning_freeze(self, predictor: HybridPredictor):
+        with predictor.frozen_learning():
+            predictor.learn_from_selection("hello", "zzqfrozen", explicit=True)
+
+        assert "zzqfrozen" not in predictor._ngram.user_vocab
+        assert "zzqfrozen" not in predictor._ngram._candidate_counts
+
     def test_learn_from_selection_gates_unknown_word(self, predictor: HybridPredictor):
         # A brand-new word that the engine generated (e.g. fuzzy /
         # PPM completion of a typed prefix) must pass through the
@@ -518,8 +544,9 @@ class TestTwoLettersAlwaysFillTheBar:
     dictionary.
 
     These drive the whole engine rather than the beam, because that is the
-    surface the report is about, and the inverse test is the one that
-    matters most: the fix may only add pills where there were none.
+    surface the report is about.  A sparse live prefix may now be supplemented
+    when its exact candidates cannot fill the requested pills, while a
+    plentiful exact prefix keeps its established order.
     """
 
     @pytest.mark.parametrize("typed", ["yh", "wq", "qg", "wg", "pw", "ek"])
@@ -538,10 +565,71 @@ class TestTwoLettersAlwaysFillTheBar:
         assert empty == []
 
     def test_an_exact_two_letter_prefix_still_completes_exactly(self, predictor: HybridPredictor):
-        # The inverse.  Where the run is a real opening the fuzzy source
+        # Where the run has plentiful exact candidates, the fuzzy source
         # stays silent as before, so these pills are the n-gram's alone and
         # every one of them still continues what was typed.
         for typed in ("th", "he", "wo", "pe"):
             offered = predictor.predict(typed, n=5)
             assert offered
             assert all(w.lower().startswith(typed) for w in offered), (typed, offered)
+
+    def test_sparse_live_prefix_adds_fuzzy_candidates_without_losing_exact_ones(
+        self, predictor: HybridPredictor
+    ):
+        for n in (3, 5, 8):
+            offered = predictor.predict("ww", n=n)
+            assert "we" in offered[:3], offered
+            if n >= 5:
+                assert {"wwe", "wwii"}.issubset(offered), offered
+        assert predictor.predict("ww", n=1) == ["wwe"]
+        assert predictor.predict("ww", n=2) == ["wwe", "wwii"]
+        assert predictor.check_autocorrect("ww") is None
+
+    def test_sparse_live_prefix_preserves_context_and_casing(self, predictor: HybridPredictor):
+        contextual = predictor.predict("of ww", n=5)
+        assert "we" in contextual[:3], contextual
+        assert predictor._current_context == "of ww"
+
+        cased = predictor.predict("OF WW", n=5)
+        assert cased == contextual
+
+    def test_another_sparse_live_prefix_gets_useful_fuzzy_completions(
+        self, predictor: HybridPredictor
+    ):
+        offered = predictor.predict("hw", n=5)
+        assert {"have", "help"}.intersection(offered), offered
+
+    def test_sparse_real_prefix_keeps_its_exact_prediction(self, predictor: HybridPredictor):
+        offered = predictor.predict("oh", n=5)
+        assert offered[0] == "oh", offered
+
+    def test_full_clean_prefix_order_is_unchanged_when_fuzzy_is_disabled(
+        self, predictor: HybridPredictor, monkeypatch
+    ):
+        expected = {typed: predictor.predict(typed, n=5) for typed in ("th", "he", "wo", "pe")}
+        monkeypatch.setattr(predictor._fuzzy, "get_fuzzy_predictions", lambda *a, **k: [])
+        assert {typed: predictor.predict(typed, n=5) for typed in expected} == expected
+
+    def test_short_rescue_does_not_change_one_character_or_next_word_prediction(
+        self, predictor: HybridPredictor, monkeypatch
+    ):
+        expected_one = predictor.predict("w", n=5)
+        expected_next = predictor.predict("hello ", n=5)
+        monkeypatch.setattr(predictor._fuzzy, "get_fuzzy_predictions", lambda *a, **k: [])
+        assert predictor.predict("w", n=5) == expected_one
+        assert predictor.predict("hello ", n=5) == expected_next
+
+    def test_suppressed_ngram_candidates_do_not_block_short_rescue(
+        self, predictor: HybridPredictor, monkeypatch
+    ):
+        suppressed = ["well", "want", "was"]
+        for word in suppressed:
+            predictor._ngram.blacklist_word(word)
+        monkeypatch.setattr(
+            predictor._ngram,
+            "predict_with_scores",
+            lambda context, n: [("wwe", 1.0), ("wwii", 0.9)] + [(word, 0.8) for word in suppressed],
+        )
+        offered = predictor.predict("ww", n=5)
+        assert "we" in offered
+        assert not set(suppressed).intersection(offered)
