@@ -190,9 +190,16 @@ jobs:
       # quarter of the lines and every shard would fail the gate. The
       # data files are uploaded instead and the `coverage` job below
       # combines them per OS and applies the threshold to the whole.
+      # A Windows shard can stall after nearly all tests finish. Dots and
+      # the outer job timeout do not identify the blocked test. Name each
+      # result, and use pytest's native watchdog to dump all thread stacks
+      # and fail a worker if one test (including teardown) takes five
+      # minutes. Keep the job timeout above as a final bound on the runner.
       - name: Run tests
         run: >-
-          python -m pytest -n auto
+          python -m pytest -n auto -vv
+          -o faulthandler_timeout=300
+          -o faulthandler_exit_on_timeout=true
           --shard-id ${{ matrix.shard }} --shard-count 4
           --cov=src --cov-report=
       # Named for combine's benefit: `coverage combine` only picks up
