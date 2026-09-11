@@ -4,6 +4,13 @@ All notable changes to Alpha-OSK are documented in this file.
 
 ## [Unreleased]
 
+### Security
+- **Two advisories published on 2026-09-08 against the Cloudflare Worker's dev dependencies are cleared.** `sharp` moves to 0.35.4 and `js-yaml` to 4.3.2. The sharp one (GHSA-rgj7-g3m4-5g8c, high) is not a flaw in sharp at all: it bundles libvips, libvips bundles libheif, and two libheif flaws reach the lockfile that way, so the fix is the libvips 1.3.3 rebuild that 0.35.4 pulls in. The js-yaml one (GHSA-2883-xcg3-v3hh, high) lets an empty merge source burn CPU without the limit that is supposed to bound it.
+
+  **Neither reaches anyone running the keyboard.** Both arrive as dev-only transitive dependencies of Wrangler, the local development tool: sharp through miniflare, js-yaml through the SBOM generator. Nothing in that chain is bundled into the installer or deployed to the edge runtime. What they do block is development, because the OSV gate is `fail-on-vuln: true` deliberately, so a new advisory against anything in that lockfile fails CI on every pull request until it is pinned away. Both were already covered by the `overrides` block and simply needed their floors raised, which is the block working as intended rather than a gap in it.
+
+  The override list in `docs/build/RELEASE.md` had drifted from the file it documents, listing five versions that had since moved and omitting `ip-address` and `sharp` altogether. It now matches, and says which of the two to believe when it drifts again.
+
 ## [1.4.1] (2026-09-08)
 
 ### Changed
