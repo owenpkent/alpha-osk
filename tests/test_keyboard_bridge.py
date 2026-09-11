@@ -2817,6 +2817,61 @@ def _press(bridge: KeyboardBridge, text: str) -> None:
             bridge.pressKey(ch)
 
 
+class TestTypingTheApostropheKeepsTheBar:
+    """The apostrophe of a contraction must not blank the suggestion bar.
+
+    The gate deciding whether to re-query was ``char.isalpha()``, which
+    is the same oversight the digit had and which the comment at that
+    call site already describes.  The cost here is sharper than for a
+    digit, because the bar is blanked at the moment it was *right*:
+    typing "don" puts "don't" at the top of the bar, and the apostrophe
+    threw it away one click short of the word.  "i'" is the worst case,
+    since "I'm" / "I'll" / "I'd" / "I've" are the entire reason to type
+    an apostrophe in that position.
+
+    Each case is paired with the near-miss it must leave alone, because
+    a gate that simply re-queries on everything would satisfy the
+    positives on its own.
+    """
+
+    @staticmethod
+    def _bar(bridge: KeyboardBridge, text: str) -> list:
+        bridge.resetContext()
+        _press(bridge, text)
+        return list(bridge._predictions)
+
+    def test_the_bar_survives_the_apostrophe(self, bridge: KeyboardBridge):
+        assert self._bar(bridge, "don'")
+        assert self._bar(bridge, "i'")
+        assert self._bar(bridge, "he'")
+
+    def test_the_contraction_is_what_is_offered(self, bridge: KeyboardBridge):
+        """Not merely non-empty: the bar has to hold the word being typed."""
+        assert "don't" in self._bar(bridge, "don'")
+        assert "he's" in self._bar(bridge, "he'")
+        assert "I'll" in self._bar(bridge, "i'")
+
+    def test_a_leading_apostrophe_still_asks_nothing(self, bridge: KeyboardBridge):
+        """The inverse.  A bare "'" has no prefix to complete.
+
+        It is a word character, so it stays in ``_current_word``, but
+        there is nothing in front of it for the engine to work from and
+        querying would only cost a round trip on the keystroke path.
+        """
+        assert self._bar(bridge, "'") == []
+
+    def test_the_word_character_rule_is_unchanged(self, bridge: KeyboardBridge):
+        """The apostrophe stays in the word, as it always did."""
+        bridge.resetContext()
+        _press(bridge, "don'")
+        assert bridge._current_word == "don'"
+
+    def test_ordinary_punctuation_still_clears_the_bar(self, bridge: KeyboardBridge):
+        """The inverse: only word characters were let through, not all of them."""
+        for text in ("hello-", "hello/", "hello*"):
+            assert self._bar(bridge, text) == [], text
+
+
 class TestAutoCapitalizeIsNotAHeldShift:
     """Auto-capitalize must capitalize the next letter and nothing else.
 

@@ -778,10 +778,33 @@ class NgramPredictor:
         return sorted_candidates[:n]
 
     def _matches_partial(self, word: str, partial: str) -> bool:
-        """Check if word matches partial input."""
+        """Check if word matches partial input.
+
+        The apostrophe in a contraction is optional in the *typed* prefix,
+        so "ill" reaches "i'll", "hes" reaches "he's" and "im" reaches
+        "i'm".  This is not a fuzzy correction and deliberately does not
+        live in the fuzzy source: a user who types "ill" for "I'll" has
+        not mis-clicked, they have skipped a character that costs an extra
+        click here (and a layer hop on the compact layouts), which is the
+        same reasoning `_APOSTROPHE_INSERTION_PROB` already encodes for the
+        whole-word path.  Matching here lets the contraction compete on its
+        own count against the other exact completions, which is the only
+        way it can win: "ill" is a live prefix of eight ordinary words, so
+        the prefix beam's apostrophe path (an omitted click at -2.5, past
+        `FREQUENCY_MAY_BUY`) is clamped below every one of them and never
+        reaches the bar at all.
+
+        Only when the user has typed no apostrophe themselves.  Once they
+        have, "don'" already matches "don't" exactly, and stripping would
+        make the prefix mean less than what was typed rather than more.
+        """
         if not partial:
             return True
-        return word.startswith(partial)
+        if word.startswith(partial):
+            return True
+        if "'" in word and "'" not in partial:
+            return word.replace("'", "").startswith(partial)
+        return False
 
     def _top_unigrams(self, n: int) -> List[str]:
         """Get top n words by frequency."""
