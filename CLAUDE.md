@@ -155,6 +155,66 @@ The last of the 2026-09-02 recommendations, landed 2026-09-03, and the one whose
 
 **The gain is modest, and that is the finding.** `scripts/bench/ksr.py --pointer BIAS_X,BIAS_Y,NOISE` simulates a pointer end to end (reported key, offset, and the presses the bias is learned from) and reports each condition three ways. A pointer whose misses are mostly random (bias 0.2, 0.15; noise 0.3; about a quarter of clicks on the wrong key), the robustness check: keys only 50.5%, plus offsets 50.8%, plus learned bias 50.9%. One whose misses are mostly systematic (0.35, 0.25; 0.15; 22% wrong), the case this feature is for: 51.1%, 51.5%, **51.8%**. The earlier per-key simulation (75% to 86.5% intended-key recovery with a learned bias) was real but did not translate, because the prefix beam plus the dictionary already recover most single-key errors from the reported key alone; what a click position adds on top is a few tenths of a point, more for a systematic pointer than a scattered one. It ships because it never regresses at 0.55, costs nothing at runtime, is privacy-gated like every other learning, and because the persisted table is the first measurement of this user's actual pointer bias, which no simulation can supply. Tests: `tests/test_pointer_model.py`, `tests/test_click_position.py` (recognizer, bridge and persistence hops, each paired with the near-miss it must leave alone) and `tests/test_qml_click_position.py`, which loads `KeyButton.qml` on its own in a `QQuickView` (one item, not a Repeater delegate, so the scene point is reliable under the offscreen plugin) and presses at a known point, and which also calls the overloaded `pressKey` / `pressKeyLiteral` slots with three arguments and with one from a QML function against a real bridge: the Python tests call the slots directly and never touch Qt's overload resolution, and a three-argument call that failed to bind from QML would degrade every press to the key centre with no warning anyone would see.
 
+## The apostrophe is optional in a typed prefix
+
+Typing `ill` offers `I'll`, `hes` offers `he's`, `im` offers `I'm`. The rule is
+one clause in `NgramPredictor._matches_partial`, the single choke point every
+prefix match goes through: a word containing an apostrophe also matches a typed
+prefix that its apostrophe-stripped form starts with, **and only when the user
+has typed no apostrophe themselves** (once they have, `don'` already matches
+`don't` exactly, and stripping on top would make the prefix mean less than what
+was typed rather than more).
+
+**It belongs in the n-gram's exact match, not in the fuzzy source, and that is
+the whole finding.** A user who types `ill` for `I'll` has not mis-clicked: the
+apostrophe costs an extra click here and a layer hop on the compact layouts, so
+it is the character they skip deliberately. This is the same thing
+`_APOSTROPHE_INSERTION_PROB` (0.50 against a generic 0.15) already encodes for
+the whole-word path, one layer over. The fuzzy source structurally cannot
+rescue it mid-word: the prefix beam reaches `i'll` only through an omitted
+click at `LOG_OMIT` (-2.5), which is past `FREQUENCY_MAY_BUY` (-1.5), so
+`_protect_exact_completions` clamps it below every completion of the live
+prefix `ill`, and `ill` has eight. `he's` was not reached at all. Cheapening
+the beam's apostrophe omission was tried and is the wrong lever: it prices a
+deliberate skip as a motor error, and it still has to buy past eight exact
+completions on frequency alone.
+
+**Typing the apostrophe must not blank the bar.** `_press_char`'s gate on
+whether to re-query was `char.isalpha()`, so the apostrophe threw the bar away
+at the moment it was right: `don` put `don't` at the top, and the `'` cleared
+it one click short of the word; `i'` discarded `I'm` / `I'll` / `I'd` / `I've`,
+which are the entire reason to type an apostrophe there. That is the same
+oversight the digit had, and which the comment at that call site already
+describes. `_continues_a_word` is the gate now: letters always, plus `'` and
+`_` when there are letters in front of them (a leading one carries no prefix,
+so asking costs a round trip and returns nothing). It is deliberately a
+separate question from the word-character rule in `_press_char` that decides
+what `_current_word` keeps: that one says what a word is made of, this one says
+whether the run so far is worth asking about.
+
+Measured on the held-out AAC corpora, counting every contraction occurrence and
+typing it the way a user of this keyboard does (no apostrophe), the word is
+offered somewhere while typing it **65.1% -> 94.5%** of the time; `i'm`, the
+most common contraction in the set at 24 occurrences, was previously
+unreachable at every prefix length. Keystroke savings are unchanged to the
+decimal (49.1% aac-dev, 50.4% aac-test): those corpora type contractions *with*
+their apostrophes, so the benchmark cannot see this at all and is a regression
+check here, not a measurement of it. The remaining misses are possessives
+(`doctor's`, `today's`) that are not in the vocabulary as words, which no
+prefix rule can reach. Across a sweep of 4,056 two- and three-letter prefixes
+only 10 change, 7 by gaining a contraction and **none by losing one**; the
+words displaced are all rank 5-6 tail items.
+
+Guarded by `tests/test_ngram_predictor.py::TestTheApostropheIsOptionalInATypedPrefix`
+(the predicate), `tests/test_hybrid_predictor.py::TestASkippedApostropheStillFindsTheWord`
+(the ranking, on the shipped word lists rather than a stub, because the claim
+is about real frequencies) and
+`tests/test_keyboard_bridge.py::TestTypingTheApostropheKeepsTheBar`. Every
+positive is paired with the near-miss it must still reject, and the pairs that
+bite are the ones a rule that matched too much would satisfy: `ill` must keep
+offering `ill` and `illinois`, a prefix with no contraction behind it must grow
+none, and a bare `'` must still ask nothing.
+
 ## Short words in next-word predictions
 
 `HybridPredictor._short_word_allowed` gates one- and two-letter words out of *next-word* predictions (the filter does not apply once the user has started typing a word, where the prefix already constrains things). It used to be a blanket `len(word) <= 2` with `"i"` as the single exception, which discarded exactly the words next-word prediction is best at: after "I want", the useful pills are "to", "it", "my", "us"; after "one", they are "of" and "or". Those are also the highest-frequency words in English, so the bar was withholding its strongest guesses and offering the fourth-best instead.

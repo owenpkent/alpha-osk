@@ -426,6 +426,63 @@ class TestMergeStrategies:
             assert merged.index("everywhere") < merged.index("narrow")
 
 
+class TestASkippedApostropheStillFindsTheWord:
+    """ "ill" offers "I'll" and "hes" offers "he's", on the real vocabulary.
+
+    The apostrophe is the character a user of this keyboard skips: it
+    costs an extra click, and a layer hop on the compact layouts.  The
+    fuzzy source cannot rescue it, which is why the match lives in the
+    n-gram's prefix rule instead.  "ill" is a live prefix of eight
+    ordinary words, so the prefix beam reaches "i'll" only through an
+    omitted click at -2.5, past ``FREQUENCY_MAY_BUY``, and
+    ``_protect_exact_completions`` clamps it below all eight; "he's" was
+    not reached at all.
+
+    These run against the shipped word lists rather than a seeded stub,
+    because the thing being asserted is a *ranking* among real
+    frequencies: a stub would prove the plumbing and not the outcome.
+    """
+
+    @pytest.mark.parametrize(
+        "typed,wanted",
+        [
+            ("ill", "I'll"),
+            ("im", "I'm"),
+            ("ive", "I've"),
+            ("hes", "he's"),
+            ("shes", "she's"),
+            ("dont", "don't"),
+            ("cant", "can't"),
+            ("youre", "you're"),
+            ("thats", "that's"),
+            ("whats", "what's"),
+        ],
+    )
+    def test_the_contraction_is_offered(self, predictor, typed, wanted) -> None:
+        words = predictor.predict(typed, n=6)
+        assert wanted in words, f"{typed!r} did not offer {wanted!r}: {words}"
+
+    @pytest.mark.parametrize(
+        "typed,wanted",
+        [("ill", "ill"), ("ill", "illinois"), ("hes", "hesitate"), ("im", "image")],
+    )
+    def test_the_ordinary_words_keep_their_place(self, predictor, typed, wanted) -> None:
+        """The inverse: the contraction joins the bar, it does not take it.
+
+        Without this, "match the word with its apostrophes removed" could
+        degrade into matching far too much and still satisfy every
+        assertion above.
+        """
+        words = predictor.predict(typed, n=6)
+        assert wanted in words, f"{typed!r} lost {wanted!r}: {words}"
+
+    @pytest.mark.parametrize("typed", ["the", "hel", "wor", "illus", "hesi", "imp"])
+    def test_a_prefix_with_no_contraction_behind_it_is_unchanged(self, predictor, typed) -> None:
+        """Nothing apostrophe-shaped may appear where none was asked for."""
+        words = predictor.predict(typed, n=6)
+        assert not [w for w in words if "'" in w], f"{typed!r} grew a contraction: {words}"
+
+
 class TestShortWordsAreOfferedAsNextWords:
     """Two-letter words are the ones next-word prediction is best at.
 
