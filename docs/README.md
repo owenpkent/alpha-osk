@@ -20,6 +20,7 @@ Active design docs for the engine, the platform abstraction, and the user-facing
 - [`architecture/FUZZY_RECOGNITION.md`](architecture/FUZZY_RECOGNITION.md): spatial error correction, tunable constants, the relationship to SymSpell.
 - [`architecture/PREDICTION_NOTES.md`](architecture/PREDICTION_NOTES.md): the "unified system" framing across the predictors, fragment filter and repetition gate, autocorrect thresholds, reinforcement and backspace-as-negative-signal, the structured-token store for numbers and email addresses, prioritised future work.
 - [`architecture/PLATFORM_ARCHITECTURE.md`](architecture/PLATFORM_ARCHITECTURE.md): cross-platform abstraction details (key synthesis, password-field detection, config paths).
+- [`architecture/ARCHITECTURE_REVIEW_2026-09-10.md`](architecture/ARCHITECTURE_REVIEW_2026-09-10.md): dated architecture assessment and prioritized recommendations for failure handling, data restore, interaction ownership, settings and responsiveness.
 - [`architecture/COMPACT_VIEW.md`](architecture/COMPACT_VIEW.md): the denser 13x4 keyboard for small screens, its measurements, and the layer model behind `?123`.
 - [`architecture/MODULAR_LAYOUTS.md`](architecture/MODULAR_LAYOUTS.md): custom keyboard layouts inspired by Octavium / Nimbus.
 - [`architecture/UIA_TARGETS.md`](architecture/UIA_TARGETS.md): the switch-scanning contract. How an external scanner finds the keyboard through Windows UI Automation, the target ids, stale-prediction safety, minimizing and restoring without taking focus, and what was verified and how.
