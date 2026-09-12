@@ -31,6 +31,15 @@ import QtQuick 2.15
 Item {
     id: numRow
 
+    // Scan-target identity, set by Main.qml. The id format lives once, on
+    // Main.qml's root, so that six surfaces cannot drift into handing a
+    // scanner colliding ids. Empty section means this panel is not exposed.
+    property string scanSection: ""
+    property var scanIdFor: null
+    function _scanId(row, idx) {
+        return (scanIdFor && scanSection !== "") ? scanIdFor(scanSection, row, idx) : ""
+    }
+
     property real keyW: 48
     property real keyH: 36
     property real keySpacing: 2
@@ -118,6 +127,7 @@ Item {
                 keyHeight: numRow.keyH
                 hitMarginH: numRow.hitMarginH
                 hitMarginV: numRow.hitMarginV
+                targetId: numRow._scanId(0, index)
                 fontSize: kd.special ? 11 : 14
                 isSpecial: !!kd.special
                 // This panel's keyDefs are its own shape rather than the
