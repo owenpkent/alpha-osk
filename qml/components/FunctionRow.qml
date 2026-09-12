@@ -10,6 +10,15 @@ import QtQuick 2.15
 Item {
     id: fnRow
 
+    // Scan-target identity, set by Main.qml. The id format lives once, on
+    // Main.qml's root, so that six surfaces cannot drift into handing a
+    // scanner colliding ids. Empty section means this panel is not exposed.
+    property string scanSection: ""
+    property var scanIdFor: null
+    function _scanId(row, idx) {
+        return (scanIdFor && scanSection !== "") ? scanIdFor(scanSection, row, idx) : ""
+    }
+
     property real keyW: 48
     property real keyH: 36
     property real keySpacing: 2
@@ -190,7 +199,14 @@ Item {
             model: fnRow.keyGroups
 
             Row {
+                id: fnGroupRow
                 spacing: fnRow.keySpacing
+
+                // Captured here because `index` inside the nested Repeater
+                // below resolves to the innermost one (0-3 within the
+                // group), and the scan id needs the flat position across
+                // all three groups (0-11).
+                property int groupIndex: index
 
                 Repeater {
                     model: modelData
@@ -229,6 +245,15 @@ Item {
                         // at a glance which keys no longer send what their
                         // cap used to say.
                         isActive: fnRow._isProgrammed(modelData)
+                        targetId: fnRow._scanId(0, fnGroupRow.groupIndex * 4 + index)
+                        // Deliberately NOT a toggle target, even though
+                        // `isActive` is bound above.  Here that accent means
+                        // "this key has been reassigned", which is a fact
+                        // about the key rather than a state it is in, so
+                        // reporting it as a UI Automation toggle would tell a
+                        // scanner (and a screen reader) that F13 is switched
+                        // on.  Toggle targets are the modifiers, Caps and
+                        // NumLock, and nothing else.
                         role: "fn"
                         roleColors: fnRow.roleColors
                         keyColor: fnRow.keyColor
