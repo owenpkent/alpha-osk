@@ -16,6 +16,13 @@ Window {
     minimumHeight: 200
     color: "transparent"
     title: "Alpha-OSK"
+    // Qt synthesises the window's UI Automation AutomationId from its
+    // objectName, as "QGuiApplication.<objectName>".  Pinning it gives an
+    // external scanner a stable anchor to find this window by, which the
+    // title cannot be (it is user-facing text) and the window class must not
+    // be (Qt generates it, and it changes under us on a Qt upgrade).  See
+    // docs/architecture/UIA_TARGETS.md.
+    objectName: "alphaOskKeyboard"
 
     // Persistent settings — saved automatically on change, restored on launch
     Settings {
@@ -592,6 +599,55 @@ Window {
     // Keyboard layout (data-driven from JSON)
     property var layoutRows: keyboard ? keyboard.getLayoutRows() : []
     property string currentLayout: appSettings.savedLayout
+
+    // ===== External switch-scanning targets =====
+    //
+    // The contract an external scanner (Switchify and any other Windows
+    // assistive technology) reads through UI Automation.  Normative
+    // description, including why each piece is shaped this way, is in
+    // docs/architecture/UIA_TARGETS.md; issue #106 is the conversation.
+    //
+    // The id scheme lives here and nowhere else.  Five surfaces draw
+    // scannable keys and a sixth draws the pills, and a second copy of this
+    // format string is the parallel-blocks failure this project keeps paying
+    // for: a surface that drifted would hand a scanner ids that collide with
+    // another section's, and the scanner cannot tell that from a relayout.
+    readonly property string scanContractVersion: "aosk.v1"
+    function scanTargetId(section, row, idx) {
+        return root.scanContractVersion + "." + section + "." + row + "." + idx
+    }
+
+    // Predictions get a generation rather than a bare slot, so that an id a
+    // scanner has already seen always denotes the same offer.  It is bumped
+    // whenever the pill row is repopulated, including a repopulation that
+    // happens to produce the same words: "the bar was rebuilt" is the event a
+    // stale selection has to be caught by, not "the text changed".
+    property int predictionGeneration: 0
+    onPredictionsChanged: root.predictionGeneration += 1
+    function scanPredictionId(idx) {
+        return root.scanContractVersion + ".pred." + idx + ".g" + root.predictionGeneration
+    }
+
+    // One cheap thing for a scanner to poll.  Everything that can move a
+    // target, change its label, or change whether it is there at all feeds
+    // this string; the scanner reads one property at whatever rate its
+    // overlay needs and takes a full cached snapshot only when it changes.
+    // Geometry is included directly because window drag and resize are the
+    // changes with no other signal behind them.
+    readonly property string scanRevision: [
+        root.predictionGeneration,
+        Math.round(root.x), Math.round(root.y),
+        Math.round(root.width), Math.round(root.height),
+        root.currentLayout, root.compactView ? 1 : 0, root.activeLayer,
+        root.showNumberRow ? 1 : 0, root.showFunctionRow ? 1 : 0,
+        root.showExtraFunctionRow ? 1 : 0, root.showNavigation ? 1 : 0,
+        root.showNumpad ? 1 : 0, root.suggestionsEnabled ? 1 : 0,
+        root.shiftOn ? 1 : 0, root.capsOn ? 1 : 0, root.ctrlOn ? 1 : 0,
+        root.altOn ? 1 : 0, root.winOn ? 1 : 0,
+        root.shiftLocked ? 1 : 0, root.ctrlLocked ? 1 : 0,
+        root.altLocked ? 1 : 0, root.winLocked ? 1 : 0,
+        root.visible ? 1 : 0
+    ].join(".")
 
     // ===== Compact view =====
     // A *view* preference, orthogonal to which letter arrangement is picked:
@@ -1354,6 +1410,24 @@ Window {
     // this back to true to keep the screenshots' corners.
     property bool selfRoundedCorners: Qt.platform.os !== "windows"
     readonly property real windowRadius: selfRoundedCorners ? 10 : 0
+
+    // The one property an external scanner polls.  Its Name is the revision
+    // string above; when that changes, something in the scanning contract
+    // moved and the scanner takes a fresh cached snapshot of the subtree.
+    // That keeps the steady-state cost at one cross-process property read
+    // rather than a walk of sixty-odd elements at overlay frame rate.
+    //
+    // It has to be `visible` to be in the accessibility tree at all (an
+    // invisible item is pruned), so it is a real but empty 1x1 item rather
+    // than `visible: false`.  It draws nothing.
+    Item {
+        objectName: "scanRevisionBeacon"
+        width: 1
+        height: 1
+        Accessible.role: Accessible.StaticText
+        Accessible.name: root.scanRevision
+        Accessible.id: root.scanContractVersion + ".revision"
+    }
 
     // Main background — uses Qt.rgba so only the background becomes transparent
     // while keys and text remain fully opaque
@@ -2528,6 +2602,38 @@ Window {
                                           : root.predPillBorder
                             border.width: predMouse.containsMouse ? 2 : 1
 
+                            // ===== Switch-scanning target =====
+                            //
+                            // The stale-selection guarantee the contract makes
+                            // (an outdated scan selection can never insert a
+                            // word the user was not looking at) rests on object
+                            // lifetime, not on the id below, and that was
+                            // measured rather than assumed: swapping the model
+                            // array makes Repeater destroy and rebuild every
+                            // delegate, so a scanner holding an element from
+                            // the previous round gets ElementNotAvailable and
+                            // its Invoke does nothing.  It holds even when the
+                            // new round produces identical words, because a
+                            // fresh array is a fresh array.
+                            //
+                            // The generation in the id is the *client's* half:
+                            // it lets a scanner notice the change cheaply and
+                            // keeps an id from ever denoting two different
+                            // offers.  Do not "optimise" the model into a
+                            // reused list: that would trade the guarantee for
+                            // a few allocations.
+                            // Named rather than inlined into the attached
+                            // property, for the reason KeyButton's own block
+                            // gives: an attached `Accessible.*` is unreadable
+                            // from PySide, so anything expressed only there is
+                            // untestable.
+                            property string scanTargetId: root.scanPredictionId(index)
+
+                            Accessible.role: Accessible.Button
+                            Accessible.name: modelData
+                            Accessible.id: scanTargetId
+                            Accessible.onPressAction: keyboard.pressPrediction(modelData)
+
                             // Subtle gradient for depth
                             Rectangle {
                                 anchors.fill: parent
@@ -2864,6 +2970,8 @@ Window {
                         objectName: "extraFunctionRowPanel"
                         visible: root.showExtraFunctionRow
                         Layout.alignment: Qt.AlignHCenter
+                        scanSection: "fn2"
+                        scanIdFor: root.scanTargetId
                         keyGroups: [
                             ["F13", "F14", "F15", "F16"],
                             ["F17", "F18", "F19", "F20"],
@@ -2893,6 +3001,8 @@ Window {
                         objectName: "functionRowPanel"
                         visible: root.showFunctionRow
                         Layout.alignment: Qt.AlignHCenter
+                        scanSection: "fn1"
+                        scanIdFor: root.scanTargetId
                         keyW: root.keyW
                         keyH: root.keyH * 0.7
                         keySpacing: root.keySpacing
@@ -2932,6 +3042,8 @@ Window {
                         objectName: "numberRowPanel"
                         visible: root.showNumberRow
                         Layout.alignment: Qt.AlignHCenter
+                        scanSection: "num"
+                        scanIdFor: root.scanTargetId
                         keyW: root.keyW
                         keyH: root.keyH
                         keySpacing: root.keySpacing
@@ -2963,6 +3075,10 @@ Window {
                         Layout.alignment: Qt.AlignHCenter
                         spacing: root.keySpacing
                         property var rowData: modelData
+                        // Visual row order, for the scan-target id below.  The
+                        // inner Repeater's own `index` is the key's slot, so the
+                        // row's has to be captured here before it is shadowed.
+                        property int rowIndex: index
                         property real rowKeyH: rowData.id === "number" ? root.keyH - 4 : root.keyH
 
                         // Equal unit totals are NOT equal pixel widths, and the
@@ -3021,6 +3137,11 @@ Window {
                                 hitMarginH: root.keyHitMarginH
                                 hitMarginV: root.keyHitMarginV
                                 fontSize: kd.fontSize || 16
+                                targetId: root.scanTargetId("grid", rowIndex, index)
+                                // A key with a stateKey is one that can be on or
+                                // off (the modifiers, Caps, NumLock); nothing else
+                                // reports a toggle state to a scanner.
+                                isToggleTarget: !!kd.stateKey
                                 isSpecial: kd.type !== "char"
                                 isActive: {
                                     if (!kd.stateKey) return false
@@ -3231,6 +3352,8 @@ Window {
                 // Flush with the grid on both rails; the panel divides
                 // this between its five rows itself.
                 Layout.preferredHeight: root.sectionHeight
+                scanSection: "nav"
+                scanIdFor: root.scanTargetId
                 roleColors: root.keyRoles
                 // Vertically off `keySpacing`, not `rowSpacing`: this
                 // panel lays its own rows out on it.
@@ -3260,6 +3383,8 @@ Window {
                 objectName: "numpadPanel"
                 visible: root.showNumpad
                 Layout.preferredHeight: root.sectionHeight
+                scanSection: "pad"
+                scanIdFor: root.scanTargetId
                 roleColors: root.keyRoles
                 // Vertically off `keySpacing`, not `rowSpacing`: this
                 // panel lays its own rows out on it.

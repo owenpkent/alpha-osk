@@ -1991,6 +1991,87 @@ Snippets and the clear-context ring do not move.
 Guarded by `tests/test_qml_symbols.py`, `tests/test_glyphs.py`, and
 `tests/test_keyboard_bridge.py::TestTypingAGlyphFromThePicker`.
 
+## Switch-scanning targets (external scanners over UI Automation)
+
+Every visible key and prediction pill is published as a UI Automation
+`Button`, so an external switch-scanning application (Switchify PC, issue
+#106, and any other Windows-permitted assistive technology) can enumerate
+the targets, highlight them, and activate the user's selection through
+Invoke. Normative contract, with the measured findings behind each
+decision: `docs/architecture/UIA_TARGETS.md`. Guard:
+`tests/test_qml_scan_targets.py`.
+
+**It is UI Automation rather than the IPC server the request asked for, and
+the deciding argument was authorization.** Alpha-OSK runs with
+`uiAccess="true"`, so it can send input to windows an ordinary same-user
+process cannot. A pipe that validated only the user would lend that ability
+to anything running as the user, which makes this app a confused deputy.
+Over UIA, Windows decides who may drive the keyboard, and we write no ACLs,
+no framing, no PID or token checks and no publisher policy. Do not "upgrade"
+this to a socket without re-reading that argument.
+
+- **Ids are `aosk.v1.<section>.<row>.<index>`** (`grid` / `fn1` / `fn2` /
+  `num` / `nav` / `pad`), predictions `aosk.v1.pred.<index>.g<generation>`.
+  **The format lives once**, in `Main.qml::scanTargetId`; six surfaces draw
+  targets and call it. Two surfaces computing it independently would
+  eventually collide, and a collision is invisible to the client (it reads
+  as one target that moved, not as a fault). Same parallel-blocks failure
+  this file documents for sticky-modifier release.
+- **Presence means activatable.** A key on a hidden panel or an unshown
+  layer is absent from the tree, not present and disabled: Qt prunes
+  invisible items and `Accessible.ignored` removes anything with no id. A
+  `KeyButton` whose caller forgets `targetId` is therefore silently
+  unreachable rather than broken-looking, which is why the test walks the
+  whole tree and fails on any visible key without one.
+- **`Accessible.name` is a *speakable* label, not the keycap.** Taking the
+  cap verbatim is wrong in seven places on the shipped qwerty layout: the
+  space bar's cap is the empty string, and Backspace, Win and the four
+  arrows are glyphs with no spoken form, so a scanner announced seven
+  unlabelled or unpronounceable targets including the most-pressed key on
+  the board. `KeyButton._scanName` strips non-ASCII from the cap and falls
+  back to `keyText`, which every caller already sets to the key's own word.
+  No glyph table, no upkeep.
+- **Only real toggles report a toggle state.** The modifiers plus Caps and
+  NumLock. A **programmed F-key is not one**, even though `FunctionRow`
+  binds its `isActive`: there the accent means "this key was reassigned",
+  which is a fact about the key rather than a state it is in, and reporting
+  it would tell a scanner and a screen reader that F13 is switched on.
+- **Right-click lock rides in `Accessible.description`**, which Qt maps to
+  UIA **`FullDescription` (30159), NOT HelpText** (verified against a live
+  client; HelpText and ItemStatus both stay empty). That property is UIA3
+  only, so a legacy `System.Windows.Automation` client sees it as absent.
+  It is the one field in the contract a UIA2 client cannot read.
+- **Invoke is a one-shot, never `_activate()`.**
+  `KeyButton.activateFromAssistiveClient` fires `keyPressed` without arming
+  the repeat timer, because a scanner has no release event and a single
+  Invoke on Backspace would otherwise repeat until the safety timer fired.
+  It flashes the key: a switch user is looking at the keyboard, not the text
+  field, so without it the only feedback is a character appearing elsewhere.
+- **The stale-prediction guarantee is object lifetime, not the id.** Swapping
+  the prediction model makes `Repeater` destroy and rebuild every pill
+  delegate, so a scanner holding an element from the previous round gets
+  `UIA_E_ELEMENTNOTAVAILABLE` and its Invoke does nothing (measured, and it
+  holds when the new round produces identical words). The generation in the
+  id is the client's half. **Do not optimise the pill row into a reused
+  model**: that trades the guarantee for a few allocations per keystroke.
+- **`scanRevision` is the one property a scanner polls**, exposed as the Name
+  of the `aosk.v1.revision` beacon; it folds in geometry, layout, panels,
+  layer, every modifier and lock, the prediction generation and visibility.
+  Its internal format is not part of the contract: compare, never parse. The
+  beacon has to be a real 1x1 `visible` item, since an invisible one is
+  pruned from the accessibility tree.
+- **The window is found by AutomationId `QGuiApplication.alphaOskKeyboard`**,
+  which Qt synthesises from `Main.qml`'s `objectName`. Not the title (it is
+  user-facing text) and not the window class (Qt generates it and it moves on
+  a Qt upgrade), the same rule this file already states for compat detection.
+- **PySide cannot read an attached `Accessible.*` property at all**
+  (`QQmlProperty` reports it invalid), so every accessible value is kept in a
+  named property (`_scanName`, `_scanChecked`, `_scanDescription`,
+  `_scanIgnored`, the pill's `scanTargetId`) and the attached binding is a
+  bare pass-through. **Never inline an expression into the `Accessible`
+  block**: anything written only there is untestable, and that block is
+  already the one part of the contract the headless suite cannot see.
+
 ## Modular Layouts
 
 Design doc at `docs/architecture/MODULAR_LAYOUTS.md`. Inspired by Octavium's (`C:\Users\owenp\dev\Octavium`) Layout/KeyDef data model. Four levels of modularity: (1) Built-in JSON layout packs (video editing, gaming, streaming). (2) User-created layouts via editor. (3) Panel composition - snap independent panels (QWERTY, numpad, macros) into a grid. (4) App-aware auto-switching based on foreground window.
