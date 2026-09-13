@@ -4,6 +4,11 @@ All notable changes to Alpha-OSK are documented in this file.
 
 ## [Unreleased]
 
+### Changed
+- **Dependabot's patch and minor updates now merge themselves once every required check passes.** Lint, type checking, the test suite and the OSV vulnerability scan all have to pass first, so an update with a known advisory against it stays open. Major version bumps still wait for a person, because that is where an upgrade can change behaviour the tests do not cover. The workflow never runs the updated dependency's code with write access: it reads Dependabot's description of the update and asks GitHub to merge later. One trade-off is accepted and written down in `docs/build/CI.md`: a merge made this way does not start CI on `main`, so a break from an auto-merged update surfaces on the next pull request's checks rather than on `main` itself.
+
+- **The nightly telemetry workflow moved from `actions/checkout` v4 to v7, pinned to the v7.0.1 commit** like every other workflow here. Dependabot proposed the bump as a bare `@v7` tag; pinning it by commit keeps that workflow consistent with the rest, and Dependabot keeps pins in that form current from now on.
+
 ### Security
 - **Two advisories published on 2026-09-08 against the Cloudflare Worker's dev dependencies are cleared.** `sharp` moves to 0.35.4 and `js-yaml` to 4.3.2. The sharp one (GHSA-rgj7-g3m4-5g8c, high) is not a flaw in sharp at all: it bundles libvips, libvips bundles libheif, and two libheif flaws reach the lockfile that way, so the fix is the libvips 1.3.3 rebuild that 0.35.4 pulls in. The js-yaml one (GHSA-2883-xcg3-v3hh, high) lets an empty merge source burn CPU without the limit that is supposed to bound it.
 
