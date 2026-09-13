@@ -4,6 +4,9 @@ All notable changes to Alpha-OSK are documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+- **Closing the keyboard from the taskbar minimizes it instead of making it vanish.** It used to disappear from the screen and the taskbar while still running, reachable only from the tray icon. It now drops to the taskbar like the minimize button. The close button on the keyboard itself and Quit in the tray still end it.
+
 ### Security
 - **Two advisories published on 2026-09-08 against the Cloudflare Worker's dev dependencies are cleared.** `sharp` moves to 0.35.4 and `js-yaml` to 4.3.2. The sharp one (GHSA-rgj7-g3m4-5g8c, high) is not a flaw in sharp at all: it bundles libvips, libvips bundles libheif, and two libheif flaws reach the lockfile that way, so the fix is the libvips 1.3.3 rebuild that 0.35.4 pulls in. The js-yaml one (GHSA-2883-xcg3-v3hh, high) lets an empty merge source burn CPU without the limit that is supposed to bound it.
 

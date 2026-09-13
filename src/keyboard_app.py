@@ -55,7 +55,7 @@ from pathlib import Path
 from types import TracebackType
 from typing import cast
 
-from PySide6.QtCore import QSettings, QSharedMemory, Qt, QUrl
+from PySide6.QtCore import QEvent, QObject, QSettings, QSharedMemory, Qt, QUrl
 from PySide6.QtGui import QIcon, QWindow
 from PySide6.QtQml import QQmlApplicationEngine
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
@@ -678,6 +678,37 @@ def _name_for_ui_automation(app) -> None:
     app.setObjectName(UIA_APPLICATION_NAME)
 
 
+def _note_quit(event_type: QEvent.Type, keyboard_window: QObject | None) -> None:
+    """Tell the keyboard window a real quit has begun.
+
+    Qt 6 closes every top-level window when the application quits, and
+    cancels the quit if a window refuses (``QGuiApplication::event`` on
+    ``QEvent::Quit``).  The keyboard refuses a close that is not part of a
+    quit, and minimizes instead (``Main.qml``'s ``onClosing``), so it has to
+    know which is which.  ``Qt.quit()``, the tray's Quit and a Windows
+    logoff all arrive here as that one event, so one flag covers every way
+    out.
+    """
+    if event_type == QEvent.Type.Quit and keyboard_window is not None:
+        keyboard_window.setProperty("quitting", True)
+
+
+class _KeyboardApplication(QApplication):
+    """The application, plus the one event the keyboard window needs.
+
+    ``event`` is only called for events delivered to the application object
+    itself, which are few, so overriding it costs nothing on the keystroke
+    path (unlike an application-wide event filter, which sees every event
+    for every object).
+    """
+
+    keyboard_window: QObject | None = None
+
+    def event(self, e: QEvent) -> bool:
+        _note_quit(e.type(), self.keyboard_window)
+        return super().event(e)
+
+
 def main() -> int:
     """Launch the Alpha-OSK on-screen keyboard."""
     # CLI dispatch — the post-update relauncher re-invokes this binary
@@ -730,7 +761,7 @@ def main() -> int:
         Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
     )
 
-    app = QApplication(sys.argv)
+    app = _KeyboardApplication(sys.argv)
     _name_for_ui_automation(app)
     app.setApplicationName("Alpha-OSK")
     app.setOrganizationName("alpha-osk")
@@ -845,9 +876,14 @@ def main() -> int:
     # rootObjects() is typed to return QObject; the loaded root is always
     # the top-level QML Window, i.e. a QWindow, at runtime.
     root = cast(QWindow, engine.rootObjects()[0])
+    quiet_restore = None
     if root:
         _apply_window_flags(root)
         _wire_floating_windows(root)
+        # Held for the life of the event loop: Qt does not own a filter
+        # installed from Python.  See QuietRestoreFilter for the why.
+        quiet_restore = windows_window.install_quiet_restore(root)
+        app.keyboard_window = root
 
     # --- System tray icon ---
     tray = QSystemTrayIcon(app_icon, app)
@@ -892,6 +928,7 @@ def main() -> int:
         bridge.shutdown()
 
     app.aboutToQuit.connect(_on_about_to_quit)
+    _ = quiet_restore
 
     return app.exec()
 

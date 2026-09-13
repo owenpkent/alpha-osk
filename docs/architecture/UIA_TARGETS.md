@@ -202,6 +202,83 @@ UIA `Invoke` on a target does what a primary click does.
 Privacy mode needs no special handling by a client. It already empties the
 prediction bar, so those targets leave the tree with it.
 
+## Showing, minimizing, and reading the state
+
+A client puts the keyboard away and brings it back through the keyboard
+window's standard UIA **WindowPattern**, and reads where it is from the same
+pattern. There is no Alpha-OSK-specific control for this, deliberately: the
+standard pattern is what every assistive technology already speaks, and a
+second route would be a second thing to secure.
+
+| To | Call |
+|----|------|
+| Put the keyboard away | `SetWindowVisualState(Minimized)` |
+| Bring it back | `SetWindowVisualState(Normal)` |
+| Read where it is | `WindowVisualState`: `Normal` or `Minimized` |
+
+**Ignore `CanMinimize`.** It reads `False`, because the keyboard draws its own
+title bar and Qt derives that property from the native minimize button the
+window does not have. The call works regardless.
+
+**The states a client can see are `Normal` and `Minimized`, and that is all
+of them on Windows.** Every route the keyboard offers for putting itself away
+(its own minimize button, the tray, the taskbar) minimizes rather than hides,
+and a minimized keyboard stays in the tree under the same window id, with the
+revision beacon still readable. A keyboard that is absent from the tree is not
+running.
+
+**While minimized, the keyboard offers no targets.** Every key and pill leaves
+the tree, and an Invoke on an element a client is still holding from before
+the minimize inserts nothing. Windows would otherwise keep reporting those
+elements as present and onscreen, and "presence means activatable" would be
+false for as long as the keyboard stayed minimized. The window and the beacon
+stay, so the state stays readable and the keyboard stays recallable. A key
+Invoke refused this way is not reported as an error to the client, so check
+`WindowVisualState` rather than relying on an Invoke failing.
+
+**The beacon moves on every change of state**, including a minimize or restore
+the user makes directly (the minimize button, the tray, the taskbar), so a
+client polling the beacon learns of it without polling the window as well.
+
+**Restoring never takes focus.** The application receiving text keeps the
+foreground across a restore, whoever asks for it. This needed work, and the
+reason matters to anyone changing it: Qt restores a minimized window with the
+activating form of `ShowWindow` whatever the window's flags, and on this
+keyboard the tray's restore code, `SetWindowVisualState(Normal)` and a plain
+`ShowWindow(SW_RESTORE)` from another process all left the keyboard in the
+foreground. (A real click on the taskbar button was not measured. A click
+there has already moved the foreground to the taskbar, so it is not the case
+this protects.) For a client restoring the keyboard on the user's behalf,
+that is a restore that silently sends the next keystroke somewhere the user
+did not choose. `QuietRestoreFilter` in `src/platform/windows_window.py`
+declines the `WM_QUERYOPEN` that Windows sends before each of those restores
+and performs the restore itself with `SW_SHOWNOACTIVATE`.
+
+**`WindowPattern.Close` minimizes the keyboard; it does not quit it.** A
+client should never offer it as a way to hide the keyboard, and never needs
+to. Qt's default for a close was to hide the window while leaving the process
+running, which took the keyboard off the taskbar and out of the tree, where
+no client could find it again, and the taskbar's own Close did the same
+(both measured). A
+close that is not part of a quit now minimizes instead. The keyboard's own
+close button and the tray's Quit still end it.
+
+### What this does and does not protect
+
+These controls give a client nothing a process could not already do to the
+window. Anything that can reach the keyboard through UIA can equally call
+`ShowWindow`, post it a close message, or end the process, and Windows decides
+who can do any of those. What the changes above remove is a set of harms that
+standard, well-meaning calls used to cause:
+
+- a restore that moved the foreground, and with it the user's next keystroke;
+- a close that stranded the keyboard running but out of reach;
+- targets that stayed invokable while the keyboard was not on screen.
+
+A hostile process on the same desktop can still minimize or close the
+keyboard. That is a property of the Windows desktop, not of this contract, and
+this contract does not make it easier.
+
 ## Stale predictions cannot fire
 
 The guarantee is that a scan selection made against one round of predictions
@@ -260,6 +337,12 @@ synthesis replaced by a recorder so nothing reached the desktop.
 | `Accessible.description` becomes `FullDescription` (30159) | Confirmed. It is **not** HelpText or ItemStatus, both of which stay empty |
 | Bounds are physical pixels | Confirmed at 150% scaling |
 | A pill destroyed by a new round cannot be invoked | Confirmed, with a control that invokes the same held element with no round in between and succeeds. UIA3 reported `UIA_E_ELEMENTNOTAVAILABLE`; the managed client reports "Unsupported Pattern" |
+| `SetWindowVisualState(Minimized)` / `(Normal)` and `WindowVisualState` on the keyboard window | Confirmed. Minimizing never moved the foreground; the window stayed discoverable by id with the beacon readable |
+| A minimized keyboard's keys and pills leave the tree, and a held one inserts nothing | Confirmed, with the same key inserting once the keyboard was restored |
+| Restoring leaves the foreground alone | Confirmed for `SetWindowVisualState(Normal)`, an external `ShowWindow(SW_RESTORE)`, and the tray's restore. Without the filter the same restores took the foreground (on a plain window every time; on the keyboard whenever Windows' foreground rules allowed it). A control window with ordinary flags showed each run could see a steal |
+| Declining the restore but not letting its own restore through | **Refuted**: the keyboard declined its own restore 409 times and never came back. Hence `_restoring` |
+| Adding `SWP_NOACTIVATE` to `WM_WINDOWPOSCHANGING` instead | **Refuted**: no effect; the activation on restore does not go through those flags |
+| `WindowPattern.Close` | Before: the process kept running with the keyboard hidden and absent from the tree. After: the keyboard minimizes and stays discoverable, and the application's own quit still exits |
 | An identical round rebuilds the pills | **Refuted** in the first version (the pills survived and a held one inserted); fixed by carrying the generation in the model, and held by `test_an_identical_round_destroys_the_pills_it_replaces` |
 | The window's AutomationId | `alphaOsk.alphaOskKeyboard` with the application named. Unnamed it is the application's class name: `QApplication.` in the shipped keyboard, `QGuiApplication.` in the test harness |
 | The beacon moves on a state change | Confirmed |
@@ -283,7 +366,10 @@ identity, that identities are unique and well-formed, that names are
 speakable, that only real toggles claim a toggle state, that a new prediction
 round always yields new ids, that an identical round still destroys the
 pills it replaces, that an Invoke from a dead generation inserts nothing,
-and that the beacon moves.
+that a minimized keyboard offers no targets and inserts nothing, that a close
+minimizes while a quit still closes, and that the beacon moves.
+`tests/test_windows_window.py` holds the quiet-restore filter's decision
+message by message, including the reentrancy guard.
 
 PySide cannot read an attached `Accessible.*` property at all (`QQmlProperty`
 reports it invalid), so every accessible value is kept in a named property

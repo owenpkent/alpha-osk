@@ -2041,6 +2041,28 @@ this to a socket without re-reading that argument.
   client; HelpText and ItemStatus both stay empty). That property is UIA3
   only, so a legacy `System.Windows.Automation` client sees it as absent.
   It is the one field in the contract a UIA2 client cannot read.
+- **Show, minimize and state go through the window's standard
+  WindowPattern, and three things make that safe; each was measured broken
+  first.** (1) **Restoring never takes the foreground**:
+  `windows_window.QuietRestoreFilter` declines `WM_QUERYOPEN` for the keyboard
+  and restores with `SW_SHOWNOACTIVATE`, because Qt restores with
+  `SW_SHOWNORMAL` whatever the flags, and the tray's restore code, a client's
+  `SetWindowVisualState(Normal)` and another process's `ShowWindow(SW_RESTORE)`
+  all made the keyboard the foreground window (a real taskbar-button click was
+  not measured). Its `_restoring` flag is load-bearing (without it the keyboard
+  declined its own restore in a loop), and `SWP_NOACTIVATE` in
+  `WM_WINDOWPOSCHANGING` does nothing, so do not "simplify" to it.
+  (2) **A close that is not a quit minimizes** (`Main.qml` `onClosing`,
+  Windows only), because Qt's default hid the keyboard with the process still
+  running, out of the tree and off the taskbar. Qt 6 cancels a quit if a
+  window refuses to close, so `keyboard_app._KeyboardApplication` sets the
+  window's `quitting` on `QEvent::Quit`; any new way to end the app must be a
+  real quit or it will be refused. (3) **A minimized keyboard offers no
+  targets**: keys and pills go `Accessible.ignored` and refuse Invoke, since
+  Windows keeps a minimized window's elements in the tree as onscreen. The
+  beacon carries `root.visibility` so a poll sees a minimize. None of this adds
+  capability (anything that can reach the window can already `ShowWindow` or
+  close it); it removes harm from calls that were standard.
 - **Invoke is a one-shot, never `_activate()`.**
   `KeyButton.activateFromAssistiveClient` fires `keyPressed` without arming
   the repeat timer, because a scanner has no release event and a single
