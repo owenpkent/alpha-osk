@@ -324,8 +324,13 @@ it". Each was the part that was missing once.
 
 The Windows UIA behaviour below is Qt's, not this codebase's, and none of it
 can be reached under the `offscreen` platform plugin the test suite uses. It
-was verified against a live UIA3 client driving the real `Main.qml`, with key
-synthesis replaced by a recorder so nothing reached the desktop.
+was verified against live UIA clients driving the real `Main.qml`, with key
+synthesis replaced by a recorder so nothing reached the desktop. The original
+contract was checked with a UIA3 client. The window-id, stale-pill and
+window-state rows were checked with the managed `System.Windows.Automation`
+client, from a harness with its own settings key and config directory, so the
+developer's running keyboard was never touched. None of those rows depend on
+`FullDescription`, the one property that client cannot read.
 
 | Claim | Result |
 |-------|--------|
@@ -356,6 +361,36 @@ Two traps for anyone re-running this:
   `System.Windows.Automation` cannot resolve `FullDescription` and reports it
   as absent. Use a UIA3 client (`IUIAutomation`) or you will conclude a
   working field is broken.
+
+### Independent verification by an external client
+
+The external test client written for this contract,
+[`OwenMcGirr/alpha-osk-scan-lab`](https://github.com/OwenMcGirr/alpha-osk-scan-lab),
+is a Rust UIA3 client and a click-through overlay, independent of this repo.
+It re-ran the stale-prediction and window-id fixes against commit `b75ec07`.
+Its results and raw reports are in that repo's
+[`VALIDATION.md` at `ba6a598`](https://github.com/OwenMcGirr/alpha-osk-scan-lab/blob/ba6a598b29aabd21120f7110ec4315464746ccdc/VALIDATION.md).
+
+- **Stale predictions:** it held an old pill across a round of identical
+  words, and separately across a round of different words, and invoked it with
+  no client-side comparison first. Both produced zero synthesis calls, and a
+  current pill still inserted.
+- **Window id:** it finds the keyboard by `alphaOsk.alphaOskKeyboard` alone,
+  with both earlier forms removed.
+- **Overall:** all 13 of its live UIA checks passed, including foreground
+  preservation across Invoke.
+
+That run predates the window-state work in `69d6e56`, so it covers none of
+*Showing, minimizing, and reading the state*. It also recorded synthesis
+rather than injecting desktop input.
+
+**Still unverified by anyone:**
+
+- the signed, installed build with UIAccess active;
+- mixed-DPI and multi-monitor alignment, including negative coordinates;
+- a physical switch driving the scanner;
+- text inserted into a real application on the desktop;
+- a real click on the taskbar button to restore the keyboard.
 
 ## What the headless tests can and cannot hold
 

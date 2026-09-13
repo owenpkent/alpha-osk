@@ -4,6 +4,11 @@ All notable changes to Alpha-OSK are documented in this file.
 
 ## [Unreleased]
 
+### Added
+- **External switch scanners can now drive the keyboard on Windows.** Every key and every suggestion is published through Windows UI Automation, the interface assistive technology already uses. A switch-scanning app can find each one, draw its highlight over it, and press it for you, and a press behaves exactly like a click. It can also minimize the keyboard and bring it back without taking focus from the app you are typing into. It was built with the developer of Switchify PC, and any Windows-permitted assistive technology can use it, not one app in particular. Nothing new listens on your machine: there is no socket or background service, and Windows decides which programs may use it, as it does for screen readers.
+
+  **A suggestion you meant to pick can never be swapped for a different word.** If the suggestions change while a scanner is still highlighting an old one, pressing it does nothing, even when the new suggestions happen to spell the same words. A minimized keyboard offers nothing to press at all. The full contract, and how each part was verified, is in `docs/architecture/UIA_TARGETS.md`.
+
 ### Changed
 - **Your own words reach the top of the suggestions sooner.** The shipped example text used to be counted as if you had typed it, 2,604 words' worth on a fresh install and another copy at every launch, so a word you actually use had to outweigh all of it. Those examples now sit behind your typing as a light prior: with nothing learned yet the suggestions are unchanged, and once you type or pick a word it competes against a tenth of the old mass. Measured on fresh models, "bamboo" reaches the first pill after 3 typings instead of 22, and after one selection instead of five. The examples are rebuilt from the shipped file at every launch and are never written into your model, so a word a later release drops from its examples leaves with it. Models saved before this keep the counts they already have.
 
