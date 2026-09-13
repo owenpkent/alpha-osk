@@ -366,8 +366,8 @@ class TestTheSettingsListIsTheLeftClickRoute:
 
     def test_an_editor_opened_from_a_key_does_not_open_settings(self, qml_root) -> None:
         """The inverse half. Without it, "always re-show settings" passes,
-        and right-clicking a key would pop a settings window over the
-        editor it just opened."""
+        and an editor opened directly would pop a settings window over
+        itself."""
         root, warnings, _, _ = qml_root
         root.setProperty("showExtraFunctionRow", True)
         _pump()
@@ -377,6 +377,25 @@ class TestTheSettingsListIsTheLeftClickRoute:
         QMetaObject.invokeMethod(self._editor(root), "close")
         _pump()
         assert root.property("showSettings") is False
+        assert _real_warnings(warnings) == []
+
+    def test_a_right_click_on_a_key_does_not_open_the_editor(self, qml_root) -> None:
+        """Removed at the owner's request: programming a key is done from
+        *Settings -> Function Keys* only, so a stray right-click on the row
+        never pops an editor over the letter grid."""
+        root, warnings, _, synth = qml_root
+        root.setProperty("showExtraFunctionRow", True)
+        root.setProperty("showFunctionRow", True)
+        _pump()
+        synth.reset_mock()
+        for panel in ("extraFunctionRowPanel", "functionRowPanel"):
+            keys = _keys(_panel(root, panel))
+            assert keys
+            for key in keys.values():
+                key.keyRightPressed.emit()
+        _pump()
+        assert self._editor(root).property("opened") is False
+        assert not synth.send_key.called
         assert _real_warnings(warnings) == []
 
     def test_a_left_tap_on_a_key_types_it(self, qml_root) -> None:
