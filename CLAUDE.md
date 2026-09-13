@@ -833,12 +833,13 @@ chord's action key - which is the only way to name Enter or an arrow
 without a second picker listing every key we can send. The modifier chips
 are ordinary buttons in the popup.
 
-**Right-click an F-key opens its editor, and that must never be the only
-route.** A dwell-click, switch-access, head- or eye-tracker pointer, and a
-single-button adaptive mouse all have no right button, so right-click alone
-would let such a user press an F-key and never program one. The left-click
-route is ***Settings -> Function Keys***, which lists all twenty-four with
-what each one currently does and opens the editor on a tap.
+**The only route into the editor is *Settings -> Function Keys***, which
+lists all twenty-four with what each one currently does and opens the editor
+on a tap. Right-clicking an F-key used to open it too; that was removed at
+Owen's request (2026-09-13), so a stray right-click on the row never pops an
+editor over the letters. Right-click on an F-key now does nothing. Don't add
+it back. Guarded by
+`tests/test_qml_function_row.py::TestTheSettingsListIsTheLeftClickRoute::test_a_right_click_on_a_key_does_not_open_the_editor`.
 
 **That page replaced an Edit toggle on the row itself**, which flipped both
 rows into an assign mode where a left-click opened the editor. The list
@@ -858,8 +859,8 @@ live inside it (the Deepgram key field carries the same note); leaving a
 is typed with, or both. `root.settingsReturnView` brings settings back on
 the same page afterwards, which is the one documented exception to
 "re-opening Settings always lands on the home grid" (see *Settings Panel
-Structure*). The inverse matters as much and is tested: an editor opened by
-right-clicking a key must **not** pop the settings window open behind it.
+Structure*). The inverse matters as much and is tested: an editor opened any
+other way must **not** pop the settings window open behind it.
 
 **Every key takes its share of the gap around it.**
 `FunctionRow`'s `hitMarginH` / `hitMarginV` default to 0 and there is no
@@ -943,7 +944,7 @@ The parent (`Main.qml`'s settings popup window) calls `settingsPanel.resetToHome
 
 **Where it opens is `root.safePanelPos(w, h)`, shared with Help and the Dashboard.** All three used to open at `Screen.width / 2 - width / 2`, which gets three things wrong at once: it centres on the **primary** screen whatever screen the keyboard is on (a monitor to the left has negative coordinates a primary-screen centre cannot even reach, the same bug the snippets restore documents one window over); it can land on top of the keyboard, which is what the user types into these windows with; and none of the three has an OS title bar to drag it back by, while Settings cannot take focus either, so a window that opens somewhere unreachable stays unreachable. `safePanelPos` puts the panel above the keyboard where there is room, below it where there is not, centred on the keyboard's own screen when it fits neither, and clamped on that screen in every case; `screenBoundsAt(px, py)` is the screen lookup, walking `Qt.application.screens` because `Screen` inside a Window is not knowable before the window is placed and `Screen.width` is a size rather than a position. Guarded by `tests/test_qml_panel_placement.py`, which cannot exercise the multi-monitor half (the offscreen plugin gives one screen) and so pins the half a single screen can prove: that the position is derived from the keyboard's geometry rather than the screen's centre, which is exactly the property the old code lacked.
 
-**The one exception is `root.settingsReturnView`, and it is a return rather than a re-open.** Tapping a key in *Function Keys* hides the settings window and opens the key editor, which lives on the **keyboard** window because it is typed into with the OSK's own keys and the settings window cannot hold OS focus (the Deepgram key field carries the same note). Leaving a 360x540 window parked mid-screen would cover the editor, the letter grid it is typed with, or both. `settingsWindow.onVisibleChanged` consumes `settingsReturnView` when it is set and calls `resetToHome()` otherwise, so only that hand-off lands deep; coming back to the home grid there would lose the user's place in a list of twenty-four. Guarded by `tests/test_qml_function_row.py::TestTheSettingsListIsTheLeftClickRoute`, whose inverse half asserts an editor opened by right-clicking a key does **not** pop the settings window open behind it.
+**The one exception is `root.settingsReturnView`, and it is a return rather than a re-open.** Tapping a key in *Function Keys* hides the settings window and opens the key editor, which lives on the **keyboard** window because it is typed into with the OSK's own keys and the settings window cannot hold OS focus (the Deepgram key field carries the same note). Leaving a 360x540 window parked mid-screen would cover the editor, the letter grid it is typed with, or both. `settingsWindow.onVisibleChanged` consumes `settingsReturnView` when it is set and calls `resetToHome()` otherwise, so only that hand-off lands deep; coming back to the home grid there would lose the user's place in a list of twenty-four. Guarded by `tests/test_qml_function_row.py::TestTheSettingsListIsTheLeftClickRoute`, whose inverse half asserts an editor opened any other way does **not** pop the settings window open behind it.
 
 ### Where each section lives
 
