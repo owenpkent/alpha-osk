@@ -691,6 +691,23 @@ class _TrayClickRouter:
         self._toggle()
 
 
+# The application object's name is the first segment of the keyboard
+# window's UI Automation AutomationId, which is how an external switch
+# scanner finds the window (docs/architecture/UIA_TARGETS.md).  Qt builds
+# that id by walking the window's accessible parents and using each object's
+# objectName, falling back to its C++ class name when the name is empty
+# (QAccessibleBridgeUtils::accessibleId).  Left unnamed, the id depends on
+# which application class happened to be constructed: `QApplication.` here,
+# `QGuiApplication.` in the headless test harness, which is how the published
+# contract came to name an id the shipped keyboard never had.  Naming the
+# application makes the id a fact about this project rather than about Qt.
+UIA_APPLICATION_NAME = "alphaOsk"
+
+
+def _name_for_ui_automation(app) -> None:
+    app.setObjectName(UIA_APPLICATION_NAME)
+
+
 def main() -> int:
     """Launch the Alpha-OSK on-screen keyboard."""
     # CLI dispatch — the post-update relauncher re-invokes this binary
@@ -744,6 +761,7 @@ def main() -> int:
     )
 
     app = QApplication(sys.argv)
+    _name_for_ui_automation(app)
     app.setApplicationName("Alpha-OSK")
     app.setOrganizationName("alpha-osk")
 

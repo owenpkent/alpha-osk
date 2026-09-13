@@ -33,7 +33,14 @@ pytest.importorskip("PySide6")
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 try:
-    from PySide6.QtCore import QCoreApplication, QSettings, QUrl  # noqa: E402
+    from PySide6.QtCore import (  # noqa: E402
+        Q_ARG,
+        QCoreApplication,
+        QEvent,
+        QMetaObject,
+        QSettings,
+        QUrl,
+    )
     from PySide6.QtGui import QGuiApplication  # noqa: E402
     from PySide6.QtQml import QQmlApplicationEngine  # noqa: E402
 
@@ -284,12 +291,19 @@ class TestOnlyRealTogglesReportAToggleState:
 
 
 class TestPredictionPillsGetAFreshIdentity:
-    """The stale-selection guarantee. Its load-bearing half is that Repeater
-    destroys and rebuilds the delegates, which is Qt behaviour and was
-    verified against a live UIA client; what is asserted here is the half
-    this repo controls, that the id never denotes two different offers."""
+    """The stale-selection guarantee: an outdated scan selection can never
+    insert a word. It rests on two things, and each is tested on its own. The
+    pills are rebuilt every round, so an element a scanner is holding from an
+    earlier round is destroyed; and an Invoke carries its pill's generation,
+    which is refused once that round is gone.
 
-    def _pill_ids(self, root) -> list:
+    The rebuild was first claimed as free Qt behaviour, and it was not:
+    Repeater.setModel returns early when the new list compares equal to the
+    old one, so a round of identical words kept the old pill objects, and the
+    external test client (OwenMcGirr/alpha-osk-scan-lab, on PR #114) invoked a
+    held one and got a keystroke. The identical round is the case to test."""
+
+    def _pills(self, root) -> list:
         out: list = []
 
         def walk(item):
@@ -298,11 +312,29 @@ class TestPredictionPillsGetAFreshIdentity:
             for child in item.childItems():
                 tid = child.property("scanTargetId")
                 if tid and str(tid).startswith("aosk.v1.pred."):
-                    out.append(str(tid))
+                    out.append(child)
                 walk(child)
 
         walk(root.property("contentItem"))
         return out
+
+    def _pill_ids(self, root) -> list:
+        return [str(p.property("scanTargetId")) for p in self._pills(root)]
+
+    @staticmethod
+    def _typed(bridge) -> list:
+        """What reached the (mocked) synthesiser: the proof an insert happened."""
+        return [
+            c
+            for c in bridge._synth.method_calls
+            if c[0] in ("send_text", "send_key", "replace_text")
+        ]
+
+    @staticmethod
+    def _flush_deletes() -> None:
+        QCoreApplication.processEvents()
+        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+        QCoreApplication.processEvents()
 
     def test_pill_ids_match_the_published_scheme(self, qml_root):
         root, _, bridge = qml_root
@@ -340,6 +372,99 @@ class TestPredictionPillsGetAFreshIdentity:
         assert not set(first) & set(second), (
             f"an identical round reused its ids: {first} vs {second}"
         )
+
+    def test_an_identical_round_destroys_the_pills_it_replaces(self, qml_root):
+        """The regression the external client found. Before the fix this
+        reused every pill, so a held element survived the round and stayed
+        invokable, and only a client that compared ids first was safe."""
+        root, _, bridge = qml_root
+        bridge.predictionsChanged.emit(["hello", "help"])
+        _settle(root)
+        old = self._pills(root)
+        assert old, "no prediction pills were exposed"
+        destroyed: list = []
+        for pill in old:
+            pill.destroyed.connect(lambda *_: destroyed.append(1))
+
+        bridge.predictionsChanged.emit(["hello", "help"])
+        _settle(root)
+        self._flush_deletes()
+
+        assert len(destroyed) == len(old), (
+            f"{len(old) - len(destroyed)} of {len(old)} pills survived an "
+            "identical round, so a scanner holding one could still invoke it"
+        )
+        assert self._pills(root), "the new round exposed no pills at all"
+
+    def test_a_different_round_destroys_them_too(self, qml_root):
+        """The inverse, so the test above cannot pass by destroying pills
+        only when nothing changed."""
+        root, _, bridge = qml_root
+        bridge.predictionsChanged.emit(["hello", "help"])
+        _settle(root)
+        old = self._pills(root)
+        destroyed: list = []
+        for pill in old:
+            pill.destroyed.connect(lambda *_: destroyed.append(1))
+
+        bridge.predictionsChanged.emit(["world", "work"])
+        _settle(root)
+        self._flush_deletes()
+
+        assert old and len(destroyed) == len(old)
+
+    def test_an_invoke_from_a_round_that_is_gone_inserts_nothing(self, qml_root):
+        """The second, independent half: the generation travels with the
+        Invoke and a dead one is refused, so the guarantee does not rest on
+        the rebuild alone."""
+        root, _, bridge = qml_root
+        bridge.predictionsChanged.emit(["hello", "help"])
+        _settle(root)
+        stale = int(root.property("predictionGeneration"))
+        bridge.predictionsChanged.emit(["hello", "help"])
+        _settle(root)
+        assert int(root.property("predictionGeneration")) != stale
+        bridge._synth.reset_mock()
+
+        called = QMetaObject.invokeMethod(
+            root, "invokeScanPrediction", Q_ARG("QVariant", "hello"), Q_ARG("QVariant", stale)
+        )
+        QCoreApplication.processEvents()
+
+        # Without this the test passes against a keyboard with no such check
+        # at all, since a call that never happens inserts nothing either.
+        assert called, "invokeScanPrediction could not be called"
+
+        assert self._typed(bridge) == [], f"a stale generation inserted text: {self._typed(bridge)}"
+
+    def test_an_invoke_on_a_live_pill_still_inserts(self, qml_root):
+        """The inverse, through the pill's own handler: a check that refused
+        everything would satisfy the test above on its own."""
+        root, _, bridge = qml_root
+        bridge.predictionsChanged.emit(["hello", "help"])
+        _settle(root)
+        pills = self._pills(root)
+        assert pills
+        bridge._synth.reset_mock()
+
+        assert QMetaObject.invokeMethod(pills[0], "scanInvoke")
+        QCoreApplication.processEvents()
+
+        assert self._typed(bridge), "invoking a live pill inserted nothing"
+
+    def test_a_pills_id_is_fixed_for_its_lifetime(self, qml_root):
+        """The id is built from the pill's own generation, not the live one,
+        so it can never change under an element a scanner is holding."""
+        root, _, bridge = qml_root
+        bridge.predictionsChanged.emit(["hello", "help"])
+        _settle(root)
+        pill = self._pills(root)[0]
+        before = str(pill.property("scanTargetId"))
+        root.setProperty("predictionGeneration", int(root.property("predictionGeneration")) + 1)
+        # Read before the deferred delete lands, which is the window a held
+        # element could otherwise be read in.
+        QCoreApplication.processEvents()
+        assert str(pill.property("scanTargetId")) == before
 
 
 class TestTheRevisionBeacon:

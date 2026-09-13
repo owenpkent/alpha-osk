@@ -33,10 +33,22 @@ them and the client's language already binds to it.
 
 ## Finding the keyboard
 
-Match the top-level window on **AutomationId `QGuiApplication.alphaOskKeyboard`**.
+Match the top-level window on **AutomationId `alphaOsk.alphaOskKeyboard`**.
 
-Qt synthesises a window's AutomationId from its QML `objectName`, so
-`Main.qml` pins `objectName: "alphaOskKeyboard"` for exactly this purpose.
+Qt builds a window's AutomationId by walking its accessible parents and
+joining their names: the window's own `objectName`, prefixed with the
+application object's. `Main.qml` pins the window's (`alphaOskKeyboard`) and
+`keyboard_app.py` pins the application's (`alphaOsk`), both for exactly this
+purpose.
+
+Pinning the application's name is not decoration. Where an object has no
+name Qt substitutes its C++ class name, so an unnamed application made the id
+depend on which application class was constructed. The first version of this
+document published `QGuiApplication.alphaOskKeyboard`, which is what the
+headless test harness produced, while the shipped keyboard constructs a
+`QApplication` and reported `QApplication.alphaOskKeyboard`. The external test
+client found that; both unnamed forms and the pinned one were then confirmed
+against a live UIA client.
 
 Do not match on the window's Name (`Alpha-OSK`), which is user-facing text,
 and do not match on the window class: Qt generates it
@@ -195,21 +207,41 @@ prediction bar, so those targets leave the tree with it.
 The guarantee is that a scan selection made against one round of predictions
 can never insert a word from a later round.
 
-It rests on **object lifetime**, not on the id. Swapping the prediction model
-makes Qt's `Repeater` destroy and rebuild every pill delegate, so a client
-holding an element from the previous round gets `UIA_E_ELEMENTNOTAVAILABLE`
-and its `Invoke` does nothing at all. This was measured, including the case
-where the new round produces identical words: a fresh array is a fresh array,
-and the delegates are rebuilt either way.
+It rests on two things on the keyboard's side, and neither depends on the
+client comparing anything first.
 
-The generation in the AutomationId is the client's half of the same fact: it
-lets a scanner notice the change cheaply, and stops an id ever denoting two
-different offers. Comparing the AutomationId (and RuntimeId, Name, enabled
-and offscreen state) immediately before Invoke is still recommended, but the
-guarantee does not depend on the client remembering to.
+1. **Every round rebuilds the pills.** Each entry in the pill row's model
+   carries the round's generation, so no two rounds compare equal and Qt's
+   `Repeater` destroys every pill from the previous round. A client still
+   holding one of those elements finds its `Invoke` fails, and nothing is
+   inserted. The error a client sees depends on the client, so do not match
+   on a specific one: a UIA3 client was seen to get
+   `UIA_E_ELEMENTNOTAVAILABLE`, and the managed `System.Windows.Automation`
+   client gets an `InvalidOperationException` reading "Unsupported Pattern".
+2. **An Invoke carries its pill's generation, and a dead one is refused.**
+   The pill hands its own generation to `invokeScanPrediction` in
+   `Main.qml`, which inserts nothing unless that is still the live round.
+   Part 1 should make this unreachable; it exists so that a later change
+   letting a pill survive a round fails closed instead of inserting.
 
-**Do not** optimise the pill row into a reused model. That would trade the
-guarantee for a few allocations per keystroke.
+**The first version of this guarantee was wrong, and the way it was wrong is
+worth knowing.** It claimed part 1 as free Qt behaviour: swap the model and
+the delegates are rebuilt, identical words included. They are not.
+`QQuickRepeater::setModel` returns early when the new list compares equal to
+the old one, so a round of identical words kept the old pill objects. The
+external test client (`OwenMcGirr/alpha-osk-scan-lab`) held a pill across
+such a round, invoked it, and got a keystroke. The earlier measurement had
+only exercised a round that changed the words.
+
+The generation in the AutomationId is the client's half. It is built from the
+pill's own generation, so it never changes under an element a client is
+holding, and it lets a scanner notice a new round cheaply. Comparing the
+AutomationId (and Name, enabled and offscreen state) immediately before
+Invoke is still recommended, but the guarantee no longer rests on it.
+
+**Do not** strip the generation out of the pill model to save allocations,
+and do not drop the generation check because the rebuild "already handles
+it". Each was the part that was missing once.
 
 ## What was verified, and how
 
@@ -227,7 +259,9 @@ synthesis replaced by a recorder so nothing reached the desktop.
 | `Accessible.checkable` / `checked` become TogglePattern | Confirmed, `Off` to `On` across an Invoke |
 | `Accessible.description` becomes `FullDescription` (30159) | Confirmed. It is **not** HelpText or ItemStatus, both of which stay empty |
 | Bounds are physical pixels | Confirmed at 150% scaling |
-| A stale pill element dies | Confirmed, `UIA_E_ELEMENTNOTAVAILABLE` |
+| A pill destroyed by a new round cannot be invoked | Confirmed, with a control that invokes the same held element with no round in between and succeeds. UIA3 reported `UIA_E_ELEMENTNOTAVAILABLE`; the managed client reports "Unsupported Pattern" |
+| An identical round rebuilds the pills | **Refuted** in the first version (the pills survived and a held one inserted); fixed by carrying the generation in the model, and held by `test_an_identical_round_destroys_the_pills_it_replaces` |
+| The window's AutomationId | `alphaOsk.alphaOskKeyboard` with the application named. Unnamed it is the application's class name: `QApplication.` in the shipped keyboard, `QGuiApplication.` in the test harness |
 | The beacon moves on a state change | Confirmed |
 
 Two traps for anyone re-running this:
@@ -247,7 +281,9 @@ is no UIA provider under `offscreen`. What it holds is the half that is ours
 and the half that will actually rot: that every visible key carries an
 identity, that identities are unique and well-formed, that names are
 speakable, that only real toggles claim a toggle state, that a new prediction
-round always yields new ids, and that the beacon moves.
+round always yields new ids, that an identical round still destroys the
+pills it replaces, that an Invoke from a dead generation inserts nothing,
+and that the beacon moves.
 
 PySide cannot read an attached `Accessible.*` property at all (`QQmlProperty`
 reports it invalid), so every accessible value is kept in a named property

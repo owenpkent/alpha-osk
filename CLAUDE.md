@@ -2195,21 +2195,33 @@ this to a socket without re-reading that argument.
   Invoke on Backspace would otherwise repeat until the safety timer fired.
   It flashes the key: a switch user is looking at the keyboard, not the text
   field, so without it the only feedback is a character appearing elsewhere.
-- **The stale-prediction guarantee is object lifetime, not the id.** Swapping
-  the prediction model makes `Repeater` destroy and rebuild every pill
-  delegate, so a scanner holding an element from the previous round gets
-  `UIA_E_ELEMENTNOTAVAILABLE` and its Invoke does nothing (measured, and it
-  holds when the new round produces identical words). The generation in the
-  id is the client's half. **Do not optimise the pill row into a reused
-  model**: that trades the guarantee for a few allocations per keystroke.
+- **The stale-prediction guarantee is two things, and the first was once
+  claimed for free and was not.** (1) Every pill-model entry carries the
+  prediction generation, so each round rebuilds the pills and an element held
+  from an earlier round cannot be invoked. `QQuickRepeater::setModel` returns
+  early on a list that compares equal to the current one, so a plain word
+  list kept the old pills across a round of identical words and a held one
+  still inserted; the external test client found it, after this file had
+  called it measured. (2) The pill's Invoke goes through
+  `invokeScanPrediction(word, generation)`, which refuses a generation that
+  is no longer live, so a pill that ever survives a round fails closed. The
+  id is built from the pill's own generation and never changes under a held
+  element. **Do not strip the generation from the model, and do not drop the
+  check as redundant**: each was the missing half once. Guarded by
+  `TestPredictionPillsGetAFreshIdentity`, where the identical-round and
+  dead-generation cases each fail on their own mutation.
 - **`scanRevision` is the one property a scanner polls**, exposed as the Name
   of the `aosk.v1.revision` beacon; it folds in geometry, layout, panels,
   layer, every modifier and lock, the prediction generation and visibility.
   Its internal format is not part of the contract: compare, never parse. The
   beacon has to be a real 1x1 `visible` item, since an invisible one is
   pruned from the accessibility tree.
-- **The window is found by AutomationId `QGuiApplication.alphaOskKeyboard`**,
-  which Qt synthesises from `Main.qml`'s `objectName`. Not the title (it is
+- **The window is found by AutomationId `alphaOsk.alphaOskKeyboard`**,
+  which Qt builds from the application object's name and `Main.qml`'s
+  `objectName`. `keyboard_app.py::_name_for_ui_automation` pins the first
+  half, and it has to: Qt substitutes the class name for an unnamed object,
+  so the id was `QApplication.` in the shipped keyboard and `QGuiApplication.`
+  in the test harness, and the contract first published the harness's. Not the title (it is
   user-facing text) and not the window class (Qt generates it and it moves on
   a Qt upgrade), the same rule this file already states for compat detection.
 - **PySide cannot read an attached `Accessible.*` property at all**
