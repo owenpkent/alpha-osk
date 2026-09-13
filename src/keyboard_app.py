@@ -220,8 +220,14 @@ def _apply_window_flags(root: QWindow) -> None:
     # Qt flags — work on all platforms.  WindowDoesNotAcceptFocus
     # is the Linux/Wayland equivalent of WS_EX_NOACTIVATE; on
     # Windows the Win32 path below handles focus suppression.
+    #
+    # Main.qml declares this same set on the Window, so off macOS this is
+    # a no-op.  Keep the two identical: a set that differs makes Qt rebuild
+    # the frame of an already shown window, which moves it off the position
+    # Main.qml just restored (see the note on `flags` there).
     base_flags = (
-        Qt.WindowType.WindowStaysOnTopHint
+        Qt.WindowType.Window
+        | Qt.WindowType.WindowStaysOnTopHint
         | Qt.WindowType.FramelessWindowHint
         | Qt.WindowType.WindowDoesNotAcceptFocus
     )
