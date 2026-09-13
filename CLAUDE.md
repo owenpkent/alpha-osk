@@ -1111,6 +1111,15 @@ each one fixed: `docs/build/CI.md`. The rules that outlive the reasoning:
   process, so workers would disagree about which tests are theirs, which does
   not fail loudly: it runs some tests twice and others never. It is
   `crc32(nodeid) % count`, in `tests/conftest.py::pytest_collection_modifyitems`.
+- **Dependabot patch and minor updates merge themselves once the required
+  checks pass** (`.github/workflows/dependabot-auto-merge.yml`); majors wait
+  for a person. Needs the repository's "Allow auto-merge" setting on. The job
+  runs only when Dependabot opened the PR *and* caused the event, and never
+  checks out PR code. To take a Dependabot PR over, `gh pr merge <n>
+  --disable-auto` before pushing to it. A merge made with `GITHUB_TOKEN` does
+  not trigger CI's push run on main, and protection does not require branches
+  to be up to date, so a break from an auto-merged update surfaces on the next
+  PR's checks rather than on main. See `docs/build/CI.md`.
 - **Branch protection requires the `Tests` job, not the shards.** Required
   checks are configured by name in the repo settings, so naming shards there
   means reconfiguring protection on every change to the shard count, and a

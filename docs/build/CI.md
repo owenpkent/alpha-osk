@@ -137,6 +137,51 @@ dependency failed is *skipped*, and a skipped required check reads as
 pending rather than red: without it the gate goes quiet exactly when it
 should be loud. The required set is Lint, Type Check, Tests, OSV Scanner.
 
+## Dependabot auto-merge
+
+`.github/workflows/dependabot-auto-merge.yml` queues Dependabot's patch and
+minor updates to squash-merge once every required check has passed, using
+GitHub's documented pattern. A major version bump waits for a person,
+because that is where an upgrade can change behaviour the tests do not
+cover. The repository's "Allow auto-merge" setting has to stay on for it to
+work.
+
+Five things about it are deliberate:
+
+- **The required checks are the gate, and nothing merges past them.** Lint,
+  Type Check, Tests and the OSV scan must all pass, so an update with a known
+  advisory against it fails the OSV scan and stays open.
+- **It runs only when Dependabot both opened the PR and caused the event.**
+  If a person pushes a commit onto a Dependabot branch, the job does not run
+  for that push. Auto-merge switched on earlier is not switched off by a push
+  from someone with write access, though, so to take a Dependabot PR over,
+  run `gh pr merge <number> --disable-auto` first.
+- **It never checks out the pull request.** It reads Dependabot's metadata and
+  asks GitHub to merge later, so no dependency code runs with the write token.
+  Top-level permissions are empty and the job asks only for `contents: write`
+  and `pull-requests: write`.
+- **`update-type` is the highest change in the PR.** The pip group bundles
+  minor and patch updates, so a grouped PR auto-merges; a major update arrives
+  as its own PR and waits.
+- **`dependabot/fetch-metadata` is pinned to a commit hash**, like every
+  other action here, and Dependabot keeps that pin current.
+
+**The one gap it opens, and why it is accepted.** GitHub does not start new
+workflow runs for events caused by a workflow's own `GITHUB_TOKEN`
+([GITHUB_TOKEN](https://docs.github.com/en/actions/concepts/security/github_token)),
+and an auto-merge enabled with that token merges as it. So an auto-merged
+Dependabot PR does not trigger CI's `push` run on main. Branch protection
+does not require a PR to be up to date with main (`strict` is off), so an
+update can land on a main that moved after its checks ran, with nothing
+re-testing the combination straight away. The next pull request's checks run
+against the merge with the new main, so a break is caught there. That is a
+delay rather than a hole, which is why this uses the plain documented pattern
+rather than a `workflow_run` job that merges and then dispatches CI on main:
+that would close the delay at the cost of a privileged workflow reacting to
+pull-request CI, which is harder to keep safe. Turning `strict` on would also
+close it, but would make every pull request, not just Dependabot's, update its
+branch before merging.
+
 ## Concurrency
 
 The workflow sets `concurrency: group: ci-${{ github.ref }}` with
