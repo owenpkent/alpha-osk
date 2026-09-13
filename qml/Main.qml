@@ -17,7 +17,8 @@ Window {
     color: "transparent"
     title: "Alpha-OSK"
     // Qt synthesises the window's UI Automation AutomationId from its
-    // objectName, as "QGuiApplication.<objectName>".  Pinning it gives an
+    // objectName, prefixed with the application's own name, which
+    // keyboard_app.py pins: "alphaOsk.alphaOskKeyboard".  Pinning it gives an
     // external scanner a stable anchor to find this window by, which the
     // title cannot be (it is user-facing text) and the window class must not
     // be (Qt generates it, and it changes under us on a Qt upgrade).  See
@@ -624,8 +625,20 @@ Window {
     // stale selection has to be caught by, not "the text changed".
     property int predictionGeneration: 0
     onPredictionsChanged: root.predictionGeneration += 1
-    function scanPredictionId(idx) {
-        return root.scanContractVersion + ".pred." + idx + ".g" + root.predictionGeneration
+    function scanPredictionId(idx, generation) {
+        return root.scanContractVersion + ".pred." + idx + ".g" + generation
+    }
+    // What a prediction pill's Invoke goes through.  A pill carries the
+    // generation it was built for and is refused once that generation is
+    // gone, so a pill object that outlived its round can never insert.  The
+    // per-round rebuild in the pill Repeater is what normally makes a stale
+    // element unreachable; this is the check that still holds if a later
+    // change ever lets a pill survive a round, and it fails closed.
+    function invokeScanPrediction(word, generation) {
+        if (generation !== root.predictionGeneration)
+            return false
+        keyboard.pressPrediction(word)
+        return true
     }
 
     // One cheap thing for a scanner to poll.  Everything that can move a
@@ -2586,10 +2599,29 @@ Window {
                         // above, unchanged): the study's predictions-off
                         // condition must not also change key geometry, which
                         // `suggestionsEnabled` would (STUDY_PROTOCOL.md 5.1).
+                        //
+                        // Each entry carries the prediction generation, and
+                        // that is what makes a stale scan selection harmless.
+                        // Repeater.setModel returns early when the new list
+                        // compares equal to the old one, so a round of
+                        // identical words used to keep the old pill objects,
+                        // and a scanner holding one could still Invoke it.
+                        // With the generation in every entry no two rounds
+                        // compare equal, the pills are rebuilt, and an
+                        // element from an earlier round is gone.  Do not
+                        // strip this back to a plain word list.
                         model: (root.suggestionsEnabled && !root.privacyMode
                                 && !root.dictationActive
-                                && !study.suppressPredictions) ? predRow.fit.words : []
+                                && !study.suppressPredictions)
+                               ? predRow.fit.words.map(function (w) {
+                                     return { word: w, generation: root.predictionGeneration }
+                                 })
+                               : []
                         delegate: Rectangle {
+                            // One pill is one offer: the word and the round
+                            // it was offered in, fixed for the object's life.
+                            readonly property string pillWord: modelData.word
+                            readonly property int pillGeneration: modelData.generation
                             width: index < predRow.fit.widths.length
                                    ? predRow.fit.widths[index]
                                    : predBar.predMinWidth
@@ -2604,35 +2636,33 @@ Window {
 
                             // ===== Switch-scanning target =====
                             //
-                            // The stale-selection guarantee the contract makes
-                            // (an outdated scan selection can never insert a
-                            // word the user was not looking at) rests on object
-                            // lifetime, not on the id below, and that was
-                            // measured rather than assumed: swapping the model
-                            // array makes Repeater destroy and rebuild every
-                            // delegate, so a scanner holding an element from
-                            // the previous round gets ElementNotAvailable and
-                            // its Invoke does nothing.  It holds even when the
-                            // new round produces identical words, because a
-                            // fresh array is a fresh array.
+                            // The stale-selection guarantee (an outdated scan
+                            // selection can never insert a word the user was
+                            // not looking at) rests on two things.  The model
+                            // above is rebuilt every round, so an element from
+                            // an earlier round is destroyed and a scanner
+                            // holding it gets ElementNotAvailable.  And the
+                            // Invoke goes through invokeScanPrediction, which
+                            // refuses a generation that is no longer live.
+                            // The id is the client's half: it lets a scanner
+                            // notice the change cheaply, and it is built from
+                            // this pill's own generation so it never changes
+                            // under a held element.
                             //
-                            // The generation in the id is the *client's* half:
-                            // it lets a scanner notice the change cheaply and
-                            // keeps an id from ever denoting two different
-                            // offers.  Do not "optimise" the model into a
-                            // reused list: that would trade the guarantee for
-                            // a few allocations.
                             // Named rather than inlined into the attached
                             // property, for the reason KeyButton's own block
                             // gives: an attached `Accessible.*` is unreadable
                             // from PySide, so anything expressed only there is
                             // untestable.
-                            property string scanTargetId: root.scanPredictionId(index)
+                            property string scanTargetId: root.scanPredictionId(index, pillGeneration)
+                            function scanInvoke() {
+                                return root.invokeScanPrediction(pillWord, pillGeneration)
+                            }
 
                             Accessible.role: Accessible.Button
-                            Accessible.name: modelData
+                            Accessible.name: pillWord
                             Accessible.id: scanTargetId
-                            Accessible.onPressAction: keyboard.pressPrediction(modelData)
+                            Accessible.onPressAction: scanInvoke()
 
                             // Subtle gradient for depth
                             Rectangle {
@@ -2658,7 +2688,7 @@ Window {
                                 anchors.leftMargin: predBar.predTextInset
                                 anchors.rightMargin: predBar.predTextInset
                                 horizontalAlignment: Text.AlignHCenter
-                                text: modelData
+                                text: pillWord
                                 // Predictions can originate from an imported
                                 // vocabulary pack's dictionary.txt, which is
                                 // unsanitised: force plain text so a crafted
@@ -2690,12 +2720,12 @@ Window {
                                         // the token store never reads.
                                         // Forgetting one is the dashboard's
                                         // Saved Numbers & Addresses.
-                                        if (keyboard && keyboard.isTokenPill(modelData))
+                                        if (keyboard && keyboard.isTokenPill(pillWord))
                                             return
                                         var pos = mapToItem(root.contentItem, mouse.x, mouse.y)
-                                        predContextMenu.showAt(modelData, pos.x, pos.y)
+                                        predContextMenu.showAt(pillWord, pos.x, pos.y)
                                     } else {
-                                        keyboard.pressPrediction(modelData)
+                                        keyboard.pressPrediction(pillWord)
                                     }
                                 }
                             }
@@ -2723,7 +2753,7 @@ Window {
                                 visible: predMouse.containsMouse && predText.truncated
                                 delay: 400
                                 contentItem: Text {
-                                    text: modelData
+                                    text: pillWord
                                     textFormat: Text.PlainText
                                     // The flat theme properties, not
                                     // root.theme.*: a Popup's contentItem is

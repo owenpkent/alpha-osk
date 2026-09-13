@@ -362,3 +362,31 @@ class TestTheCompositionRootIsTypeChecked:
                 "like the rest of the file tree now that its ctypes code "
                 "lives in src/platform/windows_window.py and macos_window.py"
             )
+
+
+class TestTheWindowIdDoesNotDependOnTheApplicationClass:
+    """An external switch scanner finds the keyboard window by its UI
+    Automation AutomationId, which Qt builds from the window's objectName
+    prefixed with the application object's name, or with the application's
+    C++ class name when it has none. Unnamed, the id was
+    ``QApplication.alphaOskKeyboard`` in the shipped keyboard and
+    ``QGuiApplication.alphaOskKeyboard`` in the test harness, and the
+    published contract named the second (docs/architecture/UIA_TARGETS.md)."""
+
+    def test_the_application_is_given_the_contract_name(self) -> None:
+        app = MagicMock()
+        keyboard_app._name_for_ui_automation(app)
+        app.setObjectName.assert_called_once_with("alphaOsk")
+
+    def test_the_name_is_the_one_the_contract_publishes(self) -> None:
+        doc = Path(keyboard_app.__file__).resolve().parent.parent / "docs" / "architecture"
+        text = (doc / "UIA_TARGETS.md").read_text(encoding="utf-8")
+        assert f"{keyboard_app.UIA_APPLICATION_NAME}.alphaOskKeyboard" in text
+
+    def test_main_names_the_application_it_builds(self) -> None:
+        """Source-level, for the reason ``test_main_pins_no_logger_to_debug``
+        gives: ``main()`` enters an event loop and cannot be executed here."""
+        source = Path(keyboard_app.__file__).read_text(encoding="utf-8")
+        body = source.split("def main(", 1)[1]
+        built = body.index("app = QApplication(")
+        assert "_name_for_ui_automation(app)" in body[built : built + 200]
