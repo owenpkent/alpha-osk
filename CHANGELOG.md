@@ -35,6 +35,8 @@ All notable changes to Alpha-OSK are documented in this file.
   The override list in `docs/build/RELEASE.md` had drifted from the file it documents, listing five versions that had since moved and omitting `ip-address` and `sharp` altogether. It now matches, and says which of the two to believe when it drifts again.
 
 ### Fixed
+- **Closing the keyboard from the taskbar minimizes it instead of making it vanish.** It used to disappear from the screen and the taskbar while still running, reachable only from the tray icon. It now drops to the taskbar like the minimize button. The close button on the keyboard itself and Quit in the tray still end it.
+
 - **Programmable key assignments are saved the same crash-safe way as every other store**, flushed to disk before the file is swapped into place, so a crash mid-save cannot leave a truncated `key_actions.json`.
 
 - **The developer dashboard (`python run.py --dashboard`) listens on this machine only** rather than on every network interface.

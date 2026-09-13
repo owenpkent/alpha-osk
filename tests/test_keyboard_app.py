@@ -488,5 +488,43 @@ class TestTheWindowIdDoesNotDependOnTheApplicationClass:
         gives: ``main()`` enters an event loop and cannot be executed here."""
         source = Path(keyboard_app.__file__).read_text(encoding="utf-8")
         body = source.split("def main(", 1)[1]
-        built = body.index("app = QApplication(")
+        built = body.index("app = _KeyboardApplication(")
         assert "_name_for_ui_automation(app)" in body[built : built + 200]
+
+
+class TestAQuitStillClosesTheKeyboard:
+    """The keyboard window refuses a close that is not part of a quit and
+    minimizes instead, so a UI Automation client's Close or the taskbar's
+    cannot leave it running but hidden. Qt 6 cancels a quit when a window
+    refuses to close, so the window has to be told when a quit begins, or
+    the title bar's close and the tray's Quit would stop working."""
+
+    def test_a_quit_is_passed_to_the_keyboard_window(self) -> None:
+        from PySide6.QtCore import QEvent
+
+        window = MagicMock()
+        keyboard_app._note_quit(QEvent.Type.Quit, window)
+        window.setProperty.assert_called_once_with("quitting", True)
+
+    def test_nothing_else_is(self) -> None:
+        from PySide6.QtCore import QEvent
+
+        window = MagicMock()
+        for event_type in (
+            QEvent.Type.Close,
+            QEvent.Type.ApplicationStateChange,
+            QEvent.Type.Timer,
+        ):
+            keyboard_app._note_quit(event_type, window)
+        window.setProperty.assert_not_called()
+
+    def test_main_builds_the_application_that_notices(self) -> None:
+        source = Path(keyboard_app.__file__).read_text(encoding="utf-8")
+        body = source.split("def main(", 1)[1]
+        assert "app = _KeyboardApplication(sys.argv)" in body
+        assert "app.keyboard_window = root" in body
+
+    def test_main_installs_the_quiet_restore(self) -> None:
+        source = Path(keyboard_app.__file__).read_text(encoding="utf-8")
+        body = source.split("def main(", 1)[1]
+        assert "windows_window.install_quiet_restore(root)" in body

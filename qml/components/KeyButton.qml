@@ -327,7 +327,16 @@ Item {
     readonly property string _scanDescription:
         (keyRoot.isToggleTarget && keyRoot.isLocked) ? "locked" : ""
     readonly property bool _scanChecked: keyRoot.isToggleTarget && keyRoot.isActive
-    readonly property bool _scanIgnored: keyRoot.targetId === ""
+    // A keyboard the user has put away offers nothing to activate.  While
+    // its window is minimized every key leaves the tree, and an Invoke on an
+    // element a scanner is still holding does nothing (see
+    // activateFromAssistiveClient), so "presence means activatable" holds
+    // across a minimize and nothing types through a keyboard that is not on
+    // screen.  Windows keeps a minimized window's elements in the tree and
+    // reports them onscreen, which is why this cannot be left to Qt.
+    readonly property bool _scanWindowShown:
+        Window.visibility !== Window.Minimized && Window.visibility !== Window.Hidden
+    readonly property bool _scanIgnored: keyRoot.targetId === "" || !keyRoot._scanWindowShown
 
     // Every binding below is a bare pass-through of a named property above,
     // and that is deliberate rather than incidental.  PySide cannot read an
@@ -391,6 +400,8 @@ Item {
     // rather than at the text field, and without it the only feedback that a
     // scan selection landed is a character appearing somewhere else on screen.
     function activateFromAssistiveClient() {
+        if (!keyRoot._scanWindowShown)
+            return
         if (!keyRoot._acceptPress())
             return
         keyRoot._visualPressed = true

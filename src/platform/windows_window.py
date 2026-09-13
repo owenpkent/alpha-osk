@@ -35,7 +35,9 @@ from __future__ import annotations
 
 import logging
 import sys
+from typing import Callable, Optional
 
+from PySide6.QtCore import QAbstractNativeEventFilter, QTimer
 from PySide6.QtGui import QWindow
 
 _logger = logging.getLogger("windows_window")
@@ -296,6 +298,135 @@ def apply_extended_styles(root: QWindow, *, taskbar_button: bool = False) -> Non
         _logger.info("Applied WS_EX_NOACTIVATE and placed the window in the topmost band")
     except Exception as e:
         _logger.warning("Failed to apply Windows extended styles: %s", e)
+
+
+WM_QUERYOPEN = 0x0013
+SW_SHOWNOACTIVATE = 4
+# MSG layout on 64-bit Windows: HWND hwnd (8 bytes), then UINT message.
+_MSG_MESSAGE_OFFSET = 8
+
+
+class QuietRestoreFilter(QAbstractNativeEventFilter):
+    """Bring the minimized keyboard back without taking the foreground.
+
+    **Why this exists.** Qt restores a minimized window with
+    ``ShowWindow(SW_SHOWNORMAL)`` whatever its flags, and restoring a
+    minimized window that way makes it the foreground window, the keyboard's
+    ``WS_EX_NOACTIVATE`` notwithstanding.  Measured on this keyboard: the
+    tray's restore code, a UI Automation client's
+    ``WindowPattern.SetWindowVisualState(Normal)`` and a plain
+    ``ShowWindow(SW_RESTORE)`` from another process all left the keyboard in
+    the foreground.  Keystrokes the keyboard sends next then go to the
+    keyboard rather than the application the user was typing into, and that
+    application sees its focus leave.  For an external switch scanner that
+    restores the keyboard on the user's behalf, that is a restore that
+    silently redirects the next word.
+
+    **How.** Windows asks a minimized window for permission with
+    ``WM_QUERYOPEN`` before every one of those restores.  This declines it
+    (a handled result of 0 means "do not open") and performs the restore
+    itself, one event-loop turn later, with ``SW_SHOWNOACTIVATE``.  That
+    restore asks permission too, so ``_restoring`` lets it through; without
+    that flag the keyboard declined its own restore in a loop and never came
+    back.  Stripping ``SWP_NOACTIVATE`` into ``WM_WINDOWPOSCHANGING`` was
+    tried first and changes nothing, because the activation on restore does
+    not go through the window-position flags.
+
+    **What it does not do.** It adds no capability: every route above could
+    already restore the window, and this only takes the activation out of
+    them.  It does not touch minimizing, which never took the foreground.
+
+    The message test is written against plain integers so it can be tested
+    on any platform; only the ``ShowWindow`` call is Windows-specific, and it
+    is injected.  Every message this process handles passes through
+    ``nativeEventFilter``, so it reads the one field it needs and returns.
+    """
+
+    def __init__(
+        self,
+        window: QWindow,
+        *,
+        show_window: Optional[Callable[[int, int], object]] = None,
+        defer: Optional[Callable[[Callable[[], None]], None]] = None,
+    ) -> None:
+        super().__init__()
+        self._window = window
+        self._show_window = show_window
+        self._defer = defer or (lambda fn: QTimer.singleShot(0, fn))
+        self._restoring = False
+
+    def declines(self, hwnd: int, message: int) -> bool:
+        """Whether this message is a restore to decline and redo quietly."""
+        if message != WM_QUERYOPEN or self._restoring:
+            return False
+        try:
+            if hwnd != int(self._window.winId()):
+                return False
+        except Exception:
+            return False
+        self._defer(lambda: self._restore_quietly(hwnd))
+        return True
+
+    def _restore_quietly(self, hwnd: int) -> None:
+        if self._show_window is None:
+            return
+        self._restoring = True
+        try:
+            self._show_window(hwnd, SW_SHOWNOACTIVATE)
+        except Exception as e:
+            _logger.warning("Quiet restore failed: %s", e)
+        finally:
+            self._restoring = False
+
+    def nativeEventFilter(self, eventType, message):  # type: ignore[no-untyped-def]
+        try:
+            import ctypes
+
+            address = int(message)
+            msg_id = ctypes.c_uint.from_address(address + _MSG_MESSAGE_OFFSET).value
+            if msg_id != WM_QUERYOPEN:
+                return False, 0
+            hwnd = ctypes.c_void_p.from_address(address).value or 0
+            if self.declines(int(hwnd), msg_id):
+                return True, 0
+        except Exception as e:
+            _logger.debug("Quiet-restore filter could not read a message: %s", e)
+        return False, 0
+
+
+def install_quiet_restore(window: QWindow) -> Optional[QuietRestoreFilter]:
+    """Make restoring the minimized keyboard leave the foreground alone.
+
+    Returns the filter, which the caller must keep a reference to: Qt does
+    not own an event filter installed from Python, and a collected one is a
+    dangling pointer on the message path.  ``None`` off Windows, or if
+    installation failed, which is never a reason to fail startup.
+    """
+    if sys.platform != "win32":
+        return None
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        from PySide6.QtCore import QCoreApplication
+
+        user32 = ctypes.windll.user32
+        user32.ShowWindow.argtypes = [wintypes.HWND, ctypes.c_int]
+        user32.ShowWindow.restype = wintypes.BOOL
+
+        def show_window(hwnd: int, cmd: int) -> object:
+            return user32.ShowWindow(wintypes.HWND(hwnd), cmd)
+
+        flt = QuietRestoreFilter(window, show_window=show_window)
+        app = QCoreApplication.instance()
+        if app is None:
+            return None
+        app.installNativeEventFilter(flt)
+        _logger.info("Restoring the keyboard will not take the foreground")
+        return flt
+    except Exception as e:
+        _logger.warning("Could not install the quiet-restore filter: %s", e)
+        return None
 
 
 def prefer_dwm_rounded_corners(window: QWindow) -> None:

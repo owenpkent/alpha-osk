@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import os
 import re
+import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -532,3 +533,127 @@ class TestHiddenSurfacesAreNotTargets:
         _settle(root)
         ids = [k.property("targetId") for k in _visible_keys(root)]
         assert [i for i in ids if i.startswith("aosk.v1.pad.")]
+
+
+def _minimize(root) -> None:
+    QMetaObject.invokeMethod(root, "showMinimized")
+    _settle(root)
+
+
+def _restore(root) -> None:
+    QMetaObject.invokeMethod(root, "showNormal")
+    _settle(root)
+
+
+class TestAMinimizedKeyboardOffersNothing:
+    """A keyboard the user has put away is not a target. Windows keeps a
+    minimized window's elements in the accessibility tree and reports them
+    onscreen, so without this a scanner would go on highlighting and
+    invoking keys that are not on screen, and "presence means activatable"
+    would be false for as long as the keyboard stays minimized."""
+
+    def _pills(self, root) -> list:
+        return TestPredictionPillsGetAFreshIdentity._pills(None, root)  # type: ignore[arg-type]
+
+    @pytest.fixture(autouse=True)
+    def _can_minimize(self, qml_root):
+        root, _, _ = qml_root
+        _minimize(root)
+        if root.property("scanWindowShown"):
+            pytest.skip("this platform plugin does not report a minimized window")
+        _restore(root)
+
+    def test_keys_leave_the_tree(self, qml_root):
+        root, _, _ = qml_root
+        keys = _visible_keys(root)
+        assert keys and not any(k.property("_scanIgnored") for k in keys)
+        _minimize(root)
+        assert all(k.property("_scanIgnored") for k in keys)
+
+    def test_and_come_back_when_it_is_restored(self, qml_root):
+        root, _, _ = qml_root
+        keys = _visible_keys(root)
+        _minimize(root)
+        _restore(root)
+        assert not any(k.property("_scanIgnored") for k in keys)
+
+    def test_a_held_key_types_nothing_while_minimized(self, qml_root):
+        root, _, bridge = qml_root
+        key = next(
+            k
+            for k in _visible_keys(root)
+            if str(k.property("targetId")).startswith("aosk.v1.grid.")
+        )
+        _minimize(root)
+        bridge._synth.reset_mock()
+        assert QMetaObject.invokeMethod(key, "activateFromAssistiveClient")
+        QCoreApplication.processEvents()
+        assert TestPredictionPillsGetAFreshIdentity._typed(bridge) == []
+
+    def test_the_same_key_types_once_restored(self, qml_root):
+        """The inverse, so a guard that refused everything cannot pass."""
+        root, _, bridge = qml_root
+        key = next(
+            k
+            for k in _visible_keys(root)
+            if str(k.property("targetId")).startswith("aosk.v1.grid.")
+        )
+        _minimize(root)
+        _restore(root)
+        bridge._synth.reset_mock()
+        assert QMetaObject.invokeMethod(key, "activateFromAssistiveClient")
+        QCoreApplication.processEvents()
+        assert TestPredictionPillsGetAFreshIdentity._typed(bridge)
+
+    def test_a_pill_leaves_the_tree_and_inserts_nothing(self, qml_root):
+        root, _, bridge = qml_root
+        bridge.predictionsChanged.emit(["hello", "help"])
+        _settle(root)
+        pill = self._pills(root)[0]
+        assert pill.property("scanIgnored") is False
+        _minimize(root)
+        assert pill.property("scanIgnored") is True
+        bridge._synth.reset_mock()
+        assert QMetaObject.invokeMethod(pill, "scanInvoke")
+        QCoreApplication.processEvents()
+        assert TestPredictionPillsGetAFreshIdentity._typed(bridge) == []
+
+    def test_the_beacon_moves_when_it_is_minimized(self, qml_root):
+        """A polling scanner learns of a minimize from the beacon alone."""
+        root, _, _ = qml_root
+        before = root.property("scanRevision")
+        _minimize(root)
+        minimized = root.property("scanRevision")
+        _restore(root)
+        assert minimized != before
+        assert root.property("scanRevision") != minimized
+
+
+class TestClosingTheKeyboardMinimizesIt:
+    """A close that is not a quit minimizes the keyboard. The taskbar's
+    Close and any UI Automation client's WindowPattern.Close both arrive
+    as one, and Qt's default hid the keyboard while leaving the process
+    running: off the taskbar, out of the tree, reachable only from the
+    tray. Measured against a live client before this change."""
+
+    @pytest.fixture(autouse=True)
+    def _windows_only(self):
+        if sys.platform != "win32":
+            pytest.skip("the close-to-minimize rule is Windows only")
+
+    def test_a_close_minimizes_rather_than_hiding(self, qml_root):
+        root, _, _ = qml_root
+        QMetaObject.invokeMethod(root, "close")
+        _settle(root)
+        assert root.property("visible") is True, "the keyboard was hidden by a close"
+        assert root.property("scanWindowShown") is False, "the close did not minimize it"
+
+    def test_a_quit_is_let_through(self, qml_root):
+        """The inverse, and the half that matters most: Qt cancels a quit
+        when a window refuses to close, so a keyboard that refused every
+        close would also refuse its own close button."""
+        root, _, _ = qml_root
+        root.setProperty("quitting", True)
+        QMetaObject.invokeMethod(root, "close")
+        _settle(root)
+        assert root.property("visible") is False

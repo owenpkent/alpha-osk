@@ -37,6 +37,27 @@ Window {
     // docs/architecture/UIA_TARGETS.md.
     objectName: "alphaOskKeyboard"
 
+    // Closing the keyboard window means minimizing it, unless the app is
+    // quitting.  A close reaches this window from the taskbar's Close and
+    // from any UI Automation client's WindowPattern.Close, and Qt's default
+    // left the process running with the keyboard hidden: not on the taskbar,
+    // not in the accessibility tree, reachable only from the tray.  A switch
+    // user's scanner could therefore make the keyboard vanish beyond its own
+    // reach, and a user who closed it from the taskbar lost it the same way.
+    // Minimized, it stays on the taskbar and in the tree, and any client can
+    // bring it back.  The title bar's close and the tray's Quit end the app
+    // as before: they quit, and keyboard_app.py sets `quitting` when a quit
+    // begins, which is what lets this close through (Qt 6 cancels a quit if
+    // a window refuses to close).  Windows only: the scanning contract is
+    // Windows, and a minimize is inert on a tucked X11 window.
+    property bool quitting: false
+    onClosing: function (close) {
+        if (Qt.platform.os !== "windows" || root.quitting)
+            return
+        close.accepted = false
+        root.showMinimized()
+    }
+
     // Persistent settings — saved automatically on change, restored on launch
     Settings {
         id: appSettings
@@ -647,7 +668,7 @@ Window {
     // element unreachable; this is the check that still holds if a later
     // change ever lets a pill survive a round, and it fails closed.
     function invokeScanPrediction(word, generation) {
-        if (generation !== root.predictionGeneration)
+        if (generation !== root.predictionGeneration || !root.scanWindowShown)
             return false
         keyboard.pressPrediction(word)
         return true
@@ -659,8 +680,14 @@ Window {
     // overlay needs and takes a full cached snapshot only when it changes.
     // Geometry is included directly because window drag and resize are the
     // changes with no other signal behind them.
+    // Whether the keyboard is on screen for scanning purposes.  Minimized (or,
+    // off Windows, hidden) takes every key and pill out of the target set;
+    // KeyButton reads the same thing through its own attached Window.
+    readonly property bool scanWindowShown:
+        root.visibility !== Window.Minimized && root.visibility !== Window.Hidden
     readonly property string scanRevision: [
         root.predictionGeneration,
+        root.visibility,
         Math.round(root.x), Math.round(root.y),
         Math.round(root.width), Math.round(root.height),
         root.currentLayout, root.compactView ? 1 : 0, root.activeLayer,
@@ -2671,7 +2698,12 @@ Window {
                                 return root.invokeScanPrediction(pillWord, pillGeneration)
                             }
 
+                            // Out of the tree while the keyboard is minimized,
+                            // for the reason KeyButton's _scanWindowShown gives.
+                            readonly property bool scanIgnored: !root.scanWindowShown
+
                             Accessible.role: Accessible.Button
+                            Accessible.ignored: scanIgnored
                             Accessible.name: pillWord
                             Accessible.id: scanTargetId
                             Accessible.onPressAction: scanInvoke()
