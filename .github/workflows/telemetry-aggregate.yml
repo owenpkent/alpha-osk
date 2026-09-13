@@ -55,7 +55,7 @@ jobs:
   aggregate:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # Full history. The data branch is fetched and pushed below, and a
           # shallow clone can have its push rejected as a shallow update.
