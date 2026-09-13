@@ -16,6 +16,35 @@ Window {
     minimumHeight: 200
     color: "transparent"
     title: "Alpha-OSK"
+    // Qt synthesises the window's UI Automation AutomationId from its
+    // objectName, prefixed with the application's own name, which
+    // keyboard_app.py pins: "alphaOsk.alphaOskKeyboard".  Pinning it gives an
+    // external scanner a stable anchor to find this window by, which the
+    // title cannot be (it is user-facing text) and the window class must not
+    // be (Qt generates it, and it changes under us on a Qt upgrade).  See
+    // docs/architecture/UIA_TARGETS.md.
+    objectName: "alphaOskKeyboard"
+
+    // Closing the keyboard window means minimizing it, unless the app is
+    // quitting.  A close reaches this window from the taskbar's Close and
+    // from any UI Automation client's WindowPattern.Close, and Qt's default
+    // left the process running with the keyboard hidden: not on the taskbar,
+    // not in the accessibility tree, reachable only from the tray.  A switch
+    // user's scanner could therefore make the keyboard vanish beyond its own
+    // reach, and a user who closed it from the taskbar lost it the same way.
+    // Minimized, it stays on the taskbar and in the tree, and any client can
+    // bring it back.  The title bar's close and the tray's Quit end the app
+    // as before: they quit, and keyboard_app.py sets `quitting` when a quit
+    // begins, which is what lets this close through (Qt 6 cancels a quit if
+    // a window refuses to close).  Windows only: the scanning contract is
+    // Windows, and a minimize is inert on a tucked X11 window.
+    property bool quitting: false
+    onClosing: function (close) {
+        if (Qt.platform.os !== "windows" || root.quitting)
+            return
+        close.accepted = false
+        root.showMinimized()
+    }
 
     // Persistent settings — saved automatically on change, restored on launch
     Settings {
@@ -592,6 +621,73 @@ Window {
     // Keyboard layout (data-driven from JSON)
     property var layoutRows: keyboard ? keyboard.getLayoutRows() : []
     property string currentLayout: appSettings.savedLayout
+
+    // ===== External switch-scanning targets =====
+    //
+    // The contract an external scanner (Switchify and any other Windows
+    // assistive technology) reads through UI Automation.  Normative
+    // description, including why each piece is shaped this way, is in
+    // docs/architecture/UIA_TARGETS.md; issue #106 is the conversation.
+    //
+    // The id scheme lives here and nowhere else.  Five surfaces draw
+    // scannable keys and a sixth draws the pills, and a second copy of this
+    // format string is the parallel-blocks failure this project keeps paying
+    // for: a surface that drifted would hand a scanner ids that collide with
+    // another section's, and the scanner cannot tell that from a relayout.
+    readonly property string scanContractVersion: "aosk.v1"
+    function scanTargetId(section, row, idx) {
+        return root.scanContractVersion + "." + section + "." + row + "." + idx
+    }
+
+    // Predictions get a generation rather than a bare slot, so that an id a
+    // scanner has already seen always denotes the same offer.  It is bumped
+    // whenever the pill row is repopulated, including a repopulation that
+    // happens to produce the same words: "the bar was rebuilt" is the event a
+    // stale selection has to be caught by, not "the text changed".
+    property int predictionGeneration: 0
+    onPredictionsChanged: root.predictionGeneration += 1
+    function scanPredictionId(idx, generation) {
+        return root.scanContractVersion + ".pred." + idx + ".g" + generation
+    }
+    // What a prediction pill's Invoke goes through.  A pill carries the
+    // generation it was built for and is refused once that generation is
+    // gone, so a pill object that outlived its round can never insert.  The
+    // per-round rebuild in the pill Repeater is what normally makes a stale
+    // element unreachable; this is the check that still holds if a later
+    // change ever lets a pill survive a round, and it fails closed.
+    function invokeScanPrediction(word, generation) {
+        if (generation !== root.predictionGeneration || !root.scanWindowShown)
+            return false
+        keyboard.pressPrediction(word)
+        return true
+    }
+
+    // One cheap thing for a scanner to poll.  Everything that can move a
+    // target, change its label, or change whether it is there at all feeds
+    // this string; the scanner reads one property at whatever rate its
+    // overlay needs and takes a full cached snapshot only when it changes.
+    // Geometry is included directly because window drag and resize are the
+    // changes with no other signal behind them.
+    // Whether the keyboard is on screen for scanning purposes.  Minimized (or,
+    // off Windows, hidden) takes every key and pill out of the target set;
+    // KeyButton reads the same thing through its own attached Window.
+    readonly property bool scanWindowShown:
+        root.visibility !== Window.Minimized && root.visibility !== Window.Hidden
+    readonly property string scanRevision: [
+        root.predictionGeneration,
+        root.visibility,
+        Math.round(root.x), Math.round(root.y),
+        Math.round(root.width), Math.round(root.height),
+        root.currentLayout, root.compactView ? 1 : 0, root.activeLayer,
+        root.showNumberRow ? 1 : 0, root.showFunctionRow ? 1 : 0,
+        root.showExtraFunctionRow ? 1 : 0, root.showNavigation ? 1 : 0,
+        root.showNumpad ? 1 : 0, root.suggestionsEnabled ? 1 : 0,
+        root.shiftOn ? 1 : 0, root.capsOn ? 1 : 0, root.ctrlOn ? 1 : 0,
+        root.altOn ? 1 : 0, root.winOn ? 1 : 0,
+        root.shiftLocked ? 1 : 0, root.ctrlLocked ? 1 : 0,
+        root.altLocked ? 1 : 0, root.winLocked ? 1 : 0,
+        root.visible ? 1 : 0
+    ].join(".")
 
     // ===== Compact view =====
     // A *view* preference, orthogonal to which letter arrangement is picked:
@@ -1354,6 +1450,24 @@ Window {
     // this back to true to keep the screenshots' corners.
     property bool selfRoundedCorners: Qt.platform.os !== "windows"
     readonly property real windowRadius: selfRoundedCorners ? 10 : 0
+
+    // The one property an external scanner polls.  Its Name is the revision
+    // string above; when that changes, something in the scanning contract
+    // moved and the scanner takes a fresh cached snapshot of the subtree.
+    // That keeps the steady-state cost at one cross-process property read
+    // rather than a walk of sixty-odd elements at overlay frame rate.
+    //
+    // It has to be `visible` to be in the accessibility tree at all (an
+    // invisible item is pruned), so it is a real but empty 1x1 item rather
+    // than `visible: false`.  It draws nothing.
+    Item {
+        objectName: "scanRevisionBeacon"
+        width: 1
+        height: 1
+        Accessible.role: Accessible.StaticText
+        Accessible.name: root.scanRevision
+        Accessible.id: root.scanContractVersion + ".revision"
+    }
 
     // Main background — uses Qt.rgba so only the background becomes transparent
     // while keys and text remain fully opaque
@@ -2512,10 +2626,29 @@ Window {
                         // above, unchanged): the study's predictions-off
                         // condition must not also change key geometry, which
                         // `suggestionsEnabled` would (STUDY_PROTOCOL.md 5.1).
+                        //
+                        // Each entry carries the prediction generation, and
+                        // that is what makes a stale scan selection harmless.
+                        // Repeater.setModel returns early when the new list
+                        // compares equal to the old one, so a round of
+                        // identical words used to keep the old pill objects,
+                        // and a scanner holding one could still Invoke it.
+                        // With the generation in every entry no two rounds
+                        // compare equal, the pills are rebuilt, and an
+                        // element from an earlier round is gone.  Do not
+                        // strip this back to a plain word list.
                         model: (root.suggestionsEnabled && !root.privacyMode
                                 && !root.dictationActive
-                                && !study.suppressPredictions) ? predRow.fit.words : []
+                                && !study.suppressPredictions)
+                               ? predRow.fit.words.map(function (w) {
+                                     return { word: w, generation: root.predictionGeneration }
+                                 })
+                               : []
                         delegate: Rectangle {
+                            // One pill is one offer: the word and the round
+                            // it was offered in, fixed for the object's life.
+                            readonly property string pillWord: modelData.word
+                            readonly property int pillGeneration: modelData.generation
                             width: index < predRow.fit.widths.length
                                    ? predRow.fit.widths[index]
                                    : predBar.predMinWidth
@@ -2527,6 +2660,41 @@ Window {
                                           ? Qt.lighter(root.predPillBorder, 1.2)
                                           : root.predPillBorder
                             border.width: predMouse.containsMouse ? 2 : 1
+
+                            // ===== Switch-scanning target =====
+                            //
+                            // The stale-selection guarantee (an outdated scan
+                            // selection can never insert a word the user was
+                            // not looking at) rests on two things.  The model
+                            // above is rebuilt every round, so an element from
+                            // an earlier round is destroyed and a scanner
+                            // holding it gets ElementNotAvailable.  And the
+                            // Invoke goes through invokeScanPrediction, which
+                            // refuses a generation that is no longer live.
+                            // The id is the client's half: it lets a scanner
+                            // notice the change cheaply, and it is built from
+                            // this pill's own generation so it never changes
+                            // under a held element.
+                            //
+                            // Named rather than inlined into the attached
+                            // property, for the reason KeyButton's own block
+                            // gives: an attached `Accessible.*` is unreadable
+                            // from PySide, so anything expressed only there is
+                            // untestable.
+                            property string scanTargetId: root.scanPredictionId(index, pillGeneration)
+                            function scanInvoke() {
+                                return root.invokeScanPrediction(pillWord, pillGeneration)
+                            }
+
+                            // Out of the tree while the keyboard is minimized,
+                            // for the reason KeyButton's _scanWindowShown gives.
+                            readonly property bool scanIgnored: !root.scanWindowShown
+
+                            Accessible.role: Accessible.Button
+                            Accessible.ignored: scanIgnored
+                            Accessible.name: pillWord
+                            Accessible.id: scanTargetId
+                            Accessible.onPressAction: scanInvoke()
 
                             // Subtle gradient for depth
                             Rectangle {
@@ -2552,7 +2720,7 @@ Window {
                                 anchors.leftMargin: predBar.predTextInset
                                 anchors.rightMargin: predBar.predTextInset
                                 horizontalAlignment: Text.AlignHCenter
-                                text: modelData
+                                text: pillWord
                                 // Predictions can originate from an imported
                                 // vocabulary pack's dictionary.txt, which is
                                 // unsanitised: force plain text so a crafted
@@ -2584,12 +2752,12 @@ Window {
                                         // the token store never reads.
                                         // Forgetting one is the dashboard's
                                         // Saved Numbers & Addresses.
-                                        if (keyboard && keyboard.isTokenPill(modelData))
+                                        if (keyboard && keyboard.isTokenPill(pillWord))
                                             return
                                         var pos = mapToItem(root.contentItem, mouse.x, mouse.y)
-                                        predContextMenu.showAt(modelData, pos.x, pos.y)
+                                        predContextMenu.showAt(pillWord, pos.x, pos.y)
                                     } else {
-                                        keyboard.pressPrediction(modelData)
+                                        keyboard.pressPrediction(pillWord)
                                     }
                                 }
                             }
@@ -2617,7 +2785,7 @@ Window {
                                 visible: predMouse.containsMouse && predText.truncated
                                 delay: 400
                                 contentItem: Text {
-                                    text: modelData
+                                    text: pillWord
                                     textFormat: Text.PlainText
                                     // The flat theme properties, not
                                     // root.theme.*: a Popup's contentItem is
@@ -2864,6 +3032,8 @@ Window {
                         objectName: "extraFunctionRowPanel"
                         visible: root.showExtraFunctionRow
                         Layout.alignment: Qt.AlignHCenter
+                        scanSection: "fn2"
+                        scanIdFor: root.scanTargetId
                         keyGroups: [
                             ["F13", "F14", "F15", "F16"],
                             ["F17", "F18", "F19", "F20"],
@@ -2893,6 +3063,8 @@ Window {
                         objectName: "functionRowPanel"
                         visible: root.showFunctionRow
                         Layout.alignment: Qt.AlignHCenter
+                        scanSection: "fn1"
+                        scanIdFor: root.scanTargetId
                         keyW: root.keyW
                         keyH: root.keyH * 0.7
                         keySpacing: root.keySpacing
@@ -2932,6 +3104,8 @@ Window {
                         objectName: "numberRowPanel"
                         visible: root.showNumberRow
                         Layout.alignment: Qt.AlignHCenter
+                        scanSection: "num"
+                        scanIdFor: root.scanTargetId
                         keyW: root.keyW
                         keyH: root.keyH
                         keySpacing: root.keySpacing
@@ -2963,6 +3137,10 @@ Window {
                         Layout.alignment: Qt.AlignHCenter
                         spacing: root.keySpacing
                         property var rowData: modelData
+                        // Visual row order, for the scan-target id below.  The
+                        // inner Repeater's own `index` is the key's slot, so the
+                        // row's has to be captured here before it is shadowed.
+                        property int rowIndex: index
                         property real rowKeyH: rowData.id === "number" ? root.keyH - 4 : root.keyH
 
                         // Equal unit totals are NOT equal pixel widths, and the
@@ -3021,6 +3199,11 @@ Window {
                                 hitMarginH: root.keyHitMarginH
                                 hitMarginV: root.keyHitMarginV
                                 fontSize: kd.fontSize || 16
+                                targetId: root.scanTargetId("grid", rowIndex, index)
+                                // A key with a stateKey is one that can be on or
+                                // off (the modifiers, Caps, NumLock); nothing else
+                                // reports a toggle state to a scanner.
+                                isToggleTarget: !!kd.stateKey
                                 isSpecial: kd.type !== "char"
                                 isActive: {
                                     if (!kd.stateKey) return false
@@ -3231,6 +3414,8 @@ Window {
                 // Flush with the grid on both rails; the panel divides
                 // this between its five rows itself.
                 Layout.preferredHeight: root.sectionHeight
+                scanSection: "nav"
+                scanIdFor: root.scanTargetId
                 roleColors: root.keyRoles
                 // Vertically off `keySpacing`, not `rowSpacing`: this
                 // panel lays its own rows out on it.
@@ -3260,6 +3445,8 @@ Window {
                 objectName: "numpadPanel"
                 visible: root.showNumpad
                 Layout.preferredHeight: root.sectionHeight
+                scanSection: "pad"
+                scanIdFor: root.scanTargetId
                 roleColors: root.keyRoles
                 // Vertically off `keySpacing`, not `rowSpacing`: this
                 // panel lays its own rows out on it.

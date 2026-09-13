@@ -4,6 +4,14 @@ All notable changes to Alpha-OSK are documented in this file.
 
 ## [Unreleased]
 
+### Added
+- **External switch scanners can now drive the keyboard on Windows.** Every key and every suggestion is published through Windows UI Automation, the interface assistive technology already uses. A switch-scanning app can find each one, draw its highlight over it, and press it for you, and a press behaves exactly like a click. It can also minimize the keyboard and bring it back without taking focus from the app you are typing into. It was built with the developer of Switchify PC, and any Windows-permitted assistive technology can use it, not one app in particular. Nothing new listens on your machine: there is no socket or background service, and Windows decides which programs may use it, as it does for screen readers.
+
+  **A suggestion you meant to pick can never be swapped for a different word.** If the suggestions change while a scanner is still highlighting an old one, pressing it does nothing, even when the new suggestions happen to spell the same words. A minimized keyboard offers nothing to press at all. The full contract, and how each part was verified, is in `docs/architecture/UIA_TARGETS.md`.
+
+### Fixed
+- **Closing the keyboard from the taskbar minimizes it instead of making it vanish.** It used to disappear from the screen and the taskbar while still running, reachable only from the tray icon. It now drops to the taskbar like the minimize button. The close button on the keyboard itself and Quit in the tray still end it.
+
 ### Security
 - **Two advisories published on 2026-09-08 against the Cloudflare Worker's dev dependencies are cleared.** `sharp` moves to 0.35.4 and `js-yaml` to 4.3.2. The sharp one (GHSA-rgj7-g3m4-5g8c, high) is not a flaw in sharp at all: it bundles libvips, libvips bundles libheif, and two libheif flaws reach the lockfile that way, so the fix is the libvips 1.3.3 rebuild that 0.35.4 pulls in. The js-yaml one (GHSA-2883-xcg3-v3hh, high) lets an empty merge source burn CPU without the limit that is supposed to bound it.
 

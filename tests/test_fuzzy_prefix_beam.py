@@ -40,6 +40,19 @@ def fr() -> FuzzyRecognizer:
     return recognizer
 
 
+def built_beam(fr: FuzzyRecognizer):
+    """The recognizer's prefix beam, built if nothing has built it yet.
+
+    The beam is built lazily on the first completion. Reading
+    ``_prefix_beam`` straight off the shared module fixture only worked when
+    an earlier test in the same process had already asked for a completion,
+    so these tests failed on their own and whenever xdist put them on a
+    worker without that test.
+    """
+    fr.word_generator.complete_prefix("zz", 1)
+    return fr.word_generator._prefix_beam
+
+
 def top(fr: FuzzyRecognizer, typed: str, n: int = 5, **kw) -> list[str]:
     return [w for w, _ in fr.get_fuzzy_predictions(typed, n, **kw)]
 
@@ -265,7 +278,7 @@ class TestATwoLetterMisClickDoesNotEmptyTheBar:
         # The inverse, and the reason this change cannot regress the common
         # path: wherever the typed run is somebody's opening, the beam stays
         # silent exactly as it did before.
-        beam = fr.word_generator._prefix_beam
+        beam = built_beam(fr)
         assert beam is not None
         speaking = [
             a + b
@@ -278,7 +291,7 @@ class TestATwoLetterMisClickDoesNotEmptyTheBar:
     def test_a_single_character_is_still_too_little_to_act_on(self, fr):
         # One character is one click and carries no evidence of anything; the
         # floor moved to two, not to nothing.
-        beam = fr.word_generator._prefix_beam
+        beam = built_beam(fr)
         assert beam is not None
         assert [c for c in string.ascii_lowercase if beam.complete(c, 5)] == []
         assert beam.complete("", 5) == []

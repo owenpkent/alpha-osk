@@ -362,3 +362,69 @@ class TestTheCompositionRootIsTypeChecked:
                 "like the rest of the file tree now that its ctypes code "
                 "lives in src/platform/windows_window.py and macos_window.py"
             )
+
+
+class TestTheWindowIdDoesNotDependOnTheApplicationClass:
+    """An external switch scanner finds the keyboard window by its UI
+    Automation AutomationId, which Qt builds from the window's objectName
+    prefixed with the application object's name, or with the application's
+    C++ class name when it has none. Unnamed, the id was
+    ``QApplication.alphaOskKeyboard`` in the shipped keyboard and
+    ``QGuiApplication.alphaOskKeyboard`` in the test harness, and the
+    published contract named the second (docs/architecture/UIA_TARGETS.md)."""
+
+    def test_the_application_is_given_the_contract_name(self) -> None:
+        app = MagicMock()
+        keyboard_app._name_for_ui_automation(app)
+        app.setObjectName.assert_called_once_with("alphaOsk")
+
+    def test_the_name_is_the_one_the_contract_publishes(self) -> None:
+        doc = Path(keyboard_app.__file__).resolve().parent.parent / "docs" / "architecture"
+        text = (doc / "UIA_TARGETS.md").read_text(encoding="utf-8")
+        assert f"{keyboard_app.UIA_APPLICATION_NAME}.alphaOskKeyboard" in text
+
+    def test_main_names_the_application_it_builds(self) -> None:
+        """Source-level, for the reason ``test_main_pins_no_logger_to_debug``
+        gives: ``main()`` enters an event loop and cannot be executed here."""
+        source = Path(keyboard_app.__file__).read_text(encoding="utf-8")
+        body = source.split("def main(", 1)[1]
+        built = body.index("app = _KeyboardApplication(")
+        assert "_name_for_ui_automation(app)" in body[built : built + 200]
+
+
+class TestAQuitStillClosesTheKeyboard:
+    """The keyboard window refuses a close that is not part of a quit and
+    minimizes instead, so a UI Automation client's Close or the taskbar's
+    cannot leave it running but hidden. Qt 6 cancels a quit when a window
+    refuses to close, so the window has to be told when a quit begins, or
+    the title bar's close and the tray's Quit would stop working."""
+
+    def test_a_quit_is_passed_to_the_keyboard_window(self) -> None:
+        from PySide6.QtCore import QEvent
+
+        window = MagicMock()
+        keyboard_app._note_quit(QEvent.Type.Quit, window)
+        window.setProperty.assert_called_once_with("quitting", True)
+
+    def test_nothing_else_is(self) -> None:
+        from PySide6.QtCore import QEvent
+
+        window = MagicMock()
+        for event_type in (
+            QEvent.Type.Close,
+            QEvent.Type.ApplicationStateChange,
+            QEvent.Type.Timer,
+        ):
+            keyboard_app._note_quit(event_type, window)
+        window.setProperty.assert_not_called()
+
+    def test_main_builds_the_application_that_notices(self) -> None:
+        source = Path(keyboard_app.__file__).read_text(encoding="utf-8")
+        body = source.split("def main(", 1)[1]
+        assert "app = _KeyboardApplication(sys.argv)" in body
+        assert "app.keyboard_window = root" in body
+
+    def test_main_installs_the_quiet_restore(self) -> None:
+        source = Path(keyboard_app.__file__).read_text(encoding="utf-8")
+        body = source.split("def main(", 1)[1]
+        assert "windows_window.install_quiet_restore(root)" in body
