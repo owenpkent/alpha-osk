@@ -257,7 +257,10 @@ def run_dashboard():
             print(f"[Dashboard] {args[0]}")
 
     handler = partial(DashboardHandler, directory=str(templates_dir))
-    with socketserver.TCPServer(("", port), handler) as httpd:
+    # Loopback only: an empty host binds every interface, which would serve
+    # this dev-only dashboard (and whatever the templates directory holds)
+    # to the whole LAN rather than just the machine running it.
+    with socketserver.TCPServer(("127.0.0.1", port), handler) as httpd:
         url = f"http://localhost:{port}"
         print(f"Dashboard: {url}")
         webbrowser.open(url)
