@@ -152,6 +152,11 @@ Defines `KeySynthesizerBase` with these abstract methods:
   sticky modifier (Ctrl+C flow) must land at the X server in the order
   Python issued them, and non-blocking `Popen` races lead to stuck
   modifiers. The ~10 ms cost per event is inaudible at typing cadence.
+- `_run()` logs a failure by tool, subcommand and error class only (`_describe`,
+  `_error_name`), never the command's arguments or the exception's message: for
+  `xdotool type` the arguments are the text being typed, `TimeoutExpired` quotes
+  the whole argv, and `alpha-osk.log` is what users attach to bug reports. The
+  full command goes to DEBUG through `_log_send`, which is off in normal operation.
 - `_run()` bounds every call with a 2.0s timeout (`_SUBPROCESS_TIMEOUT_S`).
   It runs synchronously on the Qt UI thread, so a wedged `xdotool` /
   `ydotool` child (a hung X server, a dead ydotoold socket) would otherwise

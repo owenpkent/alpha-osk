@@ -378,29 +378,48 @@ def _migrate_legacy_compat_settings() -> None:
     settings.sync()
 
 
-#: Sentinel recording that the one-time pre-fix log purge has run.  Its
-#: presence is the only state: the contents are informational.
+#: Sentinels recording that each one-time log purge has run.  Presence is
+#: the only state: the contents are informational.  Each is one generation
+#: of the typed-content fix, and a generation is never retired: an install
+#: that skipped every build in between still owes every purge it missed.
+#:
+#: Generation 1, every platform: releases up to and including 1.0.30
+#: logged the user's typed text from the bridge at INFO, including up to
+#: 200 characters of the context buffer, even while privacy mode was on.
 _LOG_PURGE_SENTINEL = ".log-privacy-purge"
+#: Generation 2, Linux only: releases up to and including 1.4.1 logged the
+#: whole ``xdotool type`` / ``ydotool type`` command line at ERROR when the
+#: tool stalled or failed, and the chorded key name at WARNING when no tool
+#: was installed (``src/platform/linux.py::_run`` / ``send_key``).  Only a
+#: Linux config dir can hold those records, and a purge costs the user
+#: their diagnostics, so the other platforms are not charged for it.
+_LOG_PURGE_SENTINEL_LINUX = ".log-privacy-purge-2"
 
 
-def _purge_pre_fix_logs(config_dir: Path) -> int:
-    """Delete diagnostic logs written before the typed-content fix.
+def _purge_pre_fix_logs(config_dir: Path, *, platform: str | None = None) -> int:
+    """Delete diagnostic logs written before a typed-content fix.
 
-    Releases up to and including 1.0.30 logged the user's typed text to
-    ``alpha-osk.log`` at INFO, including up to 200 characters of the
-    context buffer, and did so even while privacy mode was active.  The
-    logging sites are fixed, but that only stops *new* leakage: an
-    upgrading user still has up to four rotated files on disk holding a
-    transcript of what they typed, potentially including a password.
-    Purging them is part of the fix, not housekeeping.
+    Fixing a logging site only stops *new* leakage: an upgrading user
+    still has up to four rotated files on disk holding a transcript of
+    what they typed, potentially including a password.  Purging them is
+    part of the fix, not housekeeping.  Each fix is a generation with its
+    own sentinel (see the module constants).  The purge runs when any
+    generation that applies to *platform* has not run yet, then writes
+    every sentinel it owed, so it runs once per generation and a user who
+    later wants to keep logs across restarts is not fighting us.
 
-    Runs once, guarded by a sentinel, so a user who later wants to keep
-    logs across restarts is not fighting us.  Returns the number of
-    files removed.  Never raises: a failure here must not stop the
+    *platform* defaults to the running one; the parameter exists so the
+    tests can exercise every branch on one machine.  Returns the number
+    of files removed.  Never raises: a failure here must not stop the
     keyboard from starting.
     """
-    sentinel = config_dir / _LOG_PURGE_SENTINEL
-    if sentinel.exists():
+    if platform is None:
+        platform = CURRENT_PLATFORM
+    generations = [config_dir / _LOG_PURGE_SENTINEL]
+    if platform == "linux":
+        generations.append(config_dir / _LOG_PURGE_SENTINEL_LINUX)
+    owed = [sentinel for sentinel in generations if not sentinel.exists()]
+    if not owed:
         return 0
 
     removed = 0
@@ -412,12 +431,13 @@ def _purge_pre_fix_logs(config_dir: Path) -> int:
                 removed += 1
             except OSError:
                 # A locked or already-gone file is not worth failing over;
-                # the sentinel still gets written so we do not retry forever.
+                # the sentinels still get written so we do not retry forever.
                 continue
-        sentinel.write_text(
-            f"purged={removed} version={__version__}\n",
-            encoding="utf-8",
-        )
+        for sentinel in owed:
+            sentinel.write_text(
+                f"purged={removed} version={__version__}\n",
+                encoding="utf-8",
+            )
     except OSError:
         return removed
     return removed

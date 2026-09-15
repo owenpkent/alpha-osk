@@ -428,9 +428,12 @@ class MacOSKeySynthesizer(KeySynthesizerBase):
             if not modifiers:
                 self.send_text(key_name)
                 return
+            # The key name is what the user pressed, so only its length
+            # reaches the log: no record at INFO or above may carry typed
+            # content, and privacy mode cannot gate this layer.
             _logger.warning(
-                "No keycode for %r and modifiers %s — dropping",
-                key_name,
+                "No keycode for a %d-character key with modifiers %s: dropping",
+                len(key_name),
                 modifiers,
             )
             return

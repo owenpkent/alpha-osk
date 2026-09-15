@@ -26,6 +26,7 @@ import pytest
 import src.keyboard_app as keyboard_app
 from src.keyboard_app import (
     _LOG_PURGE_SENTINEL,
+    _LOG_PURGE_SENTINEL_LINUX,
     _configure_logging,
     _install_exception_hooks,
     _purge_pre_fix_logs,
@@ -93,6 +94,85 @@ class TestPurgePreFixLogs:
         removed = _purge_pre_fix_logs(missing)
 
         assert removed == 0
+
+
+class TestTheSecondLogPurge:
+    """Generation 2 of the purge: the Linux synthesizer's own leak.
+
+    Releases up to 1.4.1 logged the whole ``xdotool type`` command at
+    ERROR when the tool stalled or failed, so a Linux install that already
+    ran the first purge holds new transcripts and owes a second one.  Only
+    a Linux config dir can hold those records, and a purge costs the user
+    their diagnostics, so the other platforms are not charged for it.
+    Each Linux case is paired with the platform that must be left alone.
+    """
+
+    def test_a_linux_install_that_ran_the_first_purge_purges_again_once(
+        self, tmp_path: Path
+    ) -> None:
+        _seed_logs(tmp_path)
+        (tmp_path / _LOG_PURGE_SENTINEL).write_text("generation 1", encoding="utf-8")
+
+        removed = _purge_pre_fix_logs(tmp_path, platform="linux")
+
+        assert removed == 4
+        assert (tmp_path / _LOG_PURGE_SENTINEL_LINUX).is_file()
+
+        # Logs written by the fixed build are safe and must survive.
+        (tmp_path / "alpha-osk.log").write_text("post-fix", encoding="utf-8")
+        assert _purge_pre_fix_logs(tmp_path, platform="linux") == 0
+        assert (tmp_path / "alpha-osk.log").exists()
+
+    @pytest.mark.parametrize("platform", ["windows", "macos"])
+    def test_other_platforms_that_ran_the_first_purge_keep_their_logs(
+        self, tmp_path: Path, platform: str
+    ) -> None:
+        """Their logs never held these records; deleting them costs diagnostics for nothing."""
+        _seed_logs(tmp_path)
+        (tmp_path / _LOG_PURGE_SENTINEL).write_text("generation 1", encoding="utf-8")
+
+        removed = _purge_pre_fix_logs(tmp_path, platform=platform)
+
+        assert removed == 0
+        assert len(list(tmp_path.glob("alpha-osk.log*"))) == 4
+        assert not (tmp_path / _LOG_PURGE_SENTINEL_LINUX).exists()
+
+    @pytest.mark.parametrize("platform", ["windows", "macos", "linux"])
+    def test_an_install_that_never_purged_still_purges_everywhere(
+        self, tmp_path: Path, platform: str
+    ) -> None:
+        """Generation 1 applied to every platform, and a generation is never retired."""
+        _seed_logs(tmp_path)
+
+        removed = _purge_pre_fix_logs(tmp_path, platform=platform)
+
+        assert removed == 4
+        assert (tmp_path / _LOG_PURGE_SENTINEL).is_file()
+
+    def test_a_fresh_linux_install_marks_both_generations_done(self, tmp_path: Path) -> None:
+        removed = _purge_pre_fix_logs(tmp_path, platform="linux")
+
+        assert removed == 0
+        assert (tmp_path / _LOG_PURGE_SENTINEL).is_file()
+        assert (tmp_path / _LOG_PURGE_SENTINEL_LINUX).is_file()
+
+    def test_the_default_platform_is_the_running_one(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``_configure_logging`` passes no platform, so the default has to be right."""
+        monkeypatch.setattr(keyboard_app, "CURRENT_PLATFORM", "linux")
+        (tmp_path / _LOG_PURGE_SENTINEL).write_text("generation 1", encoding="utf-8")
+        _seed_logs(tmp_path)
+
+        assert _purge_pre_fix_logs(tmp_path) == 4
+
+        monkeypatch.setattr(keyboard_app, "CURRENT_PLATFORM", "windows")
+        other = tmp_path / "windows"
+        other.mkdir()
+        (other / _LOG_PURGE_SENTINEL).write_text("generation 1", encoding="utf-8")
+        _seed_logs(other)
+
+        assert _purge_pre_fix_logs(other) == 0
 
 
 @pytest.fixture
