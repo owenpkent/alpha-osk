@@ -387,13 +387,17 @@ def _migrate_legacy_compat_settings() -> None:
 #: logged the user's typed text from the bridge at INFO, including up to
 #: 200 characters of the context buffer, even while privacy mode was on.
 _LOG_PURGE_SENTINEL = ".log-privacy-purge"
-#: Generation 2, Linux only: releases up to and including 1.4.1 logged the
-#: whole ``xdotool type`` / ``ydotool type`` command line at ERROR when the
-#: tool stalled or failed, and the chorded key name at WARNING when no tool
-#: was installed (``src/platform/linux.py::_run`` / ``send_key``).  Only a
-#: Linux config dir can hold those records, and a purge costs the user
-#: their diagnostics, so the other platforms are not charged for it.
-_LOG_PURGE_SENTINEL_LINUX = ".log-privacy-purge-2"
+#: Generation 2, Linux and macOS: releases up to and including 1.4.1 had a
+#: typed-content site in each of those synthesizers.  ``linux.py`` logged
+#: the whole ``xdotool type`` / ``ydotool type`` command line at ERROR when
+#: the tool stalled or failed, and the chorded key name at WARNING when no
+#: tool was installed; ``macos.py`` logged a chorded key that had no
+#: keycode by its character at WARNING.  The Windows synthesizer had no
+#: such site, so a Windows config dir cannot hold these records, and since
+#: a purge costs the user their diagnostics it is not charged for one.
+_LOG_PURGE_SENTINEL_2 = ".log-privacy-purge-2"
+#: The platforms whose synthesizer carried a generation-2 site.
+_LOG_PURGE_2_PLATFORMS = ("linux", "macos")
 
 
 def _purge_pre_fix_logs(config_dir: Path, *, platform: str | None = None) -> int:
@@ -416,8 +420,8 @@ def _purge_pre_fix_logs(config_dir: Path, *, platform: str | None = None) -> int
     if platform is None:
         platform = CURRENT_PLATFORM
     generations = [config_dir / _LOG_PURGE_SENTINEL]
-    if platform == "linux":
-        generations.append(config_dir / _LOG_PURGE_SENTINEL_LINUX)
+    if platform in _LOG_PURGE_2_PLATFORMS:
+        generations.append(config_dir / _LOG_PURGE_SENTINEL_2)
     owed = [sentinel for sentinel in generations if not sentinel.exists()]
     if not owed:
         return 0
