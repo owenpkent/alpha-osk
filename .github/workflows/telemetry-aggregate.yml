@@ -87,12 +87,19 @@ jobs:
           # committed as a row of zeros, which is worse than no row.
           body=$(curl --fail --silent --show-error --max-time 30 "${ENDPOINT%/}/v1/aggregate")
 
+          # Every field must be a number before it is written: @csv quotes a
+          # string correctly but leaves a leading =, +, - or @ in place, and a
+          # spreadsheet opening the committed file would run it as a formula.
+          # Only a compromised worker could send one, so this is the cheap
+          # second-order guard, not the first line.
           row=$(printf '%s' "$body" | jq -er '
             [
-              (now | strftime("%Y-%m-%d")),
               .users, .keystrokes, .words, .predictions,
               .keystrokes_saved, .minutes, .sessions, .prediction_offers
-            ] | @csv
+            ] as $n
+            | if ($n | all(type == "number")) then
+                [(now | strftime("%Y-%m-%d"))] + $n | @csv
+              else error("aggregate returned a non-numeric field") end
           ')
 
           git config user.name "github-actions[bot]"

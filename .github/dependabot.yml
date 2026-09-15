@@ -21,3 +21,20 @@ updates:
     labels:
       - "dependencies"
       - "github-actions"
+
+  # The Cloudflare Worker's lockfile was scanned by CI's OSV job only when
+  # something else was pushed; the two advisories it did catch needed a
+  # manual fix. Same minor-and-patch grouping as pip, so the auto-merge
+  # workflow treats it the same way.
+  - package-ecosystem: "npm"
+    directory: "/backend/cf-worker"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+    groups:
+      npm-minor-and-patch:
+        update-types:
+          - "minor"
+          - "patch"
