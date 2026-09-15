@@ -20,7 +20,6 @@ Active design docs for the engine, the platform abstraction, and the user-facing
 - [`architecture/FUZZY_RECOGNITION.md`](architecture/FUZZY_RECOGNITION.md): spatial error correction, tunable constants, the relationship to SymSpell.
 - [`architecture/PREDICTION_NOTES.md`](architecture/PREDICTION_NOTES.md): the "unified system" framing across the predictors, fragment filter and repetition gate, autocorrect thresholds, reinforcement and backspace-as-negative-signal, the structured-token store for numbers and email addresses, prioritised future work.
 - [`architecture/PLATFORM_ARCHITECTURE.md`](architecture/PLATFORM_ARCHITECTURE.md): cross-platform abstraction details (key synthesis, password-field detection, config paths).
-- [`architecture/ARCHITECTURE_REVIEW_2026-09-10.md`](architecture/ARCHITECTURE_REVIEW_2026-09-10.md): dated architecture assessment and prioritized recommendations for failure handling, data restore, interaction ownership, settings and responsiveness.
 - [`architecture/COMPACT_VIEW.md`](architecture/COMPACT_VIEW.md): the denser 13x4 keyboard for small screens, its measurements, and the layer model behind `?123`.
 - [`architecture/MODULAR_LAYOUTS.md`](architecture/MODULAR_LAYOUTS.md): custom keyboard layouts inspired by Octavium / Nimbus.
 - [`architecture/DICTATION.md`](architecture/DICTATION.md): voice input. The Qt-only audio and websocket stack, the four-state run model, where the Deepgram API key lives, and why privacy mode cancels a run outright.
@@ -29,6 +28,7 @@ Active design docs for the engine, the platform abstraction, and the user-facing
 - [`architecture/LONG_PRESS_ALTERNATES.md`](architecture/LONG_PRESS_ALTERNATES.md): long-press accent picker design (deferred; rationale in the doc).
 - [`architecture/EXTRA_BUTTONS.md`](architecture/EXTRA_BUTTONS.md): brainstorm of beyond-keyboard button options.
 - [`architecture/TELEMETRY.md`](architecture/TELEMETRY.md): opt-in usage-stats pipeline (payload schema, anon_id lifecycle, backend, deployment workflow).
+- [`architecture/STRUCTURAL_REVIEW.md`](architecture/STRUCTURAL_REVIEW.md): whole-repository structural review at v1.2.2 (1 September 2026), its recommended sequence, and the live status table of what landed (#55 to #62).
 
 ## `build/`: packaging, signing, releases, updates
 
@@ -68,6 +68,7 @@ Reference material that informed the design but isn't a living spec. Useful for 
 - [`research/TRAINING_DATA_STRATEGY.md`](research/TRAINING_DATA_STRATEGY.md): training-data sourcing strategy.
 - [`research/STRATEGIC_OPPORTUNITIES.md`](research/STRATEGIC_OPPORTUNITIES.md): strategic positioning notes.
 - [`research/SECURITY_AUDIT.md`](research/SECURITY_AUDIT.md): the security-audit record: the April and August 2026 passes and the September 2026 follow-up, each finding with its fix, plus the candidates that were verified and declined.
+- [`research/ARCHITECTURE_REVIEW_2026-09-10.md`](research/ARCHITECTURE_REVIEW_2026-09-10.md): dated architecture assessment of v1.4.1 plus the unmerged #108. A confirmed typed-content leak in the Linux platform layer's error logging, fixed since in #120 with the purge the fix needed, false-success reports in the release build and snippet persistence, and prioritised recommendations for input failure contracts, transactional restore, interaction and settings ownership, and responsiveness.
 - [`research/LLM_ONBOARDING.md`](research/LLM_ONBOARDING.md): early AI-onboarding doc (largely superseded by [`../CLAUDE.md`](../CLAUDE.md)).
 - [`research/LLM_ONBOARDING_TEMPLATE.md`](research/LLM_ONBOARDING_TEMPLATE.md): template for the above.
 - [`research/CONSTELLATION_INTEGRATION_GUIDE.md`](research/CONSTELLATION_INTEGRATION_GUIDE.md): Constellation cross-project integration guide.
