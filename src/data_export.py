@@ -36,7 +36,11 @@ Import validates every entry:
 - per-file uncompressed size is capped (``_MAX_FILE_BYTES``);
 - total uncompressed size is capped (``_MAX_TOTAL_UNCOMPRESSED``);
 - only members matching the expected layout are extracted; anything
-  else is silently ignored.
+  else is silently ignored;
+- every member the import is about to write is read in full, against
+  the same caps, before any live file is replaced, so a corrupt or
+  oversize member fails the import while the destination is still
+  intact (see ``_prevalidate_extractable_members``).
 
 Replace semantics
 -----------------
@@ -52,8 +56,10 @@ from __future__ import annotations
 
 import json
 import logging
+import lzma
 import shutil
 import zipfile
+import zlib
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -253,7 +259,9 @@ def _validate_archive_entry(entry: zipfile.ZipInfo) -> None:
         )
 
 
-def _bounded_copy(src_f: IO[bytes], dst_f: IO[bytes], name: str, total_before: int) -> int:
+def _bounded_copy(
+    src_f: IO[bytes], dst_f: Optional[IO[bytes]], name: str, total_before: int
+) -> int:
     """Copy *src_f* to *dst_f*, capping on bytes actually read, not on the
     zip's declared (and forgeable) ``file_size``.
 
@@ -273,6 +281,31 @@ def _bounded_copy(src_f: IO[bytes], dst_f: IO[bytes], name: str, total_before: i
     too: every failure importing a member should look the same to the
     caller, whether the entry lies about its size or is simply corrupt.
 
+    A corrupt *compressed* stream is a different failure from a bad CRC,
+    and each of the four compression methods ``zipfile`` supports fails
+    in its own way: ``zlib.error`` for deflate, ``EOFError`` when the
+    compressed data ends before ``compress_left`` says it should (any
+    method), ``lzma.LZMAError`` for the LZMA wrapper, and a bare
+    ``OSError`` (message ``"Invalid data stream"``) from the C ``bz2``
+    module, which has no dedicated exception type of its own. All four
+    are translated here for the same reason ``BadZipFile`` already is:
+    without this, a corrupt second member aborted ``import_user_data``
+    with a raw ``zlib.error`` after the first member had already
+    replaced a good file on disk, which is exactly the half-applied
+    state this whole function exists to prevent. Catching bare
+    ``OSError`` here is safe specifically because the ``try`` below
+    wraps only the *read* off ``src_f``: a write failure on ``dst_f``
+    (disk full, permission denied) happens on a separate line outside
+    this ``try`` and is never caught here, so it still propagates as an
+    ordinary ``OSError`` rather than being reported as a corrupt
+    archive.
+
+    *dst_f* is ``None`` for the pre-validation pass
+    (``_prevalidate_extractable_members``): every byte is still read,
+    decompressed and counted against both caps, it is just never
+    written anywhere, since that pass exists only to prove the member
+    is well-formed before anything is extracted for real.
+
     Returns the new running total across the whole import so the caller
     can thread it into the next entry.
     """
@@ -281,7 +314,7 @@ def _bounded_copy(src_f: IO[bytes], dst_f: IO[bytes], name: str, total_before: i
     while True:
         try:
             chunk = src_f.read(_COPY_CHUNK_BYTES)
-        except zipfile.BadZipFile as exc:
+        except (zipfile.BadZipFile, zlib.error, EOFError, lzma.LZMAError, OSError) as exc:
             raise DataExportError(
                 f"Archive entry {name!r} failed an integrity check: {exc}"
             ) from exc
@@ -299,7 +332,8 @@ def _bounded_copy(src_f: IO[bytes], dst_f: IO[bytes], name: str, total_before: i
                 f"Archive uncompressed size exceeds cap while extracting "
                 f"({total} > {_MAX_TOTAL_UNCOMPRESSED})"
             )
-        dst_f.write(chunk)
+        if dst_f is not None:
+            dst_f.write(chunk)
 
 
 def _allowed_archive_member(name: str) -> bool:
@@ -378,8 +412,8 @@ def inspect_export(src: Path) -> ExportSummary:
 
 
 def _flatten_imported_snippet_newlines(snippets_path: Path) -> None:
-    """Replace carriage return / newline with a space in every value of an
-    imported ``snippets.json``.
+    """Replace carriage return / newline / tab with a space in every value
+    of an imported ``snippets.json``.
 
     Called only right after the file has been extracted and replaced as
     part of an import (see the caller). Best-effort and non-fatal by
@@ -390,6 +424,17 @@ def _flatten_imported_snippet_newlines(snippets_path: Path) -> None:
     to seeded defaults for anything it cannot parse, so the worst case of
     skipping this step is the user's snippets resetting to defaults on
     next load, not a security regression.
+
+    A tab is flattened for the same reason ``\\r`` / ``\\n`` are: it is a
+    real keystroke on both synthesizers too (Windows resolves it to
+    ``VK_TAB``, ``xdotool type`` types it), and Tab moves focus to
+    whatever control is next in the app the snippet is typed into rather
+    than inserting a character. ``SnippetStore._clean_value`` deliberately
+    *keeps* tabs (and newlines) in a locally authored snippet, because the
+    user typed and reviewed that value themselves before it reached disk;
+    only an imported value, which this repo's own import preview never
+    shows the contents of, has to be treated as something that might be
+    trying to act as a keypress rather than hold text.
     """
     try:
         data = json.loads(snippets_path.read_text(encoding="utf-8"))
@@ -401,8 +446,8 @@ def _flatten_imported_snippet_newlines(snippets_path: Path) -> None:
             if not isinstance(item, dict):
                 continue
             value = item.get("value")
-            if isinstance(value, str) and ("\r" in value or "\n" in value):
-                item["value"] = value.replace("\r", " ").replace("\n", " ")
+            if isinstance(value, str) and ("\r" in value or "\n" in value or "\t" in value):
+                item["value"] = value.replace("\r", " ").replace("\n", " ").replace("\t", " ")
                 changed = True
         if not changed:
             return
@@ -431,12 +476,61 @@ def _flatten_imported_snippet_newlines(snippets_path: Path) -> None:
         )
 
 
+def _prevalidate_extractable_members(src: Path) -> None:
+    """Read every member :func:`import_user_data` is about to write, in
+    full, before it writes any of them.
+
+    ``inspect_export`` (which every import already calls first) only
+    checks each entry's *declared* metadata: names, and the forgeable
+    ``file_size`` field from the central directory. It never decompresses
+    anything, so a member that is well-formed on paper but has a corrupt
+    compressed stream (a flipped bit in a deflate block, a truncated
+    bzip2 or LZMA stream) sails through it. Without this pass that
+    corruption was only discovered by ``_bounded_copy`` mid-extraction,
+    which for a *second* model file meant the first one had already
+    replaced a good file in ``config_dir`` with no way back except the
+    rescue archive: exactly the half-applied import this function exists
+    to prevent.
+
+    Streams each allow-listed member (the model files that are actually
+    present, plus every pack file ``_allowed_archive_member`` would let
+    through: this is deliberately the same predicate the real extraction
+    loops in :func:`import_user_data` use, so what gets dry-run here is
+    exactly what would get written for real) through :func:`_bounded_copy`
+    with ``dst_f=None``, so the same per-file and cross-entry caps and the
+    same corruption checks run against real decompressed bytes with
+    nothing written to disk and nothing kept in memory.
+
+    This means the archive is opened and read twice per import: once
+    here, once more in the real extraction loops below. That is an
+    accepted cost. An export is capped at ``_MAX_ARCHIVE_BYTES`` (200 MB
+    on disk), this runs once per user-initiated import rather than on any
+    hot path, and the alternative (validating and extracting in the same
+    pass) is exactly the design that let a corrupt second member leave
+    the first one already replaced.
+    """
+    with zipfile.ZipFile(src, "r") as zf:
+        total = 0
+        for entry in zf.infolist():
+            if not _allowed_archive_member(entry.filename):
+                continue
+            _validate_archive_entry(entry)
+            with zf.open(entry) as src_f:
+                total = _bounded_copy(src_f, None, entry.filename, total)
+
+
 def import_user_data(src: Path, config_dir: Path) -> ExportSummary:
     """Replace the user data in *config_dir* with the contents of *src*.
 
     Before overwriting anything, the current state is written to a
     rescue archive in ``<config_dir>/exports/`` so the user can revert.
     Rescue export failures are logged but do not abort the import.
+
+    Every member the import would write is then proven readable, in
+    full and within the caps, before any of them are touched (see
+    :func:`_prevalidate_extractable_members`) -- so a corrupt or
+    oversize member fails the import while every pre-existing file in
+    *config_dir* is still exactly as it was.
 
     Model files are replaced via tempfile-then-rename so a partial
     write does not corrupt the existing file. Packs are full-replace:
@@ -456,6 +550,12 @@ def import_user_data(src: Path, config_dir: Path) -> ExportSummary:
         export_user_data(config_dir, rescue_path)
     except DataExportError as exc:
         _logger.warning("Rescue export failed (continuing import anyway): %s", exc)
+
+    # Dry-run every member below before any of them is written for real.
+    # Must run after the rescue export (so a rescue exists to roll back
+    # to even though nothing below will need it) and before the first
+    # live file is touched (see the function's own docstring for why).
+    _prevalidate_extractable_members(src)
 
     with zipfile.ZipFile(src, "r") as zf:
         archive_names = {e.filename for e in zf.infolist()}
@@ -496,13 +596,16 @@ def import_user_data(src: Path, config_dir: Path) -> ExportSummary:
         # user constructed and reviewed it before it ever reached disk. A
         # value arriving from an imported archive was never reviewed here
         # (the import preview does not show snippet contents), so it is
-        # untrusted: flatten every carriage return and newline in every
-        # imported value to a single space, so an imported snippet can
-        # never carry a payload that behaves like a Return keypress (Enter
-        # on Linux via `xdotool type`, line-terminating input on a Windows
-        # console) the first time the user taps it. This only touches the
-        # file the loop above just wrote; a pre-existing snippets.json that
-        # this archive did not include is left alone.
+        # untrusted: flatten every carriage return, newline AND tab in
+        # every imported value to a single space, so an imported snippet
+        # can never carry a payload that behaves like a Return keypress
+        # (Enter on Linux via `xdotool type`, line-terminating input on a
+        # Windows console) or a Tab keypress (VK_TAB on Windows, typed as
+        # Tab by `xdotool type` on Linux; either way it moves focus to
+        # whatever control is next in the app, rather than inserting a
+        # character) the first time the user taps it. This only touches
+        # the file the loop above just wrote; a pre-existing snippets.json
+        # that this archive did not include is left alone.
         if "snippets.json" in archive_names:
             _flatten_imported_snippet_newlines(config_dir / "snippets.json")
 
