@@ -1805,8 +1805,9 @@ class KeyboardBridge(QObject):
             # `_current_word` of "gm" that it reset at the "@" anyway.
             #
             # The old gate here was `if char.isalpha()`, which is why a
-            # digit used to blank the bar outright.
-            if char.isalpha() or self._in_token_context():
+            # digit used to blank the bar outright, and why the apostrophe
+            # of a contraction did too until `_continues_a_word` took over.
+            if self._continues_a_word(char) or self._in_token_context():
                 self._refresh_prediction_bar()
             else:
                 self._clear_token_pills()
@@ -3358,6 +3359,30 @@ class KeyboardBridge(QObject):
     # ------------------------------------------------------------------
     #  Structured-token predictions (numbers, phone numbers, emails)
     # ------------------------------------------------------------------
+
+    def _continues_a_word(self, char: str) -> bool:
+        """Does this keystroke leave a run the word engine can complete?
+
+        Letters always do.  The apostrophe and the underscore are word
+        characters too, the same set `_press_char` keeps in
+        `_current_word` so that "don't" and "snake_case" stay single
+        tokens, but only *inside* a word: a leading one carries no prefix
+        of its own, so asking the engine about it buys nothing and costs a
+        round trip on the keystroke path.
+
+        The apostrophe is the half that was missing.  Typing "don" offers
+        "don't" at the top of the bar, and the `'` used to blank the bar
+        outright, one click short of the word; "i'" threw away the four
+        pills ("I'm", "I'll", "I'd", "I've") that are the whole reason
+        to type an apostrophe there.  That is the same oversight the digit
+        had, one character class over, and it is deliberately a separate
+        question from the word-character rule in `_press_char`: that one
+        decides what `_current_word` keeps, this one decides whether the
+        run so far is worth asking about.
+        """
+        if char.isalpha():
+            return True
+        return char in ("'", "_") and any(c.isalpha() for c in self._current_word)
 
     def _in_token_context(self) -> bool:
         """Is the run before the cursor a structured token in progress?
