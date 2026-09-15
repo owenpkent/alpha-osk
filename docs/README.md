@@ -66,7 +66,7 @@ Reference material that informed the design but isn't a living spec. Useful for 
 - [`research/PREDICTION_OPTIONS.md`](research/PREDICTION_OPTIONS.md): exploration of prediction-stack options.
 - [`research/TRAINING_DATA_STRATEGY.md`](research/TRAINING_DATA_STRATEGY.md): training-data sourcing strategy.
 - [`research/STRATEGIC_OPPORTUNITIES.md`](research/STRATEGIC_OPPORTUNITIES.md): strategic positioning notes.
-- [`research/SECURITY_AUDIT.md`](research/SECURITY_AUDIT.md): security-audit record from the hardening pass.
+- [`research/SECURITY_AUDIT.md`](research/SECURITY_AUDIT.md): the security-audit record: the April and August 2026 passes and the September 2026 follow-up, each finding with its fix, plus the candidates that were verified and declined.
 - [`research/LLM_ONBOARDING.md`](research/LLM_ONBOARDING.md): early AI-onboarding doc (largely superseded by [`../CLAUDE.md`](../CLAUDE.md)).
 - [`research/LLM_ONBOARDING_TEMPLATE.md`](research/LLM_ONBOARDING_TEMPLATE.md): template for the above.
 - [`research/CONSTELLATION_INTEGRATION_GUIDE.md`](research/CONSTELLATION_INTEGRATION_GUIDE.md): Constellation cross-project integration guide.

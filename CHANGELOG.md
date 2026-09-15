@@ -10,6 +10,16 @@ All notable changes to Alpha-OSK are documented in this file.
 - **The nightly telemetry workflow moved from `actions/checkout` v4 to v7, pinned to the v7.0.1 commit** like every other workflow here. Dependabot proposed the bump as a bare `@v7` tag; pinning it by commit keeps that workflow consistent with the rest, and Dependabot keeps pins in that form current from now on.
 
 ### Security
+- **The installer no longer runs anything it reads from the registry when it offers to remove an older version, and its Add/Remove Programs entry now sits with the other machine-wide entries.** When a previous Alpha-OSK was recorded in another folder, the installer used to run that entry's uninstall command with its administrator rights after asking you, and the entry lived in a part of the registry any program running as you can write. A program planted there would have been one Yes away from running as administrator. It never was: the installer overwrote the entry before reading it, which also meant the offer never appeared. It now appears when it should, runs only Alpha-OSK's own uninstaller from under Program Files, never a command it read, and answers No on its own during a silent update.
+
+- **A crafted backup archive can no longer plant a word count that breaks typing.** A model file with a non-number where a count belongs loaded without complaint; the shipped vocabulary then failed to load and the next completion of that word raised an error on the typing path. Every count is now checked as the file loads and a bad one is dropped.
+
+- **A damaged backup archive can no longer leave your data half restored.** Every file the restore is about to write is read in full first, against the same size limits, so a corrupt entry stops the restore while every existing file is still intact. A tab character inside an imported snippet is flattened to a space, as line breaks already were, because Tab is a keystroke that moves focus.
+
+- **"Show more", "Show less" and "Remove" on a suggestion, and the Debug Console, now respect paused learning** the way tapping a suggestion already did.
+
+- **Deleting your contributed usage statistics removes both database rows explicitly**, rather than relying on the database's cascade rule, and the published aggregate series refuses a non-numeric value rather than writing it into the CSV. The worker's own dependencies are now watched by Dependabot. The audit behind these is recorded in `docs/research/SECURITY_AUDIT.md`.
+
 - **Two advisories published on 2026-09-08 against the Cloudflare Worker's dev dependencies are cleared.** `sharp` moves to 0.35.4 and `js-yaml` to 4.3.2. The sharp one (GHSA-rgj7-g3m4-5g8c, high) is not a flaw in sharp at all: it bundles libvips, libvips bundles libheif, and two libheif flaws reach the lockfile that way, so the fix is the libvips 1.3.3 rebuild that 0.35.4 pulls in. The js-yaml one (GHSA-2883-xcg3-v3hh, high) lets an empty merge source burn CPU without the limit that is supposed to bound it.
 
   **Neither reaches anyone running the keyboard.** Both arrive as dev-only transitive dependencies of Wrangler, the local development tool: sharp through miniflare, js-yaml through the SBOM generator. Nothing in that chain is bundled into the installer or deployed to the edge runtime. What they do block is development, because the OSV gate is `fail-on-vuln: true` deliberately, so a new advisory against anything in that lockfile fails CI on every pull request until it is pinned away. Both were already covered by the `overrides` block and simply needed their floors raised, which is the block working as intended rather than a gap in it.
@@ -17,6 +27,10 @@ All notable changes to Alpha-OSK are documented in this file.
   The override list in `docs/build/RELEASE.md` had drifted from the file it documents, listing five versions that had since moved and omitting `ip-address` and `sharp` altogether. It now matches, and says which of the two to believe when it drifts again.
 
 ### Fixed
+- **Programmable key assignments are saved the same crash-safe way as every other store**, flushed to disk before the file is swapped into place, so a crash mid-save cannot leave a truncated `key_actions.json`.
+
+- **The developer dashboard (`python run.py --dashboard`) listens on this machine only** rather than on every network interface.
+
 - **On Linux, a stalled or missing `xdotool` no longer writes what you were typing into the diagnostic log.** When the tool timed out or failed, the log recorded the whole command it had been given, and for typed text that command *is* the text, password fields included, since pausing learning never stops the keyboard from typing. With no tool installed at all, each chorded key was logged by name, and on macOS a chorded key the layout had no keycode for was logged by character. A failure now names the tool, the subcommand and the kind of error, and nothing else. The old records are already on disk for anyone who hit this, so the first launch of this build on Linux or macOS deletes the existing log and its rotations once, as the fix for the earlier logging leak did; Windows logs never held these records and are left alone.
 
 ## [1.4.1] (2026-09-08)
