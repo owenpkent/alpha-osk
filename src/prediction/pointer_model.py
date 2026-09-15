@@ -98,7 +98,17 @@ class PointerModel:
         return ((sx + PRIOR * gx) / (n + PRIOR), (sy + PRIOR * gy) / (n + PRIOR))
 
     def correct(self, slot: str, dx: float, dy: float) -> Tuple[float, float]:
-        """``(dx, dy)`` with the learned bias for ``slot`` taken out."""
+        """``(dx, dy)`` with the learned bias for ``slot`` taken out.
+
+        A non-finite offset reads as the key centre. ``observe`` already
+        refuses one; letting it through here would put a NaN position into
+        the prefix beam's spatial scoring, where every comparison against
+        it is False. The bridge's slots take arbitrary floats from QML.
+        """
+        if not (math.isfinite(dx) and math.isfinite(dy)):
+            dx, dy = 0.0, 0.0
+        dx = max(-MAX_OFFSET, min(MAX_OFFSET, dx))
+        dy = max(-MAX_OFFSET, min(MAX_OFFSET, dy))
         bx, by = self.bias(slot)
         return (dx - bx, dy - by)
 
