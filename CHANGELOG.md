@@ -16,6 +16,9 @@ All notable changes to Alpha-OSK are documented in this file.
 
   The override list in `docs/build/RELEASE.md` had drifted from the file it documents, listing five versions that had since moved and omitting `ip-address` and `sharp` altogether. It now matches, and says which of the two to believe when it drifts again.
 
+### Fixed
+- **On Linux, a stalled or missing `xdotool` no longer writes what you were typing into the diagnostic log.** When the tool timed out or failed, the log recorded the whole command it had been given, and for typed text that command *is* the text, password fields included, since pausing learning never stops the keyboard from typing. With no tool installed at all, each chorded key was logged by name, and on macOS a chorded key the layout had no keycode for was logged by character. A failure now names the tool, the subcommand and the kind of error, and nothing else. The old records are already on disk for anyone who hit this, so the first launch of this build on Linux or macOS deletes the existing log and its rotations once, as the fix for the earlier logging leak did; Windows logs never held these records and are left alone.
+
 ## [1.4.1] (2026-09-08)
 
 ### Changed

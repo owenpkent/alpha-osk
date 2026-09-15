@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import ntpath
 import subprocess
 import sys
@@ -421,6 +422,160 @@ class TestLinuxRunTimeout:
 
         monkeypatch.setattr(linux_mod.subprocess, "run", fake_run)
         linux_mod._run(["xdotool", "key", "a"])  # must not raise
+
+
+class TestLinuxDiagnosticsNeverCarryTypedText:
+    """No record at INFO or above from the Linux synthesizer may hold typed text.
+
+    Regression: ``_run`` logged the whole command at ERROR on a timeout
+    or any other failure, and ``send_text`` builds that command as
+    ``xdotool type --clearmodifiers -- <text>``, so on a host where
+    xdotool stalled ``alpha-osk.log`` recorded the characters typed,
+    password fields included (privacy mode deliberately still types, so
+    it cannot gate this layer).  ``send_key`` also logged the key name at
+    WARNING when no tool was installed, and the bridge's chord path hands
+    it the typed letter.  ``alpha-osk.log`` is the file users attach to
+    bug reports.
+
+    Every negative case is paired with the positive half: a record *is*
+    still emitted and still names the tool and subcommand, so a fix that
+    simply deleted the logging would fail here too.
+    """
+
+    SECRET = "hunter2-Secr3t"
+
+    @staticmethod
+    def _make_synth(tool):
+        from src.platform import linux as linux_mod
+
+        synth = linux_mod.LinuxKeySynthesizer.__new__(linux_mod.LinuxKeySynthesizer)
+        synth._tool = tool
+        return synth
+
+    @staticmethod
+    def _failing_run(monkeypatch, exc_factory):
+        from src.platform import linux as linux_mod
+
+        def fake_run(cmd, **kwargs):
+            raise exc_factory(cmd, kwargs)
+
+        monkeypatch.setattr(linux_mod.subprocess, "run", fake_run)
+
+    @staticmethod
+    def _loud(caplog):
+        return [r for r in caplog.records if r.levelno >= logging.INFO]
+
+    def test_a_timed_out_type_command_logs_no_text(self, monkeypatch, caplog):
+        self._failing_run(
+            monkeypatch,
+            lambda cmd, kw: subprocess.TimeoutExpired(cmd=cmd, timeout=kw.get("timeout", 0)),
+        )
+        synth = self._make_synth("xdotool")
+
+        with caplog.at_level(logging.INFO, logger="LinuxKeySynthesizer"):
+            synth.send_text(self.SECRET)
+
+        loud = self._loud(caplog)
+        assert [r.levelno for r in loud] == [logging.ERROR]
+        message = loud[0].getMessage()
+        assert self.SECRET not in message
+        assert "xdotool type" in message
+        assert "timed out" in message
+
+    def test_a_failed_command_logs_neither_the_text_nor_the_exception_message(
+        self, monkeypatch, caplog
+    ):
+        # The exception's own message quotes the command, as TimeoutExpired's
+        # does for real, so str(exc) is as unsafe as cmd itself.
+        self._failing_run(monkeypatch, lambda cmd, kw: OSError(2, f"cannot exec {cmd!r}"))
+        synth = self._make_synth("xdotool")
+
+        with caplog.at_level(logging.INFO, logger="LinuxKeySynthesizer"):
+            synth.send_text(self.SECRET)
+
+        loud = self._loud(caplog)
+        assert [r.levelno for r in loud] == [logging.ERROR]
+        message = loud[0].getMessage()
+        assert self.SECRET not in message
+        assert "xdotool type" in message
+        # What a bug report needs survives: the class and the errno.
+        assert "FileNotFoundError" in message
+        assert "errno 2" in message
+
+    def test_a_replace_text_timeout_on_ydotool_logs_no_text(self, monkeypatch, caplog):
+        # replace_text is the other path that puts typed text on a command
+        # line, and ydotool is the other tool name the record must carry.
+        self._failing_run(
+            monkeypatch,
+            lambda cmd, kw: subprocess.TimeoutExpired(cmd=cmd, timeout=kw.get("timeout", 0)),
+        )
+        synth = self._make_synth("ydotool")
+
+        with caplog.at_level(logging.INFO, logger="LinuxKeySynthesizer"):
+            synth.replace_text(3, self.SECRET)
+
+        loud = self._loud(caplog)
+        assert loud, "a stalled backend must still leave a record"
+        assert all(self.SECRET not in r.getMessage() for r in loud)
+        assert any(r.getMessage().startswith("ydotool ") for r in loud)
+
+    def test_a_missing_tool_logs_no_key_name(self, monkeypatch, caplog):
+        from src.platform import linux as linux_mod
+
+        calls: list[list[str]] = []
+        monkeypatch.setattr(linux_mod, "_run", lambda cmd: calls.append(cmd))
+        synth = self._make_synth(None)
+
+        with caplog.at_level(logging.INFO, logger="LinuxKeySynthesizer"):
+            synth.send_key(self.SECRET, modifiers=["ctrl"])
+
+        loud = self._loud(caplog)
+        assert [r.levelno for r in loud] == [logging.WARNING]
+        assert self.SECRET not in loud[0].getMessage()
+        assert calls == []
+
+    def test_an_empty_command_is_described_without_indexing_it(self, monkeypatch, caplog):
+        from src.platform import linux as linux_mod
+
+        self._failing_run(monkeypatch, lambda cmd, kw: ValueError("no command"))
+
+        with caplog.at_level(logging.INFO, logger="LinuxKeySynthesizer"):
+            linux_mod._run([])  # must not raise
+
+        loud = self._loud(caplog)
+        assert [r.levelno for r in loud] == [logging.ERROR]
+        assert "ValueError" in loud[0].getMessage()
+
+
+class TestMacOSDiagnosticsNeverCarryTypedText:
+    """The macOS synthesizer's one loud site that sees a key name names no key.
+
+    ``send_key`` warns when a chorded key has no keycode.  The bridge's
+    chord path hands it the typed letter, so the record carries the key's
+    length and the modifiers, never the key itself.  Paired with the
+    positive half: the warning is still emitted and nothing is posted.
+    """
+
+    SECRET = "hunter2-Secr3t"
+
+    def test_a_chord_with_no_keycode_logs_no_key_name(self, monkeypatch, caplog):
+        from src.platform import macos as macos_mod
+
+        synth = macos_mod.MacOSKeySynthesizer.__new__(macos_mod.MacOSKeySynthesizer)
+        synth._available = True
+        monkeypatch.setattr(synth, "_resolve_keycode", lambda name: None)
+        posted: list = []
+        monkeypatch.setattr(synth, "_post_keycode", lambda *args: posted.append(args))
+
+        with caplog.at_level(logging.INFO):
+            synth.send_key(self.SECRET, modifiers=["ctrl"])
+
+        loud = [r for r in caplog.records if r.levelno >= logging.INFO]
+        assert [r.levelno for r in loud] == [logging.WARNING]
+        message = loud[0].getMessage()
+        assert self.SECRET not in message
+        assert "ctrl" in message
+        assert posted == []
 
 
 class TestWindowsReplaceText:

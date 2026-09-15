@@ -106,17 +106,49 @@ _CHAR_TO_KEYSYM: Dict[str, str] = {
 _SUBPROCESS_TIMEOUT_S = 2.0
 
 
+def _describe(cmd: List[str]) -> str:
+    """Name a command by its tool and subcommand, never by its arguments.
+
+    The arguments are typed content: ``send_text`` and ``replace_text``
+    build ``xdotool type --clearmodifiers -- <text>``, so a record that
+    carries ``cmd`` is a transcript of what the user typed, and privacy
+    mode cannot gate it because privacy mode deliberately still types.
+    The first two elements are always the binary and its subcommand.
+    """
+    return " ".join(cmd[:2]) if cmd else "(empty command)"
+
+
+def _error_name(exc: BaseException) -> str:
+    """The exception's class and errno, without its message.
+
+    An exception string can quote the command (``TimeoutExpired`` repeats
+    the whole argv), so only the class name and, for an ``OSError``, the
+    errno reach the log. Those two are what a bug report needs: a missing
+    binary reads ``FileNotFoundError (errno 2)`` either way.
+    """
+    errno_value = getattr(exc, "errno", None)
+    name = type(exc).__name__
+    if isinstance(errno_value, int):
+        return f"{name} (errno {errno_value})"
+    return name
+
+
 def _run(cmd: List[str]) -> None:
     """Run a key-synthesis command synchronously.
 
     Modifier events MUST be ordered correctly relative to the key events
-    they wrap — if ``keydown ctrl`` / ``keyup ctrl`` are fired as
+    they wrap: if ``keydown ctrl`` / ``keyup ctrl`` are fired as
     ``subprocess.Popen`` with no wait, they race each other and the
     target app can see the ``keyup`` first, leaving Ctrl stuck held.
-    ``subprocess.run`` blocks until the tool exits (~5–15 ms), which is
+    ``subprocess.run`` blocks until the tool exits (~5 to 15 ms), which is
     negligible for key input and guarantees event ordering. The call is
     bounded by ``timeout=_SUBPROCESS_TIMEOUT_S`` so a wedged backend
     raises ``TimeoutExpired`` instead of blocking that thread forever.
+
+    A failure is logged by tool, subcommand and error class only (see
+    ``_describe`` and ``_error_name``). ``alpha-osk.log`` is the file
+    users attach to bug reports, and no record at INFO or above may carry
+    typed content; the full command is what ``_log_send`` puts at DEBUG.
     """
     try:
         subprocess.run(
@@ -127,9 +159,9 @@ def _run(cmd: List[str]) -> None:
             timeout=_SUBPROCESS_TIMEOUT_S,
         )
     except subprocess.TimeoutExpired:
-        _logger.error("Command timed out after %.1fs: %s", _SUBPROCESS_TIMEOUT_S, cmd)
+        _logger.error("%s timed out after %.1fs", _describe(cmd), _SUBPROCESS_TIMEOUT_S)
     except Exception as exc:
-        _logger.error("Command failed %s: %s", cmd, exc)
+        _logger.error("%s failed: %s", _describe(cmd), _error_name(exc))
 
 
 class LinuxKeySynthesizer(KeySynthesizerBase):
@@ -220,7 +252,9 @@ class LinuxKeySynthesizer(KeySynthesizerBase):
                        press+release.
         """
         if not self._tool:
-            _logger.warning("No synth tool — cannot send key: %s", key_name)
+            # The key name is what the user pressed: the bridge's chord path
+            # hands the typed letter through here. It stays out of the log.
+            _logger.warning("No synth tool: cannot send key")
             return
 
         modifiers = modifiers or []
