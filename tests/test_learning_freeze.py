@@ -12,6 +12,7 @@ unable to learn.
 
 from __future__ import annotations
 
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -289,21 +290,45 @@ class TestPredictionStillWorksWhileFrozen:
 # ----------------------------------------------------------------------
 
 
+def _nested(table: dict) -> dict:
+    return {k: dict(v) for k, v in table.items()}
+
+
 def _snapshot(predictor: HybridPredictor) -> dict:
-    """Everything a study session must leave exactly as it found it."""
+    """Everything a study session must leave exactly as it found it.
+
+    The *sub-threshold* stores below are the reason this is not simply
+    the tables the dashboard displays.  An unknown word does not reach
+    ``user_vocab`` until its third sighting and a blacklisted one is not
+    released until its third, so a snapshot of the visible tables alone
+    reports "nothing moved" for the first two sightings of either, and a
+    guard that had stopped covering them would look perfectly frozen.
+    The same goes for PPM, which ``learn`` trains and ``save`` persists
+    but which appears in none of the n-gram tables, and for the user
+    half of the context tables, whose changes can round away in the
+    merged view.
+    """
     ngram = predictor._ngram
     return {
         "unigrams": dict(ngram.unigrams),
         "user_vocab": dict(ngram.user_vocab),
         "user_total": ngram._user_total,
-        "bigrams": {k: dict(v) for k, v in ngram.bigrams.items()},
-        "trigrams": {k: dict(v) for k, v in ngram.trigrams.items()},
+        "bigrams": _nested(ngram.bigrams),
+        "trigrams": _nested(ngram.trigrams),
+        "user_bigrams": _nested(ngram._user_bigrams),
+        "user_trigrams": _nested(ngram._user_trigrams),
         "capitalization": dict(ngram.capitalization),
         "blacklist": set(ngram.blacklist),
         "dispreference": dict(ngram.dispreference),
         "preferred": dict(ngram.preferred),
         "pointer": {k: tuple(v) for k, v in predictor._fuzzy.pointer._slots.items()},
         "tokens": dict(ngram.tokens.tokens),
+        # Sub-threshold and out-of-table learned state.
+        "candidate_counts": dict(ngram._candidate_counts),
+        "candidate_last_seen": dict(ngram._candidate_last_seen),
+        "blacklist_type_count": dict(ngram._blacklist_type_count),
+        "ppm_total_chars": getattr(predictor._ppm, "total_chars", None),
+        "ppm_word_total": getattr(predictor._ppm_word, "total_chars", None),
     }
 
 
@@ -323,6 +348,14 @@ _RECIPES = {
     "unlearn_word": (
         lambda p: _promote_to_known(p, "zorblat"),
         lambda p: p.unlearn_word("zorblat"),
+    ),
+    # Below the promotion threshold: moves only the candidate pool and
+    # PPM, which is exactly the hole the extended snapshot closes.
+    "learn:below promotion": (None, lambda p: p.learn("quixotic zephyr")),
+    # Below the rehabilitation threshold: moves only the sighting count.
+    "record_typed_word:below rehabilitation": (
+        _prime_blacklisted,
+        lambda p: p.record_typed_word("help"),
     ),
     "learn_token": (None, lambda p: p.learn_token("555-1234")),
     "learn_from_selection": (None, lambda p: p.learn_from_selection("help", "hel")),
@@ -357,7 +390,18 @@ _RECIPES = {
         lambda p: _promote_to_known(p, "zorblat"),
         lambda p: p.clear_user_data(),
     ),
+    "load_corpus": (None, lambda p: p.load_corpus(_corpus_file())),
+    "load_ppm_training_text": (None, lambda p: p.load_ppm_training_text(_corpus_file())),
 }
+
+
+def _corpus_file() -> Path:
+    """A small corpus on disk, for the two loaders that take a path."""
+    directory = Path(tempfile.mkdtemp())
+    path = directory / "corpus.txt"
+    path.write_text("hello there quixotic zephyr\n" * 20, encoding="utf-8")
+    return path
+
 
 #: Mutates learned state and the freeze must stop it.
 _MUST_FREEZE = frozenset(
@@ -396,8 +440,52 @@ _LEAKS_PENDING_DECISION = frozenset(
     }
 )
 
+#: Mutates learned state but is outside the freeze by design.
+#:
+#: These are administrative rather than learning: corpus and pack loading
+#: build the *base* the user's model sits on, and reload/save move it to
+#: and from disk.  None is on the keystroke path and the corpus loaders
+#: have no production caller at all, so none is an ordinary-typing leak.
+#: They are listed here rather than with the readers because the claim
+#: this inventory makes is that every learned-state mutation has been
+#: identified, and calling them non-mutating would make that claim false:
+#: `load_corpus` moves `unigrams`, `user_vocab`, `_user_total` and both
+#: context tables, and `load_ppm_training_text` trains the PPM trie.
+#:
+#: Whether a study session should be able to reach any of them is the
+#: same open question as _LEAKS_PENDING_DECISION, and is not settled here.
+_MUTATES_OUTSIDE_THE_FREEZE = frozenset(
+    {
+        "load_corpus",
+        "load_ppm_training_text",
+        "enable_vocabulary_pack",
+        "disable_vocabulary_pack",
+        "import_vocabulary_pack",
+        "reload_from_disk",
+        "save",
+    }
+)
+
+#: Members of the bucket above that are probed, and what the rest need.
+#:
+#: The pack and disk APIs want a fixture this module does not build (an
+#: importable pack directory, a written model file), and they are covered
+#: by tests/test_vocabulary_pack.py and tests/test_data_export.py.  Naming
+#: them here keeps "classified but unprobed" explicit rather than letting
+#: a bucket membership imply a probe that does not exist.
+_NO_RECIPE_NEEDS_FIXTURE = frozenset(
+    {
+        "enable_vocabulary_pack",
+        "disable_vocabulary_pack",
+        "import_vocabulary_pack",
+        "reload_from_disk",
+        "save",
+    }
+)
+
+
 #: Reviewed and does not mutate learned state: readers, predictors, Qt
-#: signals, pack and corpus loading, and configuration.
+#: signals and configuration.
 _NOT_LEARNING_STATE = frozenset(
     {
         "autocorrectSuggested",
@@ -407,8 +495,6 @@ _NOT_LEARNING_STATE = frozenset(
         "learning_frozen",
         "llm_available",
         "merge_strategy",
-        "disable_vocabulary_pack",
-        "enable_vocabulary_pack",
         "frozen_learning",
         "get_available_packs",
         "get_capitalized",
@@ -417,10 +503,7 @@ _NOT_LEARNING_STATE = frozenset(
         "get_stats",
         "get_unigram_freqs",
         "get_user_packs_dir",
-        "import_vocabulary_pack",
         "llmAvailableChanged",
-        "load_corpus",
-        "load_ppm_training_text",
         "modelLoading",
         "packsChanged",
         "predict",
@@ -430,8 +513,6 @@ _NOT_LEARNING_STATE = frozenset(
         "predictionsReady",
         "predictionsRefined",
         "reload_dictionary",
-        "reload_from_disk",
-        "save",
         "set_key_positions",
         "set_merge_strategy",
     }
@@ -459,34 +540,76 @@ class TestTheInventoryIsExhaustive:
         is why adding a mutation to this class can no longer quietly skip
         the freeze.
         """
-        classified = _MUST_FREEZE | _LEAKS_PENDING_DECISION | _NOT_LEARNING_STATE
+        classified = (
+            _MUST_FREEZE
+            | _LEAKS_PENDING_DECISION
+            | _MUTATES_OUTSIDE_THE_FREEZE
+            | _NOT_LEARNING_STATE
+        )
         actual = _public_methods()
 
         unclassified = actual - classified
         assert not unclassified, (
             f"new public method(s) {sorted(unclassified)} on HybridPredictor. "
             "Decide whether each mutates learned state and add it to "
-            "_MUST_FREEZE, _LEAKS_PENDING_DECISION or _NOT_LEARNING_STATE "
-            "in this file. If it mutates, give it a recipe in _RECIPES too."
+            "_MUST_FREEZE, _LEAKS_PENDING_DECISION, "
+            "_MUTATES_OUTSIDE_THE_FREEZE or _NOT_LEARNING_STATE in this "
+            "file. If it mutates, give it a recipe in _RECIPES too."
         )
 
         stale = classified - actual
         assert not stale, f"classified method(s) {sorted(stale)} no longer exist"
 
     def test_the_buckets_do_not_overlap(self) -> None:
-        assert not (_MUST_FREEZE & _LEAKS_PENDING_DECISION)
-        assert not (_MUST_FREEZE & _NOT_LEARNING_STATE)
-        assert not (_LEAKS_PENDING_DECISION & _NOT_LEARNING_STATE)
+        buckets = (
+            _MUST_FREEZE,
+            _LEAKS_PENDING_DECISION,
+            _MUTATES_OUTSIDE_THE_FREEZE,
+            _NOT_LEARNING_STATE,
+        )
+        for i, left in enumerate(buckets):
+            for right in buckets[i + 1 :]:
+                assert not (left & right), sorted(left & right)
 
     def test_every_mutating_method_has_a_recipe(self) -> None:
-        """Otherwise a method could be called mutating and never probed."""
-        mutating = _MUST_FREEZE | _LEAKS_PENDING_DECISION
-        assert mutating - set(_RECIPES) == set()
-        assert set(_RECIPES) - mutating == set()
+        """Otherwise a method could be called mutating and never probed.
+
+        ``_NO_RECIPE_NEEDS_FIXTURE`` is the one exemption, and it is an
+        explicit list with a reason rather than a silent gap.
+        """
+        mutating = _MUST_FREEZE | _LEAKS_PENDING_DECISION | _MUTATES_OUTSIDE_THE_FREEZE
+        # Recipe keys may carry a ":variant" suffix for a second case.
+        probed = {name.split(":", 1)[0] for name in _RECIPES}
+
+        assert mutating - probed - _NO_RECIPE_NEEDS_FIXTURE == set()
+        assert probed - mutating == set()
+        assert _NO_RECIPE_NEEDS_FIXTURE <= _MUTATES_OUTSIDE_THE_FREEZE
+
+    def test_the_unfrozen_maintenance_apis_really_do_mutate(
+        self, predictor: HybridPredictor
+    ) -> None:
+        """The bucket above claims these write; this is that claim tested.
+
+        Without it the bucket would be an assertion in a comment, and a
+        method could be parked there to get it out of the inventory's way.
+        """
+        for name in sorted(_MUTATES_OUTSIDE_THE_FREEZE - _NO_RECIPE_NEEDS_FIXTURE):
+            fresh = HybridPredictor(model_dir=Path(tempfile.mkdtemp()), enable_llm=False)
+            setup, call = _RECIPES[name]
+            if setup is not None:
+                setup(fresh)
+            before = _snapshot(fresh)
+            call(fresh)
+            after = _snapshot(fresh)
+            assert [k for k in before if before[k] != after[k]], (
+                f"{name} is in _MUTATES_OUTSIDE_THE_FREEZE but moved nothing"
+            )
 
 
 class TestEveryMutatingMethodIsProbed:
-    @pytest.mark.parametrize("name", sorted(_MUST_FREEZE))
+    @pytest.mark.parametrize(
+        "name", sorted(n for n in _RECIPES if n.split(":", 1)[0] in _MUST_FREEZE)
+    )
     def test_it_moves_nothing_while_frozen(self, predictor: HybridPredictor, name: str) -> None:
         setup, call = _RECIPES[name]
         if setup is not None:
@@ -500,7 +623,9 @@ class TestEveryMutatingMethodIsProbed:
         moved = sorted(k for k in before if before[k] != after[k])
         assert not moved, f"{name} wrote {moved} while learning was frozen"
 
-    @pytest.mark.parametrize("name", sorted(_MUST_FREEZE))
+    @pytest.mark.parametrize(
+        "name", sorted(n for n in _RECIPES if n.split(":", 1)[0] in _MUST_FREEZE)
+    )
     def test_it_still_moves_something_when_thawed(
         self, predictor: HybridPredictor, name: str
     ) -> None:
