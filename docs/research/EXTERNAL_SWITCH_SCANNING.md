@@ -1,5 +1,14 @@
 # Secure external switch scanning for Alpha-OSK
 
+> **Status.** This document is the research proposal that preceded implementation. The *Scanner-
+> neutral target contract*, *Windows UI Automation design*, *Delivery sequence*, and *Acceptance
+> tests* sections below describe a contract that was proposed, not one that shipped exactly as
+> written. The implemented and measured contract is
+> [`docs/architecture/UIA_TARGETS.md`](../architecture/UIA_TARGETS.md), which landed in PR #114.
+> Where the two disagree on identifiers or mechanics, the target ID grammar in particular, see
+> *Identity* below, UIA_TARGETS.md is the one to implement against. Cross-references to its
+> sections are added inline below wherever this proposal has since been superseded or specified.
+
 ## Executive summary
 
 Switch scanning is a selection method, not a device protocol. A physical switch, keyboard key,
@@ -189,7 +198,7 @@ prediction. It does not document a general scanner for every application's contr
 
 [Grid 3](https://thinksmartbox.com/product/grid-3/),
 [Communicator 5](https://us.tobiidynavox.com/products/communicator-5),
-[Mind Express 5](https://www.jabbla.com/en/mind-express/),
+[Mind Express 5](https://www.jabbla.com/en/mind-express-5/),
 [TD Snap Scanning](https://us.tobiidynavox.com/pages/td-snap-scanning), and
 [PRC-Saltillo scanning](https://documentation.prc-saltillo.com/docs/switch-scanning-setup) are
 typical AAC products with scanning built into their own pages, keyboards, prediction areas, and
@@ -395,14 +404,44 @@ Alpha-OSK is authoritative for:
 - whether a target is hidden, disabled, or removed by privacy mode;
 - the exact one-shot action associated with each target;
 - action generations when a position acquires new meaning; and
-- preserving no-focus, sticky-modifier, password, learning, and telemetry invariants during an
-  accessible activation.
+- preserving no-focus, sticky-modifier, password, learning, pointer-bias, and telemetry invariants
+  during an accessible activation.
 
-The accessible action must emit the same QML signal as a primary click. Character keys continue
-through `KeyboardBridge.pressKey` or `pressKeyLiteral`, special keys through `pressSpecialKey`, and
-prediction pills through `pressPrediction`. It must not call the repeat-arming helper. The
+An accessible activation is defined as raising the same one-shot QML signal a primary click raises
+(`KeyButton.keyPressed`), and reaching whatever that key's handler does, rather than as a fixed
+enumeration of bridge methods. In `qml/Main.qml`'s key delegate, that handler dispatches on
+`kd.type`: character keys reach `KeyboardBridge.pressKey` or `pressKeyLiteral`, special keys reach
+`pressSpecialKey`, modifier keys reach `toggleShift` / `toggleCapsLock` / `toggleCtrl` /
+`toggleAlt` / `toggleWin`, and prediction pills reach `pressPrediction`. **Layer keys are a fourth
+category and reach no bridge method at all**: switching to `?123` or `=\<` is a view-state change,
+`root.activeLayer` plus a released Shift, by design, and the in-code comment explains why this must
+never call `setLayout`, which would persist the symbol layer as the user's chosen keyboard layout.
+A conformance test for "reaches the same handler as a click" must exempt layer keys rather than
+fail them, and should assert the view-state change directly instead. Whatever category applies, the
+activation must not call the repeat-arming helper. The
 [Qt Accessible QML documentation](https://doc.qt.io/qt-6/qml-qtquick-accessible.html) states that
 `Accessible.onPressAction` should have the same effect as tapping or clicking the control.
+
+A single primary action per target does not reach everything a mouse can, because four
+capabilities are wired to `onKeyRightPressed` only: locking a modifier held (`lockModifier`),
+typing a shifted glyph without a sticky-Shift round trip, a prediction pill's context menu (Show
+more, Show less, Remove, Edit), and right-click-to-program an F-key. This contract does not invent
+a second UIA action for these; each either has a left-click route already, or is named here as a
+gap rather than papered over:
+
+- **Programming an F-key** is reachable left-click-only through *Settings -> Function Keys*, which
+  lists all twenty-four keys and opens the same editor a right-click does.
+- **Capitals** are reachable through the sticky Shift toggle followed by the letter key, or through
+  Caps Lock for a run of them; neither needs the right-click shortcut.
+- **A shifted symbol** (`!` on `1`, `<` on `,`) is reachable the same way, Shift toggled on and then
+  the key.
+- **The prediction context menu is not reachable from an accessible activation today.** Show more,
+  Show less, Remove, and Edit have no left-click equivalent anywhere in the product. This is a
+  known gap and a follow-up, not something this contract solves.
+- **The right-click lock ("hold the key down") is likewise not enterable from a scanner today.**
+  UIA_TARGETS.md exposes it as observable state only (its *State* section: `FullDescription`
+  carries the literal token `locked`), with nothing an accessible client can Invoke to set it. This
+  is also a known gap and a follow-up.
 
 ### What the scanner should own
 
@@ -425,6 +464,19 @@ interaction model.
 Do not make an accessibility Invoke start or stop Alpha's key-repeat state. Scanners already
 condition switch input and may hold a switch for navigation. Mapping that hold to a keyboard key's
 pointer-repeat helper could duplicate letters or destructive keys.
+
+Do not let an accessible activation feed the learned pointer-bias model. `KeyboardBridge`'s
+not-privacy branch of `_press_char` calls `NgramPredictor.observe_press` with a click offset for
+every character, and a one-argument caller, which is what an accessible Invoke is, defaults that
+offset to the key's exact centre. `PointerModel` shrinks each slot's estimate toward the global
+mean with `PRIOR = 10` pseudo-observations, so a long scanning session feeding thousands of
+exact-centre presses would drag every slot toward zero bias and erase what a mixed
+mouse-and-scanner user's own pointer had taught the keyboard. The contract must exclude accessible
+activations from `observe_press` outright rather than defaulting them to centre. As of PR #114's
+current head this is not yet enforced: `KeyButton.activateFromAssistiveClient()` raises
+`keyPressed()` without setting `pressDx` / `pressDy`, so the press still reaches `pressKey`'s
+float overload with implicit centre coordinates instead of being skipped. That is an open item on
+#114, not a shipped guarantee.
 
 Do not expose prediction history, typed context, model scores, snippets, or telemetry. A visible
 prediction label is sufficient to announce and select the pill. When privacy mode removes
@@ -452,6 +504,10 @@ The Alpha-OSK accessible root should provide:
 A scanner rejects an unsupported major version. A minor version can add optional metadata without
 changing existing action meaning.
 
+UIA_TARGETS.md's *Finding the keyboard* and *The revision beacon* sections describe the shipped
+analogue of this root: window identity by AutomationId rather than a queryable root property, and a
+revision beacon in place of an explicit major/minor version pair.
+
 ### Target fields
 
 | Semantic field | Meaning |
@@ -472,6 +528,12 @@ changing existing action meaning.
 Use native properties wherever the platform supplies them. Put only missing machine-readable
 metadata in the accessible identifier or other stable native field.
 
+UIA_TARGETS.md's *State* section is the shipped mapping for several of these fields: Enabled and
+Showing keep their ordinary UIA meanings, and sticky/locked modifiers use `TogglePattern`. The
+locked toggle state is observable there (`FullDescription` carries the literal token `locked`), but
+as of this writing no accessible action can *enter* it: see *What Alpha-OSK should own* above for
+why the right-click lock has no left-click or accessible equivalent yet.
+
 For Windows, an identifier can follow this grammar:
 
 `alpha-osk.target.v1/<kind>/<generation>/<layout>/<layer>/<section>/<row>/<column>/<action>`
@@ -480,16 +542,31 @@ The prediction text belongs in the accessible name, not the identifier. Fixed-wi
 segments make lexical and numeric order agree. IDs should be unique across the exposed subtree,
 even where a platform promises uniqueness only among siblings.
 
+This grammar is the proposal. The scheme that shipped in #114 is different and is the one to
+implement against: see UIA_TARGETS.md's *Identity* section, `aosk.v1.<section>.<row>.<index>` for
+keys and `aosk.v1.pred.<index>.g<generation>` for prediction pills, with a separate
+`aosk.v1.revision` beacon rather than a generation folded into every id.
+
 ### Snapshot consistency and stale targets
 
 The scanner must treat enumeration as a snapshot, not a collection of permanent coordinates.
 Before activation it should confirm that the element is still enabled and showing and that its
 runtime identity, stable ID, generation, and label still match the highlighted choice.
 
-When a prediction, layout key, layer key, or programmed key acquires a different action,
-Alpha-OSK should replace its accessible object and increment the action generation. An old
-reference must fail or perform no action. Movement, resizing, highlight changes, and modifier-state
-updates do not change action identity and should not churn the object unnecessarily.
+When a prediction, layout key, layer key, programmed key, or a key affected by entering or leaving
+edit mode acquires a different action, Alpha-OSK should replace its accessible object and increment
+the action generation. Edit mode is the sharpest case of this: `KeyboardBridge`'s edit-mode redirect
+(`beginEditSession` / `endEditSession`, still reachable through the legacy `setEditMode` bool)
+reroutes `pressKey` and `pressSpecialKey` for every key on the board at once, from synthesizing into
+the foreground application to `editKeyTyped` / `editSpecialPressed` into the prediction-edit popup
+or the snippets editor, with the key's label and bounds completely unchanged. A generation scheme
+that only bumps on a label or bounds change misses this. UIA_TARGETS.md's *State* and *Stale
+predictions cannot fire* sections do not yet describe edit mode as a distinct action-generation
+event, so treat that as an open item for whichever document specifies it next, not as something
+#114 already covers.
+
+An old reference must fail or perform no action. Movement, resizing, highlight changes, and
+modifier-state updates do not change action identity and should not churn the object unnecessarily.
 
 Activation is not safe to retry automatically. If a platform call times out after dispatch, the
 scanner cannot assume no action occurred. It should stop, refresh, and ask for a new user selection.
@@ -541,25 +618,60 @@ prediction delegate should be a Button, with toggle semantics added for sticky a
 modifiers. `Accessible.focusable` must be set consistently with the keyboard's no-focus design,
 rather than accepting the Button role's default.
 
+The accessible node belongs to the `KeyButton` root item, the keycap, and not to its `MouseArea`.
+`KeyButton`'s `MouseArea` is anchored with negative `hitMarginH` / `hitMarginV` margins so its hit
+area reaches half a gap past the keycap on every side, and vertical neighbours' hit areas
+deliberately overlap. Qt derives `QAccessibleInterface::rect()` from whichever item carries the
+accessible node, so putting the metadata on the MouseArea would hand a point-scanning client
+overlapping rectangles and an overlay wider than the key it names. UIA_TARGETS.md's *Bounds and
+DPI* section describes the shipped bounds (`BoundingRectangle` in physical screen pixels, exactly
+as UIA reports it) without stating which item they come from; the keycap rather than the MouseArea
+is still the right answer for #114's implementation, and is worth stating explicitly since nothing
+else does.
+
 ### Discovery, caching, and coordinates
 
-A scanner should locate Alpha's top-level UIA window, verify the owning process and product, then
-query descendants with the contract identifier prefix. Microsoft documents that
+Alpha-OSK is several top-level windows, not one: the keyboard itself, `snippetsWindow` and
+`symbolsWindow` (separate top-level `Window` instances found by `objectName` in
+`keyboard_app.py::_wire_floating_windows`), the settings window, Help, and `vizWindow` (the
+Dashboard), plus the key-action editor and the prediction-edit popup, which are `Popup`s parented
+to `Overlay.overlay` on the keyboard window rather than top-level windows of their own. A discovery
+procedure that locates only "Alpha's top-level UIA window" finds the keyboard grid and nothing
+else, which is every non-typing feature in the product. #114 implements discovery for the keyboard
+window alone (UIA_TARGETS.md's *Finding the keyboard*, matching AutomationId
+`alphaOsk.alphaOskKeyboard`, and *The target set*, which lists `grid`/`fn1`/`fn2`/`num`/`nav`/
+`pad`/`pred` as the sections in scope); that document says explicitly that the settings, help,
+snippets, symbols and dashboard windows are "out of scope for v1, and absent from the tree." A
+scanner should locate each top-level window it needs by its own AutomationId, verify the owning
+process and product for each, then query descendants with the contract identifier prefix. Extending
+discovery to the other windows and the two popups is a follow-up, not something the shipped
+contract already does.
+
+Microsoft documents that
 [UIA caching](https://learn.microsoft.com/en-us/windows/win32/winauto/uiauto-cachingforclients)
-can retrieve several properties for several elements in one cross-process call. Cached patterns
-cannot perform actions, so the client must retain or reacquire a live element for the final Invoke.
+can retrieve several properties for several elements in one cross-process call. A cache request
+built with `AutomationElementMode_None` retains no live element and cannot perform an action
+afterward; keeping the ability to Invoke requires either building the cache request with
+[`AutomationElementMode_Full`](https://learn.microsoft.com/en-us/windows/win32/api/uiautomationclient/ne-uiautomationclient-automationelementmode),
+so the returned element keeps a live reference alongside its cached properties, or treating an
+`AutomationElementMode_None` result as a snapshot and reacquiring a live element by identity before
+the final Invoke. See Microsoft's own note on the
+["strength of element references"](https://learn.microsoft.com/en-us/windows/win32/winauto/uiauto-cachingforclients#strength-of-element-references)
+for why a cached-only reference should not be assumed to survive.
 
 UIA bounding rectangles use physical coordinates. Microsoft's
 [screen-scaling guidance](https://learn.microsoft.com/en-us/windows/win32/winauto/uiauto-screenscaling)
 requires a UIA client to be DPI-aware and use corresponding physical cursor or overlay coordinates.
 Tests must cover mixed scale factors and negative desktop coordinates for monitors left of or above
-the primary display.
+the primary display. UIA_TARGETS.md's *Bounds and DPI* section records the shipped side of this:
+Alpha-OSK declares `PerMonitorV2` in its manifest, and a client that is not itself per-monitor DPI
+aware will see rectangles scaled by the wrong factor.
 
 ### Update behavior on the pinned Qt release
 
 Qt Quick creates accessibility updates for item movement and visibility, but inspection of Qt
 6.11's
-[Windows UIA event dispatch](https://github.com/qt/qtbase/blob/6.11/src/plugins/platforms/windows/uiautomation/qwindowsuiaaccessibility.cpp)
+[Windows UIA event dispatch](https://github.com/qt/qtbase/blob/v6.11.1/src/plugins/platforms/windows/uiautomation/qwindowsuiaaccessibility.cpp)
 shows that `LocationChanged`, `ObjectShow`, and `ObjectHide` are not forwarded. `NameChanged` is
 forwarded only for combo boxes or the focused element. Alpha's keys deliberately do not take focus.
 
@@ -575,6 +687,12 @@ If polling cannot meet the agreed latency and power targets, add a one-way local
 signal containing only `{protocol, revision}`. UIA remains authoritative for data and activation.
 The notification accepts no commands and carries no labels, bounds, context, or prediction text.
 
+#114 shipped exactly this fallback, as `aosk.v1.revision` (UIA_TARGETS.md's *The revision beacon*):
+a zero-sized `StaticText` whose Name changes on every contract-relevant change, polled instead of
+relying on the missing events above, with a full cached snapshot taken only when it moves. A cached
+snapshot of the whole keyboard measured 12.5 ms for 83 elements on the development machine, which
+is the figure to compare against the latency target in step 4.
+
 ### Windows authorization boundary
 
 Microsoft describes UIA as the Windows accessibility interface and UIAccess as the mechanism that
@@ -583,16 +701,36 @@ allows a qualifying assistive application to cross relevant integrity boundaries
 and [secure-location policy](https://learn.microsoft.com/en-us/previous-versions/windows/it-pro/windows-10/security/threat-protection/security-policy-settings/user-account-control-only-elevate-uiaccess-applications-that-are-installed-in-secure-locations)
 require an appropriate manifest, Authenticode signature, and protected installation location.
 
-For Alpha's standard-user installation, the practical contract is "a scanner Windows permits to
-reach this UI at the applicable integrity level," not "a scanner signed by one approved
-publisher." This is important in both directions:
+Alpha-OSK is not a standard-user installation. `build/windows/build.py` installs it under
+`$PROGRAMFILES64\Alpha-OSK`, `run.py::ensure_admin_windows()` relaunches the dev entry point under
+UAC, and the shipped binary's manifest (`build/windows/alpha-osk.exe.manifest`) sets
+`requestedExecutionLevel level="asInvoker" uiAccess="true"`. That combination, an EV-signed
+executable in a protected install location requesting `uiAccess`, is exactly what Microsoft's
+secure-location policy above is gating: Windows grants the running process the elevated reach
+`uiAccess` carries only when the signature and location checks both pass. The practical contract
+therefore starts from "a scanner Windows permits to reach a UIAccess-elevated UI at the applicable
+integrity level," not "a scanner signed by one approved publisher," and not from an ordinary
+same-user application's integrity level. This is important in both directions:
 
 - a normal process without the necessary integrity cannot treat Alpha as an unrestricted input
   broker; and
 - another qualifying assistive client may be able to inspect and invoke Alpha's exposed controls.
 
-This is suitable when interoperability with assistive technologies is the policy goal. It is not
-suitable if Alpha must cryptographically identify one partner before every activation.
+Naming the escalation directly: a UIA client that successfully invokes Alpha's keys gains
+synthesized keystroke delivery into windows at higher integrity than the client's own process could
+reach unassisted, for example an elevated Command Prompt, Task Manager, or Registry Editor.
+Alpha-OSK's UIAccess token is what performs that crossing; the manifest's own comment documents the
+intent. This is the one property distinguishing Alpha from an ordinary invokable application, and
+it has to be weighed rather than assumed away when reaching the "suitable" verdict below.
+UIA_TARGETS.md's *What this does and does not protect* subsection is the implemented answer to what
+mitigates this, and it does not go further than stating plainly that "a hostile process on the same
+desktop can still minimize or close the keyboard" through the same channel; this document should
+not claim more mitigation than that section states.
+
+This is suitable when interoperability with assistive technologies is the policy goal, weighed
+against the escalation named above. It is not suitable if Alpha must cryptographically identify one
+partner before every activation, and it is not suitable if the UIAccess escalation itself is judged
+an unacceptable risk regardless of caller identity.
 
 ## Evaluation of integration options
 
@@ -619,7 +757,7 @@ press keys may gain input effects it could not produce itself. Qt's Windows `QLo
 remote clients, but its implementation does not request `FILE_FLAG_FIRST_PIPE_INSTANCE`, so it is
 not by itself a complete basis for first-instance ownership and client verification. See the
 [QLocalServer documentation](https://doc.qt.io/qt-6/qlocalserver.html) and
-[Windows implementation](https://github.com/qt/qtbase/blob/6.11/src/network/socket/qlocalserver_win.cpp).
+[Windows implementation](https://github.com/qt/qtbase/blob/v6.11.1/src/network/socket/qlocalserver_win.cpp).
 
 A future partner-only protocol would need, at minimum:
 
@@ -645,26 +783,28 @@ default merely to avoid UIA polling.
 
 ## Product-specific case study: Switchify
 
-Switchify is one possible client, not part of the generalized contract. Its current public product
-description matches the common system-wide architecture: semantic item scanning first, point and
-radar fallbacks, automatic and manual movement, action menus, multiple physical and camera input
-sources, and press filtering. See
-[How Switchify works](https://switchifyapp.com/how-it-works/).
+Switchify is one possible client, not part of the generalized contract. Its public product
+description, as recorded on 2026-09-11, matches the common system-wide architecture: semantic item
+scanning first, point and radar fallbacks, automatic and manual movement, action menus, multiple
+physical and camera input sources, and press filtering. See
+[How Switchify works](https://switchifyapp.com/how-it-works/). Switchify has since shipped rc.7 and
+Alpha-OSK has shipped 1.4.2, so a reader relying on any claim in this section should recheck it
+against the current releases rather than the ones inspected here.
 
 The Windows packaging reviewed for issue 106 is compatible with a production UIA spike. Alpha-OSK
 and Switchify both publish Windows configurations for signed UIAccess applications installed under
-Program Files. The inspected Alpha-OSK 1.4.1 and Switchify 1.0.0-rc.6 installers had valid
-Authenticode signatures and hashes matching their GitHub release asset digests. This verifies
-those installer artifacts, not every future release or the runtime behavior of their installed
-executables. See the [Alpha-OSK manifest](../../build/windows/alpha-osk.exe.manifest),
+Program Files. As inspected on 2026-09-11, the Alpha-OSK 1.4.1 and Switchify 1.0.0-rc.6 installers
+had valid Authenticode signatures and hashes matching their GitHub release asset digests. This
+verifies those installer artifacts, not every future release or the runtime behavior of their
+installed executables. See the [Alpha-OSK manifest](../../build/windows/alpha-osk.exe.manifest),
 [Alpha-OSK 1.4.1 release](https://github.com/owenpkent/alpha-osk-releases/releases/tag/v1.4.1),
 [Switchify packaging notes](https://github.com/switchifyapp/switchify-pc#readme), and
-[Switchify UIAccess manifest](https://github.com/switchifyapp/switchify-pc/blob/main/src-tauri/windows/uiaccess.manifest).
+[Switchify UIAccess manifest](https://github.com/switchifyapp/switchify-pc/blob/7e383f4c12d4bf912dd641dfe84fc276c5f1f755/src-tauri/windows/uiaccess.manifest).
 
-Switchify's public UIAccess manifest does not declare a DPI mode. Its locked Tao 0.35.3 runtime
-defaults DPI awareness on and requests Per-Monitor V2 on supported Windows, and no repository
-override disabling that default was found. See Switchify's
-[locked Rust dependencies](https://github.com/switchifyapp/switchify-pc/blob/main/src-tauri/Cargo.lock)
+As recorded on 2026-09-11, Switchify's public UIAccess manifest does not declare a DPI mode. Its
+locked Tao 0.35.3 runtime defaults DPI awareness on and requests Per-Monitor V2 on supported
+Windows, and no repository override disabling that default was found at that time. See Switchify's
+[locked Rust dependencies](https://github.com/switchifyapp/switchify-pc/blob/7e383f4c12d4bf912dd641dfe84fc276c5f1f755/src-tauri/Cargo.lock)
 and Tao's
 [DPI setup](https://github.com/tauri-apps/tao/blob/tao-v0.35.3/src/platform_impl/windows/dpi.rs).
 The packaged client must still verify effective DPI awareness and overlay alignment at runtime.
@@ -675,23 +815,37 @@ scanner, Alpha's accessible surface should remain unchanged.
 
 ## Delivery sequence
 
-1. Add accessible metadata and one-shot press actions to key and prediction delegates.
+Steps 1-4 are the ones PR #114 has since implemented; the cross-references below say where. Steps 5
+onward remain open.
+
+1. Add accessible metadata and one-shot press actions to key and prediction delegates. (Implemented:
+   UIA_TARGETS.md's *The target set*, *Names, and why they are not the keycaps*, and *Activation*.)
 2. Define the versioned target ID grammar, group metadata, and deterministic visual order.
-3. Replace accessible objects whenever an action changes and test stale references.
+   (Implemented, with a different concrete scheme than the one proposed above: UIA_TARGETS.md's
+   *Identity* is the scheme now shipping.)
+3. Replace accessible objects whenever an action changes and test stale references. (Implemented:
+   UIA_TARGETS.md's *Stale predictions cannot fire*.)
 4. Build a small Windows UIA conformance probe that prints one cached snapshot and can invoke one
-   explicitly chosen test target.
+   explicitly chosen test target. (Superseded: an independent external client did this; see
+   UIA_TARGETS.md's *Independent verification by an external client*.)
 5. Test one-switch auto, two-switch step, row-column, and auditory client prototypes against the
    same target snapshot. Alpha should require no mode-specific changes.
 6. Integrate the provider into Switchify or another scanner and render its existing no-activate
    overlay from UIA physical bounds.
 7. Measure polling overhead and refresh latency. Add the one-way revision signal only if the agreed
-   acceptance threshold is missed.
+   acceptance threshold is missed. (UIA_TARGETS.md's *The revision beacon* describes the shipped
+   version of this signal.)
 8. Test signed production-style UIAccess builds. Unsigned debug builds do not reproduce the
    production integrity boundary.
 9. Prototype the same semantic controls through macOS Accessibility and AT-SPI when those Alpha
    ports are ready, without copying the Windows identifier or coordinate assumptions blindly.
 
 ## Acceptance tests
+
+These tests predate implementation. `tests/test_qml_scan_targets.py` now covers the headless half
+of several of them, and UIA_TARGETS.md's *What was verified, and how* records what was additionally
+checked against live UIA clients; see that document's *What the headless tests can and cannot hold*
+for exactly which of these properties a headless test can and cannot see.
 
 ### Provider conformance
 
@@ -702,17 +856,25 @@ scanner, Alpha's accessible surface should remain unchanged.
 - Hidden panels, disabled actions, and privacy-suppressed predictions are absent or accurately
   non-actionable.
 - Names contain visible labels only. No typed context, scores, history, snippets, or secrets appear.
-- Modifiers expose inactive, sticky, and locked state without changing action identity.
+- Modifiers expose inactive, sticky, and locked state without changing action identity; the locked
+  state is observable even though, as of this writing, no accessible action can enter it (see *What
+  Alpha-OSK should own*).
 
 ### Action behavior
 
-- Pointer click and accessible activation reach the same bridge method for characters, literals,
-  modifiers, special keys, programmed keys, page changes, and predictions.
+- Pointer click and accessible activation raise the same `KeyButton.keyPressed` signal and reach
+  the same handler for characters, literals, modifiers, special keys, and programmed keys, and
+  predictions raise the matching prediction-pill signal. A layer key (a page change) is exempt from
+  "reaches the same handler": it is a view-state change with no bridge call by design, and its test
+  should assert that `root.activeLayer` changed rather than that a bridge method fired.
 - Accessible activation is one-shot and never arms Alpha's pointer-repeat behavior.
 - Activation never gives Alpha focus or changes the foreground target.
+- Activation never records a click position for the learned pointer-bias model (see *What not to
+  combine*).
 - Password checks, privacy gates, sticky-modifier release, literal insertion, and prediction
   behavior remain identical to primary clicks.
-- Holding an old prediction or changed-key reference across an update performs no action.
+- Holding an old prediction or changed-key reference across an update performs no action, including
+  a key whose action changed only because edit mode was entered or left.
 - An ambiguous timeout is never retried automatically.
 
 ### Scanner interoperability
@@ -780,8 +942,7 @@ Typical hardware and interfaces:
   [Breeze sip-and-puff interface](https://www.orin.com/access/docs/Breeze_oneSheet.pdf)
 - Pretorian: [Simple Switch Interface](https://www.pretorianuk.com/simple-switch-interface/) and
   [APPlicator Bluetooth interface](https://support.inclusive.com/article/applicator)
-- Tecla: [tecla-e product and port specifications](https://gettecla.com/products/tecla-e) and
-  [device compatibility](https://gettecla.com/pages/tecla-e)
+- Tecla: [tecla-e product and port specifications](https://gettecla.com/products/tecla-e)
 - Microsoft: [Xbox Adaptive Controller](https://www.xbox.com/en-US/accessories/controllers/xbox-adaptive-controller/)
 
 Provider APIs and security:
