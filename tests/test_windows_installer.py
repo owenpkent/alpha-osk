@@ -351,13 +351,24 @@ class TestTheSettingsKeySurvivesAnUpgrade:
         assert "ExecWait" not in section
 
     def test_different_directory_cleanup_also_uses_the_guard(self, nsh: str) -> None:
-        code = _macro_code(nsh, "customInstall")
-        # _?= prevents NSIS's self-copy launcher from returning before the
-        # actual uninstaller has finished deleting keys. The copy must be
-        # restored only after that process, not after its launcher exits.
-        assert code.count("Push '\"$0\" /S _?=$2'") == 2
-        assert code.count("Call RunPreviousUninstaller") == 2
-        assert "ExecWait" not in code
+        """The guard wraps the one invocation ``removePreviousInstallAt`` makes.
+
+        It used to sit in ``customInstall``, twice, around a command built
+        from a register filled by ``ReadRegStr``. The hive check that
+        replaced that (see
+        ``TestThePreviousVersionCheckExecutesNothingFromTheRegistry``) runs
+        our own validated ``uninstall.exe`` instead, and the guard moved
+        with it, so there is one call site rather than two. ``_?=`` is what
+        makes the wait a wait: without it NSIS's self-copy launcher returns
+        before the real uninstaller has deleted anything, and the settings
+        would be restored before they were destroyed rather than after.
+        """
+        code = _macro_code(nsh, "removePreviousInstallAt")
+        command = code.index("Push '\"$8\\uninstall.exe\" /S _?=$8'")
+        guard = code.index("Call RunPreviousUninstaller", command)
+        assert command < guard
+        # The old uninstaller is only ever reached through the guard.
+        assert "ExecWait" not in _macro_code(nsh, "customInstall") + code
 
     def test_the_uninstall_section_does_not_delete_it(self, nsi: str) -> None:
         section = _uninstall_section(nsi)
@@ -898,10 +909,14 @@ class TestThePreviousVersionCheckExecutesNothingFromTheRegistry:
     def test_no_uninstall_string_is_read_or_executed(self, nsh: str) -> None:
         code = _macro_code(nsh, "customInstall") + _macro_code(nsh, "removePreviousInstallAt")
         assert "UninstallString" not in code
+        # The removal now runs through upgrade_settings.nsh's guard, which
+        # takes the command on the stack, so the Push is what names it.
         exec_lines = [
             line
             for line in code.splitlines()
-            if "ExecWait" in line or line.strip().startswith("Exec ")
+            if "ExecWait" in line
+            or line.strip().startswith("Exec ")
+            or ("Push" in line and "uninstall.exe" in line)
         ]
         removals = [line for line in exec_lines if "explorer.exe" not in line]
         assert removals, "the macro must still run our own uninstaller"

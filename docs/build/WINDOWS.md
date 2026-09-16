@@ -554,10 +554,36 @@ their registry types, to a unique sibling under
 `HKCU\Software\alpha-osk-upgrade-backups`. It checks and flushes the copy before
 starting cleanup, and restores it even if the old process reports an error.
 The old command uses `/S _?=<directory>` so setup waits for the actual uninstaller
-instead of its temporary-copy launcher. Copy failure stops setup before cleanup;
-restore failure stops setup and retains the recovery key, reporting its path.
-Successful restoration removes the copy. This protects preferences still present
-at upgrade time, not preferences that an earlier update already erased.
+instead of its temporary-copy launcher, and the command it runs is always the
+validated `<directory>\uninstall.exe` the caller resolved, never a string read
+from the registry.
+
+**Copy failure and restore failure stop setup; the old uninstaller's own exit
+code does not.** That asymmetry is deliberate. On a same-directory upgrade the
+helper runs before the replacement files are extracted, so aborting on the old
+uninstaller's exit code left a user whose only input device is this keyboard
+with the previous install already removed, no new one, no shortcuts, and a retry
+that failed at the same point every time; the auto-updater's relauncher cannot
+rescue that either, because it waits for a newly written executable an aborted
+install never produces. A backup failure is different, since nothing destructive
+has run yet, and so is a restore failure, since the settings then exist only in
+the copy.
+
+A retained recovery copy is announced in two durable places, because the message
+box is auto-answered by `/SD IDOK` on the silent path the auto-updater drives and
+`DetailPrint` writes to a details pane silent mode never shows: a
+`LastRetainedBackup` value on the fixed `HKCU\Software\alpha-osk-upgrade-backups`
+key, and `settings-recovery.txt` in the install folder. A successful restore
+removes its copy, and a name already in use is stepped past rather than treated
+as a failure, since `GetTempFileName` is only unique against what is in `%TEMP%`
+at the time and a collision used to make every retry fail identically.
+
+Two limits. This protects preferences still present at upgrade time, not
+preferences an earlier update already erased. And **the elevated installer's
+`HKEY_CURRENT_USER` is the profile that elevated**: where a standard user
+elevates by typing an administrator's credentials, the tree copied and restored
+is that administrator's, and the keyboard's own user is not protected. That is
+the same hazard that puts the study-invite seed in HKLM.
 
 ---
 
