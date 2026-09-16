@@ -318,6 +318,7 @@ def _snapshot(predictor: HybridPredictor) -> dict:
         "user_bigrams": _nested(ngram._user_bigrams),
         "user_trigrams": _nested(ngram._user_trigrams),
         "capitalization": dict(ngram.capitalization),
+        "taught_capitalization": set(ngram.taught_capitalization),
         "blacklist": set(ngram.blacklist),
         "dispreference": dict(ngram.dispreference),
         "preferred": dict(ngram.preferred),
