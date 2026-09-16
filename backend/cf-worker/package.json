@@ -12,7 +12,7 @@
     "sbom": "cyclonedx-npm --spec-version 1.6 --output-reproducible --output-format JSON --output-file cf-worker-sbom.cyclonedx.json"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "^4.20250101.0",
+    "@cloudflare/workers-types": "^5.20260911.1",
     "@cyclonedx/cyclonedx-npm": "^5.0.0",
     "typescript": "^5.4.0",
     "wrangler": "^4.131.1"
