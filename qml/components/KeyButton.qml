@@ -209,6 +209,16 @@ Item {
     // user's systematic offset.  Auto-repeat re-reads the same values.
     property real pressDx: 0
     property real pressDy: 0
+    // Whether the values above describe a real press.  They persist from the
+    // last click on this key, so an Invoke that left them alone handed the
+    // bridge the coordinates of a click that did not happen: they reached the
+    // live fuzzy position for the character AND `observe_press`, so a mixed
+    // scanner-and-mouse user had their learned pointer bias taught from
+    // clicks nobody made.  Zeroing them is not the fix either, since that
+    // trains an artificial dead-centre click.  False means "no pointer
+    // sample": the character resolves to the key centre for this keystroke
+    // and contributes nothing to the pointer model.
+    property bool pressFromPointer: true
 
     width: keyWidth
     height: keyHeight
@@ -336,7 +346,23 @@ Item {
     // reports them onscreen, which is why this cannot be left to Qt.
     readonly property bool _scanWindowShown:
         Window.visibility !== Window.Minimized && Window.visibility !== Window.Hidden
-    readonly property bool _scanIgnored: keyRoot.targetId === "" || !keyRoot._scanWindowShown
+    // The window is not the only thing that can take a key off the screen.
+    // The numpad, the navigation cluster and both function rows are hidden
+    // with `visible: false` on the panel, which leaves every delegate inside
+    // alive; a client that retained one of their targets, or whose visibility
+    // check raced the panel closing, could Invoke it and type a key that is
+    // not on screen.  `Item.visible` is the effective value (Qt Quick
+    // propagates a false parent down), so this is the one test that covers
+    // the window, the panel and the key.  `enabled` joins it because the
+    // contract says presence means activatable, and the numpad's centre key
+    // is blank and disabled with NumLock off.
+    //
+    // It gates the accessible presence AND the activation, and it has to be
+    // both: removing a key from a fresh traversal does nothing to an
+    // interface a scanner is already holding.
+    readonly property bool _scanActivatable:
+        keyRoot._scanWindowShown && keyRoot.visible && keyRoot.enabled
+    readonly property bool _scanIgnored: keyRoot.targetId === "" || !keyRoot._scanActivatable
 
     // Every binding below is a bare pass-through of a named property above,
     // and that is deliberate rather than incidental.  PySide cannot read an
@@ -400,10 +426,14 @@ Item {
     // rather than at the text field, and without it the only feedback that a
     // scan selection landed is a character appearing somewhere else on screen.
     function activateFromAssistiveClient() {
-        if (!keyRoot._scanWindowShown)
+        if (!keyRoot._scanActivatable)
             return
         if (!keyRoot._acceptPress())
             return
+        // No pointer was involved, so the offsets from whatever was last
+        // clicked here must not travel with this keystroke.  See
+        // `pressFromPointer`.
+        keyRoot.pressFromPointer = false
         keyRoot._visualPressed = true
         invokeFlashTimer.restart()
         keyRoot.keyPressed()
@@ -629,6 +659,7 @@ Item {
             var capX = mouse.x - keyRoot.hitMarginH
             var capY = mouse.y - keyRoot.hitMarginV
             keyRoot._pressVisual(capX, capY)
+            keyRoot.pressFromPointer = true
             keyRoot.pressDx = keyRoot.width > 0 ? capX / keyRoot.width - 0.5 : 0
             keyRoot.pressDy = keyRoot.height > 0 ? capY / keyRoot.height - 0.5 : 0
 

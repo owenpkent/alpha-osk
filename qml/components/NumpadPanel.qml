@@ -20,7 +20,18 @@ Item {
     // directions, so a caller passes half of it for both axes.
     property real hitMarginH: 0
     property real hitMarginV: 0
+    // NumLock rewrites this panel: ten keys change their label, their
+    // action and (for the centre) whether they do anything at all, while
+    // every scan target id stays the same.  Two consequences live elsewhere
+    // and are easy to miss from here: `Main.qml::scanRevision` carries this
+    // flag, or a scanner polling the beacon would keep a stale target map,
+    // and the dual keys below bind `keyText` per state, because a scanner
+    // may speak the name and four of the NumLock-off caps are bare glyphs
+    // with no spoken form.
     property bool numLockOn: true
+    // Raised rather than written here, so the state has one owner.  It is
+    // `Main.qml`'s, because the scan beacon has to carry it (see above).
+    signal numLockToggled()
     property color keyColor: "#3a3a3a"
     property color specialKeyColor: "#333333"
     property color keyPressedColor: "#5a5a5a"
@@ -101,6 +112,7 @@ Item {
                 borderColor: numpadPanel.borderColor
                 hitMarginH: numpadPanel.hitMarginH
                 hitMarginV: numpadPanel.hitMarginV
+                keyText: numpadPanel.numLockOn ? "7" : "Home"
                 targetId: numpadPanel._scanId(0, 0)
                 // Home does not repeat with NumLock off, matching
                 // NavigationPanel: the caret is already at the line start
@@ -125,6 +137,7 @@ Item {
                 borderColor: numpadPanel.borderColor
                 hitMarginH: numpadPanel.hitMarginH
                 hitMarginV: numpadPanel.hitMarginV
+                keyText: numpadPanel.numLockOn ? "8" : "Up"
                 targetId: numpadPanel._scanId(0, 1)
                 enableRepeat: numpadPanel.numLockOn ? numpadPanel.characterRepeat : true
                 repeatDelay: numpadPanel.repeatDelay
@@ -146,6 +159,7 @@ Item {
                 borderColor: numpadPanel.borderColor
                 hitMarginH: numpadPanel.hitMarginH
                 hitMarginV: numpadPanel.hitMarginV
+                keyText: numpadPanel.numLockOn ? "9" : "Page Up"
                 targetId: numpadPanel._scanId(0, 2)
                 enableRepeat: numpadPanel.numLockOn ? numpadPanel.characterRepeat : true
                 repeatDelay: numpadPanel.repeatDelay
@@ -194,6 +208,7 @@ Item {
                 borderColor: numpadPanel.borderColor
                 hitMarginH: numpadPanel.hitMarginH
                 hitMarginV: numpadPanel.hitMarginV
+                keyText: numpadPanel.numLockOn ? "4" : "Left"
                 targetId: numpadPanel._scanId(1, 0)
                 enableRepeat: numpadPanel.numLockOn ? numpadPanel.characterRepeat : true
                 repeatDelay: numpadPanel.repeatDelay
@@ -238,6 +253,7 @@ Item {
                 borderColor: numpadPanel.borderColor
                 hitMarginH: numpadPanel.hitMarginH
                 hitMarginV: numpadPanel.hitMarginV
+                keyText: numpadPanel.numLockOn ? "6" : "Right"
                 targetId: numpadPanel._scanId(1, 2)
                 enableRepeat: numpadPanel.numLockOn ? numpadPanel.characterRepeat : true
                 repeatDelay: numpadPanel.repeatDelay
@@ -286,6 +302,7 @@ Item {
                 borderColor: numpadPanel.borderColor
                 hitMarginH: numpadPanel.hitMarginH
                 hitMarginV: numpadPanel.hitMarginV
+                keyText: numpadPanel.numLockOn ? "1" : "End"
                 targetId: numpadPanel._scanId(2, 0)
                 // End does not repeat with NumLock off, same reason as Home
                 // on the 7 key above.
@@ -309,6 +326,7 @@ Item {
                 borderColor: numpadPanel.borderColor
                 hitMarginH: numpadPanel.hitMarginH
                 hitMarginV: numpadPanel.hitMarginV
+                keyText: numpadPanel.numLockOn ? "2" : "Down"
                 targetId: numpadPanel._scanId(2, 1)
                 enableRepeat: numpadPanel.numLockOn ? numpadPanel.characterRepeat : true
                 repeatDelay: numpadPanel.repeatDelay
@@ -330,6 +348,7 @@ Item {
                 borderColor: numpadPanel.borderColor
                 hitMarginH: numpadPanel.hitMarginH
                 hitMarginV: numpadPanel.hitMarginV
+                keyText: numpadPanel.numLockOn ? "3" : "Page Down"
                 targetId: numpadPanel._scanId(2, 2)
                 enableRepeat: numpadPanel.numLockOn ? numpadPanel.characterRepeat : true
                 repeatDelay: numpadPanel.repeatDelay
@@ -378,6 +397,7 @@ Item {
                 borderColor: numpadPanel.borderColor
                 hitMarginH: numpadPanel.hitMarginH
                 hitMarginV: numpadPanel.hitMarginV
+                keyText: numpadPanel.numLockOn ? "0" : "Insert"
                 targetId: numpadPanel._scanId(3, 0)
                 // Insert is not in the repeat-worthy nav set (matches
                 // NavigationPanel's own Insert key, which has no
@@ -402,6 +422,7 @@ Item {
                 borderColor: numpadPanel.borderColor
                 hitMarginH: numpadPanel.hitMarginH
                 hitMarginV: numpadPanel.hitMarginV
+                keyText: numpadPanel.numLockOn ? "." : "Delete"
                 targetId: numpadPanel._scanId(3, 1)
                 enableRepeat: numpadPanel.numLockOn ? numpadPanel.characterRepeat : true
                 repeatDelay: numpadPanel.repeatDelay
@@ -480,7 +501,7 @@ Item {
                 // for as long as the button stayed down.
                 onKeyPressed: {
                     keyboard.pressSpecialKey("numlock")
-                    numpadPanel.numLockOn = !numpadPanel.numLockOn
+                    numpadPanel.numLockToggled()
                 }
             }
         }

@@ -2165,12 +2165,21 @@ this to a socket without re-reading that argument.
   eventually collide, and a collision is invisible to the client (it reads
   as one target that moved, not as a fault). Same parallel-blocks failure
   this file documents for sticky-modifier release.
-- **Presence means activatable.** A key on a hidden panel or an unshown
-  layer is absent from the tree, not present and disabled: Qt prunes
-  invisible items and `Accessible.ignored` removes anything with no id. A
-  `KeyButton` whose caller forgets `targetId` is therefore silently
-  unreachable rather than broken-looking, which is why the test walks the
-  whole tree and fails on any visible key without one.
+- **Presence means activatable, and the check has to run at activation as
+  well.** A key on a hidden panel or an unshown layer is absent from the
+  tree: Qt prunes invisible items and `Accessible.ignored` removes anything
+  with no id. Pruning only shapes a *fresh traversal*, though, and hiding a
+  panel leaves every delegate inside it alive, so a client that retained a
+  target before the panel closed, or whose visibility check raced the close,
+  could Invoke it and type a key that was not on screen (reproduced against
+  `pad.0.0`). `KeyButton._scanActivatable` is the one condition behind both
+  the presence and the refusal, and it reads the key's own **effective**
+  `visible` (Qt propagates a false parent down, so it covers window, panel
+  and key at once) plus `enabled`, which is what takes the numpad's blank
+  centre key out with NumLock off. A `KeyButton` whose caller forgets
+  `targetId` is silently unreachable rather than broken-looking, which is
+  why the test walks the whole tree and fails on any visible key without
+  one.
 - **`Accessible.name` is a *speakable* label, not the keycap.** Taking the
   cap verbatim is wrong in seven places on the shipped qwerty layout: the
   space bar's cap is the empty string, and Backspace, Win and the four
@@ -2178,7 +2187,11 @@ this to a socket without re-reading that argument.
   unlabelled or unpronounceable targets including the most-pressed key on
   the board. `KeyButton._scanName` strips non-ASCII from the cap and falls
   back to `keyText`, which every caller already sets to the key's own word.
-  No glyph table, no upkeep.
+  No glyph table, no upkeep. **The numpad has to name both of its states**:
+  its ten dual keys change meaning with NumLock and four of the NumLock-off
+  caps are bare glyph arrows, so they bind `keyText` per state. The
+  default-state name check could not see that, because the panel ships with
+  NumLock on.
 - **Only real toggles report a toggle state.** The modifiers plus Caps and
   NumLock. A **programmed F-key is not one**, even though `FunctionRow`
   binds its `isActive`: there the accent means "this key was reassigned",
@@ -2189,6 +2202,32 @@ this to a socket without re-reading that argument.
   client; HelpText and ItemStatus both stay empty). That property is UIA3
   only, so a legacy `System.Windows.Automation` client sees it as absent.
   It is the one field in the contract a UIA2 client cannot read.
+- **Everything that can change the target set feeds the revision beacon, and
+  two things that could were missing.** `Main.qml::scanRevision` is the one
+  property a scanner polls, so a change it does not carry is a stale target
+  map for as long as nothing else moves. **NumLock** rewrites ten numpad
+  names and actions with every id unchanged; and **whether the pill row has
+  any targets at all** is a different question from `predictionGeneration`,
+  because dictation entering `listening` and the study's predictions-off
+  condition *remove* the pills rather than repopulating them, so the
+  generation never moves. `root.predictionsArePresent` is that condition,
+  read by the pill Repeater's model and by the beacon, so the two cannot
+  drift. The numpad's NumLock state lives on `root` for the same reason: the
+  beacon has to see it.
+- **An Invoke carries no click position, and that is a difference from a
+  click rather than a likeness.** `pressDx` / `pressDy` persist from the last
+  real press on a key, so an Invoke that left them alone handed the engine
+  the coordinates of a click that never happened, into the live fuzzy
+  scoring *and* into `observe_press`, which teaches the per-slot pointer
+  bias. For a user who scans sometimes and mouses at other times that is the
+  correction the prefix beam depends on, taught from presses nobody made.
+  The source travels with the keystroke (`KeyButton.pressFromPointer`, the
+  fourth argument to `pressKey` / `pressKeyLiteral`, defaulting True so
+  every existing caller is unchanged): the character resolves to its key's
+  centre, keeps its slot in `_word_offsets` so the sequence still lines up
+  with the word, and contributes no pointer sample. Zeroing the offsets was
+  the obvious fix and is wrong, since it trains an artificial dead-centre
+  click.
 - **Show, minimize and state go through the window's standard
   WindowPattern, and three things make that safe; each was measured broken
   first.** (1) **Restoring never takes the foreground**:

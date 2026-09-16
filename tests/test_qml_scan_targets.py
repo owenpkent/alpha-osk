@@ -657,3 +657,245 @@ class TestClosingTheKeyboardMinimizesIt:
         QMetaObject.invokeMethod(root, "close")
         _settle(root)
         assert root.property("visible") is False
+
+
+class TestARetainedTargetOnAHiddenPanelCannotType:
+    """A hidden panel's keys are still alive, and a scanner may hold one.
+
+    ``TestHiddenSurfacesAreNotTargets`` above covers the traversal half:
+    hide the numpad and a fresh walk finds no ``pad.`` targets. That is not
+    enough on its own, and the gap is the whole point of this class. Hiding
+    a panel leaves every delegate inside it constructed, so a client that
+    retained a target before the panel closed, or whose visibility check
+    raced the close, still holds a live accessible interface. The guard used
+    to check only the window, so invoking that retained interface typed a
+    key that was not on screen.
+    """
+
+    def _pad_key(self, root):
+        root.setProperty("showNumpad", True)
+        _settle(root)
+        return next(
+            k for k in _visible_keys(root) if str(k.property("targetId")) == "aosk.v1.pad.0.0"
+        )
+
+    def test_a_key_on_a_hidden_panel_types_nothing(self, qml_root):
+        root, _, bridge = qml_root
+        key = self._pad_key(root)
+        root.setProperty("showNumpad", False)
+        _settle(root)
+        bridge._synth.reset_mock()
+        assert QMetaObject.invokeMethod(key, "activateFromAssistiveClient")
+        QCoreApplication.processEvents()
+        assert TestPredictionPillsGetAFreshIdentity._typed(bridge) == []
+
+    def test_the_same_key_types_once_the_panel_is_shown(self, qml_root):
+        """The inverse: a guard that refused everything would pass alone."""
+        root, _, bridge = qml_root
+        key = self._pad_key(root)
+        bridge._synth.reset_mock()
+        assert QMetaObject.invokeMethod(key, "activateFromAssistiveClient")
+        QCoreApplication.processEvents()
+        typed = TestPredictionPillsGetAFreshIdentity._typed(bridge)
+        assert [(c[0], c[1]) for c in typed] == [("send_text", ("7",))]
+
+    def test_a_key_the_panel_disables_types_nothing(self, qml_root):
+        """The numpad's centre key is blank and disabled with NumLock off.
+
+        The contract says presence means activatable, so it must leave the
+        target set rather than sit there doing nothing when invoked.
+        """
+        root, _, bridge = qml_root
+        root.setProperty("showNumpad", True)
+        root.setProperty("numLockOn", False)
+        _settle(root)
+        centre = next(
+            k for k in _key_items(root) if str(k.property("targetId")) == "aosk.v1.pad.1.1"
+        )
+        assert centre.property("_scanIgnored")
+        bridge._synth.reset_mock()
+        assert QMetaObject.invokeMethod(centre, "activateFromAssistiveClient")
+        QCoreApplication.processEvents()
+        assert TestPredictionPillsGetAFreshIdentity._typed(bridge) == []
+
+
+class TestTheBeaconCarriesEveryTargetChangingState:
+    """The beacon is the only thing a scanner polls, so a change it misses
+    is a stale target map for as long as nothing else moves.
+
+    Both cases here changed the target set while leaving the beacon
+    byte-identical. They are asserted as a pair with the accessible state
+    they describe, not as a beacon string on its own, because a beacon that
+    changed for an unrelated reason would satisfy the string half alone.
+    """
+
+    def test_numlock_moves_it(self, qml_root):
+        """NumLock rewrites ten names and actions with every id unchanged."""
+        root, _, _ = qml_root
+        root.setProperty("showNumpad", True)
+        root.setProperty("numLockOn", True)
+        _settle(root)
+        before = root.property("scanRevision")
+        digit = next(
+            k for k in _key_items(root) if str(k.property("targetId")) == "aosk.v1.pad.0.0"
+        )
+        assert digit.property("_scanName") == "7"
+
+        root.setProperty("numLockOn", False)
+        _settle(root)
+
+        assert digit.property("_scanName") == "Home"
+        assert root.property("scanRevision") != before
+
+    def test_dictation_emptying_the_pill_row_moves_it(self, qml_root):
+        """`listening` removes every pill, and the generation does not move.
+
+        The pills are removed rather than repopulated, so
+        `predictionGeneration` is untouched and the old beacon said nothing
+        had changed while every prediction target had gone.
+        """
+        root, _, _ = qml_root
+        root.setProperty("predictions", ["alpha", "beta"])
+        _settle(root)
+        assert TestPredictionPillsGetAFreshIdentity._pills(None, root)
+        before = root.property("scanRevision")
+
+        root.setProperty("dictationState", "listening")
+        _settle(root)
+
+        assert not TestPredictionPillsGetAFreshIdentity._pills(None, root)
+        assert root.property("scanRevision") != before
+
+    def test_and_it_moves_back_when_dictation_stops(self, qml_root):
+        root, _, _ = qml_root
+        root.setProperty("predictions", ["alpha", "beta"])
+        root.setProperty("dictationState", "listening")
+        _settle(root)
+        quiet = root.property("scanRevision")
+
+        root.setProperty("dictationState", "idle")
+        _settle(root)
+
+        assert TestPredictionPillsGetAFreshIdentity._pills(None, root)
+        assert root.property("scanRevision") != quiet
+
+
+class TestEveryTargetHasSomethingToSay:
+    """A scanner may speak a target's name, so an empty one is a target its
+    user cannot identify.
+
+    ``TestTheNamesAreSpeakable`` covers the default state. The numpad with
+    NumLock off is the state it misses: four of its caps are bare glyph
+    arrows and the panel set no `keyText`, so their accessible names came
+    out empty.
+    """
+
+    @pytest.mark.parametrize("num_lock", [True, False])
+    def test_the_numpad_names_every_target_in_both_states(self, qml_root, num_lock):
+        root, _, _ = qml_root
+        root.setProperty("showNumpad", True)
+        root.setProperty("numLockOn", num_lock)
+        _settle(root)
+        pad = [
+            k
+            for k in _visible_keys(root)
+            if str(k.property("targetId")).startswith("aosk.v1.pad.")
+            and not k.property("_scanIgnored")
+        ]
+        assert pad, "walked the tree and found no numpad targets"
+        empty = [k.property("targetId") for k in pad if not str(k.property("_scanName")).strip()]
+        assert not empty, empty
+
+    def test_the_arrow_keys_are_words_rather_than_glyphs(self, qml_root):
+        """The specific case: a glyph-only cap has no spoken form at all."""
+        root, _, _ = qml_root
+        root.setProperty("showNumpad", True)
+        root.setProperty("numLockOn", False)
+        _settle(root)
+        names = {
+            str(k.property("targetId")): str(k.property("_scanName"))
+            for k in _key_items(root)
+            if str(k.property("targetId")).startswith("aosk.v1.pad.")
+        }
+        assert names["aosk.v1.pad.0.1"] == "Up"
+        assert names["aosk.v1.pad.1.0"] == "Left"
+        assert names["aosk.v1.pad.1.2"] == "Right"
+        assert names["aosk.v1.pad.2.1"] == "Down"
+
+
+class TestAnAssistiveActivationIsNotAPointerSample:
+    """`pressDx` / `pressDy` persist from the last real click on a key.
+
+    An Invoke that left them alone handed the bridge the coordinates of a
+    click that did not happen. They reached two places: the live fuzzy
+    position for that character, and `observe_press`, which teaches the
+    per-slot pointer bias. For a user who scans sometimes and mouses at
+    other times, that is the correction the prefix beam depends on being
+    taught from presses nobody made. Zeroing them instead would train an
+    artificial dead-centre click, which is why the source is carried
+    explicitly rather than the numbers being overwritten.
+    """
+
+    def _grid_key(self, root):
+        return next(
+            k
+            for k in _visible_keys(root)
+            if str(k.property("targetId")).startswith("aosk.v1.grid.")
+            and str(k.property("keyText")).strip() != ""
+            and len(str(k.property("displayText"))) == 1
+        )
+
+    def test_an_invoke_contributes_no_pointer_sample(self, qml_root):
+        root, _, bridge = qml_root
+        key = self._grid_key(root)
+        key.setProperty("pressDx", 0.37)
+        key.setProperty("pressDy", -0.22)
+        observed: list = []
+        bridge._predictor.observe_press = lambda *a: observed.append(a)
+
+        assert QMetaObject.invokeMethod(key, "activateFromAssistiveClient")
+        QCoreApplication.processEvents()
+
+        assert observed == []
+        assert bridge._word_offsets
+        assert bridge._word_offsets[-1][1] is None
+
+    def test_a_real_press_still_carries_its_position(self, qml_root):
+        """The inverse, and the half that stops this becoming 'never learn'.
+
+        Driven through the bridge slot rather than a synthetic click,
+        because the offsets a real press records reach the bridge the same
+        way and a mouse event cannot be delivered reliably to a Repeater
+        delegate under the offscreen plugin.
+        """
+        root, _, bridge = qml_root
+        observed: list = []
+        bridge._predictor.observe_press = lambda *a: observed.append(a)
+
+        bridge.pressKey("a", 0.37, -0.22, True)
+
+        assert observed == [("a", 0.37, -0.22)]
+        assert bridge._word_offsets[-1] == ("a", (0.37, -0.22))
+
+    def test_the_four_argument_slot_binds_from_qml(self, qml_root):
+        """PySide overload resolution is the part Python tests cannot see.
+
+        A four-argument call that failed to bind from QML would fall back
+        to the three-argument overload with no warning anyone would notice,
+        and every scanner press would teach a dead-centre click again.
+        """
+        root, _, bridge = qml_root
+        observed: list = []
+        bridge._predictor.observe_press = lambda *a: observed.append(a)
+        ok = QMetaObject.invokeMethod(
+            root,
+            "scanTestPressKey",
+            Q_ARG("QVariant", "a"),
+            Q_ARG("QVariant", 0.4),
+            Q_ARG("QVariant", -0.1),
+            Q_ARG("QVariant", False),
+        )
+        QCoreApplication.processEvents()
+        assert ok
+        assert observed == []
+        assert bridge._word_offsets[-1] == ("a", None)

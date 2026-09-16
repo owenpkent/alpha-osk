@@ -107,17 +107,26 @@ class TestTheRecognizerResolvesOffsets:
 
 
 class TestTheBridgeKeepsOffsetsParallelToTheWord:
+    """Each entry is the character and its offset, or None for no pointer.
+
+    The offset became a nested tuple so that "no pointer was involved" has
+    a representation distinct from "a click dead centre". That matters for
+    an external switch scanner's activation, which carries no position at
+    all: recording it as (0, 0) taught the pointer model an artificial
+    centred click. See `pressFromPointer` in KeyButton.qml.
+    """
+
     def test_a_press_records_its_offset(self, bridge: KeyboardBridge):
         bridge.pressKey("h", 0.25, -0.1)
         bridge.pressKey("o")
         assert bridge._current_word == "ho"
-        assert bridge._word_offsets == [("h", 0.25, -0.1), ("o", 0.0, 0.0)]
+        assert bridge._word_offsets == [("h", (0.25, -0.1)), ("o", (0.0, 0.0))]
 
     def test_backspace_pops_and_a_reset_clears(self, bridge: KeyboardBridge):
         bridge.pressKey("h", 0.25, -0.1)
         bridge.pressKey("o", 0.1, 0.1)
         bridge.pressSpecialKey("backspace")
-        assert bridge._word_offsets == [("h", 0.25, -0.1)]
+        assert bridge._word_offsets == [("h", (0.25, -0.1))]
         bridge._reset_typing_context()
         assert bridge._word_offsets == []
 
@@ -138,7 +147,10 @@ class TestTheBridgeKeepsOffsetsParallelToTheWord:
         assert seen[-1] is None
         # and the next press re-syncs rather than staying broken
         bridge.pressKey("w", 0.1, 0.0)
-        assert seen[-1] == [(0.0, 0.0)] * 5 + [(0.1, 0.0)]
+        # The re-synced characters read as None rather than dead centre,
+        # which is what they always meant: nothing was recorded for them.
+        # `positions_for` resolves either one to the key's centre.
+        assert seen[-1] == [None] * 5 + [(0.1, 0.0)]
 
     def test_a_rewritten_word_of_the_same_length_does_not_inherit_them(
         self, bridge: KeyboardBridge, monkeypatch
@@ -185,7 +197,7 @@ class TestTheBridgeKeepsOffsetsParallelToTheWord:
 
     def test_the_literal_path_carries_the_offset_too(self, bridge: KeyboardBridge):
         bridge.pressKeyLiteral("A", 0.3, 0.2)
-        assert bridge._word_offsets == [("A", 0.3, 0.2)]
+        assert bridge._word_offsets == [("A", (0.3, 0.2))]
 
     def test_a_press_is_observed_for_the_bias_outside_privacy_mode_only(
         self, bridge: KeyboardBridge

@@ -658,6 +658,16 @@ Window {
     // stale selection has to be caught by, not "the text changed".
     property int predictionGeneration: 0
     onPredictionsChanged: root.predictionGeneration += 1
+    // Exists for `tests/test_qml_scan_targets.py`. PySide's Python tests
+    // call the bridge slots directly and so never exercise QML's overload
+    // resolution; a four-argument `pressKey` that failed to bind would fall
+    // back to the three-argument overload silently, and every scanner press
+    // would teach the pointer model a dead-centre click again. The same
+    // argument the click-position work makes for `test_qml_click_position.py`.
+    function scanTestPressKey(ch, dx, dy, fromPointer) {
+        keyboard.pressKey(ch, dx, dy, fromPointer)
+    }
+
     function scanPredictionId(idx, generation) {
         return root.scanContractVersion + ".pred." + idx + ".g" + generation
     }
@@ -685,8 +695,27 @@ Window {
     // KeyButton reads the same thing through its own attached Window.
     readonly property bool scanWindowShown:
         root.visibility !== Window.Minimized && root.visibility !== Window.Hidden
+    // The numpad's NumLock state, held here rather than inside the panel
+    // because `scanRevision` below has to carry it: NumLock rewrites ten
+    // targets' names and actions while leaving every id alone, so a scanner
+    // polling the beacon kept a stale map. The panel binds to this and the
+    // Num key writes it back.
+    property bool numLockOn: true
+    // Whether the pill row has any targets in it.  Declared here rather than
+    // inline on the Repeater's model because the beacon has to carry the
+    // same condition: dictation entering `listening` empties the row, and
+    // so does the study's predictions-off condition, and neither of them
+    // moves `predictionGeneration` (the pills are removed rather than
+    // repopulated).  A scanner polling the beacon kept a target map holding
+    // pills that were no longer on screen.  One property, both readers.
+    readonly property bool predictionsArePresent:
+        root.suggestionsEnabled && !root.privacyMode
+        && !root.dictationActive && !study.suppressPredictions
     readonly property string scanRevision: [
         root.predictionGeneration,
+        // Everything that decides whether the pills are there at all, not
+        // just whether their words changed.
+        root.predictionsArePresent ? 1 : 0,
         root.visibility,
         Math.round(root.x), Math.round(root.y),
         Math.round(root.width), Math.round(root.height),
@@ -694,6 +723,11 @@ Window {
         root.showNumberRow ? 1 : 0, root.showFunctionRow ? 1 : 0,
         root.showExtraFunctionRow ? 1 : 0, root.showNavigation ? 1 : 0,
         root.showNumpad ? 1 : 0, root.suggestionsEnabled ? 1 : 0,
+        // NumLock rewrites the whole numpad: the digits become navigation
+        // actions and the centre key goes blank and disabled, with every
+        // target id unchanged, so without this the beacon was byte-identical
+        // across a change that replaced ten targets' names and actions.
+        root.numLockOn ? 1 : 0,
         root.shiftOn ? 1 : 0, root.capsOn ? 1 : 0, root.ctrlOn ? 1 : 0,
         root.altOn ? 1 : 0, root.winOn ? 1 : 0,
         root.shiftLocked ? 1 : 0, root.ctrlLocked ? 1 : 0,
@@ -2649,9 +2683,7 @@ Window {
                         // compare equal, the pills are rebuilt, and an
                         // element from an earlier round is gone.  Do not
                         // strip this back to a plain word list.
-                        model: (root.suggestionsEnabled && !root.privacyMode
-                                && !root.dictationActive
-                                && !study.suppressPredictions)
+                        model: root.predictionsArePresent
                                ? predRow.fit.words.map(function (w) {
                                      return { word: w, generation: root.predictionGeneration }
                                  })
@@ -3298,10 +3330,20 @@ Window {
                                         // deliberately left alone by a layer
                                         // switch, so without this, Caps + the
                                         // micro sign typed a Greek capital Mu.
+                                        // The fourth argument is whether a
+                                        // pointer was involved: an assistive
+                                        // Invoke carries no click position, and
+                                        // the values above persist from the last
+                                        // real press on this key, so passing them
+                                        // would score the word against a click
+                                        // nobody made and teach the pointer model
+                                        // from it.
                                         if (kd.literal)
-                                            keyboard.pressKeyLiteral(kd.key, keyBtn.pressDx, keyBtn.pressDy)
+                                            keyboard.pressKeyLiteral(kd.key, keyBtn.pressDx, keyBtn.pressDy,
+                                                                     keyBtn.pressFromPointer)
                                         else
-                                            keyboard.pressKey(ch, keyBtn.pressDx, keyBtn.pressDy)
+                                            keyboard.pressKey(ch, keyBtn.pressDx, keyBtn.pressDy,
+                                                              keyBtn.pressFromPointer)
                                         // displayText already reflects shift/
                                         // caps casing, so it matches the char
                                         // pressKey actually sends to the OS.
@@ -3391,7 +3433,8 @@ Window {
                                     } else {
                                         return
                                     }
-                                    keyboard.pressKeyLiteral(rch, keyBtn.pressDx, keyBtn.pressDy)
+                                    keyboard.pressKeyLiteral(rch, keyBtn.pressDx, keyBtn.pressDy,
+                                                             keyBtn.pressFromPointer)
                                     if (root.keyPreviewEnabled)
                                         root.showKeyPreview(keyBtn, rch)
                                 }
@@ -3457,6 +3500,8 @@ Window {
                 Layout.preferredHeight: root.sectionHeight
                 scanSection: "pad"
                 scanIdFor: root.scanTargetId
+                numLockOn: root.numLockOn
+                onNumLockToggled: root.numLockOn = !root.numLockOn
                 roleColors: root.keyRoles
                 // Vertically off `keySpacing`, not `rowSpacing`: this
                 // panel lays its own rows out on it.

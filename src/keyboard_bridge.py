@@ -778,7 +778,7 @@ class KeyboardBridge(QObject):
         # Context tracking for predictions
         self._context_buffer = ""
         self._current_word = ""
-        self._word_offsets: List[Tuple[str, float, float]] = []
+        self._word_offsets: List[Tuple[str, Optional[Tuple[float, float]]]] = []
         # True iff Caps Lock was active for at least one character in the
         # currently-being-typed word.  Distinguishes "user shouted via
         # caps lock" from "user deliberately right-clicked / shifted each
@@ -1542,19 +1542,32 @@ class KeyboardBridge(QObject):
 
     @Slot(str)
     @Slot(str, float, float)
-    def pressKey(self, key: str, dx: float = 0.0, dy: float = 0.0) -> None:
+    @Slot(str, float, float, bool)
+    def pressKey(
+        self, key: str, dx: float = 0.0, dy: float = 0.0, from_pointer: bool = True
+    ) -> None:
         """Called from QML when a character key is pressed.
 
         Applies shift / caps-lock case normalization to `key`. For a
         "type this character verbatim" path (e.g. right-click → shifted
         variant where QML has already picked the exact character to
         send), use :meth:`pressKeyLiteral` instead.
+
+        ``from_pointer`` is False for an activation with no pointer behind
+        it, which today means an external switch scanner's UI Automation
+        Invoke. ``dx`` / ``dy`` are then ignored: the character resolves to
+        its key's centre for this keystroke and contributes no sample to
+        the learned pointer bias. It defaults True so every existing
+        caller, tests included, still means "a press at this offset".
         """
-        self._press_char(key, literal=False, offset=(dx, dy))
+        self._press_char(key, literal=False, offset=(dx, dy) if from_pointer else None)
 
     @Slot(str)
     @Slot(str, float, float)
-    def pressKeyLiteral(self, char: str, dx: float = 0.0, dy: float = 0.0) -> None:
+    @Slot(str, float, float, bool)
+    def pressKeyLiteral(
+        self, char: str, dx: float = 0.0, dy: float = 0.0, from_pointer: bool = True
+    ) -> None:
         """Type ``char`` exactly as-is, bypassing shift / caps-lock case
         normalization.
 
@@ -1564,10 +1577,13 @@ class KeyboardBridge(QObject):
         side effects (analytics, learning, predictions, modifier
         auto-release) match :meth:`pressKey`.
         """
-        self._press_char(char, literal=True, offset=(dx, dy))
+        self._press_char(char, literal=True, offset=(dx, dy) if from_pointer else None)
 
     def _press_char(
-        self, key: str, literal: bool, offset: Tuple[float, float] = (0.0, 0.0)
+        self,
+        key: str,
+        literal: bool,
+        offset: Optional[Tuple[float, float]] = (0.0, 0.0),
     ) -> None:
         # Edit-mode intercept: route the character to the popup's
         # TextField instead of the OS. Apply shift/caps for case but
@@ -1720,11 +1736,19 @@ class KeyboardBridge(QObject):
             # `_offsets_spell` for why a length check was not enough).
             # The press is also observed for the learned bias, inside
             # the not-privacy branch like every other learning.
+            #
+            # `None` is a keystroke with no pointer behind it (a switch
+            # scanner's Invoke).  It keeps its slot, so the sequence still
+            # lines up with the word, and `positions_for` already reads a
+            # missing entry as the key centre; it teaches the pointer model
+            # nothing, because a centre-of-key sample from a click nobody
+            # made would drag every slot's learned bias toward zero.
             so_far = self._current_word[:-1]
             if not self._offsets_spell(so_far):
-                self._word_offsets = [(c, 0.0, 0.0) for c in so_far]
-            self._word_offsets.append((char, offset[0], offset[1]))
-            self._predictor.observe_press(char, offset[0], offset[1])
+                self._word_offsets = [(c, None) for c in so_far]
+            self._word_offsets.append((char, offset))
+            if offset is not None:
+                self._predictor.observe_press(char, offset[0], offset[1])
             # Track whether Caps Lock was on for any char in this word
             # — gates whether all-caps typing is allowed to be learned
             # (see `_word_typed_under_caps_lock` in __init__).
@@ -3403,13 +3427,19 @@ class KeyboardBridge(QObject):
         closes it without touching any of the sites that rewrite the
         word, the same argument ``_token_pill_words`` makes.
         """
-        return "".join(c for c, _, _ in self._word_offsets).lower() == word.lower()
+        return "".join(c for c, _ in self._word_offsets).lower() == word.lower()
 
-    def _offsets_for_word(self) -> Optional[List[Tuple[float, float]]]:
-        """The click positions for ``_current_word``, or None for key centres."""
+    def _offsets_for_word(self) -> Optional[List[Optional[Tuple[float, float]]]]:
+        """The click positions for ``_current_word``, or None for key centres.
+
+        An individual entry may also be ``None``, for a character typed
+        with no pointer behind it; ``positions_for`` reads that as the key
+        centre, so one scanner keystroke inside a moused word costs only
+        its own position rather than the whole word's.
+        """
         if not self._current_word or not self._offsets_spell(self._current_word):
             return None
-        return [(dx, dy) for _, dx, dy in self._word_offsets]
+        return [offset for _, offset in self._word_offsets]
 
     def _update_predictions(self) -> None:
         """Request updated predictions from the engine."""

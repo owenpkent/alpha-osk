@@ -109,6 +109,8 @@ target that moved, not as a fault).
 
 ## Names, and why they are not the keycaps
 
+
+
 `Name` is a **speakable** label, not a copy of the cap.
 
 Taking the cap verbatim was tried first and is wrong on the shipped qwerty
@@ -128,6 +130,13 @@ the character itself, so it keeps its own name.
 
 Prediction pill Names are exactly the word on the pill, with no
 transformation.
+
+**The numpad names both of its states.** Its ten dual-purpose keys change
+what they do with NumLock, and four of the NumLock-off caps are bare glyph
+arrows, which the ASCII strip above reduces to nothing. They bind `keyText`
+per state (`"8"` or `"Up"`), so a scanner has a word to speak in either one.
+The default-state name checks could not see this, because the numpad ships
+with NumLock on; the coverage now runs with the panel visible in both states.
 
 ## State
 
@@ -168,7 +177,19 @@ offset in an overlay is the symptom to check first.
 string. It changes whenever anything in this contract changes: window
 position and size, monitor or DPI, layout, compact view, active layer, any
 panel's visibility, any modifier or lock state, the prediction generation,
-and keyboard visibility.
+whether the prediction row has any targets at all, the numpad's NumLock
+state, and keyboard visibility.
+
+The last two were missing and are worth naming, because both changed the
+target set while leaving the string byte-identical, which a client following
+the loop below cannot detect at all. **NumLock** rewrites ten numpad targets'
+names and actions with every id unchanged, and blanks and disables the centre
+one. **Whether the pills are present** is not the same question as the
+prediction generation: dictation entering `listening`, and the study's
+predictions-off condition, *remove* the pill row rather than repopulating it,
+so the generation does not move. A single `predictionsArePresent` property is
+now what both the pill Repeater's model and this string read, so the two
+cannot disagree again.
 
 The intended client loop is to poll that one property at whatever rate the
 overlay needs, and take a full cached snapshot only when it moves. That keeps
@@ -198,6 +219,30 @@ UIA `Invoke` on a target does what a primary click does.
   looking at the keyboard rather than the text field, and without it the only
   feedback that a selection landed is a character appearing elsewhere.
 - It goes through the same debounce a click does.
+- It **carries no click position**, and that is a difference from a click
+  rather than a likeness. A key's last press offsets persist on the object,
+  so an Invoke that left them alone handed the engine the coordinates of a
+  click that never happened: they reached the live fuzzy scoring for that
+  character *and* the learned per-slot pointer bias. For someone who scans
+  sometimes and mouses at other times, that taught the correction the prefix
+  beam depends on from presses nobody made. The input source now travels with
+  the keystroke (`KeyButton.pressFromPointer`, the fourth argument to the
+  bridge's `pressKey` / `pressKeyLiteral`): the character resolves to its
+  key's centre for that keystroke, keeps its slot in the word's offset
+  sequence, and contributes no sample to the pointer model. Zeroing the
+  offsets instead would have trained an artificial dead-centre click, which
+  is why the source is explicit rather than the numbers being overwritten.
+
+**A target that is not on screen refuses to activate, and the window is not
+the only way it can be off screen.** The numpad, the navigation cluster and
+both function rows are hidden by hiding the panel, which leaves every key
+inside it constructed and holding a live accessible interface. Removing them
+from a fresh traversal does nothing for a client that retained a target
+before the panel closed, or whose visibility check raced the close. The guard
+is the key's own effective visibility and enabled state, checked at
+activation as well as at presence, so it covers the window, the panel and the
+key together. `enabled` is in it because presence means activatable, and the
+numpad's centre key is blank and disabled with NumLock off.
 
 Privacy mode needs no special handling by a client. It already empties the
 prediction bar, so those targets leave the tree with it.
