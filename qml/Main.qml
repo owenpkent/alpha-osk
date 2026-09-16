@@ -2891,7 +2891,6 @@ Window {
                         maxWidth: root._widestRow.units * root.keyW
                                   + root._widestRow.gaps * root.keySpacing
                         actions: root.keyActions
-                        editFn: root.openKeyActionEditor
                         roleColors: root.keyRoles
                         keyColor: Qt.darker(root.themeKeyColor, 1.15)
                         keyPressedColor: root.themeKeyPressed
@@ -2918,7 +2917,6 @@ Window {
                         maxWidth: root._widestRow.units * root.keyW
                                   + root._widestRow.gaps * root.keySpacing
                         actions: root.keyActions
-                        editFn: root.openKeyActionEditor
                         roleColors: root.keyRoles
                         keyColor: Qt.darker(root.themeKeyColor, 1.15)
                         keyPressedColor: root.themeKeyPressed
@@ -3951,8 +3949,9 @@ Window {
         }
 
         // The return leg of `editKeyFromSettings`. Guarded on the return
-        // view being set, so an editor opened by right-clicking a key
-        // does not pop the settings window open behind it.
+        // view being set, so an editor opened any other way (a direct
+        // `openKeyActionEditor` call) does not pop the settings window
+        // open behind it.
         Connections {
             target: keyActionEditor
             function onClosed() {
