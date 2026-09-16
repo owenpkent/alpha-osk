@@ -1,4 +1,8 @@
-# Reviewed stems for the supplemental no-swears list, including compounds
+# Reviewed profanity stems. These SEED the suggestion filter
+# (scripts/gen_explicit_words.py); they are no longer removed from the
+# shipped wordlist. Renamed from explicit_exclusions.txt when that
+# changed, because a file called "exclusions" that excludes nothing is
+# how the two jobs got confused in the first place. Includes compounds
 # and doubled consonants. Matching is exact with these permitted suffixes:
 # empty, s, es, ed, ing, er, ers, y, ies, ish, ier, iest, ily.
 # Do not use substring matching: cockpit, peacock, and dictionary are valid.

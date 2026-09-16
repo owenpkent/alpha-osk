@@ -411,7 +411,7 @@ wordlist and writes both the data and its provenance manifest. It retains all
 remaining size-60 entries after filtering, without random sampling or a
 word-length cutoff. Filters exclude uppercase forms, possessives, unsupported
 characters, fragments, existing vocabulary, and the explicitly reviewed stems
-and inflections in `data/explicit_exclusions.txt`. Matching is exact, so
+and inflections in `data/explicit_stems.txt`. Matching is exact, so
 cockpit, peacock, dictionary, and medical vocabulary are not removed merely
 because they contain an ambiguous substring. This is a reviewed exclusion
 list, not a claim of exhaustive content classification. The flat source lacks

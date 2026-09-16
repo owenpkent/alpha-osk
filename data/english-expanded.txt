@@ -3,8 +3,9 @@
 # Source URL: https://sourceforge.net/projects/wordlist/files/speller/2026.02.25/wordlist-en_US-2026.02.25.zip/download
 # Archive SHA-256: caeb6ee8a38e98ccbd6e5c717889a1bab68073dcba8a9c0ca6570641926913e9.
 # License and original notices: data/licenses/ESDB.txt.
-# Explicit exclusions: data/explicit_exclusions.txt, exact roots plus
-# documented inflections only; no substring matching.
+# No content is excluded here. Explicit words are in this list,
+# and data/explicit_words.txt decides whether the prediction bar
+# volunteers them, under a user setting. See CLAUDE.md.
 # Filter: lowercase ASCII words, no possessives, length > 2,
 # vowel and consonant required, excluding existing Alpha-OSK words.
 # Selection: every remaining size-60 word; no sampling or length cutoff.
@@ -2771,6 +2772,8 @@ asseverated
 asseverates
 asseverating
 asseveration
+asshole
+assholes
 assiduity
 assiduous
 assiduously
@@ -3994,6 +3997,15 @@ bassos
 basswood
 basswoods
 bast
+bastard
+bastardization
+bastardizations
+bastardize
+bastardized
+bastardizes
+bastardizing
+bastards
+bastardy
 baste
 basted
 baster
@@ -5068,6 +5080,15 @@ bishoprics
 bismuth
 bisque
 bistros
+bitch
+bitched
+bitches
+bitchier
+bitchiest
+bitchily
+bitchiness
+bitching
+bitchy
 bitcoin
 bitcoins
 biter
@@ -5483,6 +5504,8 @@ blowhole
 blowholes
 blowier
 blowiest
+blowjob
+blowjobs
 blowlamp
 blowlamps
 blowouts
@@ -5756,7 +5779,9 @@ bollix
 bollixed
 bollixes
 bollixing
+bollocking
 bollockings
+bollocks
 bolls
 bolsheviks
 bolshie
@@ -6753,6 +6778,11 @@ bugbears
 bugfix
 bugfixes
 bugged
+bugger
+buggered
+buggering
+buggers
+buggery
 buggier
 buggies
 buggiest
@@ -6832,6 +6862,11 @@ bullpens
 bullring
 bullrings
 bullseye
+bullshits
+bullshitted
+bullshitter
+bullshitters
+bullshitting
 bullwhip
 bullwhips
 bully
@@ -8917,6 +8952,8 @@ chickened
 chickenhearted
 chickening
 chickenpox
+chickenshit
+chickenshits
 chickpea
 chickpeas
 chickweed
@@ -9982,6 +10019,7 @@ cochineal
 cochlea
 cochleae
 cochlear
+cock
 cockade
 cockades
 cockamamie
@@ -9995,13 +10033,20 @@ cockchafer
 cockchafers
 cockcrow
 cockcrows
+cocked
+cocker
 cockerel
 cockerels
+cockers
 cockeyed
 cockfight
 cockfighting
 cockfights
+cockier
+cockiest
+cockily
 cockiness
+cocking
 cockle
 cockles
 cockleshell
@@ -10012,10 +10057,14 @@ cockpit
 cockpits
 cockroach
 cockroaches
+cocks
 cockscomb
 cockscombs
+cocksucker
+cocksuckers
 cocksure
 cocktails
+cocky
 cocoas
 coconuts
 cocoon
@@ -13034,6 +13083,8 @@ cunning
 cunninger
 cunningest
 cunningly
+cunt
+cunts
 cupboard
 cupboards
 cupcake
@@ -13383,6 +13434,14 @@ dames
 dammed
 damming
 dammit
+damn
+damnable
+damnably
+damnation
+damned
+damnedest
+damning
+damns
 damped
 dampen
 dampened
@@ -15201,11 +15260,17 @@ dichotomy
 dicier
 diciest
 dicing
+dick
 dickens
+dicker
 dickered
 dickering
+dickers
 dickey
 dickeys
+dickhead
+dickheads
+dicks
 dickybird
 dickybirds
 dicotyledon
@@ -15335,6 +15400,8 @@ dilation
 dilator
 dilators
 dilatory
+dildo
+dildos
 dilemmas
 dilettante
 dilettantes
@@ -17294,6 +17361,7 @@ dulling
 dullness
 dulls
 dully
+dumbass
 dumbbell
 dumbbells
 dumbed
@@ -20014,9 +20082,15 @@ faff
 faffed
 faffing
 faffs
+fag
+fagged
+fagging
+faggot
+faggots
 fagot
 fagoting
 fagots
+fags
 faience
 failings
 faille
@@ -22443,6 +22517,14 @@ ftpers
 ftping
 fuchsia
 fuchsias
+fuck
+fucked
+fucker
+fuckers
+fuckhead
+fuckheads
+fucking
+fucks
 fuddle
 fuddled
 fuddles
@@ -23775,6 +23857,8 @@ godawful
 godchild
 godchildren
 goddammit
+goddamn
+goddamned
 goddaughter
 goddaughters
 goddesses
@@ -26566,6 +26650,7 @@ horsemen
 horseplay
 horseradish
 horseradishes
+horseshit
 horseshoe
 horseshoed
 horseshoeing
@@ -29812,6 +29897,8 @@ jackal
 jackalope
 jackalopes
 jackals
+jackass
+jackasses
 jackboot
 jackbooted
 jackboots
@@ -35528,6 +35615,9 @@ mothballed
 mothballing
 mothballs
 mothered
+motherfucker
+motherfuckers
+motherfucking
 motherhood
 mothering
 motherland
@@ -36693,10 +36783,15 @@ niff
 niffy
 niftier
 niftiest
+nigga
 niggard
 niggardliness
 niggardly
 niggards
+niggas
+niggaz
+nigger
+niggers
 niggle
 niggled
 niggler
@@ -41435,6 +41530,14 @@ pis
 piscatorial
 pismire
 pismires
+piss
+pissed
+pisser
+pissers
+pisses
+pissing
+pissoir
+pissoirs
 pistachio
 pistachios
 piste
@@ -42270,6 +42373,13 @@ porkier
 porkies
 porkiest
 porky
+porn
+porno
+pornographer
+pornographers
+pornographic
+pornographically
+pornography
 porosity
 porous
 porousness
@@ -44201,6 +44311,7 @@ puss
 pusses
 pussier
 pussiest
+pussy
 pussycat
 pussycats
 pussyfoot
@@ -50406,9 +50517,16 @@ sewerage
 sewers
 sewn
 sews
+sex
 sexagenarian
 sexagenarians
+sexed
+sexes
+sexier
+sexiest
+sexily
 sexiness
+sexing
 sexism
 sexist
 sexists
@@ -50432,6 +50550,7 @@ sexualize
 sexualized
 sexualizes
 sexualizing
+sexy
 shabbier
 shabbiest
 shabbily
@@ -50786,6 +50905,17 @@ shirttails
 shirtwaist
 shirtwaists
 shirty
+shit
+shitfaced
+shithead
+shitheads
+shitload
+shits
+shitted
+shittier
+shittiest
+shitting
+shitty
 shiv
 shiver
 shivered
@@ -52018,6 +52148,12 @@ slushier
 slushiest
 slushiness
 slushy
+slut
+sluts
+sluttier
+sluttiest
+sluttish
+slutty
 sly
 slyly
 slyness
@@ -52709,12 +52845,14 @@ songwriting
 sonnet
 sonnets
 sonnies
+sonofabitch
 sonogram
 sonograms
 sonority
 sonorous
 sonorously
 sonorousness
+sonsofbitches
 soot
 sooth
 soothe
@@ -59099,6 +59237,8 @@ twanging
 twangs
 twangy
 twas
+twat
+twats
 tweaked
 tweaking
 tweaks
@@ -62398,6 +62538,12 @@ wanglers
 wangles
 wangling
 waning
+wank
+wanked
+wanker
+wankers
+wanking
+wanks
 wanly
 wannabe
 wannabee
@@ -63187,6 +63333,13 @@ whopper
 whoppers
 whopping
 whops
+whore
+whorehouse
+whorehouses
+whoreish
+whores
+whoring
+whorish
 whorl
 whorled
 whorls

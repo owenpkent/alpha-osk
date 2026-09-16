@@ -19,32 +19,6 @@ SOURCE_URL = (
     "https://sourceforge.net/projects/wordlist/files/speller/2026.02.25/"
     "wordlist-en_US-2026.02.25.zip/download"
 )
-EXPLICIT_SUFFIXES = (
-    "",
-    "s",
-    "es",
-    "ed",
-    "ing",
-    "er",
-    "ers",
-    "y",
-    "ies",
-    "ish",
-    "ier",
-    "iest",
-    "ily",
-)
-
-
-def excluded_forms(roots: set[str]) -> set[str]:
-    return {root + suffix for root in roots for suffix in EXPLICIT_SUFFIXES}
-
-
-def is_explicit_word(word: str, roots: set[str]) -> bool:
-    """Apply exact-root filtering without removing safe compounds."""
-    return word in excluded_forms(roots)
-
-
 def words_from_file(path: Path) -> set[str]:
     words: set[str] = set()
     for line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
@@ -66,13 +40,6 @@ def main() -> None:
         raise SystemExit(f"source SHA-256 mismatch: expected {SOURCE_SHA256}, got {digest}")
 
     existing = set().union(*(words_from_file(path) for path in args.base))
-    exclusions_path = Path(__file__).parent.parent / "data" / "explicit_exclusions.txt"
-    exclusions = {
-        line.strip().lower()
-        for line in exclusions_path.read_text(encoding="utf-8").splitlines()
-        if line.strip() and not line.lstrip().startswith("#")
-    }
-    excluded = excluded_forms(exclusions)
     with zipfile.ZipFile(args.archive) as archive:
         raw = archive.read("en_US.txt").decode("utf-8")
 
@@ -82,8 +49,6 @@ def main() -> None:
         if word != word.lower() or not WORD_RE.fullmatch(word):
             continue
         if len(word) <= 2 or word.endswith("'s") or word in existing:
-            continue
-        if word in excluded:
             continue
         if not any(char in "aeiouy" for char in word):
             continue
@@ -97,8 +62,9 @@ def main() -> None:
         f"# Source URL: {SOURCE_URL}\n"
         f"# Archive SHA-256: {SOURCE_SHA256}.\n"
         "# License and original notices: data/licenses/ESDB.txt.\n"
-        "# Explicit exclusions: data/explicit_exclusions.txt, exact roots plus\n"
-        "# documented inflections only; no substring matching.\n"
+        "# No content is excluded here. Explicit words are in this list,\n"
+        "# and data/explicit_words.txt decides whether the prediction bar\n"
+        "# volunteers them, under a user setting. See CLAUDE.md.\n"
         "# Filter: lowercase ASCII words, no possessives, length > 2,\n"
         "# vowel and consonant required, excluding existing Alpha-OSK words.\n"
         "# Selection: every remaining size-60 word; no sampling or length cutoff.\n"
@@ -115,8 +81,8 @@ def main() -> None:
         f"output_words={len(selected)}\n"
         "selection=all words remaining after filtering, sorted alphabetically\n"
         "filter=lowercase ASCII words, internal apostrophes, length greater than 2, "
-        "vowel and consonant, no possessives, existing words excluded, "
-        "explicit stems and inflections excluded by data/explicit_exclusions.txt\n",
+        "vowel and consonant, no possessives, existing words excluded\n"
+        "content=unfiltered; data/explicit_words.txt governs suggestions instead\n",
         encoding="utf-8",
     )
     print(f"generated {len(selected)} words")

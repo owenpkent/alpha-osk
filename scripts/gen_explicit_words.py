@@ -6,7 +6,7 @@ Run from the repository root:
     python scripts/gen_explicit_words.py
 
 **This is a flag list, not an exclusion list, and the difference is the
-point.** ``data/explicit_exclusions.txt`` is applied by
+point.** ``data/explicit_stems.txt`` is applied by
 ``gen_vocabulary.py`` when the wordlist is built, so the words it names
 are simply absent and no setting can bring them back. The list written
 here is consulted at *suggestion* time instead, so the words stay in the
@@ -18,7 +18,7 @@ what allows a mechanical rule here at all. A word wrongly flagged is one
 the bar does not offer while the filter is on; a word wrongly excluded is
 one nobody can ever predict.
 
-Matching follows the convention ``explicit_exclusions.txt`` already
+Matching follows the convention ``explicit_stems.txt`` already
 documents: a stem matches exactly, plus a closed set of inflectional
 suffixes. **Never substring matching.** That is the Scunthorpe rule, and
 without it ``class``, ``assess``, ``cocktail``, ``peacock``,
@@ -34,7 +34,7 @@ import sys
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 DATA = ROOT / "data"
 
-#: Inflections a stem is allowed to carry, from explicit_exclusions.txt.
+#: Inflections a stem is allowed to carry, from explicit_stems.txt.
 SUFFIXES = ("", "s", "es", "ed", "ing", "er", "ers", "y", "ies", "ish", "ier", "iest", "ily")
 
 #: Sources of shipped vocabulary. Anything not in one of these cannot be
@@ -94,7 +94,7 @@ SLUR_STEMS = (
 
 def load_stems() -> list[str]:
     """The profanity stems already curated, plus the slur stems above."""
-    path = DATA / "explicit_exclusions.txt"
+    path = DATA / "explicit_stems.txt"
     profanity = [
         line.strip().lower()
         for line in path.read_text(encoding="utf-8").splitlines()

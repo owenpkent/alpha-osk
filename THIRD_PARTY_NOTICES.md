@@ -80,7 +80,7 @@ redistribution, and sale with those notices retained.
 archive checksum before generating the derivative. It removes uppercase
 forms, possessives, unsupported word shapes, already shipped words, and the
 reviewed explicit-content forms in
-[`data/explicit_exclusions.txt`](data/explicit_exclusions.txt). All remaining
+[`data/explicit_stems.txt`](data/explicit_stems.txt). All remaining
 words are retained; no frequency estimates are inferred from their order.
 [`data/english-expanded.manifest`](data/english-expanded.manifest) records the
 release, checksum, filtering, and generated count. These words receive one

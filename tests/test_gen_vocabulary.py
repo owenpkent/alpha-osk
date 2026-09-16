@@ -16,12 +16,19 @@ def _module():
     return module
 
 
-def test_explicit_filter_does_not_use_substrings():
+def test_the_generator_no_longer_filters_content():
+    """Content filtering moved out of generation and into suggestion time.
+
+    The stems now seed ``scripts/gen_explicit_words.py``, so the words stay
+    in the vocabulary and a user setting decides whether the bar offers
+    them. This asserts the old machinery is gone rather than merely unused:
+    while it existed, a future change could quietly start calling it again,
+    and the words it removes cannot be recovered by any setting.
+    """
     generator = _module()
-    roots = {"cock", "fuck"}
-    assert generator.is_explicit_word("cock", roots)
-    assert generator.is_explicit_word("fucking", roots)
-    assert not generator.is_explicit_word("cockpit", roots)
+    assert not hasattr(generator, "is_explicit_word")
+    assert not hasattr(generator, "excluded_forms")
+    assert not hasattr(generator, "EXPLICIT_SUFFIXES")
 
 
 def test_generator_rejects_unverified_archive(tmp_path, monkeypatch):
@@ -73,18 +80,58 @@ def test_generator_preserves_long_words_and_filters_source_noise(tmp_path, monke
     )
     generator.main()
     words = [line for line in output.read_text().splitlines() if not line.startswith("#")]
-    assert words == ["caregiver", "cockpit", "neurodiversity", "rhythm"]
-    assert "output_words=4" in output.with_suffix(".manifest").read_text()
+    # The explicit words come through now: generation no longer removes
+    # content, and data/explicit_words.txt governs whether the bar offers
+    # them. What is still filtered here is source noise, which is a
+    # different job: capitalised forms, possessives, digits, runs with no
+    # vowel, words of two characters or fewer, and words already known.
+    assert words == [
+        "blowjobs",
+        "caregiver",
+        "cockpit",
+        "cocksucker",
+        "fucking",
+        "neurodiversity",
+        "rhythm",
+    ]
+    assert "output_words=7" in output.with_suffix(".manifest").read_text()
+    # The near-miss: "cloud" was in the base list, "Alice" is capitalised,
+    # "caregiver's" is a possessive, "xqz" has no vowel, "a" is too short
+    # and "hello123" carries digits. None of them survive.
+    for noise in ("cloud", "alice", "caregiver's", "xqz", "a", "hello123"):
+        assert noise not in words
 
 
-def test_shipped_supplement_matches_its_manifest_and_exclusion_policy():
+def test_shipped_supplement_matches_its_manifest():
     generator = _module()
     data = Path(__file__).parents[1] / "data"
     words = generator.words_from_file(data / "english-expanded.txt")
-    exclusions = generator.words_from_file(data / "explicit_exclusions.txt")
-    assert not words.intersection(generator.excluded_forms(exclusions))
     assert {"cockpit", "neurodiversity", "rhythmically"} <= words
     assert all(generator.WORD_RE.fullmatch(word) for word in words)
     manifest = (data / "english-expanded.manifest").read_text(encoding="utf-8")
     assert f"output_words={len(words)}\n" in manifest
     assert f"source_sha256={generator.SOURCE_SHA256}\n" in manifest
+    assert "content=unfiltered" in manifest
+
+
+def test_the_shipped_wordlist_is_unfiltered_and_the_flag_list_covers_it():
+    """The pair that states the whole arrangement.
+
+    The vocabulary carries explicit words, and every one of them is on the
+    list the suggestion filter consults. Asserted together because either
+    half alone is satisfiable by the wrong thing: an empty vocabulary would
+    satisfy the coverage check, and an empty flag list would satisfy nothing
+    but would look fine if only the vocabulary were checked.
+    """
+    generator = _module()
+    data = Path(__file__).parents[1] / "data"
+    words = generator.words_from_file(data / "english-expanded.txt")
+    stems = generator.words_from_file(data / "explicit_stems.txt")
+    flagged = generator.words_from_file(data / "explicit_words.txt")
+
+    suffixes = ("", "s", "es", "ed", "ing", "er", "ers", "y", "ies", "ish", "ier", "iest", "ily")
+    forms = {stem + suffix for stem in stems for suffix in suffixes}
+
+    present = words & forms
+    assert present, "the wordlist no longer carries the words the stems name"
+    assert present <= flagged, sorted(present - flagged)

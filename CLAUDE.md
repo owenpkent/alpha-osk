@@ -1467,22 +1467,25 @@ filter honest.
   (`scripts/gen_explicit_words.py`). It is a list of **exact words**, so the
   runtime is a set lookup with no suffix logic to get wrong.
 - **Matching is stem-plus-closed-suffix-set, never substring.** That rule and
-  its suffix list come from `data/explicit_exclusions.txt`, which already
+  its suffix list come from `data/explicit_stems.txt`, which already
   documented it. Substring matching is the Scunthorpe problem and it flags
   `class`, `assess`, `cocktail`, `peacock`, `dictionary`, `analysis` and
   `shiitake`. A filter that visibly swallows ordinary words is one the user
   switches off and leaves off, which is the same outcome as not having it.
   `"spook"` is deliberately **not** a stem for exactly this reason: it would
   take `spooky` and `spooked` with it.
-- **The two lists do opposite jobs and must not be merged.**
-  `explicit_exclusions.txt` is applied by `gen_vocabulary.py` when the
-  wordlist is built, so what it names is simply absent and no setting can
-  bring it back. `explicit_words.txt` is consulted at suggestion time. Note
-  the consequence, which is easy to misread: the shipped list currently
-  contains **slurs but not common profanity**, because the exclusion list was
-  written to cover swearing and missed slurs. Restoring profanity to the
-  vocabulary means regenerating without that exclusion, which is a separate
-  decision and has not been taken.
+- **Nothing is filtered at generation time any more, and that is the fix for
+  a bug worth remembering.** `explicit_stems.txt` (named
+  `explicit_exclusions.txt` until 2026-09-16) used to be applied by
+  `gen_vocabulary.py`, so the words it named were absent from the shipped
+  list and no setting could bring them back. It had been written to cover
+  swearing and it missed slurs, so the shipped vocabulary ended up carrying
+  **slurs but no common profanity**, which is the exact inverse of what
+  anyone wanted: you could not predict `fuck` at all, while the slurs were
+  one keystroke from a pill. The stems now only *seed* the suggestion
+  filter, the wordlist ships unfiltered, and the file was renamed because a
+  file called "exclusions" that excludes nothing is how the two jobs got
+  confused in the first place.
 - **The filter is applied in exactly one place**, `_finalize_scores`, beside
   the short-word gate, because every suggestion from every strategy passes
   through there. A second copy at another emit site is the parallel-blocks
