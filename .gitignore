@@ -73,3 +73,8 @@ backend/cf-worker/cf-worker-sbom.cyclonedx.json
 # Hypothesis example database (the test profile sets database=None, so this
 # should never appear, but a manual run with a different profile would.)
 .hypothesis/
+
+# PowerShell drops its module-analysis cache here when a tool runs with
+# LOCALAPPDATA unset or pointed at the working directory. Regenerable, and
+# nothing to do with the project, but it dirties `git status` if untracked.
+Microsoft/

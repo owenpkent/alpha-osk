@@ -193,15 +193,10 @@ Hybrid startup and full dictionary rebuilds explicitly call
 prefix does not pay construction cost. Standalone fuzzy frequency updates
 remain lazy. Layout changes reuse the dictionary index and refresh emissions.
 
-The larger base dictionary can make a two-letter typo a live prefix of an
-uncommon word. `HybridPredictor.predict` therefore opts into
-`allow_short_prefix` when fewer than five valid exact candidates exist,
-independent of the requested pill count. Suppressed candidates do not fill
-that quota. Standalone fuzzy calls retain
-the original default, and a single character remains below the rescue floor.
-
-The design, vocabulary source, measurements and remaining options are recorded in
-[`VOCABULARY_MEMORY.md`](../research/VOCABULARY_MEMORY.md).
+These structures change how the vocabulary is stored and searched, not what
+is in it or how it is ranked: the same dictionary produces the same
+suggestions in the same order, which is what the parity tests in
+`tests/test_packed_prefixes.py` and `tests/test_symspell.py` pin.
 
 ## Historical Gaps / Future Work
 

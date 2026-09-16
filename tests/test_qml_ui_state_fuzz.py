@@ -420,11 +420,61 @@ class TestGeometryExtremes:
     every key rectangle and renders a blank keyboard.
     """
 
-    HOSTILE = (0, 1, -1, -100000, 200, 319, 320, 4096, 20000, 100000)
+    # The top of this sweep is capped, and the cap is the interesting part.
+    #
+    # `keyW` is `(width - layoutFixedPixels) / totalKeyUnits` and `keyH` is
+    # `keyW * 0.89`, so every key grows with the window; the window's height
+    # is content-bound and follows.  A width of W therefore renders a scene
+    # of W x O(W) pixels, and the render cost is linear in that *area*,
+    # which makes it quadratic in the width this loop sets.  Measured on the
+    # live Main.qml under the offscreen plugin, compact, one `_settle()`
+    # each.  The scene sizes are exact; the times are this developer
+    # machine's and move a little with load, but their ratios do not:
+    #
+    #     width    window          scene      time
+    #      4_096   4096 x  1511      6 Mpx   0.01 s
+    #     20_000  20000 x  6869    137 Mpx   0.2  s
+    #    100_000  100000 x 33672   3367 Mpx   5   s
+    #
+    # There is no GPU under `offscreen` on any machine, so that is Qt's
+    # software rasteriser every time and the only variable is how fast the
+    # host can push pixels.  A four-vCPU CI runner with four xdist workers
+    # competing for its memory bandwidth turns that last row into minutes:
+    # `[True]` hashes to shard 1 (`crc32(nodeid) % 4`), which is why the
+    # Windows 1/4 shard ran ~12 minutes against 6-8 for its siblings and
+    # intermittently reached the job's 20 minute timeout.  `[False]` pays
+    # the same cost on shard 0 at about 0.6x the area, since compact keys
+    # are taller per unit of width.  Nothing about it was Windows-specific
+    # in kind, only in degree.
+    #
+    # 20_000 is kept because it is already five times a 4K display and
+    # 2.6 times an 8K one, so the arithmetic is still exercised far past
+    # anything a window manager can hand us, and doubles remain exact over
+    # integers of this size: there is no floating-point cliff between 2e4
+    # and 1e5 for the division and multiplication under test, so the wider
+    # value was buying magnitude rather than coverage.  Raise this only
+    # against a measurement, and price it as the square of what you raise.
+    MAX_HOSTILE_WIDTH = 20_000
+
+    HOSTILE = (0, 1, -1, -100000, 200, 319, 320, 4096, MAX_HOSTILE_WIDTH)
 
     @pytest.mark.parametrize("compact", (False, True))
     def test_hostile_widths_never_break_the_sizing_math(self, qml_root, compact) -> None:
+        # Do NOT try to buy the render back by hiding the window.  It looks
+        # like the obvious fix (the invariants read properties, not pixels)
+        # and it is silently vacuous: Qt does not deliver
+        # `widthChanged` on a window that is not visible, so `root.width`
+        # reports the new value while every binding downstream of it keeps
+        # the old one.  Measured: hidden, at width 100_000 with
+        # `totalKeyUnits` 13 and `layoutFixedPixels` 100, `keyW` stayed at
+        # the previous width's 307.4 instead of the 7684.6 its own binding
+        # defines.  The sweep would then pass against any sizing bug at all.
         root, warnings, _ = qml_root
+        assert root.property("visible"), (
+            "the window must stay visible: the sizing bindings under test do "
+            "not re-evaluate while it is hidden, which makes this sweep pass "
+            "whatever the arithmetic does"
+        )
         root.setProperty("compactView", compact)
         _settle()
 

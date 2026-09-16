@@ -17,7 +17,7 @@ import sys
 import time
 from collections import defaultdict
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional, Set, Tuple, TypeVar, cast, overload
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Set, Tuple, TypeVar, cast, overload
 
 from ..atomic_write import atomic_write_json
 from .language import ENGLISH, LanguageProfile
@@ -580,35 +580,6 @@ class NgramPredictor:
             except Exception as e:
                 _logger.warning("Failed to load supplement wordlist: %s", e)
 
-    def _load_extra_vocabulary(self) -> None:
-        """Add the profile's unranked vocabulary to the base prior only.
-
-        A spelling list supplies coverage, not conversational frequencies.
-        A single count makes its words available without promoting the tail
-        above existing common words or treating it as personal history.
-        """
-        path = self.profile.extra_vocabulary
-        if path is None:
-            return
-        try:
-            with path.open(encoding="utf-8") as source:
-                for line in source:
-                    word = line.strip().lower()
-                    if (
-                        not word
-                        or word.startswith("#")
-                        or not self.profile.word_re.fullmatch(word)
-                        or not self._is_plausible_word(word)
-                        or word in self._base_unigrams
-                    ):
-                        continue
-                    self._base_unigrams[word] = 1
-                    self._base_total += 1
-                    self.unigrams[word] += 1
-                    self.total_words += 1
-        except OSError as exc:
-            _logger.warning("Could not load extra vocabulary %s: %s", path, exc)
-
     def _load_proper_nouns(self) -> None:
         """Load built-in proper nouns for auto-capitalization."""
         path = Path(__file__).parent.parent.parent / "data" / "proper_nouns.txt"
@@ -1115,9 +1086,63 @@ class NgramPredictor:
         """
         return word in self.unigrams or word in self._base_unigrams or word in self._corpus_unigrams
 
+    def _load_extra_vocabulary(self) -> None:
+        """Add the profile's unranked vocabulary to the base prior only.
+
+        A spelling list supplies coverage, not conversational frequencies.
+        One count each makes the words available without promoting the tail
+        above existing common words or treating any of it as personal
+        history.
+
+        **Every failure is caught, and the breadth is the point.** This
+        runs inside ``__init__``, so anything that escapes it stops the
+        keyboard starting, and a user whose only input device is this
+        keyboard cannot then go and repair the file. Catching only
+        ``OSError`` left a decode error, or any surprise in the file's
+        shape, propagating out of construction. Being wrong the other way
+        costs a smaller vocabulary, which is what a fresh install has
+        anyway.
+        """
+        path = self.profile.extra_vocabulary
+        if path is None:
+            return
+        added = 0
+        try:
+            with path.open(encoding="utf-8") as source:
+                for line in source:
+                    word = line.strip().lower()
+                    if not word or word.startswith("#"):
+                        continue
+                    if word in self._base_unigrams or word in self.unigrams:
+                        continue
+                    if not self._is_plausible_word(word):
+                        continue
+                    self._base_unigrams[word] = 1
+                    self.unigrams[word] = max(self.unigrams.get(word, 0), 1)
+                    added += 1
+        except Exception:  # noqa: BLE001 - see the docstring
+            _logger.warning("Could not load the extra vocabulary; continuing without it")
+            return
+        _logger.debug("Extra vocabulary loaded: %d words", added)
+
     def vocabulary(self) -> Set[str]:
         """Every word the model knows: merged table, base table and corpus prior."""
         return set(self.unigrams) | set(self._base_unigrams) | set(self._corpus_unigrams)
+
+    def vocabulary_ordered(self) -> Iterable[str]:
+        """:meth:`vocabulary` in a stable order, for the packed indexes.
+
+        The same three layers, deduplicated by first appearance instead of
+        collapsed into a set, because a set's iteration order is salted per
+        process and the packed prefix index breaks equal scores by insertion
+        order. Kept beside ``vocabulary`` rather than inlined at the call
+        site so what counts as the model's vocabulary is still stated once:
+        the corpus prior in particular lives outside the merged table, and a
+        caller walking only ``unigrams`` silently drops it.
+        """
+        return dict.fromkeys(
+            itertools.chain(self.unigrams, self._base_unigrams, self._corpus_unigrams)
+        )
 
     def _effective_typing_count(self, word: str) -> float:
         """Return one word's effective personal count, including corpus prior."""
