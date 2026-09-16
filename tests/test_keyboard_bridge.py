@@ -2935,6 +2935,147 @@ def _press(bridge: KeyboardBridge, text: str) -> None:
             bridge.pressKey(ch)
 
 
+class TestTypingTheApostropheKeepsTheBar:
+    """The apostrophe of a contraction must not blank the suggestion bar.
+
+    The gate deciding whether to re-query was ``char.isalpha()``, which
+    is the same oversight the digit had and which the comment at that
+    call site already describes.  The cost here is sharper than for a
+    digit, because the bar is blanked at the moment it was *right*:
+    typing "don" puts "don't" at the top of the bar, and the apostrophe
+    threw it away one click short of the word.  "i'" is the worst case,
+    since "I'm" / "I'll" / "I'd" / "I've" are the entire reason to type
+    an apostrophe in that position.
+
+    Each case is paired with the near-miss it must leave alone, because
+    a gate that simply re-queries on everything would satisfy the
+    positives on its own.
+    """
+
+    @staticmethod
+    def _bar(bridge: KeyboardBridge, text: str) -> list:
+        bridge.resetContext()
+        _press(bridge, text)
+        return list(bridge._predictions)
+
+    def test_the_bar_survives_the_apostrophe(self, bridge: KeyboardBridge):
+        assert self._bar(bridge, "don'")
+        assert self._bar(bridge, "i'")
+        assert self._bar(bridge, "he'")
+
+    def test_the_contraction_is_what_is_offered(self, bridge: KeyboardBridge):
+        """Not merely non-empty: the bar has to hold the word being typed."""
+        assert "don't" in self._bar(bridge, "don'")
+        assert "he's" in self._bar(bridge, "he'")
+        assert "I'll" in self._bar(bridge, "i'")
+
+    def test_a_leading_apostrophe_still_asks_nothing(self, bridge: KeyboardBridge):
+        """The inverse.  A bare "'" has no prefix to complete.
+
+        It is a word character, so it stays in ``_current_word``, but
+        there is nothing in front of it for the engine to work from and
+        querying would only cost a round trip on the keystroke path.
+        """
+        assert self._bar(bridge, "'") == []
+
+    def test_the_word_character_rule_is_unchanged(self, bridge: KeyboardBridge):
+        """The apostrophe stays in the word, as it always did."""
+        bridge.resetContext()
+        _press(bridge, "don'")
+        assert bridge._current_word == "don'"
+
+    def test_ordinary_punctuation_still_clears_the_bar(self, bridge: KeyboardBridge):
+        """The inverse: only word characters were let through, not all of them."""
+        for text in ("hello-", "hello/", "hello*"):
+            assert self._bar(bridge, text) == [], text
+
+    def test_an_underscore_still_clears_the_bar(self, bridge: KeyboardBridge):
+        """The inverse the first version of the gate got wrong.
+
+        ``_press_char`` keeps the underscore in ``_current_word`` so that
+        "snake_case" stays one token, but the word tokenizer keeps
+        letters and apostrophes only, so after "snake_" the model
+        predicts from "snake" while the typed run is "snake_".  Every
+        pill is then an exact completion of a prefix produced by
+        discarding a typed character: the probe displayed "snake" first,
+        and tapping it called ``replace_text(6, "snake ")``, removing the
+        underscore the user had just typed.  Until the tokenizer and the
+        gate agree on the underscore, it clears the bar as it always did.
+        """
+        assert self._bar(bridge, "snake_") == []
+        assert bridge._current_word == "snake_"
+
+
+class TestATappedContractionInsertsWhatItDisplayed:
+    """Tapping a contraction the skipped-apostrophe rule offered.
+
+    The typed prefix ("ill") is not a prefix of the pill ("I'll"): the
+    apostrophe the user skipped and the capital the "I" family carries
+    both stand in the way of suffix-only insertion, so the tap takes the
+    select-and-replace path, and in Compatibility Mode the BackSpace and
+    retype path.  Those are the two destructive branches of
+    ``pressPrediction`` and the two a held modifier can corrupt, so each
+    is pinned here against the word this rule made reachable rather than
+    assumed from the ordinary-word tests.
+    """
+
+    @staticmethod
+    def _offer(bridge: KeyboardBridge) -> None:
+        bridge.resetContext()
+        _press(bridge, "ill")
+        assert "I'll" in bridge._predictions
+        bridge._synth.reset_mock()
+
+    def test_the_tap_replaces_the_typed_prefix(self, bridge: KeyboardBridge):
+        self._offer(bridge)
+        bridge.pressPrediction("I'll")
+        bridge._synth.replace_text.assert_called_once_with(3, "I'll ")
+        assert _typed(bridge) == []
+        assert bridge._current_word == ""
+        assert bridge._context_buffer.endswith("I'll ")
+
+    def test_compat_mode_backspaces_and_retypes(self, bridge: KeyboardBridge):
+        self._offer(bridge)
+        bridge.setCompatMode(True)
+        bridge.pressPrediction("I'll")
+        backspaces = [c for c in bridge._synth.send_key.call_args_list if c[0] == ("BackSpace",)]
+        assert len(backspaces) == 3
+        assert _typed(bridge) == ["I'll "]
+        bridge._synth.replace_text.assert_not_called()
+
+    def test_a_locked_ctrl_is_dropped_around_the_replace(self, bridge: KeyboardBridge):
+        """``replace_text``'s Shift+Left selection is itself a chord.
+
+        With Ctrl held it becomes Ctrl+Shift+Left, which selects whole
+        preceding words that the insert then overwrites.  The lock is the
+        user's decision, so it is put back once the word has landed.
+        """
+        self._offer(bridge)
+        bridge.lockModifier("ctrl")
+        bridge._synth.reset_mock()
+        bridge.pressPrediction("I'll")
+        names = [c[0] for c in bridge._synth.mock_calls]
+        assert names.count("replace_text") == 1
+        released = names.index("release_modifier")
+        replaced = names.index("replace_text")
+        held = len(names) - 1 - names[::-1].index("hold_modifier")
+        assert released < replaced < held
+        bridge._synth.replace_text.assert_called_once_with(3, "I'll ")
+        assert bridge._ctrl_locked is True
+
+    def test_privacy_mode_still_inserts_but_learns_nothing(self, bridge: KeyboardBridge):
+        """The user tapped the pill, so the word reaches the app either way."""
+        bridge.setPrivacyMode(True)
+        bridge._current_word = "ill"
+        bridge._predictor.learn_from_selection = MagicMock()
+        bridge._analytics.record_prediction_selected = MagicMock()
+        bridge._synth.reset_mock()
+        bridge.pressPrediction("I'll")
+        bridge._synth.replace_text.assert_called_once_with(3, "I'll ")
+        bridge._predictor.learn_from_selection.assert_not_called()
+        bridge._analytics.record_prediction_selected.assert_not_called()
+
+
 class TestAutoCapitalizeIsNotAHeldShift:
     """Auto-capitalize must capitalize the next letter and nothing else.
 

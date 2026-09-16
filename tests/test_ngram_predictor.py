@@ -938,6 +938,84 @@ class TestReinforceContext:
         assert p.bigrams["hello"]["world"] == 1
 
 
+class TestTheApostropheIsOptionalInATypedPrefix:
+    """ "ill" has to reach "i'll", and "hes" has to reach "he's".
+
+    Typing the apostrophe costs an extra click here, and a layer hop on
+    the compact layouts, so it is the character a user skips.  That is
+    not a mis-click and the fuzzy source cannot rescue it: "ill" is a
+    live prefix of eight ordinary words, so the prefix beam's apostrophe
+    path (an omitted click at -2.5, past ``FREQUENCY_MAY_BUY``) is
+    clamped below every one of them.  Matching it here instead lets the
+    contraction compete on its own count.
+
+    Every positive case below is paired with the near-miss it must still
+    reject, because a rule that only ever says yes would make the prefix
+    mean nothing at all.
+    """
+
+    def test_a_skipped_apostrophe_still_matches(self):
+        p = NgramPredictor()
+        assert p._matches_partial("i'll", "ill")
+        assert p._matches_partial("he's", "hes")
+        assert p._matches_partial("i'm", "im")
+        assert p._matches_partial("don't", "dont")
+
+    def test_the_rest_of_the_prefix_still_has_to_match(self):
+        """The inverse: dropping the apostrophe is not dropping the rule."""
+        p = NgramPredictor()
+        assert not p._matches_partial("i'll", "ilx")
+        assert not p._matches_partial("he's", "his")
+        assert not p._matches_partial("don't", "dent")
+        assert not p._matches_partial("i'm", "am")
+
+    def test_a_word_with_no_apostrophe_is_untouched(self):
+        p = NgramPredictor()
+        assert p._matches_partial("illinois", "ill")
+        assert not p._matches_partial("illinois", "iln")
+        assert not p._matches_partial("hesitate", "hs")
+
+    def test_a_typed_apostrophe_is_matched_literally(self):
+        """Once the user types it, the prefix means more, not less.
+
+        "don'" already reaches "don't" by the ordinary rule, and
+        stripping on top of that would let a typed apostrophe match a
+        position the word does not have one in.
+        """
+        p = NgramPredictor()
+        assert p._matches_partial("don't", "don'")
+        assert p._matches_partial("i'll", "i'l")
+        assert not p._matches_partial("illinois", "i'l")
+        assert not p._matches_partial("i'll", "il'l")
+
+    def test_the_contraction_reaches_the_candidates(self):
+        """End to end through the scorer, not just the predicate.
+
+        Seeded rather than assumed: a bare ``NgramPredictor`` carries no
+        apostrophe words at all (they arrive with ``base_dictionary.txt``,
+        which only the hybrid loads), so an unseeded version of this test
+        would pass against a predicate that had stopped working.  The
+        shipped-vocabulary case is
+        ``test_hybrid_predictor.py::TestASkippedApostropheStillFindsTheWord``.
+        """
+        p = NgramPredictor()
+        for word in ("i'll", "he's", "i'm"):
+            p.unigrams[word] = 9000
+            p._base_unigrams[word] = 9000
+        for prefix, wanted in (("ill", "i'll"), ("hes", "he's"), ("im", "i'm")):
+            words = [w for w, _ in p.predict_with_scores(prefix, 8)]
+            assert wanted in words, f"{prefix!r} did not offer {wanted!r}: {words}"
+
+    def test_the_ordinary_completions_are_not_displaced(self):
+        """The inverse: the contraction joins the bar, it does not take it."""
+        p = NgramPredictor()
+        p.unigrams["i'll"] = 9000
+        p._base_unigrams["i'll"] = 9000
+        words = [w for w, _ in p.predict_with_scores("ill", 8)]
+        assert "ill" in words
+        assert "illinois" in words
+
+
 class TestTaughtAcronymsAreLearnable:
     """A deliberately-capitalised acronym is exempt from the shape filter.
 
