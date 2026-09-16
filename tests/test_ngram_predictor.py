@@ -1294,3 +1294,30 @@ class TestACraftedModelCannotDesyncTheUserTotal:
 
         assert predictor._user_total == 5
         assert predictor._user_total == sum(predictor.user_vocab.values())
+
+
+class TestLearnWordRetiresTheCandidateEntry:
+    """A word promoted by ``learn_word`` must not keep a sighting record.
+
+    Every later ``learn()`` takes the known-word branch and never reaches
+    the pop, so the entry was persisted under ``candidate_counts`` until
+    decay or the age sweep retired it.
+    """
+
+    def test_a_sighting_record_is_dropped_on_promotion(self):
+        predictor = NgramPredictor()
+        predictor.learn("zzqcand")
+        assert predictor._candidate_counts["zzqcand"] == 1
+        assert "zzqcand" in predictor._candidate_last_seen
+
+        predictor.learn_word("zzqcand")
+
+        assert "zzqcand" not in predictor._candidate_counts
+        assert "zzqcand" not in predictor._candidate_last_seen
+        assert predictor.user_vocab["zzqcand"] == 5
+
+    def test_a_word_with_no_record_is_unaffected(self):
+        predictor = NgramPredictor()
+        predictor.learn("zzqother")
+        predictor.learn_word("zzqcand")
+        assert predictor._candidate_counts["zzqother"] == 1
