@@ -36,6 +36,22 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
+      # Branch protection requires one approving review, and a patch or
+      # minor bump whose checks pass is exactly the change that review exists
+      # to wave through, so the workflow gives it before it queues the merge.
+      # GITHUB_TOKEN can approve only because the repository's Actions
+      # setting "Allow GitHub Actions to create and approve pull requests"
+      # is on; with it off every Dependabot PR stalls at "Review required"
+      # rather than merging unreviewed, which is the safe way to fail.
+      - name: Approve patch and minor updates
+        if: >-
+          steps.metadata.outputs.update-type == 'version-update:semver-patch' ||
+          steps.metadata.outputs.update-type == 'version-update:semver-minor'
+        run: gh pr review --approve "$PR_URL"
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       # update-type is the highest semver change in the PR, so a grouped PR
       # carrying one major bump is left for a person as a whole.
       - name: Queue patch and minor updates to merge when checks pass

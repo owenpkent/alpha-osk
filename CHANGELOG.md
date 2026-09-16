@@ -5,6 +5,8 @@ All notable changes to Alpha-OSK are documented in this file.
 ## [Unreleased]
 
 ### Changed
+- **Merging to `main` now requires one approving review**, with administrators exempt, so a future collaborator or token cannot land an unreviewed change; the maintainer merges through the admin path. Dependabot's patch and minor updates approve themselves before they queue to merge, so that flow is unchanged. Decided out of the September 2026 security audit, which also settled that the bundled DLLs stay unsigned: 342 files at several seconds each per release, for an enforcement environment no user has asked for.
+
 - **Dependabot's patch and minor updates now merge themselves once every required check passes.** Lint, type checking, the test suite and the OSV vulnerability scan all have to pass first, so an update with a known advisory against it stays open. Major version bumps still wait for a person, because that is where an upgrade can change behaviour the tests do not cover. The workflow never runs the updated dependency's code with write access: it reads Dependabot's description of the update and asks GitHub to merge later. One trade-off is accepted and written down in `docs/build/CI.md`: a merge made this way does not start CI on `main`, so a break from an auto-merged update surfaces on the next pull request's checks rather than on `main` itself.
 
 - **The nightly telemetry workflow moved from `actions/checkout` v4 to v7, pinned to the v7.0.1 commit** like every other workflow here. Dependabot proposed the bump as a bare `@v7` tag; pinning it by commit keeps that workflow consistent with the rest, and Dependabot keeps pins in that form current from now on.

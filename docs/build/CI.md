@@ -137,6 +137,27 @@ dependency failed is *skipped*, and a skipped required check reads as
 pending rather than red: without it the gate goes quiet exactly when it
 should be loud. The required set is Lint, Type Check, Tests, OSV Scanner.
 
+## One approving review is required, and administrators are exempt
+
+Since 15 September 2026, branch protection requires one approving review
+before a merge, with stale approvals dismissed on a new push. Administrators
+are exempt (`enforce_admins` is off), and that exemption is what makes the
+rule workable for a repository with one maintainer: GitHub does not let an
+author approve their own pull request, so the maintainer merges with
+`gh pr merge --admin` (the "merge without waiting for requirements" path in
+the UI), and every other actor, a future collaborator or any token without
+admin rights, has to be reviewed first. The rule gates the blast radius of
+an added identity; it is not a ceremony for the person who owns the
+repository, and each bypass is recorded on the pull request.
+
+Two consequences follow. Dependabot's pull requests need an approval before
+auto-merge can complete, so the workflow below approves the patch and minor
+updates it queues, which requires the repository's Actions setting "Allow
+GitHub Actions to create and approve pull requests" to be on. And a pull
+request from anyone else sits at "Review required" until someone with
+write access approves it, which is the point. Decided out of the September
+2026 security audit (`docs/research/SECURITY_AUDIT.md`).
+
 ## Dependabot auto-merge
 
 `.github/workflows/dependabot-auto-merge.yml` queues Dependabot's patch and
@@ -146,7 +167,7 @@ because that is where an upgrade can change behaviour the tests do not
 cover. The repository's "Allow auto-merge" setting has to stay on for it to
 work.
 
-Five things about it are deliberate:
+Six things about it are deliberate:
 
 - **The required checks are the gate, and nothing merges past them.** Lint,
   Type Check, Tests and the OSV scan must all pass, so an update with a known
@@ -165,6 +186,13 @@ Five things about it are deliberate:
   as its own PR and waits.
 - **`dependabot/fetch-metadata` is pinned to a commit hash**, like every
   other action here, and Dependabot keeps that pin current.
+- **It approves what it merges.** Branch protection requires one approving
+  review (previous section), and a patch or minor bump whose checks pass is
+  exactly the change that review exists to wave through, so the workflow
+  gives it before queueing the merge. A major bump gets neither. The
+  `GITHUB_TOKEN` can approve only because the repository's Actions setting
+  allows it; switched off, every Dependabot PR stalls at "Review required"
+  rather than merging unreviewed, which is the safe way for this to fail.
 
 **The one gap it opens, and why it is accepted.** GitHub does not start new
 workflow runs for events caused by a workflow's own `GITHUB_TOKEN`
