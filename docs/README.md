@@ -58,6 +58,8 @@ Forward-looking design docs and active launch planning. Convert entries into `ar
 
 Reference material that informed the design but isn't a living spec. Useful for context; not authoritative for current behaviour.
 
+- [`research/AAC_BENCHMARK_EVIDENCE.md`](research/AAC_BENCHMARK_EVIDENCE.md): source audit of Will Wade's AAC dataset and correction work, limits of the existing pointer-learning evidence, metric definitions and a staged benchmark plan.
+
 - [`research/PHILOSOPHY.md`](research/PHILOSOPHY.md): what the project believes and why, plus what it changed its mind about. The "why" layer behind the whitepaper's "what".
 - [`research/USER_PERSPECTIVE.md`](research/USER_PERSPECTIVE.md): user-lens framing of the project.
 - [`research/DESIGN.md`](research/DESIGN.md): early overall design notes.
