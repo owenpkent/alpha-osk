@@ -47,17 +47,13 @@ Item {
     // the same thing, which is state that can go stale.
     property var actions: ({})
 
-    // editFn(keyId) -> open the action editor for that key.
-    property var editFn: null
-
-    // **This row has no left-click route into the editor, on purpose.**
+    // **This row has no route into the editor at all, on purpose.**
     //
-    // It used to carry an Edit toggle that put every key into "tap to
-    // program" mode, because right-click is unreachable for a dwell-click,
-    // switch-access, head- or eye-tracker pointer and for a single-button
-    // adaptive mouse, and without a second route such a user could press
-    // an F-key and never program one.  That argument still holds; what
-    // changed is where it is answered.  *Settings -> Function Keys* lists
+    // Right-click used to open it, and was removed at the owner's request:
+    // a stray right-click on a key should never pop an editor over the
+    // letters.  Before that the row carried an Edit toggle that put every
+    // key into "tap to program" mode.  Both are answered by the same
+    // page instead.  *Settings -> Function Keys* lists
     // all twenty-four with what each one does and opens the editor on a
     // tap, which is a bigger target than any key on this row, needs no
     // mode to get into or out of, and is the only surface that shows an
@@ -237,12 +233,8 @@ Item {
                         accentColor: fnRow.accentColor
                         borderColor: fnRow.borderColor
                         onKeyPressed: fnRow._activate(modelData)
-                        // The fast route for a pointer that can right-click.
-                        // Never the only route: *Settings -> Function Keys*
-                        // is the one that needs no right button.  See the
-                        // note at the top of this file.
-                        onKeyRightPressed: if (fnRow.editFn)
-                            fnRow.editFn(modelData.toLowerCase())
+                        // No onKeyRightPressed: right-click on an F-key does
+                        // nothing.  See the note at the top of this file.
                     }
                 }
             }

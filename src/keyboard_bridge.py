@@ -1869,8 +1869,9 @@ class KeyboardBridge(QObject):
             # `_current_word` of "gm" that it reset at the "@" anyway.
             #
             # The old gate here was `if char.isalpha()`, which is why a
-            # digit used to blank the bar outright.
-            if char.isalpha() or self._in_token_context():
+            # digit used to blank the bar outright, and why the apostrophe
+            # of a contraction did too until `_continues_a_word` took over.
+            if self._continues_a_word(char) or self._in_token_context():
                 self._refresh_prediction_bar()
             else:
                 self._clear_token_pills()
@@ -3431,6 +3432,38 @@ class KeyboardBridge(QObject):
     # ------------------------------------------------------------------
     #  Structured-token predictions (numbers, phone numbers, emails)
     # ------------------------------------------------------------------
+
+    def _continues_a_word(self, char: str) -> bool:
+        """Does this keystroke leave a run the word engine can complete?
+
+        Letters always do, and so does an apostrophe *inside* a word: a
+        leading one carries no prefix of its own, so asking the engine
+        about it buys nothing and costs a round trip on the keystroke
+        path.
+
+        The apostrophe is the half that was missing.  Typing "don" offers
+        "don't" at the top of the bar, and the `'` used to blank the bar
+        outright, one click short of the word; "i'" threw away the four
+        pills ("I'm", "I'll", "I'd", "I've") that are the whole reason
+        to type an apostrophe there.  That is the same oversight the digit
+        had, one character class over, and it is deliberately a separate
+        question from the word-character rule in `_press_char`: that one
+        decides what `_current_word` keeps, this one decides whether the
+        run so far is worth asking about.
+
+        The underscore is deliberately NOT here, although `_press_char`
+        keeps it in `_current_word` so that "snake_case" stays one token.
+        The word tokenizer keeps letters and apostrophes only, so after
+        "snake_" the model predicts from "snake" while the typed run is
+        "snake_": every pill is then an exact completion of a prefix
+        produced by discarding a typed character, and tapping "snake"
+        called `replace_text(6, "snake ")`, which removed the underscore
+        the user had just typed.  Until the tokenizer and this rule agree
+        on the underscore, it clears the bar as it always did.
+        """
+        if char.isalpha():
+            return True
+        return char == "'" and any(c.isalpha() for c in self._current_word)
 
     def _in_token_context(self) -> bool:
         """Is the run before the cursor a structured token in progress?
@@ -5635,7 +5668,20 @@ class KeyboardBridge(QObject):
 
     @Slot(str, str)
     def editPrediction(self, original: str, edited: str) -> None:
-        """User edited a prediction (e.g. to fix capitalization). Insert it and learn."""
+        """User edited a prediction (e.g. to fix capitalization). Insert it and learn.
+
+        What is learned depends on whether the spelling changed.  A Save
+        whose letters differ from the pill is a correction the user typed
+        out, and it is learned at once (``explicit=True``: +5, context
+        reinforced, fuzzy entry refreshed).  A Save that kept the spelling,
+        including one that only changed the casing, confirms the word the
+        pill showed, and that is what tapping the pill means, so it takes
+        the ordinary pill path and its three-sighting gate for an unknown
+        word.  Opening the editor on a fuzzy-generated pill and tapping
+        Save is an ordinary thing to do, and it must not be the one tap
+        that injects a never-typed word permanently.  Casing is recorded
+        either way through ``set_capitalization``.
+        """
         # Close the same 200 ms race _press_char guards against, mirroring
         # pressPrediction.
         self._check_password_field_sync()
@@ -5656,6 +5702,8 @@ class KeyboardBridge(QObject):
         # Learn the preferred capitalization. Suppressed in privacy mode:
         # this persists into the model, same as pressPrediction's guards.
         if not self._privacy_mode:
+            corrected = edited.lower() != original.strip().lower()
+            self._predictor.learn_from_selection(self._context_buffer, edited, explicit=corrected)
             self._predictor.set_capitalization(edited, edited)
 
         # Insert the edited word (same as pressPrediction but with edited

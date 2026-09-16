@@ -440,8 +440,9 @@ rebuilds the same base vocabulary. No user-data schema changes are required.
 
 Vocabulary growth also invalidated one shortcut: a two-letter mis-click can
 become a live prefix of a rare new word. The hybrid now allows short-prefix
-fuzzy completion when fewer than the requested number of valid exact
-suggestions can reach the bar. Suppressed candidates do not fill that quota.
+fuzzy completion when fewer than five valid exact suggestions can reach the
+bar. This fixed floor preserves main's pill-count-independent rescue rule.
+Suppressed candidates do not fill that quota.
 One letter still does not trigger fuzzy rescue, and the standalone fuzzy API
 keeps its original default. This prevents new words such as `pwned` from
 disabling help for a mistyped `pe`.
@@ -488,8 +489,8 @@ and scanned a set containing every base word for each request. A profile on
 Next-word scoring spent most of its time scoring and sorting base words that
 could never reach the bar. Compact fuzzy storage alone does not solve this.
 
-The implemented candidate search keeps **all personal and context candidates**
-and only the best requested number of matching base words. For ordinary
+The implemented candidate search keeps **all personal, corpus, and context
+candidates** and only the best requested number of matching base words. For ordinary
 nonnegative mixture weights, a base-only word's score is a fixed nonnegative
 multiple of its base frequency. A word below that base cutoff cannot displace
 the better base candidates, whose personal/context contributions can only
@@ -506,6 +507,13 @@ Replacing it with an ordinary dictionary remains supported via uncached
 rebuilds. The sorted reference list adds approximately **0.64 MiB** at this
 vocabulary size, outside the fuzzy-only memory table above; it copies no word
 strings. Personal counts are read fresh on each request.
+
+Integration with main's skipped-apostrophe matching also indexes the small
+subset of base words containing apostrophes by their stripped spelling.
+Searching both prefix ranges keeps contractions such as `i'll` reachable from
+`ill`, including words supported only by the base. This auxiliary cache is
+additional to the word-reference measurement above. Corpus-prior candidates
+remain in the sparse candidate set alongside personal and context evidence.
 
 Equal scores now use lexical ordering. The previous set iteration made
 low-frequency ties depend on Python's randomized hash seed; the expanded tail
@@ -529,13 +537,13 @@ The improvement is large enough to be meaningful despite normal workstation
 timing noise. These are warmed microbenchmarks, not a promise about every
 prefix, user history, device, or first-keystroke cost.
 
-## Final prediction-quality evaluation
+## Prediction-quality evaluation at `714db10`
 
 Fresh temporary models, five pills, `ksr.py --conditions full --mis-click`.
 The source vocabulary and its priors were not selected from either AAC split.
 The development split was used to check regressions; the test split was run
-against the final implementation. Results are potential click savings for an
-ideal user, not a measured accessibility study.
+against the expansion before integrating subsequent main changes. Results are
+potential click savings for an ideal user, not a measured accessibility study.
 
 | Corpus / condition | Original 18,989-word base | Expanded 83,307-word base |
 |---|---:|---:|
@@ -551,15 +559,15 @@ yardstick**: the supported conclusion is broader coverage without a material
 aggregate regression, not a proven large improvement in conversational typing.
 Direct regression cases separately check the intended care/software vocabulary.
 
-Final hybrid prediction medians were 0.5 ms clean and 0.6 ms with slips on both
+Hybrid prediction medians were 0.5 ms clean and 0.6 ms with slips on both
 splits. The corresponding p95 values were 4.2/4.5 ms on dev and 4.3/4.7 ms on
 test. Earlier unoptimized expansion measurements ran alongside tests and were
 slower; they are not used for a controlled timing ratio. The paired n-gram
 microbenchmark above isolates the algorithm's effect more reliably.
 
-## Final validation
+## Validation before integrating main
 
-The final source passed every `check.py` stage on Windows: Ruff lint,
+The source at `714db10` passed every `check.py` stage on Windows: Ruff lint,
 formatting, mypy for Linux, mypy for Windows, and the complete pytest suite.
 The run took 400.9 seconds, including 396.7 seconds for pytest. The check
 runner's subprocess output was captured explicitly because its Windows
@@ -576,3 +584,29 @@ corrupt-model loading checks. Tests and benchmarks used scoped temporary
 models and cleaned their scratch directories. No live learned model was
 modified. These checks do not substitute for a packaged-release smoke test
 or a full GUI process-memory measurement.
+
+## Integration with current main for the PR
+
+The PR branch integrates main at `f0cdb5a`, including the corpus-prior split,
+explicit prediction-edit learning, skipped-apostrophe matching, and the fixed
+five-candidate short-prefix rescue floor. Candidate pruning retains every
+corpus-prior candidate, and a small additional base index covers apostrophe-
+stripped prefix matches. Fuzzy frequency construction visits merged, base,
+and corpus dictionaries in stable order. The earlier packed-index memory
+measurements still describe the storage design; they are not new full-app
+measurements after this integration.
+
+Fresh temporary-model AAC runs after integration reproduced every rounded
+quality figure in the `714db10` table above: dev 49.6% clean / 45.6% slip, test
+50.7% clean / 46.9% slip, with unchanged next-word hit and never-predicted rates.
+No constants were retuned. These runs overlapped the full test gate, so their
+timing values are recorded only as observations: dev median 0.8/1.0 ms and
+p95 5.4/5.6 ms, test median 0.9/1.2 ms and p95 6.3/7.2 ms (clean/slip).
+They do not provide a controlled comparison with the earlier latency figures.
+
+The integrated source passed the complete `check.py` gate in 312.9 seconds:
+Ruff, formatting, mypy for both Linux and Windows, and pytest (308.0 seconds).
+The generator and four benchmark scripts also passed their separate Ruff and
+format checks. Focused integration tests cover corpus-only candidates,
+base-only contractions, and corpus-adjusted score ties. Test models and
+benchmark models were temporary, and their scratch directories were removed.

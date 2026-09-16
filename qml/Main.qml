@@ -16,6 +16,18 @@ Window {
     minimumHeight: 200
     color: "transparent"
     title: "Alpha-OSK"
+    // Born frameless, on top and non-activating, rather than given those
+    // flags by keyboard_app.py::_apply_window_flags after the fact.  That
+    // call runs once the window is already shown, and taking the frame off
+    // a shown window on Windows keeps the old outer rectangle as the new
+    // client one: the keyboard moved 7 px left and 30 px up and grew 15 px
+    // wider, *after* Component.onCompleted had restored its saved position,
+    // and onXChanged then saved the shifted spot.  So it never came back
+    // where it was left, and crept further every launch.  With the flags
+    // declared here that Python call is a no-op, and the two sets must stay
+    // identical (tests/test_window_position_restore.py).
+    flags: Qt.Window | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint
+           | Qt.WindowDoesNotAcceptFocus
 
     // Persistent settings — saved automatically on change, restored on launch
     Settings {
@@ -2879,7 +2891,6 @@ Window {
                         maxWidth: root._widestRow.units * root.keyW
                                   + root._widestRow.gaps * root.keySpacing
                         actions: root.keyActions
-                        editFn: root.openKeyActionEditor
                         roleColors: root.keyRoles
                         keyColor: Qt.darker(root.themeKeyColor, 1.15)
                         keyPressedColor: root.themeKeyPressed
@@ -2906,7 +2917,6 @@ Window {
                         maxWidth: root._widestRow.units * root.keyW
                                   + root._widestRow.gaps * root.keySpacing
                         actions: root.keyActions
-                        editFn: root.openKeyActionEditor
                         roleColors: root.keyRoles
                         keyColor: Qt.darker(root.themeKeyColor, 1.15)
                         keyPressedColor: root.themeKeyPressed
@@ -3939,8 +3949,9 @@ Window {
         }
 
         // The return leg of `editKeyFromSettings`. Guarded on the return
-        // view being set, so an editor opened by right-clicking a key
-        // does not pop the settings window open behind it.
+        // view being set, so an editor opened any other way (a direct
+        // `openKeyActionEditor` call) does not pop the settings window
+        // open behind it.
         Connections {
             target: keyActionEditor
             function onClosed() {

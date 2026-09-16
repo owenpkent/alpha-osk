@@ -72,6 +72,7 @@ Reference material that informed the design but isn't a living spec. Useful for 
 - [`research/LLM_ONBOARDING_TEMPLATE.md`](research/LLM_ONBOARDING_TEMPLATE.md): template for the above.
 - [`research/CONSTELLATION_INTEGRATION_GUIDE.md`](research/CONSTELLATION_INTEGRATION_GUIDE.md): Constellation cross-project integration guide.
 - [`research/SLIDES_WORKFLOW.md`](research/SLIDES_WORKFLOW.md): presentation/slides workflow.
+- [`research/EXTERNAL_SWITCH_SCANNING.md`](research/EXTERNAL_SWITCH_SCANNING.md): the research proposal for external switch-scanning support that preceded [`architecture/UIA_TARGETS.md`](architecture/UIA_TARGETS.md), the implemented and measured contract.
 
 ---
 

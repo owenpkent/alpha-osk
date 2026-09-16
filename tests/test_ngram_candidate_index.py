@@ -26,6 +26,7 @@ def _blank_predictor(*, broad_unicode: bool = False) -> NgramPredictor:
     predictor.unigrams.clear()
     predictor._base_unigrams.clear()
     predictor.user_vocab.clear()
+    predictor._corpus_unigrams.clear()
     predictor.bigrams.clear()
     predictor.trigrams.clear()
     predictor._user_bigrams.clear()
@@ -50,6 +51,11 @@ def _seed_unigrams(
     for word in set(base) | set(user):
         predictor.unigrams[word] = base.get(word, 0) + user.get(word, 0)
     predictor.total_words = sum(predictor.unigrams.values())
+
+
+def _seed_corpus_prior(predictor: NgramPredictor, corpus: dict[str, int]) -> None:
+    predictor._corpus_unigrams.update(corpus)
+    predictor._corpus_total = sum(corpus.values())
 
 
 def _seed_context(
@@ -119,8 +125,10 @@ def _brute_force_predictions(
             words = words[:-1]
 
     if not words and not partial:
-        ranked = sorted(predictor.unigrams.items(), key=lambda item: (-item[1], item[0]))
-        return [(word, float(frequency)) for word, frequency in ranked[:n]]
+        scores = {word: float(frequency) for word, frequency in predictor.unigrams.items()}
+        for word, frequency in predictor._corpus_unigrams.items():
+            scores[word] = scores.get(word, 0.0) + predictor._CORPUS_PRIOR_WEIGHT * frequency
+        return sorted(scores.items(), key=lambda item: (-item[1], item[0]))[:n]
 
     trigram_probabilities: dict[str, float] = {}
     if len(words) >= 2:
@@ -151,12 +159,13 @@ def _brute_force_predictions(
     words_to_score = (
         set(predictor._base_unigrams)
         | set(predictor.user_vocab)
+        | set(predictor._corpus_unigrams)
         | set(bigram_probabilities)
         | set(trigram_probabilities)
     )
     candidates = []
     for word in words_to_score:
-        if partial and not word.startswith(partial):
+        if not predictor._matches_partial(word, partial):
             continue
         base_probability = (
             predictor._base_unigrams.get(word, 0) / predictor._base_total
@@ -164,8 +173,8 @@ def _brute_force_predictions(
             else 0.0
         )
         user_probability = (
-            predictor.user_vocab.get(word, 0) / predictor._user_total
-            if predictor._user_total
+            predictor._effective_typing_count(word) / predictor._effective_typing_total()
+            if predictor._effective_typing_total()
             else 0.0
         )
         unigram_probability = (
@@ -212,6 +221,35 @@ def test_empty_context_top_unigrams_use_the_same_lexical_tie_rule():
 
     _assert_matches_oracle(predictor, "", 5)
     assert predictor.predict("", 5) == ["personal", "alpha", "middle", "zulu", "lower"]
+
+
+def test_corpus_prior_uses_raw_scores_and_lexical_ties_without_context():
+    predictor = _blank_predictor()
+    _seed_unigrams(predictor, {"zulu": 5, "alpha": 5})
+    _seed_corpus_prior(predictor, {"middle": 50, "zulu": 10})
+
+    _assert_matches_oracle(predictor, "", 4)
+    assert predictor.predict("", 4) == ["zulu", "alpha", "middle"]
+
+
+def test_base_pruning_keeps_apostrophe_optional_base_matches():
+    predictor = _blank_predictor()
+    _seed_unigrams(
+        predictor,
+        {"i'll": 100, "illness": 80, "illusion": 70, "alpha": 10},
+    )
+
+    _assert_matches_oracle(predictor, "ill", 1)
+    assert predictor.predict("ill", 1) == ["i'll"]
+
+
+def test_corpus_prior_candidates_remain_after_base_pruning():
+    predictor = _blank_predictor()
+    _seed_unigrams(predictor, {f"base{index:03d}": 100 - index for index in range(50)})
+    _seed_corpus_prior(predictor, {"corpusonly": 20, "corpusword": 10})
+
+    for context in ("missing ", "corpus"):
+        _assert_matches_oracle(predictor, context, 5)
 
 
 @pytest.mark.parametrize("alpha", [0.0, 0.25, 0.7, 1.0])

@@ -36,6 +36,7 @@ Owen is a wheelchair user with muscular dystrophy. Typing is hard - be proactive
 
 ## Build, run, test
 
+- Temporary files: use a scoped `tempfile.TemporaryDirectory` under the system temp directory for experiments and scratch models, with cleanup on success, errors and interruption. Do not create `.tmp-*` folders in the checkout. Clean up your own scratch files before finishing; never sweep unrelated folders or delete explicitly supplied model directories. Pytest removes its generated test directories after a passing run and keeps a failed test's for the post-mortem (`tmp_path_retention_policy = "failed"`); if supplying `--basetemp`, put it inside your own cleanup scope. The KSR benchmark cleans up its default model directory automatically and keeps `--model-dir`.
 - Run: `python run.py` (creates venv, installs deps, launches the keyboard).
 - Test: `python -m pytest` (around 2,250 tests; `python -m pytest --collect-only -q` prints the live count, so don't restate it elsewhere; also `-k fuzzy`, `-k property`, or a single file like `tests/test_keyboard_bridge.py`).
 - Pre-push gate, the same checks as CI (`ruff check`, `ruff format --check`, `mypy` under **both** `--platform linux` and `--platform win32`, `pytest`): `python check.py` (~60s); `python check.py --full` adds the `--cov-fail-under=60` coverage gate (~110s, full CI parity). `python check.py --install-hook` wires it to `git push` so it runs automatically rather than by hand (`--no-verify` skips it once). CI additionally runs `osv-scanner` over the lockfiles. Formatting is gated separately from linting because `ruff check` ignores layout; fix a format failure with `ruff format src/ tests/`. The two mypy passes are both required and neither substitutes for the other: `linux` is what the runner uses (typeshed gates whole symbols on platform, so `ctypes.WinDLL` degrades to `Any` there and trips `warn_return_any`), and `win32` is the only thing that type-checks the `if sys.platform == "win32"` bodies at all, since mypy prunes them as unreachable under the other.
@@ -115,9 +116,58 @@ How it works now:
 - **Writes**: every user context write goes through `_bump_user_context` (from `learn()` and `reinforce_context`), which keeps the merged view in step. Base writes go straight to the merged tables: `learn(text, corpus=True)` (what `load_corpus` calls), `learn_corpus_context`, `_learn_base`, the two seed loaders, and `PackManager.apply_to_predictor`. A direct write to `.bigrams` in a test is therefore a base write and still works.
 - **Decay** (`_decay_user_context`) acts on the user share of **both** orders, subtracting exactly what it removes from the merged view, and drops a count below `_USER_CONTEXT_MIN` (0.1, about a week for a single typing). Seeds are untouched however long the session runs (`tests/test_ngram_context_split.py::TestSeedsSurviveTheSession`). The merged count rounds to zero at tick 14 while the user share lasts to tick 45, so for a prefix with no base evidence the merged row is gone for two thirds of the pair's life; `_context_probs` scores from the user row alone in that window rather than returning nothing (`TestScoringTrustsTheUserInProportion::test_a_lone_user_pair_keeps_scoring_until_it_is_forgotten`).
 - **Legacy files** carrying `bigrams` / `trigrams` are adopted wholesale as user history (`_adopt_user_context`): the halves cannot be separated after the fact, adopting keeps every ranking exactly as it was, and decay retires the inherited seed mass over the following weeks while the base is re-seeded cleanly underneath. The next save writes the new keys; an older build reading a new file loses only user context, since it re-seeds base itself.
-- **`HybridPredictor.reload_from_disk` must call `_reseed_context()` after `load()`.** It used to work by accident, because the persisted table already carried the (inflated) seeds. `clear_user_data` wipes both halves and the hybrid re-seeds, as before. The reseed re-links the corpus through `learn_corpus_context`, which applies the same known-or-third-sighting gate as `learn(corpus=True)` (reading the candidate pool, never writing it), so a reload rebuilds the base share a launch would; its first version linked every plausible word, and a reload grew edges for rare corpus words that a fresh start withholds (`TestTheMergedViewStaysHonest::test_reseeding_the_corpus_gates_rare_words_exactly_as_a_launch_does`).
+- **`HybridPredictor.reload_from_disk` must call `_reseed_context()` after `load()`.** It used to work by accident, because the persisted table already carried the (inflated) seeds. `clear_user_data` wipes both halves and the hybrid re-seeds, as before. The reseed re-links the corpus through `learn_corpus_context`, which applies a known-or-third-sighting gate of its own over the corpus's sightings alone (it neither reads nor writes the user's candidate pool; since the corpus prior split, the launch path makes the same call, so the two agree by construction), so a reload rebuilds the base share a launch would; its first version linked every plausible word, and a reload grew edges for rare corpus words that a fresh start withholds (`TestTheMergedViewStaysHonest::test_reseeding_the_corpus_gates_rare_words_exactly_as_a_launch_does`).
 
-Known follow-ups, deliberately not bundled: the training corpus's *unigrams* are still learned as user typing on every launch (pre-existing, bounded by decay, and why a fresh `user_vocab` is not empty); the seed weight of 50 now only matters relative to the corpus's +1 and could come down; the cross-order interpolation weights are fixed at 0.5/0.3/0.2 (renormalising when a table is silent would not reorder anything, since the bigram-to-unigram ratio is unchanged; evidence-weighted interpolation across orders is the change that would). Benchmarks: `scripts/bench/ksr.py` (keystroke savings, ablations, `--learn-half`) and `scripts/bench/fuzzy.py`; both run against a temporary model directory, never the live one. **Every keystroke-savings figure quoted in this file (52.5, 53.6, 55.0%) is on `ksr.py`'s `builtin` corpus**, 30 sentences written by hand in this repo. They stay correct and comparable to each other, and are not comparable to anything measured since: `--corpus aac-dev` / `aac-test` (real held-out AAC communications, added 2026-09-05) read 47.3% and 48.7% for the same engine, because the hand-written set sits close to the curated seeds and the training corpus. The generated context seeds landed the same day and took those to **49.1% and 50.4%**, at 28.7% and 30.4% next-word hit; see *Measured result* in `docs/architecture/NGRAM_SEEDS.md`. Quote the corpus with the number from now on, and treat anything under 1.4 points as noise, which is what the two AAC splits disagree by with nothing else changed. See *Benchmark baselines* in `docs/architecture/PREDICTION_NOTES.md`.
+Known follow-ups, deliberately not bundled: the seed weight of 50 now only matters relative to the corpus's +1 and could come down; the cross-order interpolation weights are fixed at 0.5/0.3/0.2 (renormalising when a table is silent would not reorder anything, since the bigram-to-unigram ratio is unchanged; evidence-weighted interpolation across orders is the change that would). Benchmarks: `scripts/bench/ksr.py` (keystroke savings, ablations, `--learn-half`) and `scripts/bench/fuzzy.py`; both run against a temporary model directory, never the live one. **Every keystroke-savings figure quoted in this file (52.5, 53.6, 55.0%) is on `ksr.py`'s `builtin` corpus**, 30 sentences written by hand in this repo. They stay correct and comparable to each other, and are not comparable to anything measured since: `--corpus aac-dev` / `aac-test` (real held-out AAC communications, added 2026-09-05) read 47.3% and 48.7% for the same engine, because the hand-written set sits close to the curated seeds and the training corpus. The generated context seeds landed the same day and took those to **49.1% and 50.4%**, at 28.7% and 30.4% next-word hit; see *Measured result* in `docs/architecture/NGRAM_SEEDS.md`. Quote the corpus with the number from now on, and treat anything under 1.4 points as noise, which is what the two AAC splits disagree by with nothing else changed. See *Benchmark baselines* in `docs/architecture/PREDICTION_NOTES.md`.
+
+## Shipped corpus prior and faster personal learning
+
+Since 2026-09-10, the shipped training corpus's unigrams live in
+`NgramPredictor._corpus_unigrams` / `_corpus_total`, rebuilt in memory by
+`load_corpus_prior`, instead of being added to `user_vocab` at each launch.
+The old path injected 2,604 accepted tokens of pseudo-personal history even
+on a fresh model. The n-gram and fuzzy scorers now share
+`_effective_typing_count` / `_effective_typing_total`: real counts plus
+`_CORPUS_PRIOR_WEIGHT` (0.1) times the corpus counts. With no real learning,
+the weight cancels and the conversational distribution is preserved; new
+learning competes with one tenth the former bootstrap mass. Existing saved
+user counts are preserved because real and historical corpus counts cannot
+be separated safely. The user-total invariant remains exact.
+
+The prior uses its own local three-sighting gate and never changes user
+candidate state or the decay clock. Its accepted words are known to both
+ordinary typing and pill learning. **They live in `_corpus_unigrams` and
+nowhere else.** The merged `unigrams` table is persisted by `save()`, and a
+first version installed the prior there so membership tests would find it:
+a corpus-only word then survived the release that dropped it from the
+shipped file, kept passing the hybrid's validity check and was rebuilt into
+the fuzzy dictionary on every launch. `NgramPredictor.in_vocabulary` and
+`vocabulary()` are the membership test and the enumeration that see both
+halves; `_is_valid_word` and `_fuzzy_frequencies` go through them, and
+`_top_unigrams_with_scores` adds the prior at `_CORPUS_PRIOR_WEIGHT` rather
+than at full count. Reload rebuilds the prior against the replacement user
+history, and Clear Learned Data rebuilds it outside the PPM-enabled branch.
+The generic `load_corpus` API is unchanged. Guarded by
+`tests/test_corpus_prior.py::test_a_word_dropped_from_the_corpus_leaves_with_it`,
+paired with the learned word that must stay.
+
+Saving a prediction edit **whose spelling changed** calls
+`learn_from_selection(..., explicit=True)`: each token gets an immediate +5,
+its context is reinforced, and its fuzzy entry is refreshed. A Save that
+kept the spelling (including a casing-only edit) is one ordinary pill tap,
+gated exactly as a tap is, because opening the editor on a fuzzy-generated
+pill and tapping Save must not be the one tap that injects a never-typed
+word; the casing is still recorded through `set_capitalization`. The
+explicit path applies the shape filter and the blacklist at edit time, the
+same rule `load()` applies on the way back in, so a token is refused where
+the user can see it rather than learned and silently stripped at the next
+launch (a taught acronym passes as it does everywhere). `learn_word` also
+retires the word's candidate-pool entry, which every later `learn()` would
+otherwise leave persisted. Ordinary pill clicks keep the unknown-word
+repetition gate. Privacy and learning freeze suppress the new learning path.
+Measured fresh-model examples, lifecycle details, and limits are in
+`docs/architecture/HYBRID_MERGING.md`; regressions are in
+`tests/test_corpus_prior.py` and the hybrid/bridge edit tests.
 
 ## Prefix beam (mid-word fuzzy completion)
 
@@ -125,7 +175,7 @@ Known follow-ups, deliberately not bundled: the training corpus's *unigrams* are
 
 Why (measured 2026-09-02, write-up linked from the memory index): mid-word, the old fuzzy source put the intended word in its top five 0.0% of the time after a neighbour slip and 1.4% with no error at all, because its spatial beam only emitted sequences as long as the typed text and SymSpell reached two edits further, so 87% of its mid-word candidates were shorter than the prefix. The n-gram completer needs an exact prefix. Between them one mis-click cost +2.05 clicks per word (+69%).
 
-How: a beam over the dictionary's **live prefixes** (`PrefixIndex`, about 24,000 for the shipped list, 0.01 s, rebuilt lazily after `load_dictionary` / `set_frequencies`, updated in place by `update_word` as the vocabulary changes (see *Fuzzy dictionary refresh*), and rebuilt whenever the spatial model object changes, which `set_key_positions` does on a layout switch) with an **unnormalised** Gaussian emission (`SpatialEmissions`: a hit costs 0, so a perfect 13-letter typing no longer prunes out and an edge key no longer outscores a central one for equal accuracy) and four transitions: substitution, omitted click, extra click, transposition. Completions are ranked by path score plus `0.55 * log1p(freq)`. Scores come back relative, in (0, 1], so `_normalise_source` sees positives. Below three typed characters it returns nothing (the `should_autocorrect` guard; the n-gram's exact match is the better source there), **unless the run is not a live prefix**, where both halves of that reasoning fail at once: spelling no word's opening is itself the evidence of an error, and the exact source it defers to has nothing to return. That was reported as "two letters shows nothing until you type a third", and it was 298 of the 676 two-letter runs against the shipped dictionary, all of which now fill. `MIN_TYPED_DEAD_PREFIX` (2) is the rescue floor and `PrefixBeam._worth_completing` is the rule. A *live* two-letter prefix is still refused, and that is what makes the rescue safe rather than a retuning: it can only fire where the exact source found nothing, so it has nothing to displace and every case that worked before is untouched by construction (`tests/test_fuzzy_prefix_beam.py::TestATwoLetterMisClickDoesNotEmptyTheBar` and `tests/test_hybrid_predictor.py::TestTwoLettersAlwaysFillTheBar` each pair the rescue with that inverse). One character stays too little to act on. Measured on `scripts/bench/ksr.py --mis-click`, whose slip lands on the second character of every word: clean typing is **unchanged to the decimal** (49.1% aac-dev, 50.4% aac-test), and with the slip 44.7 -> 45.3% and 46.3 -> 46.7%, at unchanged latency. That gain is small because KSR counts clicks saved rather than whether anything was offered at all, and the report was about the blank bar.
+How: a beam over the dictionary's **live prefixes** (`PrefixIndex`, about 24,000 for the shipped list, 0.01 s, rebuilt lazily after `load_dictionary` / `set_frequencies`, updated in place by `update_word` as the vocabulary changes (see *Fuzzy dictionary refresh*), and rebuilt whenever the spatial model object changes, which `set_key_positions` does on a layout switch) with an **unnormalised** Gaussian emission (`SpatialEmissions`: a hit costs 0, so a perfect 13-letter typing no longer prunes out and an edge key no longer outscores a central one for equal accuracy) and four transitions: substitution, omitted click, extra click, transposition. Completions are ranked by path score plus `0.55 * log1p(freq)`. Scores come back relative, in (0, 1], so `_normalise_source` sees positives. By default, below three typed characters it returns nothing (the `should_autocorrect` guard; the n-gram's exact match is the better source there), **unless the run is not a live prefix**, where both halves of that reasoning fail at once: spelling no word's opening is itself the evidence of an error, and the exact source it defers to has nothing to return. That was reported as "two letters shows nothing until you type a third", and it was 298 of the 676 two-letter runs against the shipped dictionary, all of which now fill. `MIN_TYPED_DEAD_PREFIX` (2) is the rescue floor and `PrefixBeam._worth_completing` is the rule. A *live* two-letter prefix is refused by default. Since 2026-09-10, `HybridPredictor.predict` opts into `allow_short_prefix` when fewer than `HybridPredictor.SHORT_PREFIX_RESCUE_FLOOR` (5, the benchmark's pill count) valid n-gram candidates can reach the bar, **independent of the max-suggestions setting**: its first version decided against the requested count, so whether the rescue fired, and with it which word held slot 1 for a short prefix, changed when the user raised the count, on a keyboard where pill position is muscle memory. This lets `ww` offer `we` alongside `wwe` and `wwii`, whose presence previously disabled correction altogether. Suppressed candidates do not count towards the floor. Prefixes with five or more exact suggestions keep their existing ranking, every bar is a prefix of the widest one (`TestTwoLettersAlwaysFillTheBar::test_the_rescue_does_not_depend_on_how_many_pills_are_shown`), and the standalone fuzzy API keeps its original default (`tests/test_fuzzy_prefix_beam.py::TestATwoLetterMisClickDoesNotEmptyTheBar` and `tests/test_hybrid_predictor.py::TestTwoLettersAlwaysFillTheBar`). One character stays too little to act on. Measured on `scripts/bench/ksr.py --mis-click`, whose slip lands on the second character of every word: clean typing is **unchanged to the decimal** (49.1% aac-dev, 50.4% aac-test), and with the slip 44.7 -> 45.3% and 46.3 -> 46.7%, at unchanged latency. That gain is small because KSR counts clicks saved rather than whether anything was offered at all, and the report was about the blank bar.
 
 Constants were set by sweep against the shipped list **with the n-gram's counts**, which is how the hybrid runs it: the bare wordlist carries no frequencies, so without `set_frequencies` the frequency term is a constant and rankings fall to insertion order (the first prototype's numbers were spatial-only for that reason; any test or bench of this path must inject the counts, see the fixture in `tests/test_fuzzy_prefix_beam.py`). With them, and drawing words from the 2,000 most frequent the way typing is distributed (a uniform draw over all 10,000 weights a word used once a year the same as "because" and reads 30% / 62% on the first two figures; the first bench did that): a clean 4-letter prefix completes to the intended word 92% of the time, a one-slip prefix 94.5%, a dropped click 71%, a doubled click 58%, a transposition 96%, and the top pick never overrides a typed prefix (100%). Omission and extra pull against each other (a cheaper omission explains a doubled click away as something else: at -2.0 it is 83% / 52%, at -3.0 58% / 66%); -2.5 leans toward omission, the dominant error for this kind of input. `scripts/bench/fuzzy.py --n 300` reproduces the shape (`--legacy` for the before column): clean prefixes 0.2% -> 89%, a slipped prefix 0 / 0 / 0.3 / 0.3% -> 56 / 92 / 98 / 99.7% by prefix length 3 to 6. End to end (`scripts/bench/ksr.py --conditions legacy-fuzzy,full --mis-click`): keystroke savings 52.5 -> 53.6% on clean typing (the source is no longer net-negative) and **34.6 -> 47.9%** with one uncorrected mis-click per word, at about 0.3 ms per keystroke.
 
@@ -159,12 +209,13 @@ Hybrid startup and full dictionary rebuilds call `prepare_prefix_index()`
 after frequency injection, keeping construction off the first typed prefix.
 Standalone fuzzy callers still prepare lazily; layout changes reuse the index.
 
-An underfilled exact prediction bar opts into `allow_short_prefix` for fuzzy
-completion, since new rare words can make a two-letter typo a live prefix.
-Suppressed entries do not count as filling the bar. The standalone fuzzy API
-keeps its former default, and one character never triggers this fallback.
+The existing `allow_short_prefix` rescue remains tied to the fixed five-candidate
+floor, independent of the requested pill count. New rare words can make a
+two-letter typo a live prefix, but suppressed entries do not count toward that
+floor. The standalone fuzzy API keeps its former default, and one character
+never triggers this fallback.
 
-The n-gram scorer retains all user/context candidates but only the best requested
+The n-gram scorer retains all user/corpus/context candidates but only the best requested
 number of matching base words. Nonnegative mixture terms make this cutoff exact;
 unusual weights/counts fall back to the full scan. A versioned base map invalidates
 the sorted word-reference list and bounded next-word top rows on mutation. Equal
@@ -191,6 +242,73 @@ The last of the 2026-09-02 recommendations, landed 2026-09-03, and the one whose
 **Two emission widths.** `SpatialEmissions.KEY_SIGMA` (0.85) is the uncertainty when only the key is known: somewhere inside it, plus scatter. `POSITION_SIGMA` (0.55) is the uncertainty when the position inside the key is known. It was set by sweep and the sweep is the part to remember: sharper than 0.55 *hurt* both simulated pointers (0.3 lost 1.6 points of keystroke savings, 0.22 lost 6), because scatter then puts the intended key on the expensive side of the click more often than the extra precision helps.
 
 **The gain is modest, and that is the finding.** `scripts/bench/ksr.py --pointer BIAS_X,BIAS_Y,NOISE` simulates a pointer end to end (reported key, offset, and the presses the bias is learned from) and reports each condition three ways. A pointer whose misses are mostly random (bias 0.2, 0.15; noise 0.3; about a quarter of clicks on the wrong key), the robustness check: keys only 50.5%, plus offsets 50.8%, plus learned bias 50.9%. One whose misses are mostly systematic (0.35, 0.25; 0.15; 22% wrong), the case this feature is for: 51.1%, 51.5%, **51.8%**. The earlier per-key simulation (75% to 86.5% intended-key recovery with a learned bias) was real but did not translate, because the prefix beam plus the dictionary already recover most single-key errors from the reported key alone; what a click position adds on top is a few tenths of a point, more for a systematic pointer than a scattered one. It ships because it never regresses at 0.55, costs nothing at runtime, is privacy-gated like every other learning, and because the persisted table is the first measurement of this user's actual pointer bias, which no simulation can supply. Tests: `tests/test_pointer_model.py`, `tests/test_click_position.py` (recognizer, bridge and persistence hops, each paired with the near-miss it must leave alone) and `tests/test_qml_click_position.py`, which loads `KeyButton.qml` on its own in a `QQuickView` (one item, not a Repeater delegate, so the scene point is reliable under the offscreen plugin) and presses at a known point, and which also calls the overloaded `pressKey` / `pressKeyLiteral` slots with three arguments and with one from a QML function against a real bridge: the Python tests call the slots directly and never touch Qt's overload resolution, and a three-argument call that failed to bind from QML would degrade every press to the key centre with no warning anyone would see.
+
+## The apostrophe is optional in a typed prefix
+
+Typing `ill` offers `I'll`, `hes` offers `he's`, `im` offers `I'm`. The rule is
+one clause in `NgramPredictor._matches_partial`, the single choke point every
+prefix match goes through: a word containing an apostrophe also matches a typed
+prefix that its apostrophe-stripped form starts with, **and only when the user
+has typed no apostrophe themselves** (once they have, `don'` already matches
+`don't` exactly, and stripping on top would make the prefix mean less than what
+was typed rather than more).
+
+**It belongs in the n-gram's exact match, not in the fuzzy source, and that is
+the whole finding.** A user who types `ill` for `I'll` has not mis-clicked: the
+apostrophe costs an extra click here and a layer hop on the compact layouts, so
+it is the character they skip deliberately. This is the same thing
+`_APOSTROPHE_INSERTION_PROB` (0.50 against a generic 0.15) already encodes for
+the whole-word path, one layer over. The fuzzy source structurally cannot
+rescue it mid-word: the prefix beam reaches `i'll` only through an omitted
+click at `LOG_OMIT` (-2.5), which is past `FREQUENCY_MAY_BUY` (-1.5), so
+`_protect_exact_completions` clamps it below every completion of the live
+prefix `ill`, and `ill` has eight. `he's` was not reached at all. Cheapening
+the beam's apostrophe omission was tried and is the wrong lever: it prices a
+deliberate skip as a motor error, and it still has to buy past eight exact
+completions on frequency alone.
+
+**Typing the apostrophe must not blank the bar.** `_press_char`'s gate on
+whether to re-query was `char.isalpha()`, so the apostrophe threw the bar away
+at the moment it was right: `don` put `don't` at the top, and the `'` cleared
+it one click short of the word; `i'` discarded `I'm` / `I'll` / `I'd` / `I've`,
+which are the entire reason to type an apostrophe there. That is the same
+oversight the digit had, and which the comment at that call site already
+describes. `_continues_a_word` is the gate now: letters always, plus `'` when
+there are letters in front of it (a leading one carries no prefix, so asking
+costs a round trip and returns nothing). It is deliberately a separate question
+from the word-character rule in `_press_char` that decides what `_current_word`
+keeps: that one says what a word is made of, this one says whether the run so
+far is worth asking about. **The underscore is deliberately not in the gate**,
+although `_press_char` keeps it in the word so `snake_case` stays one token: the
+tokenizer keeps letters and apostrophes only, so after `snake_` the model
+predicts from `snake` while the typed run is `snake_`, every pill is an exact
+completion of a prefix that discards a typed character, and tapping `snake`
+called `replace_text(6, "snake ")`, removing the underscore just typed. Until
+the tokenizer and the gate agree on it, an underscore clears the bar as it
+always did (`TestTypingTheApostropheKeepsTheBar::test_an_underscore_still_clears_the_bar`).
+
+Measured on the held-out AAC corpora, counting every contraction occurrence and
+typing it the way a user of this keyboard does (no apostrophe), the word is
+offered somewhere while typing it **65.1% -> 94.5%** of the time; `i'm`, the
+most common contraction in the set at 24 occurrences, was previously
+unreachable at every prefix length. Keystroke savings are unchanged to the
+decimal (49.1% aac-dev, 50.4% aac-test): those corpora type contractions *with*
+their apostrophes, so the benchmark cannot see this at all and is a regression
+check here, not a measurement of it. The remaining misses are possessives
+(`doctor's`, `today's`) that are not in the vocabulary as words, which no
+prefix rule can reach. Across a sweep of 4,056 two- and three-letter prefixes
+only 10 change, 7 by gaining a contraction and **none by losing one**; the
+words displaced are all rank 5-6 tail items.
+
+Guarded by `tests/test_ngram_predictor.py::TestTheApostropheIsOptionalInATypedPrefix`
+(the predicate), `tests/test_hybrid_predictor.py::TestASkippedApostropheStillFindsTheWord`
+(the ranking, on the shipped word lists rather than a stub, because the claim
+is about real frequencies) and
+`tests/test_keyboard_bridge.py::TestTypingTheApostropheKeepsTheBar`. Every
+positive is paired with the near-miss it must still reject, and the pairs that
+bite are the ones a rule that matched too much would satisfy: `ill` must keep
+offering `ill` and `illinois`, a prefix with no contraction behind it must grow
+none, and a bare `'` must still ask nothing.
 
 ## Short words in next-word predictions
 
@@ -283,6 +401,7 @@ Edit `always_capitalize` on the language profile in `src/prediction/language.py`
 - **Settings** (layout, theme, toggles): Managed by Qt `Settings` in QML. Auto-saved on change. Stored in OS registry/config automatically by Qt: on Windows that is `HKCU\Software\alpha-osk`, the **organisation** name from `keyboard_app.py::app.setOrganizationName`.
   - **The Windows uninstaller must not delete that key except behind its own prompt.** It used to delete it from the `.nsi` Uninstall section unconditionally, spelled `Software\${APP_NAME}`, and two things make that wipe every setting on every upgrade rather than only on an uninstall: registry keys are **case-insensitive**, so "Alpha-OSK" resolves to the "alpha-osk" organisation key and takes the whole tree under it, and the installer's Install section runs the previous version's `uninstall.exe /S` before extracting, which is also exactly what the auto-updater drives. So a reinstall and an auto-update both silently reset the theme, layout, panels, opacity and window size to defaults. The deletion now lives in `installer.nsh::customUnInstall`, in the same `IfSilent`-guarded branch as the `%APPDATA%` removal, spelled from a new `APP_ORG` define that must keep matching `setOrganizationName`. Guarded by `tests/test_windows_installer.py`, which expands the `!define`s before comparing, because the bug's own spelling never mentioned the organisation. **The fix cannot protect the upgrade that delivers it**, and that is worth knowing before reading a bug report saying it did not work: the Install section runs `$INSTDIR\uninstall.exe`, the binary the *previous* version wrote, and only calls `WriteUninstaller` afterwards, so every user coming from 1.3.0 or earlier runs the old unconditional `DeleteRegKey` one final time. Only upgrades from the first release carrying this fix are covered.
   - **The installer's Add/Remove Programs entry lives in HKLM, and the previous-version check executes nothing it reads from the registry.** Releases up to 1.4.1 wrote the entry to HKCU, and `installer.nsh::customInstall` ran that entry's `UninstallString` with the installer's administrator token behind a prompt recommending Yes, shown even on a silent auto-update because it carried no `/SD` (measured: NSIS shows an un-defaulted MessageBox under `/S`). Any process running as the user can write HKCU, so a planted string was one Yes away from running as administrator. It never fired, because the Install section wrote its own entry over the key first, in every revision in history, which also meant removing a previous version from another directory never worked. Now `removePreviousInstallAt` reads only `InstallLocation`, normalises it with `GetFullPathName` (so `Program Files\..\Users\x` is compared as what it names), requires a per-user location to sit under Program Files and to hold our own `alpha-osk.exe` and `uninstall.exe`, runs that uninstaller and nothing else, and defaults to No when silent; the entry is read before this install writes its own; the uninstaller deletes both hives. Guarded by `tests/test_windows_installer.py::TestThePreviousVersionCheckExecutesNothingFromTheRegistry`, including a `makensis` compile of the macros where NSIS is installed. The before/after runtime harness (a test GUID under HKCU, a planted uninstaller, a `..` traversal, a stale entry, a genuine old install, the silent default) is the shape any future change here should be checked with.
+  - **An uninstaller shipped before 1.4.0 still deletes that key, so every invocation of a previous uninstaller goes through `upgrade_settings.nsh::RunPreviousUninstaller`.** The fix above cannot protect the upgrade that delivers it, because the Install section runs the *previous* version's binary. The helper copies the whole settings tree, registry types and nested keys included, to a uniquely named sibling under `HKCU\Software\alpha-osk-upgrade-backups`, flushes it so it is on disk before destructive code runs, runs the uninstaller, and copies it back. It never imports an editable `.reg` file into the elevated process. **Backup and restore failures stop setup; the old uninstaller's own exit code does not**, and that asymmetry is the load-bearing part: on the same-directory path this runs *before* the replacement files are extracted, so aborting there leaves a user whose only input device is this keyboard with the old binary already uninstalled and no new one, and every retry failing at the same point. A failed restore keeps its recovery copy and records the path in two durable places, since the message box is auto-answered on the silent path the auto-updater drives and `DetailPrint` goes to a pane silent mode never shows. **The elevated installer's `HKEY_CURRENT_USER` is the profile that elevated**, so under credential elevation (a standard user typing an administrator's password) the tree it protects is the administrator's, and the keyboard's own user is unprotected; that is the same hazard that puts the study-invite seed in HKLM. Structural coverage is in `tests/test_windows_installer.py`, executable Windows/NSIS coverage in `tests/test_upgrade_settings.py`. Settings already deleted by an earlier upgrade cannot be reconstructed.
 - **Prediction model** (learned words/phrases): Saved to disk explicitly or via auto-save on exit.
   - Windows: `%APPDATA%/alpha-osk/models/`
   - Linux: `~/.config/alpha-osk/models/`
@@ -883,12 +1002,13 @@ chord's action key - which is the only way to name Enter or an arrow
 without a second picker listing every key we can send. The modifier chips
 are ordinary buttons in the popup.
 
-**Right-click an F-key opens its editor, and that must never be the only
-route.** A dwell-click, switch-access, head- or eye-tracker pointer, and a
-single-button adaptive mouse all have no right button, so right-click alone
-would let such a user press an F-key and never program one. The left-click
-route is ***Settings -> Function Keys***, which lists all twenty-four with
-what each one currently does and opens the editor on a tap.
+**The only route into the editor is *Settings -> Function Keys***, which
+lists all twenty-four with what each one currently does and opens the editor
+on a tap. Right-clicking an F-key used to open it too; that was removed at
+Owen's request (2026-09-13), so a stray right-click on the row never pops an
+editor over the letters. Right-click on an F-key now does nothing. Don't add
+it back. Guarded by
+`tests/test_qml_function_row.py::TestTheSettingsListIsTheLeftClickRoute::test_a_right_click_on_a_key_does_not_open_the_editor`.
 
 **That page replaced an Edit toggle on the row itself**, which flipped both
 rows into an assign mode where a left-click opened the editor. The list
@@ -908,8 +1028,8 @@ live inside it (the Deepgram key field carries the same note); leaving a
 is typed with, or both. `root.settingsReturnView` brings settings back on
 the same page afterwards, which is the one documented exception to
 "re-opening Settings always lands on the home grid" (see *Settings Panel
-Structure*). The inverse matters as much and is tested: an editor opened by
-right-clicking a key must **not** pop the settings window open behind it.
+Structure*). The inverse matters as much and is tested: an editor opened any
+other way must **not** pop the settings window open behind it.
 
 **Every key takes its share of the gap around it.**
 `FunctionRow`'s `hitMarginH` / `hitMarginV` default to 0 and there is no
@@ -993,7 +1113,7 @@ The parent (`Main.qml`'s settings popup window) calls `settingsPanel.resetToHome
 
 **Where it opens is `root.safePanelPos(w, h)`, shared with Help and the Dashboard.** All three used to open at `Screen.width / 2 - width / 2`, which gets three things wrong at once: it centres on the **primary** screen whatever screen the keyboard is on (a monitor to the left has negative coordinates a primary-screen centre cannot even reach, the same bug the snippets restore documents one window over); it can land on top of the keyboard, which is what the user types into these windows with; and none of the three has an OS title bar to drag it back by, while Settings cannot take focus either, so a window that opens somewhere unreachable stays unreachable. `safePanelPos` puts the panel above the keyboard where there is room, below it where there is not, centred on the keyboard's own screen when it fits neither, and clamped on that screen in every case; `screenBoundsAt(px, py)` is the screen lookup, walking `Qt.application.screens` because `Screen` inside a Window is not knowable before the window is placed and `Screen.width` is a size rather than a position. Guarded by `tests/test_qml_panel_placement.py`, which cannot exercise the multi-monitor half (the offscreen plugin gives one screen) and so pins the half a single screen can prove: that the position is derived from the keyboard's geometry rather than the screen's centre, which is exactly the property the old code lacked.
 
-**The one exception is `root.settingsReturnView`, and it is a return rather than a re-open.** Tapping a key in *Function Keys* hides the settings window and opens the key editor, which lives on the **keyboard** window because it is typed into with the OSK's own keys and the settings window cannot hold OS focus (the Deepgram key field carries the same note). Leaving a 360x540 window parked mid-screen would cover the editor, the letter grid it is typed with, or both. `settingsWindow.onVisibleChanged` consumes `settingsReturnView` when it is set and calls `resetToHome()` otherwise, so only that hand-off lands deep; coming back to the home grid there would lose the user's place in a list of twenty-four. Guarded by `tests/test_qml_function_row.py::TestTheSettingsListIsTheLeftClickRoute`, whose inverse half asserts an editor opened by right-clicking a key does **not** pop the settings window open behind it.
+**The one exception is `root.settingsReturnView`, and it is a return rather than a re-open.** Tapping a key in *Function Keys* hides the settings window and opens the key editor, which lives on the **keyboard** window because it is typed into with the OSK's own keys and the settings window cannot hold OS focus (the Deepgram key field carries the same note). Leaving a 360x540 window parked mid-screen would cover the editor, the letter grid it is typed with, or both. `settingsWindow.onVisibleChanged` consumes `settingsReturnView` when it is set and calls `resetToHome()` otherwise, so only that hand-off lands deep; coming back to the home grid there would lose the user's place in a list of twenty-four. Guarded by `tests/test_qml_function_row.py::TestTheSettingsListIsTheLeftClickRoute`, whose inverse half asserts an editor opened any other way does **not** pop the settings window open behind it.
 
 ### Where each section lives
 

@@ -22,6 +22,8 @@
 ;
 ; See docs/build/WINDOWS.md for full UIAccess explanation.
 
+!include "${__FILEDIR__}\upgrade_settings.nsh"
+
 !macro customInit
   ; A silent install is the auto-updater (src/updater.py drives `/S`).  It has
   ; no window to prompt over and has already put its own toast on screen, so
@@ -220,10 +222,18 @@
       ${AndIf} ${FileExists} "$8\${APP_EXE}"
         ${If} ${Cmd} `MessageBox MB_YESNO|MB_ICONQUESTION "A previous ${KIND} installation of Alpha-OSK (v$1) was found at:$\r$\n$8$\r$\n$\r$\nWould you like to remove it?$\r$\n(Recommended: Yes)" /SD IDNO IDYES`
           DetailPrint "Removing the previous installation at $8"
-          ; _?= runs the uninstaller in place, so ExecWait really waits for
-          ; it rather than for the copy it would otherwise spawn in $TEMP.
-          ; The price is that it cannot delete itself, so this does.
-          ExecWait '"$8\uninstall.exe" /S _?=$8'
+          ; _?= runs the uninstaller in place, so the wait really is for the
+          ; uninstaller rather than for the copy it would otherwise spawn in
+          ; $TEMP.  The price is that it cannot delete itself, so this does.
+          ;
+          ; It goes through RunPreviousUninstaller rather than a bare
+          ; ExecWait because an uninstaller shipped before 1.4.0 deletes the
+          ; whole Qt organisation key on its way out, settings and all.  The
+          ; helper copies that tree aside first and puts it back afterwards.
+          ; The command it runs is this macro's own validated path, never a
+          ; string read from the registry.
+          Push '"$8\uninstall.exe" /S _?=$8'
+          Call RunPreviousUninstaller
           Delete "$8\uninstall.exe"
           RMDir "$8"
         ${EndIf}

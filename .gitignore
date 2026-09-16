@@ -46,6 +46,15 @@ build-cache/
 
 # Test / coverage
 .coverage
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+# Local test runs with an explicit pytest --basetemp.
+/.tmp-*/
+/build/test-*/
+# Generated installer compiler smoke checks.
+/build/*-smoke.exe
+/build/*-smoke.nsi
 
 # Release output (NSIS installers, AppImages)
 release/

@@ -195,8 +195,9 @@ remain lazy. Layout changes reuse the dictionary index and refresh emissions.
 
 The larger base dictionary can make a two-letter typo a live prefix of an
 uncommon word. `HybridPredictor.predict` therefore opts into
-`allow_short_prefix` only when valid exact candidates cannot fill the bar.
-Suppressed candidates do not fill that quota. Standalone fuzzy calls retain
+`allow_short_prefix` when fewer than five valid exact candidates exist,
+independent of the requested pill count. Suppressed candidates do not fill
+that quota. Standalone fuzzy calls retain
 the original default, and a single character remains below the rescue floor.
 
 The design, vocabulary source, measurements and remaining options are recorded in
@@ -263,3 +264,41 @@ out. Measured on the shipped list with the n-gram's counts, a one-slip
 before) and a clean 4-letter prefix 92% (1.4% before). The whole account,
 including the sweep behind each constant and why there is no user setting,
 is the *Prefix beam* section of `CLAUDE.md`.
+
+### Sparse two-letter prefixes (2026-09-10)
+
+The hybrid also requests fuzzy suggestions for a live two-letter prefix
+when fewer than `HybridPredictor.SHORT_PREFIX_RESCUE_FLOOR` (5) of its
+exact completions can reach the bar, whatever the pill count. Previously,
+`ww` offered only `wwe` and `wwii`: those dictionary entries made the prefix
+live, disabling the fuzzy source that could suggest `we`. With five pills,
+the fresh model now offers `wwe`, `we`, `wwii`, `well`, and `want`.
+
+`HybridPredictor.predict` counts candidates through the same validity gate
+used by the merge, so suppressed words cannot prevent this fallback. It
+passes `allow_short_prefix` through the recognizer to `PrefixBeam.complete`.
+The floor is a constant rather than the requested count: its first version
+decided against `n`, so whether the rescue fired, and with it which word
+held slot 1, changed when the user raised the max-suggestions setting, on a
+keyboard where pill position is muscle memory. Five is the benchmark's pill
+count, so the figures below describe exactly this rule, and the count is
+only computed for a two-character current word, the one length the beam
+can act on.
+The beam still protects exact completions from expensive corrections, and
+prefixes with enough exact candidates retain their previous ranking. The
+standalone fuzzy API keeps its default short-prefix guard. Single characters
+still cannot trigger fuzzy suggestions, and space-triggered autocorrection
+keeps its separate confidence and minimum-length rules.
+
+Fresh-model KSR benchmark, five pills, `scripts/bench/ksr.py` on 2026-09-10:
+
+| Corpus | Clean before / after | Mis-click before / after |
+|---|---|---|
+| `aac-dev` | 49.1% / 49.1% | 45.3% / 45.5% |
+| `aac-test` | 50.4% / 50.4% | 46.7% / 46.9% |
+
+The mis-click condition slips on the second character of each word. These
+small aggregate gains are below the benchmark's noise floor; the concrete
+improvement is making short corrections available where dictionary entries
+previously blocked them. Newly eligible prefixes now incur a fuzzy beam
+search. No dictionary entries, frequencies, or merge weights changed.

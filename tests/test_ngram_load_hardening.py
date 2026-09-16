@@ -12,15 +12,16 @@ crafted file through both ``NgramPredictor`` and ``HybridPredictor`` and
 assert the poison is dropped on load rather than merely deferred to the
 next keystroke.
 
-Note on ``HybridPredictor``: this codebase's docs describe a shipped
-"corpus prior" (``_corpus_total`` / ``load_corpus_prior``); no such
-attribute exists in this checkout. What actually reproduces the reported
-crash here is ``HybridPredictor.__init__`` -> ``load_base_dictionary`` /
-``_load_training_corpus`` -> ``NgramPredictor.learn(corpus=True)``, which
-is the path a poisoned ``unigrams["hello"]`` used to take down (each
-wrapped in its own try/except, so construction "succeeded" while quietly
-logging an ERROR and leaving the corpus half-trained). That is the path
-exercised below.
+Note on ``HybridPredictor``: what reproduces the reported crash is
+``HybridPredictor.__init__`` -> ``load_base_dictionary`` /
+``_load_training_corpus`` -> ``NgramPredictor.load_corpus_prior`` and
+``learn_corpus_context``, which is the path a poisoned
+``unigrams["hello"]`` used to take down (each wrapped in its own
+try/except, so construction "succeeded" while quietly logging an ERROR
+and leaving the corpus half-trained). That is the path exercised below.
+The corpus prior never writes ``unigrams`` (it lives in
+``_corpus_unigrams``, see CLAUDE.md *Shipped corpus prior*), so the
+proof that it ran to completion is the prior itself.
 """
 
 from __future__ import annotations
@@ -173,12 +174,14 @@ class TestHybridPredictorLoadsOverAPoisonedModel:
         error_records = [r for r in caplog.records if r.levelno >= logging.ERROR]
         assert not error_records, [r.getMessage() for r in error_records]
 
-        # "hello" appears once in data/training_corpus.txt and is a
-        # known Google-10K word, so if load_base_dictionary /
+        # "hello" appears in data/training_corpus.txt and is a known
+        # Google-10K word, so if load_base_dictionary /
         # _load_training_corpus ran to completion (instead of dying on
-        # the poisoned entry load() used to hand them), it is learned
-        # back in with a positive count rather than staying at 0.
-        assert hybrid._ngram.unigrams.get("hello", 0) > 0
+        # the poisoned entry load() used to hand them), the corpus prior
+        # holds it with a positive count and the model knows the word,
+        # rather than the prior staying empty.
+        assert hybrid._ngram._corpus_unigrams.get("hello", 0) > 0
+        assert hybrid._ngram.in_vocabulary("hello")
         assert hybrid._ngram.total_words > 0
 
 

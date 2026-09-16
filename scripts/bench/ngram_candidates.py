@@ -1,8 +1,10 @@
 """Compare current and historical n-gram candidate-selection latency.
 
 Both implementations read the same expanded model snapshot. The benchmark
-uses shipped vocabulary, seeds, and training text only. It excludes fuzzy
-matching, PPM, QML, the live user model, and end-to-end prediction merging.
+preserves the historical corpus-bootstrap snapshot: it loads shipped training
+text through ``load_corpus`` so the ``cb101da`` reference and the indexed
+implementation score the same data. It excludes fuzzy matching, PPM, QML,
+the live user model, and end-to-end prediction merging.
 """
 
 from __future__ import annotations
@@ -219,6 +221,7 @@ def _main(args: argparse.Namespace) -> int:
         "reference_commit": commit,
         "snapshot": {
             "copy_method": "reference.__dict__ = current.__dict__.copy()",
+            "corpus_setup": "legacy load_corpus bootstrap for cb101da comparability",
             "base_words": len(current._base_unigrams),
             "user_words": len(current.user_vocab),
             "bigram_edges": sum(len(row) for row in current.bigrams.values()),

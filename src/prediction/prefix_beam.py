@@ -387,10 +387,13 @@ class PrefixBeam:
         bar at three characters and left it blank at two, which reads as
         the suggestions being unreliable rather than as a mis-click.
 
-        A live two-character prefix is refused by default. The hybrid can
-        opt in with ``allow_short_prefix`` when its valid exact candidates
-        cannot fill the requested pills. The one-character floor and
-        ``_protect_exact_completions`` still apply.
+        A live two-character prefix is refused by default.  The hybrid
+        can opt in with ``allow_short_prefix`` when fewer than its fixed
+        floor of valid exact completions exist (independent of how many
+        pills are shown, see ``HybridPredictor.SHORT_PREFIX_RESCUE_FLOOR``):
+        entries such as ``wwe`` and ``wwii`` make ``ww`` live but should
+        not prevent offering ``we`` alongside them.  The one-character
+        floor and ``_protect_exact_completions`` still apply.
         """
         if len(typed) >= self.MIN_TYPED:
             return True
