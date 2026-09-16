@@ -199,6 +199,12 @@ class HybridPredictor(QObject):
         # generating deletion variants, so the wasted build was ~0.5 s of
         # the ~1.5 s this constructor took, paid on every launch, and on
         # every one of the ~1300 tests that builds a bridge.
+        # Explicit-content filter. Defaults on: the words stay in the
+        # dictionary either way, so this decides only whether the bar
+        # volunteers them, and a fresh install should not.
+        self._explicit_words = self._load_explicit_words()
+        self._filter_explicit = True
+
         self._fuzzy.set_frequencies(self._fuzzy_frequencies())
         # Build the packed prefix index now rather than on the first typed
         # prefix: it is the same work either way, and paying it here keeps
@@ -408,6 +414,59 @@ class HybridPredictor(QObject):
         """
         parts = self._current_context.strip().split()
         return parts[-1].lower() if parts else ""
+
+    def _load_explicit_words(self) -> frozenset:
+        """The flag list, or an empty set if it is missing or unreadable.
+
+        Failing open is deliberate and is the same trade
+        ``_load_extra_vocabulary`` makes one layer down: this runs during
+        construction, and an unreadable data file must not be the reason a
+        keyboard somebody depends on fails to start. The cost of failing
+        open is that the filter silently does nothing, which is why
+        ``getExplicitFilterAvailable`` exists for the UI to say so rather
+        than showing a toggle that quietly governs nothing.
+        """
+        path = self._ngram.profile.explicit_words
+        if path is None:
+            return frozenset()
+        try:
+            return frozenset(
+                line.strip().lower()
+                for line in path.read_text(encoding="utf-8").splitlines()
+                if line.strip() and not line.startswith("#")
+            )
+        except Exception:  # noqa: BLE001 - see the docstring
+            _logger.warning("Could not load the explicit-word list; the filter is inert")
+            return frozenset()
+
+    def _explicit_suppressed(self, word: str) -> bool:
+        """Whether the filter should keep ``word`` off the bar.
+
+        Three things this deliberately is not. It does not stop the word
+        being **typed**: every character still reaches the app, and this is
+        consulted only where suggestions are assembled. It does not stop
+        the word being **learned**, so turning the filter off later brings
+        back everything the user has since typed. And it does not apply to
+        a word the user has typed enough for it to reach ``user_vocab``,
+        because at that point the keyboard has direct evidence of their own
+        register and imposing one over it is the behaviour this setting
+        exists to let them switch off.
+        """
+        if not self._filter_explicit or not self._explicit_words:
+            return False
+        lowered = word.lower()
+        if lowered not in self._explicit_words:
+            return False
+        return lowered not in self._ngram.user_vocab
+
+    def set_explicit_filter(self, enabled: bool) -> None:
+        """Turn the explicit-content filter on or off. See the QML setting."""
+        self._filter_explicit = bool(enabled)
+
+    @property
+    def explicit_filter_available(self) -> bool:
+        """False when the flag list is missing, so the toggle governs nothing."""
+        return bool(self._explicit_words)
 
     def _merge_predictions(
         self,
@@ -778,6 +837,8 @@ class HybridPredictor(QObject):
             # slipped past the per-source filter (e.g. fuzzy, which
             # the rank strategy historically didn't filter).
             if is_next_word and not self._next_word_allowed(word):
+                continue
+            if self._explicit_suppressed(word):
                 continue
             capped = self._ngram.get_capitalized(word, sentence_start)
             results.append(capped)

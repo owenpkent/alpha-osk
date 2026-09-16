@@ -4761,6 +4761,12 @@ class KeyboardBridge(QObject):
         self._autocorrect_enabled = enabled
         _logger.info("Autocorrect: %s", enabled)
 
+    @Slot(bool)
+    def setFilterExplicit(self, enabled: bool) -> None:
+        """Toggle the explicit-content filter on prediction suggestions."""
+        self._predictor.set_explicit_filter(enabled)
+        _logger.info("Filter explicit words: %s", enabled)
+
     @Slot(str)
     def setMergeStrategy(self, strategy: str) -> None:
         """Pick the prediction merge strategy.

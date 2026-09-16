@@ -1124,7 +1124,7 @@ The parent (`Main.qml`'s settings popup window) calls `settingsPanel.resetToHome
 | | Theme | 9-theme color picker |
 | | Key Colours | Six-scheme picker, **Monochrome by default** (Default / Monochrome / Two-Tone / Function / Ink / Signal). Directly under Theme because every colour it offers is derived from the theme |
 | | Sound & Opacity | Key click sound, opacity slider |
-| **Smart Typing** | Suggestions | Show suggestions, auto-space, intelligent spacing, auto-cap, max count |
+| **Smart Typing** | Suggestions | Show suggestions, auto-space, intelligent spacing, auto-cap, max count, filter explicit words |
 | | Suggestion Engine | Merge strategy 4-card picker (rank / rrf / linear / loglinear) |
 | | Input | Right-click shift, key preview popup, Compatibility Mode picker, repeat delay & interval |
 | **Function Keys** | Show | Function Keys (F1-F12) and Extra Function Keys (F13-F24) row toggles, moved here from Appearance -> Panels |
@@ -1445,9 +1445,66 @@ Theme picker in settings shows labeled color swatches with mini key previews.
 
 ## Vocabulary
 
-- **Base**: Google 10K wordlist (`data/google-10000-english-usa-no-swears.txt`) + 10K supplement (`data/google-20000-supplement.txt`, filtered for explicit content). ~20K total regular words.
+- **Base**: Google 10K wordlist (`data/google-10000-english-usa-no-swears.txt`) + 10K supplement (`data/google-20000-supplement.txt`, filtered for explicit content) + `data/english-expanded.txt`, 64,291 words from SCOWL size 60 by way of the ESDB bundle (permissively licensed, see `data/licenses/ESDB.txt`, pinned by sha256 in `data/english-expanded.manifest`). ~83K total. The SCOWL half enters at **one base count each**, so it supplies coverage without competing with conversational frequencies or reading as personal history. It is a speller's list, which is why it carries explicit content that the curated lists do not: see *Explicit content is filtered from suggestions*.
 - **Packs**: No built-ins ship. The system is import-only - see *Vocabulary Packs* section. Imported packs appear as toggles in Settings -> Your Language Model -> Vocabulary Packs.
 - **Numpad**: Toggles between numbers and navigation keys (Home/End/PgUp/PgDn/arrows/Ins/Del) via NumLock. Key 5 is blank in nav mode. Layout mirrors a physical numpad: rows `7 8 9 /`, `4 5 6 *`, `1 2 3 -`, `0(span 2) . +`, `Enter(span 3) NumLock`. NumLock sits at the bottom-right (active highlight uses the theme accent), Enter is the wide bottom-row key. Earlier builds put NumLock on the top row and stretched `+` / Enter as 2-row spans on the right column. The flat 5-row layout was the user's request to match a physical 10-key.
+
+## Explicit content is filtered from suggestions, not from the vocabulary
+
+*Settings -> Smart Typing -> Suggestions -> Filter Explicit Words*, **default
+ON**. The whole design is in the distinction the title makes: the words stay
+in the dictionary, stay typable character by character, and stay learnable.
+The setting decides only what the prediction bar **volunteers**.
+
+That is deliberate and was the owner's call (2026-09-16): a keyboard that
+cannot swear is a dignity problem for an AAC user, so the answer is not to
+remove the words but to let the user decide whether the bar offers them. The
+shipped wordlist is therefore unfiltered, including slurs, and the filter is
+the control over it. Do not re-litigate the content question; do keep the
+filter honest.
+
+- **`data/explicit_words.txt` is generated, not hand-edited**
+  (`scripts/gen_explicit_words.py`). It is a list of **exact words**, so the
+  runtime is a set lookup with no suffix logic to get wrong.
+- **Matching is stem-plus-closed-suffix-set, never substring.** That rule and
+  its suffix list come from `data/explicit_exclusions.txt`, which already
+  documented it. Substring matching is the Scunthorpe problem and it flags
+  `class`, `assess`, `cocktail`, `peacock`, `dictionary`, `analysis` and
+  `shiitake`. A filter that visibly swallows ordinary words is one the user
+  switches off and leaves off, which is the same outcome as not having it.
+  `"spook"` is deliberately **not** a stem for exactly this reason: it would
+  take `spooky` and `spooked` with it.
+- **The two lists do opposite jobs and must not be merged.**
+  `explicit_exclusions.txt` is applied by `gen_vocabulary.py` when the
+  wordlist is built, so what it names is simply absent and no setting can
+  bring it back. `explicit_words.txt` is consulted at suggestion time. Note
+  the consequence, which is easy to misread: the shipped list currently
+  contains **slurs but not common profanity**, because the exclusion list was
+  written to cover swearing and missed slurs. Restoring profanity to the
+  vocabulary means regenerating without that exclusion, which is a separate
+  decision and has not been taken.
+- **The filter is applied in exactly one place**, `_finalize_scores`, beside
+  the short-word gate, because every suggestion from every strategy passes
+  through there. A second copy at another emit site is the parallel-blocks
+  failure this file warns about for sticky-modifier release.
+- **Personal vocabulary outranks the filter.** A flagged word in
+  `user_vocab` is offered normally, because at that point the keyboard has
+  direct evidence of the user's own register. **One typing is enough**, not
+  three: the three-sighting candidate gate applies to words the model does
+  not already know, and these are all in the shipped dictionary, so `learn`
+  takes the known-word branch. Worth knowing because the neighbouring gate
+  makes three the number a reader expects.
+- **It fails open.** A missing or unreadable list leaves the filter inert
+  rather than stopping construction, the same trade `_load_extra_vocabulary`
+  makes, and `explicit_filter_available` is what lets the UI say so rather
+  than showing a toggle that governs nothing.
+
+Guarded by `tests/test_explicit_filter.py`, where every case is paired with
+its inverse: the suppression test is paired with turning the filter off (a
+filter that suggested nothing at all would satisfy the first alone), and the
+flag list is checked against the shipped **no-swears** frequency list as
+ground truth, so a false positive is caught by construction rather than by
+anyone's judgement.
 
 ## Vocabulary Packs
 
