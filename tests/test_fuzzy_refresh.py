@@ -83,13 +83,23 @@ class TestPacksReachTheFuzzySource:
 
 
 class TestAShrunkVocabularyIsRebuilt:
+    def test_startup_prepares_the_prefix_index(self, hp):
+        beam = hp._fuzzy.word_generator._prefix_beam
+        assert beam is not None
+        assert not hp._fuzzy.word_generator._prefix_dirty
+
     def test_clear_learned_data_forgets_the_word_in_the_fuzzy_dictionary_too(self, hp):
+        original_index = hp._fuzzy.word_generator._prefix_beam.index
         for _ in range(3):
             hp.learn(f"the {NOVEL} arrived")
         assert NOVEL in hp._fuzzy.word_generator.dictionary
         hp.clear_user_data()
         assert NOVEL not in hp._fuzzy.word_generator.dictionary
         assert "hello" in hp._fuzzy.word_generator.dictionary  # the base survives
+        rebuilt = hp._fuzzy.word_generator._prefix_beam
+        assert rebuilt is not None
+        assert not hp._fuzzy.word_generator._prefix_dirty
+        assert rebuilt.index is not original_index
 
     def test_rolling_back_a_boost_lowers_the_fuzzy_frequency_too(self, hp):
         # The boost reaches the fuzzy dictionary through the refresh, which

@@ -165,7 +165,45 @@ overwrites. `setAutocorrectEnabled(True)` re-enables the overwrite
 path; the fuzzy recogniser itself runs unconditionally as part of
 the prediction merge.
 
-## Known Gaps / Future Work
+## Packed whole-word correction index (2026-09-15)
+
+`symspell.py` uses `packed_deletes.py::PackedDeletes` for the initial vocabulary.
+Deletion-key UTF-8 bytes, key boundaries, posting boundaries, candidate word IDs
+and hash slots live in contiguous buffers. Hash collisions are resolved by
+comparing the full key. The existing seven-character prefix and distance-two
+candidate algorithm are unchanged.
+
+The first `prepare()` builds the index in two passes without first constructing
+the old dictionary of candidate lists. New words learned afterward enter a
+small mutable deletion index. Queries visit packed candidates before new ones
+within each deletion bucket, preserving the original tie ordering. Frequency
+changes update the shared word-frequency dictionary and need no index rebuild.
+The existing reset/reload path replaces the SymSpell instance and rebuilds it
+from the replacement vocabulary; no file format or user setting was added.
+
+`PrefixIndex` uses a separate packed structure in `packed_prefixes.py`: UTF-8
+prefix keys and child rows, word IDs for the short-prefix top lists, and hash
+fingerprints with full-key collision checks. A mutable overlay keeps personal
+updates immediate, while a bounded 4,096-entry cache avoids repeated packed
+lookups along adjacent beam paths. Long-prefix bisect limits and completion
+ties retain their previous behavior.
+
+Hybrid startup and full dictionary rebuilds explicitly call
+`prepare_prefix_index()` after injecting frequencies, so the first typed
+prefix does not pay construction cost. Standalone fuzzy frequency updates
+remain lazy. Layout changes reuse the dictionary index and refresh emissions.
+
+These structures change how the vocabulary is stored and searched, not what
+is in it or how it is ranked: the same dictionary produces the same
+suggestions in the same order, which is what the parity tests in
+`tests/test_packed_prefixes.py` and `tests/test_symspell.py` pin.
+
+## Historical Gaps / Future Work
+
+The first two items below describe the early engine and have since been
+addressed by SymSpell and its final Damerau-Levenshtein distance check. They
+are retained as design history, not as limitations of the current candidate
+generator.
 
 The list matches `CLAUDE.md`'s "Prediction & Autocorrect — Architecture
 Notes" section:
