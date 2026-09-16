@@ -289,12 +289,17 @@ class HybridPredictor(QObject):
             ppm_preds = self._ppm_word.predict_with_scores(context, n * 2)
             _logger.debug("PPM preds: %s", [w for w, _ in ppm_preds[:5]])
 
-        # A live short prefix can still leave spare pills: "ww" has "wwe"
-        # and "wwii", but should also offer "we". Count candidates that can
-        # actually reach the bar so suppressed entries cannot block rescue.
-        allow_short_prefix = (
-            sum(self._candidate_passes(word, is_next_word) for word, _ in ngram_preds) < n
-        )
+        # A live two-letter prefix with only a few exact completions is
+        # still worth a correction: "ww" has "wwe" and "wwii", and should
+        # offer "we" beside them.  Decided against a fixed floor, never
+        # against `n`: pill position is muscle memory, so whether the
+        # rescue fires (and with it which word sits in slot 1) must not
+        # change when the user raises the max-suggestions setting.  Only
+        # candidates that can reach the bar count, so a suppressed word
+        # cannot block the rescue.  Computed only where it can matter, a
+        # two-character current word; the next-word and one-character
+        # paths never consult it.
+        allow_short_prefix = self._short_prefix_needs_rescue(context, ngram_preds, is_next_word)
         fuzzy_preds = self._fuzzy.get_fuzzy_predictions(
             context, n, offsets=offsets, allow_short_prefix=allow_short_prefix
         )
@@ -307,14 +312,56 @@ class HybridPredictor(QObject):
         _logger.debug("MERGED result: %s", predictions)
         return predictions
 
+    # A live two-letter prefix is rescued when fewer than this many of its
+    # exact completions can reach the bar.  Five is the benchmark's pill
+    # count, so every measured figure describes exactly this rule, and it
+    # is a constant rather than the requested count so that the rescue,
+    # and the pill order it can change, is a property of the prefix and
+    # not of the max-suggestions setting.
+    SHORT_PREFIX_RESCUE_FLOOR = 5
+
+    def _short_prefix_needs_rescue(
+        self,
+        context: str,
+        ngram_preds: List[Tuple[str, float]],
+        is_next_word: bool,
+    ) -> bool:
+        """Should the fuzzy source complete a live two-letter prefix?
+
+        Only a two-character current word can qualify (the beam's
+        ``MIN_TYPED_DEAD_PREFIX``; one character is never acted on and
+        three is the ordinary floor), so the count is skipped everywhere
+        else rather than computed and discarded.  When the caller asked
+        for fewer candidates than the floor, the n-gram is asked once
+        more for enough to decide, so a small ``n`` cannot make a
+        plentiful prefix look sparse.
+        """
+        if is_next_word:
+            return False
+        words = context.split()
+        current_word = words[-1] if words else ""
+        if len(current_word) != 2:
+            return False
+        floor = self.SHORT_PREFIX_RESCUE_FLOOR
+        if len(ngram_preds) < floor:
+            ngram_preds = self._ngram.predict_with_scores(context, floor)
+        valid = 0
+        for word, _ in ngram_preds:
+            if self._candidate_passes(word, is_next_word):
+                valid += 1
+                if valid >= floor:
+                    return False
+        return True
+
     def _is_valid_word(self, word: str) -> bool:
         """Check if word is in our vocabulary and not blacklisted."""
         word_lower = word.lower()
         # Blacklisted words never appear
         if self._ngram.is_suppressed(word_lower):
             return False
-        # Check n-gram vocabulary (includes Google 10K)
-        if word_lower in self._ngram.unigrams:
+        # Check n-gram vocabulary (includes Google 10K) and the corpus
+        # prior, which is deliberately not in the merged table.
+        if self._ngram.in_vocabulary(word_lower):
             return True
         # Check if it's a common short word (pronouns, articles, etc.)
         if word_lower in {
@@ -898,8 +945,13 @@ class HybridPredictor(QObject):
         return (p_user + p_base) * ng._base_total / (1.0 - alpha)
 
     def _fuzzy_frequencies(self) -> Dict[str, float]:
-        """``_fuzzy_frequency`` over every word the n-gram knows."""
-        return {word: self._fuzzy_frequency(word) for word in self._ngram.unigrams}
+        """``_fuzzy_frequency`` over every word the n-gram knows.
+
+        ``vocabulary()`` rather than ``unigrams``: the corpus prior is not
+        in the merged table, and a rebuild that walked only that table
+        would leave every corpus-only word out of the fuzzy dictionary.
+        """
+        return {word: self._fuzzy_frequency(word) for word in self._ngram.vocabulary()}
 
     def _rebuild_fuzzy_dictionary(self) -> None:
         """Rebuild the fuzzy dictionary from scratch after the vocabulary shrank.
@@ -965,10 +1017,26 @@ class HybridPredictor(QObject):
         a fuzzy/PPM-generated pill for a never-typed word would inject
         it permanently into ``user_vocab``.
 
-        ``explicit`` is reserved for a confirmed edit in the prediction
-        editor. That is a stronger signal than tapping a generated pill,
-        so each word token is sent through ``learn_word`` immediately while
-        the ordinary pill path keeps its candidate gate.
+        ``explicit`` is reserved for a *correction* in the prediction
+        editor, a Save whose spelling differs from the pill it opened on.
+        That is a stronger signal than tapping a generated pill, so each
+        word token is sent through ``learn_word`` immediately while the
+        ordinary pill path keeps its candidate gate.  A Save that left the
+        spelling alone is not explicit: it confirms the displayed word,
+        which is what a tap does, and routing it here would let opening
+        the editor on a fuzzy-generated pill inject a never-typed word
+        permanently, which is exactly what the gate exists to prevent.
+
+        The explicit path still applies the shape filter and the
+        blacklist.  ``learn_word`` on its own applies neither, and
+        ``load()`` strips implausible words on the way back in, so an
+        unfiltered explicit learn was a word (and a persisted context
+        edge that nothing strips) taught at edit time and silently
+        forgotten at the next launch.  Refusing it here is the same rule
+        at the same moment the user can see it.  The taught-acronym
+        exemption applies as it does everywhere else.  A blacklisted word
+        is one the user removed; typing it three times or un-removing it
+        from the dashboard are the routes back, not the editor.
 
         Trailing bigram / trigram edges are still reinforced
         immediately via :meth:`NgramPredictor.reinforce_context`. The
@@ -988,14 +1056,22 @@ class HybridPredictor(QObject):
             words = self._ngram._tokenize(selected_word)
             if not words:
                 return
+            learned: List[str] = []
             running_context = context
             for word in words:
+                if not self._ngram._is_plausible_word(word) or self._ngram.is_suppressed(word):
+                    # No edge across a refused token either, the rule
+                    # `learn()` keeps through `_link_context`.
+                    running_context = ""
+                    continue
                 self._ngram.learn_word(word)
                 self._ngram.reinforce_context(running_context, word)
                 if running_context.strip():
                     running_context = running_context.rstrip() + " "
                 running_context += word + " "
-            self._refresh_fuzzy_frequencies(words)
+                learned.append(word)
+            if learned:
+                self._refresh_fuzzy_frequencies(learned)
             return
         self._ngram.learn_from_pill_click(selected_word)
         self._ngram.reinforce_context(context, selected_word)
@@ -1077,8 +1153,10 @@ class HybridPredictor(QObject):
         self._ngram.load_seed_ngrams(_DATA_DIR / "seed_trigrams.txt")
         text = self._read_training_corpus()
         if text:
-            self._ngram.ensure_corpus_prior(text)
-            self._ngram.learn_corpus_context(text, include_user_candidates=False)
+            # Rebuilt against the replacement user history, so an import
+            # cannot keep a rare corpus word the old history admitted.
+            self._ngram.load_corpus_prior(text)
+            self._ngram.learn_corpus_context(text)
 
     def _load_training_corpus(self) -> None:
         """Load default training corpus for better predictions."""
@@ -1091,7 +1169,7 @@ class HybridPredictor(QObject):
             # context rows remain base evidence, while its unigram counts
             # are a weak in-memory personal prior.
             self._ngram.load_corpus_prior(clean_text)
-            self._ngram.learn_corpus_context(clean_text, include_user_candidates=False)
+            self._ngram.learn_corpus_context(clean_text)
             if self._enable_ppm:
                 self._ppm.train(clean_text)
 

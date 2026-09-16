@@ -225,7 +225,8 @@ is the *Prefix beam* section of `CLAUDE.md`.
 ### Sparse two-letter prefixes (2026-09-10)
 
 The hybrid also requests fuzzy suggestions for a live two-letter prefix
-when its valid exact candidates cannot fill the requested pills. Previously,
+when fewer than `HybridPredictor.SHORT_PREFIX_RESCUE_FLOOR` (5) of its
+exact completions can reach the bar, whatever the pill count. Previously,
 `ww` offered only `wwe` and `wwii`: those dictionary entries made the prefix
 live, disabling the fuzzy source that could suggest `we`. With five pills,
 the fresh model now offers `wwe`, `we`, `wwii`, `well`, and `want`.
@@ -233,6 +234,13 @@ the fresh model now offers `wwe`, `we`, `wwii`, `well`, and `want`.
 `HybridPredictor.predict` counts candidates through the same validity gate
 used by the merge, so suppressed words cannot prevent this fallback. It
 passes `allow_short_prefix` through the recognizer to `PrefixBeam.complete`.
+The floor is a constant rather than the requested count: its first version
+decided against `n`, so whether the rescue fired, and with it which word
+held slot 1, changed when the user raised the max-suggestions setting, on a
+keyboard where pill position is muscle memory. Five is the benchmark's pill
+count, so the figures below describe exactly this rule, and the count is
+only computed for a two-character current word, the one length the beam
+can act on.
 The beam still protects exact completions from expensive corrections, and
 prefixes with enough exact candidates retain their previous ranking. The
 standalone fuzzy API keeps its default short-prefix guard. Single characters

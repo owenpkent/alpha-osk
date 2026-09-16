@@ -13,7 +13,7 @@ import math
 import time
 from collections import defaultdict
 from pathlib import Path
-from typing import Dict, List, Mapping, Optional, Tuple
+from typing import Dict, List, Mapping, Optional, Set, Tuple
 
 from ..atomic_write import atomic_write_json
 from .language import ENGLISH, LanguageProfile
@@ -103,8 +103,14 @@ class NgramPredictor:
         self._base_unigrams: Dict[str, int] = defaultdict(int)
         self._base_total: int = 0
         # The shipped training corpus is a weak prior for the personal
-        # distribution.  It stays in memory only, so it cannot inflate the
-        # persisted user history on every launch.
+        # distribution.  It lives here and nowhere else: not in
+        # `user_vocab`, which it used to inflate by one copy per launch,
+        # and not in the merged `unigrams` table either, because `save()`
+        # persists that one, and a corpus word written there once stays in
+        # the model after a later release drops it from the shipped file.
+        # Every reader that needs "is this a word we know" consults
+        # `in_vocabulary`, and the scorers add the share at
+        # `_CORPUS_PRIOR_WEIGHT` through `_effective_typing_count`.
         self._corpus_unigrams: Dict[str, int] = defaultdict(int)
         self._corpus_total: int = 0
         self.personal_weight: float = 0.7
@@ -801,14 +807,38 @@ class NgramPredictor:
         Used by :meth:`predict_with_scores` when there is no context to
         condition on.  The raw integer frequency stands in for the
         unigram probability (callers normalise per source before
-        combining).
+        combining).  The corpus prior joins at its own weight, the same
+        `_CORPUS_PRIOR_WEIGHT` the context path applies, rather than at
+        full count: it is not in `unigrams` at all (see `in_vocabulary`).
         """
-        sorted_words = sorted(self.unigrams.items(), key=lambda x: -x[1])
-        return [(word, float(freq)) for word, freq in sorted_words[:n]]
+        scores: Dict[str, float] = {word: float(freq) for word, freq in self.unigrams.items()}
+        weight = self._CORPUS_PRIOR_WEIGHT
+        for word, freq in self._corpus_unigrams.items():
+            scores[word] = scores.get(word, 0.0) + weight * freq
+        sorted_words = sorted(scores.items(), key=lambda x: -x[1])
+        return sorted_words[:n]
 
     def _tokenize(self, text: str) -> List[str]:
         """Split text into words, per the active language's word shape."""
         return self.profile.word_re.findall(text.lower())
+
+    def in_vocabulary(self, word: str) -> bool:
+        """Is *word* one the model knows: merged table or corpus prior.
+
+        The corpus prior is deliberately absent from ``unigrams`` (see the
+        constructor note), so a membership test on that table alone would
+        call every corpus-only word unknown and the hybrid would refuse to
+        show it.  The base table is consulted too: ``load()`` replaces the
+        merged table with the file's, so a hand-built or partial model
+        file can leave a shipped word out of ``unigrams`` while it is
+        still scored from ``_base_unigrams``.  This is the one test for
+        "known word" that every half satisfies.
+        """
+        return word in self.unigrams or word in self._base_unigrams or word in self._corpus_unigrams
+
+    def vocabulary(self) -> Set[str]:
+        """Every word the model knows: merged table, base table and corpus prior."""
+        return set(self.unigrams) | set(self._base_unigrams) | set(self._corpus_unigrams)
 
     def _effective_typing_count(self, word: str) -> float:
         """Return one word's effective personal count, including corpus prior."""
@@ -1017,7 +1047,7 @@ class NgramPredictor:
                 else:
                     self._bump_user_context(self._user_trigrams, self.trigrams, key, curr)
 
-    def learn_corpus_context(self, text: str, *, include_user_candidates: bool = True) -> None:
+    def learn_corpus_context(self, text: str) -> None:
         """Add a corpus's bigram / trigram pairs to the base share only.
 
         The unigram side is deliberately left alone.  ``reload_from_disk``
@@ -1033,8 +1063,12 @@ class NgramPredictor:
         every rare corpus word that a launch withholds, so the base share
         differed between a fresh start and a post-import reload.
         """
-        initial_sightings = self._candidate_counts if include_user_candidates else {}
-        sightings: Dict[str, int] = defaultdict(int, initial_sightings)
+        # The sighting gate is local to this text.  It neither reads nor
+        # writes the user's candidate pool: the launch path and the reload
+        # path both come through here since the corpus prior split, so
+        # they agree by construction, and a rare corpus word gets in on
+        # the corpus's own evidence or not at all.
+        sightings: Dict[str, int] = defaultdict(int)
         learned: List[Optional[str]] = []
         for word in self._tokenize(text):
             if not self._is_plausible_word(word):
@@ -1046,21 +1080,21 @@ class NgramPredictor:
                 learned.append(word if sightings[word] >= self._candidate_threshold else None)
         self._link_context(learned, base=True)
 
-    def _install_corpus_unigrams(self) -> None:
-        """Make corpus words visible in the merged vocabulary without user counts."""
-        for word, count in self._corpus_unigrams.items():
-            desired = self._base_unigrams.get(word, 0) + self.user_vocab.get(word, 0) + count
-            current = self.unigrams.get(word, 0)
-            if current < desired:
-                self.unigrams[word] = desired
-                self.total_words += desired - current
-
     def load_corpus_prior(self, text: str) -> None:
         """Rebuild the in-memory unigram prior from shipped corpus text.
 
         This follows the same plausibility and local three-sighting gate as
         :meth:`learn`, but never touches user counts, candidate state, or the
         decay clock. Context rows are loaded separately by the HybridPredictor.
+
+        Nothing here writes ``unigrams``.  A first version installed the
+        accepted words there so that membership tests would find them, and
+        since ``save()`` persists that table, a corpus-only word survived
+        the corpus that shipped it: dropped from the next release's file, it
+        stayed in the saved model, kept passing the hybrid's validity check
+        and was rebuilt into the fuzzy dictionary on every launch.  The
+        readers consult :meth:`in_vocabulary` instead, and a launch whose
+        corpus no longer carries a word is the last time that word is seen.
         """
         self._corpus_unigrams.clear()
         self._corpus_total = 0
@@ -1081,14 +1115,6 @@ class NgramPredictor:
             else:
                 self._corpus_unigrams[word] += 1
                 self._corpus_total += 1
-        self._install_corpus_unigrams()
-
-    def ensure_corpus_prior(self, text: str) -> None:
-        """Restore corpus-only merged candidates after a model reload."""
-        # A rare corpus word is accepted when user history already knows it.
-        # Rebuild against the replacement history so imports cannot retain
-        # words admitted only by the old model.
-        self.load_corpus_prior(text)
 
     @staticmethod
     def _ri(value: float) -> int:
@@ -1403,6 +1429,12 @@ class NgramPredictor:
             self.user_vocab[word] += 5
             self._user_total += 5
             self.total_words += 5
+            # The word is in user_vocab now, so a sighting record for it is
+            # stale: every later learn() takes the known-word branch and
+            # never reaches the pop, and the entry would otherwise be
+            # persisted under candidate_counts until decay retired it.
+            self._candidate_counts.pop(word, None)
+            self._candidate_last_seen.pop(word, None)
 
     # Per-click weight when promoting a candidate through the pill-click
     # path. Matches the +5 that :meth:`learn_word` applies for known

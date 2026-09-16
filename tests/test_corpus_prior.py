@@ -124,7 +124,14 @@ def test_hybrid_save_restart_does_not_duplicate_user_counts(tmp_path: Path):
     assert second._ngram._user_total == sum(second._ngram.user_vocab.values())
 
 
-def test_reload_restores_missing_corpus_candidate_once(tmp_path: Path, monkeypatch):
+def test_a_corpus_word_is_never_written_to_the_model_file(tmp_path: Path, monkeypatch):
+    """The prior lives in `_corpus_unigrams` only; `save()` never sees it.
+
+    A first version installed the prior into the merged `unigrams` table
+    so membership tests would find it, and that table is persisted, so a
+    corpus-only word outlived the corpus that shipped it.  The readers
+    consult `in_vocabulary` / `vocabulary()` instead.
+    """
     corpus = "zzqrestore zzqrestore zzqrestore"
     monkeypatch.setattr(
         HybridPredictor,
@@ -133,14 +140,68 @@ def test_reload_restores_missing_corpus_candidate_once(tmp_path: Path, monkeypat
     )
     model_dir = tmp_path / "model"
     predictor = HybridPredictor(model_dir=model_dir, enable_llm=False)
-    total = predictor._ngram._corpus_total
-    predictor._ngram.unigrams.pop("zzqrestore", None)
+    ngram = predictor._ngram
+    assert "zzqrestore" not in ngram.unigrams
+    assert ngram.in_vocabulary("zzqrestore")
+    assert "zzqrestore" in ngram.vocabulary()
+    assert "zzqrestore" in predictor._fuzzy.word_generator.dictionary
+    assert "zzqrestore" in predictor.predict("zzqrest", n=5)
+    total = ngram._corpus_total
+
     predictor.save()
+    saved = json.loads((model_dir / "ngram_model.json").read_text())
+    assert "zzqrestore" not in saved["unigrams"]
+    assert "zzqrestore" not in saved["user_vocab"]
 
     predictor.reload_from_disk()
 
     assert predictor._ngram._corpus_total == total
-    assert predictor._ngram.unigrams["zzqrestore"] == 3
+    assert predictor._ngram._corpus_unigrams["zzqrestore"] == 3
+    assert "zzqrestore" not in predictor._ngram.unigrams
+    assert "zzqrestore" in predictor._fuzzy.word_generator.dictionary
+
+
+def test_a_word_dropped_from_the_corpus_leaves_with_it(tmp_path: Path, monkeypatch):
+    """A later release's corpus can retire its own vocabulary.
+
+    Paired with the learned word that must stay: a rule that forgot both
+    would satisfy the first half on its own.
+    """
+    model_dir = tmp_path / "model"
+    monkeypatch.setattr(
+        HybridPredictor,
+        "_read_training_corpus",
+        staticmethod(lambda: "zzqgone zzqgone zzqgone"),
+    )
+    first = HybridPredictor(model_dir=model_dir, enable_llm=False)
+    assert first._ngram.in_vocabulary("zzqgone")
+    first.learn_word("zzqkept")
+    first.save()
+
+    monkeypatch.setattr(
+        HybridPredictor,
+        "_read_training_corpus",
+        staticmethod(lambda: "hello hello hello"),
+    )
+    second = HybridPredictor(model_dir=model_dir, enable_llm=False)
+
+    assert not second._ngram.in_vocabulary("zzqgone")
+    assert "zzqgone" not in second._fuzzy.word_generator.dictionary
+    assert "zzqgone" not in second.predict("zzqgo", n=5)
+    assert second._ngram.user_vocab["zzqkept"] == 5
+    assert "zzqkept" in second._fuzzy.word_generator.dictionary
+    assert "zzqkept" in second.predict("zzqke", n=5)
+
+
+def test_the_no_context_ranking_weighs_the_prior_rather_than_counting_it_in_full():
+    """`_top_unigrams_with_scores` used to read the installed full count."""
+    predictor = NgramPredictor()
+    predictor.load_corpus_prior("zzqprior " * 30)
+    predictor.learn_word("zzqmine")
+
+    ranked = dict(predictor._top_unigrams_with_scores(len(predictor.vocabulary())))
+    assert ranked["zzqprior"] == pytest.approx(3.0)
+    assert ranked["zzqmine"] == pytest.approx(5.0)
 
 
 def test_clear_rebuilds_corpus_prior_with_ppm_disabled(tmp_path: Path, monkeypatch):
@@ -157,7 +218,8 @@ def test_clear_rebuilds_corpus_prior_with_ppm_disabled(tmp_path: Path, monkeypat
     predictor.clear_user_data()
 
     assert predictor._ngram._corpus_unigrams["zzqclear"] == 3
-    assert predictor._ngram.unigrams["zzqclear"] == 3
+    assert predictor._ngram.in_vocabulary("zzqclear")
+    assert "zzqclear" not in predictor._ngram.unigrams
     assert predictor._ngram.user_vocab.get("zzqpersonal", 0) == 0
 
 

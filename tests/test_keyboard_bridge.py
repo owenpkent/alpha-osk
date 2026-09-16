@@ -2432,6 +2432,52 @@ class TestEditPredictionPrivacyMode:
         assert ngram.user_vocab[word] == 5
         assert ngram.bigrams["zzqeditcontext"][word] == 1
 
+    def test_an_unchanged_save_is_one_ordinary_tap(self, bridge: KeyboardBridge):
+        """Opening the editor on a generated pill and tapping Save is ordinary.
+
+        It must not be the one tap that injects a never-typed word: the
+        word takes the pill path and its three-sighting gate, exactly as a
+        tap on the pill would.
+        """
+        word = "zzqunchanged"
+        bridge._context_buffer = "zzqeditcontext "
+
+        bridge.editPrediction(word, word)
+
+        ngram = bridge._predictor._ngram
+        assert word not in ngram.user_vocab
+        assert ngram._candidate_counts[word] == 1
+
+    def test_a_casing_only_save_is_an_ordinary_tap_that_records_the_casing(
+        self, bridge: KeyboardBridge
+    ):
+        bridge._predictor.learn_from_selection = MagicMock()
+        bridge._predictor.set_capitalization = MagicMock()
+
+        bridge.editPrediction("zzqcasing", "zzqCasing")
+
+        _, kwargs = bridge._predictor.learn_from_selection.call_args
+        assert kwargs == {"explicit": False}
+        bridge._predictor.set_capitalization.assert_called_once_with("zzqCasing", "zzqCasing")
+
+    def test_a_changed_spelling_is_explicit(self, bridge: KeyboardBridge):
+        bridge._predictor.learn_from_selection = MagicMock()
+
+        bridge.editPrediction("zzqcasing", "zzqcorrected")
+
+        _, kwargs = bridge._predictor.learn_from_selection.call_args
+        assert kwargs == {"explicit": True}
+
+    def test_a_refused_edit_still_reaches_the_app(self, bridge: KeyboardBridge):
+        """Learning is refused for "zzz"; the insert is not the engine's to refuse."""
+        bridge._current_word = "zz"
+        bridge._synth.reset_mock()
+
+        bridge.editPrediction("zzq", "zzz")
+
+        bridge._synth.replace_text.assert_called_once_with(2, "zzz ")
+        assert "zzz" not in bridge._predictor._ngram.user_vocab
+
 
 class TestPasswordDetectionAvailableProperty:
     """KeyboardBridge.passwordDetectionAvailable surfaces whether the

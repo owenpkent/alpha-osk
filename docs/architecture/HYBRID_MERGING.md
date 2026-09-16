@@ -190,18 +190,36 @@ User actions feed back into the models:
 | Word completed with space | n-gram unigrams/bigrams/trigrams, PPM trie, capitalisation (all-caps only learned if Caps Lock was off — see below) |
 | Sentence ended (`.!?`) | Full sentence re-trains n-grams + PPM |
 | Prediction selected | Word boosted (`learn_from_selection`), context→word association recorded |
-| Prediction edited via right-click → "Edit" | Each confirmed word learned immediately with +5, its context reinforced and fuzzy entries refreshed (`learn_from_selection(..., explicit=True)`), plus preferred capitalisation (`set_capitalization`) |
+| Prediction edited via right-click → "Edit" | A Save whose spelling changed: each plausible, non-blacklisted word learned immediately with +5, its context reinforced and fuzzy entries refreshed (`learn_from_selection(..., explicit=True)`). A Save that kept the spelling: one ordinary pill tap. Preferred capitalisation recorded either way (`set_capitalization`) |
 | Word right-click → "Remove" | Blacklist entry added |
 | Word right-click → "Bad suggestion" | Dispreference incremented |
 
 All persisted to `ngram_model.json` + `ppm_model.json` on explicit
 save or auto-save-on-exit.
 
-Confirmed edits bypass the unknown-word repetition gate because the user
-has supplied and saved the correction. Ordinary prediction clicks retain
-that gate. Multiword edits are tokenized before learning, so a phrase never
-becomes one dictionary entry. Privacy mode suppresses this learning, and
-the predictor's learning freeze also applies.
+A corrected edit bypasses the unknown-word repetition gate because the
+user retyped the word and saved it. "Corrected" means the spelling differs
+from the pill the editor opened on: a Save that kept the spelling, casing
+changes included, confirms the displayed word, which is what a tap does, so
+it takes the ordinary pill path and its gate. Opening the editor on a
+fuzzy-generated pill and tapping Save is an ordinary thing to do, and it
+must not be the one tap that injects a never-typed word permanently.
+Ordinary prediction clicks retain that gate. Multiword edits are tokenized
+before learning, so a phrase never becomes one dictionary entry.
+
+The explicit path applies the same shape filter and blacklist the other
+entry points do. `learn_word` on its own applies neither, and `load()`
+strips implausible words on the way back in, so an unfiltered explicit
+learn taught a word (and a persisted context edge nothing strips) at edit
+time and forgot it silently at the next launch. Refusing it at edit time is
+the same rule at the moment the user can see it; a taught acronym passes as
+it does everywhere, and a refused token breaks the context chain the way
+`_link_context` does, so no edge spans it. A blacklisted word is one the
+user removed: typing it three times or un-removing it from the dashboard
+are the routes back, not the editor. `learn_word` also retires the word's
+candidate-pool entry, which every later `learn()` would otherwise leave
+persisted under `candidate_counts`. Privacy mode suppresses this learning,
+and the predictor's learning freeze also applies.
 
 ### Capitalisation learning — Caps Lock vs. deliberate caps
 
@@ -274,10 +292,23 @@ unknown words, without touching personal counts, pending user candidates, or
 the decay clock. Corpus context remains base evidence. Accepted corpus words
 are known vocabulary for subsequent typing and prediction selections.
 
+They are held in `_corpus_unigrams` and nowhere else. The merged `unigrams`
+table is what `save()` persists, and a first version installed the prior
+there so that membership tests would find it: a corpus-only word then
+survived the release that dropped it from the shipped file, kept passing the
+hybrid's validity check and was rebuilt into the fuzzy dictionary at every
+launch, at full count rather than at the prior's weight. The readers now go
+through `NgramPredictor.in_vocabulary` (membership) and `vocabulary()`
+(enumeration, which is what the fuzzy dictionary rebuild walks), and the
+no-context ranking in `_top_unigrams_with_scores` adds the prior at
+`_CORPUS_PRIOR_WEIGHT`. A launch whose corpus no longer carries a word is the
+last time that word is seen; a word the user actually learned stays.
+Guarded by `tests/test_corpus_prior.py::test_a_word_dropped_from_the_corpus_leaves_with_it`.
+
 With no personal learning, `q` cancels from `P_typing`, preserving the
 conversational distribution. Once the user types or chooses a word, the
-examples carry one tenth their former mass. A confirmed prediction edit also
-teaches each edited word immediately with +5 and reinforces its context;
+examples carry one tenth their former mass. A prediction edit that changed
+the spelling also teaches each edited word immediately with +5 and reinforces its context;
 ordinary unknown-word typing and pill clicks retain their repetition gate.
 
 Measured in isolated fresh models with five pills, using the first letter
@@ -309,7 +340,7 @@ is used for the shipped text. Regression coverage is in
 keyboard bridge tests.
 
 Base context tables already have their own user/base split and proportional
-trust rule; see the context-table account in `AGENTS.md`.
+trust rule; see the context-table account in `CLAUDE.md`.
 
 ## Recency Decay
 

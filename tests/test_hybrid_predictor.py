@@ -99,6 +99,54 @@ class TestHybridLearning:
         assert "zzqfrozen" not in predictor._ngram.user_vocab
         assert "zzqfrozen" not in predictor._ngram._candidate_counts
 
+    def test_explicit_selection_refuses_what_load_would_strip(self, predictor: HybridPredictor):
+        """The shape filter applies at edit time, not only at the next launch.
+
+        ``learn_word`` applies no filter, and ``load()`` strips implausible
+        words on the way back in, so an unfiltered explicit learn taught
+        "zzz" (no vowel) and "pr" (two letters, not a short word) at edit
+        time and forgot them silently at the next launch, leaving behind a
+        persisted context edge that nothing strips.
+        """
+        for word in ("zzz", "pr"):
+            predictor.learn_from_selection("hello", word, explicit=True)
+            assert word not in predictor._ngram.user_vocab, word
+            assert word not in predictor._ngram.unigrams, word
+            assert word not in predictor._ngram._user_bigrams.get("hello", {}), word
+            assert word not in predictor._fuzzy.word_generator.dictionary, word
+
+    def test_explicit_selection_refuses_a_removed_word(self, predictor: HybridPredictor):
+        """A word the user removed comes back by typing it or from the dashboard."""
+        predictor._ngram.blacklist_word("zzqbanned")
+        predictor.learn_from_selection("hello", "zzqbanned", explicit=True)
+
+        assert "zzqbanned" not in predictor._ngram.user_vocab
+        assert "zzqbanned" not in predictor._ngram._user_bigrams.get("hello", {})
+        assert predictor._ngram.is_suppressed("zzqbanned")
+
+    def test_a_refused_token_breaks_the_context_chain(self, predictor: HybridPredictor):
+        """No edge spans a refused token, the rule ``_link_context`` keeps."""
+        predictor.learn_from_selection("hello", "zzqfirst zzz zzqthird", explicit=True)
+
+        assert predictor._ngram.user_vocab["zzqfirst"] == 5
+        assert predictor._ngram.user_vocab["zzqthird"] == 5
+        assert "zzz" not in predictor._ngram.user_vocab
+        assert "zzqthird" not in predictor._ngram.bigrams.get("zzqfirst", {})
+        assert "zzqthird" not in predictor._ngram.bigrams.get("zzz", {})
+
+    def test_an_explicit_edit_survives_a_save_and_reload(self, tmp_path):
+        """What edit time accepts, the next launch keeps: the two rules agree."""
+        model_dir = tmp_path / "model"
+        first = HybridPredictor(model_dir=model_dir, enable_llm=False)
+        first.learn_from_selection("hello", "zzqtaught", explicit=True)
+        first.save()
+
+        second = HybridPredictor(model_dir=model_dir, enable_llm=False)
+
+        assert second._ngram.user_vocab["zzqtaught"] == 5
+        assert "zzqtaught" in second._fuzzy.word_generator.dictionary
+        assert "zzqtaught" in second.predict("zzqtau", n=5)
+
     def test_learn_from_selection_gates_unknown_word(self, predictor: HybridPredictor):
         # A brand-new word that the engine generated (e.g. fuzzy /
         # PPM completion of a typed prefix) must pass through the
@@ -544,9 +592,10 @@ class TestTwoLettersAlwaysFillTheBar:
     dictionary.
 
     These drive the whole engine rather than the beam, because that is the
-    surface the report is about.  A sparse live prefix may now be supplemented
-    when its exact candidates cannot fill the requested pills, while a
-    plentiful exact prefix keeps its established order.
+    surface the report is about.  A sparse live prefix (fewer than
+    ``SHORT_PREFIX_RESCUE_FLOOR`` exact completions, whatever the pill count)
+    may now be supplemented, while a plentiful exact prefix keeps its
+    established order.
     """
 
     @pytest.mark.parametrize("typed", ["yh", "wq", "qg", "wg", "pw", "ek"])
@@ -582,8 +631,47 @@ class TestTwoLettersAlwaysFillTheBar:
             if n >= 5:
                 assert {"wwe", "wwii"}.issubset(offered), offered
         assert predictor.predict("ww", n=1) == ["wwe"]
-        assert predictor.predict("ww", n=2) == ["wwe", "wwii"]
         assert predictor.check_autocorrect("ww") is None
+
+    def test_the_rescue_does_not_depend_on_how_many_pills_are_shown(
+        self, predictor: HybridPredictor
+    ):
+        """Raising max suggestions must not reorder a prefix's first pills.
+
+        The rescue used to fire when fewer than ``n`` exact completions
+        existed, so a user going from 3 pills to 5 found slot 1 changed
+        for short prefixes, on a keyboard where pill position is muscle
+        memory.  It is decided against ``SHORT_PREFIX_RESCUE_FLOOR`` now,
+        so every bar is a prefix of the widest one, with and without
+        context, and a small ``n`` cannot make a plentiful prefix look
+        sparse.
+        """
+        for context in ("ww", "of ww", "he", "the he"):
+            widest = predictor.predict(context, n=8)
+            for n in (1, 2, 3, 5):
+                assert predictor.predict(context, n=n) == widest[:n], (context, n)
+
+    def test_a_small_pill_count_cannot_make_a_plentiful_prefix_look_sparse(
+        self, predictor: HybridPredictor, monkeypatch
+    ):
+        """The inverse of the rescue: "he" has far more than five exact completions.
+
+        With one pill requested the n-gram hands back two candidates, fewer
+        than the floor, and a count over that list alone would call the
+        prefix sparse and switch the fuzzy source on.  The rescue asks for
+        enough to decide instead.
+        """
+        asked: list = []
+        real = predictor._fuzzy.get_fuzzy_predictions
+
+        def spy(*args, **kwargs):
+            asked.append(kwargs.get("allow_short_prefix"))
+            return real(*args, **kwargs)
+
+        monkeypatch.setattr(predictor._fuzzy, "get_fuzzy_predictions", spy)
+        predictor.predict("he", n=1)
+        predictor.predict("ww", n=1)
+        assert asked == [False, True]
 
     def test_sparse_live_prefix_preserves_context_and_casing(self, predictor: HybridPredictor):
         contextual = predictor.predict("of ww", n=5)

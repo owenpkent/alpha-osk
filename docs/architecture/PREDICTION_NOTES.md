@@ -31,8 +31,8 @@ Deep-dive design docs for each algorithm: `FUZZY_RECOGNITION.md` (spatial model 
 ## Benchmark baselines
 
 The 2026-09-10 learning change separates the shipped corpus from personal
-unigram history and treats its counts as a weak prior. Confirmed prediction
-edits now teach their words and context immediately. Fresh-model learning
+unigram history and treats its counts as a weak prior. Prediction edits
+that change a word's spelling now teach it and its context immediately. Fresh-model learning
 examples and lifecycle guarantees are in `HYBRID_MERGING.md` under
 *Shipped examples no longer dilute personal learning*.
 

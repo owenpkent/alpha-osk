@@ -5635,7 +5635,20 @@ class KeyboardBridge(QObject):
 
     @Slot(str, str)
     def editPrediction(self, original: str, edited: str) -> None:
-        """User edited a prediction (e.g. to fix capitalization). Insert it and learn."""
+        """User edited a prediction (e.g. to fix capitalization). Insert it and learn.
+
+        What is learned depends on whether the spelling changed.  A Save
+        whose letters differ from the pill is a correction the user typed
+        out, and it is learned at once (``explicit=True``: +5, context
+        reinforced, fuzzy entry refreshed).  A Save that kept the spelling,
+        including one that only changed the casing, confirms the word the
+        pill showed, and that is what tapping the pill means, so it takes
+        the ordinary pill path and its three-sighting gate for an unknown
+        word.  Opening the editor on a fuzzy-generated pill and tapping
+        Save is an ordinary thing to do, and it must not be the one tap
+        that injects a never-typed word permanently.  Casing is recorded
+        either way through ``set_capitalization``.
+        """
         # Close the same 200 ms race _press_char guards against, mirroring
         # pressPrediction.
         self._check_password_field_sync()
@@ -5656,7 +5669,8 @@ class KeyboardBridge(QObject):
         # Learn the preferred capitalization. Suppressed in privacy mode:
         # this persists into the model, same as pressPrediction's guards.
         if not self._privacy_mode:
-            self._predictor.learn_from_selection(self._context_buffer, edited, explicit=True)
+            corrected = edited.lower() != original.strip().lower()
+            self._predictor.learn_from_selection(self._context_buffer, edited, explicit=corrected)
             self._predictor.set_capitalization(edited, edited)
 
         # Insert the edited word (same as pressPrediction but with edited
