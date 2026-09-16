@@ -190,9 +190,25 @@ jobs:
       # quarter of the lines and every shard would fail the gate. The
       # data files are uploaded instead and the `coverage` job below
       # combines them per OS and applies the threshold to the whole.
+      # A Windows shard can stall after nearly all tests finish. Dots and
+      # the outer job timeout do not identify the blocked test, so name each
+      # result and arm pytest's watchdog to dump all thread stacks and fail
+      # a worker if one test takes five minutes.
+      #
+      # Know what that watchdog does NOT cover before reading a green run as
+      # proof the stall is gone: pytest arms `faulthandler_timeout` inside
+      # `pytest_runtest_protocol` and cancels it in that wrapper's `finally`,
+      # so it is disarmed during collection, session-scoped fixture teardown,
+      # pytest-cov's end-of-session write and xdist shutdown. Those are the
+      # phases a "stalls after nearly all tests finish" symptom most likely
+      # points at, and bounding them needs a process-level timeout rather
+      # than this. What this reliably buys is the test names. The job
+      # timeout above remains the only bound on those phases.
       - name: Run tests
         run: >-
-          python -m pytest -n auto
+          python -m pytest -n auto -vv
+          -o faulthandler_timeout=300
+          -o faulthandler_exit_on_timeout=true
           --shard-id ${{ matrix.shard }} --shard-count 4
           --cov=src --cov-report=
       # Named for combine's benefit: `coverage combine` only picks up

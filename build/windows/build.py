@@ -960,8 +960,16 @@ Section "Install"
   ; (Different-directory cleanup is handled in customInstall.)
   IfFileExists "$INSTDIR\\uninstall.exe" 0 skipSameDirCleanup
     DetailPrint "Removing previous installation..."
-    ExecWait '"$INSTDIR\\uninstall.exe" /S _?=$INSTDIR'
-    Sleep 1500
+    ; Old uninstallers can erase the Qt settings key even with /S, so this
+    ; goes through the guard rather than a bare ExecWait. It runs BEFORE the
+    ; replacement files are extracted, which is why the guard does not abort
+    ; on the old uninstaller's exit code: see upgrade_settings.nsh.
+    Push '"$INSTDIR\\uninstall.exe" /S _?=$INSTDIR'
+    Call RunPreviousUninstaller
+    ; No Sleep here. It covered the window between NSIS's self-copy launcher
+    ; returning and the real uninstaller finishing, and _?= plus the ExecWait
+    ; inside the guard removed that window; the Delete below is best-effort
+    ; anyway, since WriteUninstaller overwrites the file a few lines later.
     ; Delete the old uninstaller itself (_? flag keeps it from self-deleting)
     Delete "$INSTDIR\\uninstall.exe"
   skipSameDirCleanup:
