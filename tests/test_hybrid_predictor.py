@@ -522,6 +522,28 @@ class TestTwoLettersAlwaysFillTheBar:
     matters most: the fix may only add pills where there were none.
     """
 
+    _CONTROLLED_WORDS = {
+        "wwe": 100.0,
+        "wwii": 90.0,
+        "we": 80.0,
+        "hiddenone": 70.0,
+        "hiddentwo": 60.0,
+        "hiddenthree": 50.0,
+    }
+
+    @classmethod
+    def _configure_controlled_case(cls, predictor, monkeypatch, ngram_results):
+        predictor._fuzzy.reset_dictionary()
+        predictor._fuzzy.set_frequencies(cls._CONTROLLED_WORDS)
+        predictor._ngram.unigrams.update(
+            {word: int(frequency) for word, frequency in cls._CONTROLLED_WORDS.items()}
+        )
+        monkeypatch.setattr(
+            predictor._ngram,
+            "predict_with_scores",
+            lambda _context, _n: list(ngram_results),
+        )
+
     @pytest.mark.parametrize("typed", ["yh", "wq", "qg", "wg", "pw", "ek"])
     def test_a_mistyped_two_letter_prefix_still_offers_something(
         self, predictor: HybridPredictor, typed: str
@@ -545,3 +567,47 @@ class TestTwoLettersAlwaysFillTheBar:
             offered = predictor.predict(typed, n=5)
             assert offered
             assert all(w.lower().startswith(typed) for w in offered), (typed, offered)
+
+    def test_an_underfilled_live_prefix_uses_fuzzy_candidates_for_spare_pills(
+        self, predictor: HybridPredictor, monkeypatch
+    ):
+        self._configure_controlled_case(
+            predictor,
+            monkeypatch,
+            [("wwe", 1.0), ("wwii", 0.9)],
+        )
+
+        assert predictor.predict("ww", n=5) == ["wwe", "wwii", "we"]
+
+    def test_enough_exact_candidates_keep_their_existing_ranking(
+        self, predictor: HybridPredictor, monkeypatch
+    ):
+        self._configure_controlled_case(
+            predictor,
+            monkeypatch,
+            [("wwe", 1.0), ("wwii", 0.9)],
+        )
+
+        assert predictor.predict("ww", n=2) == ["wwe", "wwii"]
+
+    def test_suppressed_exact_candidates_do_not_count_as_filled_pills(
+        self, predictor: HybridPredictor, monkeypatch
+    ):
+        raw = [
+            ("wwe", 1.0),
+            ("wwii", 0.9),
+            ("hiddenone", 0.8),
+            ("hiddentwo", 0.7),
+            ("hiddenthree", 0.6),
+        ]
+        self._configure_controlled_case(predictor, monkeypatch, raw)
+        for word in ("hiddenone", "hiddentwo", "hiddenthree"):
+            predictor.blacklist_word(word)
+
+        assert predictor.predict("ww", n=5) == ["wwe", "wwii", "we"]
+
+    def test_an_underfilled_one_character_prefix_stays_silent(
+        self, predictor: HybridPredictor, monkeypatch
+    ):
+        self._configure_controlled_case(predictor, monkeypatch, [])
+        assert predictor.predict("w", n=5) == []

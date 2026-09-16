@@ -141,6 +141,18 @@ The prediction engine is the most novel component of the system and the most sal
 
 For deep design treatments of each, see `architecture/PPM.md`, `architecture/FUZZY_RECOGNITION.md`, and `architecture/HYBRID_MERGING.md`.
 
+Vocabulary scaling work on 2026-09-15 expands the base from 18,989 to 83,307
+words, using a filtered ESDB size-60 spelling list and a small curated set of
+care, accessibility, and software terms. Unranked additions receive one base
+count and never become synthetic personal history. Packed SymSpell and prefix
+indexes keep retained fuzzy-index allocations near the previous smaller
+dictionary's cost (48.79 versus 44.12 MiB), with higher construction time and
+temporary memory. These are isolated index measurements, not full application
+RAM. The source, license, reproducible benchmarks, and limitations are in
+[`research/VOCABULARY_MEMORY.md`](research/VOCABULARY_MEMORY.md); older startup
+and dictionary-size measurements elsewhere in this paper describe their
+original configurations.
+
 #### 3.1.1 Why layered
 
 Each predictor in isolation has a complementary failure mode, and the merge layer is what makes the whole stack stronger than any of its parts. A pure n-gram model is excellent at "the user just typed *I want*. They probably want *to*", but it has no notion of partial words, so it cannot complete *th* into *the*. A pure PPM character model is excellent at completing partial words, but it sees the world as a stream of characters, not words, so it readily produces suffixes that match no real word ("th" → "throu" rather than "through"). A pure fuzzy/spatial recogniser corrects mis-taps but is context-blind: after typing "of ", it cannot tell *the* from *thy*. Both are spatially plausible neighbours of whatever the user meant. Merge them and each layer's strength covers the others' blind spots: the n-gram supplies context, PPM supplies prefix-completion, fuzzy supplies typo-tolerance.

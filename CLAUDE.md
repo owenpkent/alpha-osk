@@ -135,6 +135,43 @@ Constants were set by sweep against the shipped list **with the n-gram's counts*
 
 ## Fuzzy dictionary refresh, and PPM out of the merge
 
+**Packed correction index (2026-09-15).** `SymSpell.prepare()` builds an
+immutable deletion index with UTF-8 key storage, packed 32-bit word IDs and
+offsets, and open-addressed hash slots (`src/prediction/packed_deletes.py`).
+New words added afterward go into a mutable deletion overlay, so personal
+learning still takes effect without a rebuild. Known-word frequency updates
+only touch the shared frequency map. Each query merges base postings before
+overlay postings to preserve candidate tie ordering. Reset/reload still
+replaces the whole SymSpell instance. Distance thresholds, serialized model
+formats, and dependencies are unchanged.
+
+`PrefixIndex` also uses packed keys, child rows, and top-completion word IDs
+(`packed_prefixes.py`), with mutable personal overlays and at most 4,096
+cached successful lookups. The base vocabulary grows from 18,989 to 83,307:
+64,291 filtered ESDB size-60 words at one base count each, plus 27 curated
+care/accessibility/software words at 25 counts. `LanguageProfile.extra_vocabulary`
+owns the extra list. Exact and fuzzy prediction both consult the current base
+after model load without repopulating rejected saved entries or overwriting
+personal counts; clear/reload rebuild fuzzy coverage. The generator,
+checksum, source manifest, and full bundled license are documented in
+`docs/research/VOCABULARY_MEMORY.md` alongside measured memory and startup costs.
+Hybrid startup and full dictionary rebuilds call `prepare_prefix_index()`
+after frequency injection, keeping construction off the first typed prefix.
+Standalone fuzzy callers still prepare lazily; layout changes reuse the index.
+
+An underfilled exact prediction bar opts into `allow_short_prefix` for fuzzy
+completion, since new rare words can make a two-letter typo a live prefix.
+Suppressed entries do not count as filling the bar. The standalone fuzzy API
+keeps its former default, and one character never triggers this fallback.
+
+The n-gram scorer retains all user/context candidates but only the best requested
+number of matching base words. Nonnegative mixture terms make this cutoff exact;
+unusual weights/counts fall back to the full scan. A versioned base map invalidates
+the sorted word-reference list and bounded next-word top rows on mutation. Equal
+scores now sort lexically, so the larger frequency-1 tail is deterministic across
+processes. See `tests/test_ngram_candidate_index.py` for brute-force parity and
+`scripts/bench/ngram_candidates.py` for the same-snapshot speed comparison.
+
 Two more of the 2026-09-02 findings, fixed together on 2026-09-03.
 
 **The fuzzy dictionary follows the vocabulary.** It used to be loaded once at startup (`load_dictionary` plus one `set_frequencies(ngram.unigrams)`) and never touched again: the constructor comment named a `_refresh_fuzzy_frequencies` that did not exist, and `enable_vocabulary_pack` wrote pack words into the n-gram only, so a word learned this session was not fuzzy-matchable (nor reachable by the prefix beam) until a restart, and a pack's words never were. Now every learning path pushes the changed words through `HybridPredictor._refresh_fuzzy_frequencies(words)` (`learn`, `learn_word`, `learn_from_selection`, `mark_good_suggestion`), which calls `FuzzyRecognizer.update_word(word, count)`: the dictionary entry is raised, **SymSpell indexes a new word in place** (`SymSpell.add_word` on a built index no longer invalidates it, since the rebuild is about 0.5 s and this runs on the keystroke path) and `PrefixIndex.update_word` adjusts the word's own prefixes. A pack enable merges the whole table (`_refresh_fuzzy_frequencies()` with no words). Both only add or raise, the `max` rule `set_frequencies` always had, so the three events that *shrink* the vocabulary, Clear Learned Data, a Data Backup import and a boost rollback from the dashboard (`clear_user_data`, `reload_from_disk`, `unprefer`), go through `_rebuild_fuzzy_dictionary`: `reset_dictionary`, the profile's wordlist, then the counts, about half a second at a moment the user asked for. `unprefer` was missed at first, and since the boost itself had reached the fuzzy dictionary through the refresh, a rolled-back word kept winning mid-word completions until the next restart. The one lowering deliberately *not* followed is `unlearn_word`, the backspace negative signal: it moves a count by one on the keystroke path, where the rebuild has no place, so the fuzzy count can sit a sighting or two above the n-gram's until the next rebuild. Tests: `tests/test_fuzzy_refresh.py`, one vocabulary event each, asking the fuzzy source on the same instance.

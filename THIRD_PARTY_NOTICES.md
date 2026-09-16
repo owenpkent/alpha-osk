@@ -66,6 +66,26 @@ The base vocabulary in [`data/`](data/) is derived from the Google 10 000 /
 [`docs/WHITEPAPER.md`](docs/WHITEPAPER.md) for how they are used and why no
 domain packs ship by default.
 
+The additional spelling vocabulary in
+[`data/english-expanded.txt`](data/english-expanded.txt) is a filtered
+derivative of Kevin Atkinson's English Speller Database (ESDB, formerly
+SCOWL), American English size 60, release 2026.02.25. The source is the
+[official plain-wordlist release](https://sourceforge.net/projects/wordlist/files/speller/2026.02.25/wordlist-en_US-2026.02.25.zip/download).
+The complete upstream copyright and source notices are retained in
+[`data/licenses/ESDB.txt`](data/licenses/ESDB.txt), which is bundled with the
+dictionary on all platforms. Its permission grant allows use, modification,
+redistribution, and sale with those notices retained.
+
+[`scripts/gen_vocabulary.py`](scripts/gen_vocabulary.py) verifies the source
+archive checksum before generating the derivative. It removes uppercase
+forms, possessives, unsupported word shapes, already shipped words, and the
+reviewed explicit-content forms in
+[`data/explicit_exclusions.txt`](data/explicit_exclusions.txt). All remaining
+words are retained; no frequency estimates are inferred from their order.
+[`data/english-expanded.manifest`](data/english-expanded.manifest) records the
+release, checksum, filtering, and generated count. These words receive one
+base count each and do not count as personal learning.
+
 ---
 
 ## Context seed n-grams

@@ -14,6 +14,61 @@ import pytest
 from src.prediction.symspell import SymSpell, damerau_levenshtein
 
 
+def _oracle_distance(left: str, right: str) -> int:
+    """Independent optimal-string-alignment distance for small test cases."""
+    rows = [[0] * (len(right) + 1) for _ in range(len(left) + 1)]
+    for i in range(len(left) + 1):
+        rows[i][0] = i
+    for j in range(len(right) + 1):
+        rows[0][j] = j
+
+    for i in range(1, len(left) + 1):
+        for j in range(1, len(right) + 1):
+            substitution = 0 if left[i - 1] == right[j - 1] else 1
+            rows[i][j] = min(
+                rows[i - 1][j] + 1,
+                rows[i][j - 1] + 1,
+                rows[i - 1][j - 1] + substitution,
+            )
+            if i > 1 and j > 1 and left[i - 1] == right[j - 2] and left[i - 2] == right[j - 1]:
+                rows[i][j] = min(rows[i][j], rows[i - 2][j - 2] + substitution)
+    return rows[-1][-1]
+
+
+def _expected_result_set(
+    entries: list[tuple[str, int]], input_word: str, max_edit_distance: int
+) -> set[tuple[str, int, int]]:
+    """Apply public normalization and max-frequency rules to oracle distances."""
+    frequencies: dict[str, int] = {}
+    for word, frequency in entries:
+        word = word.lower()
+        if not word:
+            continue
+        frequencies[word] = max(frequency, frequencies.get(word, 0))
+
+    input_word = input_word.lower()
+    matches = set()
+    for word, frequency in frequencies.items():
+        distance = _oracle_distance(input_word, word)
+        if distance <= max_edit_distance:
+            matches.add((word, frequency, distance))
+    return matches
+
+
+def _single_edit_neighborhood(word: str) -> set[str]:
+    """Return a compact exhaustive neighborhood using every supported edit kind."""
+    probes = {word}
+    probes.update(word[:i] + word[i + 1 :] for i in range(len(word)))
+    probes.update(word[:i] + "x" + word[i + 1 :] for i in range(len(word)))
+    probes.update(word[:i] + "x" + word[i:] for i in range(len(word) + 1))
+    probes.update(
+        word[:i] + word[i + 1] + word[i] + word[i + 2 :]
+        for i in range(len(word) - 1)
+        if word[i] != word[i + 1]
+    )
+    return probes
+
+
 class TestDamerauLevenshtein:
     def test_identity(self):
         assert damerau_levenshtein("the", "the") == 0
@@ -189,6 +244,171 @@ class TestSymSpellEdgeCases:
         # crash, just return distance-1 results.
         results = ss.lookup("becuase", max_edit_distance=5)
         assert all(d <= 1 for _, _, d in results)
+
+
+class TestSymSpellPreparedAndIncrementalBehavior:
+    ENTRIES = [
+        ("cat", 10),
+        ("bat", 10),
+        ("can't", 7),
+        ("café", 9),
+        ("hat", 10),
+        ("cart", 6),
+        ("cant", 4),
+        ("cafe", 5),
+    ]
+
+    def test_prepared_and_grown_indexes_match_an_independent_oracle(self):
+        prepared = SymSpell(max_edit_distance=2)
+        prepared.add_dictionary(self.ENTRIES)
+        prepared.prepare()
+
+        grown = SymSpell(max_edit_distance=2)
+        grown.add_dictionary(self.ENTRIES[:4])
+        grown.prepare()
+        grown.add_dictionary(self.ENTRIES[4:])
+
+        probes = {"dat", "ct", "cta", "caxt", "cafx", "cant", "can't"}
+        for word, _ in self.ENTRIES:
+            probes.update(_single_edit_neighborhood(word))
+
+        for max_distance in (0, 1, 2):
+            for probe in probes:
+                expected = _expected_result_set(self.ENTRIES, probe, max_distance)
+                prepared_results = prepared.lookup(probe, max_distance)
+                grown_results = grown.lookup(probe, max_distance)
+
+                assert set(prepared_results) == expected
+                assert prepared_results == grown_results
+                ranking = [(distance, -frequency) for _, frequency, distance in prepared_results]
+                assert ranking == sorted(ranking)
+
+    def test_base_and_added_word_share_a_deletion_bucket(self):
+        index = SymSpell(max_edit_distance=2)
+        index.add_word("cat", 10)
+        index.prepare()
+        index.add_word("bat", 10)
+
+        assert index.lookup("dat", 1) == [("cat", 10, 1), ("bat", 10, 1)]
+
+    def test_added_word_with_new_deletion_buckets_is_immediately_findable(self):
+        index = SymSpell(max_edit_distance=2)
+        index.add_word("cat", 10)
+        index.prepare()
+        index.add_word("zebra", 3)
+
+        assert index.lookup("zebar") == [("zebra", 3, 1)]
+
+    def test_repeated_prepare_does_not_regenerate_the_base(self, monkeypatch):
+        index = SymSpell(max_edit_distance=2)
+        index.add_dictionary([("hello", 10), ("world", 8)])
+
+        calls = 0
+        original = index._deletion_variants
+
+        def counted(word, max_deletes):
+            nonlocal calls
+            calls += 1
+            return original(word, max_deletes)
+
+        monkeypatch.setattr(index, "_deletion_variants", counted)
+        index.prepare()
+        first_prepare_calls = calls
+        index.prepare()
+
+        assert first_prepare_calls > 0
+        assert calls == first_prepare_calls
+
+    def test_frequency_updates_use_the_max_for_base_and_added_words(self):
+        index = SymSpell(max_edit_distance=2)
+        index.add_word("cat", 10)
+        index.prepare()
+        index.add_word("bat", 20)
+
+        index.add_word("cat", 4)
+        index.add_word("bat", 3)
+        index.add_word("cat", 40)
+        index.add_word("bat", 30)
+
+        assert index.lookup("dat") == [("cat", 40, 1), ("bat", 30, 1)]
+        assert index.lookup("cat", 0) == [("cat", 40, 0)]
+        assert index.lookup("bat", 0) == [("bat", 30, 0)]
+
+    def test_unicode_and_apostrophes_work_in_both_layers(self):
+        index = SymSpell(max_edit_distance=2)
+        index.add_dictionary([("naïve", 12), ("i'm", 11)])
+        index.prepare()
+        index.add_dictionary([("café", 10), ("we're", 9)])
+
+        assert index.lookup("naive", 1) == [("naïve", 12, 1)]
+        assert index.lookup("im", 1) == [("i'm", 11, 1)]
+        assert index.lookup("cafe", 1) == [("café", 10, 1)]
+        assert index.lookup("were", 1) == [("we're", 9, 1)]
+
+    def test_lone_surrogate_round_trips_through_the_prepared_index(self):
+        encoded_word = b"a\xed\xa0\x80b"
+        encoded_probe = b"a\xed\xa0\x80c"
+        word = encoded_word.decode("utf-8", "surrogatepass")
+        probe = encoded_probe.decode("utf-8", "surrogatepass")
+        index = SymSpell(max_edit_distance=2)
+        index.add_word(word, 8)
+        index.prepare()
+
+        results = index.lookup(probe, 1)
+        safe_results = [
+            (candidate.encode("utf-8", "surrogatepass"), frequency, distance)
+            for candidate, frequency, distance in results
+        ]
+        assert safe_results == [(encoded_word, 8, 1)]
+
+    def test_hash_collisions_preserve_base_overlay_and_missing_key_lookups(self, monkeypatch):
+        from src.prediction import packed_deletes
+
+        monkeypatch.setattr(packed_deletes, "hash", lambda _key: 0, raising=False)
+        index = SymSpell(max_edit_distance=2)
+        index.add_dictionary([("cat", 10), ("dog", 8), ("café", 6)])
+        index.prepare()
+        index.add_word("bat", 20)
+
+        assert index.lookup("dat", 1) == [("bat", 20, 1), ("cat", 10, 1)]
+        assert index.lookup("dgo", 1) == [("dog", 8, 1)]
+        assert index.lookup("cafe", 1) == [("café", 6, 1)]
+        assert index.lookup("zzzz") == []
+
+    def test_empty_prepared_base_accepts_later_words(self):
+        index = SymSpell(max_edit_distance=2)
+        index.prepare()
+        index.add_word("later", 5)
+
+        assert index.lookup("ltaer") == [("later", 5, 1)]
+
+    def test_lookup_distance_zero_negative_and_clamped(self):
+        index = SymSpell(max_edit_distance=2)
+        index.add_word("because", 100)
+        index.prepare()
+
+        assert index.lookup("because", 0) == [("because", 100, 0)]
+        assert index.lookup("becuase", 0) == []
+        assert index.lookup("because", -1) == []
+        assert index.lookup("becouase", 99) == [("because", 100, 2)]
+
+    def test_prefix_boundary_and_distance_parameter_behavior(self):
+        index = SymSpell(max_edit_distance=2, prefix_length=4)
+        index.add_word("abcdefgh", 10)
+        index.prepare()
+
+        one_edit_probes = [
+            "abxdefgh",
+            "abcdxfgh",
+            "abcdegh",
+            "abxcdefgh",
+        ]
+        for probe in one_edit_probes:
+            assert index.lookup(probe, 1) == [("abcdefgh", 10, 1)]
+
+        two_edit_probe = "abxdxfgh"
+        assert index.lookup(two_edit_probe, 1) == []
+        assert index.lookup(two_edit_probe, 2) == [("abcdefgh", 10, 2)]
 
 
 class TestFuzzyRecognizerIntegration:

@@ -16,6 +16,7 @@ import logging
 import math
 import threading
 from contextlib import contextmanager
+from itertools import chain
 from pathlib import Path
 from typing import Dict, Iterable, Iterator, List, Optional, Sequence, Tuple
 
@@ -200,6 +201,7 @@ class HybridPredictor(QObject):
         # the ~1.5 s this constructor took, paid on every launch, and on
         # every one of the ~1300 tests that builds a bridge.
         self._fuzzy.set_frequencies(self._fuzzy_frequencies())
+        self._fuzzy.prepare_prefix_index()
 
         # Initialize vocabulary pack manager
         self._pack_manager = PackManager()
@@ -289,8 +291,15 @@ class HybridPredictor(QObject):
             ppm_preds = self._ppm_word.predict_with_scores(context, n * 2)
             _logger.debug("PPM preds: %s", [w for w, _ in ppm_preds[:5]])
 
-        # Add fuzzy candidates for current word
-        fuzzy_preds = self._fuzzy.get_fuzzy_predictions(context, n, offsets=offsets)
+        # A live short prefix can still leave spare pills. Count candidates
+        # that can actually reach the bar so suppressed entries cannot block
+        # the fuzzy source from helping to fill it.
+        allow_short_prefix = (
+            sum(self._candidate_passes(word, is_next_word) for word, _ in ngram_preds) < n
+        )
+        fuzzy_preds = self._fuzzy.get_fuzzy_predictions(
+            context, n, offsets=offsets, allow_short_prefix=allow_short_prefix
+        )
         if fuzzy_preds:
             _logger.debug("FUZZY preds: %s", [w for w, _ in fuzzy_preds[:5]])
 
@@ -307,7 +316,7 @@ class HybridPredictor(QObject):
         if self._ngram.is_suppressed(word_lower):
             return False
         # Check n-gram vocabulary (includes Google 10K)
-        if word_lower in self._ngram.unigrams:
+        if word_lower in self._ngram.unigrams or word_lower in self._ngram._base_unigrams:
             return True
         # Check if it's a common short word (pronouns, articles, etc.)
         if word_lower in {
@@ -891,7 +900,10 @@ class HybridPredictor(QObject):
 
     def _fuzzy_frequencies(self) -> Dict[str, float]:
         """``_fuzzy_frequency`` over every word the n-gram knows."""
-        return {word: self._fuzzy_frequency(word) for word in self._ngram.unigrams}
+        # Saved models may predate the current shipped vocabulary. Consult
+        # both layers without repopulating cleaned or rejected saved entries.
+        words = dict.fromkeys(chain(self._ngram.unigrams, self._ngram._base_unigrams))
+        return {word: self._fuzzy_frequency(word) for word in words}
 
     def _rebuild_fuzzy_dictionary(self) -> None:
         """Rebuild the fuzzy dictionary from scratch after the vocabulary shrank.
@@ -905,6 +917,7 @@ class HybridPredictor(QObject):
         self._fuzzy.reset_dictionary()
         self._fuzzy.load_dictionary(self._ngram.profile.dictionary)
         self._fuzzy.set_frequencies(self._fuzzy_frequencies())
+        self._fuzzy.prepare_prefix_index()
 
     def learn_word(self, word: str) -> None:
         """Learn a single word (e.g., when user types it)."""

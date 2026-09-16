@@ -36,8 +36,9 @@ from __future__ import annotations
 
 import bisect
 import math
-from collections import defaultdict
-from typing import Dict, List, Mapping, Optional, Sequence, Set, Tuple
+from typing import Dict, List, Mapping, Optional, Sequence, Tuple
+
+from .packed_prefixes import PackedPrefixes
 
 Position = Tuple[float, float]
 
@@ -45,12 +46,14 @@ Position = Tuple[float, float]
 class PrefixIndex:
     """Every prefix of every dictionary word, with the best completions of each.
 
-    Built once per dictionary (about 24,000 prefixes and 0.01 s for the
-    shipped 10k list) and rebuilt when the dictionary changes.  Short
-    prefixes have thousands of completions, so their top ``top_k`` by
-    frequency are precomputed; longer ones are found by bisecting a sorted
-    word list, where the range is small.
+    The initial dictionary is stored in compact immutable tables. New words
+    and frequency raises go into a small mutable overlay. Short prefixes have
+    thousands of completions, so their top ``top_k`` by frequency are
+    precomputed; longer ones are found by bisecting a sorted word list, where
+    the range is small.
     """
+
+    _BASE_CACHE_MAX = 4096
 
     def __init__(
         self,
@@ -65,25 +68,20 @@ class PrefixIndex:
         self.max_scan = max_scan
         self._freq: Dict[str, float] = {w: float(f) for w, f in dictionary.items() if w}
         self._words: List[str] = sorted(self._freq)
-        self._live: Set[str] = set()
-        children: Dict[str, Set[str]] = defaultdict(set)
-        top: Dict[str, List[Tuple[float, str]]] = defaultdict(list)
-        for word, freq in self._freq.items():
-            for i in range(1, len(word) + 1):
-                prefix = word[:i]
-                self._live.add(prefix)
-                if i < len(word):
-                    children[prefix].add(word[i])
-                if i <= precompute_len:
-                    top[prefix].append((freq, word))
-        self._children: Dict[str, str] = {p: "".join(sorted(s)) for p, s in children.items()}
-        self._top: Dict[str, List[Tuple[float, str]]] = {}
-        for prefix, entries in top.items():
-            entries.sort(reverse=True)
-            self._top[prefix] = entries[:top_k]
+        self._base = PackedPrefixes.build(
+            self._freq,
+            top_k=top_k,
+            precompute_len=precompute_len,
+        )
+        # Successful packed lookups recur across adjacent beam paths. Keep a
+        # small bounded cache so those paths do not repeat UTF-8 comparisons.
+        self._base_cache: Dict[str, int] = {}
+        self._overlay_live: set[str] = set()
+        self._overlay_children: Dict[str, set[str]] = {}
+        self._top_overrides: Dict[str, List[Tuple[float, str]]] = {}
 
     def __len__(self) -> int:
-        return len(self._live)
+        return len(self._base) + len(self._overlay_live)
 
     def update_word(self, word: str, freq: float) -> None:
         """Add ``word`` or raise its frequency, keeping every table in step.
@@ -105,29 +103,44 @@ class PrefixIndex:
             bisect.insort(self._words, word)
             for i in range(1, len(word) + 1):
                 prefix = word[:i]
-                self._live.add(prefix)
+                if self._base_key(prefix) is None:
+                    self._overlay_live.add(prefix)
                 if i < len(word):
-                    following = self._children.get(prefix, "")
-                    if word[i] not in following:
-                        self._children[prefix] = "".join(sorted(following + word[i]))
+                    self._overlay_children.setdefault(prefix, set()).add(word[i])
         for i in range(1, min(len(word), self.precompute_len) + 1):
             prefix = word[:i]
-            entries = [(f, w) for f, w in self._top.get(prefix, []) if w != word]
+            current = self._top_overrides.get(prefix)
+            if current is None:
+                key_index = self._base_key(prefix)
+                base_words = () if key_index is None else self._base.iter_top_words_at(key_index)
+                current = [(self._freq[w], w) for w in base_words]
+            entries = [(f, w) for f, w in current if w != word]
             entries.append((freq, word))
             entries.sort(reverse=True)
-            self._top[prefix] = entries[: self.top_k]
+            self._top_overrides[prefix] = entries[: self.top_k]
 
     def is_live(self, prefix: str) -> bool:
-        return prefix in self._live
+        return prefix in self._overlay_live or self._base_key(prefix) is not None
 
     def children(self, prefix: str) -> str:
         """The characters that can follow ``prefix`` in some word, as a string."""
-        return self._children.get(prefix, "")
+        key_index = self._base_key(prefix)
+        base = "" if key_index is None else self._base.children_at(key_index)
+        overlay = self._overlay_children.get(prefix)
+        if not overlay:
+            return base
+        return "".join(sorted(set(base).union(overlay)))
 
     def completions(self, prefix: str) -> List[Tuple[float, str]]:
         """Top ``top_k`` ``(freq, word)`` completions of ``prefix``, best first."""
         if len(prefix) <= self.precompute_len:
-            return self._top.get(prefix, [])
+            override = self._top_overrides.get(prefix)
+            if override is not None:
+                return override
+            key_index = self._base_key(prefix)
+            if key_index is None:
+                return []
+            return [(self._freq[word], word) for word in self._base.iter_top_words_at(key_index)]
         lo = bisect.bisect_left(self._words, prefix)
         hi = bisect.bisect_left(
             self._words, prefix + "￿", lo, min(len(self._words), lo + self.max_scan)
@@ -135,6 +148,17 @@ class PrefixIndex:
         found = [(self._freq[w], w) for w in self._words[lo:hi] if w.startswith(prefix)]
         found.sort(reverse=True)
         return found[: self.top_k]
+
+    def _base_key(self, prefix: str) -> int | None:
+        key_index = self._base_cache.get(prefix)
+        if key_index is not None:
+            return key_index
+        key_index = self._base.find(prefix)
+        if key_index is not None:
+            if len(self._base_cache) >= self._BASE_CACHE_MAX:
+                self._base_cache.clear()
+            self._base_cache[prefix] = key_index
+        return key_index
 
 
 class SpatialEmissions:
@@ -232,8 +256,8 @@ class PrefixBeam:
     # act on and the n-gram completer's exact-prefix match is the better
     # source; the same guard ``should_autocorrect`` applies.
     MIN_TYPED = 3
-    # ...unless the run spells no word's opening at all, where both halves
-    # of that reasoning fail at once.  See ``_worth_completing``.
+    # ...unless the run spells no word's opening, or the hybrid asks for
+    # help filling a sparse short-prefix bar. See ``_worth_completing``.
     MIN_TYPED_DEAD_PREFIX = 2
     # A path costing more than this (one cheap edit: an adjacent slip is
     # -0.69, a diagonal -0.87, a swap -1.0) may not be bought past the
@@ -249,6 +273,8 @@ class PrefixBeam:
         typed: str,
         n: int = 5,
         positions: Optional[Sequence[Optional[Position]]] = None,
+        *,
+        allow_short_prefix: bool = False,
     ) -> List[Tuple[str, float]]:
         """Top-``n`` ``(word, score)`` completions of ``typed``.
 
@@ -257,10 +283,12 @@ class PrefixBeam:
         to the reported key's centre.  Scores are relative, in ``(0, 1]``
         with the best at 1.0, so the merge's sum-to-1 normalisation sees
         positives.  See ``_protect_exact_completions`` for the one rule
-        applied on top of the path scores.
+        applied on top of the path scores. ``allow_short_prefix`` also
+        admits live two-character prefixes when the caller lacks enough
+        exact candidates to fill its suggestions.
         """
         typed = typed.lower()
-        if n <= 0 or not self._worth_completing(typed):
+        if n <= 0 or not self._worth_completing(typed, allow_short_prefix=allow_short_prefix):
             return []
         emits: List[Optional[Dict[str, float]]] = []
         for i, char in enumerate(typed):
@@ -340,7 +368,7 @@ class PrefixBeam:
         best = ranked[0][1]
         return [(word, math.exp(value - best)) for word, value in ranked]
 
-    def _worth_completing(self, typed: str) -> bool:
+    def _worth_completing(self, typed: str, *, allow_short_prefix: bool = False) -> bool:
         """Should the beam run over this typed run at all?
 
         ``MIN_TYPED`` is the ordinary floor, and it rests on two claims:
@@ -359,17 +387,16 @@ class PrefixBeam:
         bar at three characters and left it blank at two, which reads as
         the suggestions being unreliable rather than as a mis-click.
 
-        A *live* two-character prefix is deliberately still refused, and
-        that is what makes this safe rather than a retuning: the rescue
-        can only fire where the exact source found nothing, so it has
-        nothing to displace and every case that works today is untouched
-        by construction.  ``_protect_exact_completions`` is the rule that
-        would otherwise have to arbitrate, and it already returns early on
-        a dead prefix for the same reason.
+        A live two-character prefix is refused by default. The hybrid can
+        opt in with ``allow_short_prefix`` when its valid exact candidates
+        cannot fill the requested pills. The one-character floor and
+        ``_protect_exact_completions`` still apply.
         """
         if len(typed) >= self.MIN_TYPED:
             return True
-        return len(typed) >= self.MIN_TYPED_DEAD_PREFIX and not self.index.is_live(typed)
+        return len(typed) >= self.MIN_TYPED_DEAD_PREFIX and (
+            allow_short_prefix or not self.index.is_live(typed)
+        )
 
     def _protect_exact_completions(
         self, typed: str, scored: Dict[str, float], best_path: Dict[str, float]

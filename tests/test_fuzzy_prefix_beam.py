@@ -162,6 +162,38 @@ class TestTheBeamFollowsTheLayout:
 
 
 class TestTheIndexFollowsTheDictionary:
+    def test_standalone_frequency_merge_stays_lazy_until_explicitly_prepared(self):
+        recognizer = FuzzyRecognizer(dictionary={"zebra": 10.0})
+        recognizer.set_frequencies({"zebrafish": 50.0})
+        assert recognizer.word_generator._prefix_beam is None
+        assert recognizer.word_generator._prefix_dirty
+
+        recognizer.prepare_prefix_index()
+
+        beam = recognizer.word_generator._prefix_beam
+        assert beam is not None
+        assert not recognizer.word_generator._prefix_dirty
+        assert [word for _, word in beam.index.completions("zeb")] == ["zebrafish", "zebra"]
+
+    def test_layout_change_reuses_the_prepared_index_and_current_frequencies(self):
+        recognizer = FuzzyRecognizer(dictionary={"zebra": 10.0, "zebras": 5.0})
+        recognizer.set_frequencies({"zebrafish": 50.0})
+        recognizer.prepare_prefix_index()
+        prepared = recognizer.word_generator._prefix_beam
+        assert prepared is not None
+        index = prepared.index
+
+        moved = dict(QWERTY_POSITIONS)
+        moved["q"] = (0.0, 9.5)
+        recognizer.set_key_positions(moved)
+        recognizer.prepare_prefix_index()
+
+        rebuilt = recognizer.word_generator._prefix_beam
+        assert rebuilt is not None
+        assert rebuilt is not prepared
+        assert rebuilt.index is index
+        assert [word for _, word in index.completions("zeb")] == ["zebrafish", "zebra", "zebras"]
+
     def test_new_words_become_reachable_without_a_restart(self):
         recognizer = FuzzyRecognizer(dictionary={"zebra": 10.0, "zebras": 5.0})
         assert top(recognizer, "zeb") == ["zebra", "zebras"]
@@ -256,8 +288,12 @@ class TestATwoLetterMisClickDoesNotEmptyTheBar:
             ("pw", "people"),  # "pe", e -> w
         ],
     )
-    def test_a_slip_in_the_first_two_characters_still_fills_the_bar(self, fr, typed, intended):
-        offered = top(fr, typed)
+    def test_a_slip_in_the_first_two_characters_still_fills_the_bar(self, typed, intended):
+        # Keep this a genuinely dead prefix even as the shipped vocabulary
+        # grows. A newly added word beginning with the typo must not silently
+        # turn this into a test of the live-prefix path.
+        recognizer = FuzzyRecognizer(dictionary={intended: 100.0})
+        offered = top(recognizer, typed)
         assert offered, f"{typed!r} left the bar empty"
         assert intended in offered, f"{typed!r} offered {offered}"
 
@@ -265,6 +301,7 @@ class TestATwoLetterMisClickDoesNotEmptyTheBar:
         # The inverse, and the reason this change cannot regress the common
         # path: wherever the typed run is somebody's opening, the beam stays
         # silent exactly as it did before.
+        top(fr, "hello")  # build the lazy prefix index without relying on test order
         beam = fr.word_generator._prefix_beam
         assert beam is not None
         speaking = [
@@ -278,6 +315,7 @@ class TestATwoLetterMisClickDoesNotEmptyTheBar:
     def test_a_single_character_is_still_too_little_to_act_on(self, fr):
         # One character is one click and carries no evidence of anything; the
         # floor moved to two, not to nothing.
+        top(fr, "hello")  # build the lazy prefix index without relying on test order
         beam = fr.word_generator._prefix_beam
         assert beam is not None
         assert [c for c in string.ascii_lowercase if beam.complete(c, 5)] == []
@@ -288,3 +326,15 @@ class TestATwoLetterMisClickDoesNotEmptyTheBar:
         beam = PrefixBeam(index, SpatialEmissions(QWERTY_POSITIONS))
         assert beam.complete("sp", 3) == []  # live: the exact completer's job
         assert [w for w, _ in beam.complete("ap", 3)] == ["spent", "spend"]
+
+    def test_the_default_still_leaves_a_live_two_letter_prefix_to_exact_completion(self):
+        recognizer = FuzzyRecognizer(dictionary={"wwe": 100.0, "wwii": 90.0, "we": 80.0})
+        assert top(recognizer, "ww") == []
+
+    def test_the_opt_in_fills_spare_pills_for_a_live_two_letter_prefix(self):
+        recognizer = FuzzyRecognizer(dictionary={"wwe": 100.0, "wwii": 90.0, "we": 80.0})
+        assert top(recognizer, "ww", allow_short_prefix=True) == ["wwe", "wwii", "we"]
+
+    def test_the_opt_in_does_not_lower_the_floor_to_one_character(self):
+        recognizer = FuzzyRecognizer(dictionary={"wwe": 100.0, "wwii": 90.0, "we": 80.0})
+        assert top(recognizer, "w", allow_short_prefix=True) == []

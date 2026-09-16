@@ -546,22 +546,8 @@ class FuzzyWordGenerator:
         self._prefix_beam = None
         self._prefix_dirty = True
 
-    def complete_prefix(
-        self,
-        typed: str,
-        n: int = 5,
-        positions: Optional[Sequence[Optional[Position]]] = None,
-    ) -> List[Tuple[str, float]]:
-        """Completions of a possibly mistyped prefix; see ``prefix_beam``.
-
-        This is the mid-word counterpart of ``generate_candidates``, which
-        corrects a *finished* word and stays as it is for that.  The index
-        is rebuilt after any dictionary change and the emission table
-        whenever the spatial model object changes (``set_key_positions``
-        re-points it on a layout switch), and both are cheap enough (about
-        0.01 s for the shipped list) that rebuilding beats keeping them in
-        step by hand.
-        """
+    def _ensure_prefix_beam(self) -> PrefixBeam:
+        """Return a beam over the current dictionary and spatial model."""
         spatial_id = id(self.spatial_model)
         if self._prefix_beam is None or self._prefix_dirty or spatial_id != self._prefix_spatial_id:
             if self._prefix_beam is not None and not self._prefix_dirty:
@@ -571,7 +557,32 @@ class FuzzyWordGenerator:
             self._prefix_beam = PrefixBeam(index, SpatialEmissions(self.spatial_model.positions))
             self._prefix_dirty = False
             self._prefix_spatial_id = spatial_id
-        return self._prefix_beam.complete(typed, n, positions)
+        return self._prefix_beam
+
+    def prepare_prefix_index(self) -> None:
+        """Build the packed prefix index without generating predictions."""
+        self._ensure_prefix_beam()
+
+    def complete_prefix(
+        self,
+        typed: str,
+        n: int = 5,
+        positions: Optional[Sequence[Optional[Position]]] = None,
+        *,
+        allow_short_prefix: bool = False,
+    ) -> List[Tuple[str, float]]:
+        """Completions of a possibly mistyped prefix; see ``prefix_beam``.
+
+        This is the mid-word counterpart of ``generate_candidates``, which
+        corrects a *finished* word and stays as it is for that. The packed
+        index is built lazily, rebuilt after bulk dictionary replacement,
+        and updated in place for individual learned words. The emission
+        table is rebuilt whenever ``set_key_positions`` points the spatial
+        model at a new layout.
+        """
+        return self._ensure_prefix_beam().complete(
+            typed, n, positions, allow_short_prefix=allow_short_prefix
+        )
 
 
 class FuzzyRecognizer:
@@ -676,6 +687,7 @@ class FuzzyRecognizer:
         *,
         positions: Optional[Sequence[Optional[Position]]] = None,
         offsets: Optional[Sequence[Optional[Tuple[float, float]]]] = None,
+        allow_short_prefix: bool = False,
     ) -> List[Tuple[str, float]]:
         """Top-``n`` fuzzy candidates for the current word in ``typed_text``.
 
@@ -686,6 +698,8 @@ class FuzzyRecognizer:
         layer treats fuzzy as a "complete what you're typing" source, not a
         next-word predictor.  ``positions`` optionally carries one click
         position per character of the current word, in key units.
+        ``allow_short_prefix`` lets the hybrid supplement a sparse set of
+        exact two-character completions; a single character stays too short.
         """
         words = typed_text.split()
         current_word = words[-1] if words and not typed_text.endswith(" ") else ""
@@ -694,7 +708,9 @@ class FuzzyRecognizer:
         if self.prefix_completion:
             if positions is None and offsets is not None:
                 positions = self.positions_for(current_word, offsets)
-            return self.word_generator.complete_prefix(current_word, n, positions)
+            return self.word_generator.complete_prefix(
+                current_word, n, positions, allow_short_prefix=allow_short_prefix
+            )
         return self.word_generator.generate_candidates(current_word)[:n]
 
     def should_autocorrect(
@@ -790,6 +806,10 @@ class FuzzyRecognizer:
     def set_frequencies(self, freqs: Mapping[str, float]) -> None:
         """Merge n-gram-style frequency counts into the fuzzy dictionary."""
         self.word_generator.set_frequencies(freqs)
+
+    def prepare_prefix_index(self) -> None:
+        """Build the prefix index now instead of on the first typed prefix."""
+        self.word_generator.prepare_prefix_index()
 
     def update_word(self, word: str, freq: float) -> None:
         """Add one word or raise its frequency; pass-through to the generator."""

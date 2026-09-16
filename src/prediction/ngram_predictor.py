@@ -7,13 +7,17 @@ This is the "instant" layer of the hybrid approach.
 
 from __future__ import annotations
 
+import bisect
+import heapq
+import itertools
 import json
 import logging
 import math
+import sys
 import time
 from collections import defaultdict
 from pathlib import Path
-from typing import Dict, List, Mapping, Optional, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Tuple, TypeVar, cast, overload
 
 from ..atomic_write import atomic_write_json
 from .language import ENGLISH, LanguageProfile
@@ -31,6 +35,77 @@ SENTENCE_START = "<s>"
 
 #: Characters that end a sentence, so the next word starts one.
 _SENTENCE_ENDERS = ".!?"
+_MISSING = object()
+_DefaultT = TypeVar("_DefaultT")
+
+
+class _VersionedCounts(dict[str, int]):
+    """Integer counts with defaultdict behavior and a mutation version."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.version = 0
+
+    def __missing__(self, key: str) -> int:
+        self[key] = 0
+        return 0
+
+    def __setitem__(self, key: str, value: int) -> None:
+        previous = self.get(key)
+        if key not in self or previous != value:
+            self.version += 1
+        super().__setitem__(key, value)
+
+    def __delitem__(self, key: str) -> None:
+        super().__delitem__(key)
+        self.version += 1
+
+    def clear(self) -> None:
+        if self:
+            super().clear()
+            self.version += 1
+
+    def update(self, *args: object, **kwargs: int) -> None:
+        if len(args) > 1:
+            raise TypeError(f"update expected at most 1 argument, got {len(args)}")
+        entries: Dict[str, int] = {}
+        if args:
+            entries.update(dict(cast(Any, args[0])))
+        entries.update(kwargs)
+        for key, value in entries.items():
+            self[key] = value
+
+    def setdefault(self, key: str, default: int = 0) -> int:
+        if key in self:
+            return self[key]
+        self[key] = default
+        return default
+
+    @overload
+    def pop(self, key: str) -> int: ...
+
+    @overload
+    def pop(self, key: str, default: _DefaultT) -> int | _DefaultT: ...
+
+    def pop(self, key: str, default: object = _MISSING) -> object:
+        if key not in self:
+            if default is _MISSING:
+                raise KeyError(key)
+            return default
+        value = super().pop(key)
+        self.version += 1
+        return value
+
+    def popitem(self) -> Tuple[str, int]:
+        item = super().popitem()
+        self.version += 1
+        return item
+
+    # Typeshed couples dict.__ior__ to dict.__or__'s generic return overloads,
+    # while this internal count map deliberately stays str-to-int.
+    def __ior__(self, other: object, /) -> _VersionedCounts:  # type: ignore[override,misc]
+        self.update(other)
+        return self
 
 
 class NgramPredictor:
@@ -100,9 +175,17 @@ class NgramPredictor:
         #   P(w) = alpha · P_user(w) + (1 - alpha) · P_base(w)
         # alpha ("personal_weight") defaults to 0.7 — personal typing wins
         # on rank but the base dictionary still shapes the long tail.
-        self._base_unigrams: Dict[str, int] = defaultdict(int)
+        self._base_unigrams: Dict[str, int] = _VersionedCounts()
         self._base_total: int = 0
         self.personal_weight: float = 0.7
+        # Lexically sorted references into the base dictionary support exact
+        # prefix ranges without copying the strings. The versioned count map
+        # invalidates both this list and the cached global top rows lazily.
+        self._base_candidate_source: object | None = None
+        self._base_candidate_version = -1
+        self._base_candidate_words: List[str] = []
+        self._base_candidate_top: Dict[int, Tuple[str, ...]] = {}
+        self._base_candidate_counts_nonnegative = True
 
         # User-typed word counts.  Incremented by learn() / learn_word();
         # feeds P_user in the split-table score.  Recency-decayed.
@@ -405,6 +488,8 @@ class NgramPredictor:
                 self._base_total += 100
             self.total_words = len(self._common_words) * 100
 
+        self._load_extra_vocabulary()
+
         # Load saved model if provided
         if model_path and model_path.exists():
             self.load(model_path)
@@ -482,6 +567,35 @@ class NgramPredictor:
                 )
             except Exception as e:
                 _logger.warning("Failed to load supplement wordlist: %s", e)
+
+    def _load_extra_vocabulary(self) -> None:
+        """Add the profile's unranked vocabulary to the base prior only.
+
+        A spelling list supplies coverage, not conversational frequencies.
+        A single count makes its words available without promoting the tail
+        above existing common words or treating it as personal history.
+        """
+        path = self.profile.extra_vocabulary
+        if path is None:
+            return
+        try:
+            with path.open(encoding="utf-8") as source:
+                for line in source:
+                    word = line.strip().lower()
+                    if (
+                        not word
+                        or word.startswith("#")
+                        or not self.profile.word_re.fullmatch(word)
+                        or not self._is_plausible_word(word)
+                        or word in self._base_unigrams
+                    ):
+                        continue
+                    self._base_unigrams[word] = 1
+                    self._base_total += 1
+                    self.unigrams[word] += 1
+                    self.total_words += 1
+        except OSError as exc:
+            _logger.warning("Could not load extra vocabulary %s: %s", path, exc)
 
     def _load_proper_nouns(self) -> None:
         """Load built-in proper nouns for auto-capitalization."""
@@ -751,12 +865,26 @@ class NgramPredictor:
             w_bi = 0.0
             w_uni = 1.0
 
-        # Candidate set: every word that could get non-zero score.
+        # Sparse sources are always retained. Under ordinary nonnegative
+        # weights, a base-only word's score is a fixed nonnegative multiple
+        # of its base frequency. Therefore no base word below the top ``n``
+        # matching frequencies can enter the final top ``n``. Lexical order
+        # resolves the equal-score boundary exactly. Unusual weights fall
+        # back to the full base scan so this optimization cannot change them.
         seen_words: set[str] = set()
         seen_words.update(trigram_probs.keys())
         seen_words.update(bigram_probs.keys())
-        seen_words.update(self._base_unigrams.keys())
         seen_words.update(self.user_vocab.keys())
+        if self._can_prune_base_candidates(
+            n=n,
+            alpha=alpha,
+            weights=(w_tri, w_bi, w_uni),
+            trigram_probs=trigram_probs,
+            bigram_probs=bigram_probs,
+        ):
+            seen_words.update(self._top_base_candidates(partial_word, n))
+        else:
+            seen_words.update(self._base_unigrams.keys())
 
         candidates: Dict[str, float] = {}
         for word in seen_words:
@@ -774,7 +902,7 @@ class NgramPredictor:
             if score > 0:
                 candidates[word] = score
 
-        sorted_candidates = sorted(candidates.items(), key=lambda x: -x[1])
+        sorted_candidates = sorted(candidates.items(), key=lambda item: (-item[1], item[0]))
         return sorted_candidates[:n]
 
     def _matches_partial(self, word: str, partial: str) -> bool:
@@ -782,6 +910,100 @@ class NgramPredictor:
         if not partial:
             return True
         return word.startswith(partial)
+
+    def _can_prune_base_candidates(
+        self,
+        *,
+        n: int,
+        alpha: float,
+        weights: Tuple[float, float, float],
+        trigram_probs: Mapping[str, float],
+        bigram_probs: Mapping[str, float],
+    ) -> bool:
+        """Whether base-frequency pruning has its nonnegative guarantees."""
+        if n <= 0 or not 0.0 <= alpha <= 1.0:
+            return False
+        if any(not 0.0 <= weight <= 1.0 for weight in weights):
+            return False
+        if self._base_total < 0 or self._user_total < 0:
+            return False
+        if any(count < 0 for count in self.user_vocab.values()):
+            return False
+        if any(probability < 0.0 for probability in trigram_probs.values()):
+            return False
+        if any(probability < 0.0 for probability in bigram_probs.values()):
+            return False
+        self._ensure_base_candidate_index()
+        return self._base_candidate_counts_nonnegative
+
+    def _ensure_base_candidate_index(self) -> None:
+        """Refresh sorted base references after any base-count mutation.
+
+        ``_VersionedCounts`` covers every internal writer and ordinary direct
+        test mutation. If a caller replaces the mapping with an unversioned
+        dict, rebuilding on every call preserves correctness for that unusual
+        case instead of trusting a stale cache.
+        """
+        counts = self._base_unigrams
+        version = counts.version if isinstance(counts, _VersionedCounts) else None
+        if (
+            version is not None
+            and self._base_candidate_source is counts
+            and self._base_candidate_version == version
+        ):
+            return
+        self._base_candidate_words = sorted(counts)
+        self._base_candidate_top.clear()
+        self._base_candidate_counts_nonnegative = all(count >= 0 for count in counts.values())
+        self._base_candidate_source = counts if version is not None else None
+        self._base_candidate_version = version if version is not None else -1
+
+    @staticmethod
+    def _prefix_successor(prefix: str) -> Optional[str]:
+        """Smallest string above every string beginning with ``prefix``."""
+        characters = list(prefix)
+        for index in range(len(characters) - 1, -1, -1):
+            codepoint = ord(characters[index])
+            if codepoint < sys.maxunicode:
+                characters[index] = chr(codepoint + 1)
+                return "".join(characters[: index + 1])
+        return None
+
+    def _top_base_candidates(self, partial: str, n: int) -> Tuple[str, ...]:
+        """Best ``n`` matching base words by ``(-frequency, word)``.
+
+        Prefix ranges come from the lexically sorted pointer list. The empty
+        prefix is the next-word hot path, so its small top row is cached by
+        requested size until a versioned base mutation invalidates it.
+        """
+        self._ensure_base_candidate_index()
+        cache_result = not partial and n <= 32
+        if not partial:
+            cached = self._base_candidate_top.get(n)
+            if cached is not None:
+                return cached
+            start = 0
+            stop = len(self._base_candidate_words)
+        else:
+            start = bisect.bisect_left(self._base_candidate_words, partial)
+            successor = self._prefix_successor(partial)
+            stop = (
+                len(self._base_candidate_words)
+                if successor is None
+                else bisect.bisect_left(self._base_candidate_words, successor, start)
+            )
+
+        words = itertools.islice(self._base_candidate_words, start, stop)
+        ranked = tuple(
+            heapq.nsmallest(
+                n,
+                words,
+                key=lambda word: (-self._base_unigrams[word], word),
+            )
+        )
+        if cache_result:
+            self._base_candidate_top[n] = ranked
+        return ranked
 
     def _top_unigrams(self, n: int) -> List[str]:
         """Get top n words by frequency."""
@@ -795,7 +1017,7 @@ class NgramPredictor:
         unigram probability (callers normalise per source before
         combining).
         """
-        sorted_words = sorted(self.unigrams.items(), key=lambda x: -x[1])
+        sorted_words = sorted(self.unigrams.items(), key=lambda item: (-item[1], item[0]))
         return [(word, float(freq)) for word, freq in sorted_words[:n]]
 
     def _tokenize(self, text: str) -> List[str]:
@@ -1993,6 +2215,7 @@ class NgramPredictor:
 
         # Rebuild base vocabulary from wordlists
         self._load_frequency_wordlist()
+        self._load_extra_vocabulary()
         self._load_proper_nouns()
         _logger.info("User data cleared, base dictionary reloaded")
 

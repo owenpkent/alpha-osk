@@ -8,6 +8,11 @@ deletion variants of the input the same way; any dictionary word that
 shares a deletion variant with the input is a candidate, and a final
 Damerau-Levenshtein check filters to the configured edit distance.
 
+The initial dictionary is stored as packed deletion keys and contiguous
+word-ID postings.  Words learned after that base is prepared go into a
+small mutable overlay, so they are immediately searchable without a full
+index rebuild.
+
 This catches insertions, deletions, substitutions, transpositions, and
 mixed errors at the configured edit distance with O(1) hash lookups
 per input variant.  The prior beam-search/per-letter edit-distance
@@ -22,7 +27,11 @@ from __future__ import annotations
 
 import logging
 from collections import defaultdict
+from collections.abc import Iterator
+from itertools import chain
 from typing import Dict, Iterable, List, Optional, Set, Tuple
+
+from .packed_deletes import PackedDeletes
 
 _logger = logging.getLogger("SymSpell")
 
@@ -31,7 +40,7 @@ def damerau_levenshtein(a: str, b: str, max_dist: int = 2) -> int:
     """Damerau-Levenshtein distance with early termination.
 
     Returns ``max_dist + 1`` if the true distance exceeds ``max_dist``
-    (the precise value above the threshold is not meaningful — the
+    (the precise value above the threshold is not meaningful; the
     early-termination prunes once any row's minimum exceeds it).
     """
     if a == b:
@@ -71,16 +80,16 @@ class SymSpell:
     """Precomputed-deletion spelling correction index.
 
     Build via ``add_word`` / ``add_dictionary``, then query with
-    ``lookup``.  The deletion index is built lazily on the first
-    ``lookup`` call after any mutation, so bulk-loading does not pay
-    rebuild cost per insert.
+    ``lookup``.  The initial packed deletion index is built lazily on
+    the first ``lookup``.  Later words are indexed in a mutable overlay,
+    so bulk loading is compact and incremental inserts stay cheap.
     """
 
     def __init__(self, max_edit_distance: int = 2, prefix_length: int = 7):
         """
         Args:
             max_edit_distance: Max edit distance for lookups.  Higher
-                means more recall but more memory — the deletion-variant
+                means more recall but more memory; the deletion-variant
                 count grows superlinearly with this.  Default 2 catches
                 most real typos including double-edits.
             prefix_length: For words longer than this, only index
@@ -98,7 +107,8 @@ class SymSpell:
         self.prefix_length = prefix_length
 
         self._words: Dict[str, int] = {}
-        self._deletes: Dict[str, List[str]] = defaultdict(list)
+        self._packed_deletes: Optional[PackedDeletes] = None
+        self._overlay_deletes: Dict[str, List[str]] = defaultdict(list)
         self._built = False
 
     def add_word(self, word: str, freq: int = 1) -> None:
@@ -119,7 +129,7 @@ class SymSpell:
         if is_new or freq > existing:
             self._words[word] = freq
         if is_new and self._built:
-            self._index_word(word)
+            self._index_overlay_word(word)
         elif is_new:
             self._built = False
 
@@ -132,7 +142,7 @@ class SymSpell:
         """All distinct deletion variants of ``word`` up to ``max_deletes``."""
         if max_deletes <= 0 or len(word) <= 1:
             return set()
-        # BFS through deletion levels — each level deletes one char from
+        # BFS through deletion levels. Each level deletes one char from
         # each string in the previous level.
         result: Set[str] = set()
         frontier: Set[str] = {word}
@@ -156,29 +166,33 @@ class SymSpell:
 
         Useful when the caller wants to pay the build cost during
         startup (or any other known idle window) instead of on the
-        first ``lookup`` call.  Idempotent — does nothing if the index
-        is already built and no mutations have occurred since.
+        first ``lookup`` call.  Idempotent: does nothing once the packed
+        base exists, including after words have been added to the overlay.
         """
         self._build_index()
 
-    def _index_word(self, word: str) -> None:
+    def _index_variants(self, word: str) -> Iterator[str]:
         indexed = word[: self.prefix_length] if len(word) > self.prefix_length else word
         # The indexed prefix is itself a "zero-deletion variant".
-        self._deletes[indexed].append(word)
-        for variant in self._deletion_variants(indexed, self.max_edit_distance):
-            self._deletes[variant].append(word)
+        yield indexed
+        yield from self._deletion_variants(indexed, self.max_edit_distance)
+
+    def _index_overlay_word(self, word: str) -> None:
+        for variant in self._index_variants(word):
+            self._overlay_deletes[variant].append(word)
 
     def _build_index(self) -> None:
         if self._built:
             return
-        self._deletes.clear()
-        for word in self._words:
-            self._index_word(word)
+        packed_deletes = PackedDeletes.build(self._words, self._index_variants)
+        self._packed_deletes = packed_deletes
+        self._overlay_deletes.clear()
         self._built = True
         _logger.debug(
-            "SymSpell index: %d words, %d deletion variants",
+            "SymSpell index: %d words, %d deletion variants, %d postings",
             len(self._words),
-            len(self._deletes),
+            len(packed_deletes),
+            packed_deletes.posting_count,
         )
 
     def lookup(
@@ -217,11 +231,13 @@ class SymSpell:
         input_variants: Set[str] = {indexed_input}
         input_variants.update(self._deletion_variants(indexed_input, max_edit_distance))
 
+        packed_deletes = self._packed_deletes
+        if packed_deletes is None:
+            raise RuntimeError("SymSpell deletion index was not built")
         for variant in input_variants:
-            sources = self._deletes.get(variant)
-            if not sources:
-                continue
-            for source in sources:
+            sources = packed_deletes.iter_words(variant)
+            overlay_sources = self._overlay_deletes.get(variant, ())
+            for source in chain(sources, overlay_sources):
                 if source in candidates:
                     continue
                 dist = damerau_levenshtein(input_word, source, max_edit_distance)

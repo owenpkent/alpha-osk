@@ -1,0 +1,9 @@
+source_url=https://sourceforge.net/projects/wordlist/files/speller/2026.02.25/wordlist-en_US-2026.02.25.zip/download
+source_release=2026.02.25
+source_commit=7e99eda
+source_sha256=caeb6ee8a38e98ccbd6e5c717889a1bab68073dcba8a9c0ca6570641926913e9
+source_member=en_US.txt
+source_dictionary=ESDB size 60, American English
+output_words=64291
+selection=all words remaining after filtering, sorted alphabetically
+filter=lowercase ASCII words, internal apostrophes, length greater than 2, vowel and consonant, no possessives, existing words excluded, explicit stems and inflections excluded by data/explicit_exclusions.txt

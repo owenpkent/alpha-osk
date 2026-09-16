@@ -584,3 +584,33 @@ how's 1500
 when's 800
 there's 4500
 here's 2500
+
+# Accessibility, care, and current software vocabulary. Small base priors
+# provide coverage while keeping common words and personal learning ahead.
+caregiver 25
+caregiving 25
+dystrophy 25
+neuromuscular 25
+spasticity 25
+paralysis 25
+quadriplegic 25
+quadriplegia 25
+paraplegic 25
+paraplegia 25
+screenreader 25
+screenreaders 25
+ventilator 25
+wheelchairs 25
+dysphagia 25
+gastrostomy 25
+physiotherapy 25
+telehealth 25
+github 25
+docker 25
+cloudflare 25
+typescript 25
+livestream 25
+livestreaming 25
+touchpad 25
+trackball 25
+autofill 25

@@ -62,6 +62,7 @@ Reference material that informed the design but isn't a living spec. Useful for 
 - [`research/INNOVATION_SOURCES.md`](research/INNOVATION_SOURCES.md): index of innovations drawn from Dasher, Gboard, LatinIME, Presage, etc.
 - [`research/TECHNICAL_INNOVATIONS.md`](research/TECHNICAL_INNOVATIONS.md): deep dive into the Dasher Project innovations.
 - [`research/MOBILE_KEYBOARD_INNOVATIONS.md`](research/MOBILE_KEYBOARD_INNOVATIONS.md): deep dive into the Gboard / SwiftKey approaches.
+- [`research/VOCABULARY_MEMORY.md`](research/VOCABULARY_MEMORY.md): vocabulary memory measurements, Gboard's published decoder designs, and compact-index options.
 - [`research/LEARNING_IMPROVEMENTS.md`](research/LEARNING_IMPROVEMENTS.md): exploration of learning-loop changes.
 - [`research/PREDICTION_OPTIONS.md`](research/PREDICTION_OPTIONS.md): exploration of prediction-stack options.
 - [`research/TRAINING_DATA_STRATEGY.md`](research/TRAINING_DATA_STRATEGY.md): training-data sourcing strategy.
