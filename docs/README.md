@@ -22,6 +22,7 @@ Active design docs for the engine, the platform abstraction, and the user-facing
 - [`architecture/PLATFORM_ARCHITECTURE.md`](architecture/PLATFORM_ARCHITECTURE.md): cross-platform abstraction details (key synthesis, password-field detection, config paths).
 - [`architecture/COMPACT_VIEW.md`](architecture/COMPACT_VIEW.md): the denser 13x4 keyboard for small screens, its measurements, and the layer model behind `?123`.
 - [`architecture/MODULAR_LAYOUTS.md`](architecture/MODULAR_LAYOUTS.md): custom keyboard layouts inspired by Octavium / Nimbus.
+- [`architecture/UIA_TARGETS.md`](architecture/UIA_TARGETS.md): the switch-scanning contract. How an external scanner finds the keyboard through Windows UI Automation, the target ids, stale-prediction safety, minimizing and restoring without taking focus, and what was verified and how.
 - [`architecture/DICTATION.md`](architecture/DICTATION.md): voice input. The Qt-only audio and websocket stack, the four-state run model, where the Deepgram API key lives, and why privacy mode cancels a run outright.
 - [`architecture/BACKEND_PARITY.md`](architecture/BACKEND_PARITY.md): what the Python and C++ backends each implement, and the cross-backend conformance harness.
 - [`architecture/GOTCHAS.md`](architecture/GOTCHAS.md): the implementation traps and invariants. Read before touching keystroke synthesis, the prediction context buffers, window flags, or the build pipeline.

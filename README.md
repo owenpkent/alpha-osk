@@ -251,6 +251,7 @@ Yes on Windows (Unicode keystroke injection covers anything in BMP and supplemen
 - Compatibility mode for IDEs (VS Code, JetBrains) and remote desktop (TeamViewer, RDP, VNC) where suffix-only insertion is unsafe
 - Privacy mode: auto-detects password fields and pauses learning
 - Window never steals focus from the app you're typing into
+- Ready for external switch scanners on Windows. A scanning app can find, highlight and press every key and suggestion through Windows UI Automation, and minimize or bring back the keyboard without taking focus from the app you are typing into. It was built with the developer of Switchify PC and works for any Windows-permitted assistive technology. The contract is in [`docs/architecture/UIA_TARGETS.md`](docs/architecture/UIA_TARGETS.md)
 - Nine themes including high-contrast options
 - Key Colours: colour a key by what it does rather than by where it sits, so Backspace, Enter and the held modifiers are findable without reading them. Six schemes, every colour derived from the theme above it, and every one held to a 4.5:1 contrast ratio against its own legend on all nine themes
 - Adjustable opacity, key spacing, key sizing

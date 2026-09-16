@@ -3,6 +3,15 @@ import QtQuick 2.15
 Item {
     id: navPanel
 
+    // Scan-target identity, set by Main.qml. The id format lives once, on
+    // Main.qml's root, so that six surfaces cannot drift into handing a
+    // scanner colliding ids. Empty section means this panel is not exposed.
+    property string scanSection: ""
+    property var scanIdFor: null
+    function _scanId(row, idx) {
+        return (scanIdFor && scanSection !== "") ? scanIdFor(scanSection, row, idx) : ""
+    }
+
     property real keyW: 44
     property real keyH: 44
     property real keySpacing: 2
@@ -87,6 +96,7 @@ Item {
             borderColor: navPanel.borderColor
             hitMarginH: navPanel.hitMarginH
             hitMarginV: navPanel.hitMarginV
+            targetId: navPanel._scanId(0, 0)
             role: "nav"
             roleColors: navPanel.roleColors
             onKeyPressed: keyboard.pressSpecialKey("print")
@@ -101,6 +111,7 @@ Item {
             borderColor: navPanel.borderColor
             hitMarginH: navPanel.hitMarginH
             hitMarginV: navPanel.hitMarginV
+            targetId: navPanel._scanId(0, 1)
             role: "nav"
             roleColors: navPanel.roleColors
             onKeyPressed: keyboard.pressSpecialKey("scrolllock")
@@ -115,6 +126,7 @@ Item {
             borderColor: navPanel.borderColor
             hitMarginH: navPanel.hitMarginH
             hitMarginV: navPanel.hitMarginV
+            targetId: navPanel._scanId(0, 2)
             role: "nav"
             roleColors: navPanel.roleColors
             onKeyPressed: keyboard.pressSpecialKey("pause")
@@ -131,6 +143,7 @@ Item {
             borderColor: navPanel.borderColor
             hitMarginH: navPanel.hitMarginH
             hitMarginV: navPanel.hitMarginV
+            targetId: navPanel._scanId(1, 0)
             role: "nav"
             roleColors: navPanel.roleColors
             onKeyPressed: keyboard.pressSpecialKey("insert")
@@ -145,6 +158,7 @@ Item {
             borderColor: navPanel.borderColor
             hitMarginH: navPanel.hitMarginH
             hitMarginV: navPanel.hitMarginV
+            targetId: navPanel._scanId(1, 1)
             role: "nav"
             roleColors: navPanel.roleColors
             onKeyPressed: keyboard.pressSpecialKey("home")
@@ -159,6 +173,7 @@ Item {
             borderColor: navPanel.borderColor
             hitMarginH: navPanel.hitMarginH
             hitMarginV: navPanel.hitMarginV
+            targetId: navPanel._scanId(1, 2)
             role: "nav"
             roleColors: navPanel.roleColors
             enableRepeat: true; repeatDelay: navPanel.repeatDelay; repeatInterval: navPanel.repeatInterval
@@ -176,6 +191,7 @@ Item {
             borderColor: navPanel.borderColor
             hitMarginH: navPanel.hitMarginH
             hitMarginV: navPanel.hitMarginV
+            targetId: navPanel._scanId(2, 0)
             role: "kill"
             roleColors: navPanel.roleColors
             enableRepeat: true; repeatDelay: navPanel.repeatDelay; repeatInterval: navPanel.repeatInterval
@@ -191,6 +207,7 @@ Item {
             borderColor: navPanel.borderColor
             hitMarginH: navPanel.hitMarginH
             hitMarginV: navPanel.hitMarginV
+            targetId: navPanel._scanId(2, 1)
             role: "nav"
             roleColors: navPanel.roleColors
             onKeyPressed: keyboard.pressSpecialKey("end")
@@ -205,6 +222,7 @@ Item {
             borderColor: navPanel.borderColor
             hitMarginH: navPanel.hitMarginH
             hitMarginV: navPanel.hitMarginV
+            targetId: navPanel._scanId(2, 2)
             role: "nav"
             roleColors: navPanel.roleColors
             enableRepeat: true; repeatDelay: navPanel.repeatDelay; repeatInterval: navPanel.repeatInterval
@@ -240,6 +258,7 @@ Item {
                 borderColor: navPanel.borderColor
                 hitMarginH: navPanel.hitMarginH
                 hitMarginV: navPanel.hitMarginV
+                targetId: navPanel._scanId(3, 1)
                 role: "nav"
                 roleColors: navPanel.roleColors
                 enableRepeat: true; repeatDelay: navPanel.repeatDelay; repeatInterval: navPanel.repeatInterval
@@ -261,6 +280,7 @@ Item {
             borderColor: navPanel.borderColor
             hitMarginH: navPanel.hitMarginH
             hitMarginV: navPanel.hitMarginV
+            targetId: navPanel._scanId(4, 0)
             role: "nav"
             roleColors: navPanel.roleColors
             enableRepeat: true; repeatDelay: navPanel.repeatDelay; repeatInterval: navPanel.repeatInterval
@@ -276,6 +296,7 @@ Item {
             borderColor: navPanel.borderColor
             hitMarginH: navPanel.hitMarginH
             hitMarginV: navPanel.hitMarginV
+            targetId: navPanel._scanId(4, 1)
             role: "nav"
             roleColors: navPanel.roleColors
             enableRepeat: true; repeatDelay: navPanel.repeatDelay; repeatInterval: navPanel.repeatInterval
@@ -291,6 +312,7 @@ Item {
             borderColor: navPanel.borderColor
             hitMarginH: navPanel.hitMarginH
             hitMarginV: navPanel.hitMarginV
+            targetId: navPanel._scanId(4, 2)
             role: "nav"
             roleColors: navPanel.roleColors
             enableRepeat: true; repeatDelay: navPanel.repeatDelay; repeatInterval: navPanel.repeatInterval

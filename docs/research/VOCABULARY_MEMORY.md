@@ -610,3 +610,26 @@ The generator and four benchmark scripts also passed their separate Ruff and
 format checks. Focused integration tests cover corpus-only candidates,
 base-only contractions, and corpus-adjusted score ties. Test models and
 benchmark models were temporary, and their scratch directories were removed.
+
+## Final integration with UI Automation support
+
+The published PR head `e7fde34` contains the vocabulary expansion and the
+validated integration described above. Main subsequently advanced to
+`3a9347f`, adding UI Automation support. This final merge retains that upstream
+work together with the 83,307-word vocabulary, packed indexes, candidate-search
+optimizations, research documentation, and benchmark tooling.
+
+The only merge conflict was in `tests/test_fuzzy_prefix_beam.py`. Its resolution
+keeps main's `built_beam` helper and its callers, while preserving the vocabulary
+branch's preparation, layout-reuse, dead-prefix, and short-prefix regression
+tests. The helper makes beam initialization independent of test order.
+
+After resolving that conflict, Ruff lint, formatting, mypy for Linux and
+Windows, all tests changed by the UI Automation update, and conformance checks
+passed. Those runs completed before finalization resumed. The complete
+`check.py` gate and AAC quality runs recorded above apply to `e7fde34`; no new
+AAC result or full-gate timing is claimed for this final merge. The completed
+checks were not repeated for this documentation-only wrap-up.
+
+The finalization did not launch the keyboard, touch live learned data, merge
+the PR, or publish a release.
