@@ -421,10 +421,18 @@ class HybridPredictor(QObject):
         Failing open is deliberate and is the same trade
         ``_load_extra_vocabulary`` makes one layer down: this runs during
         construction, and an unreadable data file must not be the reason a
-        keyboard somebody depends on fails to start. The cost of failing
-        open is that the filter silently does nothing, which is why
-        ``getExplicitFilterAvailable`` exists for the UI to say so rather
-        than showing a toggle that quietly governs nothing.
+        keyboard somebody depends on fails to start.
+
+        The cost is that the filter then silently does nothing, and the
+        setting still reads as on. :attr:`explicit_filter_available`
+        reports that, but **nothing in the UI consults it yet**: there is
+        no bridge slot and the toggle has no unavailable state, so today
+        this shows up only in the log. ``passwordDetectionAvailable`` is
+        the pattern to copy when that is wired up. Said plainly here
+        because an earlier version of this docstring claimed a
+        ``getExplicitFilterAvailable`` slot that was never written, which
+        is the same trap as the constructor comment that once named a
+        ``_refresh_fuzzy_frequencies`` that did not exist.
         """
         path = self._ngram.profile.explicit_words
         if path is None:
@@ -890,6 +898,12 @@ class HybridPredictor(QObject):
 
         def on_refined(refined: List[str]):
             self._pending_refinement = False
+            # This path does not go through _finalize_scores, so the
+            # explicit filter has to be applied here too. It is the one
+            # place in the engine that emits a pill row without passing
+            # through that choke point, which is exactly how a second
+            # emit site escapes a filter everybody believes is central.
+            refined = [word for word in refined if not self._explicit_suppressed(word)]
             # Only emit if context hasn't changed
             if context == self._current_context and refined:
                 self.predictionsRefined.emit(refined)

@@ -197,8 +197,8 @@ formats, and dependencies are unchanged.
 
 `PrefixIndex` also uses packed keys, child rows, and top-completion word IDs
 (`packed_prefixes.py`), with mutable personal overlays and at most 4,096
-cached successful lookups. The base vocabulary grows from 18,989 to 83,307:
-64,291 filtered ESDB size-60 words at one base count each, plus 27 curated
+cached successful lookups. The base vocabulary grows from 18,989 to 83,386:
+64,443 ESDB size-60 words at one base count each, plus 27 curated
 care/accessibility/software words at 25 counts. `LanguageProfile.extra_vocabulary`
 owns the extra list. Exact and fuzzy prediction both consult the current base
 after model load without repopulating rejected saved entries or overwriting
@@ -1445,7 +1445,7 @@ Theme picker in settings shows labeled color swatches with mini key previews.
 
 ## Vocabulary
 
-- **Base**: Google 10K wordlist (`data/google-10000-english-usa-no-swears.txt`) + 10K supplement (`data/google-20000-supplement.txt`, filtered for explicit content) + `data/english-expanded.txt`, 64,291 words from SCOWL size 60 by way of the ESDB bundle (permissively licensed, see `data/licenses/ESDB.txt`, pinned by sha256 in `data/english-expanded.manifest`). ~83K total. The SCOWL half enters at **one base count each**, so it supplies coverage without competing with conversational frequencies or reading as personal history. It is a speller's list, which is why it carries explicit content that the curated lists do not: see *Explicit content is filtered from suggestions*.
+- **Base**: Google 10K wordlist (`data/google-10000-english-usa-no-swears.txt`) + 10K supplement (`data/google-20000-supplement.txt`, filtered for explicit content) + `data/english-expanded.txt`, 64,443 words from SCOWL size 60 by way of the ESDB bundle (permissively licensed, see `data/licenses/ESDB.txt`, pinned by sha256 in `data/english-expanded.manifest`). ~83K total. The SCOWL half enters at **one base count each**, so it supplies coverage without competing with conversational frequencies or reading as personal history. It is a speller's list, which is why it carries explicit content that the curated lists do not: see *Explicit content is filtered from suggestions*.
 - **Packs**: No built-ins ship. The system is import-only - see *Vocabulary Packs* section. Imported packs appear as toggles in Settings -> Your Language Model -> Vocabulary Packs.
 - **Numpad**: Toggles between numbers and navigation keys (Home/End/PgUp/PgDn/arrows/Ins/Del) via NumLock. Key 5 is blank in nav mode. Layout mirrors a physical numpad: rows `7 8 9 /`, `4 5 6 *`, `1 2 3 -`, `0(span 2) . +`, `Enter(span 3) NumLock`. NumLock sits at the bottom-right (active highlight uses the theme accent), Enter is the wide bottom-row key. Earlier builds put NumLock on the top row and stretched `+` / Enter as 2-row spans on the right column. The flat 5-row layout was the user's request to match a physical 10-key.
 

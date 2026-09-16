@@ -243,3 +243,53 @@ class TestTheCheckedInListMatchesItsGenerator:
             "data/explicit_words.txt is out of date. "
             "Re-run scripts/gen_explicit_words.py and commit the result."
         )
+
+
+class TestTheRefinementPathIsFilteredToo:
+    def test_a_reranked_suggestion_is_filtered(self, predictor: HybridPredictor) -> None:
+        """The LLM re-ranking path emits without going through
+        ``_finalize_scores``, so it is the one place in the engine that can
+        put a pill on the bar without passing the filter's choke point.
+
+        The path is disabled by default, which is precisely why it needs a
+        test: nothing else exercises it, so the gap would sit there until
+        somebody enabled the feature and found it the hard way.
+        """
+        word = next(w for w in _flagged(predictor) if len(w) > 4)
+        emitted: list[list[str]] = []
+        predictor.predictionsRefined.connect(emitted.append)
+
+        class _Stub:
+            def rerank_async(self, context, candidates, callback, n):
+                callback([word, "hello"])
+
+        predictor._transformer = _Stub()
+        predictor._current_context = "the "
+        predictor._pending_refinement = False
+
+        predictor._refine_async("the ", ["hello"], 5)
+
+        assert emitted, "the refinement path emitted nothing at all"
+        assert word not in [w.lower() for w in emitted[-1]]
+        assert "hello" in emitted[-1]
+
+    def test_it_still_emits_when_the_filter_is_off(self, predictor: HybridPredictor) -> None:
+        """The inverse: a path that had stopped emitting entirely, or a stub
+        that never fired, would satisfy the test above perfectly."""
+        word = next(w for w in _flagged(predictor) if len(w) > 4)
+        emitted: list[list[str]] = []
+        predictor.predictionsRefined.connect(emitted.append)
+        predictor.set_explicit_filter(False)
+
+        class _Stub:
+            def rerank_async(self, context, candidates, callback, n):
+                callback([word, "hello"])
+
+        predictor._transformer = _Stub()
+        predictor._current_context = "the "
+        predictor._pending_refinement = False
+
+        predictor._refine_async("the ", ["hello"], 5)
+
+        assert emitted
+        assert word in [w.lower() for w in emitted[-1]]

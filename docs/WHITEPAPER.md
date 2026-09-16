@@ -141,7 +141,7 @@ The prediction engine is the most novel component of the system and the most sal
 
 For deep design treatments of each, see `architecture/PPM.md`, `architecture/FUZZY_RECOGNITION.md`, and `architecture/HYBRID_MERGING.md`.
 
-Vocabulary scaling work on 2026-09-15 expands the base from 18,989 to 83,307
+Vocabulary scaling work on 2026-09-15 expands the base from 18,989 to 83,386
 words, using a filtered ESDB size-60 spelling list and a small curated set of
 care, accessibility, and software terms. Unranked additions receive one base
 count and never become synthetic personal history. Packed SymSpell and prefix

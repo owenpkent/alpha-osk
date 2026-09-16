@@ -1,5 +1,12 @@
 # Vocabulary memory and Gboard research
 
+> **The figures below were measured on the 64,291-word list.** That list
+> was regenerated on 2026-09-16 to 64,443 words, when content filtering
+> moved out of generation and into a user setting, so the explicit words
+> it had removed came back. The counts here are left as measured rather
+> than restated against a vocabulary they were not run on; the shipped
+> totals are 64,443 and 83,386.
+
 Research date: 2026-09-15. Baseline code: `cb101da`, on
 `feat/vocab-next-release`. Implemented milestones are packed SymSpell, packed
 prefix lookup, bounded n-gram candidate search, and a licensed expansion from
