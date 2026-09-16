@@ -15,16 +15,15 @@ review. That tree is **v1.4.1** (`438cfd3`, the `main` of the day) plus
 `ngram_predictor.py`, `prefix_beam.py` and `fuzzy_recognizer.py`, 963
 insertions and 284 deletions across 20 files.
 
-`87f519a` is an exact identifier and a perishable one, in two ways rather
-than one. The repository squash-merges, so it will not be reachable from a
-fresh clone once #108 lands; and #108's branch has since been revised in
-review and force-pushed, so that commit is already off the branch and the
-pull request's current head describes a different tree. The durable
-identifiers are therefore the tag and the pull request number, and the
-anchor that matters is **v1.4.1**: nothing below turns on the unmerged
-commits, and the three files whose sizes are quoted differ from v1.4.1 by
-one line between them (`keyboard_bridge.py` 5,835 against 5,834; the other
-two identical).
+`87f519a` is an exact identifier and a perished one. It was perishable in
+two ways rather than one: the repository squash-merges, and #108 was also
+revised in review and force-pushed, which took that commit off the branch
+before the merge did. #108 has since landed on `main` as `34f08d8`, so the
+reviewed tree is reachable from no branch at all. The durable identifiers
+are the tag and the pull request number, and the anchor that matters is
+**v1.4.1**: nothing below turns on what was unmerged at the time, and the
+three files whose sizes are quoted differ from v1.4.1 by one line between
+them (`keyboard_bridge.py` 5,835 against 5,834; the other two identical).
 
 This document continues the
 [structural review](../architecture/STRUCTURAL_REVIEW.md) of 1 September
