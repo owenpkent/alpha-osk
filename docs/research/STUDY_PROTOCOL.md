@@ -1,7 +1,7 @@
 # Alpha-OSK User Study Protocol
 
 **Status:** draft, not yet open for enrolment.
-**Version:** 0.1 (2026-09-07).
+**Version:** 0.2 (2026-09-16). Documentation audit; RQ4 deferred and learning-isolation gap recorded before enrolment.
 **Run by:** Owen Kent, the project author. No institutional affiliation, no IRB. See *Ethics posture*.
 
 This document is published **before** anyone enrols, and is versioned in git so that
@@ -44,19 +44,22 @@ reportable rather than avoidable.
 | **RQ1** | How much of the offline keystroke saving is realised in use? | Realised savings (%) against the 49.1 / 50.4% benchmark |
 | **RQ2** | Does prediction increase text entry rate, and by how much? | Entry rate (WPM), prediction on vs off |
 | **RQ3** | What does prediction cost in accuracy and in perceived effort? | Uncorrected error rate; raw NASA-TLX |
-| **RQ4** | Does the benefit depend on pointer precision? | Entry-rate difference regressed on the participant's own measured pointer error |
+| **RQ4** | Deferred: does prediction benefit vary with pointer error? | Not measured by the current harness; requires a validated spatial measure |
 
 RQ1 is the headline. RQ2 is the one with a genuine chance of a null or negative
 result, and section 3 explains why that is the expected outcome rather than a
 disappointing one.
 
-RQ4 exists because the engine has one component, the spatial prefix beam, that the
-whitepaper already reports as **worth nothing on clean input and worth eight to nine
-points of keystroke savings under pointer error**. If that finding is real, the
-benefit should scale with how imprecise the participant's pointing is, and this study
-can check that against real pointers instead of a simulated one. The pointer-bias
-table the app already learns per physical key slot (`src/prediction/pointer_model.py`)
-gives a per-participant precision measure for free, with no extra task.
+RQ4 is motivated by the prefix beam's synthetic slip benchmark, but the current
+study cannot answer it. The learned pointer table stores an observation count and
+summed within-key offsets per reported physical slot. It estimates mean bias, but
+retains no intended-key labels, squared deviations, miss rates or trial-level
+samples. Its magnitude is neither pointer error nor pointer precision.
+
+The trial event schema also records no click coordinates. A future protocol revision
+may restore RQ4 after adding an independent pointing calibration or consented
+per-press spatial capture with a pre-specified error measure. Until then, no
+participant-level regression or subgroup claim about pointer precision will be made.
 
 ## 3. What prior work predicts
 
@@ -74,11 +77,11 @@ The expectation going in should be set by the literature, not by the benchmark.
   for reporting corrected and uncorrected error separately, since a technique can look
   accurate simply because the participant spent the time fixing it.
 
-So the honest prior is: **realised savings well below 49%, and an entry-rate effect
-that may be small, absent, or negative.** If the study returns that, it is a finding,
-and the protocol commits in advance to publishing it as one. The interesting question
-in that case becomes RQ4, whether the benefit is concentrated in the participants
-whose pointing is least precise, which is the population the design is actually for.
+Prior work motivates the possibility of realised savings below simulated KSR and
+an entry-rate effect that is small, absent or negative. Such a result remains
+reportable. Whether benefit is concentrated among participants with less precise
+pointing is a separate, deferred question: this harness does not measure pointer
+error.
 
 ## 4. Candidate designs
 
@@ -91,7 +94,7 @@ is a configuration change and not a rewrite. The recommendation is Design A.
 Counterbalanced blocks of copy typing inside Alpha-OSK, predictions on in one block
 and off in the other. About 25 minutes per participant.
 
-- **Answers** RQ1, RQ2, RQ3 and RQ4 directly, and RQ1 exactly.
+- **Answers** RQ1, RQ2 and RQ3. RQ4 requires additional spatial instrumentation.
 - **Within subjects**, so each participant is their own control. This matters more
   here than in most text-entry work, because motor ability varies enormously between
   participants and a between-subjects design would need a sample this population
@@ -164,29 +167,30 @@ counted as valid.
 
 ### 5.2 Learning must be frozen for the whole session
 
-`HybridPredictor.learn()` has no gate, and the model updates on every completed word.
-Privacy mode is not a substitute: it suppresses learning but also suppresses
-prediction entirely and replaces the pills with "Learning paused", so it changes the
-condition under test.
+`HybridPredictor.frozen_learning()` gates core n-gram/PPM learning,
+selection boosts, token learning and capitalisation learning. `StudyBridge` enters
+that gate for the session and releases it on exit. This reduces the risk that one
+block trains the language model used to score the next.
 
-Without a freeze, the prediction-on block trains the model that the same block is
-being scored on, and the effect is order dependent: a participant whose on-block runs
-second is typing against a model that the off block has already fed. Counterbalancing
-spreads that across the group but does not remove it from any individual, and it
-inflates the on condition specifically.
+It is a partial mutation gate, not a snapshot-and-restore transaction.
+`observe_press()` does not check it, so click offsets can still update the persisted
+pointer-bias table. `record_typed_word()` also bypasses it: completed words update
+blacklist rehabilitation counts and can unblacklist a word. Ordinary bridge analytics
+continue to advance. Releasing the gate does not undo those changes. The implementation therefore does
+not yet meet this protocol's requirement that all learned state remain fixed and
+that ending or withdrawing from a session leave the participant's state untouched.
 
-**Requirement:** a study session freezes all model mutation at entry and restores it
-on exit, so both blocks are scored against a byte-identical model. The freeze must
-cover the n-gram tables, the pointer-bias model, the capitalisation table, the token
-store and the analytics counters. The participant's own model must be untouched when
-the session ends, both because contaminating a real user's model to run a study on
-them is not acceptable, and because a participant may withdraw and their data has to
-be removable without leaving residue.
+**Pre-enrolment requirement:** isolate every persistent predictor mutation path,
+including pointer learning and blacklist rehabilitation, plus analytics. Verify
+normal completion, withdrawal and exception paths.
+Recruitment remains closed pending that work. This documentation correction does
+not implement it or change the consent or export schema.
 
-**Consequence to state in the paper:** freezing learning measures the engine as a
-participant meets it on day one, with a cold personal model. That understates what a
-long-term user gets, since the whitepaper's own personalisation figures show the model
-improving with use. The study measures first-contact benefit, and should say so.
+Once isolation is implemented, the study measures prediction against the
+participant's model state at session entry. That state is not necessarily cold:
+prior personalisation can differ across participants. It is a first-contact study
+only if a fresh model is separately required and verified. The whitepaper's
+in-domain text-exposure experiment does not establish longitudinal user benefit.
 
 ### 5.3 The trial types into a recorder, not into an application
 
@@ -294,7 +298,9 @@ anxiety grounds, and an observer changes how people type.
    between a familiar and an unfamiliar interface. Practice trials are recorded and
    marked, never silently dropped.
 5. **Blocks.** Two blocks of 10 scored phrases, order counterbalanced across
-   participants. Learning frozen throughout (see 5.2).
+   participants. Core n-gram/PPM, token and capitalisation learning are gated;
+   pointer, blacklist rehabilitation and analytics isolation remain pre-enrolment
+   requirements (see 5.2).
 6. **Raw TLX** after each block.
 7. **Break between blocks**, participant-controlled, with no timer and no prompt to
    hurry. The session may be **resumed on another day**: block boundaries are the
@@ -340,7 +346,7 @@ These are two separate things and the documentation keeps them separate.
 | Consent | Installer checkbox (ticked by default since 2026-09-08, on a page that shows the payload) or Settings | Full consent form in the app |
 | Data | Ten lifetime counters, weekly | Per-trial timing and text |
 | Sample | Anyone who opts in | 12 to 20 recruited participants |
-| Answers | Sustained use at scale, RQ-adjacent | RQ1 to RQ4 directly |
+| Answers | Sustained use at scale, RQ-adjacent | RQ1 to RQ3; RQ4 deferred |
 
 Telemetry is the closest thing to Design C, at a much larger sample and much lower
 cost, which is the main reason Design C is not recommended as a standalone study. Its
@@ -367,10 +373,10 @@ multiplicity correction across RQ2 and RQ3, because these are pre-specified sepa
 questions rather than a family of tests hunting for one; that choice is stated here
 rather than defended afterwards.
 
-**RQ4.** Entry-rate difference regressed on the participant's own pointer imprecision,
-taken from the learned pointer-bias table. With n under 20 this is **exploratory and
-labelled as such**, and reported as a scatter plot with a fitted line and its interval
-rather than as a coefficient with a p-value.
+**RQ4.** Not analysed in protocol version 0.2. The pointer table is a prediction-state
+mean, not a validated measure of pointer error, and trial events retain no spatial
+samples. A later analysis requires a protocol amendment published before enrolment
+that defines capture, metrics, exclusions and analysis independently of the data.
 
 **Order effects** are checked by including block order as a factor and reported
 whether or not they are significant.
@@ -429,8 +435,12 @@ submitted.
 
 ## 14. Deviations from protocol
 
-None yet. Every change after the first participant enrols gets an entry here with the
-date, what changed and why, and the git history is the audit trail.
+No post-enrolment deviations: enrolment remains closed. Version 0.2 (16 September
+2026) corrects the interpretation of pointer means, defers RQ4, and records the
+remaining pointer, blacklist rehabilitation and analytics isolation requirements. See
+[AAC benchmark evidence and plan](AAC_BENCHMARK_EVIDENCE.md). Every change after the
+first participant enrols will record its date and reason here; git preserves the
+audit trail.
 
 ## 15. What gets published
 
@@ -455,7 +465,7 @@ the number used in analysis are the same number.
 | Conditions, counterbalancing, block state (4, 8) | `src/study/session.py` |
 | Consent state, participant code, resume (8, 12) | `src/study/config.py` |
 | Bar reserved but empty (5.1) | study mode in `qml/Main.qml`, asserted by the harness |
-| Learning freeze and restore (5.2) | `HybridPredictor` freeze gate, entered by `session.py` |
+| Partial model-mutation gate (5.2); full state isolation pending | `HybridPredictor.frozen_learning`, entered by `src/study_bridge.py` |
 | Submission bundle and review-before-send (12) | `src/study/export.py` |
 | QML surface | `src/study_bridge.py`, `qml/components/StudyWindow.qml` |
 
