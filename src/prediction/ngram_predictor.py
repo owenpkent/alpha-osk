@@ -108,6 +108,12 @@ class _VersionedCounts(dict[str, int]):
         return self
 
 
+#: Validated extra-vocabulary words, keyed on the file and the profile
+#: rules that validate it. One entry: in practice a process runs one
+#: language profile, and an entry holds 64,000 strings.
+_EXTRA_VOCABULARY_CACHE: Dict[Tuple[object, ...], Tuple[str, ...]] = {}
+
+
 class NgramPredictor:
     """
     N-gram based predictor for instant word suggestions.
@@ -1086,6 +1092,77 @@ class NgramPredictor:
         """
         return word in self.unigrams or word in self._base_unigrams or word in self._corpus_unigrams
 
+    def _validated_extra_words(self) -> Tuple[str, ...]:
+        """The wordlist, parsed and validated, shared across instances.
+
+        Validation is re-run on load rather than trusted from the
+        generator, the same rule the token store follows: the file can be
+        hand-edited, or arrive in an imported archive, and the generator's
+        guarantees say nothing about the bytes actually on disk. But the
+        work is a pure function of the file and the profile's rules, so
+        every instance after the first was redoing it: about 125 ms and a
+        per-character scan of 64,000 words, on every construction, which is
+        roughly 1,300 times in the test suite.
+
+        The key covers everything the validation reads, including the
+        file's mtime and size, so an edited file is re-validated rather
+        than served from the cache.
+
+        **The taught-acronym override is why this takes a guard rather
+        than an ordering assumption.** ``_is_plausible_word`` can admit a
+        word it would otherwise reject through ``is_taught_acronym``, which
+        reads ``taught_capitalization``. Note which table that is: proper
+        nouns fill ``capitalization`` and leave ``taught_capitalization``
+        empty, and only ``load`` and ``learn_capitalization`` add to it,
+        both of which run after this. So the set is empty here today on
+        both call paths, and the two paths do not even agree on their
+        order: the constructor loads proper nouns first, ``clear_user_data``
+        loads them last. Rather than depend on any of that, an instance
+        that already has a taught acronym skips the cache and does the full
+        pass, so reordering can cost time but cannot cost correctness.
+        """
+        path = self.profile.extra_vocabulary
+        if path is None:
+            return ()
+
+        if self.taught_capitalization:
+            return self._parse_extra_words(path)
+
+        stat = path.stat()
+        key = (
+            str(path),
+            stat.st_mtime_ns,
+            stat.st_size,
+            self.profile.word_re.pattern,
+            frozenset(self.profile.short_words),
+            frozenset(self.profile.vowels),
+            frozenset(self.profile.semivowels),
+        )
+        cached = _EXTRA_VOCABULARY_CACHE.get(key)
+        if cached is not None:
+            return cached
+
+        words = self._parse_extra_words(path)
+        _EXTRA_VOCABULARY_CACHE.clear()  # one profile per process in practice
+        _EXTRA_VOCABULARY_CACHE[key] = words
+        return words
+
+    def _parse_extra_words(self, path: Path) -> Tuple[str, ...]:
+        """Read and validate the wordlist. See :meth:`_validated_extra_words`."""
+        words: List[str] = []
+        with path.open(encoding="utf-8") as source:
+            for line in source:
+                word = line.strip().lower()
+                if (
+                    not word
+                    or word.startswith("#")
+                    or not self.profile.word_re.fullmatch(word)
+                    or not self._is_plausible_word(word)
+                ):
+                    continue
+                words.append(word)
+        return tuple(words)
+
     def _load_extra_vocabulary(self) -> None:
         """Add the profile's unranked vocabulary to the base prior only.
 
@@ -1102,27 +1179,27 @@ class NgramPredictor:
         of construction. Failing the other way costs a smaller vocabulary,
         which is what a fresh install has anyway.
         """
-        path = self.profile.extra_vocabulary
-        if path is None:
+        if self.profile.extra_vocabulary is None:
             return
         try:
-            with path.open(encoding="utf-8") as source:
-                for line in source:
-                    word = line.strip().lower()
-                    if (
-                        not word
-                        or word.startswith("#")
-                        or not self.profile.word_re.fullmatch(word)
-                        or not self._is_plausible_word(word)
-                        or word in self._base_unigrams
-                    ):
-                        continue
-                    self._base_unigrams[word] = 1
-                    self._base_total += 1
-                    self.unigrams[word] += 1
-                    self.total_words += 1
+            words = self._validated_extra_words()
         except Exception:  # noqa: BLE001 - see the docstring
-            _logger.warning("Could not load extra vocabulary %s; continuing without it", path)
+            _logger.warning(
+                "Could not load extra vocabulary %s; continuing without it",
+                self.profile.extra_vocabulary,
+            )
+            return
+
+        # The membership test stays per instance: what is already known
+        # depends on the saved model and on which packs are enabled, so it
+        # is not a property of the file.
+        for word in words:
+            if word in self._base_unigrams:
+                continue
+            self._base_unigrams[word] = 1
+            self._base_total += 1
+            self.unigrams[word] += 1
+            self.total_words += 1
 
     def vocabulary(self) -> Set[str]:
         """Every word the model knows: merged table, base table and corpus prior."""

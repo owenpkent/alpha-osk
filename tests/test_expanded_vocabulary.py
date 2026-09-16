@@ -135,3 +135,71 @@ def test_a_missing_wordlist_is_simply_absent(tmp_path: Path) -> None:
 
     assert predictor.predict("th", 3)
     assert "caregiver" not in predictor._base_unigrams
+
+
+def test_the_validated_wordlist_is_shared_between_instances(tmp_path: Path) -> None:
+    """Two predictors over the same file validate it once.
+
+    The cache is why construction is not 125 ms of re-parsing on every one
+    of the suite's ~1,300 predictors.
+    """
+    from src.prediction import ngram_predictor as module
+
+    extra = tmp_path / "extra.txt"
+    extra.write_text("caregiver\ndystrophy\n", encoding="utf-8")
+    profile = replace(ENGLISH, extra_vocabulary=extra)
+
+    module._EXTRA_VOCABULARY_CACHE.clear()
+    first = NgramPredictor(profile=profile)
+    entries_after_first = len(module._EXTRA_VOCABULARY_CACHE)
+    second = NgramPredictor(profile=profile)
+
+    assert entries_after_first == 1
+    assert len(module._EXTRA_VOCABULARY_CACHE) == 1
+    assert first._base_unigrams["caregiver"] == second._base_unigrams["caregiver"]
+
+
+def test_an_edited_wordlist_is_revalidated(tmp_path: Path) -> None:
+    """The near-miss: a cache ignoring mtime and size would serve the old
+    contents after an edit, which is how a stale generated file silently
+    outlives its regeneration."""
+    from src.prediction import ngram_predictor as module
+
+    extra = tmp_path / "extra.txt"
+    extra.write_text("caregiver\n", encoding="utf-8")
+    profile = replace(ENGLISH, extra_vocabulary=extra)
+
+    module._EXTRA_VOCABULARY_CACHE.clear()
+    before = NgramPredictor(profile=profile)
+    assert "dystrophy" not in before._base_unigrams
+
+    extra.write_text("caregiver\ndystrophy\n", encoding="utf-8")
+    after = NgramPredictor(profile=profile)
+
+    assert "dystrophy" in after._base_unigrams
+
+
+def test_a_populated_capitalisation_table_bypasses_the_cache(tmp_path: Path) -> None:
+    """The guard that removes an ordering assumption.
+
+    ``_is_plausible_word`` can admit a word through ``is_taught_acronym``,
+    which reads ``taught_capitalization``. Which table matters: proper
+    nouns fill ``capitalization`` and leave this one empty, so guarding on
+    the wrong one bypasses the cache on every construction and the caching
+    silently does nothing. That is what this test caught.
+    """
+    from src.prediction import ngram_predictor as module
+
+    extra = tmp_path / "extra.txt"
+    extra.write_text("caregiver\n", encoding="utf-8")
+    profile = replace(ENGLISH, extra_vocabulary=extra)
+
+    module._EXTRA_VOCABULARY_CACHE.clear()
+    predictor = NgramPredictor(profile=profile)
+    predictor.taught_capitalization.add("pr")
+
+    module._EXTRA_VOCABULARY_CACHE.clear()
+    words = predictor._validated_extra_words()
+
+    assert words == ("caregiver",)
+    assert not module._EXTRA_VOCABULARY_CACHE, "a populated table must not fill the cache"
