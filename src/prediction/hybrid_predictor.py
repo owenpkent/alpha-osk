@@ -200,6 +200,10 @@ class HybridPredictor(QObject):
         # the ~1.5 s this constructor took, paid on every launch, and on
         # every one of the ~1300 tests that builds a bridge.
         self._fuzzy.set_frequencies(self._fuzzy_frequencies())
+        # Build the packed prefix index now rather than on the first typed
+        # prefix: it is the same work either way, and paying it here keeps
+        # it off the keystroke path, where a stall is felt.
+        self._fuzzy.prepare_prefix_index()
 
         # Initialize vocabulary pack manager
         self._pack_manager = PackManager()
@@ -979,7 +983,7 @@ class HybridPredictor(QObject):
         in the merged table, and a rebuild that walked only that table
         would leave every corpus-only word out of the fuzzy dictionary.
         """
-        return {word: self._fuzzy_frequency(word) for word in self._ngram.vocabulary()}
+        return {word: self._fuzzy_frequency(word) for word in self._ngram.vocabulary_ordered()}
 
     def _rebuild_fuzzy_dictionary(self) -> None:
         """Rebuild the fuzzy dictionary from scratch after the vocabulary shrank.
@@ -993,6 +997,7 @@ class HybridPredictor(QObject):
         self._fuzzy.reset_dictionary()
         self._fuzzy.load_dictionary(self._ngram.profile.dictionary)
         self._fuzzy.set_frequencies(self._fuzzy_frequencies())
+        self._fuzzy.prepare_prefix_index()
 
     def learn_word(self, word: str) -> None:
         """Learn a single word (e.g., when user types it)."""
