@@ -306,7 +306,16 @@ Window {
         // Copying is what this window is for, so every open starts
         // there; manage mode is an errand, not a preference.
         manageMode = false
-        if (keyboard) keyboard.setEditMode(false)
+        // "snippets" is a no-op here unless this window itself still
+        // holds edit mode (e.g. returning from the editor). It used to
+        // be an unconditional setEditMode(false), which is the defect
+        // this owner scheme exists to fix: opening the Snippets list
+        // while the prediction-edit popup was still showing cut that
+        // popup's routing out from under it with no warning, so the
+        // next OSK keystroke went to the app behind the keyboard
+        // instead of the still-open popup. endEditSession only clears
+        // the mode when this window is the one that set it.
+        if (keyboard) keyboard.endEditSession("snippets")
         refresh()
         // Restore where the user last left it, clamped back
         // on-screen in case the display layout changed since. Only
@@ -345,12 +354,12 @@ Window {
         closeMenu()
         editingIndex = idx
         editIdentity = identityOf(idx)
-        if (keyboard) keyboard.setEditMode(true)
+        if (keyboard) keyboard.beginEditSession("snippets")
         snipValueField.forceActiveFocus()
     }
 
     function endEdit() {
-        if (keyboard) keyboard.setEditMode(false)
+        if (keyboard) keyboard.endEditSession("snippets")
         editingIndex = -1
         editIdentity = ""
     }
@@ -374,7 +383,7 @@ Window {
     }
 
     onVisibleChanged: {
-        if (!visible && keyboard) keyboard.setEditMode(false)
+        if (!visible && keyboard) keyboard.endEditSession("snippets")
     }
 
     // While the editor is open, OSK key presses are short-
@@ -407,8 +416,29 @@ Window {
                 snippetsWindow.endEdit()
         }
 
+        // Another surface (the prediction popup, the key-action editor)
+        // claimed edit mode while this window's own editor was showing.
+        // Return to the list rather than sit open with nothing routing
+        // to its fields -- the takeover already moved the keystrokes
+        // elsewhere, so leaving the editor up would silently go stale.
+        // This is in the same block as onSnippetsChanged above (not a
+        // separate, ownership-gated one) because this block's own
+        // `enabled` depends only on `visible`, never on `editOwner`, so
+        // there is no race between disabling the block and this handler
+        // running off the very signal that would disable it.
+        function onEditOwnerChanged(owner) {
+            if (snippetsWindow.editingIndex >= 0 && owner !== "" && owner !== "snippets")
+                snippetsWindow.endEdit()
+        }
+
         function onEditKeyTyped(ch) {
-            if (snippetsWindow.editingIndex < 0) return
+            // The ownership half of this guard matters as much as the
+            // editingIndex half: without it, a keystroke sent while
+            // another surface (the prediction popup, say) owns edit mode
+            // would still land here as long as this window's own editor
+            // happened to be showing, which is exactly the double-insert
+            // this owner scheme exists to prevent.
+            if (snippetsWindow.editingIndex < 0 || keyboard.editOwner !== "snippets") return
             var f = snippetsWindow.activeField()
             if (f.selectedText)
                 f.remove(f.selectionStart, f.selectionEnd)
@@ -416,7 +446,7 @@ Window {
         }
 
         function onEditSpecialPressed(name) {
-            if (snippetsWindow.editingIndex < 0) return
+            if (snippetsWindow.editingIndex < 0 || keyboard.editOwner !== "snippets") return
             var f = snippetsWindow.activeField()
             if (applyEditChord(f, name)) return
             var pos = f.cursorPosition
