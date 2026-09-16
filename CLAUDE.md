@@ -185,12 +185,19 @@ at the moment it was right: `don` put `don't` at the top, and the `'` cleared
 it one click short of the word; `i'` discarded `I'm` / `I'll` / `I'd` / `I've`,
 which are the entire reason to type an apostrophe there. That is the same
 oversight the digit had, and which the comment at that call site already
-describes. `_continues_a_word` is the gate now: letters always, plus `'` and
-`_` when there are letters in front of them (a leading one carries no prefix,
-so asking costs a round trip and returns nothing). It is deliberately a
-separate question from the word-character rule in `_press_char` that decides
-what `_current_word` keeps: that one says what a word is made of, this one says
-whether the run so far is worth asking about.
+describes. `_continues_a_word` is the gate now: letters always, plus `'` when
+there are letters in front of it (a leading one carries no prefix, so asking
+costs a round trip and returns nothing). It is deliberately a separate question
+from the word-character rule in `_press_char` that decides what `_current_word`
+keeps: that one says what a word is made of, this one says whether the run so
+far is worth asking about. **The underscore is deliberately not in the gate**,
+although `_press_char` keeps it in the word so `snake_case` stays one token: the
+tokenizer keeps letters and apostrophes only, so after `snake_` the model
+predicts from `snake` while the typed run is `snake_`, every pill is an exact
+completion of a prefix that discards a typed character, and tapping `snake`
+called `replace_text(6, "snake ")`, removing the underscore just typed. Until
+the tokenizer and the gate agree on it, an underscore clears the bar as it
+always did (`TestTypingTheApostropheKeepsTheBar::test_an_underscore_still_clears_the_bar`).
 
 Measured on the held-out AAC corpora, counting every contraction occurrence and
 typing it the way a user of this keyboard does (no apostrophe), the word is

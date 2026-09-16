@@ -3436,12 +3436,10 @@ class KeyboardBridge(QObject):
     def _continues_a_word(self, char: str) -> bool:
         """Does this keystroke leave a run the word engine can complete?
 
-        Letters always do.  The apostrophe and the underscore are word
-        characters too, the same set `_press_char` keeps in
-        `_current_word` so that "don't" and "snake_case" stay single
-        tokens, but only *inside* a word: a leading one carries no prefix
-        of its own, so asking the engine about it buys nothing and costs a
-        round trip on the keystroke path.
+        Letters always do, and so does an apostrophe *inside* a word: a
+        leading one carries no prefix of its own, so asking the engine
+        about it buys nothing and costs a round trip on the keystroke
+        path.
 
         The apostrophe is the half that was missing.  Typing "don" offers
         "don't" at the top of the bar, and the `'` used to blank the bar
@@ -3452,10 +3450,20 @@ class KeyboardBridge(QObject):
         question from the word-character rule in `_press_char`: that one
         decides what `_current_word` keeps, this one decides whether the
         run so far is worth asking about.
+
+        The underscore is deliberately NOT here, although `_press_char`
+        keeps it in `_current_word` so that "snake_case" stays one token.
+        The word tokenizer keeps letters and apostrophes only, so after
+        "snake_" the model predicts from "snake" while the typed run is
+        "snake_": every pill is then an exact completion of a prefix
+        produced by discarding a typed character, and tapping "snake"
+        called `replace_text(6, "snake ")`, which removed the underscore
+        the user had just typed.  Until the tokenizer and this rule agree
+        on the underscore, it clears the bar as it always did.
         """
         if char.isalpha():
             return True
-        return char in ("'", "_") and any(c.isalpha() for c in self._current_word)
+        return char == "'" and any(c.isalpha() for c in self._current_word)
 
     def _in_token_context(self) -> bool:
         """Is the run before the cursor a structured token in progress?
