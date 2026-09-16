@@ -28,6 +28,21 @@ Item {
     property bool isLocked: false
     property bool isWide: false
 
+    // ===== External switch-scanning target (see docs/architecture/UIA_TARGETS.md) =====
+    //
+    // `targetId` is this key's AutomationId, and setting it is what puts the
+    // key in the UI Automation tree an external scanner walks.  A key that
+    // leaves it empty is `Accessible.ignored` and so is absent from that tree
+    // rather than present and unactivatable, which is the property the
+    // contract rests on: presence means invokable.  Callers own the id, since
+    // only they know which section and slot the key occupies.
+    property string targetId: ""
+
+    // Whether this key reports a toggle state to a scanner.  Modifiers and
+    // the lock-style toggles (Caps, NumLock) do; a letter does not, and
+    // claiming otherwise would tell a scanner a letter can be "on".
+    property bool isToggleTarget: false
+
     // How far the hit area reaches past the keycap's own slot, per
     // axis, in pixels.  The gap between two caps is otherwise dead: a
     // click landing in it types nothing and shows nothing, and unlike a
@@ -194,6 +209,16 @@ Item {
     // user's systematic offset.  Auto-repeat re-reads the same values.
     property real pressDx: 0
     property real pressDy: 0
+    // Whether the values above describe a real press.  They persist from the
+    // last click on this key, so an Invoke that left them alone handed the
+    // bridge the coordinates of a click that did not happen: they reached the
+    // live fuzzy position for the character AND `observe_press`, so a mixed
+    // scanner-and-mouse user had their learned pointer bias taught from
+    // clicks nobody made.  Zeroing them is not the fix either, since that
+    // trains an artificial dead-centre click.  False means "no pointer
+    // sample": the character resolves to the key centre for this keystroke
+    // and contributes nothing to the pointer model.
+    property bool pressFromPointer: true
 
     width: keyWidth
     height: keyHeight
@@ -278,6 +303,83 @@ Item {
         }
     }
 
+    // ===== What an external switch scanner sees =====
+    //
+    // Verified against a live UIA client rather than taken from the docs:
+    // `Accessible.id` becomes the AutomationId, `Accessible.description`
+    // becomes FullDescription (NOT HelpText, which stays empty), and
+    // `checkable` becomes a TogglePattern.  Invoke reaches `onPressAction`
+    // without the window taking focus, which is what lets this work at all on
+    // a WS_EX_NOACTIVATE window.
+    // A scanner may *speak* this name, so it cannot just be the keycap.
+    // Measured on the shipped qwerty layout: the space bar's cap is the empty
+    // string, and Backspace, Win and the four arrows are glyphs with no
+    // spoken form, so a scanner would have announced seven unlabelled or
+    // unpronounceable targets including the most-pressed key on the board.
+    //
+    // So: strip anything outside printable ASCII from the cap, and fall back
+    // to `keyText` when nothing survives.  Every caller already sets keyText
+    // to the key's own word ("space", "backspace", "up"), because that is
+    // what gets sent, so this needs no per-key table and no upkeep.  A
+    // non-ASCII key that genuinely types its own glyph (the symbol layers'
+    // currency and maths signs, an accented letter) falls back to keyText,
+    // which for those is the character itself, so it keeps its own name.
+    // The strip is also what turns "⇧ Shift" into "Shift".
+    readonly property string _scanName: {
+        var shown = (keyRoot.displayText || "").replace(/[^\x20-\x7E]/g, "").trim()
+        return shown !== "" ? shown : (keyRoot.keyText || "")
+    }
+
+    // UI Automation has no vocabulary for "held until released", so the third
+    // modifier state rides in the description as a documented token.  It
+    // doubles as a sensible screen-reader announcement ("Shift, locked"),
+    // which is why it is a real word rather than a code.
+    readonly property string _scanDescription:
+        (keyRoot.isToggleTarget && keyRoot.isLocked) ? "locked" : ""
+    readonly property bool _scanChecked: keyRoot.isToggleTarget && keyRoot.isActive
+    // A keyboard the user has put away offers nothing to activate.  While
+    // its window is minimized every key leaves the tree, and an Invoke on an
+    // element a scanner is still holding does nothing (see
+    // activateFromAssistiveClient), so "presence means activatable" holds
+    // across a minimize and nothing types through a keyboard that is not on
+    // screen.  Windows keeps a minimized window's elements in the tree and
+    // reports them onscreen, which is why this cannot be left to Qt.
+    readonly property bool _scanWindowShown:
+        Window.visibility !== Window.Minimized && Window.visibility !== Window.Hidden
+    // The window is not the only thing that can take a key off the screen.
+    // The numpad, the navigation cluster and both function rows are hidden
+    // with `visible: false` on the panel, which leaves every delegate inside
+    // alive; a client that retained one of their targets, or whose visibility
+    // check raced the panel closing, could Invoke it and type a key that is
+    // not on screen.  `Item.visible` is the effective value (Qt Quick
+    // propagates a false parent down), so this is the one test that covers
+    // the window, the panel and the key.  `enabled` joins it because the
+    // contract says presence means activatable, and the numpad's centre key
+    // is blank and disabled with NumLock off.
+    //
+    // It gates the accessible presence AND the activation, and it has to be
+    // both: removing a key from a fresh traversal does nothing to an
+    // interface a scanner is already holding.
+    readonly property bool _scanActivatable:
+        keyRoot._scanWindowShown && keyRoot.visible && keyRoot.enabled
+    readonly property bool _scanIgnored: keyRoot.targetId === "" || !keyRoot._scanActivatable
+
+    // Every binding below is a bare pass-through of a named property above,
+    // and that is deliberate rather than incidental.  PySide cannot read an
+    // attached `Accessible.*` property at all (QQmlProperty reports it
+    // invalid), so this block is the one part of the contract the headless
+    // tests cannot see.  Keeping it free of logic puts all the logic where
+    // the tests can reach it, and leaves this layer able to break only by
+    // being deleted outright.  Do not inline an expression here.
+    Accessible.role: Accessible.Button
+    Accessible.ignored: keyRoot._scanIgnored
+    Accessible.name: keyRoot._scanName
+    Accessible.id: keyRoot.targetId
+    Accessible.checkable: keyRoot.isToggleTarget
+    Accessible.checked: keyRoot._scanChecked
+    Accessible.description: keyRoot._scanDescription
+    Accessible.onPressAction: keyRoot.activateFromAssistiveClient()
+
     // ===== Press lifecycle =====
     //
     // Split out of the MouseArea because a press can end through more than
@@ -309,6 +411,39 @@ Item {
         ripple.width = 0
         ripple.opacity = 0
         rippleAnim.start()
+    }
+
+    // An external scanner activating this key through UI Automation Invoke.
+    //
+    // Deliberately NOT `_activate()`: that arms the repeat timer for the keys
+    // that opted in, and a scanner has no release to stop it with, so a single
+    // Invoke on Backspace would repeat until the safety timer fired.  One
+    // keystroke, every time.  It goes through `_acceptPress()` for the same
+    // reason a click does, so "behaves like a primary click" stays true of the
+    // debounce as well as the keystroke.
+    //
+    // The flash is not decoration.  A switch user is looking at the keyboard
+    // rather than at the text field, and without it the only feedback that a
+    // scan selection landed is a character appearing somewhere else on screen.
+    function activateFromAssistiveClient() {
+        if (!keyRoot._scanActivatable)
+            return
+        if (!keyRoot._acceptPress())
+            return
+        // No pointer was involved, so the offsets from whatever was last
+        // clicked here must not travel with this keystroke.  See
+        // `pressFromPointer`.
+        keyRoot.pressFromPointer = false
+        keyRoot._visualPressed = true
+        invokeFlashTimer.restart()
+        keyRoot.keyPressed()
+    }
+
+    Timer {
+        id: invokeFlashTimer
+        interval: 120
+        repeat: false
+        onTriggered: keyRoot._visualPressed = false
     }
 
     // Type once, then arm auto-repeat if this key opted in.  Character keys
@@ -524,6 +659,7 @@ Item {
             var capX = mouse.x - keyRoot.hitMarginH
             var capY = mouse.y - keyRoot.hitMarginV
             keyRoot._pressVisual(capX, capY)
+            keyRoot.pressFromPointer = true
             keyRoot.pressDx = keyRoot.width > 0 ? capX / keyRoot.width - 0.5 : 0
             keyRoot.pressDy = keyRoot.height > 0 ? capY / keyRoot.height - 0.5 : 0
 

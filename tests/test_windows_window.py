@@ -15,6 +15,9 @@ from unittest.mock import MagicMock
 import pytest
 
 from src.platform.windows_window import (
+    SW_SHOWNOACTIVATE,
+    WM_QUERYOPEN,
+    QuietRestoreFilter,
     apply_extended_styles,
     set_app_user_model_id,
     surface_existing_instance,
@@ -337,3 +340,116 @@ def test_module_imports_cleanly() -> None:
     inside a function body, guarded by the platform check above, so the
     module has to be importable on every OS with no side effects."""
     import src.platform.windows_window  # noqa: F401
+
+
+class TestRestoringTheKeyboardLeavesTheForegroundAlone:
+    """Qt restores a minimized window with the activating form of
+    ``ShowWindow``, and on this keyboard the tray's restore code, a UI
+    Automation client's restore and a plain
+    ``ShowWindow(SW_RESTORE)`` from another process all left it in the
+    foreground, so the next keystroke went to the keyboard instead of the
+    application the user was typing into. ``QuietRestoreFilter`` declines
+    the ``WM_QUERYOPEN`` each of those sends and restores without
+    activating. Whether Windows then leaves the foreground alone was
+    measured against a live client; what is held here is the decision the
+    filter makes, message by message. Each case is paired with the one it
+    must leave alone."""
+
+    HWND = 0x1234
+
+    def _filter(self):
+        window = MagicMock()
+        window.winId.return_value = self.HWND
+        shown: list = []
+        deferred: list = []
+        flt = QuietRestoreFilter(
+            window,
+            show_window=lambda hwnd, cmd: shown.append((hwnd, cmd)),
+            defer=deferred.append,
+        )
+        return flt, shown, deferred
+
+    def test_a_restore_of_the_keyboard_is_declined(self) -> None:
+        flt, _, _ = self._filter()
+        assert flt.declines(self.HWND, WM_QUERYOPEN) is True
+
+    def test_and_redone_without_activating(self) -> None:
+        flt, shown, deferred = self._filter()
+        flt.declines(self.HWND, WM_QUERYOPEN)
+        assert shown == [], "the restore must wait until Windows has had its answer"
+        for fn in deferred:
+            fn()
+        assert shown == [(self.HWND, SW_SHOWNOACTIVATE)]
+
+    def test_its_own_restore_is_let_through(self) -> None:
+        """Without this the keyboard declined its own restore in a loop,
+        measured at 409 declines, and never came back."""
+        flt, _, deferred = self._filter()
+        answers: list = []
+
+        def show_window(hwnd, cmd):
+            answers.append(flt.declines(hwnd, WM_QUERYOPEN))
+
+        flt._show_window = show_window
+        flt.declines(self.HWND, WM_QUERYOPEN)
+        # A snapshot, not the live list: a filter that declined its own
+        # restore would keep appending to it, and this would loop for ever
+        # rather than fail.
+        for fn in list(deferred):
+            fn()
+        assert answers == [False]
+        assert len(deferred) == 1, "the keyboard's own restore was declined and requeued"
+
+    def test_a_later_restore_is_declined_again(self) -> None:
+        flt, _, deferred = self._filter()
+        flt.declines(self.HWND, WM_QUERYOPEN)
+        for fn in deferred:
+            fn()
+        assert flt.declines(self.HWND, WM_QUERYOPEN) is True
+
+    def test_another_window_is_left_alone(self) -> None:
+        """The dashboard is allowed to take focus; this is the keyboard's rule."""
+        flt, _, deferred = self._filter()
+        assert flt.declines(0x9999, WM_QUERYOPEN) is False
+        assert deferred == []
+
+    def test_every_other_message_is_left_alone(self) -> None:
+        flt, _, deferred = self._filter()
+        for message in (0x0000, 0x0006, 0x0010, 0x0046, 0x0112):
+            assert flt.declines(self.HWND, message) is False
+        assert deferred == []
+
+    def test_a_window_without_a_handle_declines_nothing(self) -> None:
+        flt, _, _ = self._filter()
+        flt._window.winId.side_effect = RuntimeError("no native window")
+        assert flt.declines(self.HWND, WM_QUERYOPEN) is False
+
+    def test_the_native_message_is_read_from_the_msg_it_was_handed(self) -> None:
+        """``nativeEventFilter`` receives a pointer to a Windows ``MSG``,
+        and a wrong field offset would silently decline nothing."""
+        import ctypes
+
+        class MSG(ctypes.Structure):
+            _fields_ = [
+                ("hwnd", ctypes.c_void_p),
+                ("message", ctypes.c_uint),
+                ("wParam", ctypes.c_size_t),
+                ("lParam", ctypes.c_ssize_t),
+                ("time", ctypes.c_ulong),
+                ("pt_x", ctypes.c_long),
+                ("pt_y", ctypes.c_long),
+            ]
+
+        if ctypes.sizeof(ctypes.c_void_p) != 8:
+            pytest.skip("the offset is for 64-bit Windows, which is what ships")
+        flt, _, _ = self._filter()
+        restore = MSG(hwnd=self.HWND, message=WM_QUERYOPEN)
+        other = MSG(hwnd=self.HWND, message=0x0010)
+        assert flt.nativeEventFilter(b"windows_generic_MSG", ctypes.addressof(restore)) == (
+            True,
+            0,
+        )
+        assert flt.nativeEventFilter(b"windows_generic_MSG", ctypes.addressof(other)) == (
+            False,
+            0,
+        )
