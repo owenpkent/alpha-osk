@@ -2,6 +2,7 @@
 
 import json
 from dataclasses import replace
+from pathlib import Path
 
 from src.prediction.hybrid_predictor import HybridPredictor
 from src.prediction.language import ENGLISH
@@ -100,3 +101,37 @@ def test_release_dictionary_covers_care_and_software_without_personal_learning()
         assert predictor._is_plausible_word(word)
     assert predictor._base_total == sum(predictor._base_unigrams.values())
     assert predictor._user_total == sum(predictor.user_vocab.values()) == 0
+
+
+def test_a_corrupt_wordlist_does_not_stop_the_keyboard_starting(tmp_path: Path) -> None:
+    """The loader runs inside ``__init__``, so it must swallow everything.
+
+    Bytes that are not UTF-8 raise ``UnicodeDecodeError``, which is a
+    ``ValueError`` and not an ``OSError``, so the original ``except
+    OSError`` let it out of the constructor. A user whose only input
+    device is this keyboard cannot repair the file without the keyboard,
+    which is why the cost of being wrong is asymmetric here and the catch
+    is deliberately broad.
+    """
+    broken = tmp_path / "broken.txt"
+    broken.write_bytes(b"caregiver\n\xff\xfe not utf-8 \xff\n")
+    profile = replace(ENGLISH, extra_vocabulary=broken)
+
+    predictor = NgramPredictor(profile=profile)
+
+    # It started, and it is usable rather than merely constructed.
+    assert predictor.predict("th", 3)
+
+
+def test_a_missing_wordlist_is_simply_absent(tmp_path: Path) -> None:
+    """The near-miss: absence is ordinary, not an error to report.
+
+    Paired with the case above so a loader that swallowed everything by
+    doing nothing at all could not satisfy both.
+    """
+    profile = replace(ENGLISH, extra_vocabulary=tmp_path / "nope.txt")
+
+    predictor = NgramPredictor(profile=profile)
+
+    assert predictor.predict("th", 3)
+    assert "caregiver" not in predictor._base_unigrams

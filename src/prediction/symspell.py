@@ -31,6 +31,7 @@ from collections.abc import Iterator
 from itertools import chain
 from typing import Dict, Iterable, List, Optional, Set, Tuple
 
+from .packed_cache import build_cached
 from .packed_deletes import PackedDeletes
 
 _logger = logging.getLogger("SymSpell")
@@ -184,7 +185,14 @@ class SymSpell:
     def _build_index(self) -> None:
         if self._built:
             return
-        packed_deletes = PackedDeletes.build(self._words, self._index_variants)
+        # Shared across instances when the vocabulary matches: the packed
+        # half never mutates, and this build walks millions of deletion
+        # variants.  See packed_cache.
+        packed_deletes = build_cached(
+            lambda: PackedDeletes.build(self._words, self._index_variants),
+            self._words,
+            ("deletes", self.max_edit_distance, self.prefix_length),
+        )
         self._packed_deletes = packed_deletes
         self._overlay_deletes.clear()
         self._built = True

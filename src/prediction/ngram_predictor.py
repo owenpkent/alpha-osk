@@ -1091,39 +1091,38 @@ class NgramPredictor:
 
         A spelling list supplies coverage, not conversational frequencies.
         One count each makes the words available without promoting the tail
-        above existing common words or treating any of it as personal
-        history.
+        above existing common words, and keeps the whole list out of
+        ``user_vocab``, so none of it reads as personal history.
 
-        **Every failure is caught, and the breadth is the point.** This
-        runs inside ``__init__``, so anything that escapes it stops the
-        keyboard starting, and a user whose only input device is this
-        keyboard cannot then go and repair the file. Catching only
-        ``OSError`` left a decode error, or any surprise in the file's
-        shape, propagating out of construction. Being wrong the other way
-        costs a smaller vocabulary, which is what a fresh install has
-        anyway.
+        **Every exception is caught, and the breadth is deliberate.** This
+        runs inside ``__init__``, so anything escaping it stops the keyboard
+        starting, and the user whose only input device is this keyboard
+        cannot then go and repair the file. Catching ``OSError`` alone left
+        a decode error, or any surprise in the file's shape, propagating out
+        of construction. Failing the other way costs a smaller vocabulary,
+        which is what a fresh install has anyway.
         """
         path = self.profile.extra_vocabulary
         if path is None:
             return
-        added = 0
         try:
             with path.open(encoding="utf-8") as source:
                 for line in source:
                     word = line.strip().lower()
-                    if not word or word.startswith("#"):
-                        continue
-                    if word in self._base_unigrams or word in self.unigrams:
-                        continue
-                    if not self._is_plausible_word(word):
+                    if (
+                        not word
+                        or word.startswith("#")
+                        or not self.profile.word_re.fullmatch(word)
+                        or not self._is_plausible_word(word)
+                        or word in self._base_unigrams
+                    ):
                         continue
                     self._base_unigrams[word] = 1
-                    self.unigrams[word] = max(self.unigrams.get(word, 0), 1)
-                    added += 1
+                    self._base_total += 1
+                    self.unigrams[word] += 1
+                    self.total_words += 1
         except Exception:  # noqa: BLE001 - see the docstring
-            _logger.warning("Could not load the extra vocabulary; continuing without it")
-            return
-        _logger.debug("Extra vocabulary loaded: %d words", added)
+            _logger.warning("Could not load extra vocabulary %s; continuing without it", path)
 
     def vocabulary(self) -> Set[str]:
         """Every word the model knows: merged table, base table and corpus prior."""

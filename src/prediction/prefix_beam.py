@@ -38,6 +38,7 @@ import bisect
 import math
 from typing import Dict, List, Mapping, Optional, Sequence, Tuple
 
+from .packed_cache import build_cached
 from .packed_prefixes import PackedPrefixes
 
 Position = Tuple[float, float]
@@ -68,10 +69,16 @@ class PrefixIndex:
         self.max_scan = max_scan
         self._freq: Dict[str, float] = {w: float(f) for w, f in dictionary.items() if w}
         self._words: List[str] = sorted(self._freq)
-        self._base = PackedPrefixes.build(
+        # Shared across instances when the vocabulary matches; see
+        # packed_cache for why that is safe and why it is worth doing.
+        self._base = build_cached(
+            lambda: PackedPrefixes.build(
+                self._freq,
+                top_k=top_k,
+                precompute_len=precompute_len,
+            ),
             self._freq,
-            top_k=top_k,
-            precompute_len=precompute_len,
+            ("prefixes", top_k, precompute_len),
         )
         # Successful packed lookups recur across adjacent beam paths. Keep a
         # small bounded cache so those paths do not repeat UTF-8 comparisons.
