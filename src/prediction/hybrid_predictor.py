@@ -837,12 +837,28 @@ class HybridPredictor(QObject):
     # ------------------------------------------------------------------
     #  Learning freeze
     #
-    #  Every method below that mutates the model returns early while the
-    #  freeze is on.  Gating each one individually rather than at a single
-    #  choke point is deliberate: there is no single choke point, the seven
-    #  entry points reach three different stores between them, and a gate
-    #  that only covered the obvious one would leave the study measuring a
-    #  model that was still quietly moving underneath it.
+    #  The implicit-learning methods below return early while the freeze
+    #  is on.  Gating each one individually rather than at a single choke
+    #  point is deliberate: there is no single choke point, they reach
+    #  four different stores between them, and a gate that only covered
+    #  the obvious one would leave the study measuring a model that was
+    #  still quietly moving underneath it.
+    #
+    #  That is exactly how this shipped incomplete once.  The list was
+    #  written from the methods with "learn" in the name, so
+    #  ``observe_press`` and ``record_typed_word``, both mutations on the
+    #  keystroke path, were missed, and the pointer bias one of them
+    #  feeds is read back on the very next prediction.  Do not extend
+    #  this class with a mutation without adding it to the inventory in
+    #  tests/test_learning_freeze.py, which fails on any public method it
+    #  has not been told about.
+    #
+    #  Not covered, deliberately and pending a decision: the explicit
+    #  user actions (``blacklist_word``, ``unblacklist_word``,
+    #  ``mark_bad_suggestion``, ``remove_dispreference``, ``unprefer``,
+    #  ``clear_user_data``).  Silently swallowing a pill right-click
+    #  would read as a click that failed to register.  That set is pinned
+    #  by TestTheOutstandingLeaksAreStated.
     # ------------------------------------------------------------------
 
     @property
@@ -891,7 +907,19 @@ class HybridPredictor(QObject):
         return new_words
 
     def observe_press(self, char: str, dx: float, dy: float) -> None:
-        """Record where inside its key a press landed; see ``pointer_model``."""
+        """Record where inside its key a press landed; see ``pointer_model``.
+
+        Frozen with the rest, and this is the one that shows why the freeze
+        has to reach the keystroke path and not just the obvious learning
+        calls.  The bias it accumulates is read straight back by
+        ``FuzzyRecognizer.positions_for`` on the next prediction, so an
+        unfrozen press does not merely leave residue after the session: it
+        moves the pills *inside* the block being measured, and it does so
+        further the longer the block runs, which is the one error shape
+        counterbalancing cannot spread out.
+        """
+        if self._learning_frozen:
+            return
         self._fuzzy.observe_press(char, dx, dy)
 
     def _refresh_fuzzy_frequencies(self, words: Optional[Iterable[str]] = None) -> None:
@@ -1487,7 +1515,15 @@ class HybridPredictor(QObject):
         self._rebuild_fuzzy_dictionary()
 
     def record_typed_word(self, word: str) -> Optional[str]:
-        """Track typed word for auto-rehabilitation of blacklisted words."""
+        """Track typed word for auto-rehabilitation of blacklisted words.
+
+        Frozen too: three sightings inside a study block would otherwise
+        put a word the participant had removed back on the bar part way
+        through, changing the pills mid-condition and outliving the
+        session in ``blacklist``.
+        """
+        if self._learning_frozen:
+            return None
         return self._ngram.record_typed_word(word)
 
     def learn_capitalization(self, word: str, *, allow_uppercase: bool = False) -> bool:

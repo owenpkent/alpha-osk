@@ -270,3 +270,281 @@ class TestPredictionStillWorksWhileFrozen:
 
         assert isinstance(results, list)
         assert any(w.startswith("th") for w in results)
+
+
+# ----------------------------------------------------------------------
+#  The inventory guard
+#
+#  Every test above names one method.  That is what let the freeze ship
+#  with `observe_press` and `record_typed_word` unguarded for as long as
+#  it did: both are mutations on the keystroke path, both are absent from
+#  the list this file was written against, and a suite that only checks
+#  the methods somebody remembered cannot report the one they forgot.
+#
+#  So the classification below is exhaustive by construction.  Every
+#  public method of HybridPredictor must appear in exactly one bucket,
+#  and `test_every_public_method_is_classified` fails on any that does
+#  not, which makes a newly added method a failing test until somebody
+#  decides which bucket it belongs in.
+# ----------------------------------------------------------------------
+
+
+def _snapshot(predictor: HybridPredictor) -> dict:
+    """Everything a study session must leave exactly as it found it."""
+    ngram = predictor._ngram
+    return {
+        "unigrams": dict(ngram.unigrams),
+        "user_vocab": dict(ngram.user_vocab),
+        "user_total": ngram._user_total,
+        "bigrams": {k: dict(v) for k, v in ngram.bigrams.items()},
+        "trigrams": {k: dict(v) for k, v in ngram.trigrams.items()},
+        "capitalization": dict(ngram.capitalization),
+        "blacklist": set(ngram.blacklist),
+        "dispreference": dict(ngram.dispreference),
+        "preferred": dict(ngram.preferred),
+        "pointer": {k: tuple(v) for k, v in predictor._fuzzy.pointer._slots.items()},
+        "tokens": dict(ngram.tokens.tokens),
+    }
+
+
+def _prime_blacklisted(predictor: HybridPredictor) -> None:
+    predictor.blacklist_word("help")
+
+
+#: ``name -> (setup, call)``.  ``setup`` runs thawed, ``call`` is what the
+#: freeze has to stop.  Every mutating method needs one, so a method
+#: cannot be declared mutating and then left unprobed.
+_RECIPES = {
+    "learn": (
+        lambda p: _promote_to_known(p, "zorblat"),
+        lambda p: p.learn("zorblat"),
+    ),
+    "learn_word": (None, lambda p: p.learn_word("zorblat")),
+    "unlearn_word": (
+        lambda p: _promote_to_known(p, "zorblat"),
+        lambda p: p.unlearn_word("zorblat"),
+    ),
+    "learn_token": (None, lambda p: p.learn_token("555-1234")),
+    "learn_from_selection": (None, lambda p: p.learn_from_selection("help", "hel")),
+    "mark_good_suggestion": (None, lambda p: p.mark_good_suggestion("help")),
+    "learn_capitalization": (
+        lambda p: _promote_to_known(p, "zorblat"),
+        lambda p: p.learn_capitalization("ZorBlat"),
+    ),
+    "set_capitalization": (None, lambda p: p.set_capitalization("zorblat", "ZorBlat")),
+    # The two that were missing, and the reason this section exists.
+    "observe_press": (None, lambda p: [p.observe_press("h", 0.4, 0.3) for _ in range(50)]),
+    "record_typed_word": (
+        _prime_blacklisted,
+        lambda p: [p.record_typed_word("help") for _ in range(4)],
+    ),
+    # Explicit user actions, pinned below rather than gated.
+    "blacklist_word": (None, lambda p: p.blacklist_word("hello")),
+    "unblacklist_word": (
+        lambda p: p.blacklist_word("water"),
+        lambda p: p.unblacklist_word("water"),
+    ),
+    "mark_bad_suggestion": (None, lambda p: p.mark_bad_suggestion("help")),
+    "remove_dispreference": (
+        lambda p: p.mark_bad_suggestion("time"),
+        lambda p: p.remove_dispreference("time"),
+    ),
+    "unprefer": (
+        lambda p: p.mark_good_suggestion("work"),
+        lambda p: p.unprefer("work"),
+    ),
+    "clear_user_data": (
+        lambda p: _promote_to_known(p, "zorblat"),
+        lambda p: p.clear_user_data(),
+    ),
+}
+
+#: Mutates learned state and the freeze must stop it.
+_MUST_FREEZE = frozenset(
+    {
+        "learn",
+        "learn_word",
+        "unlearn_word",
+        "learn_token",
+        "learn_from_selection",
+        "mark_good_suggestion",
+        "learn_capitalization",
+        "set_capitalization",
+        "observe_press",
+        "record_typed_word",
+    }
+)
+
+#: Mutates learned state and currently writes straight through the freeze.
+#:
+#: These are all *explicit* user actions (a pill right-click, a dashboard
+#: rollback) rather than the implicit learning the freeze was written for,
+#: so gating them silently is not obviously right: a control that quietly
+#: does nothing reads as a click that failed to register, which this
+#: project treats as the worse failure.  Blocking them in the UI for the
+#: duration of a session is the likelier answer.  Pinned here so the
+#: behaviour is stated rather than merely absent, and so that fixing one
+#: fails this test and prompts moving it up to _MUST_FREEZE.
+_LEAKS_PENDING_DECISION = frozenset(
+    {
+        "blacklist_word",
+        "unblacklist_word",
+        "mark_bad_suggestion",
+        "remove_dispreference",
+        "unprefer",
+        "clear_user_data",
+    }
+)
+
+#: Reviewed and does not mutate learned state: readers, predictors, Qt
+#: signals, pack and corpus loading, and configuration.
+_NOT_LEARNING_STATE = frozenset(
+    {
+        "autocorrectSuggested",
+        "check_autocorrect",
+        "enable_llm",
+        "enable_ppm",
+        "learning_frozen",
+        "llm_available",
+        "merge_strategy",
+        "disable_vocabulary_pack",
+        "enable_vocabulary_pack",
+        "frozen_learning",
+        "get_available_packs",
+        "get_capitalized",
+        "get_enabled_packs",
+        "get_key_alternatives",
+        "get_stats",
+        "get_unigram_freqs",
+        "get_user_packs_dir",
+        "import_vocabulary_pack",
+        "llmAvailableChanged",
+        "load_corpus",
+        "load_ppm_training_text",
+        "modelLoading",
+        "packsChanged",
+        "predict",
+        "predict_email_domains",
+        "predict_tokens",
+        "predict_with_refinement",
+        "predictionsReady",
+        "predictionsRefined",
+        "reload_dictionary",
+        "reload_from_disk",
+        "save",
+        "set_key_positions",
+        "set_merge_strategy",
+    }
+)
+
+
+def _public_methods() -> set:
+    """Every public callable HybridPredictor declares itself.
+
+    ``vars()`` rather than ``dir()`` so the QObject base class's own large
+    API is excluded without having to subtract it by name.
+    """
+    return {
+        name
+        for name, value in vars(HybridPredictor).items()
+        if not name.startswith("_") and (callable(value) or hasattr(value, "__get__"))
+    }
+
+
+class TestTheInventoryIsExhaustive:
+    def test_every_public_method_is_classified(self) -> None:
+        """A new public method fails this until someone buckets it.
+
+        This is the assertion the per-method tests above cannot make. It
+        is why adding a mutation to this class can no longer quietly skip
+        the freeze.
+        """
+        classified = _MUST_FREEZE | _LEAKS_PENDING_DECISION | _NOT_LEARNING_STATE
+        actual = _public_methods()
+
+        unclassified = actual - classified
+        assert not unclassified, (
+            f"new public method(s) {sorted(unclassified)} on HybridPredictor. "
+            "Decide whether each mutates learned state and add it to "
+            "_MUST_FREEZE, _LEAKS_PENDING_DECISION or _NOT_LEARNING_STATE "
+            "in this file. If it mutates, give it a recipe in _RECIPES too."
+        )
+
+        stale = classified - actual
+        assert not stale, f"classified method(s) {sorted(stale)} no longer exist"
+
+    def test_the_buckets_do_not_overlap(self) -> None:
+        assert not (_MUST_FREEZE & _LEAKS_PENDING_DECISION)
+        assert not (_MUST_FREEZE & _NOT_LEARNING_STATE)
+        assert not (_LEAKS_PENDING_DECISION & _NOT_LEARNING_STATE)
+
+    def test_every_mutating_method_has_a_recipe(self) -> None:
+        """Otherwise a method could be called mutating and never probed."""
+        mutating = _MUST_FREEZE | _LEAKS_PENDING_DECISION
+        assert mutating - set(_RECIPES) == set()
+        assert set(_RECIPES) - mutating == set()
+
+
+class TestEveryMutatingMethodIsProbed:
+    @pytest.mark.parametrize("name", sorted(_MUST_FREEZE))
+    def test_it_moves_nothing_while_frozen(self, predictor: HybridPredictor, name: str) -> None:
+        setup, call = _RECIPES[name]
+        if setup is not None:
+            setup(predictor)
+
+        before = _snapshot(predictor)
+        with predictor.frozen_learning():
+            call(predictor)
+
+        after = _snapshot(predictor)
+        moved = sorted(k for k in before if before[k] != after[k])
+        assert not moved, f"{name} wrote {moved} while learning was frozen"
+
+    @pytest.mark.parametrize("name", sorted(_MUST_FREEZE))
+    def test_it_still_moves_something_when_thawed(
+        self, predictor: HybridPredictor, name: str
+    ) -> None:
+        """The inverse half, and it is not decoration.
+
+        Without it a recipe that had quietly stopped doing anything (a
+        renamed argument, a word the shipped dictionary now rejects)
+        would satisfy the frozen assertion above perfectly, and the
+        method would look guarded when nothing was testing it at all.
+        """
+        setup, call = _RECIPES[name]
+        if setup is not None:
+            setup(predictor)
+
+        before = _snapshot(predictor)
+        call(predictor)
+
+        after = _snapshot(predictor)
+        moved = sorted(k for k in before if before[k] != after[k])
+        assert moved, f"{name} moved nothing even unfrozen: the recipe proves nothing"
+
+
+class TestTheOutstandingLeaksAreStated:
+    @pytest.mark.parametrize("name", sorted(_LEAKS_PENDING_DECISION))
+    def test_it_still_writes_through_the_freeze(
+        self, predictor: HybridPredictor, name: str
+    ) -> None:
+        """Pins the open decision described on _LEAKS_PENDING_DECISION.
+
+        This test passing is not an endorsement. It fails when one of
+        these is gated, which is the prompt to move that name into
+        _MUST_FREEZE rather than to delete the assertion.
+        """
+        setup, call = _RECIPES[name]
+        if setup is not None:
+            setup(predictor)
+
+        before = _snapshot(predictor)
+        with predictor.frozen_learning():
+            call(predictor)
+
+        after = _snapshot(predictor)
+        moved = sorted(k for k in before if before[k] != after[k])
+        assert moved, (
+            f"{name} no longer writes while frozen. If that was deliberate, "
+            "move it from _LEAKS_PENDING_DECISION to _MUST_FREEZE."
+        )
