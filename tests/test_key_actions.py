@@ -10,16 +10,19 @@ shapes a hand-edited ``key_actions.json`` actually produces.
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
-from typing import List, Sequence, Tuple
+from typing import Any, List, Sequence, Tuple
 
 import pytest
 
+from src import key_actions
 from src.key_actions import (
     ACTION_TYPES,
     FUNCTION_KEYS,
     MAX_LABEL_LEN,
     MAX_TEXT_LEN,
+    SCHEMA_VERSION,
     UNBOUND_FUNCTION_KEYS,
     ActionExecutor,
     KeyActionStore,
@@ -331,3 +334,64 @@ class TestPersistence:
         assert store.get("f20") is None
         store.reload_from_disk()
         assert store.get("f20") == {"type": "text", "text": "hi"}
+
+    def test_save_routes_through_atomic_write_json(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The write must go through the shared tempfile-then-rename helper.
+
+        A hand-rolled ``open`` + ``tmp.replace`` was the only writer in the
+        project skipping ``atomic_write.py``'s flush-and-fsync, which is
+        what stops a crash between the write and the rename leaving a
+        truncated ``key_actions.json`` where a good one used to be (see
+        "Where User Data Lives" in CLAUDE.md; ``SnippetStore.save`` is the
+        sibling this mirrors).
+        """
+        calls: List[Tuple[Path, Any]] = []
+
+        def fake_atomic_write_json(path: Path, data: Any, **kwargs: Any) -> None:
+            calls.append((path, data))
+
+        monkeypatch.setattr(key_actions, "atomic_write_json", fake_atomic_write_json)
+        path = tmp_path / "key_actions.json"
+        store = KeyActionStore(path)
+        assert store.set("f13", {"type": "text", "text": "hi"}) is True
+
+        assert len(calls) == 1
+        written_path, written_payload = calls[0]
+        assert written_path == path
+        assert written_payload == {
+            "version": SCHEMA_VERSION,
+            "actions": {"f13": {"type": "text", "text": "hi"}},
+        }
+        # Nothing actually reached disk, since the helper was faked out.
+        assert not path.exists()
+
+    def test_a_save_failure_is_logged_and_never_raises(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Same tolerance the load path already has: log it, don't block the UI.
+
+        The file on disk from the earlier good save must survive a later
+        failed one untouched - ``atomic_write_json`` writes to a temp file
+        first and only replaces the real one on success, so a raise from
+        it means the rename never happened.
+        """
+        path = tmp_path / "key_actions.json"
+        store = KeyActionStore(path)
+        store.set("f13", {"type": "text", "text": "first"})
+        before = path.read_bytes()
+
+        def fake_atomic_write_json(*args: Any, **kwargs: Any) -> None:
+            raise OSError("disk full")
+
+        monkeypatch.setattr(key_actions, "atomic_write_json", fake_atomic_write_json)
+        caplog.set_level(logging.WARNING, logger="KeyActions")
+
+        store.save()  # must not raise
+
+        assert "Failed to save key actions" in caplog.text
+        assert path.read_bytes() == before

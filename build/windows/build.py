@@ -972,20 +972,6 @@ Section "Install"
   ; Write uninstaller
   WriteUninstaller "$INSTDIR\\uninstall.exe"
 
-  ; Write registry keys for Add/Remove Programs
-  WriteRegStr HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\${{APP_GUID}}" "DisplayName" "${{APP_NAME}}"
-  WriteRegStr HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\${{APP_GUID}}" "DisplayVersion" "${{APP_VERSION}}"
-  WriteRegStr HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\${{APP_GUID}}" "Publisher" "${{APP_PUBLISHER}}"
-  WriteRegStr HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\${{APP_GUID}}" "URLInfoAbout" "${{APP_URL}}"
-  WriteRegStr HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\${{APP_GUID}}" "UninstallString" "$INSTDIR\\uninstall.exe"
-  WriteRegStr HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\${{APP_GUID}}" "InstallLocation" "$INSTDIR"
-  WriteRegStr HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\${{APP_GUID}}" "DisplayIcon" "$INSTDIR\\${{APP_EXE}}"
-
-  ; Calculate installed size
-  ${{GetSize}} "$INSTDIR" "/S=0K" $0 $1 $2
-  IntFmt $0 "0x%08X" $0
-  WriteRegDWORD HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\${{APP_GUID}}" "EstimatedSize" "$0"
-
   ; --- Research-participation invite seed ---
   ; Read once, on this machine's next launch, by
   ; TelemetryClient.apply_install_invite() in src/telemetry.py. Written
@@ -1003,8 +989,32 @@ Section "Install"
     WriteRegStr HKLM "Software\\alpha-osk-setup" "Invite" "$StudyInvite"
   ${{EndIf}}
 
-  ; Run custom install macros (old version cleanup)
+  ; Run custom install macros (old version cleanup). Before the Add/Remove
+  ; Programs entry below is written: customInstall reads the previous
+  ; install's entry, and writing ours first replaced it with $INSTDIR, so
+  ; the different-directory branch could never fire.
   !insertmacro customInstall
+
+  ; Write registry keys for Add/Remove Programs.
+  ;
+  ; HKLM, not HKCU: this is an elevated, machine-wide install into Program
+  ; Files, and the hive has to match the privilege that wrote it. Releases
+  ; up to 1.4.1 wrote HKCU, which any process running as the user can
+  ; write, and customInstall read that entry back as trusted. See
+  ; removePreviousInstallAt in installer.nsh.
+  WriteRegStr HKLM "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\${{APP_GUID}}" "DisplayName" "${{APP_NAME}}"
+  WriteRegStr HKLM "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\${{APP_GUID}}" "DisplayVersion" "${{APP_VERSION}}"
+  WriteRegStr HKLM "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\${{APP_GUID}}" "Publisher" "${{APP_PUBLISHER}}"
+  WriteRegStr HKLM "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\${{APP_GUID}}" "URLInfoAbout" "${{APP_URL}}"
+  WriteRegStr HKLM "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\${{APP_GUID}}" "UninstallString" "$INSTDIR\\uninstall.exe"
+  WriteRegStr HKLM "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\${{APP_GUID}}" "InstallLocation" "$INSTDIR"
+  WriteRegStr HKLM "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\${{APP_GUID}}" "DisplayIcon" "$INSTDIR\\${{APP_EXE}}"
+
+  ; Calculate installed size
+  ${{GetSize}} "$INSTDIR" "/S=0K" $0 $1 $2
+  IntFmt $0 "0x%08X" $0
+  WriteRegDWORD HKLM "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\${{APP_GUID}}" "EstimatedSize" "$0"
+
 
   ; Create shortcuts — use All Users context so they appear for everyone
   ; and resolve correctly under admin elevation
@@ -1051,6 +1061,8 @@ Section "Uninstall"
   ; Deleting it from this section wiped every setting on every upgrade,
   ; because the Install section above runs the old uninstaller silently
   ; before extracting.
+  ; Both hives: this build writes HKLM, releases up to 1.4.1 wrote HKCU.
+  DeleteRegKey HKLM "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\${{APP_GUID}}"
   DeleteRegKey HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\${{APP_GUID}}"
 SectionEnd
 """

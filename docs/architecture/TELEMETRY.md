@@ -55,7 +55,7 @@ One row per user, replaced on each submit (lifetime totals are monotonic, so lat
 
 ## anon_id
 
-UUID4 generated on first opt-in. Persisted to `<config_dir>/analytics.json` under the key `telemetry_anon_id`. Never derived from machine identity (no MAC address, no hostname, no Windows install ID). If the user opts out and back in, **a new anon_id is generated** so opt-in/opt-out cycles can't be linked across the cycle. This is deliberate: an anon_id stable across opt-out periods would let a determined operator track a user even after they revoked consent.
+UUID4 generated on first opt-in. Persisted to `<config_dir>/telemetry.json` under the key `anon_id`, beside the consent flag, the last submit time and the install-invite marker. It is kept out of `analytics.json` deliberately, so the two writers never share a file. Never derived from machine identity (no MAC address, no hostname, no Windows install ID). If the user opts out and back in, **a new anon_id is generated** so opt-in/opt-out cycles can't be linked across the cycle. This is deliberate: an anon_id stable across opt-out periods would let a determined operator track a user even after they revoked consent.
 
 If the user clears their config dir or reinstalls, they get a new anon_id and their lifetime totals reset (the prior row in `submissions_latest` becomes orphaned and gets garbage-collected by the cron job below). No mechanism to link the new id to the old one.
 

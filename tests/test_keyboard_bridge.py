@@ -4504,6 +4504,134 @@ class TestTokenPillsAreNotWordModelObjects:
         assert bridge._token_pill_typed == ""
 
 
+class TestWordSuppressionRespectsPrivacyMode:
+    """markGoodSuggestion / markBadSuggestion / blacklistWord all write
+    straight into the persisted model, unlike pressPrediction and
+    editPrediction they have no insertion to make regardless of privacy
+    mode, so the whole action has to be a no-op rather than only the
+    persistence half of it. Unlike ``_is_live_token_pill``, which only
+    protects a token pill's *contents*, this protects the model from
+    every pill on the bar during the 200 ms window after a password
+    field takes focus. See CLAUDE.md "Privacy Mode & Password Detection"
+    and "Word Suppression and Boosting".
+
+    ``unprefer`` / ``unblacklistWord`` / ``undisprefer`` are the
+    deliberate exception: they roll back state the model already
+    recorded rather than learning something new, so they are asserted
+    to still work under privacy mode, not merely left untested.
+    """
+
+    def test_privacy_mode_blocks_the_boost(self, bridge: KeyboardBridge) -> None:
+        bridge.setPrivacyMode(True)
+        ngram = bridge._predictor._ngram
+        before_preferred = dict(ngram.preferred)
+        before_unigrams = dict(ngram.unigrams)
+        bridge.markGoodSuggestion("zzqboostword")
+        assert ngram.preferred == before_preferred
+        assert ngram.unigrams == before_unigrams
+
+    def test_normal_mode_still_applies_the_boost(self, bridge: KeyboardBridge) -> None:
+        """The inverse: the guard must not disarm the action outright."""
+        bridge.markGoodSuggestion("zzqboostword")
+        assert "zzqboostword" in bridge._predictor._ngram.preferred
+
+    def test_privacy_mode_blocks_the_downweight(self, bridge: KeyboardBridge) -> None:
+        bridge.setPrivacyMode(True)
+        ngram = bridge._predictor._ngram
+        before = dict(ngram.dispreference)
+        bridge.markBadSuggestion("zzqdownweightword")
+        assert ngram.dispreference == before
+
+    def test_normal_mode_still_applies_the_downweight(self, bridge: KeyboardBridge) -> None:
+        bridge.markBadSuggestion("zzqdownweightword")
+        assert "zzqdownweightword" in bridge._predictor._ngram.dispreference
+
+    def test_privacy_mode_blocks_the_blacklist(self, bridge: KeyboardBridge) -> None:
+        bridge.setPrivacyMode(True)
+        ngram = bridge._predictor._ngram
+        before = set(ngram.blacklist)
+        bridge.blacklistWord("zzqblacklistword")
+        assert set(ngram.blacklist) == before
+
+    def test_normal_mode_still_applies_the_blacklist(self, bridge: KeyboardBridge) -> None:
+        bridge.blacklistWord("zzqblacklistword")
+        assert "zzqblacklistword" in bridge._predictor._ngram.blacklist
+
+    def test_privacy_mode_blocks_the_prediction_bar_refresh_too(
+        self, bridge: KeyboardBridge
+    ) -> None:
+        """blacklistWord also filters ``_predictions`` and emits a
+        signal on top of the model write; privacy mode has to skip the
+        whole action, not just the part that touches the ngram store."""
+        bridge.setPrivacyMode(True)
+        bridge._predictions = ["zzqblacklistword", "other"]
+        emitted: list = []
+        bridge.predictionsChanged.connect(lambda preds: emitted.append(list(preds)))
+        bridge.blacklistWord("zzqblacklistword")
+        assert not emitted
+        assert bridge._predictions == ["zzqblacklistword", "other"]
+
+    def test_dashboard_rollback_still_works_in_privacy_mode(self, bridge: KeyboardBridge) -> None:
+        ngram = bridge._predictor._ngram
+        bridge.markGoodSuggestion("zzqrollbackboost")
+        bridge.markBadSuggestion("zzqrollbackbad")
+        bridge.blacklistWord("zzqrollbackblocked")
+        assert "zzqrollbackboost" in ngram.preferred
+        assert "zzqrollbackbad" in ngram.dispreference
+        assert "zzqrollbackblocked" in ngram.blacklist
+
+        bridge.setPrivacyMode(True)
+        bridge.unprefer("zzqrollbackboost")
+        bridge.undisprefer("zzqrollbackbad")
+        bridge.unblacklistWord("zzqrollbackblocked")
+        assert "zzqrollbackboost" not in ngram.preferred
+        assert "zzqrollbackbad" not in ngram.dispreference
+        assert "zzqrollbackblocked" not in ngram.blacklist
+
+
+class TestPredictionDebugLogRespectsPrivacyMode:
+    """The trailing ``_add_debug_log`` calls in pressPrediction and
+    editPrediction used to sit outside the ``if not self._privacy_mode``
+    guard every neighbouring persistence call is inside, so with Debug
+    Mode on, the tapped word and its next-word predictions reached the
+    in-memory Debug Console even in privacy mode. The console is
+    in-memory rather than a file, but it is still a content sink shown
+    on screen, so it needs the same guard as everything else on these
+    two paths.
+    """
+
+    def test_privacy_mode_adds_nothing_to_the_debug_log_on_a_pill_tap(
+        self, bridge: KeyboardBridge
+    ) -> None:
+        bridge.setDebugMode(True)
+        bridge.setPrivacyMode(True)
+        bridge._debug_log = []
+        bridge.pressPrediction("hello")
+        assert bridge._debug_log == []
+
+    def test_normal_mode_still_logs_a_pill_tap(self, bridge: KeyboardBridge) -> None:
+        """The inverse: the guard must not silence Debug Mode outright."""
+        bridge.setDebugMode(True)
+        bridge._debug_log = []
+        bridge.pressPrediction("hello")
+        assert any("hello" in entry for entry in bridge._debug_log)
+
+    def test_privacy_mode_adds_nothing_to_the_debug_log_on_an_edit(
+        self, bridge: KeyboardBridge
+    ) -> None:
+        bridge.setDebugMode(True)
+        bridge.setPrivacyMode(True)
+        bridge._debug_log = []
+        bridge.editPrediction("helo", "hello")
+        assert bridge._debug_log == []
+
+    def test_normal_mode_still_logs_an_edit(self, bridge: KeyboardBridge) -> None:
+        bridge.setDebugMode(True)
+        bridge._debug_log = []
+        bridge.editPrediction("helo", "hello")
+        assert any("hello" in entry for entry in bridge._debug_log)
+
+
 class TestTheClearContextRingClearsEverything:
     """``resetContext`` and ``_reset_typing_context`` are one block now.
 

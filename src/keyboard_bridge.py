@@ -2619,7 +2619,12 @@ class KeyboardBridge(QObject):
         display = self._display_cased(next_preds)
         self._predictions = display
         self.predictionsChanged.emit(display)
-        self._add_debug_log(f"Next-word after '{word}': {display}")
+        # The Debug Console is in-memory rather than a file, but it is
+        # still a content sink: this line names both the tapped word and
+        # every next-word pill, so it needs the same privacy guard as the
+        # persistence calls above rather than running unconditionally.
+        if not self._privacy_mode:
+            self._add_debug_log(f"Next-word after '{word}': {display}")
 
     @Slot()
     def clearPredictions(self) -> None:
@@ -5419,6 +5424,18 @@ class KeyboardBridge(QObject):
     @Slot(str)
     def blacklistWord(self, word: str) -> None:
         """Remove a word from all future predictions."""
+        # A right-click menu tap on a pill still on the bar is exactly the
+        # race pressPrediction / editPrediction guard against: if focus
+        # landed on a password field in the 200 ms poll window just before
+        # this tap, the pill in front of the user belongs to a context the
+        # model must no longer learn from. Unlike those two slots nothing here has
+        # to reach the target app (this never types anything), so the fix
+        # is simpler: close the race, then refuse to touch the model at
+        # all while privacy mode is on. Same guard on markBadSuggestion
+        # and markGoodSuggestion below, same reason.
+        self._check_password_field_sync()
+        if self._privacy_mode:
+            return
         if self._is_live_token_pill(word):
             return
         self._predictor.blacklist_word(word)
@@ -5430,6 +5447,11 @@ class KeyboardBridge(QObject):
     @Slot(str)
     def markBadSuggestion(self, word: str) -> None:
         """Downweight a word in future predictions."""
+        # See blacklistWord above for why this closes the password-field
+        # race and bails out entirely rather than typing-gating each call.
+        self._check_password_field_sync()
+        if self._privacy_mode:
+            return
         if self._is_live_token_pill(word):
             return
         self._predictor.mark_bad_suggestion(word)
@@ -5442,6 +5464,11 @@ class KeyboardBridge(QObject):
         reinforcement and records the boost so the dashboard can show it
         and the user can undo it later.
         """
+        # See blacklistWord above for why this closes the password-field
+        # race and bails out entirely rather than typing-gating each call.
+        self._check_password_field_sync()
+        if self._privacy_mode:
+            return
         if self._is_live_token_pill(word):
             return
         self._predictor.mark_good_suggestion(word)
@@ -5450,18 +5477,28 @@ class KeyboardBridge(QObject):
     @Slot(str)
     def unprefer(self, word: str) -> None:
         """Roll back an explicit user boost (dashboard restore action)."""
+        # Deliberately NOT privacy-gated, unlike markGoodSuggestion above.
+        # This doesn't learn anything from typing: it rolls back a boost
+        # that is already sitting in the persisted model and showing as a
+        # tag on the Dashboard. The asymmetry with the three menu actions
+        # above is deliberate, not a missed guard; see unblacklistWord and
+        # undisprefer below for the other two.
         self._predictor.unprefer(word)
         self._add_debug_log(f"Unpreferred: {word}")
 
     @Slot(str)
     def unblacklistWord(self, word: str) -> None:
         """Restore a previously blacklisted word to predictions."""
+        # Same reasoning as unprefer above: a rollback of recorded state,
+        # not a fresh learn from typing, so no privacy gate.
         self._predictor.unblacklist_word(word)
         self._add_debug_log(f"Unblacklisted: {word}")
 
     @Slot(str)
     def undisprefer(self, word: str) -> None:
         """Remove dispreference penalty from a word."""
+        # Same reasoning as unprefer above: a rollback of recorded state,
+        # not a fresh learn from typing, so no privacy gate.
         self._predictor.remove_dispreference(word)
         self._add_debug_log(f"Removed dispreference: {word}")
 
@@ -5581,7 +5618,12 @@ class KeyboardBridge(QObject):
         self._predictions = display
         self.predictionsChanged.emit(display)
 
-        self._add_debug_log(f"Edited prediction: {original} → {edited}")
+        # Same reasoning as pressPrediction's Debug Console note above:
+        # this names the original and edited word, so it belongs behind
+        # the same guard as the set_capitalization call rather than
+        # running unconditionally.
+        if not self._privacy_mode:
+            self._add_debug_log(f"Edited prediction: {original} → {edited}")
         _logger.info(
             "Prediction edited (original_len=%d, edited_len=%d)",
             len(original),

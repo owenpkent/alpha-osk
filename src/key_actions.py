@@ -63,6 +63,7 @@ import logging
 from pathlib import Path
 from typing import Callable, Dict, List, NamedTuple, Optional, Sequence, Tuple
 
+from .atomic_write import atomic_write_json
 from .platform import get_config_dir
 
 _logger = logging.getLogger("KeyActions")
@@ -444,21 +445,21 @@ class KeyActionStore:
                 self._actions[key] = cleaned
 
     def save(self) -> None:
-        """Write assignments to disk atomically (tempfile then rename)."""
+        """Write assignments to disk atomically (tempfile then rename).
+
+        Routed through ``atomic_write.atomic_write_json`` rather than a
+        hand-rolled ``open`` + ``tmp.replace``: that helper flushes and
+        fsyncs before the rename, which a bare write does not, so a crash
+        between the write and the rename can no longer leave a truncated
+        ``key_actions.json`` where a good one used to be (see "Where User
+        Data Lives" in CLAUDE.md - every store here goes through it).
+        """
         self._path.parent.mkdir(parents=True, exist_ok=True)
         payload = {"version": SCHEMA_VERSION, "actions": self._actions}
-        tmp = self._path.with_suffix(self._path.suffix + ".saving")
         try:
-            with open(tmp, "w", encoding="utf-8") as fh:
-                json.dump(payload, fh, ensure_ascii=False, indent=2)
-            tmp.replace(self._path)
+            atomic_write_json(self._path, payload, indent=2, ensure_ascii=False)
         except OSError as exc:
             _logger.warning("Failed to save key actions: %s", exc)
-            if tmp.exists():
-                try:
-                    tmp.unlink()
-                except OSError:
-                    pass
 
     # --- Accessors -----------------------------------------------------
 

@@ -1538,6 +1538,45 @@ class NgramPredictor:
                     merged[prefix][word] = rounded
         return user, merged
 
+    @staticmethod
+    def _clean_counts(raw: object, table_name: str) -> Dict[str, int]:
+        """Keep only string-keyed, non-negative, finite counts.
+
+        A Data Backup archive is a file the user picked off disk, not
+        something this process wrote, so ``ngram_model.json`` inside it
+        is untrusted input despite living in the config directory. The
+        load used to validate only a table's *keys* (``_is_plausible_word``
+        strips fragment-shaped ones) and stored whatever value sat next
+        to them, so a crafted ``{"hello": "boom"}`` loaded without
+        complaint and then blew up the first arithmetic that touched it
+        -- the corpus-prior loader, ``predict()``'s slicing, ``learn()``'s
+        ``self.unigrams[word] += 1`` -- on the very next keystroke, well
+        after the app looked like it had started cleanly. Bad entries are
+        dropped one at a time, the same rule the token store and the
+        pointer model already apply to their own persisted tables, rather
+        than failing the whole file over one poisoned key. Only the
+        number dropped is ever logged; the words themselves are typed
+        content and must not reach the log at WARNING or above.
+        """
+        cleaned: Dict[str, int] = {}
+        if not isinstance(raw, dict):
+            return cleaned
+        dropped = 0
+        for key, value in raw.items():
+            if (
+                not isinstance(key, str)
+                or isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not math.isfinite(value)
+                or value < 0
+            ):
+                dropped += 1
+                continue
+            cleaned[key] = int(value)
+        if dropped:
+            _logger.warning("Model file dropped %d invalid count(s) from %s.", dropped, table_name)
+        return cleaned
+
     def load(self, path: Path) -> None:
         """Load model from JSON file."""
         try:
@@ -1554,12 +1593,14 @@ class NgramPredictor:
             with open(path) as f:
                 data = json.load(f)
 
-            unigrams = data.get("unigrams", {})
-            if len(unigrams) > self._MAX_UNIGRAMS:
+            unigrams_raw = data.get("unigrams", {})
+            if not isinstance(unigrams_raw, dict):
+                unigrams_raw = {}
+            if len(unigrams_raw) > self._MAX_UNIGRAMS:
                 _logger.warning(
                     "Model file %s has %d unigrams (> %d); skipping load.",
                     path,
-                    len(unigrams),
+                    len(unigrams_raw),
                     self._MAX_UNIGRAMS,
                 )
                 return
@@ -1624,10 +1665,18 @@ class NgramPredictor:
             # letter of the alphabet plus ~370 two-letter abbreviations
             # at high frequencies. Drop them on load and the next save
             # writes the cleaned model back.
+            #
+            # Key plausibility and value safety are independent checks
+            # (a fragment-shaped key and a poisoned count are different
+            # kinds of bad), so both run: _clean_counts first, so a
+            # non-numeric value never reaches _is_plausible_word's
+            # caller with the expectation that it is one.
+            unigrams = self._clean_counts(unigrams_raw, "unigrams")
             unigrams = {w: c for w, c in unigrams.items() if self._is_plausible_word(w)}
             user_vocab_raw = data.get("user_vocab", {})
+            user_vocab_clean = self._clean_counts(user_vocab_raw, "user_vocab")
             user_vocab_clean = {
-                w: c for w, c in user_vocab_raw.items() if self._is_plausible_word(w)
+                w: c for w, c in user_vocab_clean.items() if self._is_plausible_word(w)
             }
 
             self.unigrams = defaultdict(int, unigrams)
@@ -1651,12 +1700,42 @@ class NgramPredictor:
             user_total = sum(user_vocab_clean.values())
             self.user_vocab = defaultdict(int, user_vocab_clean)
             self._user_total = user_total
-            self.total_words = data.get("total_words", 0)
-            self.blacklist = set(data.get("blacklist", []))
-            self.dispreference = defaultdict(int, data.get("dispreference", {}))
-            self.preferred = defaultdict(int, data.get("preferred", {}))
-            self._blacklist_type_count = defaultdict(int, data.get("blacklist_type_count", {}))
-            self._candidate_counts = defaultdict(int, data.get("candidate_counts", {}))
+            raw_total_words = data.get("total_words", 0)
+            if (
+                isinstance(raw_total_words, (int, float))
+                and not isinstance(raw_total_words, bool)
+                and math.isfinite(raw_total_words)
+                and raw_total_words >= 0
+            ):
+                self.total_words = int(raw_total_words)
+            else:
+                # A poisoned scalar would otherwise blow up on the very
+                # next `total_words += N` a keystroke or a corpus load
+                # triggers. The unigram mass just cleaned above is the
+                # best stand-in on hand: it keeps scoring off a real
+                # number instead of quietly resetting to zero, which
+                # would make every following prediction look like it is
+                # scoring against an empty vocabulary.
+                self.total_words = sum(unigrams.values())
+            raw_blacklist = data.get("blacklist", [])
+            self.blacklist = (
+                {w for w in raw_blacklist if isinstance(w, str)}
+                if isinstance(raw_blacklist, list)
+                else set()
+            )
+            self.dispreference = defaultdict(
+                int, self._clean_counts(data.get("dispreference", {}), "dispreference")
+            )
+            self.preferred = defaultdict(
+                int, self._clean_counts(data.get("preferred", {}), "preferred")
+            )
+            self._blacklist_type_count = defaultdict(
+                int,
+                self._clean_counts(data.get("blacklist_type_count", {}), "blacklist_type_count"),
+            )
+            self._candidate_counts = defaultdict(
+                int, self._clean_counts(data.get("candidate_counts", {}), "candidate_counts")
+            )
             # Coerce loaded timestamps to float; older saves don't have
             # this key, in which case the sweep backfills the field on
             # first run rather than instantly expiring legacy entries.

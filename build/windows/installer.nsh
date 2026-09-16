@@ -166,46 +166,95 @@
   appClosed:
 !macroend
 
+; Removes a previous Alpha-OSK installation recorded under ${ROOT}, given its
+; InstallLocation in $2 and DisplayVersion in $1.
+;
+; Nothing read from the registry is ever executed. The location is used
+; only to find OUR uninstaller, next to OUR executable, and
+; REQUIRE_PROGRAM_FILES (1 or 0) says whether it must also sit under
+; Program Files. That is required for the per-user hive, which any process
+; running as the user can write, and not for HKLM, which only an
+; administrator can. Releases up to 1.4.1 ran the entry's UninstallString
+; from the per-user hive with this installer's administrator token, behind
+; a prompt whose recommended answer was Yes and which appeared even on a
+; silent auto-update (it carried no /SD). The branch happened to be
+; unreachable, because the Install section wrote its own entry over the
+; key first, but a planted string was one reordering and one Yes away from
+; running as administrator. The prompt now defaults to No when silent.
+!macro removePreviousInstallAt ROOT KIND REQUIRE_PROGRAM_FILES
+  ${If} $2 != ""
+    ; Resolve "." and ".." and stray separators first, so a location spelt
+    ; "C:\Program Files\..\Users\x" is compared as what it really names.
+    ; GetFullPathName empties the output and sets the error flag when the
+    ; path does not exist, which the stale-entry branch below handles.
+    ClearErrors
+    GetFullPathName $8 $2
+    ${If} ${Errors}
+      StrCpy $8 ""
+    ${EndIf}
+    ${If} $8 == "$INSTDIR"
+    ${OrIf} $8 == "$INSTDIR\"
+      ; Same directory: the Install section's silent same-directory cleanup
+      ; already ran the old uninstaller before extracting.
+      Nop
+    ${ElseIfNot} ${FileExists} "$8\uninstall.exe"
+      ; Nothing there to run: the entry is dead, so retire it rather than
+      ; leave Apps & Features pointing at a directory that is gone.
+      DetailPrint "Removing a stale Add/Remove Programs entry that pointed at: $2"
+      DeleteRegKey ${ROOT} "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APP_GUID}"
+    ${Else}
+      StrCpy $7 "yes"
+      !if ${REQUIRE_PROGRAM_FILES} == 1
+        StrCpy $7 "no"
+        StrLen $3 "$PROGRAMFILES64\"
+        StrCpy $4 "$8\" $3
+        StrLen $5 "$PROGRAMFILES\"
+        StrCpy $6 "$8\" $5
+        ${If} $4 == "$PROGRAMFILES64\"
+          StrCpy $7 "yes"
+        ${ElseIf} $6 == "$PROGRAMFILES\"
+          StrCpy $7 "yes"
+        ${EndIf}
+      !endif
+      ${If} $7 == "yes"
+      ${AndIf} ${FileExists} "$8\${APP_EXE}"
+        ${If} ${Cmd} `MessageBox MB_YESNO|MB_ICONQUESTION "A previous ${KIND} installation of Alpha-OSK (v$1) was found at:$\r$\n$8$\r$\n$\r$\nWould you like to remove it?$\r$\n(Recommended: Yes)" /SD IDNO IDYES`
+          DetailPrint "Removing the previous installation at $8"
+          ; _?= runs the uninstaller in place, so ExecWait really waits for
+          ; it rather than for the copy it would otherwise spawn in $TEMP.
+          ; The price is that it cannot delete itself, so this does.
+          ExecWait '"$8\uninstall.exe" /S _?=$8'
+          Delete "$8\uninstall.exe"
+          RMDir "$8"
+        ${EndIf}
+      ${Else}
+        DetailPrint "A previous Alpha-OSK installation is recorded at $8, outside Program Files. It was left alone; remove it from Apps & Features if it is still installed."
+      ${EndIf}
+    ${EndIf}
+  ${EndIf}
+!macroend
+
 !macro customInstall
-  ; --- Uninstall previous versions from DIFFERENT directories ---
+  ; --- Remove a previous version installed in a DIFFERENT directory ---
   ; Same-directory upgrades are handled in the Install section (silent
-  ; uninstall before file extraction). We only need to prompt if an old
-  ; install exists at a different path.
-  ; This macro runs once, after UAC elevation, so no double-prompt.
+  ; uninstall before file extraction). This macro runs once, after UAC
+  ; elevation, so no double-prompt, and BEFORE the Install section writes
+  ; this install's own Add/Remove Programs entry, or the read below would
+  ; only ever see $INSTDIR. See removePreviousInstallAt for why nothing
+  ; read from the registry is executed.
 
-  ; Check per-user install (HKCU) in a different directory
-  ReadRegStr $0 HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APP_GUID}" "UninstallString"
+  ; Per-user entry: releases up to 1.4.1 wrote the Add/Remove Programs
+  ; entry here. The Install section now writes HKLM, so this is legacy
+  ; only, and the hive is user-writable, so the location has to prove
+  ; itself.
   ReadRegStr $2 HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APP_GUID}" "InstallLocation"
-  ${If} $0 != ""
-  ${AndIf} $2 != ""
-  ${AndIf} $2 != "$INSTDIR"
-  ${AndIf} $2 != "$INSTDIR\"
-    ReadRegStr $1 HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APP_GUID}" "DisplayVersion"
-    MessageBox MB_YESNO|MB_ICONQUESTION \
-      "A previous version of Alpha-OSK (v$1) was found at:$\r$\n$2$\r$\n$\r$\nWould you like to remove it?$\r$\n(Recommended: Yes)" \
-      IDYES removePrevHKCU IDNO skipPrevHKCU
-    removePrevHKCU:
-      ExecWait '"$0" /S'
-      Sleep 2000
-    skipPrevHKCU:
-  ${EndIf}
+  ReadRegStr $1 HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APP_GUID}" "DisplayVersion"
+  !insertmacro removePreviousInstallAt HKCU "per-user" 1
 
-  ; Check per-machine install (HKLM) in a different directory
-  ReadRegStr $0 HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APP_GUID}" "UninstallString"
+  ; Per-machine entry, which only an administrator can have written.
   ReadRegStr $2 HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APP_GUID}" "InstallLocation"
-  ${If} $0 != ""
-  ${AndIf} $2 != ""
-  ${AndIf} $2 != "$INSTDIR"
-  ${AndIf} $2 != "$INSTDIR\"
-    ReadRegStr $1 HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APP_GUID}" "DisplayVersion"
-    MessageBox MB_YESNO|MB_ICONQUESTION \
-      "A previous system-wide installation of Alpha-OSK (v$1) was found at:$\r$\n$2$\r$\n$\r$\nWould you like to remove it?$\r$\n(Recommended: Yes)" \
-      IDYES removePrevHKLM IDNO skipPrevHKLM
-    removePrevHKLM:
-      ExecWait '"$0" /S'
-      Sleep 2000
-    skipPrevHKLM:
-  ${EndIf}
+  ReadRegStr $1 HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APP_GUID}" "DisplayVersion"
+  !insertmacro removePreviousInstallAt HKLM "system-wide" 0
 
   ; Shortcuts are created in the main install section (user-selectable)
 

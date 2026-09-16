@@ -29,6 +29,8 @@ from __future__ import annotations
 
 import importlib.util
 import re
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -362,8 +364,14 @@ class TestTheSettingsKeySurvivesAnUpgrade:
         # would satisfy the case above and leave a dead Add/Remove Programs
         # entry pointing at a directory that no longer exists.
         section = _uninstall_section(nsi)
-        assert "DeleteRegKey HKCU" in section
-        assert "CurrentVersion\\Uninstall" in section
+        deletes = [
+            line.strip()
+            for line in section.splitlines()
+            if line.strip().startswith("DeleteRegKey") and "CurrentVersion\\Uninstall" in line
+        ]
+        # Both hives: this build writes HKLM, and releases up to 1.4.1 wrote
+        # HKCU, so an upgrade from one of those must retire the old entry too.
+        assert {line.split()[1] for line in deletes} == {"HKLM", "HKCU"}
 
     def test_the_org_define_matches_the_running_application(self, nsi: str) -> None:
         # The key is only removable correctly if the installer and the app
@@ -846,3 +854,125 @@ class TestTheShortcutBoxesRememberWhatYouChose:
         leave = _strip_comments(_function_body(nsi, "ShortcutOptionsLeave"))
         assert "${NSD_GetState} $1 $CreateDesktopShortcut" in leave
         assert "${NSD_GetState} $2 $CreateStartMenuShortcut" in leave
+
+
+MAKENSIS = shutil.which("makensis") or r"C:\Program Files (x86)\NSIS\makensis.exe"
+
+
+class TestThePreviousVersionCheckExecutesNothingFromTheRegistry:
+    """customInstall removes an older install found in another directory.
+
+    Releases up to 1.4.1 read that entry's ``UninstallString`` from HKCU,
+    which any process running as the user can write, and ran it with the
+    installer's administrator token behind a prompt recommending Yes, a
+    prompt that appeared even on a silent auto-update because it carried no
+    ``/SD``. The branch was unreachable, because the Install section wrote
+    its own entry over the key first (every revision in history did), so no
+    shipped installer was exploitable; the shape was one reordering away
+    from a local privilege escalation. These pin the replacement: nothing
+    read from the registry is executed, the per-user location has to
+    resolve under Program Files, the prompt defaults to No when silent, the
+    entry is read before this install writes its own, and the entry now
+    lives in HKLM, the hive that matches the privilege writing it.
+    """
+
+    def test_no_uninstall_string_is_read_or_executed(self, nsh: str) -> None:
+        code = _macro_code(nsh, "customInstall") + _macro_code(nsh, "removePreviousInstallAt")
+        assert "UninstallString" not in code
+        exec_lines = [
+            line
+            for line in code.splitlines()
+            if "ExecWait" in line or line.strip().startswith("Exec ")
+        ]
+        removals = [line for line in exec_lines if "explorer.exe" not in line]
+        assert removals, "the macro must still run our own uninstaller"
+        for line in removals:
+            # Our uninstaller, next to our executable, never a register that
+            # was filled from ReadRegStr.
+            assert "\\uninstall.exe" in line
+            assert "$0" not in line
+
+    def test_the_prompt_defaults_to_no_when_silent(self, nsh: str) -> None:
+        # Measured on NSIS 3: a MessageBox without /SD is shown even under /S,
+        # so the auto-updater's silent run would have stopped on the prompt.
+        code = _macro_code(nsh, "removePreviousInstallAt")
+        boxes = [line for line in code.splitlines() if "MessageBox" in line]
+        assert boxes
+        for line in boxes:
+            assert "/SD IDNO" in line
+
+    def test_the_per_user_entry_must_resolve_under_program_files(self, nsh: str) -> None:
+        custom = _macro_code(nsh, "customInstall")
+        assert 'removePreviousInstallAt HKCU "per-user" 1' in custom
+        # HKLM is admin-writable, so an administrator's custom directory is
+        # still honoured there: the inverse of the per-user rule.
+        assert 'removePreviousInstallAt HKLM "system-wide" 0' in custom
+        code = _macro_code(nsh, "removePreviousInstallAt")
+        assert "$PROGRAMFILES64\\" in code
+        assert "$PROGRAMFILES\\" in code
+        # The path is normalised before anything about it is trusted, or
+        # "C:\Program Files\..\Users\x" would pass the prefix check.
+        assert code.index("GetFullPathName") < code.index("${FileExists}")
+        assert code.index("GetFullPathName") < code.index("$PROGRAMFILES64\\")
+
+    def test_the_entry_is_read_before_this_install_writes_its_own(self, nsi: str) -> None:
+        # The half that made the old branch dead: written first, the entry
+        # read back is always $INSTDIR and the different-directory check can
+        # never fire. Read first, and a genuine previous install is found.
+        section = _install_section(nsi)
+        read = section.index("!insertmacro customInstall")
+        write = section.index('CurrentVersion\\Uninstall\\${APP_GUID}" "InstallLocation"')
+        assert read < write
+
+    def test_the_add_remove_entry_is_written_to_hklm(self, nsi: str) -> None:
+        section = _install_section(nsi)
+        writes = [
+            line.strip()
+            for line in section.splitlines()
+            if line.strip().startswith(("WriteRegStr", "WriteRegDWORD"))
+            and "CurrentVersion\\Uninstall" in line
+        ]
+        assert len(writes) == 8, writes
+        assert all(line.split()[1] == "HKLM" for line in writes), writes
+
+    @pytest.mark.skipif(not Path(MAKENSIS).is_file(), reason="makensis is not installed")
+    def test_the_macros_compile(self, tmp_path: Path) -> None:
+        """LogicLib nesting and the compile-time !if only fail under makensis.
+
+        The text assertions above cannot see a misplaced ${EndIf}; this
+        compiles a harness that inserts the real macro with the real
+        defines. GitHub's Windows runners ship NSIS, so CI covers it too.
+        """
+        harness = tmp_path / "harness.nsi"
+        harness.write_text(
+            "\n".join(
+                [
+                    "Unicode true",
+                    '!include "LogicLib.nsh"',
+                    '!define APP_NAME "Alpha-OSK"',
+                    '!define APP_EXE "alpha-osk.exe"',
+                    '!define APP_GUID "alpha-osk-keyboard"',
+                    '!define APP_ORG "alpha-osk"',
+                    '!define APP_VERSION "9.9.9"',
+                    "Var StudyInvite",
+                    'OutFile "harness.exe"',
+                    'InstallDir "$TEMP\\alpha-osk-harness"',
+                    "RequestExecutionLevel user",
+                    f'!include "{INSTALLER_NSH}"',
+                    "Section",
+                    "  !insertmacro customInstall",
+                    "SectionEnd",
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        result = subprocess.run(
+            [MAKENSIS, "/V2", str(harness)],
+            capture_output=True,
+            text=True,
+            cwd=tmp_path,
+            timeout=120,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert (tmp_path / "harness.exe").is_file()

@@ -91,3 +91,28 @@ class TestPersistence:
     def test_slot_id_is_stable_and_compact(self):
         assert slot_id((1.0, 5.25)) == "1,5.25"
         assert slot_id((-1.0, 0.0)) == "-1,0"
+
+
+class TestCorrectIsAsDefensiveAsObserve:
+    def test_a_non_finite_offset_reads_as_the_key_centre(self):
+        model = PointerModel()
+        for _ in range(20):
+            model.observe("s", 0.2, -0.1)
+        expected = model.correct("s", 0.0, 0.0)
+        assert model.correct("s", float("nan"), 0.0) == expected
+        assert model.correct("s", 0.0, float("inf")) == expected
+        assert all(math.isfinite(v) for v in model.correct("s", float("nan"), float("nan")))
+
+    def test_a_finite_offset_is_still_corrected(self):
+        # The inverse: the guard must not swallow real positions.
+        model = PointerModel()
+        for _ in range(20):
+            model.observe("s", 0.2, -0.1)
+        cx, cy = model.correct("s", 0.3, 0.0)
+        assert cx == pytest.approx(0.3 - model.bias("s")[0])
+        assert cy == pytest.approx(0.0 - model.bias("s")[1])
+
+    def test_an_oversized_offset_is_clamped_like_an_observation(self):
+        model = PointerModel()
+        cx, _ = model.correct("s", 40.0, 0.0)
+        assert cx == pytest.approx(1.0)

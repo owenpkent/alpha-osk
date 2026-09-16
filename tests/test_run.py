@@ -12,7 +12,9 @@ which is Windows/ctypes-specific and a no-op off Windows.
 
 from __future__ import annotations
 
+import socketserver
 import sys
+import webbrowser
 
 import pytest
 
@@ -101,6 +103,46 @@ class TestMainOrdering:
 
         assert rc == 1
         assert order == [], "must not elevate once dependency install already failed"
+
+
+class TestDashboardBindsToLoopback:
+    """FIX 2 of the security audit: the dev dashboard used to bind every
+    interface (``socketserver.TCPServer(("", port), handler)``), which
+    serves this repo's templates to the whole LAN, not just the machine
+    running ``python run.py --dashboard``, for as long as it stays up."""
+
+    def test_run_dashboard_binds_127_0_0_1_only(self, monkeypatch):
+        captured: dict[str, object] = {}
+
+        class FakeTCPServer:
+            """Stands in for the real server so the test opens no socket."""
+
+            def __init__(self, address, handler):
+                captured["address"] = address
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_exc):
+                return False
+
+            def serve_forever(self):
+                # Stand-in for Ctrl+C so run_dashboard returns instead of
+                # blocking the test on a real event loop.
+                raise KeyboardInterrupt
+
+        # run_dashboard does `import socketserver` inside its own body,
+        # which binds to the same cached module object this patches, so
+        # the fake reaches it without touching run.py's internals.
+        monkeypatch.setattr(socketserver, "TCPServer", FakeTCPServer)
+        monkeypatch.setattr(webbrowser, "open", lambda *_a, **_kw: None)
+
+        rc = run.run_dashboard()
+
+        assert rc == 0
+        assert captured["address"][0] == "127.0.0.1", (
+            "the dashboard must bind loopback only, never every interface"
+        )
 
 
 class TestEnsureAdminWindowsIdempotent:

@@ -430,9 +430,18 @@ Uses the **same EV certificate and signing workflow** as
 
 ### What Gets Signed
 
-`build/windows/build.py` signs **every** `.exe` and `.dll` in the `dist/alpha-osk/`
-directory — including the bundled Python DLLs, PySide6 DLLs, and the main
-`alpha-osk.exe`.  It also signs the final NSIS installer `.exe`.
+`build/windows/build.py` signs every `.exe` in `dist/alpha-osk/` (the main
+`alpha-osk.exe` and any helper executables) and the final NSIS installer
+`.exe`. It does **not** sign the bundled `.dll` files: `sign_directory` takes
+`exe_only=True` and `sign_build` calls it with the default. The bundled
+Python and Qt DLLs therefore ship unsigned inside the signed installer, which
+is the common arrangement for PyInstaller applications and is what the
+auto-updater's trust chain assumes (it verifies the installer, not the
+unpacked tree). An environment that enforces signatures on every loaded
+module (WDAC, AppLocker) would need the DLLs signed too; pass
+`exe_only=False` in `sign_build`, and budget for one EV token operation per
+file. This paragraph used to say every DLL was signed; the September 2026
+security audit found that it never was.
 
 ### Step-by-Step: Building a Signed Release
 

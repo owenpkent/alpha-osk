@@ -276,8 +276,15 @@ async function handleForget(req: Request, env: Env): Promise<Response> {
         return new Response(null, { status: 204 });
     }
 
-    // ON DELETE CASCADE on submissions_latest takes care of the child row.
-    await env.DB.prepare(`DELETE FROM users WHERE anon_id = ?`).bind(id).run();
+    // The schema's ON DELETE CASCADE removes the child row too, and D1
+    // enforces foreign keys by default, but the right to be forgotten
+    // should not rest on a PRAGMA: delete the child explicitly, in one
+    // batch (D1 runs a batch as a transaction), child first so the order
+    // is valid with or without the cascade.
+    await env.DB.batch([
+        env.DB.prepare(`DELETE FROM submissions_latest WHERE anon_id = ?`).bind(id),
+        env.DB.prepare(`DELETE FROM users WHERE anon_id = ?`).bind(id),
+    ]);
 
     // Always 204 -- don't leak whether the id existed.
     return new Response(null, { status: 204 });
@@ -316,8 +323,13 @@ export default {
     // in wrangler.toml; the worker only sees the trigger event.
     async scheduled(_event: ScheduledEvent, env: Env): Promise<void> {
         const cutoff = Math.floor(Date.now() / 1000) - 365 * 24 * 60 * 60;
-        await env.DB.prepare(
-            `DELETE FROM users WHERE last_seen < ?`
-        ).bind(cutoff).run();
+        // Child rows first, explicitly, for the reason given in handleForget.
+        await env.DB.batch([
+            env.DB.prepare(
+                `DELETE FROM submissions_latest WHERE anon_id IN
+                   (SELECT anon_id FROM users WHERE last_seen < ?)`
+            ).bind(cutoff),
+            env.DB.prepare(`DELETE FROM users WHERE last_seen < ?`).bind(cutoff),
+        ]);
     },
 };

