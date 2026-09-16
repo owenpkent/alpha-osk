@@ -3701,6 +3701,11 @@ Window {
         // Edit prediction popup
         Popup {
             id: predEditPopup
+            // Lets a headless test (and beginEditSession's owner-based
+            // routing below) find this popup as a QObject -- it's a
+            // Popup, not an Item, so findChild has to search by name
+            // rather than by type.
+            objectName: "predEditPopup"
             parent: Overlay.overlay
             x: (root.width - width) / 2
             y: 36
@@ -3717,15 +3722,22 @@ Window {
             dim: false
             closePolicy: Popup.CloseOnEscape
 
-            onOpened: if (keyboard) keyboard.setEditMode(true)
-            onClosed: if (keyboard) keyboard.setEditMode(false)
+            // "prediction" is this popup's owner name -- see
+            // KeyboardBridge.beginEditSession for why a shared bool was
+            // not enough (two edit surfaces could open at once, and
+            // whichever closed last silently cut the other's routing).
+            onOpened: if (keyboard) keyboard.beginEditSession("prediction")
+            onClosed: if (keyboard) keyboard.endEditSession("prediction")
 
-            // While the popup is open, OSK key presses are short-
-            // circuited in the bridge and routed here via these signals
-            // instead of synthesising to the OS.
+            // While the popup is open AND still owns edit mode, OSK key
+            // presses are short-circuited in the bridge and routed here
+            // via these signals instead of synthesising to the OS. The
+            // ownership half of the guard is what stops a still-open
+            // popup from eating keystrokes meant for a surface that has
+            // since taken the mode over (see onEditOwnerChanged below).
             Connections {
                 target: keyboard
-                enabled: predEditPopup.opened
+                enabled: predEditPopup.opened && keyboard.editOwner === "prediction"
 
                 function onEditKeyTyped(ch) {
                     if (predEditField.selectedText)
@@ -3776,6 +3788,25 @@ Window {
                 }
             }
 
+            // Separate from the block above on purpose: that one's
+            // `enabled` is itself bound to `keyboard.editOwner`, so if
+            // this handler lived there too it would race its own
+            // disable when the very signal it listens for fires (the
+            // enabled binding and this handler are both driven off
+            // editOwnerChanged, and there's no guarantee the binding
+            // doesn't get re-evaluated -- and the block disabled --
+            // before this handler runs). Kept unconditionally enabled
+            // instead, so a takeover always closes the popup rather than
+            // leaving it on screen with nothing routing to it.
+            Connections {
+                target: keyboard
+
+                function onEditOwnerChanged(owner) {
+                    if (predEditPopup.opened && owner !== "" && owner !== "prediction")
+                        predEditPopup.close()
+                }
+            }
+
             background: Rectangle {
                 color: "#252535"
                 border.color: "#4a9eff"
@@ -3788,6 +3819,11 @@ Window {
 
                 TextField {
                     id: predEditField
+                    // Lets a headless test reach the field directly (it
+                    // has no other name -- `id` is QML-only and does not
+                    // set objectName), the same pattern the snippets and
+                    // key-action editors' own fields already use.
+                    objectName: "predEditField"
                     property string originalWord: ""
                     Layout.fillWidth: true
                     Layout.preferredHeight: 32

@@ -172,8 +172,13 @@ Popup {
     // drift from what the popup actually does.
     readonly property int closePolicyBits: closePolicy
 
-    onOpened: if (keyboard) keyboard.setEditMode(true)
-    onClosed: if (keyboard) keyboard.setEditMode(false)
+    // "keyaction" is this editor's owner name -- see
+    // KeyboardBridge.beginEditSession for why a shared bool was not
+    // enough (whichever of this, the prediction popup or the snippets
+    // editor closed last would cut the others' routing out from under
+    // them even while they were still open).
+    onOpened: if (keyboard) keyboard.beginEditSession("keyaction")
+    onClosed: if (keyboard) keyboard.endEditSession("keyaction")
 
     background: Rectangle {
         color: editor.bgColor
@@ -193,7 +198,7 @@ Popup {
 
     Connections {
         target: keyboard
-        enabled: editor.opened
+        enabled: editor.opened && keyboard.editOwner === "keyaction"
 
         function onEditKeyTyped(ch) {
             if (editor.editTarget === "chord") {
@@ -248,6 +253,22 @@ Popup {
             } else if (name === "return" || name === "enter") {
                 editor._save()
             }
+        }
+    }
+
+    // Kept as its own block, unconditionally enabled, rather than folded
+    // into the one above: that block's `enabled` is itself bound to
+    // `keyboard.editOwner`, and reusing it here would race the very
+    // signal this handler listens for (nothing guarantees the `enabled`
+    // binding re-evaluates, and the block's connections drop, before or
+    // after this handler runs). A takeover must always close the editor,
+    // so this listens regardless of who currently owns the mode.
+    Connections {
+        target: keyboard
+
+        function onEditOwnerChanged(owner) {
+            if (editor.opened && owner !== "" && owner !== "keyaction")
+                editor.close()
         }
     }
 

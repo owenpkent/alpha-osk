@@ -626,14 +626,22 @@ class KeyboardBridge(QObject):
     # spam the signal bus on a fast download.
     updateDownloadProgress = Signal(int, int)
 
-    # Edit-mode signals — when the prediction-edit popup is open, OSK
+    # Edit-mode signals: when an edit surface (the prediction-edit
+    # popup, the snippets editor, the key-action editor) is open, OSK
     # keystrokes must target its TextField, not the OS-focused app
     # behind us (we can't steal OS focus without breaking the rest of
-    # the keyboard). QML calls setEditMode(True) when the popup opens,
-    # we short-circuit pressKey/pressSpecialKey to emit these signals
-    # instead, and QML mutates the TextField directly.
+    # the keyboard). QML calls beginEditSession(owner) when a surface
+    # opens, we short-circuit pressKey/pressSpecialKey to emit these
+    # signals instead, and QML mutates the TextField directly.
     editKeyTyped = Signal(str)  # char to insert at cursor
     editSpecialPressed = Signal(str)  # special key name (backspace, left, etc.)
+    # Fires whenever the current session owner changes; "" means no
+    # surface owns edit mode. Every surface's own Connections block is
+    # gated on ``keyboard.editOwner === "<its name>"`` so it stops
+    # listening the instant another surface takes over, and each
+    # listens for this to close itself down rather than sit open with
+    # keystrokes silently going nowhere. See ``beginEditSession``.
+    editOwnerChanged = Signal(str)
 
     # Emitted after the snippet list changes (add / edit / delete /
     # move) so the Snippets popup re-queries getSnippets() and rebuilds
@@ -691,7 +699,10 @@ class KeyboardBridge(QObject):
         self._alt_locked = False
         self._win_locked = False
         self._current_layer = "lower"  # "lower", "upper", "numbers", "symbols"
-        self._edit_mode_active = False  # prediction-edit popup open → redirect OSK keys
+        self._edit_mode_active = False  # an edit surface is open → redirect OSK keys
+        # Which surface currently owns edit mode ("prediction" / "snippets" /
+        # "keyaction" / "legacy" / ""). See beginEditSession / endEditSession.
+        self._edit_owner = ""
 
         # Set while a research trial is capturing keystrokes instead of
         # sending them to the desktop.  See begin_study_capture.
@@ -1461,20 +1472,73 @@ class KeyboardBridge(QObject):
         """
         return self._context_buffer.count('"') % 2 == 1
 
+    @Slot(str)
+    def beginEditSession(self, owner: str) -> None:
+        """Claim edit mode for *owner*, routing OSK keys to it alone.
+
+        Edit mode used to be one shared bool that any of three surfaces
+        (the prediction-edit popup, the snippets editor, the key-action
+        editor) could flip, and none of them knew whether it was the one
+        that had turned it on. Opening a second surface while a first was
+        still showing either handed both ``editKeyTyped`` (one tap landed
+        in two fields) or silently dropped the mode out from under the
+        first, whose keystrokes then went to the OS app behind us instead
+        of its own field. ``owner`` fixes that: only the current owner's
+        Connections block is enabled (``keyboard.editOwner === "..."``),
+        and every surface listens for ``editOwnerChanged`` to close itself
+        when another owner takes over, rather than sit open believing it
+        still has the keys.
+
+        An empty owner is refused: it would claim the mode for nobody,
+        which is indistinguishable from the bug this replaces. Calling
+        this again with the *same* owner (e.g. re-opening the same popup)
+        still re-emits ``editOwnerChanged``; that is harmless; QML's
+        handler for its own name is a no-op.
+        """
+        if not owner:
+            return
+        self._edit_mode_active = True
+        self._edit_owner = owner
+        self.editOwnerChanged.emit(owner)
+
+    @Slot(str)
+    def endEditSession(self, owner: str) -> None:
+        """Release edit mode, but only if *owner* is the one holding it.
+
+        A surface that has already lost the mode to another owner (see
+        ``beginEditSession``) closing itself must not clear the *new*
+        owner's session, which is the other half of the same bug this
+        replaces, where ``openList()``'s unconditional ``setEditMode(False)``
+        cut off a still-open prediction popup. So a mismatched ``owner``
+        is a silent no-op rather than an error: closing a surface you no
+        longer own is an ordinary thing to happen (it just lost a race
+        with the takeover), not a caller mistake.
+        """
+        if owner != self._edit_owner:
+            _logger.debug(
+                "endEditSession ignored: caller did not own the session (owned=%s)",
+                bool(self._edit_owner),
+            )
+            return
+        self._edit_mode_active = False
+        self._edit_owner = ""
+        self.editOwnerChanged.emit("")
+
     @Slot(bool)
     def setEditMode(self, active: bool) -> None:
-        """Route OSK keystrokes to the QML edit popup instead of the OS.
+        """Legacy bool entry point, kept for existing Python callers/tests.
 
-        Called from QML when the prediction-edit popup opens/closes.
-        While active, pressKey/pressSpecialKey emit editKeyTyped /
-        editSpecialPressed instead of synthesising to the OS, so the
-        popup's TextField can insert them directly. Shift/caps still
-        affect letter case; other sticky modifiers (ctrl/alt/win) are
-        ignored while editing — chords make no sense inside a 30-char
-        edit field, and leaking a Ctrl+V into the OS app behind us
-        would be surprising.
+        Every QML surface now calls ``beginEditSession`` /
+        ``endEditSession`` with its own name (see those docstrings for
+        why the bool alone was the bug). This maps the old two-state API
+        onto a single shared owner name, ``"legacy"``, so a test or a
+        stray caller that still flips a bool gets the same routing
+        behaviour as before.
         """
-        self._edit_mode_active = active
+        if active:
+            self.beginEditSession("legacy")
+        else:
+            self.endEditSession("legacy")
 
     @Slot(str)
     @Slot(str, float, float)
@@ -3284,6 +3348,9 @@ class KeyboardBridge(QObject):
     def _get_current_layer(self) -> str:
         return self._current_layer
 
+    def _get_edit_owner(self) -> str:
+        return self._edit_owner
+
     def _get_synth_available(self) -> bool:
         return self._synth.is_available()
 
@@ -3300,6 +3367,7 @@ class KeyboardBridge(QObject):
     altLocked = Property(bool, _get_alt_locked, notify=altLockedChanged)
     winLocked = Property(bool, _get_win_locked, notify=winLockedChanged)
     currentLayer = Property(str, _get_current_layer, notify=currentLayerChanged)
+    editOwner = Property(str, _get_edit_owner, notify=editOwnerChanged)
     synthAvailable = Property(bool, _get_synth_available, constant=True)
     passwordDetectionAvailable = Property(bool, _get_password_detection_available, constant=True)
     # Exposed so the Settings panel can show the running version next to

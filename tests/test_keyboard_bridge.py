@@ -1761,6 +1761,124 @@ class TestEditModeChords:
         assert typed == [("a",)]
 
 
+class TestEditSessionsHaveAnOwner:
+    """beginEditSession / endEditSession replace the shared bool.
+
+    The defect (Sept 2026 audit, item 8): edit mode was one flag any of
+    three surfaces (the prediction-edit popup, the snippets editor, the
+    key-action editor) could flip, and none of them knew whether it was
+    the one that had turned it on. Opening the Snippets window while the
+    prediction popup was still open called an unconditional
+    setEditMode(False), which cut the popup's routing out from under it
+    with no warning -- the next OSK keystroke went to the app behind the
+    keyboard instead of the still-open popup. Opening two editors the
+    other way round handed editKeyTyped to both at once, so one tap
+    inserted into two fields. An owner name is what makes "did I set
+    this" answerable, which is what the two slots below add.
+    """
+
+    def _collect(self, signal):
+        calls: list = []
+        signal.connect(lambda *args: calls.append(args))
+        return calls
+
+    def test_begin_activates_and_claims_ownership(self, bridge: KeyboardBridge):
+        owners = self._collect(bridge.editOwnerChanged)
+
+        bridge.beginEditSession("a")
+
+        assert bridge._edit_mode_active is True
+        assert bridge.editOwner == "a"
+        assert owners == [("a",)]
+
+    def test_end_from_a_different_owner_changes_nothing(self, bridge: KeyboardBridge):
+        """The other half of the fix: a surface that has already lost the
+        mode to a takeover must not be able to clear the new owner's
+        session merely by closing itself."""
+        bridge.beginEditSession("a")
+        owners = self._collect(bridge.editOwnerChanged)
+
+        bridge.endEditSession("b")
+
+        assert bridge._edit_mode_active is True
+        assert bridge.editOwner == "a"
+        assert owners == []
+
+    def test_end_from_the_owner_deactivates(self, bridge: KeyboardBridge):
+        bridge.beginEditSession("a")
+        owners = self._collect(bridge.editOwnerChanged)
+
+        bridge.endEditSession("a")
+
+        assert bridge._edit_mode_active is False
+        assert bridge.editOwner == ""
+        assert owners == [("",)]
+
+    def test_a_second_owner_takes_over_without_being_refused(self, bridge: KeyboardBridge):
+        """This is the fix for the reported sequence: a second surface
+        opening does not have to wait for the first to close cleanly --
+        it simply wins, and the first's own close() call becomes the
+        harmless no-op covered above."""
+        bridge.beginEditSession("a")
+        owners = self._collect(bridge.editOwnerChanged)
+
+        bridge.beginEditSession("b")
+
+        assert bridge._edit_mode_active is True
+        assert bridge.editOwner == "b"
+        assert owners == [("b",)]
+
+    def test_an_empty_owner_is_refused(self, bridge: KeyboardBridge):
+        """Claiming the mode for nobody is indistinguishable from the bug
+        this replaces: keystrokes would route somewhere with no owner
+        able to answer "was that meant for me"."""
+        owners = self._collect(bridge.editOwnerChanged)
+
+        bridge.beginEditSession("")
+
+        assert bridge._edit_mode_active is False
+        assert bridge.editOwner == ""
+        assert owners == []
+
+    def test_legacy_set_edit_mode_still_toggles_the_flag(self, bridge: KeyboardBridge):
+        """Existing Python callers (this file included) still flip a bare
+        bool and get the same routing behaviour as before, via the
+        "legacy" owner name -- nothing in src/ calls it any more, but the
+        slot stays for compatibility."""
+        assert bridge._edit_mode_active is False
+        assert bridge.editOwner == ""
+
+        bridge.setEditMode(True)
+        assert bridge._edit_mode_active is True
+        assert bridge.editOwner == "legacy"
+
+        bridge.setEditMode(False)
+        assert bridge._edit_mode_active is False
+        assert bridge.editOwner == ""
+
+    def test_keystrokes_route_on_the_shared_flag_regardless_of_owner(self, bridge: KeyboardBridge):
+        """pressKey/pressSpecialKey still consult only _edit_mode_active
+        (never the owner name), so routing follows whichever session is
+        active -- the owner is bookkeeping for who may end it, not a
+        second gate on top of the existing routing flag."""
+        typed = self._collect(bridge.editKeyTyped)
+        bridge.beginEditSession("prediction")
+
+        bridge.pressKey("a")
+
+        assert typed == [("a",)]
+        bridge._synth.send_text.assert_not_called()
+        bridge._synth.send_key.assert_not_called()
+
+    def test_no_session_falls_through_to_the_synth(self, bridge: KeyboardBridge):
+        typed = self._collect(bridge.editKeyTyped)
+
+        bridge.pressKey("a")
+
+        assert typed == []
+        bridge._synth.send_text.assert_called()
+
+
 class TestDebugLog:
     """Debug logging."""
 
