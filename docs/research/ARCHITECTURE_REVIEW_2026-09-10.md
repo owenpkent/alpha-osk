@@ -8,16 +8,23 @@ of things it does not do yet.
 
 ## What was reviewed
 
-The clean working tree at `87f519a`, which is the head of pull request
-[#108](https://github.com/owenpkent/alpha-osk/pull/108) at the time of
+The clean working tree at `87f519a`, which was the head of pull request
+[#108](https://github.com/owenpkent/alpha-osk/pull/108) on the day of the
 review. That tree is **v1.4.1** (`438cfd3`, the `main` of the day) plus
-#108's three unmerged commits: prediction-engine work in
-`hybrid_predictor.py`, `ngram_predictor.py`, `prefix_beam.py` and
-`fuzzy_recognizer.py`, 963 insertions and 284 deletions across 20 files.
-The repository squash-merges, so `87f519a` will not be reachable from a
-fresh clone once #108 lands; the durable identifiers are the tag and the
-pull request number. Nothing below turns on the unmerged commits: the three
-files whose sizes are quoted differ from v1.4.1 by one line between them.
+#108's then-unmerged prediction-engine work in `hybrid_predictor.py`,
+`ngram_predictor.py`, `prefix_beam.py` and `fuzzy_recognizer.py`, 963
+insertions and 284 deletions across 20 files.
+
+`87f519a` is an exact identifier and a perishable one, in two ways rather
+than one. The repository squash-merges, so it will not be reachable from a
+fresh clone once #108 lands; and #108's branch has since been revised in
+review and force-pushed, so that commit is already off the branch and the
+pull request's current head describes a different tree. The durable
+identifiers are therefore the tag and the pull request number, and the
+anchor that matters is **v1.4.1**: nothing below turns on the unmerged
+commits, and the three files whose sizes are quoted differ from v1.4.1 by
+one line between them (`keyboard_bridge.py` 5,835 against 5,834; the other
+two identical).
 
 This document continues the
 [structural review](../architecture/STRUCTURAL_REVIEW.md) of 1 September
@@ -117,6 +124,12 @@ on every upgraded install, so the redaction ships with a second, separately
 guarded purge. This is a confirmed defect with a small fix that stands on
 its own; it should be its own pull request rather than wait on anything
 else in this document.
+
+**Fixed in [#120](https://github.com/owenpkent/alpha-osk/pull/120)**, which
+redacted both Linux sites and the macOS sibling and added the second purge
+generation for Linux and macOS. It is recorded here because a dated
+assessment that never says which of its findings were acted on is worth
+less at every later reading; the rest of this document remains proposals.
 
 ## 2. Immediate, then incremental: give operations honest success and failure contracts
 
