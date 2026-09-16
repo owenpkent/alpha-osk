@@ -40,7 +40,7 @@ Fixes that landed between August and this pass and were not recorded here:
 
 ### Documentation corrected
 
-- `docs/build/WINDOWS.md` said every `.exe` and `.dll` in the bundle is signed. Only `.exe` files are (`sign_directory` defaults to `exe_only=True` and `sign_build` passes nothing); the bundled Python and Qt DLLs ship unsigned inside the signed installer. The paragraph now says so and names the switch. Whether to sign them, at one EV token operation per file, is an open decision.
+- `docs/build/WINDOWS.md` said every `.exe` and `.dll` in the bundle is signed. Only `.exe` files are (`sign_directory` defaults to `exe_only=True` and `sign_build` passes nothing); the bundled Python and Qt DLLs ship unsigned inside the signed installer. The paragraph now says so and names the switch. Decided 2026-09-15: they stay unsigned. The bundle carries 318 DLLs and 24 `.pyd` extension modules, 15 to 25 minutes of token operations per release, for an environment class no user has asked for.
 - `docs/build/RELEASE.md` cited the `osv-scanner-action` pin at v2.3.8; CI is on a later pin that Dependabot keeps current.
 - `docs/architecture/TELEMETRY.md` said the `anon_id` lives in `analytics.json`; it lives in `telemetry.json`.
 - `docs/PRIVACY.md` described the first log leak and its fix; the second case (#120) is now recorded beside it.
@@ -51,7 +51,7 @@ Fixes that landed between August and this pass and were not recorded here:
 - **`KeySynthesizerBase._log_send` puts the full command, typed text included, into a DEBUG record with no privacy gate.** Sanctioned: the root logger is INFO and nothing in `main()` raises it (PR #80 removed the one place that did), and the platform layer cannot see privacy mode. Recorded in `keyboard_app.py`.
 - **The Windows synthesizer's `Unknown key name` warning interpolates the key.** It fires only for a multi-character name that is not a known virtual key; a typed character is single and takes the Unicode fallback silently.
 - **The token store admits letters-plus-digits shapes that could be a password.** A documented trade: every learned token is visible and individually removable under Saved Numbers & Addresses.
-- **Branch protection requires no pull-request review and `enforce_admins` is off.** The setting of a solo-maintainer repository; flagged as a decision to revisit the day a collaborator or a token with push rights is added.
+- **Branch protection requires no pull-request review and `enforce_admins` is off.** The setting of a solo-maintainer repository; Decided 2026-09-15: one approving review is now required, administrators exempt (the maintainer cannot approve their own pull requests, so they merge with `--admin`), and the Dependabot workflow approves the patch and minor updates it queues. Recorded in `docs/build/CI.md`.
 - **`create_shortcut` and its siblings in `windows.py` have no callers.** Dead code, not a defect; housekeeping.
 - **The relauncher and the Unreal-style game hold are unrelated to this pass** and were not re-examined beyond the items above.
 

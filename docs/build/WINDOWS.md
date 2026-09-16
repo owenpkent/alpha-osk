@@ -438,10 +438,13 @@ Python and Qt DLLs therefore ship unsigned inside the signed installer, which
 is the common arrangement for PyInstaller applications and is what the
 auto-updater's trust chain assumes (it verifies the installer, not the
 unpacked tree). An environment that enforces signatures on every loaded
-module (WDAC, AppLocker) would need the DLLs signed too; pass
-`exe_only=False` in `sign_build`, and budget for one EV token operation per
-file. This paragraph used to say every DLL was signed; the September 2026
-security audit found that it never was.
+module (WDAC, AppLocker) would need the DLLs signed too: `exe_only=False` in
+`sign_build` covers the 318 `.dll` files, and the 24 `.pyd` extension modules
+would need adding to its glob. Decided against on 2026-09-15: at one EV token
+operation plus a timestamp round trip each, that is 15 to 25 minutes per
+release for an environment class no user has asked for. This paragraph used
+to say every DLL was signed; the September 2026 security audit found that it
+never was.
 
 ### Step-by-Step: Building a Signed Release
 

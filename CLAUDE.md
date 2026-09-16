@@ -1137,6 +1137,13 @@ each one fixed: `docs/build/CI.md`. The rules that outlive the reasoning:
   checks are configured by name in the repo settings, so naming shards there
   means reconfiguring protection on every change to the shard count, and a
   stale entry blocks every PR for ever on a check that can never report.
+- **One approving review is required to merge, and administrators are
+  exempt.** GitHub will not let an author approve their own PR, so the
+  maintainer merges with `gh pr merge --admin`; the rule gates any future
+  collaborator or token instead. The Dependabot workflow approves the patch
+  and minor updates it queues, which needs the repository's "Allow GitHub
+  Actions to create and approve pull requests" setting on. Decided
+  2026-09-15 from the security audit; see `docs/build/CI.md`.
 - **`--cov-fail-under` belongs to the separate `coverage` job**, not the test
   jobs: a shard measures roughly a quarter of the lines. Its artifact upload
   needs `include-hidden-files: true`, or every upload is empty and the gate
