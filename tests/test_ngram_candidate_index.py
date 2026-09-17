@@ -20,6 +20,7 @@ def _blank_predictor(*, broad_unicode: bool = False) -> NgramPredictor:
         ENGLISH,
         word_re=re.compile(r"[^\s]+") if broad_unicode else ENGLISH.word_re,
         frequency=None,
+        extra_vocabulary=None,
     )
     predictor = NgramPredictor(profile=profile)
     predictor.unigrams.clear()

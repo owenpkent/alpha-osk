@@ -493,6 +493,11 @@ _NOT_LEARNING_STATE = frozenset(
         "check_autocorrect",
         "enable_llm",
         "enable_ppm",
+        # The explicit-content filter is a session flag over what the bar
+        # volunteers. It writes nothing learned and reads nothing the
+        # freeze protects, so a study session may flip it freely.
+        "explicit_filter_available",
+        "set_explicit_filter",
         "learning_frozen",
         "llm_available",
         "merge_strategy",

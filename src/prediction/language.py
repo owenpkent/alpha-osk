@@ -90,6 +90,15 @@ class LanguageProfile:
     #: language may ship a dictionary that already carries counts.
     frequency: Optional[Path] = None
 
+    #: Additional words without conversational frequency estimates. They
+    #: enter at one base count each, below the ranked vocabulary.
+    extra_vocabulary: Optional[Path] = None
+
+    #: Words the explicit-content filter suppresses from suggestions while
+    #: it is on. They stay in the dictionary and stay typable: this governs
+    #: what the bar volunteers, not what exists.
+    explicit_words: Optional[Path] = None
+
     def is_short_word(self, word: str) -> bool:
         """True if ``word`` is short enough to need the allow-list and on it.
 
@@ -162,6 +171,8 @@ ENGLISH = LanguageProfile(
     },
     dictionary=_DATA_DIR / "base_dictionary.txt",
     frequency=_DATA_DIR / "google-10000-english-usa-no-swears.txt",
+    extra_vocabulary=_DATA_DIR / "english-expanded.txt",
+    explicit_words=_DATA_DIR / "explicit_words.txt",
 )
 
 

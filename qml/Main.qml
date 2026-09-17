@@ -99,6 +99,9 @@ Window {
         property bool savedIntelligentSpacing: true
         property bool savedSnippetDetection: true
         property bool savedAutoCapitalizeAfterPunctuation: false
+        // Keeps explicit words out of the suggestion bar; the words are
+        // still typeable, this only governs whether they're offered.
+        property bool savedFilterExplicit: true
         property bool savedAutoSaveOnExit: true
         property bool savedRightClickShift: true
         // Flash a small bubble above a key showing the character it just
@@ -385,6 +388,7 @@ Window {
             keyboard.setDictationEnabled(appSettings.savedDictationEnabled)
             root.refreshDictation(false)
             keyboard.setAutoCapitalizeAfterPunctuation(appSettings.savedAutoCapitalizeAfterPunctuation)
+            keyboard.setFilterExplicit(root.filterExplicit)
             keyboard.setAutoSaveOnExit(appSettings.savedAutoSaveOnExit)
             keyboard.setCompatMode(appSettings.savedCompatMode)
             keyboard.setCompatAutoDetect(appSettings.savedCompatAutoDetect)
@@ -528,6 +532,7 @@ Window {
     // Offer to save a just-typed email / phone / address to Snippets.
     property bool snippetDetection: appSettings.savedSnippetDetection
     property bool autoCapitalizeAfterPunctuation: appSettings.savedAutoCapitalizeAfterPunctuation
+    property bool filterExplicit: appSettings.savedFilterExplicit
 
     // Auto-save prediction model on exit
     property bool autoSaveOnExit: appSettings.savedAutoSaveOnExit
@@ -5223,6 +5228,7 @@ Window {
             intelligentSpacing: root.intelligentSpacing
             snippetDetection: root.snippetDetection
             autoCapitalizeAfterPunctuation: root.autoCapitalizeAfterPunctuation
+            filterExplicit: root.filterExplicit
             autoSaveOnExit: root.autoSaveOnExit
             rightClickShift: root.rightClickShift
             keyPreviewEnabled: root.keyPreviewEnabled
@@ -5291,6 +5297,10 @@ Window {
                     root.autoCapitalizeAfterPunctuation = value
                     appSettings.savedAutoCapitalizeAfterPunctuation = value
                     if (keyboard) keyboard.setAutoCapitalizeAfterPunctuation(value)
+                } else if (setting === "filterExplicit") {
+                    root.filterExplicit = value
+                    appSettings.savedFilterExplicit = value
+                    if (keyboard) keyboard.setFilterExplicit(value)
                 } else if (setting === "intelligentSpacing") {
                     root.intelligentSpacing = value
                     appSettings.savedIntelligentSpacing = value

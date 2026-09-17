@@ -26,6 +26,7 @@ maintained counter actually fails.
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 from typing import List, Tuple
 from unittest.mock import MagicMock, patch
@@ -39,7 +40,26 @@ from src.prediction.fuzzy_recognizer import (
     FuzzyWordGenerator,
     SpatialKeyModel,
 )
+from src.prediction.language import ENGLISH
 from src.prediction.ngram_predictor import NgramPredictor
+
+#: These tests are about the counter bookkeeping, not about which words
+#: ship, so they build against the curated base list alone and leave the
+#: unranked spelling vocabulary out.
+#:
+#: That is not only tidiness. Hypothesis builds a fresh predictor per
+#: example, and loading the full profile costs 153 ms and 8.9 MiB every
+#: time against 28 ms without it, so a hundred examples per test across
+#: four xdist workers was enough to crash a CI worker outright. The
+#: invariant under test cannot tell the two profiles apart: it is a
+#: statement about ``_user_total`` tracking ``user_vocab``, and every
+#: operation these tests generate writes to the user half.
+_BOOKKEEPING_PROFILE = replace(ENGLISH, extra_vocabulary=None)
+
+
+def _predictor() -> NgramPredictor:
+    return NgramPredictor(profile=_BOOKKEEPING_PROFILE)
+
 
 # ---------------------------------------------------------------------------
 # Strategies
@@ -107,7 +127,7 @@ def predictor() -> NgramPredictor:
     accumulates across examples: the invariant has to hold from *any*
     starting state, so a deeper one is a better test than a clean one.
     """
-    return NgramPredictor()
+    return _predictor()
 
 
 class TestUserTotalStaysInStepWithUserVocab:
@@ -145,7 +165,7 @@ class TestUserTotalStaysInStepWithUserVocab:
         organically learned count behind. A fresh predictor per example: this
         is about an exact delta, so a shared accumulating one would hide an
         off-by-N."""
-        p = NgramPredictor()
+        p = _predictor()
         organic = p.user_vocab.get(word, 0)
 
         for _ in range(boosts):
@@ -160,7 +180,7 @@ class TestUserTotalStaysInStepWithUserVocab:
 
     @given(ops=operations)
     def test_clear_user_data_resets_to_a_consistent_state(self, ops: List[Tuple[str, str]]) -> None:
-        p = NgramPredictor()
+        p = _predictor()
         for op, word in ops:
             _apply(p, op, word)
         p.clear_user_data()
@@ -180,7 +200,7 @@ class TestModelRoundTrip:
         """`load` recomputes _user_total from the loaded dict rather than
         trusting a saved figure, so a model saved mid-drift self-heals. Pin
         that, and pin that the surviving entries keep their exact counts."""
-        p = NgramPredictor()
+        p = _predictor()
         for op, word in ops:
             _apply(p, op, word)
 
@@ -205,7 +225,7 @@ class TestModelRoundTrip:
         """`save` writes defaultdicts and a set (blacklist). Any state that
         json can't encode would raise on quit, losing the whole session's
         learning at exactly the moment it should be persisted."""
-        p = NgramPredictor()
+        p = _predictor()
         for op, word in ops:
             _apply(p, op, word)
 

@@ -185,6 +185,44 @@ Constants were set by sweep against the shipped list **with the n-gram's counts*
 
 ## Fuzzy dictionary refresh, and PPM out of the merge
 
+**Packed correction index (2026-09-15).** `SymSpell.prepare()` builds an
+immutable deletion index with UTF-8 key storage, packed 32-bit word IDs and
+offsets, and open-addressed hash slots (`src/prediction/packed_deletes.py`).
+New words added afterward go into a mutable deletion overlay, so personal
+learning still takes effect without a rebuild. Known-word frequency updates
+only touch the shared frequency map. Each query merges base postings before
+overlay postings to preserve candidate tie ordering. Reset/reload still
+replaces the whole SymSpell instance. Distance thresholds, serialized model
+formats, and dependencies are unchanged.
+
+`PrefixIndex` also uses packed keys, child rows, and top-completion word IDs
+(`packed_prefixes.py`), with mutable personal overlays and at most 4,096
+cached successful lookups. The base vocabulary grows from 18,989 to 83,386:
+64,443 ESDB size-60 words at one base count each, plus 27 curated
+care/accessibility/software words at 25 counts. `LanguageProfile.extra_vocabulary`
+owns the extra list. Exact and fuzzy prediction both consult the current base
+after model load without repopulating rejected saved entries or overwriting
+personal counts; clear/reload rebuild fuzzy coverage. The generator,
+checksum, source manifest, and full bundled license are documented in
+`docs/research/VOCABULARY_MEMORY.md` alongside measured memory and startup costs.
+Hybrid startup and full dictionary rebuilds call `prepare_prefix_index()`
+after frequency injection, keeping construction off the first typed prefix.
+Standalone fuzzy callers still prepare lazily; layout changes reuse the index.
+
+The existing `allow_short_prefix` rescue remains tied to the fixed five-candidate
+floor, independent of the requested pill count. New rare words can make a
+two-letter typo a live prefix, but suppressed entries do not count toward that
+floor. The standalone fuzzy API keeps its former default, and one character
+never triggers this fallback.
+
+The n-gram scorer retains all user/corpus/context candidates but only the best requested
+number of matching base words. Nonnegative mixture terms make this cutoff exact;
+unusual weights/counts fall back to the full scan. A versioned base map invalidates
+the sorted word-reference list and bounded next-word top rows on mutation. Equal
+scores now sort lexically, so the larger frequency-1 tail is deterministic across
+processes. See `tests/test_ngram_candidate_index.py` for brute-force parity and
+`scripts/bench/ngram_candidates.py` for the same-snapshot speed comparison.
+
 Two more of the 2026-09-02 findings, fixed together on 2026-09-03.
 
 **The fuzzy dictionary follows the vocabulary.** It used to be loaded once at startup (`load_dictionary` plus one `set_frequencies(ngram.unigrams)`) and never touched again: the constructor comment named a `_refresh_fuzzy_frequencies` that did not exist, and `enable_vocabulary_pack` wrote pack words into the n-gram only, so a word learned this session was not fuzzy-matchable (nor reachable by the prefix beam) until a restart, and a pack's words never were. Now every learning path pushes the changed words through `HybridPredictor._refresh_fuzzy_frequencies(words)` (`learn`, `learn_word`, `learn_from_selection`, `mark_good_suggestion`), which calls `FuzzyRecognizer.update_word(word, count)`: the dictionary entry is raised, **SymSpell indexes a new word in place** (`SymSpell.add_word` on a built index no longer invalidates it, since the rebuild is about 0.5 s and this runs on the keystroke path) and `PrefixIndex.update_word` adjusts the word's own prefixes. A pack enable merges the whole table (`_refresh_fuzzy_frequencies()` with no words). Both only add or raise, the `max` rule `set_frequencies` always had, so the three events that *shrink* the vocabulary, Clear Learned Data, a Data Backup import and a boost rollback from the dashboard (`clear_user_data`, `reload_from_disk`, `unprefer`), go through `_rebuild_fuzzy_dictionary`: `reset_dictionary`, the profile's wordlist, then the counts, about half a second at a moment the user asked for. `unprefer` was missed at first, and since the boost itself had reached the fuzzy dictionary through the refresh, a rolled-back word kept winning mid-word completions until the next restart. The one lowering deliberately *not* followed is `unlearn_word`, the backspace negative signal: it moves a count by one on the keystroke path, where the rebuild has no place, so the fuzzy count can sit a sighting or two above the n-gram's until the next rebuild. Tests: `tests/test_fuzzy_refresh.py`, one vocabulary event each, asking the fuzzy source on the same instance.
@@ -1086,7 +1124,7 @@ The parent (`Main.qml`'s settings popup window) calls `settingsPanel.resetToHome
 | | Theme | 9-theme color picker |
 | | Key Colours | Six-scheme picker, **Monochrome by default** (Default / Monochrome / Two-Tone / Function / Ink / Signal). Directly under Theme because every colour it offers is derived from the theme |
 | | Sound & Opacity | Key click sound, opacity slider |
-| **Smart Typing** | Suggestions | Show suggestions, auto-space, intelligent spacing, auto-cap, max count |
+| **Smart Typing** | Suggestions | Show suggestions, auto-space, intelligent spacing, auto-cap, max count, filter explicit words |
 | | Suggestion Engine | Merge strategy 4-card picker (rank / rrf / linear / loglinear) |
 | | Input | Right-click shift, key preview popup, Compatibility Mode picker, repeat delay & interval |
 | **Function Keys** | Show | Function Keys (F1-F12) and Extra Function Keys (F13-F24) row toggles, moved here from Appearance -> Panels |
@@ -1407,9 +1445,69 @@ Theme picker in settings shows labeled color swatches with mini key previews.
 
 ## Vocabulary
 
-- **Base**: Google 10K wordlist (`data/google-10000-english-usa-no-swears.txt`) + 10K supplement (`data/google-20000-supplement.txt`, filtered for explicit content). ~20K total regular words.
+- **Base**: Google 10K wordlist (`data/google-10000-english-usa-no-swears.txt`) + 10K supplement (`data/google-20000-supplement.txt`, filtered for explicit content) + `data/english-expanded.txt`, 64,443 words from SCOWL size 60 by way of the ESDB bundle (permissively licensed, see `data/licenses/ESDB.txt`, pinned by sha256 in `data/english-expanded.manifest`). ~83K total. The SCOWL half enters at **one base count each**, so it supplies coverage without competing with conversational frequencies or reading as personal history. It is a speller's list, which is why it carries explicit content that the curated lists do not: see *Explicit content is filtered from suggestions*.
 - **Packs**: No built-ins ship. The system is import-only - see *Vocabulary Packs* section. Imported packs appear as toggles in Settings -> Your Language Model -> Vocabulary Packs.
 - **Numpad**: Toggles between numbers and navigation keys (Home/End/PgUp/PgDn/arrows/Ins/Del) via NumLock. Key 5 is blank in nav mode. Layout mirrors a physical numpad: rows `7 8 9 /`, `4 5 6 *`, `1 2 3 -`, `0(span 2) . +`, `Enter(span 3) NumLock`. NumLock sits at the bottom-right (active highlight uses the theme accent), Enter is the wide bottom-row key. Earlier builds put NumLock on the top row and stretched `+` / Enter as 2-row spans on the right column. The flat 5-row layout was the user's request to match a physical 10-key.
+
+## Explicit content is filtered from suggestions, not from the vocabulary
+
+*Settings -> Smart Typing -> Suggestions -> Filter Explicit Words*, **default
+ON**. The whole design is in the distinction the title makes: the words stay
+in the dictionary, stay typable character by character, and stay learnable.
+The setting decides only what the prediction bar **volunteers**.
+
+That is deliberate and was the owner's call (2026-09-16): a keyboard that
+cannot swear is a dignity problem for an AAC user, so the answer is not to
+remove the words but to let the user decide whether the bar offers them. The
+shipped wordlist is therefore unfiltered, including slurs, and the filter is
+the control over it. Do not re-litigate the content question; do keep the
+filter honest.
+
+- **`data/explicit_words.txt` is generated, not hand-edited**
+  (`scripts/gen_explicit_words.py`). It is a list of **exact words**, so the
+  runtime is a set lookup with no suffix logic to get wrong.
+- **Matching is stem-plus-closed-suffix-set, never substring.** That rule and
+  its suffix list come from `data/explicit_stems.txt`, which already
+  documented it. Substring matching is the Scunthorpe problem and it flags
+  `class`, `assess`, `cocktail`, `peacock`, `dictionary`, `analysis` and
+  `shiitake`. A filter that visibly swallows ordinary words is one the user
+  switches off and leaves off, which is the same outcome as not having it.
+  `"spook"` is deliberately **not** a stem for exactly this reason: it would
+  take `spooky` and `spooked` with it.
+- **Nothing is filtered at generation time any more, and that is the fix for
+  a bug worth remembering.** `explicit_stems.txt` (named
+  `explicit_exclusions.txt` until 2026-09-16) used to be applied by
+  `gen_vocabulary.py`, so the words it named were absent from the shipped
+  list and no setting could bring them back. It had been written to cover
+  swearing and it missed slurs, so the shipped vocabulary ended up carrying
+  **slurs but no common profanity**, which is the exact inverse of what
+  anyone wanted: you could not predict `fuck` at all, while the slurs were
+  one keystroke from a pill. The stems now only *seed* the suggestion
+  filter, the wordlist ships unfiltered, and the file was renamed because a
+  file called "exclusions" that excludes nothing is how the two jobs got
+  confused in the first place.
+- **The filter is applied in exactly one place**, `_finalize_scores`, beside
+  the short-word gate, because every suggestion from every strategy passes
+  through there. A second copy at another emit site is the parallel-blocks
+  failure this file warns about for sticky-modifier release.
+- **Personal vocabulary outranks the filter.** A flagged word in
+  `user_vocab` is offered normally, because at that point the keyboard has
+  direct evidence of the user's own register. **One typing is enough**, not
+  three: the three-sighting candidate gate applies to words the model does
+  not already know, and these are all in the shipped dictionary, so `learn`
+  takes the known-word branch. Worth knowing because the neighbouring gate
+  makes three the number a reader expects.
+- **It fails open.** A missing or unreadable list leaves the filter inert
+  rather than stopping construction, the same trade `_load_extra_vocabulary`
+  makes, and `explicit_filter_available` is what lets the UI say so rather
+  than showing a toggle that governs nothing.
+
+Guarded by `tests/test_explicit_filter.py`, where every case is paired with
+its inverse: the suppression test is paired with turning the filter off (a
+filter that suggested nothing at all would satisfy the first alone), and the
+flag list is checked against the shipped **no-swears** frequency list as
+ground truth, so a false positive is caught by construction rather than by
+anyone's judgement.
 
 ## Vocabulary Packs
 

@@ -59,6 +59,7 @@ Item {
     property bool intelligentSpacing: true
     property bool snippetDetection: true
     property bool autoCapitalizeAfterPunctuation: false
+    property bool filterExplicit: true
     // Merge strategy -- see docs/architecture/HYBRID_MERGING.md.  "rank" is the
     // default and historical behaviour; the others are alternatives.
     property string mergeStrategy: "rank"
@@ -989,6 +990,14 @@ Item {
                                     text: "Auto-Capitalize After Punctuation"
                                     checked: unifiedSettings.autoCapitalizeAfterPunctuation
                                     onToggled: function(c) { unifiedSettings.settingChanged("autoCapitalizeAfterPunctuation", c) }
+                                }
+
+                                SettingsToggle {
+                                    Layout.fillWidth: true
+                                    text: "Filter Explicit Words"
+                                    description: "Keep explicit words out of suggestions. They can still be typed."
+                                    checked: unifiedSettings.filterExplicit
+                                    onToggled: function(c) { unifiedSettings.settingChanged("filterExplicit", c) }
                                 }
 
                                 // Prediction count
