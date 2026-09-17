@@ -4,12 +4,24 @@ All notable changes to Alpha-OSK are documented in this file.
 
 ## [Unreleased]
 
+## [1.5.0] (2026-09-16)
+
 ### Added
+- **The dictionary is about four times larger, and a new setting decides whether suggestions can include explicit words.** Around 64,000 more words are available to complete and correct, taken from SCOWL, the spell-checker word list, which covers far more of English than a frequency list does. They enter below everything you already use: a word from the new list never outranks a word you type, and the suggestions you see for everyday words are unchanged.
+
+  Because a spell-checker list is built to recognise words rather than to suggest them, it contains language you would not want offered unprompted. *Settings -> Smart Typing -> Suggestions -> **Filter Explicit Words*** is on by default and keeps that language off the suggestion bar. It filters suggestions and nothing else: every word is still in the dictionary, can still be typed letter by letter, and is still learned from your typing, and a word you have typed yourself is offered normally from then on, because at that point the keyboard has evidence of how you actually write rather than an opinion about it. Turn the setting off and nothing is withheld.
+
+  Matching is by whole word, never by substring, which is what keeps `class`, `assess`, `cocktail`, `peacock`, `dictionary`, `analysis` and `shiitake` out of it.
+
 - **External switch scanners can now drive the keyboard on Windows.** Every key and every suggestion is published through Windows UI Automation, the interface assistive technology already uses. A switch-scanning app can find each one, draw its highlight over it, and press it for you, and a press behaves exactly like a click. It can also minimize the keyboard and bring it back without taking focus from the app you are typing into. It was built with the developer of Switchify PC, and any Windows-permitted assistive technology can use it, not one app in particular. Nothing new listens on your machine: there is no socket or background service, and Windows decides which programs may use it, as it does for screen readers.
 
   **A suggestion you meant to pick can never be swapped for a different word.** If the suggestions change while a scanner is still highlighting an old one, pressing it does nothing, even when the new suggestions happen to spell the same words. A minimized keyboard offers nothing to press at all. The full contract, and how each part was verified, is in `docs/architecture/UIA_TARGETS.md`.
 
 ### Changed
+- **The keyboard uses about 32 MB less memory, and the first word you type no longer waits for the spell index.** The two indexes behind correction and completion were dictionaries of Python lists; they are now packed into flat buffers, with anything learned afterwards kept in a small separate table beside them. Suggestions are byte for byte identical: a sweep of 6,084 prefixes gives exactly what the previous release gave.
+
+  The index is now built while the keyboard is starting rather than when you type your first letter, so the first keypress no longer pauses. Launching takes a second or two longer as a result, which is the trade: waiting at launch is expected, waiting mid-word is not.
+
 - **Your own words reach the top of the suggestions sooner.** The shipped example text used to be counted as if you had typed it, 2,604 words' worth on a fresh install and another copy at every launch, so a word you actually use had to outweigh all of it. Those examples now sit behind your typing as a light prior: with nothing learned yet the suggestions are unchanged, and once you type or pick a word it competes against a tenth of the old mass. Measured on fresh models, "bamboo" reaches the first pill after 3 typings instead of 22, and after one selection instead of five. The examples are rebuilt from the shipped file at every launch and are never written into your model, so a word a later release drops from its examples leaves with it. Models saved before this keep the counts they already have.
 
 - **A two-letter prefix with only a few exact completions now offers corrections too.** Typing `ww` used to show just `wwe` and `wwii`, because those two dictionary entries made the prefix "real" and switched the mis-click correction off; it now offers `we` beside them. The rule is a fixed floor (fewer than five exact completions), not the number of pills you show, so raising the suggestion count never reorders the first pills for a prefix.
@@ -40,6 +52,8 @@ All notable changes to Alpha-OSK are documented in this file.
   The override list in `docs/build/RELEASE.md` had drifted from the file it documents, listing five versions that had since moved and omitting `ip-address` and `sharp` altogether. It now matches, and says which of the two to believe when it drifts again.
 
 ### Fixed
+- **Taking part in the research study no longer changes your own model.** A study session suspends learning so the block being measured cannot train the model it is scored on, and two things were slipping past that: where inside each key you press, which feeds the mis-click correction, and the count that restores a word you had removed once you type it again. The first is the one that mattered, because the keyboard reads it back on the very next word, so the suggestions drifted during the block being measured and drifted further the longer it ran, which is the one kind of error that alternating the order of the blocks cannot cancel out. Both are now suspended with everything else, and the suspension is checked against every method that writes to your model rather than against a list someone remembered to keep up to date.
+
 - **Closing the keyboard from the taskbar minimizes it instead of making it vanish.** It used to disappear from the screen and the taskbar while still running, reachable only from the tray icon. It now drops to the taskbar like the minimize button. The close button on the keyboard itself and Quit in the tray still end it.
 
 - **Programmable key assignments are saved the same crash-safe way as every other store**, flushed to disk before the file is swapped into place, so a crash mid-save cannot leave a truncated `key_actions.json`.
