@@ -198,7 +198,7 @@ Yes on Windows (Unicode keystroke injection covers anything in BMP and supplemen
 | Anonymous telemetry (opt-in) | Client + UI shipped, endpoint not yet deployed |
 | Analytics dashboard | Shipping |
 | Data backup (export / import) | Shipping |
-| Test suite | ~2,250 tests passing |
+| Test suite | ~2,900 tests passing |
 | macOS port | In progress |
 | Federated learning | Designed, not implemented |
 | Voice dictation (opt-in, bring your own Deepgram key) | Shipping |
@@ -260,7 +260,7 @@ Yes on Windows (Unicode keystroke injection covers anything in BMP and supplemen
 ### Reliability
 
 - Single-instance lock prevents accidental duplicates
-- About 2,250 tests covering prediction, platform abstraction, bridge, vocab packs, dictation, telemetry, data export,
+- About 2,900 tests covering prediction, platform abstraction, bridge, vocab packs, dictation, telemetry, data export,
   including property-based suites that generate adversarial inputs for the archive / pack import
   paths and the prediction-engine invariants
 - CI runs ruff + mypy + pytest + OSV CVE scan on every push and PR
