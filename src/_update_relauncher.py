@@ -30,9 +30,13 @@ Flow
 1. Wait for the parent ``alpha-osk.exe`` to exit (the installer's
    taskkill in ``customInit``).
 2. Wait an extra grace period for the installer to finish writing
-   files. Polling ``$INSTDIR\\alpha-osk.exe`` for an mtime newer than
-   parent-death is the strongest signal we have without parsing PE
-   headers; "exists + readable + non-zero size" is the floor.
+   files. Polling ``$INSTDIR\\alpha-osk.exe`` for an mtime *different
+   from the pre-install snapshot* the updater took is the strongest
+   signal we have without parsing PE headers; "exists + readable +
+   non-zero size" is the floor. Newer-than-parent-death was tried and
+   can never fire: NSIS restores each extracted file's build-time
+   timestamp (``SetDateSave`` is on by default), so the fresh exe's
+   mtime *predates* the install by however old the build is.
 3. Launch the new exe via ``subprocess.Popen`` from the user session.
 4. Write ``update_handoff.json`` next to ``$APPDATA/alpha-osk/`` so the
    newly launched OSK can flash a "✓ Updated to vX.Y.Z" toast.
@@ -200,20 +204,59 @@ def _wait_for_parent_exit(pid: int, timeout_s: float) -> bool:
         time.sleep(_POLL_INTERVAL_S)
 
 
+def _new_exe_looks_fresh(
+    target: Path,
+    old_mtime: float,
+    after_mtime: Optional[float],
+) -> bool:
+    """Does ``target`` look like the freshly-installed exe right now?
+
+    The strong signal is ``old_mtime``, the installed exe's mtime as the
+    updater snapshotted it immediately before handing off to the
+    installer: a completed install guarantees the mtime is *different*,
+    not newer.  NSIS restores each extracted file's build-machine
+    timestamp (``SetDateSave`` defaults on), so the check this replaces,
+    ``mtime > parent-death-time``, could never fire in production: the
+    fresh exe's mtime predates the install by however old the build is,
+    and every real update burned the full new-exe timeout and then
+    reported failure while the installer's explorer fallback quietly did
+    the relaunch.  Two builds never share a timestamp, so inequality
+    against the snapshot is exact; the one case it cannot see is a
+    reinstall of the *same* build, which the auto-updater never performs
+    (it only ever moves to a newer version).
+
+    Without a snapshot (``old_mtime <= 0``) fall back to the legacy
+    comparison, so a helper spawned by an updater too old to pass one
+    behaves as it always did.
+
+    Transient ``OSError`` reads as "not yet": the installer may be
+    mid-write, and the caller polls.
+    """
+    try:
+        if not target.is_file():
+            return False
+        stat = target.stat()
+        if stat.st_size <= 0:
+            return False
+        if old_mtime > 0:
+            return abs(stat.st_mtime - old_mtime) > 1e-6
+        if after_mtime is None:
+            return True
+        return stat.st_mtime > after_mtime
+    except OSError:
+        return False
+
+
 def _wait_for_new_exe(
     target: Path,
     after_mtime: Optional[float],
     timeout_s: float,
+    old_mtime: float = 0.0,
 ) -> bool:
-    """Block until ``target`` exists and looks like the freshly-written exe.
+    """Block until ``target`` looks freshly installed or we time out.
 
-    ``after_mtime`` is the parent OSK's death time; an exe whose mtime
-    predates that is the OLD exe (installer hasn't finished). Waiting
-    for ``mtime > after_mtime`` is a much stronger signal than just
-    "file exists." If we don't have a death time, fall back to the
-    weaker existence-and-non-empty check.
-
-    Checks before the clock for the same reason as
+    The readiness rule lives in :func:`_new_exe_looks_fresh`; this adds
+    the polling.  Checks before the clock for the same reason as
     ``_wait_for_parent_exit``: a budget already clamped to 0 must still
     stat the file once.  An installer that finished while an earlier
     phase overran is exactly the case where the answer is "yes, it is
@@ -221,16 +264,8 @@ def _wait_for_new_exe(
     """
     deadline = time.monotonic() + timeout_s
     while True:
-        try:
-            if target.is_file():
-                stat = target.stat()
-                if stat.st_size > 0:
-                    if after_mtime is None or stat.st_mtime > after_mtime:
-                        return True
-        except OSError:
-            # Transient stat race against the installer mid-write; retry
-            # on the next poll tick rather than aborting the wait.
-            pass
+        if _new_exe_looks_fresh(target, old_mtime, after_mtime):
+            return True
         if time.monotonic() >= deadline:
             return False
         time.sleep(_POLL_INTERVAL_S)
@@ -314,6 +349,10 @@ def run_relauncher(argv: list[str]) -> int:
     parser.add_argument("--new-version", type=str, required=True)
     parser.add_argument("--previous-version", type=str, default="")
     parser.add_argument("--target-exe", type=str, required=True)
+    # The installed exe's mtime as the updater saw it just before the
+    # install; 0.0 (the default) means "no snapshot" and falls back to
+    # the legacy readiness check. See _new_exe_looks_fresh.
+    parser.add_argument("--old-exe-mtime", type=float, default=0.0)
     parser.add_argument("--config-dir", type=str, required=True)
     parser.add_argument("--show-splash", action="store_true")
     args = parser.parse_args(argv[1:])
@@ -425,7 +464,8 @@ def _run_headless(args: argparse.Namespace, overall_deadline: Optional[float] = 
 
     target_exe = Path(args.target_exe)
     new_exe_budget = _remaining(overall_deadline, _NEW_EXE_TIMEOUT_S)
-    if not _wait_for_new_exe(target_exe, parent_death_time, new_exe_budget):
+    old_mtime = getattr(args, "old_exe_mtime", 0.0)
+    if not _wait_for_new_exe(target_exe, parent_death_time, new_exe_budget, old_mtime):
         _logger.error("New exe never appeared at %s within %.0fs", target_exe, new_exe_budget)
         return 3
 
@@ -438,21 +478,11 @@ def _run_headless(args: argparse.Namespace, overall_deadline: Optional[float] = 
     return 0
 
 
-def _new_exe_ready(target: Path, after_mtime: Optional[float]) -> bool:
+def _new_exe_ready(target: Path, after_mtime: Optional[float], old_mtime: float = 0.0) -> bool:
     """Single-shot version of ``_wait_for_new_exe``. Returns True if the
     new exe is in place right now. Used by the QTimer-driven splash
     path so we can yield back to the event loop between checks."""
-    try:
-        if not target.is_file():
-            return False
-        stat = target.stat()
-        if stat.st_size <= 0:
-            return False
-        if after_mtime is None:
-            return True
-        return stat.st_mtime > after_mtime
-    except OSError:
-        return False
+    return _new_exe_looks_fresh(target, old_mtime, after_mtime)
 
 
 def _run_with_splash(args: argparse.Namespace, overall_deadline: Optional[float] = None) -> int:
@@ -486,6 +516,12 @@ def _run_with_splash(args: argparse.Namespace, overall_deadline: Optional[float]
 
     existing_app = QApplication.instance()
     app = existing_app if isinstance(existing_app, QApplication) else QApplication([])
+    # Only _finish may end this process. Without this, closing the last
+    # (only) window quits the event loop mid-poll and the relaunch is
+    # silently abandoned; with it, a WM_CLOSE from outside (a stray
+    # `taskkill` without /F posts one to every window of the image) or
+    # any future second window cannot end the run early.
+    app.setQuitOnLastWindowClosed(False)
 
     splash = _build_splash_widget(
         QWidget,
@@ -505,6 +541,15 @@ def _run_with_splash(args: argparse.Namespace, overall_deadline: Optional[float]
     close_btn = splash.findChild(QWidget, "close")
     if close_btn is not None:
         close_btn.mousePressEvent = lambda ev: splash.hide()  # type: ignore[assignment]
+
+    # A close request is a "stop showing me this", never an abort: hide
+    # and keep polling, exactly like the ✕ label. An accepted close on
+    # the only window would otherwise be indistinguishable from Done.
+    def _close_means_hide(ev):  # pragma: no cover - needs a live window server
+        ev.ignore()
+        splash.hide()
+
+    splash.closeEvent = _close_means_hide  # type: ignore[method-assign]
 
     splash.show()
     # Centre on the primary screen — frameless windows don't get a
@@ -579,7 +624,11 @@ def _run_with_splash(args: argparse.Namespace, overall_deadline: Optional[float]
         QTimer.singleShot(0, _poll_new_exe)
 
     def _poll_new_exe() -> None:
-        if _new_exe_ready(target_exe, state.parent_death_time):
+        if _new_exe_ready(
+            target_exe,
+            state.parent_death_time,
+            getattr(args, "old_exe_mtime", 0.0),
+        ):
             _launch()
             return
         if time.monotonic() >= state.deadline:
