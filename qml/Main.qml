@@ -1313,7 +1313,40 @@ Window {
     // so accent keys also take an accent-coloured border (accentKeyBorder).
     // A border sits beside the label rather than behind it, so it can be the
     // full-strength accent on every theme without costing any contrast.
-    // The same "muted, not raw" reasoning is why Enter uses "#2a5a2a".
+    //
+    // ENTER TAKES THAT SAME WASH AND NO HUE OF ITS OWN, so the board under
+    // this scheme carries one colour rather than two.  It used to be a flat
+    // "#2a5a2a": the only fill in this file that skipped the walk above, and
+    // the only literal hue left in a project whose first colour rule is that
+    // there are none.  It measured 1.89:1 on Typewriter, 2.15 on Light and
+    // 3.28 on Vaporwave, all under WCAG AA, and it went unnoticed because
+    // every scheme but `off` resolves Enter through `_roleFill` and never
+    // reaches this line.  Sharing `accentKeyColor` fixes the ratio for free
+    // (it is already walked per theme) and spends no new colour to do it.
+    // The keys stay told apart by the border and by the role schemes, which
+    // is where that job belongs.
+    //
+    // THE KEYS THAT DESTROY TEXT ARE EXEMPT FROM THAT BORDER, and the
+    // exception is the rule working rather than a carve-off from it.  A
+    // saturated ring outranks a lightness step at a glance, so Backspace
+    // and Del wearing one while Enter wears none made the destructive key
+    // the loudest thing on the compact grid: reported as "more emphasized
+    // than enter", and it was, four rings (Backspace, Tab, Del, Shift)
+    // against nought.  The FILLS were never the problem and are untouched
+    // here: measured on Dark they sit 13.8 and 11.8 OKLab dE from a plain
+    // key, which is level.  It was only ever the ring.
+    //
+    // It also has to be read off the ROLE rather than a list of actions
+    // spelled out here.  `Palette.roleForKey` is already this project's one
+    // answer to "does this key destroy text" (it is what paints the `kill`
+    // band), and a second list in this file is exactly the pair of parallel
+    // blocks that drift.  Note this border is the one colour on a key that
+    // Key Colours does NOT reach, since it keys off the layout JSON's
+    // `style` and every fill keys off `role`: that is why the ring won even
+    // on Monochrome, whose whole intent is to make Enter the brightest key
+    // on the board.  Widening this to follow the scheme properly was the
+    // other option on the table and is the bigger change; this one is the
+    // smallest thing that puts Enter back on top.
     // The wash delegates to palette.js, which is the single copy of the
     // WCAG maths in the project: two copies of a contrast rule is exactly
     // how the two drift apart (see the `luminance` note above, which this
@@ -1325,6 +1358,13 @@ Window {
     readonly property color accentKeyColor: root.accentWashFor(
         root.themeKeyColor, root.themeAccent, root.themeTextColor)
     readonly property color accentKeyBorder: root.themeAccent
+    function keyBorderFor(kd) {
+        if ((kd.style || "default") !== "accent")
+            return root.themeBorder
+        // Backspace and Del: the wash still marks them, the ring does not.
+        return root.keyRoleFor(kd) === "kill" ? root.themeBorder
+                                              : root.accentKeyBorder
+    }
     property color themeBorder: activeTheme.border
 
     // ===== Key colouring by role =====
@@ -3284,8 +3324,15 @@ Window {
                                     switch(kd.style || "default") {
                                         case "secondary": return Qt.darker(root.themeKeyColor, 1.3)
                                         case "special": return Qt.darker(root.themeKeyColor, 1.15)
-                                        case "accent": return root.accentKeyColor
-                                        case "enter": return "#2a5a2a"
+                                        // Enter shares the editing keys'
+                                        // wash rather than carrying a hue of
+                                        // its own: one colour on the board,
+                                        // not two.  The two styles still part
+                                        // company on the border, where
+                                        // `accent` takes a ring and `enter`
+                                        // does not (see keyBorderFor).
+                                        case "accent":
+                                        case "enter": return root.accentKeyColor
                                         default: return root.themeKeyColor
                                     }
                                 }
@@ -3295,9 +3342,11 @@ Window {
                                 // Accent keys carry the cue on their border as
                                 // well as their fill: the fill has to stay weak
                                 // enough to keep the label readable (see
-                                // accentWashFor), the border does not.
-                                borderColor: (kd.style || "default") === "accent"
-                                             ? root.accentKeyBorder : root.themeBorder
+                                // accentWashFor), the border does not.  The
+                                // keys that destroy text are the exception and
+                                // take no ring at all; `keyBorderFor` carries
+                                // the reasoning.
+                                borderColor: root.keyBorderFor(kd)
 
                                 // Repeat-worthy specials always; character
                                 // keys only when the user asked for it (see
@@ -3519,7 +3568,7 @@ Window {
                 specialKeyColor: Qt.darker(root.themeKeyColor, 1.15)
                 keyPressedColor: root.themeKeyPressed
                 keyTextColor: root.themeTextColor
-                enterKeyColor: "#2a5a2a"
+                enterKeyColor: root.accentKeyColor
                 accentColor: root.themeAccent
                 borderColor: root.themeBorder
                 characterRepeat: root.characterRepeat
