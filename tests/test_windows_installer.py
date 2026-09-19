@@ -1010,3 +1010,124 @@ class TestThePreviousVersionCheckExecutesNothingFromTheRegistry:
         )
         assert result.returncode == 0, result.stdout + result.stderr
         assert (tmp_path / "harness.exe").is_file()
+
+
+class TestTheShortcutsCarryTheTaskbarIdentity:
+    """The installer stamps System.AppUserModel.ID onto its shortcuts.
+
+    The running keyboard sets an explicit AppUserModelID on itself
+    (keyboard_app.py::APP_USER_MODEL_ID, since v1.2.0) so the taskbar
+    keeps its icon, but ``CreateShortCut`` cannot write property-store
+    values, so from v1.2.0 to 1.5.0 the installer's shortcuts carried
+    no id at all.  Windows then derives one from the shortcut's target
+    path, the running window announces a different one, and a pinned
+    shortcut and the running keyboard show as two taskbar buttons for
+    the same app, observed on a real machine: a pre-v1.2.0 pin with an
+    empty id sitting beside a pin taken from the running window.
+    """
+
+    MAKENSIS = shutil.which("makensis") or r"C:\Program Files (x86)\NSIS\makensis.exe"
+
+    def _app_id(self) -> str:
+        source = (REPO_ROOT / "src" / "keyboard_app.py").read_text(encoding="utf-8")
+        match = re.search(r'^APP_USER_MODEL_ID = "([^"]+)"', source, re.MULTILINE)
+        assert match, "src/keyboard_app.py no longer defines APP_USER_MODEL_ID"
+        return match.group(1)
+
+    def test_the_stamp_is_the_id_the_app_sets_on_itself(self, nsi: str) -> None:
+        # Expanded against the script's own defines, and compared to the
+        # constant in keyboard_app.py: build.py reads it out of that
+        # file at generation time precisely so the two cannot drift, and
+        # a stamp that drifted would recreate the very duplicate this
+        # feature removes.
+        assert _expand_defines(nsi, "${APP_AUMI}") == self._app_id()
+
+    def test_both_app_shortcuts_are_stamped(self, nsi: str) -> None:
+        section = _install_section(nsi)
+        for lnk in (
+            "$SMPROGRAMS\\Alpha-OSK\\Alpha-OSK.lnk",
+            "$DESKTOP\\Alpha-OSK.lnk",
+        ):
+            pattern = re.escape(f'Push "{lnk}"') + r"\s*\n\s*Call StampShortcutAppId"
+            assert re.search(pattern, section), f"{lnk} is never stamped"
+
+    def test_only_the_app_shortcuts_are_stamped(self, nsi: str) -> None:
+        # Two, exactly: the uninstall shortcut must not group with the
+        # running keyboard.
+        assert _install_section(nsi).count("Call StampShortcutAppId") == 2
+
+    def test_the_stamping_survives_unchecked_shortcut_boxes(self, nsi: str) -> None:
+        # The Push/Call pairs sit after the last ${EndIf}, outside both
+        # $Create*Shortcut conditionals: every install before 1.5.1
+        # created these shortcuts unstamped, so an update whose user
+        # unchecked the boxes must still stamp the pre-existing files
+        # (the macro no-ops when the .lnk is absent).
+        section = _install_section(nsi)
+        assert section.rfind("${EndIf}") < section.find("Call StampShortcutAppId")
+
+    def test_the_macro_writes_the_property_store(self, nsh: str) -> None:
+        code = _macro_code(nsh, "customStampShortcutAppId")
+        # The pieces that make the System::Call sequence mean what it
+        # claims: a read-write property store opened on the .lnk,
+        # PKEY_AppUserModel_ID (its GUID at property id 5), a VT_LPWSTR
+        # (31) value carrying the define, and the SetValue / Commit /
+        # Release vtable slots (6, 7, 2).
+        assert "SHGetPropertyStoreFromParsingName" in code
+        assert "{886d8eeb-8cf2-4446-8d02-cdba1dbdcf99}" in code  # IID_IPropertyStore
+        assert "{9F4C2855-9F79-4B39-A8D0-E1D42DE1D5F3}" in code  # PKEY_AppUserModel_ID
+        assert re.search(r'g "\{9F4C2855[^"]+\}", i 5\)', code), (
+            "the property key must pair the GUID with property id 5"
+        )
+        assert "&i2 31" in code, "the PROPVARIANT vt must be VT_LPWSTR (31)"
+        assert "${APP_AUMI}" in code
+        for slot in ("->6(", "->7()", "->2()"):
+            assert slot in code, f"missing vtable call {slot}"
+
+    def test_a_missing_shortcut_is_skipped_not_an_error(self, nsh: str) -> None:
+        # A lost stamp costs taskbar grouping; failing the install over
+        # it would cost the keyboard.
+        code = _macro_code(nsh, "customStampShortcutAppId")
+        assert "${If} ${FileExists}" in code
+
+    @pytest.mark.skipif(not Path(MAKENSIS).is_file(), reason="makensis is not installed")
+    def test_the_stamping_macro_compiles(self, tmp_path: Path) -> None:
+        """System::Call struct specs and LogicLib nesting only fail under
+        makensis; the text assertions above cannot see a malformed one."""
+        harness = tmp_path / "harness.nsi"
+        harness.write_text(
+            "\n".join(
+                [
+                    "Unicode true",
+                    '!include "LogicLib.nsh"',
+                    '!define APP_NAME "Alpha-OSK"',
+                    '!define APP_EXE "alpha-osk.exe"',
+                    '!define APP_GUID "alpha-osk-keyboard"',
+                    '!define APP_ORG "alpha-osk"',
+                    '!define APP_VERSION "9.9.9"',
+                    '!define APP_AUMI "OKStudio.AlphaOSK"',
+                    "Var StudyInvite",
+                    'OutFile "harness.exe"',
+                    'InstallDir "$TEMP\\alpha-osk-harness"',
+                    "RequestExecutionLevel user",
+                    f'!include "{INSTALLER_NSH}"',
+                    "Function StampShortcutAppId",
+                    "  !insertmacro customStampShortcutAppId",
+                    "FunctionEnd",
+                    "Section",
+                    '  Push "$TEMP\\does-not-exist.lnk"',
+                    "  Call StampShortcutAppId",
+                    "SectionEnd",
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        result = subprocess.run(
+            [self.MAKENSIS, "/V2", str(harness)],
+            capture_output=True,
+            text=True,
+            cwd=tmp_path,
+            timeout=120,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert (tmp_path / "harness.exe").is_file()

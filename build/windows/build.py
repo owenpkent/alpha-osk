@@ -50,6 +50,7 @@ See Also
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -499,6 +500,28 @@ def build_nsis_installer(makensis_path: str) -> Path | None:
     return installer_exe
 
 
+def _read_app_user_model_id() -> str:
+    """The taskbar identity the running app sets on itself.
+
+    Read out of ``src/keyboard_app.py`` (the single definition,
+    ``APP_USER_MODEL_ID``) rather than restated here, because the
+    installer stamps this exact string onto the Start Menu / Desktop
+    shortcuts and a second copy is how the two would drift: a shortcut
+    stamped with anything else fails to group with the running window
+    and the taskbar shows two buttons for the same app.  Read by regex
+    instead of import so generating the installer script never drags
+    PySide6 into the build process.
+    """
+    source = (PROJECT_ROOT / "src" / "keyboard_app.py").read_text(encoding="utf-8")
+    match = re.search(r'^APP_USER_MODEL_ID = "([^"]+)"', source, re.MULTILINE)
+    if not match:
+        raise RuntimeError(
+            "APP_USER_MODEL_ID not found in src/keyboard_app.py; the installer "
+            "cannot stamp shortcuts with an identity it cannot read"
+        )
+    return match.group(1)
+
+
 def _generate_nsi_script(version: str, installer_name: str) -> str:
     """
     Generate the NSIS ``.nsi`` script content.
@@ -511,6 +534,7 @@ def _generate_nsi_script(version: str, installer_name: str) -> str:
     - Includes the ``installer.nsh`` custom macros.
     """
     dist_dir_nsis = str(DIST_DIR).replace("/", "\\")
+    app_aumi = _read_app_user_model_id()
     installer_nsh = str(SCRIPT_DIR / "installer.nsh").replace("/", "\\")
     release_dir_nsis = str(RELEASE_DIR).replace("/", "\\")
     # Icon path (if it exists)
@@ -616,6 +640,12 @@ def _generate_nsi_script(version: str, installer_name: str) -> str:
 ; Windows registry keys are case-insensitive, so "Alpha-OSK" would resolve to
 ; this same key -- do not spell it from ${{APP_NAME}}.
 !define APP_ORG "alpha-osk"
+; The taskbar identity the running app sets on itself
+; (keyboard_app.py::APP_USER_MODEL_ID, read from that file at generation
+; time so the two cannot drift).  Stamped onto the Start Menu / Desktop
+; shortcuts by StampShortcutAppId below; a shortcut without it does not
+; group with the running window and the taskbar shows two buttons.
+!define APP_AUMI "{app_aumi}"
 !define INSTALL_DIR "$PROGRAMFILES64\\Alpha-OSK"
 
 ; --- Installer metadata ---
@@ -941,6 +971,15 @@ Function CloseAlphaOsk
 FunctionEnd
 
 ; ============================================================
+;  Taskbar identity for shortcuts
+; ============================================================
+; A Function, not an inline macro, because it is called once per
+; shortcut and a macro inserted per call site would duplicate its body.
+Function StampShortcutAppId
+  !insertmacro customStampShortcutAppId
+FunctionEnd
+
+; ============================================================
 ;  Launch as original (non-elevated) user
 ; ============================================================
 Function LaunchAsUser
@@ -1037,6 +1076,18 @@ Section "Install"
   ${{If}} $CreateDesktopShortcut == ${{BST_CHECKED}}
     CreateShortCut "$DESKTOP\\Alpha-OSK.lnk" "$INSTDIR\\${{APP_EXE}}" "" "$INSTDIR\\${{APP_EXE}}" 0
   ${{EndIf}}
+
+  ; Stamp the taskbar identity (${{APP_AUMI}}) on this install's app
+  ; shortcuts.  Unconditional rather than inside the ${{If}} blocks
+  ; above: the function no-ops on a missing file, and a silent update
+  ; that ever stops recreating shortcuts must still stamp the ones a
+  ; previous install left behind (installs before 1.5.1 created them
+  ; unstamped).  The uninstall shortcut is deliberately not stamped:
+  ; grouping the uninstaller with the running keyboard would be wrong.
+  Push "$SMPROGRAMS\\Alpha-OSK\\Alpha-OSK.lnk"
+  Call StampShortcutAppId
+  Push "$DESKTOP\\Alpha-OSK.lnk"
+  Call StampShortcutAppId
 SectionEnd
 
 ; ============================================================

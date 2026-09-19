@@ -853,63 +853,160 @@ class TestLaunchInstaller:
         assert args == [str(dest), "/S", "/D=/opt/alpha-osk"]
 
 
-class TestRelauncherSpawnHasNoConsole:
-    """The update relauncher must not leave a console window behind.
+class TestRelauncherSpawn:
+    """_spawn_relauncher stages a renamed copy of the bundle in %TEMP%.
 
-    `_spawn_relauncher` passed `DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP`
-    with a comment asserting "No new console", and that was wrong in a way
-    worth pinning: DETACHED_PROCESS detaches only the process it creates and
-    does not propagate, so the venv interpreter's re-exec into the base
-    interpreter allocated one anyway.  The symptom was an empty terminal per
-    relauncher, which is how the leaking-process bug above was noticed.
+    Both halves of the staging are load-bearing, and each is pinned
+    below.  The helper must NOT be named alpha-osk.exe: the installer
+    closes the app with `taskkill /IM "alpha-osk.exe"`, polls tasklist
+    for that image name to disappear, and force-kills whatever still
+    matches, so a helper sharing the name cost every update the full
+    wait budget and then its own life (relauncher.log never carried a
+    production entry).  And it must NOT run from the install dir: a
+    running process holds its exe and DLLs mapped, Windows will neither
+    delete nor overwrite a mapped image, and a silent NSIS install that
+    cannot write a file aborts; the accidental kill was the only
+    reason updates succeeded.
     """
 
-    def _info(self):
-        return updater.UpdateInfo(
-            version="1.0.3",
-            download_url=(
-                "https://github.com/owenpkent/alpha-osk-releases/releases/"
-                "download/v1.0.3/Alpha-OSK-Setup-1.0.3.exe"
-            ),
-            asset_name="Alpha-OSK-Setup-1.0.3.exe",
-            notes="",
+    def _frozen_world(self, monkeypatch, tmp_path):
+        """Fake a frozen install plus an isolated temp root.
+
+        Returns (installed_exe, temp_root, popen_calls).
+        """
+        import tempfile as _tempfile
+
+        install_dir = tmp_path / "install"
+        (install_dir / "_internal").mkdir(parents=True)
+        exe = install_dir / "alpha-osk.exe"
+        exe.write_bytes(b"old build")
+        (install_dir / "_internal" / "python3.dll").write_bytes(b"dll")
+
+        temp_root = tmp_path / "temp"
+        temp_root.mkdir()
+        real_mkdtemp = _tempfile.mkdtemp
+        monkeypatch.setattr(updater.tempfile, "gettempdir", lambda: str(temp_root))
+        monkeypatch.setattr(
+            updater.tempfile,
+            "mkdtemp",
+            lambda prefix: real_mkdtemp(prefix=prefix, dir=str(temp_root)),
         )
 
-    def test_create_no_window_is_set_on_windows(self, monkeypatch):
+        monkeypatch.setattr(sys, "frozen", True, raising=False)
+        monkeypatch.setattr(sys, "executable", str(exe))
+        # The autouse guard in conftest stubs the spawn out for every
+        # test, so restore the real one to inspect what it launches.
+        monkeypatch.setattr(updater, "_spawn_relauncher", _REAL_SPAWN_RELAUNCHER)
+
+        calls = []
+
+        def fake_popen(cmd, **kwargs):
+            calls.append((cmd, kwargs))
+            return object()
+
+        monkeypatch.setattr(updater.subprocess, "Popen", fake_popen)
+        return exe, temp_root, calls
+
+    def _spawned_cmd(self, calls):
+        assert len(calls) == 1
+        return calls[0][0]
+
+    def test_a_dev_run_spawns_nothing(self, monkeypatch):
+        # Not frozen: there is no bundle to stage and no installer will
+        # ever replace the target, so the old dev spawn's only
+        # observable behaviour was a detached process waiting out its
+        # timeout (the stranded processes TODO.md recorded).
+        monkeypatch.setattr(updater, "_spawn_relauncher", _REAL_SPAWN_RELAUNCHER)
+        monkeypatch.delattr(sys, "frozen", raising=False)
+        popened = []
+        monkeypatch.setattr(updater.subprocess, "Popen", lambda *a, **k: popened.append(a))
+        assert updater._spawn_relauncher("1.0.3") is False
+        assert popened == []
+
+    def test_the_helper_is_not_named_alpha_osk_exe(self, monkeypatch, tmp_path):
+        exe, temp_root, calls = self._frozen_world(monkeypatch, tmp_path)
+        assert updater._spawn_relauncher("1.0.3") is True
+        helper = Path(self._spawned_cmd(calls)[0])
+        assert helper.name == "alpha-osk-relauncher.exe"
+        assert helper.is_file()
+        # The rename is a rename, not a second copy: the original name
+        # must be gone from the stage, or the wait loop would still see
+        # an alpha-osk.exe... only by path, but keep the stage honest.
+        assert not (helper.parent / "alpha-osk.exe").exists()
+
+    def test_the_helper_runs_from_outside_the_install_dir(self, monkeypatch, tmp_path):
+        exe, temp_root, calls = self._frozen_world(monkeypatch, tmp_path)
+        assert updater._spawn_relauncher("1.0.3") is True
+        helper = Path(self._spawned_cmd(calls)[0])
+        assert exe.parent not in helper.parents, (
+            "a helper running from the install dir holds its own image and "
+            "DLLs mapped there, and the install cannot overwrite a mapped file"
+        )
+        assert temp_root in helper.parents
+        # The copy is the whole bundle, not the bare exe: a PyInstaller
+        # onedir exe cannot start without its _internal directory.
+        assert (helper.parent / "_internal" / "python3.dll").is_file()
+
+    def test_the_cmd_names_the_real_target_and_the_mtime_snapshot(self, monkeypatch, tmp_path):
+        exe, temp_root, calls = self._frozen_world(monkeypatch, tmp_path)
+        assert updater._spawn_relauncher("1.0.3") is True
+        cmd = self._spawned_cmd(calls)
+        # The helper polls and relaunches the INSTALLED exe, never its
+        # own staged copy.
+        assert cmd[cmd.index("--target-exe") + 1] == str(exe)
+        # The snapshot is what lets the helper see a build-stamped mtime
+        # as fresh (NSIS restores build-time timestamps, so "newer than
+        # the kill" never fires; see _new_exe_looks_fresh).
+        assert cmd[cmd.index("--old-exe-mtime") + 1] == str(exe.stat().st_mtime)
+        assert cmd[cmd.index("--parent-pid") + 1] == str(os.getpid())
+        assert "--show-splash" in cmd
+
+    def test_stale_stages_are_swept_at_the_next_spawn(self, monkeypatch, tmp_path):
+        exe, temp_root, calls = self._frozen_world(monkeypatch, tmp_path)
+        stale = temp_root / "alpha-osk-relauncher-old"
+        stale.mkdir()
+        (stale / "leftover.bin").write_bytes(b"x")
+        unrelated = temp_root / "something-else"
+        unrelated.mkdir()
+        assert updater._spawn_relauncher("1.0.3") is True
+        assert not stale.exists(), (
+            "a helper cannot delete its own image, so each update leaves one "
+            "stage behind; the next spawn owns the sweep"
+        )
+        assert unrelated.exists(), "the sweep must match only our own prefix"
+
+    def test_a_staging_failure_is_not_fatal(self, monkeypatch, tmp_path):
+        # False, not an exception: the install proceeds and the
+        # installer's explorer fallback carries the relaunch, which
+        # beats aborting an update over a full temp disk.
+        self._frozen_world(monkeypatch, tmp_path)
+
+        def boom(*a, **k):
+            raise OSError("disk full")
+
+        monkeypatch.setattr(updater.shutil, "copytree", boom)
+        assert updater._spawn_relauncher("1.0.3") is False
+
+    def test_create_no_window_is_set_on_windows(self, monkeypatch, tmp_path):
         import subprocess as sp
 
         if not hasattr(sp, "CREATE_NO_WINDOW"):
             pytest.skip("CREATE_NO_WINDOW is Windows-only")
 
-        # The autouse guard in conftest stubs this out for every test, so
-        # restore the real one to inspect what it would launch.
-        monkeypatch.setattr(updater, "_spawn_relauncher", _REAL_SPAWN_RELAUNCHER)
+        _, _, calls = self._frozen_world(monkeypatch, tmp_path)
         monkeypatch.setattr(sys, "platform", "win32")
-        seen = {}
-
-        def fake_popen(cmd, **kwargs):
-            seen.update(kwargs)
-            return object()
-
-        monkeypatch.setattr(updater.subprocess, "Popen", fake_popen)
         assert updater._spawn_relauncher("1.0.3") is True
-        flags = seen["creationflags"]
-        assert flags & sp.CREATE_NO_WINDOW, (
-            "the relauncher would allocate a console; DETACHED_PROCESS does "
-            "not cover the venv interpreter's re-exec"
-        )
-        # The half that makes the assertion above mean anything.  Windows
-        # documents CREATE_NO_WINDOW as *ignored* when combined with
-        # DETACHED_PROCESS, so a test that only checked the bit was
-        # present passed just as happily against the version where it did
-        # nothing at all.
+        flags = calls[0][1]["creationflags"]
+        assert flags & sp.CREATE_NO_WINDOW
+        # Windows documents CREATE_NO_WINDOW as *ignored* when combined
+        # with DETACHED_PROCESS, so a test that only checked the bit was
+        # present passed just as happily against the version where it
+        # did nothing at all.
         assert not flags & sp.DETACHED_PROCESS, (
             "DETACHED_PROCESS makes Windows ignore CREATE_NO_WINDOW, so the "
             "console suppression above would be inert"
         )
-        assert flags & sp.CREATE_NEW_PROCESS_GROUP, (
-            "it must stay out of our console group so the installer's taskkill cannot sweep it up"
-        )
+        assert flags & sp.CREATE_NEW_PROCESS_GROUP
 
 
 def _swap_succeeds(target: Path) -> bool:
