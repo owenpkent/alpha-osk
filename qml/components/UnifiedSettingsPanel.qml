@@ -37,6 +37,7 @@ Item {
           blurb: "Flat except the three places a wrong click costs you: held modifiers, Backspace and Del, Enter." }
     ]
     property real windowOpacity: 1.0
+    property bool snapToEdges: true
     property string currentLayout: "qwerty"
     property bool compactView: false
 
@@ -936,6 +937,28 @@ Item {
                                             horizontalAlignment: Text.AlignRight
                                         }
                                     }
+                                }
+                            }
+                        }
+
+                        // -- Window --
+                        SettingsSection {
+                            title: "Window"
+                            Layout.fillWidth: true
+
+                            ColumnLayout {
+                                Layout.fillWidth: true
+                                spacing: 4
+
+                                SettingsToggle {
+                                    Layout.fillWidth: true
+                                    text: "Snap to Screen Edges"
+                                    description: "When you move the keyboard, "
+                                               + "let it jump flush to an edge "
+                                               + "of the screen, or to the "
+                                               + "middle, once it gets close."
+                                    checked: unifiedSettings.snapToEdges
+                                    onToggled: function(c) { unifiedSettings.settingChanged("snapToEdges", c) }
                                 }
                             }
                         }
