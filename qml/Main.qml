@@ -157,6 +157,9 @@ Window {
         // properties, not bound to content.
         property int savedWindowX: -1000000
         property int savedWindowY: -1000000
+        // Magnetic edges while the window is being moved. See
+        // `snapWindowPos` for why it is on by default.
+        property bool savedSnapToEdges: true
 
         // Snippets window position, same sentinel and same reasoning. It
         // used to reset to "centred above the keyboard" on every launch,
@@ -519,6 +522,9 @@ Window {
 
     // Window transparency (0.3 = very transparent, 1.0 = fully opaque)
     property real windowOpacity: appSettings.savedWindowOpacity
+
+    // Magnetic edges while the window is being moved (see `snapWindowPos`).
+    property bool snapToEdges: appSettings.savedSnapToEdges
 
     // Audio feedback
     property bool audioEnabled: appSettings.savedAudioEnabled
@@ -1247,6 +1253,67 @@ Window {
         return root.desktopBounds()
     }
 
+    // ------------------------------------------------------------------
+    // Magnetic edges
+    // ------------------------------------------------------------------
+    //
+    // Landing a dragged window flush against a screen edge means holding the
+    // button down for the whole travel and then releasing within a pixel or
+    // two of the right spot, and a sustained precise gesture is the one thing
+    // this keyboard's user cannot rely on -- the same argument behind Move
+    // mode and behind the swipe-typing removal.  So a *proposed* position
+    // within `snapThreshold` of a screen edge, or of the screen's horizontal
+    // centre, is pulled flush to it.
+    //
+    // 24 px rather than the ~10 a mouse-driven desktop uses, for the same
+    // reason `hitMarginH` exists: the pointer this has to forgive is slower
+    // and less accurate than the one those defaults were chosen for.
+    property int snapThreshold: 24
+
+    // Four things about this are load-bearing:
+    //
+    //  - It snaps against `screenBoundsAt`, i.e. the screen the window is
+    //    actually on, never the primary one.  A monitor to the left has
+    //    negative coordinates a primary-screen calculation cannot even
+    //    express, which is the bug the snippets restore documents one
+    //    window over.
+    //  - The two axes are decided independently, so a keyboard sitting
+    //    flush on the bottom edge still slides freely along it.
+    //  - Horizontal centre is a target and vertical centre is not.
+    //    Centring a wide, short keyboard across the screen is something
+    //    people do; parking it halfway down is not, and a snap nobody
+    //    wanted reads as the window sticking for no reason.
+    //  - It is applied to the proposed position and must never be written
+    //    back into whatever the caller accumulates.  Feeding a snapped
+    //    value back in turns an edge into a trap: every later delta is then
+    //    measured from the snap point, so a pointer moving inside the zone
+    //    can never build up the travel it needs to leave.  `dragArea`
+    //    avoids that by recomputing from the press origin each time, and
+    //    `windowMoveOverlay` by keeping an unsnapped shadow position.
+    function _snapAxis(v, size, lo, hi, centred) {
+        var targets = centred
+                    ? [lo, hi - size, lo + (hi - lo - size) / 2]
+                    : [lo, hi - size]
+        var best = v
+        var bestGap = root.snapThreshold
+        for (var i = 0; i < targets.length; ++i) {
+            var gap = Math.abs(v - targets[i])
+            if (gap <= bestGap) {
+                bestGap = gap
+                best = targets[i]
+            }
+        }
+        return Math.round(best)
+    }
+
+    function snapWindowPos(px, py, w, h) {
+        if (!root.snapToEdges)
+            return { x: Math.round(px), y: Math.round(py) }
+        var b = root.screenBoundsAt(px + w / 2, py + h / 2)
+        return { x: root._snapAxis(px, w, b.left, b.right, true),
+                 y: root._snapAxis(py, h, b.top, b.bottom, false) }
+    }
+
     // Where a floating panel of (w, h) should open: on the keyboard's own
     // screen, clear of the keyboard, and entirely on that screen.
     //
@@ -1639,8 +1706,17 @@ Window {
                 onPositionChanged: function(mouse) {
                     if (!pressed) return
                     var global = mapToGlobal(mouse.x, mouse.y)
-                    root.x = startWinX + (global.x - startMouseX)
-                    root.y = startWinY + (global.y - startMouseY)
+                    // The proposal is recomputed from the press origin on
+                    // every event rather than accumulated, so handing it
+                    // straight to snapWindowPos is safe: an edge releases
+                    // the moment the pointer has travelled past the
+                    // threshold, and nothing snapped is ever fed back in.
+                    var snapped = root.snapWindowPos(
+                                startWinX + (global.x - startMouseX),
+                                startWinY + (global.y - startMouseY),
+                                root.width, root.height)
+                    root.x = snapped.x
+                    root.y = snapped.y
                 }
             }
             
@@ -3554,6 +3630,14 @@ Window {
             property real anchorX: 0
             property real anchorY: 0
 
+            // The unsnapped position the pointer's travel accumulates into.
+            // The window shows the snapped version of it; writing that back
+            // here is exactly the trap snapWindowPos warns about, and here
+            // it is the only thing standing between "the edge is magnetic"
+            // and "the edge cannot be left at all".
+            property real freeX: 0
+            property real freeY: 0
+
             // Re-anchor rather than resume, both when the mode opens and if a
             // fast flick outruns the window and the pointer leaves it.  The
             // alternative is measuring against a stale anchor on the way back
@@ -3568,6 +3652,8 @@ Window {
                 if (!anchored) {
                     anchorX = mouse.x
                     anchorY = mouse.y
+                    freeX = root.x
+                    freeY = root.y
                     anchored = true
                     return
                 }
@@ -3577,8 +3663,25 @@ Window {
                 // would round away to no move at all and leave the same
                 // delta pending on every later event.  Let it accumulate.
                 if (Math.abs(dx) < 1 && Math.abs(dy) < 1) return
-                root.x = Math.round(root.x + dx)
-                root.y = Math.round(root.y + dy)
+                var beforeX = root.x
+                var beforeY = root.y
+                freeX += dx
+                freeY += dy
+                var snapped = root.snapWindowPos(freeX, freeY,
+                                                 root.width, root.height)
+                root.x = snapped.x
+                root.y = snapped.y
+                // Re-anchor by however far the window ACTUALLY went.  The
+                // self-correction above rests on it moving the whole delta,
+                // which puts the pointer back on the anchor; while a snap is
+                // holding the window still it does not, and measuring the
+                // next event against the old anchor would count the same
+                // travel again on every event and let the pointer out of the
+                // zone in a fraction of the threshold.  Compensating keeps
+                // `anchor == pointer - window` true either way, so `dx` is
+                // always the pointer's own travel and nothing else.
+                anchorX = mouse.x - (root.x - beforeX)
+                anchorY = mouse.y - (root.y - beforeY)
             }
 
             // Left puts it down, right puts it back.  Escape is not an option
@@ -5218,6 +5321,7 @@ Window {
             themeData: root.themeData
             keyColorScheme: root.keyColorScheme
             windowOpacity: root.windowOpacity
+            snapToEdges: root.snapToEdges
             currentLayout: root.currentLayout
             compactView: root.compactView
             characterRepeat: root.characterRepeat
@@ -5279,6 +5383,9 @@ Window {
                     root.applyLayout()
                 } else if (setting === "compactView") {
                     root.compactView = value
+                } else if (setting === "snapToEdges") {
+                    root.snapToEdges = value
+                    appSettings.savedSnapToEdges = value
                 } else if (setting === "audio") {
                     if (keyboard) keyboard.setAudioEnabled(value)
                     root.audioEnabled = value
