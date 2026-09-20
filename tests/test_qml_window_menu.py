@@ -1,8 +1,9 @@
-"""Headless QML tests for the title bar's right-click window menu.
+"""Headless QML tests for the title bar's window menu, moving and snapping.
 
 The whole feature is QML -- the right-button MouseArea under the caption
-strip, the menu popup, and the click-free move mode -- so the Python suite
-cannot reach any of it.  These load the real `qml/Main.qml` under the
+strip, the menu popup, the click-free move mode, and the magnetic screen
+edges both ways of moving share -- so the Python suite cannot reach any of
+it.  These load the real `qml/Main.qml` under the
 `offscreen` platform plugin and drive real `QTest` mouse events at it.
 
 Driving real events rather than the QML API is the point.  The menu has to
@@ -186,8 +187,18 @@ def _click(root, gx: int, gy: int, button) -> None:
 
 
 def _park(root) -> None:
-    """Put the window somewhere the offscreen plugin reports honestly."""
-    _eval(root, f"root.x = {PARKED_X}; root.y = {PARKED_Y}")
+    """Put the window somewhere the offscreen plugin reports honestly, with
+    the magnetic edges off.
+
+    Turning snapping off is not tidiness.  Every displacement assertion in
+    this file reads "the window followed the pointer by exactly the delta",
+    which is only true when no edge intervened, and whether one does depends
+    on a screen size the offscreen plugin chooses for us.  Stating the
+    precondition beats a suite that passes because 200 px happened to be
+    more than `snapThreshold` from everything.  TestSnappingToScreenEdges
+    turns it back on, which is where that behaviour is measured.
+    """
+    _eval(root, f"root.snapToEdges = false; root.x = {PARKED_X}; root.y = {PARKED_Y}")
     QGuiApplication.processEvents()
 
 
@@ -454,3 +465,198 @@ class TestMoveMode:
         _hover(root, ANCHOR_GX + 200, ANCHOR_GY + 130)
 
         assert _pos(root) == settled
+
+
+def _bounds(root) -> dict:
+    """The bounds of the screen the window is currently sitting on."""
+    return json.loads(
+        _eval(
+            root,
+            "JSON.stringify(root.screenBoundsAt("
+            "  root.x + root.width / 2, root.y + root.height / 2))",
+        )
+    )
+
+
+def _snap(root, px: float, py: float) -> tuple[int, int]:
+    raw = _eval(
+        root,
+        f"JSON.stringify(root.snapWindowPos({px}, {py}, root.width, root.height))",
+    )
+    p = json.loads(raw)
+    return p["x"], p["y"]
+
+
+class TestSnappingToScreenEdges:
+    """Magnetic edges: a proposed position close to one is pulled flush.
+
+    Dragging a window to a spot flush with an edge means holding the button
+    down for the whole travel and then landing within a pixel or two, which
+    is the gesture this keyboard exists to avoid needing.
+
+    What cannot be exercised here is the multi-monitor half: the offscreen
+    plugin gives exactly one screen, so nothing below can tell a
+    `screenBoundsAt` lookup from a primary-screen one.  The same limitation
+    the panel-placement tests carry, and the reason those assertions derive
+    every target from `screenBoundsAt` rather than from `Screen.width`.
+    """
+
+    def test_a_position_just_inside_the_zone_is_pulled_flush(self, qml_root):
+        root, _ = qml_root
+        _park(root)
+        _eval(root, "root.snapToEdges = true")
+        b = _bounds(root)
+        bottom = b["bottom"] - root.property("height")
+
+        assert _snap(root, b["left"] + 6, bottom - 6) == (b["left"], bottom)
+
+    def test_a_position_past_the_zone_is_left_exactly_where_it_is(self, qml_root):
+        """The inverse, and it is the half that stops "snap" meaning "clamp".
+
+        A rule that pulled every position to the nearest edge would satisfy
+        the test above perfectly and make the window impossible to park
+        anywhere else.
+        """
+        root, _ = qml_root
+        _park(root)
+        _eval(root, "root.snapToEdges = true")
+        b = _bounds(root)
+        over = _eval(root, "root.snapThreshold") + 1
+        bottom = b["bottom"] - root.property("height")
+
+        assert _snap(root, b["left"] + over, bottom - over) == (
+            b["left"] + over,
+            bottom - over,
+        )
+
+    def test_the_two_axes_are_decided_apart(self, qml_root):
+        """A keyboard sitting flush on an edge still slides along it."""
+        root, _ = qml_root
+        _park(root)
+        _eval(root, "root.snapToEdges = true")
+        b = _bounds(root)
+        bottom = b["bottom"] - root.property("height")
+        loose_x = b["left"] + 300
+
+        assert _snap(root, loose_x, bottom - 5) == (loose_x, bottom)
+
+    def test_the_horizontal_centre_is_a_target_and_the_vertical_one_is_not(self, qml_root):
+        """Centring a wide, short keyboard is something people do; parking it
+        halfway down the screen is not, and a snap nobody wanted reads as the
+        window sticking for no reason."""
+        root, _ = qml_root
+        _park(root)
+        _eval(root, "root.snapToEdges = true")
+        b = _bounds(root)
+        mid_x = b["left"] + (b["right"] - b["left"] - root.property("width")) / 2
+        mid_y = b["top"] + (b["bottom"] - b["top"] - root.property("height")) / 2
+
+        assert _snap(root, mid_x + 7, mid_y + 7) == (mid_x, round(mid_y + 7))
+
+    def test_turning_it_off_leaves_every_position_exact(self, qml_root):
+        root, _ = qml_root
+        _park(root)
+        _eval(root, "root.snapToEdges = false")
+        b = _bounds(root)
+        bottom = b["bottom"] - root.property("height")
+
+        assert _snap(root, b["left"] + 3, bottom - 3) == (b["left"] + 3, bottom - 3)
+
+    def test_the_setting_reaches_the_window_and_defaults_on(self, qml_root):
+        """The eight-step wiring, end to end: the toggle's own signal has to
+        land on the property the two move paths read."""
+        root, _ = qml_root
+        assert _eval(root, "root.snapToEdges") is True
+
+        _eval(root, 'settingsPanel.settingChanged("snapToEdges", false)')
+        QGuiApplication.processEvents()
+        assert _eval(root, "root.snapToEdges") is False
+        assert _eval(root, "appSettings.savedSnapToEdges") is False
+
+        _eval(root, 'settingsPanel.settingChanged("snapToEdges", true)')
+        QGuiApplication.processEvents()
+        assert _eval(root, "root.snapToEdges") is True
+
+    def test_a_title_bar_drag_lands_flush_on_an_edge(self, qml_root):
+        """The wiring on the drag path, driven as a real press and travel.
+
+        Asserting on `snapWindowPos` alone would pass just as happily with
+        `dragArea` never calling it.
+        """
+        root, _ = qml_root
+        _park(root)
+        b = _bounds(root)
+        start_x = b["left"] + 60
+        _eval(root, f"root.snapToEdges = true; root.x = {start_x}")
+        QGuiApplication.processEvents()
+
+        QTest.mousePress(
+            root,
+            Qt.MouseButton.LeftButton,
+            Qt.KeyboardModifier.NoModifier,
+            QPoint(160, TITLE_BAR_HEIGHT // 2),
+        )
+        # 52 px left of the grab leaves the proposal 8 px off the edge.
+        _hover(root, start_x + 160 - 52, PARKED_Y + TITLE_BAR_HEIGHT // 2)
+        landed = root.property("x")
+        QTest.mouseRelease(
+            root,
+            Qt.MouseButton.LeftButton,
+            Qt.KeyboardModifier.NoModifier,
+            QPoint(160, TITLE_BAR_HEIGHT // 2),
+        )
+        QGuiApplication.processEvents()
+
+        assert landed == b["left"]
+
+    def _pin_to_left_edge(self, root) -> int:
+        """Enter move mode with the window already flush on the left edge and
+        the anchor settled under (ANCHOR_GX, ANCHOR_GY).
+
+        The two settling hovers move the window by (-60, -40), so it starts
+        that much to the right of where it has to end up.  See `_begin_move`
+        for why both hovers are needed.
+        """
+        b = _bounds(root)
+        _eval(
+            root,
+            f"root.snapToEdges = true; root.x = {b['left'] + 60}; root.y = {PARKED_Y + 40}",
+        )
+        _eval(root, "root.beginWindowMove()")
+        _hover(root, ANCHOR_GX + 60, ANCHOR_GY + 40)
+        _hover(root, ANCHOR_GX, ANCHOR_GY)
+        assert _eval(root, "windowMoveOverlay.anchored")
+        assert root.property("x") == b["left"]
+        return b["left"]
+
+    def test_move_mode_holds_an_edge_until_the_pointer_has_really_left_it(self, qml_root):
+        root, _ = qml_root
+        _park(root)
+        left = self._pin_to_left_edge(root)
+
+        _hover(root, ANCHOR_GX + 10, ANCHOR_GY)
+        _hover(root, ANCHOR_GX + 20, ANCHOR_GY)
+
+        assert root.property("x") == left
+
+    def test_move_mode_can_leave_an_edge_it_snapped_to(self, qml_root):
+        """The trap, and the reason the overlay keeps an unsnapped shadow
+        position rather than accumulating into `root.x`.
+
+        Accumulating into the window's own position means every later delta
+        is measured from the snap point, so a pointer moving inside the zone
+        never builds up the travel it needs to get out and the edge holds the
+        window for ever.  It also has to re-anchor by however far the window
+        *actually* went, or the same travel is counted on every event and the
+        window escapes in a fraction of the threshold -- which is why this
+        walks out in 10 px steps instead of one jump.
+        """
+        root, _ = qml_root
+        _park(root)
+        left = self._pin_to_left_edge(root)
+
+        _hover(root, ANCHOR_GX + 10, ANCHOR_GY)
+        _hover(root, ANCHOR_GX + 20, ANCHOR_GY)
+        _hover(root, ANCHOR_GX + 30, ANCHOR_GY)
+
+        assert root.property("x") == left + 30

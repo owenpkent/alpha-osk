@@ -151,6 +151,70 @@ taps with a free hand in between: pick the window up, move it, put it down.
 - The landing spot persists for free, since `onXChanged` / `onYChanged` already
   restart `saveGeometryTimer`.
 
+### Magnetic edges
+
+Both ways of moving the window (the title-bar drag and Move mode) pass their
+proposed position through `Main.qml::snapWindowPos`, which pulls it flush to
+a screen edge, or to the screen's horizontal centre, when it comes within
+`snapThreshold` (24 px). *Settings -> Appearance -> Window -> Snap to Screen
+Edges*, default ON. Landing a drag flush against an edge otherwise means
+holding the button down for the whole travel and then releasing within a
+pixel or two, which is the gesture this keyboard exists to avoid needing.
+
+24 rather than the ~10 a mouse-driven desktop uses, for the same reason
+`hitMarginH` exists: the pointer this forgives is slower and less accurate
+than the one those defaults were chosen for.
+
+Four things are load-bearing:
+
+- **It snaps against `screenBoundsAt`, the screen the window is on**, never
+  the primary one. A monitor to the left has negative coordinates a
+  primary-screen calculation cannot express, which is the bug the snippets
+  restore documents one window over.
+- **The axes are decided independently**, so a keyboard flush on the bottom
+  edge still slides freely along it.
+- **Horizontal centre is a target and vertical centre is not.** Centring a
+  wide, short keyboard is something people do; parking it halfway down the
+  screen is not, and a snap nobody wanted reads as the window sticking for
+  no reason.
+- **The snapped value is never written back into whatever the caller
+  accumulates, and that is what makes an edge magnetic rather than a trap.**
+  Feed it back and every later delta is measured from the snap point, so a
+  pointer moving inside the zone never builds up the travel it needs to
+  leave and the window is stuck there for good. `dragArea` avoids that for
+  free, because it recomputes its proposal from the press origin on every
+  event rather than accumulating. `windowMoveOverlay` cannot: its whole
+  design is accumulated deltas in its own coordinates, so it keeps an
+  unsnapped shadow position (`freeX` / `freeY`) and shows the snapped version
+  of it.
+
+**Move mode also has to re-anchor by however far the window *actually*
+went** (`anchorX = mouse.x - (root.x - beforeX)`). The self-correction that
+makes the mode work at all rests on the window moving the whole delta, which
+slides it out from under the pointer and puts the pointer back on the anchor;
+while a snap is holding the window still it does not, so measuring the next
+event against the old anchor counts the same travel again on every event and
+the pointer leaves the zone in a fraction of the threshold. Compensating
+keeps `anchor == pointer - window` true either way, so `dx` is the pointer's
+own travel and nothing else.
+
+Deliberately not extended to the Snippets and Symbols windows: those are
+dragged clear of the field being filled in, which is a "not here" gesture
+rather than a "exactly there" one, and they have no Move mode to share the
+shadow-position machinery with. The left/right resize handles are untouched
+too.
+
+Guarded by `TestSnappingToScreenEdges` in `tests/test_qml_window_menu.py`,
+where every positive is paired with the near-miss it must reject (a rule
+that clamped every position to the nearest edge satisfies the snap
+assertions perfectly and makes the window impossible to park anywhere else),
+and where the escape-the-edge case walks out in 10 px steps rather than one
+jump, because a single jump passes against the re-anchoring bug as well.
+The multi-monitor half cannot be exercised headlessly, so every target is
+derived from `screenBoundsAt` rather than `Screen.width` and the class
+docstring says so. `_park` turns snapping **off**, so the file's existing
+displacement assertions still measure the follow and nothing else.
+
 **Testing note.** `tests/test_qml_window_menu.py` drives the pointer in
 *desktop* coordinates, not window-local ones. In move mode the two are not
 interchangeable: the window slides by exactly the delta, so the same local

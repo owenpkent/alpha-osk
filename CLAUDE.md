@@ -425,6 +425,7 @@ The parent (`Main.qml`'s settings popup window) calls `settingsPanel.resetToHome
 | | Theme | 9-theme color picker |
 | | Key Colours | Six-scheme picker, **Monochrome by default** (Default / Monochrome / Two-Tone / Function / Ink / Signal). Directly under Theme because every colour it offers is derived from the theme |
 | | Sound & Opacity | Key click sound, opacity slider |
+| | Window | Snap to Screen Edges (magnetic edges while the window is being moved, default ON). Its own section because placement is neither a panel, a layout, a theme nor a sound, and the alternative was hiding a window-behaviour toggle under "Sound & Opacity" |
 | **Smart Typing** | Suggestions | Show suggestions, auto-space, intelligent spacing, auto-cap, max count, filter explicit words |
 | | Suggestion Engine | Merge strategy 4-card picker (rank / rrf / linear / loglinear) |
 | | Input | Right-click shift, key preview popup, Compatibility Mode picker, repeat delay & interval |
@@ -1261,7 +1262,8 @@ Right-clicking the title bar opens Move / Minimize / Tuck away (X11 only) / Clos
 - **`titleBarMenuArea` is declared before every other input-taking child of `titleBar` and accepts only `Qt.RightButton`**; on top it would kill dragging.
 - Rows come from `windowMenu.actions`, word-only. Close carries a rule and a gap above it.
 - **Move mode** is two taps with a free hand between: the window follows by `(current - anchor)` in the overlay's coordinates (self-correcting), the anchor is dropped on `onExited`, `windowMoveOverlay` is `enabled: root.moveMode` and swallows the ending click, left puts it down and right puts it back (`_moveReturnX/Y`); there is no Escape.
-- Tests drive the pointer in desktop coordinates; a closed `Popup`'s rows all report `visible: false`.
+- **Magnetic edges** (*Appearance -> Window -> Snap to Screen Edges*, default ON): both move paths go through `Main.qml::snapWindowPos`, `snapThreshold` 24 px, against `screenBoundsAt` (the window's own screen), axes independent, horizontal centre is a target and vertical centre is not. **The snapped value is never written back into what the caller accumulates** (Move mode keeps `freeX` / `freeY`) and Move mode re-anchors by how far the window actually went, or an edge becomes a trap.
+- Tests drive the pointer in desktop coordinates; `_park` turns snapping off; a closed `Popup`'s rows all report `visible: false`.
 
 ## Right-Click for Shifted Character
 
