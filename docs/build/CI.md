@@ -210,6 +210,38 @@ pull-request CI, which is harder to keep safe. Turning `strict` on would also
 close it, but would make every pull request, not just Dependabot's, update its
 branch before merging.
 
+## Dependabot security updates, and why the schedule is not enough
+
+Dependabot is switched on in three separate places, and the repository ran
+for a while with only two of them. `.github/dependabot.yml` is the
+**version** schedule: once a week, per ecosystem, "has anything published a
+newer release". The repository setting **Dependabot security updates** is a
+different trigger: "an advisory now names the version you are pinned to",
+which fires whenever the advisory lands, against a version that may never
+move again.
+
+Enabled 2026-09-20, having been off. The gap it left was not theoretical.
+CI's OSV job runs with `fail-on-vuln: true`, so an advisory against a pinned
+dependency blocks every pull request; with security updates off, nothing
+opened the PR that unblocks them, and the fix was a manual bump. The
+repository's alert history is 36 advisories, and the great majority are
+transitive npm packages under `backend/cf-worker` (`undici`, `tar`,
+`brace-expansion`, `esbuild`, `js-yaml`), which is exactly the tree a weekly
+version check is least likely to touch: nothing in it moves because a
+transitive dependency was found vulnerable.
+
+It needs no new workflow. A security update arrives as an ordinary
+Dependabot pull request, so the auto-merge job above already covers it: a
+patch or minor fix merges once the required checks pass, and a major waits
+for a person like any other.
+
+Secret scanning and push protection were enabled in the same sitting. They
+are free on a public repository, and push protection is the half worth
+having here, since the project handles a Deepgram API key
+(`dictation.json`) and an EV signing setup; it refuses the push rather than
+reporting the leak afterwards, by which point the secret is public and has
+to be rotated.
+
 ## Concurrency
 
 The workflow sets `concurrency: group: ci-${{ github.ref }}` with

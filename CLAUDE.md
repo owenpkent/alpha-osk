@@ -590,7 +590,13 @@ each one fixed: `docs/build/CI.md`. The rules that outlive the reasoning:
   --disable-auto` before pushing to it. A merge made with `GITHUB_TOKEN` does
   not trigger CI's push run on main, and protection does not require branches
   to be up to date, so a break from an auto-merged update surfaces on the next
-  PR's checks rather than on main. See `docs/build/CI.md`.
+  PR's checks rather than on main. **Dependabot is switched on in three
+  places and needs all three**: the version schedule in
+  `.github/dependabot.yml`, the repository's *Dependabot security updates*
+  setting (a different trigger, "an advisory now names your pinned version",
+  enabled 2026-09-20 after running without it), and *Allow auto-merge*. A
+  security update is an ordinary Dependabot PR, so the auto-merge job covers
+  it with no new workflow. See `docs/build/CI.md`.
 - **Branch protection requires the `Tests` job, not the shards.** Required
   checks are configured by name in the repo settings, so naming shards there
   means reconfiguring protection on every change to the shard count, and a
