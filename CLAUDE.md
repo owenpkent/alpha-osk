@@ -82,8 +82,35 @@ User clicks key (QML)
 | `qml/palette.js` | The Key Colours engine: WCAG contrast, OKLab/OKLCh, and the six colour schemes. The single copy of the contrast maths (see *Key Colours by role*) |
 | `qml/components/` | Reusable QML components (KeyButton, settings panels, etc.) |
 | `data/` | Static data: dictionaries, training corpus, keyboard layouts, vocab packs |
-| `build/` | Packaging pipelines - `build/windows/` (PyInstaller + NSIS + EV signing) and `build/linux/` (PyInstaller + optional AppImage). `build/launcher.py` is the shared frozen-mode entry point. |
+| `build/` | Packaging pipelines - `build/windows/` (PyInstaller + NSIS + EV signing), `build/linux/` (PyInstaller + optional AppImage) and `build/macos/` (scaffolded). `build/launcher.py` is the shared frozen-mode entry point. |
 | `tests/` | pytest suite |
+
+
+## Deep-dive docs
+
+Each section below that is marked *Full write-up* keeps only its load-bearing rules here; the reasoning, the measurements and the rejected alternatives live in the doc. Read the doc before changing that area, and put new reasoning there rather than growing this file.
+
+| Area | Doc |
+|------|-----|
+| Prediction engine (context tables, corpus prior, prefix beam, fuzzy refresh, pointer bias, apostrophe, acronyms) | `docs/architecture/PREDICTION_NOTES.md` |
+| Per-algorithm detail | `FUZZY_RECOGNITION.md`, `PPM.md`, `HYBRID_MERGING.md`, `NGRAM_SEEDS.md` |
+| Where user data lives, the log, the installer's registry handling | `docs/architecture/USER_DATA.md` |
+| Modifiers, casing, pill widths | `docs/architecture/MODIFIERS_AND_CASING.md` |
+| Spacing, snippet detection, structured tokens | `docs/architecture/TEXT_PATTERNS.md` |
+| Snippets | `docs/architecture/SNIPPETS.md` |
+| Symbols & Emoji window | `docs/architecture/SYMBOLS_WINDOW.md` |
+| Function keys and programmable actions | `docs/architecture/FUNCTION_KEYS.md` |
+| Clearing stale typing context | `docs/architecture/CONTEXT_RESET.md` |
+| Key colours | `docs/architecture/KEY_COLOURS.md` |
+| Layout geometry (flush rows, section height, dead space) | `docs/architecture/LAYOUT_GEOMETRY.md` |
+| Compact view | `docs/architecture/COMPACT_VIEW.md` |
+| Window chrome (corners, title-bar menu, Move mode, snapping) | `docs/architecture/WINDOW_CHROME.md` |
+| Switch scanning over UI Automation | `docs/architecture/UIA_TARGETS.md` |
+| Dictation | `docs/architecture/DICTATION.md` |
+| Telemetry, and the installer invitation | `docs/architecture/TELEMETRY.md` |
+| Gotchas not repeated here | `docs/architecture/GOTCHAS.md` |
+| Build and release | `docs/build/WINDOWS.md`, `RELEASE.md`, `AUTO_UPDATE.md`, `CI.md`, `LINUX.md`, `MACOS.md` |
+| User study | `docs/research/STUDY_PROTOCOL.md`, `STUDY_CONSENT.md`, `STUDY_HARNESS.md` |
 
 ## Prediction Engine
 
@@ -104,211 +131,62 @@ Deep-dive design docs for each algorithm: `docs/architecture/FUZZY_RECOGNITION.m
 
 ## Context tables: base and user halves
 
-`NgramPredictor.bigrams` / `.trigrams` are **merged views**. The user's share lives in `_user_bigrams` / `_user_trigrams` (floats), and that share is the **only context that is persisted** (`user_bigrams` / `user_trigrams` keys in `ngram_model.json`). The base share (curated seeds at +50 per pair from `data/common_bigrams.txt` / `common_trigrams.txt`, the training corpus at +1, vocabulary packs) is rebuilt from the data files on every launch and never written. Invariant: `bigrams[p][w] >= round(_user_bigrams[p][w])`; base is whatever is left over.
+Full write-up: `docs/architecture/PREDICTION_NOTES.md` (section of the same name). Read it before changing this area.
 
-Why it is split, all measured on 2026-09-02 (the write-up with the numbers is linked from the memory index):
-- The single merged table was persisted **and** re-seeded on top of itself at every launch, so seeds inflated: a live model had `i -> want` at 1,037 against 63 on a fresh install, and the trigram `i want -> to` at 3,848 against 53, growing by 50 per launch with no ceiling.
-- `_apply_decay` scaled **every** bigram to a floor of 1 (its comment claimed user-only) and never touched trigrams. On a fresh model the curated ordering was flat within ~2,500 learns; on a matured one 78% of edges sat permanently at 1, which is where the user's own pairs ended up.
-- A personal phrase after a common word could not surface: `the bus` typed once was P = 0.0004 against 2,600 seed mass, needed 55 typings back to back, and at once a day never reached the pills; the same phrase after a word with no seeds was scored as a certainty (P = 1.0).
-
-How it works now:
-- **Scoring** (`_context_probs`) trusts the user's distribution for a prefix with weight `U / (U + _CONTEXT_PRIOR_FLOOR + _CONTEXT_BASE_TRUST * B)` (5 and 0.02; `U` user evidence, `B` base count for that prefix), blending it with the base distribution. With no user evidence it is the old normalised row **exactly**, so a fresh model scores byte-for-byte as before (keystroke savings 52.5% before and after), and the whole existing suite is the regression guard for that. With it, `the bus` reaches the pills after 2 typings and one typing after a new word gets 1/6, not 1.0. The sweep behind the two constants: the floor barely matters between 2 and 10; trust 0.01 surfaces a phrase after one typing, 0.05 needs five.
-- **Writes**: every user context write goes through `_bump_user_context` (from `learn()` and `reinforce_context`), which keeps the merged view in step. Base writes go straight to the merged tables: `learn(text, corpus=True)` (what `load_corpus` calls), `learn_corpus_context`, `_learn_base`, the two seed loaders, and `PackManager.apply_to_predictor`. A direct write to `.bigrams` in a test is therefore a base write and still works.
-- **Decay** (`_decay_user_context`) acts on the user share of **both** orders, subtracting exactly what it removes from the merged view, and drops a count below `_USER_CONTEXT_MIN` (0.1, about a week for a single typing). Seeds are untouched however long the session runs (`tests/test_ngram_context_split.py::TestSeedsSurviveTheSession`). The merged count rounds to zero at tick 14 while the user share lasts to tick 45, so for a prefix with no base evidence the merged row is gone for two thirds of the pair's life; `_context_probs` scores from the user row alone in that window rather than returning nothing (`TestScoringTrustsTheUserInProportion::test_a_lone_user_pair_keeps_scoring_until_it_is_forgotten`).
-- **Legacy files** carrying `bigrams` / `trigrams` are adopted wholesale as user history (`_adopt_user_context`): the halves cannot be separated after the fact, adopting keeps every ranking exactly as it was, and decay retires the inherited seed mass over the following weeks while the base is re-seeded cleanly underneath. The next save writes the new keys; an older build reading a new file loses only user context, since it re-seeds base itself.
-- **`HybridPredictor.reload_from_disk` must call `_reseed_context()` after `load()`.** It used to work by accident, because the persisted table already carried the (inflated) seeds. `clear_user_data` wipes both halves and the hybrid re-seeds, as before. The reseed re-links the corpus through `learn_corpus_context`, which applies a known-or-third-sighting gate of its own over the corpus's sightings alone (it neither reads nor writes the user's candidate pool; since the corpus prior split, the launch path makes the same call, so the two agree by construction), so a reload rebuilds the base share a launch would; its first version linked every plausible word, and a reload grew edges for rare corpus words that a fresh start withholds (`TestTheMergedViewStaysHonest::test_reseeding_the_corpus_gates_rare_words_exactly_as_a_launch_does`).
-
-Known follow-ups, deliberately not bundled: the seed weight of 50 now only matters relative to the corpus's +1 and could come down; the cross-order interpolation weights are fixed at 0.5/0.3/0.2 (renormalising when a table is silent would not reorder anything, since the bigram-to-unigram ratio is unchanged; evidence-weighted interpolation across orders is the change that would). Benchmarks: `scripts/bench/ksr.py` (keystroke savings, ablations, `--learn-half`) and `scripts/bench/fuzzy.py`; both run against a temporary model directory, never the live one. **Every keystroke-savings figure quoted in this file (52.5, 53.6, 55.0%) is on `ksr.py`'s `builtin` corpus**, 30 sentences written by hand in this repo. They stay correct and comparable to each other, and are not comparable to anything measured since: `--corpus aac-dev` / `aac-test` (real held-out AAC communications, added 2026-09-05) read 47.3% and 48.7% for the same engine, because the hand-written set sits close to the curated seeds and the training corpus. The generated context seeds landed the same day and took those to **49.1% and 50.4%**, at 28.7% and 30.4% next-word hit; see *Measured result* in `docs/architecture/NGRAM_SEEDS.md`. Quote the corpus with the number from now on, and treat anything under 1.4 points as noise, which is what the two AAC splits disagree by with nothing else changed. See *Benchmark baselines* in `docs/architecture/PREDICTION_NOTES.md`.
+- `NgramPredictor.bigrams` / `.trigrams` are **merged views**. The user's share lives in `_user_bigrams` / `_user_trigrams` and is the **only context persisted**; the base share (curated seeds at +50, corpus at +1, packs) is rebuilt from the data files every launch and never written. Invariant: `bigrams[p][w] >= round(_user_bigrams[p][w])`.
+- Every user context write goes through `_bump_user_context`. A direct write to `.bigrams` (tests, `learn(corpus=True)`, seed loaders, packs) is a base write.
+- `_context_probs` trusts the user's distribution with weight `U / (U + 5 + 0.02 * B)`. With no user evidence it is the old normalised row **exactly**, so the whole existing suite is the regression guard for a fresh model.
+- `_decay_user_context` acts on the user share of both orders only; seeds never decay. A lone user pair keeps scoring from the user row after the merged count rounds to zero.
+- Legacy files carrying `bigrams` / `trigrams` are adopted wholesale as user history (`_adopt_user_context`).
+- **`HybridPredictor.reload_from_disk` must call `_reseed_context()` after `load()`.**
+- Benchmarks: `scripts/bench/ksr.py` and `scripts/bench/fuzzy.py`, always against a temporary model directory. **Quote the corpus with every keystroke-savings number**: 52.5 / 53.6 / 55.0% are on the hand-written `builtin` corpus; the held-out `aac-dev` / `aac-test` read 49.1 / 50.4%. Anything under 1.4 points is noise.
 
 ## Shipped corpus prior and faster personal learning
 
-Since 2026-09-10, the shipped training corpus's unigrams live in
-`NgramPredictor._corpus_unigrams` / `_corpus_total`, rebuilt in memory by
-`load_corpus_prior`, instead of being added to `user_vocab` at each launch.
-The old path injected 2,604 accepted tokens of pseudo-personal history even
-on a fresh model. The n-gram and fuzzy scorers now share
-`_effective_typing_count` / `_effective_typing_total`: real counts plus
-`_CORPUS_PRIOR_WEIGHT` (0.1) times the corpus counts. With no real learning,
-the weight cancels and the conversational distribution is preserved; new
-learning competes with one tenth the former bootstrap mass. Existing saved
-user counts are preserved because real and historical corpus counts cannot
-be separated safely. The user-total invariant remains exact.
+Full write-up: `docs/architecture/PREDICTION_NOTES.md` (section of the same name). Read it before changing this area.
 
-The prior uses its own local three-sighting gate and never changes user
-candidate state or the decay clock. Its accepted words are known to both
-ordinary typing and pill learning. **They live in `_corpus_unigrams` and
-nowhere else.** The merged `unigrams` table is persisted by `save()`, and a
-first version installed the prior there so membership tests would find it:
-a corpus-only word then survived the release that dropped it from the
-shipped file, kept passing the hybrid's validity check and was rebuilt into
-the fuzzy dictionary on every launch. `NgramPredictor.in_vocabulary` and
-`vocabulary()` are the membership test and the enumeration that see both
-halves; `_is_valid_word` and `_fuzzy_frequencies` go through them, and
-`_top_unigrams_with_scores` adds the prior at `_CORPUS_PRIOR_WEIGHT` rather
-than at full count. Reload rebuilds the prior against the replacement user
-history, and Clear Learned Data rebuilds it outside the PPM-enabled branch.
-The generic `load_corpus` API is unchanged. Guarded by
-`tests/test_corpus_prior.py::test_a_word_dropped_from_the_corpus_leaves_with_it`,
-paired with the learned word that must stay.
-
-Saving a prediction edit **whose spelling changed** calls
-`learn_from_selection(..., explicit=True)`: each token gets an immediate +5,
-its context is reinforced, and its fuzzy entry is refreshed. A Save that
-kept the spelling (including a casing-only edit) is one ordinary pill tap,
-gated exactly as a tap is, because opening the editor on a fuzzy-generated
-pill and tapping Save must not be the one tap that injects a never-typed
-word; the casing is still recorded through `set_capitalization`. The
-explicit path applies the shape filter and the blacklist at edit time, the
-same rule `load()` applies on the way back in, so a token is refused where
-the user can see it rather than learned and silently stripped at the next
-launch (a taught acronym passes as it does everywhere). `learn_word` also
-retires the word's candidate-pool entry, which every later `learn()` would
-otherwise leave persisted. Ordinary pill clicks keep the unknown-word
-repetition gate. Privacy and learning freeze suppress the new learning path.
-Measured fresh-model examples, lifecycle details, and limits are in
-`docs/architecture/HYBRID_MERGING.md`; regressions are in
-`tests/test_corpus_prior.py` and the hybrid/bridge edit tests.
+- The shipped corpus's unigrams live in `NgramPredictor._corpus_unigrams` / `_corpus_total` **and nowhere else** (never in the persisted `unigrams`, or a dropped corpus word survives forever). Scorers read them through `_effective_typing_count` / `_effective_typing_total` at `_CORPUS_PRIOR_WEIGHT` (0.1).
+- Membership and enumeration go through `NgramPredictor.in_vocabulary` / `vocabulary()`, which see both halves.
+- Saving a prediction edit **whose spelling changed** calls `learn_from_selection(..., explicit=True)` (+5 per token, shape filter and blacklist applied at edit time). A Save that kept the spelling is one ordinary pill tap. Privacy mode and the learning freeze suppress both.
+- Tests: `tests/test_corpus_prior.py`.
 
 ## Prefix beam (mid-word fuzzy completion)
 
-`src/prediction/prefix_beam.py`. `FuzzyRecognizer.get_fuzzy_predictions`, the fuzzy source the hybrid merges **mid-word**, completes the typed prefix through an error instead of correcting it as a finished word. The whole-word paths (`generate_candidates`, `get_correction`, `should_autocorrect`, SymSpell), which run on space, are unchanged; they measured well (75 to 99% top-1 by error type) and it was only their use mid-word that was wrong.
+Full write-up: `docs/architecture/PREDICTION_NOTES.md` (section of the same name). Read it before changing this area.
 
-Why (measured 2026-09-02, write-up linked from the memory index): mid-word, the old fuzzy source put the intended word in its top five 0.0% of the time after a neighbour slip and 1.4% with no error at all, because its spatial beam only emitted sequences as long as the typed text and SymSpell reached two edits further, so 87% of its mid-word candidates were shorter than the prefix. The n-gram completer needs an exact prefix. Between them one mis-click cost +2.05 clicks per word (+69%).
-
-How: a beam over the dictionary's **live prefixes** (`PrefixIndex`, about 24,000 for the shipped list, 0.01 s, rebuilt lazily after `load_dictionary` / `set_frequencies`, updated in place by `update_word` as the vocabulary changes (see *Fuzzy dictionary refresh*), and rebuilt whenever the spatial model object changes, which `set_key_positions` does on a layout switch) with an **unnormalised** Gaussian emission (`SpatialEmissions`: a hit costs 0, so a perfect 13-letter typing no longer prunes out and an edge key no longer outscores a central one for equal accuracy) and four transitions: substitution, omitted click, extra click, transposition. Completions are ranked by path score plus `0.55 * log1p(freq)`. Scores come back relative, in (0, 1], so `_normalise_source` sees positives. By default, below three typed characters it returns nothing (the `should_autocorrect` guard; the n-gram's exact match is the better source there), **unless the run is not a live prefix**, where both halves of that reasoning fail at once: spelling no word's opening is itself the evidence of an error, and the exact source it defers to has nothing to return. That was reported as "two letters shows nothing until you type a third", and it was 298 of the 676 two-letter runs against the shipped dictionary, all of which now fill. `MIN_TYPED_DEAD_PREFIX` (2) is the rescue floor and `PrefixBeam._worth_completing` is the rule. A *live* two-letter prefix is refused by default. Since 2026-09-10, `HybridPredictor.predict` opts into `allow_short_prefix` when fewer than `HybridPredictor.SHORT_PREFIX_RESCUE_FLOOR` (5, the benchmark's pill count) valid n-gram candidates can reach the bar, **independent of the max-suggestions setting**: its first version decided against the requested count, so whether the rescue fired, and with it which word held slot 1 for a short prefix, changed when the user raised the count, on a keyboard where pill position is muscle memory. This lets `ww` offer `we` alongside `wwe` and `wwii`, whose presence previously disabled correction altogether. Suppressed candidates do not count towards the floor. Prefixes with five or more exact suggestions keep their existing ranking, every bar is a prefix of the widest one (`TestTwoLettersAlwaysFillTheBar::test_the_rescue_does_not_depend_on_how_many_pills_are_shown`), and the standalone fuzzy API keeps its original default (`tests/test_fuzzy_prefix_beam.py::TestATwoLetterMisClickDoesNotEmptyTheBar` and `tests/test_hybrid_predictor.py::TestTwoLettersAlwaysFillTheBar`). One character stays too little to act on. Measured on `scripts/bench/ksr.py --mis-click`, whose slip lands on the second character of every word: clean typing is **unchanged to the decimal** (49.1% aac-dev, 50.4% aac-test), and with the slip 44.7 -> 45.3% and 46.3 -> 46.7%, at unchanged latency. That gain is small because KSR counts clicks saved rather than whether anything was offered at all, and the report was about the blank bar.
-
-Constants were set by sweep against the shipped list **with the n-gram's counts**, which is how the hybrid runs it: the bare wordlist carries no frequencies, so without `set_frequencies` the frequency term is a constant and rankings fall to insertion order (the first prototype's numbers were spatial-only for that reason; any test or bench of this path must inject the counts, see the fixture in `tests/test_fuzzy_prefix_beam.py`). With them, and drawing words from the 2,000 most frequent the way typing is distributed (a uniform draw over all 10,000 weights a word used once a year the same as "because" and reads 30% / 62% on the first two figures; the first bench did that): a clean 4-letter prefix completes to the intended word 92% of the time, a one-slip prefix 94.5%, a dropped click 71%, a doubled click 58%, a transposition 96%, and the top pick never overrides a typed prefix (100%). Omission and extra pull against each other (a cheaper omission explains a doubled click away as something else: at -2.0 it is 83% / 52%, at -3.0 58% / 66%); -2.5 leans toward omission, the dominant error for this kind of input. `scripts/bench/fuzzy.py --n 300` reproduces the shape (`--legacy` for the before column): clean prefixes 0.2% -> 89%, a slipped prefix 0 / 0 / 0.3 / 0.3% -> 56 / 92 / 98 / 99.7% by prefix length 3 to 6. End to end (`scripts/bench/ksr.py --conditions legacy-fuzzy,full --mis-click`): keystroke savings 52.5 -> 53.6% on clean typing (the source is no longer net-negative) and **34.6 -> 47.9%** with one uncorrected mis-click per word, at about 0.3 ms per keystroke.
-
-**The emission takes a position.** `get_fuzzy_predictions(..., positions=[...])` carries one optional `(row, col)` in key units per character of the current word, defaulting to the key's centre. `mouse.x / mouse.y` from `KeyButton.qml` now reaches it as `offsets=`; see *Click position and the learned pointer bias* for what that turned out to be worth.
-
-`FuzzyRecognizer.prefix_completion = False` restores the pre-beam path. It exists for the benchmark's before/after (`ksr.py`'s `legacy-fuzzy` condition, `fuzzy.py --legacy`) and nothing else: there is deliberately no user setting, since a user could not act on it and the merge weights are untouched. Tests: `tests/test_fuzzy_prefix_beam.py`.
+- `FuzzyRecognizer.get_fuzzy_predictions` (the mid-word fuzzy source) is a beam over the dictionary's **live prefixes** (`src/prediction/prefix_beam.py`, `PrefixIndex`) with an unnormalised Gaussian emission and four transitions (substitution, omission, extra, transposition). The whole-word paths that run on space are unchanged.
+- **Any test or bench of this path must inject the n-gram's counts** (`set_frequencies`); the bare wordlist has no frequencies and rankings fall to insertion order.
+- Below three typed characters it returns nothing, unless the run is a dead prefix (`MIN_TYPED_DEAD_PREFIX` = 2). `HybridPredictor.predict` opts into `allow_short_prefix` when fewer than `SHORT_PREFIX_RESCUE_FLOOR` (5) valid n-gram candidates exist, **independent of the max-suggestions setting**, because pill position is muscle memory. One character never triggers it.
+- Constants (`LOG_OMIT` -2.5, the 0.55 frequency weight) were set by sweep. `prefix_completion = False` exists for the benchmark's before/after only; there is deliberately no user setting.
+- Tests: `tests/test_fuzzy_prefix_beam.py`, `tests/test_hybrid_predictor.py::TestTwoLettersAlwaysFillTheBar`.
 
 ## Fuzzy dictionary refresh, and PPM out of the merge
 
-**Packed correction index (2026-09-15).** `SymSpell.prepare()` builds an
-immutable deletion index with UTF-8 key storage, packed 32-bit word IDs and
-offsets, and open-addressed hash slots (`src/prediction/packed_deletes.py`).
-New words added afterward go into a mutable deletion overlay, so personal
-learning still takes effect without a rebuild. Known-word frequency updates
-only touch the shared frequency map. Each query merges base postings before
-overlay postings to preserve candidate tie ordering. Reset/reload still
-replaces the whole SymSpell instance. Distance thresholds, serialized model
-formats, and dependencies are unchanged.
+Full write-up: `docs/architecture/PREDICTION_NOTES.md` (section of the same name). Read it before changing this area.
 
-`PrefixIndex` also uses packed keys, child rows, and top-completion word IDs
-(`packed_prefixes.py`), with mutable personal overlays and at most 4,096
-cached successful lookups. The base vocabulary grows from 18,989 to 83,386:
-64,443 ESDB size-60 words at one base count each, plus 27 curated
-care/accessibility/software words at 25 counts. `LanguageProfile.extra_vocabulary`
-owns the extra list. Exact and fuzzy prediction both consult the current base
-after model load without repopulating rejected saved entries or overwriting
-personal counts; clear/reload rebuild fuzzy coverage. The generator,
-checksum, source manifest, and full bundled license are documented in
-`docs/research/VOCABULARY_MEMORY.md` alongside measured memory and startup costs.
-Hybrid startup and full dictionary rebuilds call `prepare_prefix_index()`
-after frequency injection, keeping construction off the first typed prefix.
-Standalone fuzzy callers still prepare lazily; layout changes reuse the index.
-
-The existing `allow_short_prefix` rescue remains tied to the fixed five-candidate
-floor, independent of the requested pill count. New rare words can make a
-two-letter typo a live prefix, but suppressed entries do not count toward that
-floor. The standalone fuzzy API keeps its former default, and one character
-never triggers this fallback.
-
-The n-gram scorer retains all user/corpus/context candidates but only the best requested
-number of matching base words. Nonnegative mixture terms make this cutoff exact;
-unusual weights/counts fall back to the full scan. A versioned base map invalidates
-the sorted word-reference list and bounded next-word top rows on mutation. Equal
-scores now sort lexically, so the larger frequency-1 tail is deterministic across
-processes. See `tests/test_ngram_candidate_index.py` for brute-force parity and
-`scripts/bench/ngram_candidates.py` for the same-snapshot speed comparison.
-
-Two more of the 2026-09-02 findings, fixed together on 2026-09-03.
-
-**The fuzzy dictionary follows the vocabulary.** It used to be loaded once at startup (`load_dictionary` plus one `set_frequencies(ngram.unigrams)`) and never touched again: the constructor comment named a `_refresh_fuzzy_frequencies` that did not exist, and `enable_vocabulary_pack` wrote pack words into the n-gram only, so a word learned this session was not fuzzy-matchable (nor reachable by the prefix beam) until a restart, and a pack's words never were. Now every learning path pushes the changed words through `HybridPredictor._refresh_fuzzy_frequencies(words)` (`learn`, `learn_word`, `learn_from_selection`, `mark_good_suggestion`), which calls `FuzzyRecognizer.update_word(word, count)`: the dictionary entry is raised, **SymSpell indexes a new word in place** (`SymSpell.add_word` on a built index no longer invalidates it, since the rebuild is about 0.5 s and this runs on the keystroke path) and `PrefixIndex.update_word` adjusts the word's own prefixes. A pack enable merges the whole table (`_refresh_fuzzy_frequencies()` with no words). Both only add or raise, the `max` rule `set_frequencies` always had, so the three events that *shrink* the vocabulary, Clear Learned Data, a Data Backup import and a boost rollback from the dashboard (`clear_user_data`, `reload_from_disk`, `unprefer`), go through `_rebuild_fuzzy_dictionary`: `reset_dictionary`, the profile's wordlist, then the counts, about half a second at a moment the user asked for. `unprefer` was missed at first, and since the boost itself had reached the fuzzy dictionary through the refresh, a rolled-back word kept winning mid-word completions until the next restart. The one lowering deliberately *not* followed is `unlearn_word`, the backspace negative signal: it moves a count by one on the keystroke path, where the rebuild has no place, so the fuzzy count can sit a sighting or two above the n-gram's until the next rebuild. Tests: `tests/test_fuzzy_refresh.py`, one vocabulary event each, asking the fuzzy source on the same instance.
-
-**Fuzzy frequencies are on the n-gram's scale, not the raw unigram count.** Plumbing the refresh through was not enough on its own: the fuzzy dictionary took the merged unigram count, which puts a base word at its rank-derived count (up to 9,885) and a personal word typed three times at 3, and on that scale the beam's frequency term buys four slips' worth of spatial cost, so a typed `zorb` ranked `spent` (z to s, o to p, r to e, b to n) above the `zorblat` the user had just taught it. The n-gram never had this problem, because `P(w) = 0.7 * P_user + 0.3 * P_base` makes a personal word far likelier than a base word. `HybridPredictor._fuzzy_frequency(word)` maps that same belief onto the base count's scale (a word the user has never typed keeps exactly its base count, so a fresh model ranks as before; a typed one is lifted by the n-gram's personal weight) and every injection into the fuzzy dictionary, at startup, on refresh and on rebuild, goes through it. It is the unigram cousin of the context-table split above: the same base-versus-user scale mismatch, one layer over. The beam carries one rule on top (`PrefixBeam._protect_exact_completions`): when the typed prefix is itself live, a candidate reached only by paths costing more than one cheap edit (`FREQUENCY_MAY_BUY`, -1.5: an adjacent slip is -0.69, a swap -1.0) is moved just below the exact prefix's own completions rather than bought past them by frequency, which is what lets a pack word at weight 3 surface against `question` two slips away, while `teh` still offers `the` first because one swap competes on frequency as before. A hard exact-first tier was tried and reversed: `teh` is a live prefix of a rare word in the shipped list, and the tier buried `the`.
-
-**PPM no longer contributes word candidates.** `PPMWordPredictor` was constructed without a dictionary, so its dictionary-completion path was dead code and it ran as a bare character beam that emitted fragments (`ing` held a pill at every sentence start). Measured with the prefix beam in place (`scripts/bench/ksr.py --conditions ppm-merge,full --mis-click`): taking it out of the merge raised keystroke savings 53.6 -> 55.0% on clean typing and 47.9 -> 49.9% with a mis-click, next-word hits 30.7 -> 32.6%, and cut per-keystroke latency from 21 ms to 3 ms. It did not help in-domain learning (learn-half 53.8% with it against 54.4% without), and the one thing a character model could add, surfacing a word before its third sighting, never reached the bar, because `_is_valid_word` gates on the unigram table either way. `HybridPredictor._ppm_in_merge` (default `False`) is the switch. The model still trains on every `learn`, still loads and saves `ppm_model.json`, and `enable_ppm` still governs that, so a later fusion inside the prefix beam (the VelociTap shape) has a trained model to use. No user setting, for the reason the prefix beam has none. Any text elsewhere that describes the merge as "n-gram + PPM + fuzzy" describes it before this date; `docs/architecture/PPM.md` and `HYBRID_MERGING.md` carry a note.
+- **The fuzzy dictionary follows the vocabulary.** Every learning path pushes changed words through `HybridPredictor._refresh_fuzzy_frequencies(words)` -> `FuzzyRecognizer.update_word` (in place, safe on the keystroke path). The events that *shrink* the vocabulary (`clear_user_data`, `reload_from_disk`, `unprefer`) go through `_rebuild_fuzzy_dictionary`. `unlearn_word` is deliberately not followed.
+- **Every injection into the fuzzy dictionary goes through `HybridPredictor._fuzzy_frequency(word)`** (the n-gram's belief on the base count's scale, never the raw merged count). `PrefixBeam._protect_exact_completions` (`FREQUENCY_MAY_BUY` -1.5) keeps frequency from buying a multi-slip candidate past exact completions; a hard exact-first tier was tried and reversed (`teh` must still offer `the`).
+- **PPM contributes no word candidates** (`HybridPredictor._ppm_in_merge = False`, since 2026-09-03). It still trains, loads and saves. Text describing the merge as "n-gram + PPM + fuzzy" predates this.
+- SymSpell and `PrefixIndex` are packed immutable indexes (`packed_deletes.py`, `packed_prefixes.py`) with mutable overlays for personal words; base postings merge before overlay postings to keep tie order. Hybrid startup and rebuilds call `prepare_prefix_index()`. Base vocabulary is 83,386 words (`LanguageProfile.extra_vocabulary` owns the extra list; see `docs/research/VOCABULARY_MEMORY.md`). Equal n-gram scores sort lexically.
+- Tests: `tests/test_fuzzy_refresh.py`, `tests/test_ngram_candidate_index.py`.
 
 ## Click position and the learned pointer bias
 
-The last of the 2026-09-02 recommendations, landed 2026-09-03, and the one whose measured gain is smallest; read the numbers before extending it.
+Full write-up: `docs/architecture/PREDICTION_NOTES.md` (section of the same name). Read it before changing this area.
 
-**What travels.** `KeyButton.qml` always had `mouse.x / mouse.y` at the press and used it for the ripple. It now publishes `pressDx` / `pressDy`, the press as a fraction of the key's width and height from its centre (-0.5 to 0.5), and `Main.qml` hands them to the bridge with the character on all three char paths (`pressKey`, `pressKeyLiteral`, the right-click variant); auto-repeat re-reads the same values. The bridge slots are overloaded (`@Slot(str)` and `@Slot(str, float, float)` on one method with Python defaults), so every existing caller, tests included, still means "key centre". `_press_char` keeps the offsets in `_word_offsets`, parallel to `_current_word`, **each entry carrying the character it was recorded under**, and **does not try to maintain that list at every site that resets the word**: it re-syncs at the append (padding with centres when the recorded characters are not the word so far) and `_update_predictions` only hands the list on when the recorded characters spell the word (`_offsets_spell` / `_offsets_for_word`), so any path that rewrites `_current_word` without knowing about it degrades to today's key-centre behaviour rather than mis-scoring. The first version compared lengths, and a rewrite of the same length slipped through it: `hwllo` typed, the `hello` pill tapped, a backspace into it, and five offsets sat under four wrong letters (autocorrect has the same shape). Matching on the characters closes that without touching any of the sites that rewrite the word, the same argument `_token_pill_words` makes; backspacing into a word exactly as it was typed still carries its offsets, since those are the user's own presses. `HybridPredictor.predict` / `predict_with_refinement` take `offsets=` and pass them to `FuzzyRecognizer.get_fuzzy_predictions`, whose `positions_for` resolves each offset against the reported key's centre in the current spatial model (so it follows the layout) with the learned bias for that slot taken out, and the prefix beam scores the continuous position. Characters the model does not place (punctuation, the space bar) resolve to `None` and fall back to the key centre.
-
-**What is learned.** `src/prediction/pointer_model.py` keeps, per **physical slot** (`slot_id` of the key's row and column, so the bias belongs to the pointer rather than the letter and survives a Dvorak or Colemak remap with no layout reset), the count and sum of offsets, and estimates each slot's bias as its own mean shrunk toward the global mean with `PRIOR = 10` pseudo-observations, Gboard's clustering idea in its simplest form. The bridge observes a press inside the not-privacy branch of `_press_char`, beside every other learning; unmapped characters are ignored; offsets are clamped to one key; nothing is logged. The table is owned by `NgramPredictor.pointer` for the reasons the token store is (one file for everything the user taught the engine, with the load caps, the backup archive and Clear Learned Data already in place; `pointer` key in `ngram_model.json`, malformed rows skipped one at a time) and the hybrid binds `FuzzyRecognizer.pointer` to that same object, which is therefore mutated in place and never rebound.
-
-**Two emission widths.** `SpatialEmissions.KEY_SIGMA` (0.85) is the uncertainty when only the key is known: somewhere inside it, plus scatter. `POSITION_SIGMA` (0.55) is the uncertainty when the position inside the key is known. It was set by sweep and the sweep is the part to remember: sharper than 0.55 *hurt* both simulated pointers (0.3 lost 1.6 points of keystroke savings, 0.22 lost 6), because scatter then puts the intended key on the expensive side of the click more often than the extra precision helps.
-
-**The gain is modest, and that is the finding.** `scripts/bench/ksr.py --pointer BIAS_X,BIAS_Y,NOISE` simulates a pointer end to end (reported key, offset, and the presses the bias is learned from) and reports each condition three ways. A pointer whose misses are mostly random (bias 0.2, 0.15; noise 0.3; about a quarter of clicks on the wrong key), the robustness check: keys only 50.5%, plus offsets 50.8%, plus learned bias 50.9%. One whose misses are mostly systematic (0.35, 0.25; 0.15; 22% wrong), the case this feature is for: 51.1%, 51.5%, **51.8%**. The earlier per-key simulation (75% to 86.5% intended-key recovery with a learned bias) was real but did not translate, because the prefix beam plus the dictionary already recover most single-key errors from the reported key alone; what a click position adds on top is a few tenths of a point, more for a systematic pointer than a scattered one. It ships because it never regresses at 0.55, costs nothing at runtime, is privacy-gated like every other learning, and because the persisted table is the first measurement of this user's actual pointer bias, which no simulation can supply. Tests: `tests/test_pointer_model.py`, `tests/test_click_position.py` (recognizer, bridge and persistence hops, each paired with the near-miss it must leave alone) and `tests/test_qml_click_position.py`, which loads `KeyButton.qml` on its own in a `QQuickView` (one item, not a Repeater delegate, so the scene point is reliable under the offscreen plugin) and presses at a known point, and which also calls the overloaded `pressKey` / `pressKeyLiteral` slots with three arguments and with one from a QML function against a real bridge: the Python tests call the slots directly and never touch Qt's overload resolution, and a three-argument call that failed to bind from QML would degrade every press to the key centre with no warning anyone would see.
+- `KeyButton.qml` publishes `pressDx` / `pressDy` (-0.5 to 0.5); `Main.qml` passes them on all three char paths. The bridge slots are overloaded (`@Slot(str)` and `@Slot(str, float, float)`), so existing callers mean "key centre".
+- `_word_offsets` entries carry the character they were recorded under and are only handed on when they spell the word (`_offsets_spell` / `_offsets_for_word`). **Do not maintain the list at every site that rewrites `_current_word`**; a mismatch degrades to key centres by design.
+- `src/prediction/pointer_model.py` learns a per **physical slot** bias (`PRIOR = 10`), owned by `NgramPredictor.pointer` (`pointer` key in `ngram_model.json`), mutated in place and never rebound. Observed only outside privacy mode.
+- `SpatialEmissions.KEY_SIGMA` 0.85, `POSITION_SIGMA` 0.55, by sweep; sharper *hurt*. The measured gain is a few tenths of a point, so read the numbers before extending it.
+- Tests: `tests/test_pointer_model.py`, `tests/test_click_position.py`, `tests/test_qml_click_position.py`.
 
 ## The apostrophe is optional in a typed prefix
 
-Typing `ill` offers `I'll`, `hes` offers `he's`, `im` offers `I'm`. The rule is
-one clause in `NgramPredictor._matches_partial`, the single choke point every
-prefix match goes through: a word containing an apostrophe also matches a typed
-prefix that its apostrophe-stripped form starts with, **and only when the user
-has typed no apostrophe themselves** (once they have, `don'` already matches
-`don't` exactly, and stripping on top would make the prefix mean less than what
-was typed rather than more).
+Full write-up: `docs/architecture/PREDICTION_NOTES.md` (section of the same name). Read it before changing this area.
 
-**It belongs in the n-gram's exact match, not in the fuzzy source, and that is
-the whole finding.** A user who types `ill` for `I'll` has not mis-clicked: the
-apostrophe costs an extra click here and a layer hop on the compact layouts, so
-it is the character they skip deliberately. This is the same thing
-`_APOSTROPHE_INSERTION_PROB` (0.50 against a generic 0.15) already encodes for
-the whole-word path, one layer over. The fuzzy source structurally cannot
-rescue it mid-word: the prefix beam reaches `i'll` only through an omitted
-click at `LOG_OMIT` (-2.5), which is past `FREQUENCY_MAY_BUY` (-1.5), so
-`_protect_exact_completions` clamps it below every completion of the live
-prefix `ill`, and `ill` has eight. `he's` was not reached at all. Cheapening
-the beam's apostrophe omission was tried and is the wrong lever: it prices a
-deliberate skip as a motor error, and it still has to buy past eight exact
-completions on frequency alone.
-
-**Typing the apostrophe must not blank the bar.** `_press_char`'s gate on
-whether to re-query was `char.isalpha()`, so the apostrophe threw the bar away
-at the moment it was right: `don` put `don't` at the top, and the `'` cleared
-it one click short of the word; `i'` discarded `I'm` / `I'll` / `I'd` / `I've`,
-which are the entire reason to type an apostrophe there. That is the same
-oversight the digit had, and which the comment at that call site already
-describes. `_continues_a_word` is the gate now: letters always, plus `'` when
-there are letters in front of it (a leading one carries no prefix, so asking
-costs a round trip and returns nothing). It is deliberately a separate question
-from the word-character rule in `_press_char` that decides what `_current_word`
-keeps: that one says what a word is made of, this one says whether the run so
-far is worth asking about. **The underscore is deliberately not in the gate**,
-although `_press_char` keeps it in the word so `snake_case` stays one token: the
-tokenizer keeps letters and apostrophes only, so after `snake_` the model
-predicts from `snake` while the typed run is `snake_`, every pill is an exact
-completion of a prefix that discards a typed character, and tapping `snake`
-called `replace_text(6, "snake ")`, removing the underscore just typed. Until
-the tokenizer and the gate agree on it, an underscore clears the bar as it
-always did (`TestTypingTheApostropheKeepsTheBar::test_an_underscore_still_clears_the_bar`).
-
-Measured on the held-out AAC corpora, counting every contraction occurrence and
-typing it the way a user of this keyboard does (no apostrophe), the word is
-offered somewhere while typing it **65.1% -> 94.5%** of the time; `i'm`, the
-most common contraction in the set at 24 occurrences, was previously
-unreachable at every prefix length. Keystroke savings are unchanged to the
-decimal (49.1% aac-dev, 50.4% aac-test): those corpora type contractions *with*
-their apostrophes, so the benchmark cannot see this at all and is a regression
-check here, not a measurement of it. The remaining misses are possessives
-(`doctor's`, `today's`) that are not in the vocabulary as words, which no
-prefix rule can reach. Across a sweep of 4,056 two- and three-letter prefixes
-only 10 change, 7 by gaining a contraction and **none by losing one**; the
-words displaced are all rank 5-6 tail items.
-
-Guarded by `tests/test_ngram_predictor.py::TestTheApostropheIsOptionalInATypedPrefix`
-(the predicate), `tests/test_hybrid_predictor.py::TestASkippedApostropheStillFindsTheWord`
-(the ranking, on the shipped word lists rather than a stub, because the claim
-is about real frequencies) and
-`tests/test_keyboard_bridge.py::TestTypingTheApostropheKeepsTheBar`. Every
-positive is paired with the near-miss it must still reject, and the pairs that
-bite are the ones a rule that matched too much would satisfy: `ill` must keep
-offering `ill` and `illinois`, a prefix with no contraction behind it must grow
-none, and a bare `'` must still ask nothing.
+- `ill` offers `I'll`, `im` offers `I'm`: one clause in `NgramPredictor._matches_partial`, applied **only when the user has typed no apostrophe themselves**. It belongs in the n-gram's exact match, not the fuzzy source (cheapening the beam's apostrophe omission was tried and is the wrong lever).
+- `_continues_a_word` gates the re-query in `_press_char`: letters always, plus `'` when letters precede it, so typing the apostrophe does not blank the bar. **The underscore is deliberately not in the gate** (the tokenizer drops it, and a pill tap would `replace_text` the underscore away).
+- Tests: `TestTheApostropheIsOptionalInATypedPrefix`, `TestASkippedApostropheStillFindsTheWord`, `TestTypingTheApostropheKeepsTheBar`.
 
 ## Short words in next-word predictions
 
@@ -318,61 +196,14 @@ It is now an **allow-list of real short words**, not a relaxed length rule, and 
 
 ## Taught acronyms (why "PR" would never learn)
 
-The engine could not hold an acronym, however many times it was typed.
-`NgramPredictor._is_plausible_word` rejects a 1- or 2-letter word that is
-not on the profile's `short_words` list, and a longer word with no vowel;
-`pr` fails the first rule and `prs` the second, for exactly the reason
-`th` and `xqz` do. `learn()` therefore dropped both before the 3-sighting
-candidate gate, `_link_context` formed no `a -> pr` edge across the gap,
-and the strip on load re-deleted them from any model that somehow held
-them. The shape filter cannot tell a vowel-less acronym from a vowel-less
-slip, and no rule over the letters ever will: they are the same shape.
+Full write-up: `docs/architecture/PREDICTION_NOTES.md` (section of the same name). Read it before changing this area.
 
-**The evidence is what the user paid to type it.**
-`NgramPredictor.is_taught_acronym(word)` is true when
-`capitalization[word]` carries **two or more capitals**, which on this
-keyboard means shifting or right-clicking each letter individually, since
-`learn_capitalization` refuses an all-caps form unless Caps Lock was off
-for the whole word (`_word_typed_under_caps_lock`). No new store, no new
-setting: the capitalisation table already recorded exactly this, and
-already has the load caps, the backup archive and Clear Learned Data
-behind it.
-
-Three things about it are load-bearing:
-
-- **Two capitals, not one.** A leading capital is what every word at a
-  sentence start carries, so `Th` from an interrupted word reaches
-  `learn_capitalization` the same way an acronym does, and a one-capital
-  rule would hand the fragment class the filter exists for a free pass.
-- **`load()` merges `capitalization` *before* the fragment strip.** It
-  used to merge after, and the strip asks `_is_plausible_word`, so every
-  learned acronym would have been deleted on the way back in and the
-  model could never hold one across a restart.
-- **The next-word gate consults it too** (`HybridPredictor._next_word_allowed`,
-  which both merge sites now call). Letting `pr` into the vocabulary is
-  not enough on its own: `_short_word_allowed` would still drop it for
-  being two characters, in the position the pill is worth the most.
-
-`get_capitalized` returns the taught form under two further guards, and
-this is the only thing besides the "I" family that it will capitalise.
-It is **not** the removed Tier 3, which was wrong because it fired on
-ordinary words and on forms the user had typed lowercase: the word must
-not be in `_base_unigrams` (so `us`, `ok`, `it` keep their own casing
-however they were once typed) and the taught form must be
-**acronym-shaped**, all caps but for a plural `s` (so `ZigZaqCorp` stays
-lowercase). The shape guard is what keeps this narrow, and the reason it
-is needed at all is that `_display_cased` already renders a mixed-case
-brand correctly from the typed prefix, while an acronym is the one case
-that mirror cannot reach: every capital after the first falls outside any
-prefix short enough to still want a pill, so `PR` came back `Pr` and got
-retyped by hand.
-
-Known limitation: the acronym has to be taught with per-letter shift or
-right-click at least once. Typed under Caps Lock it teaches nothing,
-because that is one click for the whole word and therefore no evidence
-about it. Guarded by `tests/test_ngram_predictor.py::TestTaughtAcronymsAreLearnable`
-and `tests/test_hybrid_predictor.py::TestTaughtAcronymsReachTheBar`, where
-every positive case is paired with the near-miss it must still reject.
+- `NgramPredictor.is_taught_acronym(word)` is true when `capitalization[word]` carries **two or more capitals** (one is what every sentence-start fragment carries). It exempts the word from `_is_plausible_word`'s shape filter.
+- **`load()` merges `capitalization` before the fragment strip**, or every learned acronym is deleted on the way back in.
+- The next-word gate consults it too (`HybridPredictor._next_word_allowed`, which both merge sites call).
+- `get_capitalized` returns the taught form only when the word is not in `_base_unigrams` and the form is acronym-shaped (all caps but for a plural `s`). This is not the removed Tier 3.
+- Limitation: it must be taught with per-letter shift or right-click; typed under Caps Lock it teaches nothing.
+- Tests: `TestTaughtAcronymsAreLearnable`, `TestTaughtAcronymsReachTheBar`.
 
 ## Auto-Capitalization & Proper Nouns
 
@@ -397,256 +228,83 @@ Edit `always_capitalize` on the language profile in `src/prediction/language.py`
 
 ## Where User Data Lives
 
-- **Every store writes through `src/atomic_write.py`** (tempfile created in the same directory, flushed and fsynced, then renamed into place), so a crash or power loss mid-write can never leave a truncated file where a good one used to be. A new persistent store must not write with a bare `open()`/`write_text`; route it through `atomic_write_text` or `atomic_write_json` instead.
-- **Settings** (layout, theme, toggles): Managed by Qt `Settings` in QML. Auto-saved on change. Stored in OS registry/config automatically by Qt: on Windows that is `HKCU\Software\alpha-osk`, the **organisation** name from `keyboard_app.py::app.setOrganizationName`.
-  - **The Windows uninstaller must not delete that key except behind its own prompt.** It used to delete it from the `.nsi` Uninstall section unconditionally, spelled `Software\${APP_NAME}`, and two things make that wipe every setting on every upgrade rather than only on an uninstall: registry keys are **case-insensitive**, so "Alpha-OSK" resolves to the "alpha-osk" organisation key and takes the whole tree under it, and the installer's Install section runs the previous version's `uninstall.exe /S` before extracting, which is also exactly what the auto-updater drives. So a reinstall and an auto-update both silently reset the theme, layout, panels, opacity and window size to defaults. The deletion now lives in `installer.nsh::customUnInstall`, in the same `IfSilent`-guarded branch as the `%APPDATA%` removal, spelled from a new `APP_ORG` define that must keep matching `setOrganizationName`. Guarded by `tests/test_windows_installer.py`, which expands the `!define`s before comparing, because the bug's own spelling never mentioned the organisation. **The fix cannot protect the upgrade that delivers it**, and that is worth knowing before reading a bug report saying it did not work: the Install section runs `$INSTDIR\uninstall.exe`, the binary the *previous* version wrote, and only calls `WriteUninstaller` afterwards, so every user coming from 1.3.0 or earlier runs the old unconditional `DeleteRegKey` one final time. Only upgrades from the first release carrying this fix are covered.
-  - **The installer's Add/Remove Programs entry lives in HKLM, and the previous-version check executes nothing it reads from the registry.** Releases up to 1.4.1 wrote the entry to HKCU, and `installer.nsh::customInstall` ran that entry's `UninstallString` with the installer's administrator token behind a prompt recommending Yes, shown even on a silent auto-update because it carried no `/SD` (measured: NSIS shows an un-defaulted MessageBox under `/S`). Any process running as the user can write HKCU, so a planted string was one Yes away from running as administrator. It never fired, because the Install section wrote its own entry over the key first, in every revision in history, which also meant removing a previous version from another directory never worked. Now `removePreviousInstallAt` reads only `InstallLocation`, normalises it with `GetFullPathName` (so `Program Files\..\Users\x` is compared as what it names), requires a per-user location to sit under Program Files and to hold our own `alpha-osk.exe` and `uninstall.exe`, runs that uninstaller and nothing else, and defaults to No when silent; the entry is read before this install writes its own; the uninstaller deletes both hives. Guarded by `tests/test_windows_installer.py::TestThePreviousVersionCheckExecutesNothingFromTheRegistry`, including a `makensis` compile of the macros where NSIS is installed. The before/after runtime harness (a test GUID under HKCU, a planted uninstaller, a `..` traversal, a stale entry, a genuine old install, the silent default) is the shape any future change here should be checked with.
-  - **An uninstaller shipped before 1.4.0 still deletes that key, so every invocation of a previous uninstaller goes through `upgrade_settings.nsh::RunPreviousUninstaller`.** The fix above cannot protect the upgrade that delivers it, because the Install section runs the *previous* version's binary. The helper copies the whole settings tree, registry types and nested keys included, to a uniquely named sibling under `HKCU\Software\alpha-osk-upgrade-backups`, flushes it so it is on disk before destructive code runs, runs the uninstaller, and copies it back. It never imports an editable `.reg` file into the elevated process. **Backup and restore failures stop setup; the old uninstaller's own exit code does not**, and that asymmetry is the load-bearing part: on the same-directory path this runs *before* the replacement files are extracted, so aborting there leaves a user whose only input device is this keyboard with the old binary already uninstalled and no new one, and every retry failing at the same point. A failed restore keeps its recovery copy and records the path in two durable places, since the message box is auto-answered on the silent path the auto-updater drives and `DetailPrint` goes to a pane silent mode never shows. **The elevated installer's `HKEY_CURRENT_USER` is the profile that elevated**, so under credential elevation (a standard user typing an administrator's password) the tree it protects is the administrator's, and the keyboard's own user is unprotected; that is the same hazard that puts the study-invite seed in HKLM. Structural coverage is in `tests/test_windows_installer.py`, executable Windows/NSIS coverage in `tests/test_upgrade_settings.py`. Settings already deleted by an earlier upgrade cannot be reconstructed.
-- **Prediction model** (learned words/phrases): Saved to disk explicitly or via auto-save on exit.
-  - Windows: `%APPDATA%/alpha-osk/models/`
-  - Linux: `~/.config/alpha-osk/models/`
-  - Files: `ngram_model.json`, `ppm_model.json`
-  - **Load-time caps**: both loaders reject files over 50 MB. The n-gram loader also rejects files with more than 500 000 unigrams, 500 000 bigram prefixes, or 100 000 capitalisation entries - anything beyond these is assumed to be corrupt or hostile and is silently skipped (the in-memory base dictionary is kept).
-- **Custom vocabulary packs**: Imported by the user. No built-in packs ship - see *Vocabulary Packs* section below for why.
-  - User-imported: `%APPDATA%/alpha-osk/packs/` (Windows) or `~/.config/alpha-osk/packs/` (Linux)
-  - Pack format: folder with `dictionary.txt` (required), optional `bigrams.txt`, `trigrams.txt`, `pack.json`
-  - **Import hardening**: the source folder's name is sanitised to `[a-z0-9_-]{1,64}`; anything else (including `..`) is rejected. The resolved destination is verified to sit strictly under `user_packs_dir` before any `rmtree`/`copytree` runs, and symlinks inside the source tree are skipped rather than dereferenced. Don't loosen this without re-reading `PackManager.import_pack` and the regression tests in `tests/test_vocabulary_pack.py::TestImportPackSecurity`.
-- **Analytics** (lifetime typing stats): `analytics.json` sits directly in the config dir root (not under `models/`), same Windows/Linux paths as above. **Load-time cap**: rejected outright over `_MAX_STATS_FILE_BYTES` (5 MB, checked via `stat()` before the file is opened, the same before-you-open-it pattern as the n-gram/snippets loaders); word and key frequency tables are separately capped at 5000 entries each (top-N by count) on both load and save. Every **scalar** counter goes through `_as_count` / `_as_minutes` on load, which reject a non-number (including `bool`, since `True` is an `int`), reject NaN/inf, and clamp negatives to 0: the file is replaced wholesale by a Data Backup import, and a wrongly-typed field would not fail on load at all, it would fail later inside `save()`, where every value is fed into an addition. `save()` therefore builds its whole payload inside its own `try` too. See *Analytics* section below.
-- **Dictation settings**: `dictation.json` in the config dir root (same paths as above). Holds the enable flag, model, language, input device, timeouts, custom words, **and the recogniser API key**, which makes it the only file here carrying a credential. Written atomically on every mutation, so there is no on-quit save path. Load-time caps mirror the sibling loaders: rejected outright over 64 KB (checked via `stat()` before the file is opened), every scalar clamped, an unknown model or language falling back to the default rather than being stored.
-  - **The key is wrapped with DPAPI on Windows** (`CryptProtectData` via ctypes, no new dependency), which ties the ciphertext to the user account, so a copied file is inert elsewhere. Plaintext at mode 0600 on Linux/macOS, with `key_protected` recording which form is on disk so a file written on either platform still loads on the other. Never logged, never returned to QML in the clear, and never in the websocket URL (it rides in an `Authorization` header).
-  - **Deliberately excluded from the Data Backup archive** (do NOT add it to `_MODEL_FILES` in `src/data_export.py`): an archive is carried between machines and handed around, which is the last place a credential belongs. Same class of reason as `telemetry.json`. Asserted by `tests/test_dictation.py::TestTheKeyNeverLeavesTheMachine`, so re-adding it fails loudly.
-- **Diagnostic log**: `alpha-osk.log` in the config dir (`%APPDATA%/alpha-osk/` Windows, `~/.config/alpha-osk/` Linux), wired up in `keyboard_app.py::_configure_logging` as a `RotatingFileHandler` at 2 MB x 3 backups. The frozen build has no console, so this file is the only place updater errors and crash tracebacks land, which also makes it the file users attach to bug reports.
-  - **It must never contain typed content.** No log record at INFO or above may interpolate a word, `_current_word`, `_context_buffer`, `_sentence_buffer`, or a prediction list. Log lengths and booleans instead. Anything that genuinely needs the content for local debugging goes at DEBUG *and* behind `if not self._privacy_mode:`. This is not a style preference: `_context_buffer` mirrors the on-screen text up to 200 chars, so a single careless `%s` turns the log into a plaintext transcript of the user's typing, and privacy mode does not gate the logging layer for free. Regression coverage lives with the prediction-path tests. **The platform layer is inside the rule and cannot lean on privacy mode at all**, since privacy mode deliberately still types: `linux.py::_run` logs a failed command by tool and subcommand (`_describe`) and by error class and errno (`_error_name`), never `cmd` or `str(exc)`, because the arguments of `xdotool type` *are* the text being typed and `TimeoutExpired` quotes the whole argv; the no-tool warning in `send_key` and the no-keycode warning in `macos.py` name no key. All three sites leaked through 1.4.1, which is what the second purge generation below exists for. Guarded by `tests/test_platform.py::TestLinuxDiagnosticsNeverCarryTypedText`.
-  - Deliberately **excluded** from the Data Backup archive (`_MODEL_FILES` in `src/data_export.py`), so the leak cannot compound through an export.
-  - **Uncaught tracebacks only reach it because `keyboard_app.py::_install_exception_hooks` puts them there.** Without it the file holds just the failures somebody remembered to wrap in `try` / `except` + `_logger.exception`; everything else goes to `sys.excepthook`, which writes to stderr, and a windowed PyInstaller build has no stderr (`sys.stderr` is `None`), so the traceback for an actual crash was discarded at the moment it was worth the most. Both `sys.excepthook` and `threading.excepthook` are wired (the dictation capture, the updater's download worker and Linux's AT-SPI listener all run off the main thread, and a crash there never reaches `sys.excepthook` at all), both **chain** to the previous hook so a dev run keeps its stderr traceback, both wrap the log call because a hook that raises replaces the crash it is reporting, and `KeyboardInterrupt` is passed through unlogged. A module-level flag makes the install idempotent. **`build/launcher.py` is the one crash class the hook cannot catch** (it wraps `app_main()` in its own `except`), so it logs the traceback itself before showing its dialog; before that the dialog carried one line of `str(e)` and the traceback went nowhere. Covered by `tests/test_keyboard_app.py::TestUncaughtTracebacksReachTheLog`.
-  - **The user can find it without being told where to look.** *Settings -> Data & Privacy -> Diagnostics* shows the path with **Open Log Folder** and **Copy Path**, backed by `getLogPath` / `openLogFolder` / `copyLogPath` on the bridge; Help & Shortcuts has a *Reporting a Problem* section and `bug_report.yml` names the file per platform. The path was previously announced only *inside* the log itself at startup, and the issue template asked for console output a frozen build cannot produce. **The folder, not the file**: a `.log` has no registered handler on a stock Windows install, so opening the file is a "how do you want to open this?" dialog, and the rotations live in the folder anyway. The filename lives once, as `LOG_FILENAME` / `get_log_path()` in `src/platform/__init__.py`, because the handler that writes it, the purge that globs for it and the panel that points at it must not drift. Covered by `tests/test_keyboard_bridge.py::TestTheLogIsReachableFromTheUI`.
-  - **Pre-fix logs are purged once per fix generation on upgrade.** `keyboard_app.py::_purge_pre_fix_logs` deletes `alpha-osk.log*` on the first launch of a build that fixed a leak, guarded by one sentinel per generation in the config dir: `.log-privacy-purge` (releases to 1.0.30, the bridge's INFO logs, every platform) and `.log-privacy-purge-2` (releases to 1.4.1, the Linux synthesizer's ERROR and WARNING sites and the macOS synthesizer's no-keycode warning, **Linux and macOS only**, because the Windows synthesizer had no such site, so a Windows config dir cannot hold those records, and a purge costs the user their diagnostics). Fixing the logging sites only stops *new* leakage; an upgrading user still had up to four rotated files holding a transcript of what they typed, so removing them is part of the fix rather than housekeeping. A generation is never retired, so an install that skipped every build in between still owes every purge it missed. It must run **before** the `RotatingFileHandler` opens the file, because Windows will not unlink a log the handler holds, and it must never raise: logging setup is not allowed to be the reason the keyboard fails to start. The sentinels are why each generation runs exactly once, so a user who wants logs kept across restarts is not fighting us. Covered by `tests/test_keyboard_app.py::TestPurgePreFixLogs` and `TestTheSecondLogPurge`.
+Full write-up: `docs/architecture/USER_DATA.md`. Read it before changing this area.
+
+- **Every store writes through `src/atomic_write.py`** (`atomic_write_text` / `atomic_write_json`); never a bare `open()` / `write_text`.
+- **Settings**: Qt `Settings` in QML, on Windows `HKCU\Software\alpha-osk` (the **organisation** name from `setOrganizationName`). Registry keys are case-insensitive, and the installer runs the previous version's uninstaller on every upgrade and auto-update, so:
+  - the uninstaller deletes that key only in `installer.nsh::customUnInstall`, inside the `IfSilent` guard, spelled from the `APP_ORG` define;
+  - every invocation of a previous uninstaller goes through `upgrade_settings.nsh::RunPreviousUninstaller` (back up the tree, run, restore). **Backup and restore failures stop setup; the old uninstaller's exit code does not.**
+  - the Add/Remove Programs entry lives in HKLM, and `removePreviousInstallAt` executes nothing it reads from the registry (reads only `InstallLocation`, normalises it, requires our own exes, defaults to No when silent).
+  - Guards: `tests/test_windows_installer.py`, `tests/test_upgrade_settings.py`.
+- **Prediction model**: `%APPDATA%/alpha-osk/models/` (Windows), `~/.config/alpha-osk/models/` (Linux); `ngram_model.json`, `ppm_model.json`. Loaders reject files over 50 MB, and the n-gram loader rejects more than 500 000 unigrams or bigram prefixes, or 100 000 capitalisation entries.
+- **Packs**: `<config>/packs/`, import-only (see *Vocabulary Packs*).
+- **Analytics**: `analytics.json` in the config root, 5 MB cap checked by `stat()` before opening, frequency tables capped at 5000; every scalar goes through `_as_count` / `_as_minutes`; `save()` builds its payload inside its own `try`.
+- **Dictation**: `dictation.json` holds the API key (DPAPI on Windows, 0600 elsewhere, `key_protected` records which), 64 KB cap. **Excluded from the Data Backup archive**, like `telemetry.json`.
+- **Diagnostic log**: `alpha-osk.log` in the config dir (`LOG_FILENAME` / `get_log_path()` in `src/platform/__init__.py`), 2 MB x 3, excluded from the archive.
+  - **It must never contain typed content.** No record at INFO or above may interpolate a word, `_current_word`, `_context_buffer`, `_sentence_buffer` or a prediction list; content-bearing debug goes at DEBUG *and* behind `if not self._privacy_mode:`. The platform layer is inside the rule: `linux.py::_run` logs by `_describe` / `_error_name`, never `cmd` or `str(exc)`.
+  - Uncaught tracebacks reach it only through `keyboard_app.py::_install_exception_hooks` (both `sys` and `threading` hooks, chained, idempotent); `build/launcher.py` logs its own crash.
+  - *Data & Privacy -> Diagnostics* opens the **folder**, not the file (`getLogPath` / `openLogFolder` / `copyLogPath`).
+  - `_purge_pre_fix_logs` deletes pre-fix logs once per fix generation (sentinels `.log-privacy-purge`, `.log-privacy-purge-2`; the second is Linux and macOS only). It runs before the handler opens the file, never raises, and a generation is never retired.
 
 ## Snippets (Quick-Insert Text)
 
-User-defined quick-insert text: name, email, phone, address, signatures, canned replies. The user taps one to copy it to the clipboard, instead of typing it out and fighting prediction every time. Opened from a **bookmark button in the suggestion bar, immediately left of the clear-context ring** (`snippetsBarButton`). It sits there rather than in the title bar because 45 px beats 28 px for an imprecise pointer, and left of the ring because the ring is pressed from muscle memory and should not move. **A title-bar copy survives as `snippetsTitleBarButton`, visible only when `suggestionsEnabled` is false**: the suggestion bar collapses to zero height with that setting, taking everything in it, and an unrelated setting must not be able to remove the only way into a feature (the clear-context button does have that hole, and did not get to spread it). Both icons are Feather's `bookmark` drawn through `StrokeIcon`, never a glyph, for the reason given under *Things to Watch Out For*. Backend in `src/snippets.py`; UI is the floating `snippetsWindow` in `qml/components/SnippetsWindow.qml`, instantiated from `Main.qml` (see *Floating window (NOT a Popup)* below for the component's boundary with the keyboard window).
+Full write-up: `docs/architecture/SNIPPETS.md` (section of the same name). Read it before changing this area.
 
-### Data model and storage
-Each entry is a `{label, value, color}` record: `label` is the short text on the tile (e.g. "Email"), `value` is the exact text typed when tapped, `color` is an optional tag name used to tint the tile. Persisted as `snippets.json` in the config dir (`%APPDATA%/alpha-osk/` Windows, `~/.config/alpha-osk/` Linux), saved synchronously on every mutation (atomic tempfile-then-rename), so there is no on-quit save path to wire up. On first launch the store seeds four pre-made empty labelled slots (Name / Email / Phone / Address); every field including the label is editable and deletable. Bounds: `MAX_SNIPPETS` 50, `MAX_LABEL_LEN` 40, `MAX_VALUE_LEN` 2000, file cap 1 MB. A corrupt, oversized, or empty file falls back to the seeded defaults rather than raising. Labels are collapsed to a single line; values keep newlines (a value may be a multi-line block like a mailing address), though `_clean_value` strips every other C0 control character plus DEL (0x7F, which sorts above the C0 range, so an `ord(ch) >= 0x20` filter alone would miss it). That's for locally authored snippets only: an *imported* value has its newlines flattened to spaces instead, see *Backup* below.
+User-defined quick-insert text, opened from the bookmark button in the suggestion bar (`snippetsBarButton`, with a title-bar twin visible only when `suggestionsEnabled` is false). Backend `src/snippets.py`, UI `qml/components/SnippetsWindow.qml`.
 
-**Colour tags are stored as a *name* from `SNIPPET_COLORS`, never as the hex the UI draws** (`""`, `red`, `amber`, `green`, `blue`, `purple`). Two reasons, both load-bearing. `snippets.json` is replace-on-import from an archive the user picked, and the stored string ends up in a QML `color` property, so an arbitrary value from an untrusted file must never reach it verbatim; `_clean_color` normalises case and whitespace and drops anything off the list to untagged, per entry rather than rejecting the file (a bad tag is not a reason to lose someone else's snippets). And the hexes have to stay legible on nine themes, which the store has no way to know, so QML owns them (`snippetsWindow.tagInks` in `SnippetsWindow.qml`) while the store owns which names exist. `getSnippetColors()` hands the list to QML so a swatch can never offer a tag the store would silently drop, and `tests/test_qml_snippets.py::TestColourTags` asserts every name has an ink, which is what catches the two halves drifting apart.
-
-**`""` is the grey default, not a missing value.** An untagged snippet renders in the theme's own key colour and the first swatch is a plain grey circle. That is also why there is no grey *in* the list, and why the blue-grey "slate" that was briefly there is gone: a tag that reads as the default is a tag that cannot be seen.
-
-`SCHEMA_VERSION` is 2 (colour). Nothing reads the version on load, deliberately: an entry with no `color` reads as untagged and one carrying an unknown name is retagged to untagged, so a file from either side of the bump loads correctly on its own merits, and a version gate would refuse files this loader can in fact read.
-
-### Tapping a snippet copies it to the clipboard
-`KeyboardBridge.copySnippet(index) -> bool` puts the value on the system clipboard via `QGuiApplication.clipboard()`, and QML flashes the `snippetCopiedToast`. **This is the only thing a tile tap does.** There is no "type it" control anywhere in the UI.
-
-Copy beat typing for the reason the *Insertion path* below spends four sentences on: a synthetic insert is one click against a paste's two, but it only lands correctly when the caret is already in the right field and the app does not intercept synthetic keystrokes (the entire reason Compatibility Mode exists), a long address arrives one character at a time, and **when it misses it misses silently**, into whichever window happened to be focused. A clipboard write has no focus race.
-
-Three things follow from the clipboard being invisible:
-- **The toast is the only feedback**, so it is not optional garnish. It **names the snippet** ("Copied Email"), because with colour-tagged near-duplicates on screen a confirmation that does not say which one was taken is worth very little, and it dwells 2 s rather than the 1.4 s of the sibling confirmations because it is read rather than merely noticed.
-- **The toast lives on the keyboard window, not in the snippets window**, which hides itself on the same tap and would take a toast parented there down with it. Its `closePolicy` must stay `Popup.NoAutoClose` for the usual reason: every OSK key click is a press-outside.
-- **An empty snippet and an out-of-range index return False without touching the clipboard.** Copying "nothing" would silently wipe what the user had already put there, which is the one way this feature can destroy something. Guarded by `tests/test_qml_snippets.py::TestTappingATileCopies`.
-- **A False return has to say so on screen** (`snippetProblemToast`, shared with the editor's failed save). The whole argument for the toast is that a clipboard write is invisible, which makes the failure branch the one that needs it most: doing nothing there is indistinguishable from a tap that did not register, so the user taps again. `copySnippet` also imports `QGuiApplication` **inside the slot**, not at module scope: QtGui dlopens the host's libEGL/libGL on first import, and `keyboard_bridge` is imported by most of the Python suite, so an unconditional import turns every one of those files into a pytest *collection error* on a host without them rather than a skip. Its `isinstance(QGuiApplication.instance(), QGuiApplication)` guard is deliberate too, since `instance()` is inherited from `QCoreApplication` and hands back a plain `QCoreApplication` in a non-GUI process, so a null check does not answer the question it appears to.
-
-Not gated on privacy mode, same rule as the insert path: privacy is about not *learning* from typing, and the user may need their own address in a sensitive form. Nothing in the copy path learns or logs, and the value is never written to the diagnostic log.
-
-### Insertion path (Python only, no UI path today)
-`KeyboardBridge.insertSnippet(index)` types a snippet verbatim into the focused app. **Nothing in QML calls it** since the tile tap became a copy; it is kept because it works, is covered by tests, and is the reference for how a verbatim snippet insert has to behave. Read it before wiring any new path that types stored text.
-
-`KeyboardBridge.insertSnippet(index)` routes the value through `_commit_verbatim_insert(value)`, the same call `insertGlyph` makes: prologue (`_release_sticky_modifiers()`, settle a deferred auto-space, spend an armed auto-capital), then `_send_literal_text` (a held Shift would otherwise deliver the whole address in capitals), then the shared typing-state reset. Snippets are full literal inserts, so unlike prediction pills there is **no** prefix matching, no autocorrect, and **no compat-mode BackSpace+retype** (that dance exists to replace a typed prefix, which a fresh insert doesn't have). Insertion is **not** blocked by privacy mode: privacy is about not *learning* from typing, and the user may need to drop their address into a sensitive form. After inserting, `_current_word` / predictions are cleared so the verbatim text (which may carry punctuation or newlines) can't corrupt the next prediction's prefix matching. `insertSnippet` is a no-op while edit mode is active (`_edit_mode_active`) so it can't fire while the user is editing a snippet field.
-
-### Floating window (NOT a Popup)
-`snippetsWindow` is a **separate top-level `Window`**, not a QML `Popup`, and it lives in its own file, `qml/components/SnippetsWindow.qml`, instantiated from `Main.qml` as `Comp.SnippetsWindow { id: snippetsWindow ... }`. A `Popup` is clipped to its parent window's overlay, so it could never be dragged off the keyboard; a standalone `Window` floats anywhere on the desktop. It carries the same OSK flags as the main window (`Qt.Window | FramelessWindowHint | WindowStaysOnTopHint | WindowDoesNotAcceptFocus`). On Windows that Qt flag alone doesn't stop click-activation, so `keyboard_app.py::_wire_floating_windows` finds the window by `objectName: "snippetsWindow"` and re-applies `WS_EX_NOACTIVATE` (via the shared `src/platform/windows_window.py::apply_extended_styles`) on every `visibleChanged` (the native handle only exists once shown). Non-Windows is a no-op (X11/Wayland respect the Qt flag; macOS uses the app-wide Accessory policy). The header is a drag handle that moves the whole window freely with no clamp. The dragged position **persists across restarts** (`appSettings.savedSnippetsX/Y`, the same -1000000 sentinel and on-screen clamp as the main window's `savedWindowX/Y`, written once on drag release rather than on every motion event); first open on a fresh install centers it just above the keyboard. It used to reset every launch, which undid the one adjustment anyone makes to this window: dragging it clear of the field they are filling in.
-
-**The component's whole surface with the keyboard window is `required` properties plus signals, declared at the top of the file.** `SnippetsWindow.qml` cannot see `root`, `appSettings` or any id declared in `Main.qml`, so every theme colour, helper function (`clampedWindowPos`, `inkOn`, `luminance`, `applyEditChord`) and the settings object it reads/writes are `required property` declarations that `Main.qml` binds when it instantiates the component; there is no fallback default, so a missing binding fails loudly at load rather than producing a blank or mis-themed window. The three confirmation toasts (`snippetCopiedToast`, `snippetProblemToast`, `editSavedToast`) stay behind on the keyboard window rather than moving into the component, because this window hides itself on the same tap that would trigger one and would take a toast parented here down with it; `SnippetsWindow.qml` instead declares `copied` / `problem` / `saved` signals that `Main.qml` connects to the real toasts.
-
-**The restore clamps to the whole virtual desktop, not to the primary screen** (`root.clampedWindowPos` over `root.desktopBounds`, the union of `Qt.application.screens`). `Screen` is the screen the *item* is on and `Screen.virtualX/Y` describe that screen's origin rather than the desktop's, so a `Screen.width` clamp dragged a window saved at x=2400 on a second monitor back to the primary one on every launch, and collapsed a left-hand monitor's negative coordinates to 0. That is worse than not persisting at all: the window lands nowhere near the keyboard it belongs to. The main window's own restore block still has the primary-screen version; it is the same bug and was left alone deliberately, as it is out of scope for the snippets change and touches the window the user depends on daily. The multi-monitor case cannot be exercised headlessly (the offscreen plugin gives one screen), so `TestTheRestoredPositionIsClampedToTheWholeDesktop` pins that the bounds come from the screen *list* and says so in its docstring rather than implying more coverage than it has.
-
-### Three views: tile grid, actions sheet, editor
-The window shows exactly one of three views, gated on two indices in priority order: the **editor** (`editingIndex >= 0`), the **actions sheet** (`menuIndex >= 0`), otherwise the **tile grid**. `tests/test_qml_snippets.py::TestTheWindowLoads::test_only_one_view_is_ever_showing` asserts that, because the three are siblings gated on the same two properties and a botched condition shows two at once rather than failing loudly.
-
-**The grid pages, 2 columns x 3 rows, and that is not a scroll.** This window floats over whatever the user is typing into, so a list that grew downward would eventually cover the target app, and at the 50-snippet cap it would run off the screen. A page keeps its full six cells as soon as there is more than one page (the Repeater's model is `pageSize`, not the remaining count), so a short last page cannot pull the pager and the Add button up the window, under a pointer already travelling toward one of them. `page` is a plain int rather than a binding, so `clampPage()` runs from both `refresh()` and the `onSnippetsChanged` handler: deleting the last snippet on the last page used to strand the grid on a page that no longer existed, showing six empty cells and a pager counting "Page 3 of 2".
-
-**There is a left-click-only route to the sheet: the header's Manage toggle.** Right-click opens it and press-and-hold deliberately does not, which between them made every management action unreachable to a pointer that can only left-click: dwell-click, switch access, a head or eye tracker, a single-button adaptive mouse. Such a user could copy a snippet and nothing else, never editing, recolouring, reordering or deleting one, and never freeing a slot at the 50 cap. The list this grid replaced at least put a pencil and a cross on every row, so it was a reachability regression rather than a relocation. It is a **mode**, not a per-tile control, for the reason the grid exists: a second target on a 165x58 tile sits a few pixels from the one pressed every day, which is exactly the arrangement the rework removed. In manage mode the whole tile is the target and copy is unreachable, so the worst a mis-tap does is open a sheet. Tiles take an accent border while it is on (a border rather than a fill, same contrast argument as the compact accent keys), the toggle is hidden inside the sheet and the editor, and `openList()` clears it, since copying is what the window is for and managing is an errand. The button is sized to the wider of its two labels: driven by the live text it shrank 24 px on flipping to "Done" and slid the close ✕ along the header under a pointer already moving toward it. Guarded by `TestTheTileDispatchesOnMouseButton`.
-
-**Right-click a tile opens the actions sheet; left-click types the snippet.** The sheet is a *view*, not a floating menu, and that is deliberate: a popup anchored to a 165 px tile inside a 360 px window has to be clamped away from two edges, and it puts every management action on a target smaller than the tile it came from. Taking over the window instead gives each action the full width. It carries Copy to clipboard / Edit label and text / the colour swatches / Move earlier / Move later / Delete. **Press-and-hold deliberately does not open it**: a click held a beat too long is ordinary on a keyboard built for slow motor input, and it must never turn typing a snippet into opening a menu.
-
-**Moving follows the snippet, not the slot** (`moveSnippet` updates `menuIndex` and the page it landed on). The sheet is about one snippet, and staying on the index would silently retarget it at whichever one swapped in. It points at the destination *before* calling the bridge, because the mutation emits `snippetsChanged` synchronously and the handler reads `menuIndex`.
-
-**The sheet and the editor track a snippet's identity, not its index** (`menuIdentity` / `editIdentity`, label + value, compared in `onSnippetsChanged`). A Data Backup import replaces the whole list underneath an open sheet, and an index is not an identity: Delete, Edit and the colour swatches went on acting on whatever the import had put at that index, and an index past the new end opened a blank editor whose save was a silent no-op behind a green "Saved". Identity deliberately excludes the colour, or recolouring from the sheet, which is meant to leave it open, would close it on every swatch tap. Guarded by `TestTheSheetTracksItsOwnSnippet`, whose inverse half is the colour and move cases.
-
-**Which mouse button did what lives in `tileClicked(idx, button)`, not in the delegate.** A synthetic click cannot be delivered to a Repeater delegate reliably in the headless tests (the offscreen window's layout has not settled, so every tile maps to the same scene point), so the whole test suite drove `openMenu()` / `primaryTap()` directly and the actual dispatch had no coverage at all: swapping the two branches left everything green. The delegate is now a one-line pass-through and the branch is a named function the tests call. `acceptedButtons` is asserted separately, since dropping `Qt.RightButton` is the half a pass-through cannot state.
-
-**Delete always confirms**, in place, with Keep first and wider than Delete. A snippet has no undo behind it and this window is operated with an imprecise pointer. `closeMenu()` clears `confirmingDelete` so a half-answered prompt is never waiting when the sheet reopens.
-
-**Add goes inert at the cap** rather than trying and failing. `SnippetStore.add` refuses past `MAX_SNIPPETS` by returning False and the list simply does not grow, which the old button could not tell from success: it opened the editor on "the last snippet" either way, which at the cap is an existing snippet the user never asked to edit. QML reads the cap from `getSnippetLimit()` rather than hardcoding 50.
-
-**Nothing in this window typesets an icon as a font glyph.** `qml/components/StrokeIcon.qml` draws them from SVG path data on a Canvas, the same approach and the same reason as the clear-context button: on Windows the geometric-shape and dingbat ranges commonly resolve through Segoe UI Emoji, which renders in colour and ignores the `color` property outright. The old pencil and cross were exactly that. `qml/components/SheetRow.qml` is the sheet's action row, deliberately word-only for the same reason.
-
-**Every colour is theme-derived.** The window used to be hardcoded blues, reds and greens, which read as foreign on the dark themes and broke outright on Typewriter (a light theme with near-black text). The tag inks are the one exception, because they are user data rather than chrome; `danger` is picked per theme luminance (a dark red is illegible on Typewriter's cream, a bright one glares on Spaceship's near-black) and text on an accent fill goes through the shared `root.inkOn()`.
-
-### Editor UX (reuses the edit-mode plumbing)
-The editor is a per-snippet form with Label + Text fields. **Edit mode is only turned on while the editor is showing**, not for the whole window. This is critical: if it called `beginEditSession("snippets")` on open, tapping a snippet in the list would be swallowed by edit-mode routing instead of inserting to the OS. In the editor, OSK keystrokes flow through the same `editKeyTyped` / `editSpecialPressed` signals the prediction-edit popup uses, gated on `keyboard.editOwner === "snippets"` so a takeover by another surface (the prediction popup, the key-action editor) stops this window listening immediately rather than racing it for the keystroke; an `editTarget` property ("label" / "value", set by tapping a field) picks which `TextField` receives them. `openList()` (opening the tile grid, not a slot) calls `endEditSession("snippets")`, which is a no-op unless this window is itself still holding the mode: it used to be an unconditional `setEditMode(false)`, which cut a still-open prediction popup's routing out from under it the moment the user browsed to the snippets list without editing anything (see *Editing a Prediction* for the fix, `KeyboardBridge.beginEditSession`). Saving calls `setSnippet` and flashes the shared `editSavedToast` **only when it returns True**; `SnippetStore.set` refuses an out-of-range index, and this editor is reachable from the actions sheet, whose index an import can invalidate, so the flash was capable of confirming a write that never happened. That is the same failure `acceptSnippetOffer` was given a bool return for, and `setSnippet` was the last mutation slot reporting nothing. Empty slots are never dead taps: tapping a tile with no value opens the editor directly instead of inserting. The editor edits label and value only, so `setSnippet` leaves the colour tag alone (`SnippetStore.set` takes `color=None` meaning "keep"); a save that replaced the whole record would silently clear a tag set from the sheet.
-
-**The editor has to provide the text-box behaviour the window's own flags take away, and it did not.** Three things were missing, all reported at once. (1) **Each field carried a `MouseArea` filling it**, there to record which box the OSK types into, and a MouseArea's entire job is to consume the press: caret placement, double-click-for-a-word, triple-click and drag-select were all dead behind it. Nothing else was wrong, which is the part worth remembering: `selectByMouse` was true throughout and `selectWord()` worked when invoked directly, so the fix is `mouse.accepted = false` in `onPressed`, keeping the bookkeeping and passing the event down. Any future overlay on an input has to do the same. (2) **Tab did nothing**, and since this window cannot hold OS focus there was no other key-driven way to change field, only landing a click on the other box; it now calls `focusOtherField()`, which switches and `selectAll()`s, so replacing a value is one gesture. (3) **Shift with an arrow moved the caret instead of selecting**; the arrow/Home/End branches now go through `moveCaret()`, which reads `root.shiftOn` and calls `moveCursorSelection`. `shiftOn` is still true at that point because the bridge's edit-mode intercept emits and returns *before* the auto-release block. Guarded by `tests/test_qml_snippets.py::TestTheEditorSupportsOrdinaryTextEditing`, which drives real `QTest` mouse events rather than the fields' QML API, because driving the API is exactly what let the swallowed clicks go unnoticed.
-
-### Bridge slots and signal
-`getSnippets() -> QVariantList`, `insertSnippet(int)`, `setSnippet(int, str, str)`, `addSnippet()` (appends a blank "New" slot for the user to fill), `deleteSnippet(int)`, `moveSnippet(int, int)` (direction -1 up / +1 down), `copySnippet(int) -> bool`, `setSnippetColor(int, str)`, `getSnippetColors() -> QStringList`, `getSnippetLimit() -> int`. The `snippetsChanged(list)` signal is emitted after every mutation so the window re-queries and rebuilds its tiles; `setSnippetColor` deliberately does **not** emit when the tag is unchanged, since QML rebuilds the whole grid on it.
-
-### Backup
-`snippets.json` is in the Data Backup archive (`_MODEL_FILES` in `src/data_export.py`), replace-on-import like the model files. **Import flattens newlines**: every `\r`/`\n` in an imported snippet's value is replaced with a space (`data_export.py::_flatten_imported_snippet_newlines`) right after extraction, because `xdotool type` turns a literal newline into a real Return keypress and an imported archive is untrusted content; a snippet authored locally in the editor keeps its newlines (see *Data model and storage* above). Best-effort by design: a flatten failure is logged and the file is left as extracted rather than aborting an otherwise-successful import. After an import, `KeyboardBridge.importUserData` calls `SnippetStore.reload_from_disk()` + emits `snippetsChanged` so the running session picks up the imported snippets without a restart. It is *not* encrypted: it's local user data on the user's own machine, same trust model as the prediction model. Guarded by `tests/test_data_export.py::TestSnippetNewlineFlattening`.
+- **A tile tap copies to the clipboard (`copySnippet(index) -> bool`) and does nothing else.** A False return must show `snippetProblemToast`; an empty snippet or bad index never touches the clipboard. `QGuiApplication` is imported **inside the slot**. The toasts live on the keyboard window (this window hides on the same tap) and stay `Popup.NoAutoClose`.
+- `insertSnippet` has no QML caller; it is kept as the reference verbatim insert (`_commit_verbatim_insert`).
+- `snippets.json`: saved synchronously and atomically on every mutation; `MAX_SNIPPETS` 50, label 40, value 2000, file 1 MB; a corrupt file falls back to seeded defaults. **Colour tags are stored as a name from `SNIPPET_COLORS`, never a hex** (`_clean_color`); `""` is the grey default. Nothing reads `SCHEMA_VERSION` on load, deliberately.
+- The window is a top-level `Window` (not a `Popup`), named in `keyboard_app.py::_wire_floating_windows`; its whole surface with `Main.qml` is `required` properties plus `copied` / `problem` / `saved` signals. Position persists and is clamped to the whole virtual desktop (`root.clampedWindowPos`), not the primary screen.
+- Exactly one of three views shows (grid, actions sheet, editor). The grid pages 2 x 3 with the Repeater model equal to the page size. **The header's Manage toggle is the left-click-only route to the sheet**; press-and-hold never opens it. Button dispatch lives in `tileClicked(idx, button)`. Delete always confirms; Add goes inert at the cap (`getSnippetLimit()`).
+- The sheet and editor track a snippet's **identity** (label + value, not colour), not its index, because an import replaces the list underneath them.
+- Edit session `"snippets"` is held **only while the editor is showing**. A `MouseArea` over an input must set `mouse.accepted = false`; Tab calls `focusOtherField()`; Shift + arrow selects through `moveCaret()`. `setSnippet` returns a bool and leaves the colour alone.
+- Icons are `StrokeIcon` path data, never glyphs; every colour is theme-derived except the tag inks.
+- In the Data Backup archive; **import flattens newlines** in values.
+- Tests: `tests/test_qml_snippets.py`, `tests/test_data_export.py::TestSnippetNewlineFlattening`.
 
 ## Intelligent Spacing & Snippet Auto-Detection
 
-Two features that look unrelated but ask the same question ("does this text have a recognisable shape"), so they share one module: **`src/text_patterns.py`**. Answering it in one place keeps them from drifting into disagreeing about what an email address looks like. Everything there is linear-time with explicit length caps, because it runs on the keystroke path and the input is whatever the user is typing; and nothing there logs, because every argument is typed content.
+Full write-up: `docs/architecture/TEXT_PATTERNS.md` (section of the same name). Read it before changing this area.
 
-### `_raw_token` (the run before the cursor)
+Both live in `src/text_patterns.py` (linear-time, length-capped, never logs: every argument is typed content).
 
-Both features need the unbroken run of characters immediately before the cursor, punctuation included. **This cannot be `_current_word`**: that is the prediction engine's notion of a word and it resets at `@` and at every dot, so by the time the `.` in `owen@gmail.com` arrives, `_current_word` is `gmail` and the `@` that proves this is an email is already gone. `_raw_token` is maintained in `_press_char` (append), `pressSpecialKey` (cleared on space/return and on `_TOKEN_BREAKING_KEYS`, popped by backspace), and cleared by every verbatim insert and context reset. Capped at `_MAX_RAW_TOKEN_LEN` (128). It is only maintained **outside privacy mode**, same as `_current_word`, because it holds typed characters.
-
-### Intelligent spacing
-
-*Settings → Smart Typing → Suggestions → Intelligent Spacing*, default ON, disabled and greyed when Auto-Space After Punctuation is off (it modifies that behaviour and does nothing without it). Skips the punctuation auto-space when it would break a structured token: `3.14`, `1,000`, `12:30`, `owen@gmail.com`, `www.example.com`, `https://…`, `192.168.1.1`, `C:/Users/…`, and every dot after the first in a dotted run.
-
-When suppressed, three things are skipped together: the sent space, the space in `_context_buffer` (it mirrors the screen, and a phantom space breaks pill inserts), and the auto-capitalize (or `example.com` comes out `example.Com`). The auto-space-**off** path is deliberately byte-identical to before.
-
-**The other half of the auto-space is taking one back, and `"` cannot join the list that does it.** `_NO_SPACE_BEFORE` (`? ! . , ; : ) ] }`) is the set whose members backspace over an auto-space we inserted, and every one of them is a closer or a terminator. A quote is both: `he said, "hi."` wants the space kept before the first `"` and removed before the second, so adding it to the set would jam every opening quote against the word in front of it. `_closes_a_quotation` decides per keystroke on the parity of `"` in `_context_buffer`; odd means we are inside a quotation and this one closes it. A buffer truncated at 200 chars or cleared by an app switch reads as even and keeps the space, which is the safe way to be wrong: a stray space the user deletes beats one we deleted for them. Guarded by `tests/test_keyboard_bridge.py::TestTheClosingQuoteRemovesTheAutoSpace`, where each removal case is paired with the near-miss it must leave alone.
-
-**Structural rules are gated on structural punctuation.** The `@` and path rules fire for `.` and `:` only. A domain contains dots and colons and never a comma or a semicolon, so one typed after an address belongs to the sentence around it; firing for all four auto-spaced marks turned `owen@gmail.com, thanks` into `owen@gmail.com,thanks`. Guarded by `tests/test_text_patterns.py::TestAutoSpaceSurvivesProse::test_a_comma_after_an_address_is_prose`, paired with the inverse that the structural marks are still suppressed.
-
-**A bare digit run suppresses *provisionally*.** `3` and `42` are the same token, so `3` + `.` (a decimal) and `42` + `.` (a full stop) cannot be told apart when the dot lands. Suppressing outright corrupted prose (`the total is 42. Then` → `42.Then`, capital skipped too); not suppressing broke `3.14`. So the space is withheld and settled by the **next** character: a digit confirms the decimal, a letter proves prose and the withheld space (plus any capital it owed) is typed then, one keystroke late. `text_patterns.suppression_is_provisional` decides which suppressions qualify (a bare digit run and nothing else: `192.168.1` and `1,000` already carry a separator, and `@`/path/scheme rules stand on their own evidence); the bridge holds the owed punctuation in `_deferred_auto_space` and settles it in `_flush_deferred_space`.
-
-This is *not* a reintroduction of the rejected "guess from the following character" rule below, and the difference is the direction: that rule *withheld* a space on a guess, this one only ever *adds* one. Nothing typed is taken back, so the worst case is a space arriving a keystroke late rather than mangled text. The deferral is dropped, never delivered, by any special key (the user typed their own space, backspaced, or moved the caret) and by a context reset (the punctuation is no longer at the caret); the verbatim insert paths flush it, because a pill and a snippet are both prose. Guarded by `tests/test_keyboard_bridge.py::TestTheDeferredSpaceAfterABareNumber`.
-
-### Auto-capitalize is not a held Shift
-
-`_auto_capitalize_after_punctuation` arms **`_pending_auto_cap`**, never `_shift_active`. The distinction is load-bearing and was learned the hard way. Expressing it as a Shift looks equivalent (both uppercase the next letter) but `_send_key` builds its chord modifiers straight from `_shift_active`, so a sentence-ending period left every following chord poisoned: Enter became Shift+Enter (a newline in Slack rather than send), Ctrl+C became Ctrl+Shift+C, and arrows started extending a selection. It was also the one site in the file that set an `_*_active` flag with **no paired `hold_modifier()`**, so the bridge believed in a hold the OS never had, which is exactly the invariant `_without_held_modifiers` relies on to decide what to restore. `_pending_auto_cap` feeds the case computation in `_press_char`, `_update_layer` (so the keycaps show it) and `_display_cased` case 3 (so a next-word pill shows the capital it will insert, exactly as a held Shift does); it is spent by the next character, and dropped by a caret move or a context reset. Space deliberately does *not* clear it, because the word after the auto-space is the one the capital was meant for. Guarded by `tests/test_keyboard_bridge.py::TestAutoCapitalizeIsNotAHeldShift`.
-
-**Three things must spend it, and each was missed once.** (1) The **verbatim inserts** (`pressPrediction`, `insertSnippet`) each call `_consume_auto_cap`: a tapped pill is the next thing typed, so it takes the capital, and leaving the flag armed handed the same capital to a later unrelated character. (2) The **edit-mode branch** of `_press_char` deliberately does *not* consult it at all: the capital is owed to the app behind us (nothing typed in edit mode can arm one, the branch returns before the punctuation handling), and applying it there spent nothing, so after `hello.` every character typed in the prediction-edit popup or the snippets editor came out uppercase. (3) The spend at the end of `_press_char` is guarded on `consumed_auto_cap and not rearmed_auto_cap`. "Was one owed when this keystroke started" is not "did this keystroke arm one", and the `?` of `Wait!?` does both; on the snapshot alone it threw the new capital away. Note the parity trap when testing this: each mark alternately armed and cleared, so a three-dot ellipsis came out right by accident and proves nothing. Use even-length runs.
-
-**And one class of character must *not* spend it: the quotes and brackets in `_CARRIES_AUTO_CAP` (`" ' ( ) [ ] { }`).** They can stand between a sentence boundary and the first letter of the sentence, and none of them can carry a capital, so spending one on them threw it away: `hi. "hello"` and `hi. (see below)` both came out lowercase, as did `he said "hi." Then`, where the closer sits on the other side of the same gap. Everything else still spends it, a **digit included**, since `hi. 5 apples` starts its sentence with the digit and there is no letter left owed a capital. Keep the set tight: a mark that only ever appears mid-word (`-`, `/`, `=`) would leave the flag armed on a keystroke that genuinely ended the case for it. Guarded by the three `passes_it_along` cases in `TestAutoCapitalizeIsNotAHeldShift`, each paired with a spend case (a letter, a digit) that fails if the carry is widened to everything.
-
-(Before this, the feature was inert: it set `_shift_active` and the auto-release block at the end of the same keystroke cleared it, so the toggle had no observable effect at all.)
-
-**Every rule requires positive evidence in the token itself.** There was briefly a "first-token rescue" that suppressed the dot in a lowercase single word when nothing containing whitespace had been typed yet, meant to catch `example.com` in a URL bar. **Do not reintroduce it.** The proxy for "start of the field" was `_context_buffer` being space-free, and that buffer is emptied on every app switch *and* every focused-element change (the 250 ms UIA poll), so the rule fired at the start of every newly focused text box: click into a field, type `hello.` and the space vanished, then kept vanishing because the buffer still held none. It also cannot be repaired with a better proxy, because at the instant the dot lands `example` and `hello` are the same string.
-
-**Known limitation, now unconditional.** A bare `example.com` always gets a space after its *first* dot, and since that space ends the run, `example.co.uk` loses one per dot. Guessing from the following character was tried and rejected too: it turns `i went home. then i left` into `home.then`, and corrupting prose is far worse than a space the user can delete. Closing it properly needs lookahead (buffering keystrokes until a known TLD resolves), which costs the immediate visual feedback a mouse-driven keyboard depends on. Pinned by `tests/test_keyboard_bridge.py::TestIntelligentSpacingInAFreshField` and `TestIntelligentSpacing::test_a_mid_sentence_bare_domain_loses_a_space_per_dot`. Change those if you improve it, don't delete them.
-
-### Snippet auto-detection
-
-*Settings → Data & Privacy → Privacy*, default ON. At each word boundary, `_maybe_offer_snippet()` looks for an email / phone / address and emits `snippetOffered(kind, label, value)`; QML shows the `snippetOfferToast` with a Save button and a dismiss ✕, and calls `acceptSnippetOffer()` / `dismissSnippetOffer()`.
-
-It lives under **Privacy** rather than Smart Typing because the question it raises is "may the keyboard notice personal details you type", not "how should typing behave".
-
-Six guards, all of which exist because the failure mode is offering to store the user's personal data when they didn't ask: never in privacy mode; never twice for the same value; never for a value already in a snippet; never on top of a live offer; nothing is written until Save is tapped; and a live offer is **withdrawn** when the context it belonged to goes away.
-
-`_offered_snippet_values` is the don't-nag ledger. It is a dict used as an ordered set so `_remember_offered` can bound it at `_MAX_REMEMBERED_OFFERS` (64): it holds emails, phone numbers and addresses the user typed, so it is not allowed to accumulate for a whole session. Overflowing costs at most a re-offer of something dismissed long ago.
-
-**It is written when the user *answers* an offer (`acceptSnippetOffer` / `dismissSnippetOffer`), never when one is raised.** Recording it at raise time made every withdrawal permanent: a caret poll, an app switch or privacy mode took the toast away and the address became unofferable for the rest of the session, so retyping it never brought the Save button back. A withdrawal is not an answer. The toast's own 8 s timeout does come through `dismissSnippetOffer`, because ignoring an offer is one. Guarded by the pair `test_a_withdrawn_offer_can_be_raised_again` / `test_a_dismissed_offer_stays_dismissed`.
-
-`_withdraw_snippet_offer` fires from `_reset_typing_context` whenever `keep_snippet_offer` is not set, so an app switch and entering privacy mode drop a pending offer (the three within-window signals deliberately do not; see *Clearing stale context* above). It never writes the don't-nag ledger, because the user did not answer. It is also what `setSnippetDetection(False)` calls: turning the feature off while a toast is up must take the toast with it, and clearing only the Python side left a Save button that reported **"Snippets are full"** when tapped, because `acceptSnippetOffer` returns False for "no offer pending" and for the cap alike. It **emits `snippetOfferWithdrawn`** rather than only clearing the Python side, because the toast lives in QML on its own timer and would otherwise sit there with a Save button that silently does nothing. This is also what stops an offer raised just before focus landed on a password field from remaining savable: privacy mode has to mean "stop doing this", not "stop starting new ones".
-
-**`acceptSnippetOffer` returns a bool and QML must honour it.** `SnippetStore.add` refuses past `MAX_SNIPPETS` (50) and reports it by returning False, so at the cap the save used to do nothing at all while the UI flashed "Saved" and the user walked away believing their email was stored. QML now flashes the confirmation only on True, and shows `snippetsFullToast` otherwise.
-
-Two scan windows, both needed. `_raw_token` is the only place a single-token shape survives intact (see above). The last `_SNIPPET_SCAN_TAIL` (120) chars of `_context_buffer` then cover shapes that span whitespace: an address is several words, a phone is often `(555) 123 4567`. The tail is bounded so an address typed a paragraph ago doesn't resurface at an unrelated word boundary.
-
-**Accepting fills the empty matching slot, or appends a numbered one.** The seeded Name / Email / Phone / Address slots exist to be filled, so an empty one takes the value. A slot that already holds a *different* value is never overwritten: a second email becomes `Email 2`. Work and personal addresses are both worth keeping, and silently replacing a value the user had curated is the worse failure.
-
-**Detection is conservative on purpose, and both matchers had to be tightened once.** An offer the user has to dismiss twice is an offer they learn to ignore, and a value that reaches Snippets goes to disk, travels in the Data Backup archive, and is one tap from being typed into whatever app has focus. The first version of each rule sounded specific and was not:
-
-- **Phone** started as "7-15 digits with at least one separator", which accepts a US Social Security number (`123-45-6789`), the leading digits of a card number, an ISO date (`2026-08-13`), an IP address, and `1.234-5.678`. Offering to store an SSN typed into a tax form is the worst thing this feature could do. The rule is now the digit **grouping**, matched against `_PHONE_GROUPINGS` (`(10,)`, `(3,3,4)`, `(3,4)`, `(1,3,3,4)`), with a leading `+` accepted on its own because international grouping varies too much to enumerate and nobody writes `+` in front of a date. `(3,2,4)` is an SSN, `(4,2,2)` a date, `(4,4,4,4)` a card, `(3,3,1,1)` an IP: all absent by construction.
-- **Address** started as "a house number plus a street-type suffix", which matched `it took 2 hours to drive`, `we walked 3 miles down the road` and `there were 10 people in the square`, because the suffix list is full of ordinary English words and any digit run reads as a house number. It now needs a **third anchor: a capitalised street-name word** between the two. People write `123 Main Street`; the prose cases are lowercase throughout. The lookbehind also excludes `.` and `,` so a decimal cannot supply the number (`total 12.50 in the close` matched with `50`). The cost is a miss on an address typed entirely in lowercase, which is real on a keyboard where capitals take a click, and still the right trade: a missed offer is one the user never sees, a false one puts a slice of a private message on screen and one tap from disk.
-
-Every positive case in `tests/test_text_patterns.py` is paired with the near-miss it must reject. **Pick hostile examples.** The original pairs (`500 people showed up`, `walking down Baker Street`) each fail an anchor outright, so they passed happily against matchers that were wide open; the ones that actually bite are the SSN family and ordinary prose containing a number.
-
-**The toast is parked at the bottom of the window and its buttons arm after 400 ms.** Both are deliberate, and neither is polish. The offer is raised by the *same keystroke* that repopulates the suggestion pills, so the pill row (y 52 to ~95, see `outerLayout.anchors.topMargin`) is the one region on screen that changes at the instant the banner appears, which makes it exactly the wrong place for a button that persists personal data: a click already travelling toward a pill would be caught by a control that did not exist when the user began the movement. The bottom row is static by comparison, and a mis-click landing on a key merely types a character. The `armed` flag closes the same race in time rather than in space, and 400 ms is chosen for imprecise motor input, where a click can land well after the intent formed.
-
-The toast is interactive, which is why its `closePolicy` **must** stay `Popup.NoAutoClose`: every OSK key click is a press-outside, so `CloseOnPressOutside` would slam it shut on the first keystroke (the same trap the prediction-edit popup documents). Its dwell is 8 s rather than the 1.4 s of the sibling confirmation toasts because the user has to read it, decide, and land a click with an imprecise pointer, and timing out calls `dismissSnippetOffer()`, because ignoring an offer is a decision too and without telling the bridge the value would stay "pending" and block the next one.
+- **`_raw_token`**, not `_current_word`, is the run before the cursor (the latter resets at `@` and every dot). Capped at 128, maintained only outside privacy mode.
+- A suppressed auto-space skips three things together: the sent space, the space in `_context_buffer`, and the auto-capitalize. The `@` and path rules fire for `.` and `:` only. **A bare digit run suppresses provisionally**: the space is held in `_deferred_auto_space` and settled by the next character; it only ever *adds* a space late, never takes one back.
+- `_closes_a_quotation` decides per keystroke on `"` parity; `"` must never join `_NO_SPACE_BEFORE`.
+- **Auto-capitalize is not a held Shift**: `_auto_capitalize_after_punctuation` arms `_pending_auto_cap`, never `_shift_active` (which would poison every following chord). Verbatim inserts spend it (`_consume_auto_cap`); the edit-mode branch of `_press_char` ignores it; the end-of-keystroke spend is guarded on `consumed_auto_cap and not rearmed_auto_cap`; the quotes and brackets in `_CARRIES_AUTO_CAP` pass it along. Test with even-length punctuation runs.
+- **Do not reintroduce the "first-token rescue" or guess-from-the-next-character rules.** A bare `example.com` gets a space after its first dot; that is a pinned known limitation.
+- Snippet auto-detection (*Data & Privacy -> Privacy*, default ON): six guards; `_offered_snippet_values` is written when the user **answers** an offer, never when one is raised; `_withdraw_snippet_offer` emits `snippetOfferWithdrawn`; `acceptSnippetOffer` returns a bool QML must honour. Phone detection is the digit **grouping** (`_PHONE_GROUPINGS`, which excludes SSNs, dates, cards, IPs); an address needs a capitalised street-name word. Pair every positive test with a hostile near-miss.
+- The offer toast is parked at the bottom, its buttons arm after 400 ms, it stays `Popup.NoAutoClose`, and its 8 s timeout calls `dismissSnippetOffer()`.
 
 ## Structured Tokens (numbers, phone numbers, email domains)
 
-`NgramPredictor._tokenize` is `re.findall(r"[a-zA-Z']+", text.lower())`. Every digit and every symbol is discarded before a word reaches the vocabulary, which is right for a word model and leaves the engine structurally unable to learn a phone number, a zip, a house number or an email address. Those are among the strings the user retypes most, and each is expensive here: ten digits is ten clicks, and on the compact layouts the digit row is a layer hop away. `src/prediction/token_predictor.py` is that gap and nothing else.
+Full write-up: `docs/architecture/TEXT_PATTERNS.md` (section of the same name). Read it before changing this area.
 
-`_press_char` used to end with `if char.isalpha(): _update_predictions() else: <blank the bar>`, so a digit produced no suggestion at all. It now picks between two bars.
+`src/prediction/token_predictor.py`: a flat count-weighted store of whole tokens (phones, zips, house numbers, emails) matched by prefix. **No context model, no fuzzy matching, no capitalisation logic**, and not merged into the word ranking: the two bars are mutually exclusive.
 
-### What it is not
-A flat count-weighted store of whole tokens, matched by prefix. **No context model** (the useful signal, "this is the number I always type", is already the count), **no fuzzy matching** (correcting a mistyped letter is a favour; "correcting" a digit silently changes a number, and a phone number one digit out is worse than no suggestion), **no capitalisation logic** (irrelevant for digits and domains, already carried in the stored form otherwise). It is deliberately **not merged into the pill ranking**: while the user is part-way through `owen@gm` or `555-123-`, no English word is a plausible suggestion, so the two bars are mutually exclusive rather than ranked, and the bridge picks.
-
-### The two bars
-`KeyboardBridge._in_token_context()` decides, off `_raw_token` (not `_current_word`, which resets at `@` and at every dot: see the `_raw_token` note under *Intelligent Spacing*). Two signals, and the asymmetry is deliberate:
-- **a digit anywhere**: already outside what the word engine can complete;
-- **an `@` that is not the first character**: `owen@` is an address whose only useful continuation is a domain, while `@owen` is a *mention*, which the word model can genuinely complete from a learned name. `tok.find("@") > 0`, not `"@" in tok`.
-
-Two characters minimum (`TokenPredictor.MIN_PREFIX_LEN`): on one character the prefix matches most of the store, so the bar would fill with unrelated numbers on the first digit of anything.
-
-**Every path that repopulates the bar routes through `_refresh_prediction_bar()`**, and that is structural rather than a convention: written out inline at each site the choice was missed twice. The backspace branch was the first, and only half-fixed: mid-address `_current_word` holds only the letters since the last `@` or dot, so it looks like an ordinary partial word, but after any `-`, `.`, `/`, `(` or `@` it is *empty*, so `555-` + Backspace lands in the `elif self._context_buffer` branch, which had no guard at all. `_recase_visible_predictions` was the second: tapping Shift or Caps Lock mid-token threw the whole token bar away. Both are the parallel-blocks failure this file warns about for sticky-modifier release, so the fix is the one prescribed there: one method, every emit through it.
-
-Two related invariants live with it. `_recase_visible_predictions` **returns early on a token bar** rather than routing through the helper: token pills bypass `_display_cased` so there is nothing to recase, and re-emitting would double-count `record_prediction_offered`. And the `_TOKEN_BREAKING_KEYS` branch **refreshes the bar when it clears `_raw_token`**, guarded on `_token_pill_inserts` being non-empty: a pill continues that run, so an arrow key leaves a pill promising a prefix the caret has left (the "on the bar right now" check cannot catch it, because that branch never touched the bar), while an unconditional refresh would fire a prediction query per auto-repeat.
-
-### Which pills are tokens is a set, and the insert text is recomputed
-`_token_pill_words` is the **set of pills currently on the bar that insert as tokens**, paired with `_token_pill_typed`, the run they continue. A domain pill reads `gmail.com` while the run before the cursor is `owen@`, so neither `word` nor `_current_word` tells `pressPrediction` what to insert; it dispatches on membership in that set, so a pill can only ever be inserted the way it was emitted, and `_insert_token_pill` derives the text to type from the pill and the typed run. It was briefly a dict of displayed text -> text to type, which read as the authority on what a tap inserts and was not: every read site tested membership only, and the insert path recomputed the value itself because it alone applies the case-sensitivity rule. A stored value nothing validates is a value a later caller will trust. **The dispatch requires the pill to be in `self._predictions` too, and that half is the safety property.** There are a dozen sites in `keyboard_bridge.py` that emit a pill row, so "clear the set at each one" would be one more set of parallel blocks to keep in sync (the failure mode this file warns about for sticky-modifier release), and missing one would leave a stale entry tappable. Requiring the pill to be *on the bar right now* makes that impossible without touching any of them. `_on_predictions_ready` / `_on_predictions_refined` clear the set as well, but only to keep it small; correctness does not rest on them.
-
-**Every pill is strictly longer than the run it continues**, enforced in `_token_suggestions` on both branches (and by `TokenPredictor.predict` for its own half). `_insert_token_pill` relies on it: a pill equal to what is already typed would insert nothing, or select the run and replace it with itself.
-
-**Domain pills show the domain, full learned tokens show the whole token.** Showing `owen@gmail.com` would match how word pills render and would be worse: at 20-odd characters the fitter drops the row to two suggestions (it drops rather than elides, see *Prediction pill widths*), and the local part is already on screen a centimetre away. Within any one row the semantics are uniform, because after an `@` every pill is a domain.
-
-**A tap inserts what the pill displayed, which is not always a suffix.** The store matches case-insensitively, so the pill and the characters on screen can disagree: with Caps Lock on and `OWEN@GM` typed, the pill reads `gmail.com` and a suffix-only insert of `ail.com` leaves `OWEN@GMail.com`, which is neither what the pill promised nor what the user typed, and is then learned back in that corrupted form. `Apt4B` matched from a typed `apt` fails the same way. So `_insert_token_pill` takes the suffix path only when the pill **case-sensitively** continues the typed run, and otherwise selects that run and overwrites it, exactly as `pressPrediction` falls back to `replace_text`. The run being continued is carried in `_token_pill_typed` (the tail after the `@` for a domain, the whole run otherwise), because it cannot be recovered from the pair. `keystrokes_saved` counts the pill minus what was typed, not the length of the retype.
-
-**Token pills bypass `_display_cased`.** It mirrors the typed prefix's capitals onto the pill, which is right for a word and wrong here: under Caps Lock, case 1 would render `gmail.com` as `GMAIL.COM` and then insert it that way.
-
-**A trailing space is appended except after an email or a phone number.** A house number sits mid-sentence (`1247 Main Street`) and a free space is a click saved. An email or a phone is a field *value*: a login form that does not trim rejects `owen@gmail.com ` with a validation error the user then has to notice, diagnose and backspace out of, which costs far more than the one click a wanted space costs. Nothing follows either shape in the same field anyway.
-
-Insert-path invariants mirror `pressPrediction` exactly, and the three that were missed are worth naming because each is a way the mirror can be *nearly* right. `_insert_token_pill` opens with `_begin_verbatim_insert(prose=False)`, the same prologue call every other verbatim insert makes, with `prose=False` because the tap continues the token: the returned deferred space is always empty for `prose=False`, so there is nothing to fold into the insert (unlike `pressPrediction`, which folds an owed capital into the pill text). The `_send_text` runs inside `_without_held_modifiers()`, and the insert itself is never gated on privacy mode (the user tapped it) while everything that persists is. Settling the deferred space with `prose=False` matters because the tap continues the token, so the punctuation was structural and delivering the space would put it inside the number. **Compatibility Mode rewires this too** (BackSpace x len(typed) + full retype): suffix-only insertion and `replace_text`'s Shift+Left selection are both unsafe inside an IDE or an RDP client, which is the whole reason that branch exists in `pressPrediction`.
-
-**The `_context_buffer` update is arithmetic on the join, not on the buffer.** The typed run straddles the two halves of the on-screen mirror: part of it sits in `_context_buffer` and part in `_current_word`, which is never committed. Computing `screen = _context_buffer + _current_word` and replacing the last `len(typed)` characters of *that* is the only formulation that works, and it works for all three send branches at once, because all three leave the same text on screen. Written against the buffer alone it recorded `555-3-4567` for a screen reading `555-123-4567`, and the replace branch additionally chopped `len(typed)` real characters off the front. It then cascaded: the next Backspace rehydrated the corrupted tail into `_current_word`, so the tap after that called `replace_text` with a length that ate real text. Guarded by `TestTokenPillsInsertWhatTheyDisplay`.
-
-**A tapped pill is one sighting, not two.** `_learn_raw_token` is called at the tap, because a domain accepted from the built-in list would otherwise never be learned at all; but emails and phones deliberately withhold the trailing space, so `_raw_token` still holds the completed token when the user's own space retires it again. `_learned_raw_token` records what was last handed to the store and suppresses the repeat; typing or backspacing clears it, so re-typing the same number later still counts. Count is the sort key in `TokenPredictor.predict`, so an unguarded double put pill-accepted tokens (including a built-in domain nobody typed) ahead of hand-typed ones.
-
-**The prediction-pill context menu is suppressed on a token pill** (`isTokenPill`, gating the right-click in `Main.qml`, with `_is_live_token_pill` guarding the four bridge slots as well because QML is free to drift). All four actions are word-model writes: "Show more" pushed a phone number into `unigrams` and `preferred`, which is the word cloud, Top Words, the dashboard's green boosted tags and the backup archive, i.e. exactly what `record_token_prediction_selected` exists to prevent. The other three do not even work in the other direction, since `TokenPredictor.predict` never consults `dispreference` or `blacklist`, and `editPrediction` is word-shaped throughout (it replaces `len(_current_word)`, which is only part of the run, always appends the withheld space, and persists the result into `capitalization`). Forgetting a token is `forgetToken`, in the dashboard's *Saved Numbers & Addresses*.
-
-### What may be learned
-`text_patterns.is_learnable_token` lives in that module, beside the other shape rules, because it is the same question ("does this text have a recognisable shape") and two copies of "what does an email look like" is how they start disagreeing. Learning happens at every point `_raw_token` is retired by something meaning *the user finished typing that*: space, Return, and the two punctuation branches **on their non-suppressed path only** (suppressed means intelligent spacing judged the mark to be part of the token, so it is still being typed). **Tab is deliberately excluded**, for the same reason it does not learn `_current_word`: it is the accept-completion key in every IDE and shell, so what precedes it is a prefix the app is about to finish.
-
-**The bar is asymmetric on purpose and was set against hostile examples, not tidy ones.** A missed token costs one suggestion the user never sees; a wrongly-learned one is prefix-matched into the suggestion bar, written to `ngram_model.json`, and carried in the Data Backup archive. So:
-- **Long digit runs are rejected wholesale** (`_MAX_LEARNABLE_DIGITS` = 8) rather than by trying to enumerate which identifiers are sensitive. Eight sits *below* a bare nine-digit US Social Security number while clearing every shape worth learning: zip (5), house number (1-6), year (4), IP (8), ISO date (8). Card numbers (16) and account numbers fall out by construction.
-- **Real phone numbers run longer than that** and are admitted separately by `is_phone`, which vets the digit *grouping* first (see the `_PHONE_GROUPINGS` comment: `(3,2,4)` is an SSN, `(4,2,2)` a date, `(4,4,4,4)` a card, `(3,3,1,1)` an IP). `_NEVER_LEARNED_GROUPINGS` re-blocks `(3,2,4)` because the generic "has a digit" path below `is_phone` would otherwise let it through.
-- **Plain alphabetic words are rejected**: they are the n-gram model's job, and a second, dumber vocabulary in front of the one that does context is a regression.
-
-**Entries are re-validated against the current rule on every load** (`from_dict`), so tightening the rule retroactively cleans an existing store: a file written by an older build, hand-edited, or arriving in an imported archive is not a reason to start offering an SSN. Malformed entries are dropped individually rather than rejecting the file: this rides in `ngram_model.json` alongside the vocabulary, and one bad token is not a reason to lose someone's learned words. **Load strips before it validates, exactly as `learn` does**, and the order is the point: validating the stripped form while storing the raw one let the store keep `555-1234.`, admitted on the strength of `555-1234` and then offered as a pill that types a stray full stop into the number. Counts merge rather than overwrite, so a file carrying both written forms keeps both sightings instead of whichever iterated last.
-
-### Analytics and the log
-Selections go through `TypingAnalytics.record_token_prediction_selected(rank, keystrokes_saved)`, **not** `record_prediction_selected`, which feeds its argument into `word_freq`. That table is persisted, surfaced as the dashboard's "Top Words" and carried in the backup archive; a phone number belongs in none of the three, least of all on a dashboard the user might screen-share. The word counter is skipped for the same reason it should be: a zip code is not a word, and counting it would inflate WPM. **Nothing in this path logs token content**, the same rule as the rest of the keystroke path, and every argument here is typed content by construction.
-
-### Storage
-Persisted in `ngram_model.json` under a `tokens` key, not a file of its own. That file is already the "everything the user taught us" store (capitalisation, blacklist, boosts), already in the Data Backup archive, and already has load-time size caps; a separate file would have needed all three re-established **and** a `_MODEL_FILES` change to the export. Absent from every model saved before this existed, which `from_dict` reads as an empty store. `clear_user_data()` clears it too: "clear my learned data" has to mean all of it. Bounded at `TokenPredictor.MAX_TOKENS` (2 000), evicting least-seen first with ties breaking toward the *longer* token (it cost more clicks to type, so it is worth more as a completion).
-
-### Seeing and forgetting what was learned
-
-*Dashboard -> **Saved Numbers & Addresses***, one removable tag per learned token, driven by `getLearnedTokens()` and `forgetToken(token)`.
-
-This is not a nicety, it is the other half of the admission rule. That rule is a **shape** test, not a judgement about sensitivity: it accepts any short run carrying a digit, which is also the shape of `hunter2`, `Tr0ub4dor`, `AB1234567` (a passport) and `sk-abc123def` (an API key). Password auto-detection **fails open** by design (no AT-SPI on Linux, no TCC grant on macOS, any field UIA does not mark), so the store must be assumed to see a password eventually. Rejecting every letters-plus-digits token would close that, and was tried and backed out: it also drops `Apt4B` and `v1.2`, and no rule keeps one while dropping the other because they are the same shape. **The project's position is that the recall is worth more, on the condition that a wrongly-learned token is visible and individually removable.** Delete this section and that trade stops being defensible.
-
-It is also the only window the store has onto itself. Learned *words* surface in the word cloud, the flow graph and Top Words; a phone number or an email deliberately reaches none of the three (see the analytics note above), so before this the only answer to "what has it remembered" was Clear Learned Data, which throws the vocabulary away too. `TokenPredictor.forget` had existed the whole time with nothing in QML calling it.
-
-`forgetToken` deliberately does **not** log, unlike its `unblacklistWord` siblings: those take a dictionary word, this takes whatever the user typed, and the diagnostic log is what gets attached to bug reports.
-
-Guarded by `tests/test_token_predictor.py`, `tests/test_text_patterns.py::TestLearnableToken`, and `tests/test_keyboard_bridge.py::TestStructuredTokenPredictions` / `TestEmailDomainSuggestions` / `TestLearnedTokensCanBeSeenAndRemoved` / `TestTheTokenBarSurvivesEveryWayTheBarIsRepopulated` / `TestTokenPillsInsertWhatTheyDisplay`. Every positive case is paired with the near-miss it must reject, and the pairs that bite are the SSN family, not the tidy ones.
+- `KeyboardBridge._in_token_context()` reads `_raw_token`: a digit anywhere, or an `@` that is not the first character. Two characters minimum.
+- **Every path that repopulates the bar routes through `_refresh_prediction_bar()`.** `_recase_visible_predictions` returns early on a token bar.
+- `_token_pill_words` (a set) plus `_token_pill_typed`; `pressPrediction` dispatches on membership **and** on the pill being in `self._predictions` right now. Every pill is strictly longer than the run it continues.
+- `_insert_token_pill`: suffix path only when the pill case-sensitively continues the run, otherwise select and overwrite; bypasses `_display_cased`; no trailing space after an email or phone; opens with `_begin_verbatim_insert(prose=False)`; Compatibility Mode rewires it; the `_context_buffer` update is arithmetic on `_context_buffer + _current_word`, never the buffer alone.
+- A tapped pill is one sighting (`_learned_raw_token`). The pill context menu is suppressed on token pills (`isTokenPill`, `_is_live_token_pill`).
+- `text_patterns.is_learnable_token`: digit runs over `_MAX_LEARNABLE_DIGITS` (8) rejected, phones admitted by `is_phone`, `_NEVER_LEARNED_GROUPINGS` re-blocks the SSN shape, plain words rejected, **Tab never learns**. Entries are re-validated on load, stripping before validating.
+- Selections go through `record_token_prediction_selected`, never `record_prediction_selected`. Nothing logs token content. Stored under the `tokens` key of `ngram_model.json` (`MAX_TOKENS` 2000) and cleared by `clear_user_data()`.
+- *Dashboard -> Saved Numbers & Addresses* (`getLearnedTokens` / `forgetToken`, which deliberately does not log) is the other half of the admission rule: the shape test will eventually admit a password, so a learned token must be visible and removable.
+- Tests: `tests/test_token_predictor.py`, `tests/test_text_patterns.py::TestLearnableToken`, the token classes in `tests/test_keyboard_bridge.py`.
 
 ## Dictation (voice input)
 
-Click the mic at the **left end of the suggestion bar**, speak, click again. The live transcript renders in the bar itself; each finalised phrase is typed into the focused app through the verbatim-insert path. Off by default and inert without a Deepgram API key. Full write-up: `docs/architecture/DICTATION.md`. Code: `src/dictation/` (`config` / `audio` / `providers` / `controller`), `KeyboardBridge._insert_dictated_text` + the `setDictation*` slots, `qml/Main.qml` (mic button, transcript banner, `dictationErrorToast`), the Dictation category in `UnifiedSettingsPanel.qml`.
+Full write-up: `docs/architecture/DICTATION.md` (section of the same name). Read it before changing this area.
 
-- **Built entirely on Qt, and that is a constraint rather than a coincidence: zero new Python dependencies.** `QAudioSource` (QtMultimedia) captures and **resamples for us**, so the recogniser always sees 16 kHz mono signed-16-bit PCM whatever the device natively runs at, and `QWebSocket` (QtWebSockets) speaks to the provider on the Qt event loop, so there is no worker thread, no asyncio, and no queue between the audio callback and the socket. Both already ship in the PySide6 wheel the build bundles. `sounddevice` would drag PortAudio in as a binary for PyInstaller to carry and the EV cert to sign; MacroVox sends the device's native rate and declares it, which works but makes every recogniser parameter a variable. Don't "simplify" either back.
-- **`predBar.micReserve` must stay 0 whenever the mic is not on screen.** `predRow.x` centres the pills in `width - micReserve - clearCtxReserve`, so a zero reserve collapses that expression back to exactly the single-reserve one it grew from, and a user who never enables dictation gets byte-identical bar geometry. `computeFit` is passed `clearCtxReserve + micReserve` as its existing single `reserve` argument rather than gaining a tenth parameter: the fitter has no notion of which *side* a reserve sits on, only how much of the bar the pills may not have.
-- **There is a title-bar mirror** (`dictationTitleBarButton`), visible only when `suggestionsEnabled` is false, for the reason `snippetsTitleBarButton` exists: the bar collapses to zero height with that setting, and an unrelated setting must not remove the only way into a feature. Both mic icons are Feather's `mic` through `StrokeIcon`, never a glyph.
-- **The mic's busy pulse drives a `pulse` property, never `opacity` directly.** `SequentialAnimation on <property>` takes ownership of what it animates and never hands it back, so animating `opacity` destroyed the `ready ? 1.0 : 0.45` binding on the first connect and left the button parked wherever the loop was, which for half of each cycle is nearly transparent. A property with no binding of its own is what an animation can own safely; `opacity` multiplies it in and `onRunningChanged` resets it. Applies to any future animation on a bound property.
-- **Insertion opens with `_begin_verbatim_insert()`, the same verbatim-insert prologue every other insert path calls**: `_release_sticky_modifiers()` **before** the send, a deferred auto-space settled with `prose=True`, `_consume_auto_cap()` (a dictated phrase is the next thing typed, so it takes the capital), then the send itself inside `_without_held_modifiers()` via `_send_literal_text` (so a right-click lock survives), and **the insert itself never gated on privacy mode**. It does not go the extra step through `_commit_verbatim_insert` (as `insertSnippet` / `insertGlyph` do), because its tail differs: it mirrors the insert into `_context_buffer` / `_sentence_buffer` and decides a leading space, both dictation-specific. One space is prepended between phrases, decided from what is on screen (`_context_buffer + _current_word`) rather than from a "have I inserted yet" flag, because Deepgram returns phrases with no surrounding whitespace.
-- `_context_buffer` / `_sentence_buffer` are appended to so dictation's own contribution is reflected: they are what the insert path *measures against*, so a buffer disagreeing with the screen is how a later pill tap eats real text. **The deferred auto-space is not re-added there** (`_take_deferred_space` already mirrored it, and appending it again put two spaces in the buffer where the screen has one), and the append is **suppressed in privacy mode**, exactly as `pressPrediction`'s own append is. The prediction model is deliberately **not** taught from dictated words (they came from Deepgram's vocabulary, not the user's typing).
-- **Privacy mode calls `cancel()`, not `stop()`**, and the difference is the point: `cancel` does not wait for the provider to flush, so a run under way when the caret landed on a password field cannot deliver one more sentence. **`cancel()` disconnects the controller's own handlers before aborting the stream, and the disconnect is the load-bearing half**: clearing `self._stream` only stops us *sending*, not the provider *telling us* things, and a websocket can have a `textMessageReceived` already queued at teardown. Without it a cancelled run typed one more phrase into whatever field the user had moved to. Found by `tests/test_dictation.py::TestTheRunLifecycle::test_cancelling_drops_what_is_in_flight`.
-- **`dictation.json` is deliberately absent from the Data Backup archive** (do NOT add it to `_MODEL_FILES`), because it holds an API key and the archive exists to be carried between machines. The key is DPAPI-wrapped on Windows via ctypes, plaintext at 0600 elsewhere, never logged, never returned to QML in the clear (`getDictationSettings` gives `hasKey` plus a masked preview), and never in the websocket URL (it rides in an `Authorization` header, so no proxy log captures it). `TestTheKeyNeverLeavesTheMachine` asserts the export exclusion.
-- **Toggle, not push-to-talk**, same argument as the swipe-typing removal: a sustained precise hold is the one gesture this user cannot reliably make. Two automatic stops sit behind it (a silence timeout the user notices, and a wall-clock ceiling that is the backstop for the silence detector itself failing in a noisy room), because a missed "off" click leaves the mic live and, on a metered API, billing.
-- **Four states, not a boolean** (`idle`/`connecting`/`listening`/`finishing`): `connecting` and `finishing` both have to look busy **without looking like recording**, or the user clicks again and starts a second run. `finishing` is not cosmetic: `stop()` closes the mic immediately but keeps the socket open for the `CloseStream` flush, because the final fragment for the last thing said arrives *after* that message.
-- **No automatic reconnect, on purpose.** Audio spoken during a gap is gone, so a silent reconnect yields a transcript with an invisible hole: words the user said, believes they said, and cannot see. A drop ends the run and says so. Errors are mapped to sentences naming a next step (`_friendly_error`); nobody can act on `QAbstractSocket::RemoteHostClosedError`.
-- **Nothing in `src/dictation/` logs transcript content**, same rule as the rest of the keystroke path.
-- Deepgram parameters were taken from MacroVox's production set: `model`/`punctuate`/`smart_format`/`interim_results`, with **`keyterm`** for custom vocabulary (nova-3 rejects the legacy `keywords`).
+Mic at the left end of the suggestion bar; off by default, inert without a Deepgram key. Code in `src/dictation/`, `KeyboardBridge._insert_dictated_text`, the Dictation settings category.
+
+- **Built entirely on Qt** (`QAudioSource` resamples to 16 kHz mono, `QWebSocket` on the event loop): zero new Python dependencies. Don't swap in `sounddevice`.
+- `predBar.micReserve` must stay 0 whenever the mic is not on screen. There is a title-bar mirror (`dictationTitleBarButton`) for when suggestions are off. The busy pulse animates a `pulse` property, **never a bound `opacity`** (an animation takes ownership of what it animates).
+- Insertion opens with `_begin_verbatim_insert()` and sends via `_send_literal_text`; never gated on privacy mode. It mirrors into `_context_buffer` / `_sentence_buffer` (not the deferred space again, and not in privacy mode) and does **not** teach the prediction model.
+- **Privacy mode calls `cancel()`, not `stop()`**, and `cancel()` disconnects the controller's handlers before aborting the stream.
+- `dictation.json` holds the API key: DPAPI-wrapped on Windows, never logged, never returned to QML in the clear, never in the websocket URL, and **never in the Data Backup archive**.
+- Toggle rather than push-to-talk, two automatic stops, four states (`idle` / `connecting` / `listening` / `finishing`), **no automatic reconnect**, no transcript content in logs, custom vocabulary via `keyterm`.
 
 ## Data Backup (Export / Import)
 
@@ -686,54 +344,15 @@ There are now **two** QML context properties registered in `keyboard_app.py`: `k
 
 ## Caps Lock vs. Shift
 
-Caps Lock and Shift are **independent toggles**. Toggling caps no longer also flips shift. Both are surfaced separately to QML (`capsLockActive`, `shiftActive`).
+Full write-up: `docs/architecture/MODIFIERS_AND_CASING.md` (section of the same name). Read it before changing this area.
 
-- **Uppercase output** in `pressKey`: `key.upper()` if `_shift_active OR _caps_lock_active`.
-- **Upper layer**: `_update_layer()` switches to `"upper"` if `_shift_active OR _caps_lock_active`. Same for the displayed glyph in `Main.qml`.
-- **OS-level hold**: `toggleShift` calls `_synth.hold_modifier("shift")` / `release_modifier("shift")` so the OS sees Shift physically held while the toggle is active. This is what makes Shift+click and Shift+drag in the target app extend the text selection - same as the Windows on-screen keyboard. Without it, Shift only attached to synthesised keystrokes as a chord modifier and a click between toggle and the next typed character would land without Shift held.
-- **Auto-release**: Shift auto-releases after a single keypress; caps stays on until explicitly toggled. Auto-release paths also call `release_modifier("shift")` so the OS-held shift drops together with the Python state. Caps is unaffected by the auto-release path.
-- **Visual highlight**: only the toggled key is highlighted - toggling caps does NOT also highlight the Shift key (it used to, that was a bug).
-
-The shifted *glyph* on a key (e.g. `!` on the `1` key) follows shift only - caps lock uppercases letters but does not pick the shifted variant of symbol/number keys, matching standard keyboard behavior.
-
-### Caps Lock and the prediction bar
-
-When Caps Lock is on, the prediction pills also render uppercase. The pills must match what the user is typing *and* what the pill will insert when clicked - showing "hello" while the user has typed "HELL" and then inserting lowercase next to the uppercase prefix was the pre-fix bug. Implementation: `KeyboardBridge._display_cased()` uppercases the engine's output when `_caps_lock_active`, and every emit site (`_on_predictions_ready`, `_on_predictions_refined`, next-word-after-selection, `editPrediction`) routes through it. `toggleCapsLock` re-queries the engine so currently-visible pills flip case immediately - we can't just `.upper()` / `.lower()` the stored list in place because once "iPhone" becomes "IPHONE" the original casing is lost.
-
-### Shift and the prediction bar
-
-Shift capitalizes the pills' first letter, the same courtesy Caps Lock gets. `_display_cased` has three cases in priority order: **(1)** Caps Lock on → all upper; **(2)** any uppercase in the typed prefix → mirror each uppercase position (the pre-existing rule, described below); **(3)** Shift held with nothing uppercase typed yet → capitalize the first letter only. Case 2 outranks case 3 because an uppercase already in the prefix says something more specific about the word's shape (mid-word caps like `iP` → `iPhone`) than a pending Shift does.
-
-`toggleShift`, `releaseShift` and `lockModifier("shift")` all call `_recase_visible_predictions()` so pills already on screen flip immediately, exactly as `toggleCapsLock` does; it re-queries the engine rather than re-casing the stored list, because `self._predictions` holds the *displayed* form and once "iPhone" has been shown as "IPHONE" the original casing is gone. It no-ops on an empty bar so a Shift tap during ordinary typing costs no prediction round trip.
-
-Tapping a pill with Shift held consumes it like any keystroke (`_release_sticky_modifiers()`, which runs **before** the insert). The ordering is load-bearing, not cosmetic: the capital is already baked into the word by `_display_cased`, so a Shift still held at the OS level would uppercase the insert on top of that and "Hello" would arrive as "HELLO". Releasing first also leaves nothing for `_send_literal_text` to drop and restore.
-
-One interaction worth knowing: `_auto_capitalize_after_punctuation` sets `_shift_active` after a sentence-ending period, so with that setting on the next-word pills render capitalized. That is correct (the next word *is* capitalized) and is not a reintroduction of the removed Tier-2 sentence-start auto-cap: it reflects a Shift the user's own setting turned on, and it never reaches `learn_capitalization`, which still keys on the typed prefix.
-
-`_display_cased` *also* mirrors **every** uppercase position from the typed prefix onto the displayed pill, not just the first letter. If the user typed "Hel" the pills show "Hello"/"Help"; if they right-clicked each letter to type "HEL", the pills show "HELlo"/"HELp"; if they typed "iP" (mid-word cap via right-click), the pill shows "iPhone". The gate is `any(c.isupper() for c in cw)` and the body iterates each prediction position, force-uppercasing it when the corresponding `cw[i]` is uppercase. The mirror runs **regardless of whether the pill strict-prefix-matches the typed letters**, which is the difference from the original implementation. The earlier version short-circuited to pass-through whenever `w.lower().startswith(cw.lower())` was False, which silently dropped the cap on every fuzzy / autocorrect candidate (typing "Hwl" for "Hel" -> fuzzy returns "hello" -> "hello" doesn't strict-prefix "hwl" -> cap lost). Mirroring unconditionally fixes that. Two reasons capitalised pills still matter even when the prefix matches: (1) the displayed pill must reflect what the user typed so they can tell which pill matches their prefix, and (2) the suffix-only insert path uses a case-sensitive `startswith`, so "hello".startswith("HEL") is False and the click would fall through to a full replace, clobbering the user's capitals. Sentence-start and proper-noun capitalisation still flow through `NgramPredictor.get_capitalized` upstream; this layer only mirrors the *typed* prefix back into the displayed form.
-
-### Prediction pill widths (never "..." truncation)
-
-**The bar drops low-ranked pills rather than eliding any of them.** Eight `documentation`-family candidates in a 940 px window rendered as eight identical `docu...` pills, which is unusable - every pill looks the same, so there is nothing to choose between. Showing five readable words beats showing eight unreadable ones. The whole computation lives in `predRow.computeFit(...)` in `qml/Main.qml`, which returns `{words, widths}`; the Repeater's model is `predRow.fit.words` (a **prefix** of `root.predictions`, so anything dropped is the lowest-ranked) and each delegate takes `predRow.fit.widths[index]`. `predRow.pillWidthList` is a read-only alias kept for the tests.
-
-Three rules, in priority order:
-
-1. **No elide.** Each word's *tight* width is `ceil(FontMetrics.advanceWidth(word)) + minPad` (floored at `predMinWidth`), where **`minPad = max(14, 2 * predBar.predTextInset)`**. Padding compresses to that first; if the set still doesn't fit, `count` decrements until the survivors fit at tight width. A dedicated `FontMetrics { id: predMetrics }` measures in the *same* font the pills render (pixelSize / weight / family), so the parent sizes every pill centrally instead of each delegate publishing its own `implicitWidth` back up.
-
-   **`predBar.predTextInset` is the single source of truth for horizontal padding, and that is load-bearing.** It is what the delegate's `Text` sets `anchors.leftMargin` / `rightMargin` to, *and* what `computeFit` reserves. Deriving the two from different numbers makes "tight" a width the word provably cannot render in, and the no-elide guarantee silently becomes false. That is exactly what happened: the fitter floored padding at `predHorizontalPad * 0.45` while the delegate ate `2 * predHorizontalPad * 0.28` = `0.56` of it, so for any `predHorizontalPad` above ~26 (every window wider than ~700 px, and all of Compact View) text-driven pills were born 1-5 px too narrow. Rule 2's water-fill usually topped them back up, which is why it looked fine; when the row packed tightly enough that slack ran out, they elided. **Never inline the inset at either site.** Widths are also `ceil`'d because `Text` elides on a sub-pixel overflow and the width handed back is a float.
-2. **Leftover space is handed back as padding, max-min fair**: a pill wanting less than the current fair share settles at what it wants and releases the rest, raising the share for the others (<= count passes); still-hungry pills split what remains. This is what stops "I"/"the" sitting in half-empty pills beside a cramped long word.
-3. **`predBar.clearCtxReserve` is subtracted from the available width** so the row can never reach the ⟲ button (see the invariant below).
-
-Only one case can still elide: a single word wider than the whole bar, where there is nothing left to drop. It's clamped to the available width and the hover `ToolTip` (gated on `predText.truncated`) reveals it. Consequence to be aware of: raising *Settings -> Smart Typing -> Suggestions -> max count* past what the window can hold no longer shows more pills, it just gets clipped by the fitter - the lever for more visible suggestions is a wider window.
-
-The `fit` binding reads `root.predictions`, `root.width` and the `predBar.pred*` geometry props directly so it re-evaluates whenever predictions, window width or pill sizing change. Headless-verified against real Qt `FontMetrics` + the QML binding engine in `tests/test_qml_prediction_bar.py`, which asserts on `Text.truncated` (the same flag the ToolTip is gated on, so the test can't disagree with what the user sees).
-
-**Two traps in testing this bar, both of which already produced a test that could not fail.** Read these before adding an assertion here:
-- **`root.findChildren(QObject, "predictionPillText")` returns an empty list.** A `Repeater`'s delegates are re-parented as *visual* children; their QObject parent is the delegate model, not the item tree. Every truncation assertion in the file went through `findChildren` and so ran against zero pills for its whole life, which is how a real eliding regression shipped underneath a class named `TestNoPillIsEverTruncated`. Use the `_pill_texts` helper (walks `childItems()`) and assert the result is non-empty at the call site. Reading `root.contentItem` also needs `from PySide6.QtQuick import QQuickItem` somewhere in the module or PySide raises `Can't find converter for 'QQuickItem*'`.
-- **Never assert `contentWidth <= width`.** Once a `Text` elides, `contentWidth` measures the *shortened* string, so it fits by construction and the comparison can never fail. It reads like arithmetic proof and is unfalsifiable. `Text.truncated` is the only honest signal.
-
-Also: the failure mode here is a **knife-edge**, so spot-checking a few round window widths proves nothing. `test_every_pill_has_room_for_its_own_text` sweeps 260 configurations (both view modes x 720-1240 px) because the deficit only bites where the row packs tightly enough that the water-fill cannot cover it. With the bug present that sweep failed 130 of 260; at 940 px non-compact, the obvious width to check by hand, it did not fail at all.
-- **`predBar.clearCtxReserve` is load-bearing, not decorative.** The clear-context (⟲) button owns a strip at the right edge; that width is subtracted inside `computeFit` *and* the row is positioned with an explicit `x` (not `anchors.centerIn`, which centres on the full bar) so pills are centred in what's left. It was declared but never used at first, and the right-hand pill rendered underneath the button. Reserved on the right only: taking the same bite from the left would re-centre the row in the window at twice the width cost and make long words elide sooner. Guarded by `tests/test_qml_prediction_bar.py::TestClearButtonNeverCoversPills`.
+- Caps Lock and Shift are **independent toggles**, surfaced separately (`capsLockActive`, `shiftActive`). Uppercase output and the `"upper"` layer follow `_shift_active OR _caps_lock_active`; the shifted *glyph* on a symbol key follows Shift only. Only the toggled key highlights.
+- `toggleShift` holds Shift at the OS level (`hold_modifier`), which is what makes Shift+click and Shift+drag select in the target app. Shift auto-releases after one keypress; caps stays.
+- **`_display_cased`**, three cases in priority order: (1) Caps Lock on, all upper; (2) any uppercase in the typed prefix, mirror **every** uppercase position, unconditionally (fuzzy candidates included); (3) Shift held, or an armed `_pending_auto_cap`, with nothing uppercase typed, capitalize the first letter. Every pill emit site routes through it.
+- `toggleCapsLock`, `toggleShift`, `releaseShift` and `lockModifier("shift")` re-query the engine (`_recase_visible_predictions`) rather than re-casing the stored list, because `self._predictions` holds the displayed form. It no-ops on an empty bar.
+- A pill tap releases sticky modifiers **before** the insert, or "Hello" arrives as "HELLO".
+- **Prediction pill widths: the bar drops low-ranked pills rather than eliding any.** `predRow.computeFit(...)` in `Main.qml` returns `{words, widths}`. **`predBar.predTextInset` is the single source of truth for horizontal padding**, read by both the delegate and the fitter; never inline it at either site. Leftover space is handed back max-min fair. `predBar.clearCtxReserve` (plus `micReserve`) is subtracted and the row is positioned by explicit `x`, not `centerIn`.
+- Testing that bar: `findChildren` cannot see Repeater delegates (use the `_pill_texts` helper and assert it is non-empty); never assert `contentWidth <= width` (`Text.truncated` is the only honest signal); the failure is a knife-edge, so sweep widths (`test_every_pill_has_room_for_its_own_text`).
 
 ## Editing a Prediction (OSK-friendly edit popup)
 
@@ -762,346 +381,28 @@ The premise to re-examine first is the one this feature skipped: a sustained, pr
 
 ## Sticky Modifiers (Shift, Ctrl, Alt, Win)
 
-Modifier keys are **sticky** - tap once to activate, tap again to deactivate. While active, the modifier is held at the OS level via `hold_modifier()` / `release_modifier()` on the platform synthesizer. This means:
+Full write-up: `docs/architecture/MODIFIERS_AND_CASING.md` (section of the same name). Read it before changing this area.
 
-- **Modifier+click works**: e.g., Ctrl+click to open hyperlinks, Shift+click and Shift+drag to extend text selection in the target app - same model as the Windows on-screen keyboard.
-- **Modifier+key combos work**: e.g., tap Ctrl, then tap C -> sends Ctrl+C.
-- **Auto-release**: After any key press (character or special), active modifiers are released at the OS level and deactivated. Shift specifically auto-releases after one keypress (caps lock pins it on instead) - Ctrl/Alt/Win behave the same way.
-
-### Super/Meta is never held on Linux (`win` modifier)
-
-The one exception to "held at the OS level": on Linux, `LinuxKeySynthesizer.hold_modifier()` **skips `win`/`super` entirely** (early-return, no `xdotool keydown super`). Holding Super is a window-manager gesture trigger - while it's down, Mutter/KWin grab the pointer for window move/resize (Super+drag = move, Super+right-button = resize), so *every* mouse click (including clicks on the OSK's own keys) is swallowed as a WM gesture instead of reaching the keyboard. The user then can't tap Win again to release it and is stuck (the reported "stuck in a right-click scenario" bug). `toggleWin` in the bridge is unchanged and cross-platform-uniform - it still calls `hold_modifier("win")`; the platform layer is where the no-op lives, because the WM-grab is a Linux/X11/Wayland quirk. **Super+`<key>` combos still work** (Win+D, Win+L, Win+arrow) because `send_key()` emits them as an atomic `xdotool key super+<key>` chord that presses and releases Super in one shot. Holding Super buys nothing for an OSK anyway - you can't Super+drag with the same mouse you click keys with. `release_modifier("win")` is left functional (a `keyup super` when Super isn't down is a harmless no-op and clears any externally-stuck Super). Windows still holds `VK_LWIN` - the WM-grab problem is Linux-specific. See `tests/test_platform.py::TestLinuxSuperNeverHeld`.
-
-### Clean state on open (`resetModifiers`)
-
-`KeyboardBridge.resetModifiers()` (`@Slot`) drops every held modifier (Shift/Ctrl/Alt/Win) - releasing the OS-level state via `reset_modifier_state()` and clearing the bridge flags + their key highlights - so a session never starts with a modifier stuck from a prior run, a crash mid-chord, or an external grab. Called from `Main.qml`'s `Component.onCompleted`. Caps Lock is intentionally **not** reset (it holds nothing at the OS level so it can't get stuck, and it's a deliberate persistent toggle). This complements the OS-only `reset_modifier_state()` already called in the bridge `__init__`.
-
-### Implementation
-- `keyboard_bridge.py`: `toggleShift()` / `toggleCtrl()` / `toggleAlt()` / `toggleWin()` call `_synth.hold_modifier()` on activate and `_synth.release_modifier()` on deactivate. All auto-release paths in `pressKey()` and `pressSpecialKey()` also call `release_modifier()`. `shutdown()` releases any still-held modifiers so quitting with one "active" doesn't pin it at the X server / Wayland compositor / Windows kernel.
-- `platform/base.py`: `hold_modifier()` and `release_modifier()` - default no-op.
-- `platform/windows.py`: Sends `VK_CONTROL` / `VK_MENU` / `VK_LWIN` key-down or key-up via `SendInput`.
-- `platform/linux.py`: Uses `xdotool keydown/keyup` or `ydotool key --key-down/--key-up`. **`hold_modifier` skips `win`/`super`** - see the Super/Meta note above.
-
-### Right-Click to Lock (persistent hold)
-
-**Right-clicking** Shift / Ctrl / Alt / Win **locks** it held down: the modifier stays held at the OS level and is **exempt from the per-keystroke auto-release**, so the user can fire several combos (Ctrl+C then Ctrl+V) or hold Shift across a whole selection without re-tapping. This is the accessibility answer to "hold the key down" for a mouse-driven OSK. Right-click again, or plain left-tap, to release. **Caps Lock is not lockable** (it's already a persistent toggle). Right-click-to-lock on a modifier is **independent of the "Right-Click for Shifted Character" setting** (a modifier has no shifted variant, and the whole point of the gesture is holding it).
-
-State model: each modifier keeps its existing `_*_active` (held-at-OS, drives the highlight + chord logic) plus a new `_*_locked` flag. **Locked always implies active.** `lockModifier(name)` (bridge slot, called from QML `onKeyRightPressed` for `type === "modifier"` keys) toggles the lock: locking sets active+locked and holds at OS (only if not already held, so locking an already-sticky-active modifier doesn't re-send a key-down); unlocking clears both and releases. The sticky `toggleX()` paths call `_clear_lock(name)` when they turn a modifier off, so a left-tap on a locked key also clears the lock (easy way out). The lock check lives in one place now, `_release_sticky_modifiers`'s `getattr(self, f"_{name}_locked")` guard, and every keystroke path (the edit-mode intercept, the Ctrl/Alt/Win chord branch, the char-path end, `_release_edit_chord_modifiers`, and `pressSpecialKey`, the last two alongside the nav-key `keep` exception) calls through it rather than each re-checking the flag inline. Miss the call and a locked modifier would silently drop after a keystroke. `shutdown()` releases locked modifiers too (and clears the flags) so quitting never pins one desktop-wide.
-
-QML surfaces the lock via `shiftLocked` / `ctrlLocked` / `altLocked` / `winLocked` bridge properties (+ `*LockedChanged` signals), bound in `Main.qml` and mapped per `kd.stateKey` onto `KeyButton.isLocked`. Because locked implies active, a locked key already carries the accent fill a sticky one-shot has; the lock adds a **solid 3 px bar along the bottom edge** (`lockBar` in `KeyButton.qml`) on top of it, so the two states differ by one unmissable mark rather than by a whole second colour scheme. The bar is inked with `KeyButton._onFillColor`, the shared luminance rule that also picks the key label's colour on an active/pressed fill: dark on a bright accent, white on a dark one. Nine themes ship, several with a pale accent (Blackboard, Spaceship) and one light outright (Typewriter), so any fixed colour is unreadable on roughly half of them. It is inset horizontally past the keycap's corner radius because `clip: true` clips to the bounding rect, not the rounded shape, so a full-bleed bar pokes out past the curve.
-
-This replaced a hardcoded gold 2 px ring plus a 15x15 gold badge holding a 9 px 🔒. **Don't reintroduce an emoji on a keycap**: at that size the padlock is a smudge, and Windows renders it through Segoe UI Emoji as a *colour* glyph, which ignores the `color` property outright, so what shipped was a yellow blob. Any glyph small enough to fit on a keycap is at the mercy of the host emoji font.
-
-**The same applies to any icon-sized glyph, and the clear-context (circle-arrow) button is the second case of it.** That button used to render U+27F2 in a `Text` with `anchors.centerIn`, which centres the text *item* while the ink inside it sits wherever the font puts it: the ring the eye reads sat down-and-right of the circle it lives on, with the glyph's tail hanging out to the left. It now draws **Feather's `rotate-ccw`** (MIT, see `THIRD_PARTY_NOTICES.md`) from its published path data.
-
-Three things about that are load-bearing. **It goes through `ctx.path` on the `Canvas` that was already there**, because QML's Canvas takes SVG path data directly: `QtQuick.Shapes` and `QtSvg` would each render it just as well and would each add a QML module the frozen build has to carry, and a missing QML module does not degrade, it fails `Main.qml` and ships as a blank keyboard. **The path data is kept verbatim** (the source's `polyline` written as the equivalent `M1 4 L1 10 L7 10`) so the icon can be diffed against upstream. And **the icon is centred by ink, not by viewBox**: Feather puts the corner arrow outside the ring, which leaves the composition's ink one unit left of the 24-unit box's centre, so `inkOffsetX` corrects it. That offset was measured from a render, not derived by eye.
-
-Guarded by `tests/test_qml_prediction_bar.py::TestTheClearButtonIcon`, which is worth reading before adding an assertion here, because **two successive metrics were wrong**. The ink bounding box is centred in the *glyph* version too, to within half a pixel, since the tail hanging off one side cancels the ring being pushed to the other, so a bbox assertion alone would have passed against the bug it was written for. A radial-spread metric replaced it and did separate them (glyph 0.29, hand-drawn arc 0.09, bar 0.15) but had to go as well: Feather's arrow sits outside the ring by design and scores 0.147, and a test passing by three thousandths is not a test. What is left is the pair that is honest about what the code guarantees: the icon is *drawn* rather than typeset (this is what catches the glyph), and it is grossly centred within 3 px (this catches a dropped transform, verified at -8 px). The one-unit optical correction is deliberately not pinned: asserting it across renderers buys a flake, not a guard.
-
-**Synth invariant (load-bearing: the lock is worthless without it).** Keeping the bridge state "held" isn't enough; the OS modifier must physically stay down. `hold_modifier` puts it down, but `send_key`/`replace_text` used to *wrap* the action key with a modifier down+up, and that trailing key-up silently released a held modifier after the first keystroke (mouse Ctrl+click / Shift+drag / Alt+Tab then broke even though the key still showed it held). Fix: **`WindowsKeySynthesizer.send_key` and `replace_text` skip wrapping any modifier that is already physically held** (`_modifier_already_held` → `GetAsyncKeyState`), relying on the standing hold instead. This mirrors the pre-existing `shift_already_held` guard in `_make_char_scancode_events`. Any new synth path that wraps a modifier around a keystroke must apply the same guard, or a locked (or sticky) modifier will drop. Mirrored on the `cpp-rewrite` branch (`WindowsKeySynthesizer::modifierAlreadyHeld`, used by `sendKey` + `replaceText`); no C++ is tracked on `main`. Covered by `tests/test_platform.py::TestWindowsSendKeyPunctuationChord::test_already_held_modifier_is_not_wrapped` and `TestWindowsReplaceText::test_held_shift_not_wrapped_in_selection`.
-
-**Parity**: mirrored 1:1 on the `cpp-rewrite` branch, not on `main` (`KeyboardBridge::lockModifier` / `clearLock`, the `m_*Locked` members, the guarded `releaseStickyAll()` + `pressSpecialKey` + edit-mode blocks, and the `*Locked` Q_PROPERTY/signals). Bridge behaviour is covered by `tests/test_keyboard_bridge.py::TestModifierLock` on the Python side.
+- Modifiers are **sticky** (tap on, tap off) and held at the OS level via `hold_modifier()` / `release_modifier()`, so modifier+click works. After any key press they auto-release through the one shared `_release_sticky_modifiers` (see *Key rules*). `shutdown()` releases anything still held.
+- **Linux never holds `win` / `super`** (`LinuxKeySynthesizer.hold_modifier` early-returns; a held Super makes the WM swallow every click). Super+key chords still work atomically through `send_key`. Windows still holds `VK_LWIN`. Test: `TestLinuxSuperNeverHeld`.
+- `resetModifiers()` runs from `Main.qml`'s `Component.onCompleted` so a session never starts with a stuck modifier. Caps Lock is deliberately not reset.
+- **Right-click locks** Shift / Ctrl / Alt / Win (`lockModifier(name)`, `_*_locked`; **locked always implies active**), exempt from auto-release through the single `_*_locked` guard in `_release_sticky_modifiers`. A left-tap clears the lock (`_clear_lock`). Caps Lock is not lockable, and the gesture is independent of "Right-Click for Shifted Character".
+- The lock cue is a 3 px `lockBar` inked with `KeyButton._onFillColor`. **Never an emoji or icon-sized glyph on a keycap**: Windows renders it through Segoe UI Emoji in colour and ignores `color`. The clear-context ring is drawn from Feather's `rotate-ccw` path data through `ctx.path` on a Canvas (no `QtQuick.Shapes` / `QtSvg`), centred by ink (`inkOffsetX`); read `TestTheClearButtonIcon` before adding an assertion there.
+- **Synth invariant: `WindowsKeySynthesizer.send_key` and `replace_text` skip wrapping any modifier that is already physically held** (`_modifier_already_held`), or the trailing key-up drops a lock after one keystroke. Any new synth path that wraps a modifier needs the same guard.
+- Tests: `TestModifierLock`, `TestWindowsSendKeyPunctuationChord`, `TestWindowsReplaceText`.
 
 ## Function Keys F13-F24 and Programmable Keys
 
-Two features that arrived together and answer different halves of the same
-request. **F13-F24** are more raw keys to bind *in other apps*;
-**programmable actions** turn a click here into a chord or a phrase that
-works everywhere immediately, with nothing to bind. Neither subsumes the
-other, which is why both shipped: an unbound F13 does nothing until the
-target app is taught to listen for it, and teaching every app is not
-something a mouse-driven user should have to do.
+Full write-up: `docs/architecture/FUNCTION_KEYS.md` (section of the same name). Read it before changing this area.
 
-### The extra keys are real keys
-`VK_F13`-`VK_F24` (0x7C-0x87) on Windows, the `F13`-`F24` X11 keysyms on
-Linux (which pass straight through `xdotool`, so `platform/linux.py` needed
-no change). **macOS stops at F20**: Carbon names `kVK_F13` through
-`kVK_F20` and there is no virtual keycode for F21-F24 at all, so they are
-deliberately absent from `_VK_SPECIAL` rather than guessed - an invented
-code would post some *other* key. A programmed action on F21-F24 still
-works there, because that path never reaches the map.
-
-They are worth having precisely because nothing binds them: no collision
-with an app's own F5 or Alt+F4, so a game, OBS or AutoHotkey can take one
-outright. `UNBOUND_FUNCTION_KEYS` is that set, surfaced to the editor so it
-can say which keys are free before the user commits (reassigning F5 costs
-them refresh in every app; reassigning F17 costs nothing).
-
-### Its own panel toggle, not a second line in the F1-F12 row
-*Settings -> Function Keys -> Show -> "Extra Function Keys (F13-F24)"*,
-independent of the F1-F12 toggle. Someone who wants only the twelve macro
-keys must not have to spend the height of the standard row to get them.
-The extra row renders **above** F1-F12 so toggling it never moves the row
-with muscle memory attached.
-
-### `src/key_actions.py` owns the whole action vocabulary
-The bridge switches on **nothing**. `KeyActionStore.execute` dispatches
-through a registry of `KeyActionType` records, each of which knows its own
-id, how to sanitise its payload, how to describe itself in one line, and
-how to execute itself against an `ActionExecutor` (a two-method surface the
-bridge implements: `send_chord`, `send_text`). Adding `launch` or `macro`
-from the `MODULAR_LAYOUTS.md` vocabulary is **one entry there plus one
-method on the executor**, with no branch in `pressSpecialKey` and no QML
-edit: the editor builds its picker from `getKeyActionTypes()`, and switches
-on the entry's `fields` to decide which inputs to show.
-
-Three types ship:
-- **`key`** - sends its own keystroke, and exists so a key can take a
-  *custom keycap label without changing what it does*. That is the case
-  for a key the user bound inside another app (Discord push-to-talk, an OBS
-  scene): they need to find it on screen, and swallowing the keystroke here
-  would silently break the very binding the label documents. Its `execute`
-  returns **False**, which is what lets it be a peer in the registry rather
-  than a special case the bridge has to know about.
-- **`hotkey`** - one click fires Ctrl+Shift+S.
-- **`text`** - inserts a stored phrase verbatim.
-
-**`execute` returning a bool ("did I handle this tap") is the whole
-interface.** False means the key falls through to its own keystroke.
-
-### Where the dispatch sits, and why
-Inside `pressSpecialKey`, at the point the keystroke would have been sent,
-**not** at the top of the slot with an early return. Everything downstream
-then still sees an ordinary special-key press: the sticky auto-release, the
-`_NAV_KEYS` exception and the context bookkeeping. Returning early would
-skip the auto-release, and a Shift the user tapped once would stay held at
-the OS level for every keystroke after it. Guarded by
-`tests/test_keyboard_bridge.py::TestProgrammableFunctionKeys::test_a_sticky_modifier_still_auto_releases_after_a_chord`,
-paired with the locked-modifier inverse.
-
-**A chord merges the user's held modifiers rather than replacing them**
-(`_send_key(..., extra_modifiers=...)`). A macro key bound to Ctrl+S,
-tapped while Shift is held, sends Ctrl+Shift+S, exactly as a physical macro
-key would. The merge happens inside `_send_key` so the
-`_note_own_keystroke` bookkeeping stays in one place; setting those flags
-anywhere else is what once made the caret polls read our own inserts as the
-user clicking elsewhere.
-
-**A text action *is* `_commit_verbatim_insert`, not a copy of it.**
-`_send_text_action` is a one-line call, because a programmed phrase is a
-purely literal insert with nothing to add on either end, which is exactly
-what that helper is for and what `insertSnippet` and `insertGlyph` already
-call. So it inherits the whole prologue rather than restating it:
-`_release_sticky_modifiers()` **before** the insert (a held Shift would
-otherwise deliver the phrase in capitals, and `_make_char_scancode_events`
-cannot cancel a standing hold), the send inside `_without_held_modifiers()`
-via `_send_literal_text`, a deferred auto-space settled as prose, an armed
-auto-capital spent, and the seven fields both other callers reset. It was
-written out inline first, before the helper existed, and the copy was
-already one field behind (`_word_prefix_lost`, which arrived with the
-helper): parallel blocks drifting is the failure this file warns about for
-sticky-modifier release, and this is the same shape. Not gated on privacy
-mode: the user tapped the key, so the text must reach the app either way,
-and nothing on this path learns or logs its content.
-
-**`pressSpecialKey`'s name map is hoisted to the class**
-(`_SPECIAL_KEY_NAMES`) because a programmed chord resolves its action key
-through the same map, so `"return"` reaches the synth as `"Return"`. A
-second copy inside the slot would be one more pair of parallel blocks to
-keep in sync, which is the failure mode this file warns about for the
-sticky-modifier release.
-
-### Storage
-`key_actions.json` in the config dir, saved synchronously on every mutation
-(atomic tempfile-then-rename), same shape and same tolerance as
-`snippets.json`: a missing, oversized (256 KB cap), corrupt or partially
-invalid file leaves the affected keys unassigned rather than raising, and a
-bad entry is dropped **individually** so one unusable assignment does not
-cost the eleven the user got right. An unassigned function key still works,
-so this path is never allowed to block startup.
-
-**Sanitisation is allow-list, not deny-list**, for the usual reason: a
-chord's modifiers and action key are handed to the platform synthesiser,
-which on Linux turns them into argv for `xdotool`. Modifiers come from
-`MODIFIERS` and are stored in canonical order (so two spellings of one
-chord never read as two chords); an action key must be a name from
-`CHORD_SPECIAL_KEYS` or a single printable ASCII character, because the
-platform layers translate that range and have nothing to say about a
-control character or an emoji. A hotkey with **no** action key is refused
-outright rather than stored: it would leave a key that looks programmed and
-does nothing when tapped, which is indistinguishable from a tap that failed
-to register, so the user taps it again. Text follows
-`snippets._clean_value` exactly (newline and tab kept, every other C0
-control character and DEL stripped, capped).
-
-`setKeyAction` **returns a bool and QML honours it** - the editor flashes
-"Saved" only on True, and its failure toast otherwise. A green confirmation
-over a write that never happened is the failure `setSnippet` and
-`acceptSnippetOffer` were both given bool returns for.
-
-**The slot's bool and `KeyActionStore.set`'s bool are not the same
-question, and the slot must not just forward it.** The store answers "did
-anything change", which is what decides whether the file is rewritten and
-`keyActionsChanged` emitted, so it is False for a valid payload identical
-to the one already stored. The slot answers "did my save stick". Those
-differ in exactly one case, re-saving an unchanged action, which is an
-ordinary thing to do (open the editor on a key that already does what you
-want, tap Save) and which read as a red "could not be saved" over state
-that was exactly right. The slot therefore re-validates and treats an
-unchanged assignment as success, emitting nothing since nothing moved.
-Guarded by
-`tests/test_keyboard_bridge.py::TestProgrammableFunctionKeys::test_saving_an_unchanged_action_still_reports_success`,
-paired with the inverse that a refused key, an invalid payload and an
-unknown action type are all still reported as failures: a slot that simply
-returned True would satisfy the first on its own.
-
-**Deliberately NOT in the Data Backup archive.** Adding a fourth file to
-`_MODEL_FILES` means bumping `data_export.SCHEMA_VERSION` and writing the
-back-compatible import path, which this project requires alignment on
-before changing. Until then it is machine-local, like the Qt settings layer.
-
-### The editor, and the two routes into it
-`qml/components/KeyActionEditor.qml`, a Popup (not the floating Window the
-snippets editor uses: that window exists to be dragged clear of the field
-being filled in, and this one is not editing anything in the app behind
-us). It is kept **short and parked at the top** for the reason that does
-apply: the user clicks OSK keys to type a label, so the editor must not
-cover the letter grid it is being typed with.
-
-Same two invariants as the prediction-edit popup, both easy to undo:
-`modal: false` (a modal popup installs an event-blocking overlay, so no OSK
-key would fire and the field could never be typed into) and
-`closePolicy: Popup.CloseOnEscape` **only** (every OSK key click is a
-press-outside). Keystrokes arrive through the bridge's edit-mode intercept,
-never Qt focus. `closePolicyBits` is a plain-int mirror of `closePolicy`
-that exists only so the headless test can read it: PySide has no converter
-for `QFlags<QQuickPopup::ClosePolicyFlag>`, so an assertion on the real
-property errors instead of guarding anything.
-
-This editor is the third surface sharing edit mode (with the prediction
-popup and the snippets editor), so it owns the mode under its own name:
-`onOpened: keyboard.beginEditSession("keyaction")`,
-`onClosed: keyboard.endEditSession("keyaction")`, and its `Connections`
-block only listens while `editor.opened && keyboard.editOwner ===
-"keyaction"`. A second, unconditionally-enabled `Connections` block closes
-the editor the moment another surface takes the mode over
-(`onEditOwnerChanged`), the same shape the prediction popup uses and for
-the same reason: folding that handler into the ownership-gated block would
-race the very `editOwnerChanged` signal that disables it. See *Editing a
-Prediction* for why a shared bool was not enough on its own.
-
-**It has to supply the text-box behaviour the window flags take away, and
-that is the same three things the snippets editor lists.** Clicks reach the
-fields (the `MouseArea` recording which box is being typed into sets
-`mouse.accepted = false` and passes the press down, so caret placement,
-double-click-for-a-word and drag-select all still work), Tab changes field,
-and **Shift with an arrow selects rather than moving the caret**
-(`_moveCaret`, reading the injected `shiftOn`). None of the three come for
-free: this window never holds OS focus, so Qt's own key handling never sees
-the modifier, and without the third there is no way at all to select a range
-in a 500-character phrase with an imprecise pointer. `shiftOn` is still true
-at that point because the bridge's edit-mode intercept emits and returns
-*before* its auto-release block. Guarded by
-`tests/test_qml_function_row.py::TestTheEditor`, where the Shift case is
-paired with the inverse that a bare arrow still just moves the caret: an
-unconditional `moveCursorSelection` would satisfy the first on its own.
-
-**Chord capture is a mode, not a field.** Tapping the "Key" slot sets
-`editTarget = "chord"`, and the next key pressed *on the OSK* becomes the
-chord's action key - which is the only way to name Enter or an arrow
-without a second picker listing every key we can send. The modifier chips
-are ordinary buttons in the popup.
-
-**The only route into the editor is *Settings -> Function Keys***, which
-lists all twenty-four with what each one currently does and opens the editor
-on a tap. Right-clicking an F-key used to open it too; that was removed at
-Owen's request (2026-09-13), so a stray right-click on the row never pops an
-editor over the letters. Right-click on an F-key now does nothing. Don't add
-it back. Guarded by
-`tests/test_qml_function_row.py::TestTheSettingsListIsTheLeftClickRoute::test_a_right_click_on_a_key_does_not_open_the_editor`.
-
-**That page replaced an Edit toggle on the row itself**, which flipped both
-rows into an assign mode where a left-click opened the editor. The list
-answers the same requirement strictly better: its rows are far bigger
-targets than a 36 px keycap, there is no mode to get into or out of (the
-mode's only exit was the same key that entered it, sitting one pixel from
-F12), and it is the only surface that shows an assignment the user has
-forgotten making, which twelve identical keycaps cannot. Removing the
-toggle also gave the row its thirteenth key's width back. **Don't put a
-mode toggle back on the row without first checking that page is gone.**
-
-**Tapping a row hands off to the editor on the keyboard window, and hides
-the settings window to do it.** The editor is typed into with the OSK's own
-keys and the settings window cannot hold OS focus, so the editor cannot
-live inside it (the Deepgram key field carries the same note); leaving a
-360x540 window parked mid-screen would cover the editor, the letter grid it
-is typed with, or both. `root.settingsReturnView` brings settings back on
-the same page afterwards, which is the one documented exception to
-"re-opening Settings always lands on the home grid" (see *Settings Panel
-Structure*). The inverse matters as much and is tested: an editor opened any
-other way must **not** pop the settings window open behind it.
-
-**Every key takes its share of the gap around it.**
-`FunctionRow`'s `hitMarginH` / `hitMarginV` default to 0 and there is no
-cascade, so a `KeyButton` whose caller forgets to pass them leaves the
-strip between it and its neighbour dead (see *Dead space between keys*).
-A new key added to an existing row is the likeliest place for that to be
-missed, because the row around it already works. The same applies to the
-whole F13-F24 panel, which is a second instance of this component and so
-needs its own bindings from `Main.qml`. Guarded by
-`tests/test_qml_compact_view.py::TestNoDeadStripBetweenKeys::test_every_key_in_every_panel_takes_a_share_too`,
-which walks the tree with both function rows switched on and fails on any
-key holding a zero margin.
-
-### Geometry: the keys fill the grid, the group gap never gives
-
-**The row spans the keyboard grid exactly, and it is the key width that
-absorbs the leftover.** `FunctionRow._fillKeyW` divides `maxWidth` (the
-grid width, passed by `Main.qml`) between the twelve keys after taking out
-9 internal gaps and 2 group gaps; `_groupGap` is a fixed `keySpacing * 4`.
-At a 940 px window that makes an F-key 75.6 px against the 58.7 px key
-directly below it, about 29% wider.
-
-**This reverses the earlier decision, on purpose and with the picture in
-front of us.** The row used to draw each F-key exactly one grid column wide
-and centre the result, which is what the original note in `FunctionRow.qml`
-defended against three rejected redesigns that each tried to fill the width
-by stretching keys. That note said not to revisit the inset "without
-rendering the result next to the number row", which is exactly what was
-done the second time, and stretching won: on a keyboard driven by an
-imprecise pointer, a quarter more target width outranks lining up with the
-column below. The accepted cost is that no F-key lines up with the key
-under it any more, and at 29% wider and 30% shorter the row reads a little
-bar-like. **The rule survives, pointing the other way: don't change this
-back without rendering it next to the number row.**
-
-**The group gap is fixed because a gap that gives is a gap that disappears
-exactly when the row is tightest.** It used to be the thing that gave, and
-while the Edit toggle made this row 13 keys against compact's 13-unit grid
-there were 3 px of slack, so it clamped to `keySpacing` and 4-4-4 rendered
-as one undifferentiated run, on the view where telling twelve identical
-keys apart matters most. The grouping now survives in both views.
-
-`tests/test_qml_compact_view.py::TestPanelsSitFlushWithTheGrid::test_function_row_fills_the_widest_keyboard_row`
-pins three things, and the last two are what a width check alone cannot
-see: the panel is flush with the grid; the fill width accounts for 12 keys
-plus 9 internal gaps plus 2 group gaps (so a wrong key count or a changed
-gap moves it); and the group gap holds at the 4-4-4 width in **both**
-views. It used to assert that no key ever grew, which is the assertion this
-change reverses.
-
-### Testing notes
-`tests/test_key_actions.py` (store, registry, sanitisers, dispatch against a
-five-line recording executor), `tests/test_keyboard_bridge.py::TestExtraFunctionKeys`
-/ `TestProgrammableFunctionKeys`, and `tests/test_qml_function_row.py`
-(headless Main.qml). Every positive case is paired with the near-miss it
-must reject, and the pairs that bite are the ones where a payload *looks*
-valid: a hotkey with no action key, a modifier name the synth layer has
-never heard of, a key name we cannot send.
-
-Two Qt-side traps worth knowing before adding an assertion here:
-- **The editor is a `Popup`, so `findChild(QQuickItem, ...)` returns None**
-  and every assertion after it silently never runs. `QQuickPopup` is not an
-  Item; search for `QObject`.
-- **A QML `var` holding a JS array or object arrives as a `QJSValue`**,
-  which Python cannot iterate or index. Call `.toVariant()`. This applies to
-  the two key registries and to the editor's `chordMods`.
-
-`KeyActionStore` binds `get_config_dir` at module scope, exactly like
-`src/snippets.py`, so `tests/conftest.py::_stay_off_the_real_config_dir`
-patches `src.key_actions.get_config_dir` by name. Without that line the
-suite rewrites the developer's own key assignments, which is the same
-failure the snippet store already had once.
+- F13-F24 are real keys (`VK_F13`-`VK_F24`, X11 keysyms). **macOS stops at F20**; never invent a keycode. Their panel toggle is independent of F1-F12 and the row renders above it.
+- **`src/key_actions.py` owns the action vocabulary; the bridge switches on nothing.** `KeyActionStore.execute` dispatches through a registry of `KeyActionType` records against a two-method `ActionExecutor`; `execute` returning a bool ("did I handle this tap") is the whole interface. Types: `key` (label only, returns False), `hotkey`, `text`.
+- The dispatch sits inside `pressSpecialKey` **at the point the keystroke would be sent, not as an early return**, so sticky auto-release still runs. A chord merges the user's held modifiers (`_send_key(..., extra_modifiers=...)`). A text action *is* `_commit_verbatim_insert`. The name map is class-level (`_SPECIAL_KEY_NAMES`).
+- `key_actions.json`: atomic save per mutation, 256 KB cap, bad entries dropped individually, **allow-list sanitisation** (modifiers from `MODIFIERS`, action key from `CHORD_SPECIAL_KEYS` or one printable ASCII char; a hotkey with no action key is refused). `setKeyAction` returns "did my save stick", so re-saving an unchanged action is success. **Not in the Data Backup archive.**
+- Editor (`KeyActionEditor.qml`): a `Popup` with `modal: false` and `closePolicy: Popup.CloseOnEscape` only, edit session `"keyaction"`, parked at the top, with the same three text-box behaviours the snippets editor supplies. Chord capture is a mode.
+- **The only route into the editor is *Settings -> Function Keys*.** Right-click on an F-key does nothing (removed 2026-09-13; don't add it back), and there is no Edit toggle on the row. Tapping a row hides the settings window and `root.settingsReturnView` brings it back on the same page.
+- Geometry: the twelve keys fill the grid width (`FunctionRow._fillKeyW`) and the group gap is a fixed `keySpacing * 4`. Don't change it without rendering it next to the number row. Both function rows need `hitMarginH` / `hitMarginV` bindings.
+- Test traps: the editor is a `Popup`, so search with `findChild(QObject, ...)`; a QML `var` arrives as a `QJSValue`, call `.toVariant()`; `tests/conftest.py` patches `src.key_actions.get_config_dir` by name.
 
 ## Settings Panel Structure
 
@@ -1289,7 +590,13 @@ each one fixed: `docs/build/CI.md`. The rules that outlive the reasoning:
   --disable-auto` before pushing to it. A merge made with `GITHUB_TOKEN` does
   not trigger CI's push run on main, and protection does not require branches
   to be up to date, so a break from an auto-merged update surfaces on the next
-  PR's checks rather than on main. See `docs/build/CI.md`.
+  PR's checks rather than on main. **Dependabot is switched on in three
+  places and needs all three**: the version schedule in
+  `.github/dependabot.yml`, the repository's *Dependabot security updates*
+  setting (a different trigger, "an advisory now names your pinned version",
+  enabled 2026-09-20 after running without it), and *Allow auto-merge*. A
+  security update is an ordinary Dependabot PR, so the auto-merge job covers
+  it with no new workflow. See `docs/build/CI.md`.
 - **Branch protection requires the `Tests` job, not the shards.** Required
   checks are configured by name in the repo settings, so naming shards there
   means reconfiguring protection on every change to the shard count, and a
@@ -1388,42 +695,19 @@ Protects sensitive input (passwords, PINs) from leaking into the prediction mode
 
 ### Clearing stale context when focus or the caret moves
 
-Six independent signals, each catching what the ones before it cannot. The first three are polled by `_check_foreground_window` at 4 Hz:
+Full write-up: `docs/architecture/CONTEXT_RESET.md` (section of the same name). Read it before changing this area.
 
-1. **The foreground window** (`GetForegroundWindow` / `xdotool getactivewindow`). Catches an app switch.
-2. **The focused element** (`focused_element_token`, UIA RuntimeId, Windows only). Catches the caret moving between two controls *inside* one window, e.g. two text boxes on a web page.
-3. **The caret position** (`caret_position_token`, `GetGUIThreadInfo` on the foreground thread, Windows only). Catches what (2) structurally cannot: a move *within the same control*, such as clicking from one paragraph to another in a single text box, and the common case where UIA reports one element for a whole web document so two fields share a RuntimeId.
-4. **A click outside our own window** (`external_click_detected` in `src/platform/pointer.py`, polled by `_check_external_click` on its own 50 ms timer, Windows only).
-5. **Tab** (`pressSpecialKey`). Not polled and not platform-specific: the user told us they are moving to the next field, so `_reset_typing_context(keep_snippet_offer=True)` runs directly. It is the same failure as (4) arriving through the keyboard instead of the mouse, and the only one of the five that works identically on every platform. The word in progress is deliberately **not** learned first: Tab is the accept-completion key in every IDE and shell, where `_current_word` is a *prefix* the app is about to finish, so learning it would feed the model `hel` every time the user completed `hello`. Guarded by `tests/test_keyboard_bridge.py::TestTabClearsContext`, whose inverse half asserts the Tab keystroke still reaches the app (the reset must not swallow it).
+Six signals reset the typing context, each catching what the others cannot: (1) foreground window, (2) focused element (UIA RuntimeId), (3) caret position, all polled at 4 Hz by `_check_foreground_window`; (4) a click outside our own process (`src/platform/pointer.py`, its own 50 ms poll); (5) Tab; (6) the `_NAV_KEYS`. **Stale `_current_word` / `_context_buffer` is not a bad suggestion, it is a pill tap that eats text elsewhere.**
 
-6. **The cursor-motion keys** (`_NAV_KEYS`: arrows, Home, End, PageUp, PageDown, in `pressSpecialKey`). Same reasoning as (5) and the same call, `_reset_typing_context(keep_snippet_offer=True)`. This branch already cleared `_raw_token` on these keys and stopped there, which applied the reasoning to half the state and left `_current_word` / `_context_buffer` describing text the caret has left. **The cost of being wrong here is not a bad suggestion.** Those two buffers are what the insert path measures against: a pill types only the tail it believes is unseen, and otherwise selects `len(_current_word)` characters backwards and overwrites them, so a stale context can eat text the user typed elsewhere. Clearing the bar in the same breath is what separates this from the mid-word reset that `_check_caret_moved` deliberately avoids: that one leaves a live bar and a partial word on screen, which is how a tap inserts a whole word beside its own prefix. **Delete and Escape are deliberately excluded** even though they are in `_TOKEN_BREAKING_KEYS`: Delete removes the character *after* the caret, so the run before it is untouched, and Escape does not move the caret at all. Guarded by `TestCursorMotionClearsContext`, including the auto-repeat case (a held arrow must reset once, not per repeat) and the Delete inverse.
-
-Both (2) and (3) treat `None` as "don't know" and leave state untouched, so a transient failure never wipes context. That is correct in isolation and adds up to a hole: browsers and Electron apps expose one UIA element for a whole document *and* publish no caret, so both fail closed at once and clicking from one field to another in a single window had no signal at all. That is exactly the case (4) exists for, and it is why the fallback is a click rather than a better token: a click is observable in every app, no accessibility cooperation required.
-
-(4) is deliberately coarser than the signals it backs up. A click on a toolbar button or a scrollbar does not move the caret in the text, and resetting there costs the next-word prediction the user would have got. That trade is worth taking because the failure it replaces is worse: context describing a field the caret has left produces pills that insert the wrong text into the field it is now in. It deliberately does **not** carry `_check_caret_moved`'s **only between words** guard; see the paragraph below for why that was reversed.
-
-**Where a caret is published, the two kinds of click are now told apart** (`_begin_click_settle` / `_continue_click_settle`), and the interesting part is the timing rather than the comparison. The obvious implementation reads `caret_position_token()` when the press is seen and skips the reset if it has not moved; that silently undoes the whole signal, because the poll is up to `_CLICK_POLL_MS` behind the press and the target app may not have handled it yet, so the read reports the old caret for a click that is about to move it. The decision is therefore settled over `_CLICK_SETTLE_MS` (200 ms, four ticks) and any change inside that window counts as a move. **The baseline is `_caret_before_click`, the previous tick's reading**, which is the only one that reliably predates the press, since the press is itself detected as a transition against that tick. `_last_caret_token` cannot serve: it belongs to the 4 Hz foreground poll, which lands between a press and its detection in a 50 ms window out of every 250 ms, and when it does it already holds the *post*-click value, so a genuine move reads as "unchanged". **An unreadable caret resets, on the way in and on the way out**, which is what keeps browsers and Electron (the case this signal was invented for) byte-identical to resetting on every press. The 200 ms window is not reachable as a stale bar: taking it would mean moving the pointer off whatever was just clicked, back onto a pill, and clicking again. Guarded by `TestAnOutsideClickThatMovesNoCaretIsLeftAlone`, which drives the poll tick by tick because a version that decides immediately passes any test that only inspects the end state.
-
-**Three things the window has to be told about, and each is a way to get it nearly right.** (1) **Our own inserts move the caret**, so this poll carries the same guard `_check_caret_moved` does, in a flag of its own: `_note_own_keystroke` sets `_keystroke_since_poll` *and* `_keystroke_since_click_poll`, because each poll consumes the flag it reads and a shared one would mean whichever fired first ate the evidence the other needed. Inside the window a keystroke **re-baselines rather than concluding** (a settle only opens on a click that did *not* move the caret, so a keystroke landing in it is evidence about our own insert and none about the click); at the *entry* comparison it deliberately does not apply, since there the caret has already changed by the time the click is seen and believing our own keystroke did it would mean keeping a context that may belong to the field the click just left. (2) **A settle is cleared by `_reset_typing_context`**, or an app switch would leave the next tick comparing the new app's caret against the old app's baseline, calling it a move and quietly re-opening (with `keep_snippet_offer=True`) a decision the switch had already made the other way. (3) **A scrollbar is not among the clicks this rescues.** `rcCaret` is client-relative, so scrolling drags it while the caret stays exactly where it was in the text and the click reads as a move; that is the same false positive `_check_caret_moved` carries its only-between-words guard for, and taking that guard here was tried and reversed for a stronger reason, so a scroll keeps the coarse behaviour and resets. Closing it needs a caret identity that survives a scroll, which Windows does not publish.
-
-**(4) fires mid-word, and that is a reversal of the original design.** It used to carry `_check_caret_moved`'s only-between-words guard, and mid-word clicks were held in an `_external_click_pending` flag to be acted on at the next word boundary. Both are gone. The guard suppressed the reset at the moment it was most needed, because a partial word is exactly when the bar is full of completions for the field the caret has just left: with `hel` typed and the caret clicked into another field, tapping the `hello` pill sent `lo ` into that field (measured, not theorised). Deferring to the word boundary did not rescue it either, since that boundary only arrives once the user finishes the word, by which point the wrong text is in. The flag is deleted rather than left inert: a reset that always happens immediately has nothing to hold.
-
-What the guard protected is real but rare **here specifically**: a click that does *not* move the caret desyncs `_current_word` from the screen, so a later pill completes against a prefix that is only part of what is there (`hel`, then a typed `lo`, then a tapped `look`, gives `hellook`). Reaching that costs leaving the keyboard, clicking something caret-neutral in another app, and returning mid-word, because mid-word the pointer is on the keyboard and own-window clicks are filtered by process id. Clicking into another field mid-word is ordinary. Both directions corrupt text; this one corrupts it far less often. **`_check_caret_moved` keeps its own guard** (see below), because scrolling drags the caret rectangle without moving the caret in the text and that false positive lands mid-word constantly.
-
-**A live snippet offer survives every *within-window* reset.** `keep_snippet_offer=True` is passed by all three of the outside click, the focused-element change and the caret move; the app switch and privacy mode take the default and still withdraw. The offer describes a value the user typed rather than a caret position, and clicking the next field of the same form is the single most likely thing to happen right after an email address is typed, so withdrawing there closed the Save button before the user could travel to it.
-
-**It has to be all three, and that follows from the reversal above rather than being an independent choice.** Clearing `_current_word` on the click is exactly what unlocks `_check_caret_moved`'s only-between-words guard, so a click that kept the offer was followed within 250 ms by a caret poll that reset again on the default and withdrew it anyway; the focused-element branch had no `_current_word` guard at all, which is the Chrome case. Each of these polls is testable in isolation and proves nothing that way, so `TestOutsideClickClearsContext::test_the_offer_survives_the_caret_poll_that_follows` drives two signals in sequence, which is the shape any future test here needs.
-
-**The tail of an interrupted word is never learned** (`_word_prefix_lost`, taken by `_take_lost_prefix`). This is the second cost of dropping the guard and the one that lasts. A reset landing mid-word leaves the word's opening on screen with nothing tracking it, so `docu` plus a caret-neutral click plus `mentation ` handed `mentation` to `_predictor.learn` as a whole word: measured after three such cycles it sat in `user_vocab`, in the analytics word table, and at rank 1 for every later `ment`, and from there it travels into `ngram_model.json`, the dashboard's Top Words and the Data Backup archive. The desync the paragraph above weighs is transient; this is not. The flag travels with `_word_typed_under_caps_lock` (same per-word lifetime, cleared at the same boundaries) and is consumed at the three sites that learn from `_current_word`: space, sentence punctuation and Return. The two mid-word punctuation branches gate the `_sentence_buffer` append instead, because that buffer is what the *next* boundary hands to the learner, so a fragment parked there arrives one keystroke late rather than not at all. The tail still reaches `_context_buffer`, which has to mirror the screen. Guarded by `tests/test_keyboard_bridge.py::TestAnInterruptedWordIsNotLearned`, where every case types its word **three** times, because an unknown word only promotes into `user_vocab` on its third sighting and a one-shot version of those assertions passes whether or not the gate exists.
-
-Two implementation notes on (4), both load-bearing. **Clicks on our own window are filtered by process id**, not by geometry: `WindowFromPoint` -> `GetWindowThreadProcessId` compared against `os.getpid()`, which covers the keyboard, the snippets window and every popup in one check, and is what stops the keyboard clearing its own context on every key tap. And **it polls rather than hooking**: `WS_EX_NOACTIVATE` keeps our window off the focus path so Qt never sees the event, and a `WH_MOUSE_LL` hook would put this process on the input path of every mouse event on the desktop, which is a latency and antivirus-heuristic cost out of proportion to a signal this coarse. Polling reads the pointer's *current* position, so the 50 ms interval is part of the correctness argument, not a tuning knob: the longer the gap, the more chance the pointer has already travelled back onto a key and reads as ours. **Only `GetAsyncKeyState`'s high bit is read** (`_left_button_pressed_since_last_call`), as a transition against the previous poll. The low bit ("pressed since the last call") would catch a click shorter than one poll interval, which the high bit structurally misses, and reading it is still the wrong trade: that bit is system-wide and **the read clears it**, so polling 20x a second silently steals every press from anything else watching the same way. Dwell-click and switch-access utilities are exactly the software an on-screen keyboard user runs alongside this one, and degrading another assistive tool to sharpen a signal this coarse is not worth it. A missed click costs one next-word suggestion, and the next click resets anyway. `tests/test_pointer.py::TestPressDetection::test_the_pressed_since_last_call_bit_is_ignored` asserts the *absence* of that detection, so restoring the bit fails loudly.
-
-`_check_caret_moved` carries two guards, and both matter:
-
-- **Typing moves the caret too.** `_keystroke_since_poll` is cleared on each poll, so a move we caused is never mistaken for one the user made. It is set in the bridge's synthesizer wrappers (`_send_key` / `_send_text` / `_replace_text`), **not** at the keystroke entry points: a tapped pill and a snippet both type without going through `_press_char`, so keying it off the entry points made this poll read our own insert as the user clicking elsewhere and tear down the context, and the freshly emitted next-word pills, within 250 ms of producing them. Setting it at the synth layer covers any future insert path by construction. Guarded by `TestCaretMoveClearsContext::test_our_own_inserts_do_not_trigger_it`.
-- **Only between words** (`_current_word` must be empty). A reset mid-word is the dangerous direction: it clears `_current_word` while the partial word is still on screen, so the next pill tap inserts the whole word beside it, which is the "backspacbackspaces" duplication the rehydrate logic exists to prevent. Scrolling also drags the caret rectangle across the screen without the caret moving in the text, and that is the false positive most likely to land mid-word. Waiting for a word boundary costs the mid-word case, where a stale context matters least because the user is about to finish the word anyway. **The outside-click signal (4) no longer shares this guard**: there the mid-word case is the common one and the caret-neutral false positive is rare, so the trade lands the other way round. Don't re-unify them.
-
-**`resetContext` (the clear-context ring) delegates to `_reset_typing_context` rather than clearing the same fields itself.** They were two hand-written copies of one field list and had drifted in *both* directions: the ring cleared `_learned_raw_token` and the shared reset did not, while the shared reset cleared `_pending_auto_cap` and the ring did not, so typing `hello.` and tapping the ring left a capital owed and the next character came out uppercase in a context the user had just told the keyboard to forget. That is the parallel-blocks failure this file documents for sticky-modifier release, and the fix is the one prescribed there: one method, every caller through it. Guarded by `TestTheClearContextRingClearsEverything`.
+- `None` from a token means "don't know" and leaves state untouched.
+- **The outside click (4) resets mid-word; `_check_caret_moved` keeps its only-between-words guard. Don't re-unify them.** The old `_external_click_pending` deferral is deleted.
+- Where a caret is published, a click is settled over `_CLICK_SETTLE_MS` (200 ms) against `_caret_before_click` (the previous tick's reading, never `_last_caret_token`); an unreadable caret resets. `_note_own_keystroke` sets both `_keystroke_since_poll` and `_keystroke_since_click_poll`, and it is set in the synth wrappers (`_send_key` / `_send_text` / `_replace_text`), not the keystroke entry points. `_reset_typing_context` clears a pending settle. A scrollbar click still resets.
+- All three within-window resets pass `keep_snippet_offer=True`; an app switch and privacy mode withdraw the offer.
+- **The tail of an interrupted word is never learned** (`_word_prefix_lost`, `_take_lost_prefix`). Tests for it must type the word three times.
+- Own-window clicks are filtered by process id, not geometry. It polls rather than hooking, and reads **only the high bit** of `GetAsyncKeyState` (the low bit is system-wide and the read clears it for other assistive tools).
+- Tab does not learn the word in progress (it is the accept-completion key). Delete and Escape are excluded from the nav-key reset. A held arrow resets once.
+- `resetContext` (the clear-context ring) delegates to `_reset_typing_context`.
+- Tests: `TestTabClearsContext`, `TestCursorMotionClearsContext`, `TestOutsideClickClearsContext`, `TestAnOutsideClickThatMovesNoCaretIsLeftAlone`, `TestCaretMoveClearsContext`, `TestAnInterruptedWordIsNotLearned`, `tests/test_pointer.py`.
 
 ### Key files
 - `src/platform/password_detect.py` - platform-specific detection (UIA COM via ctypes), plus `focused_element_token` / `caret_position_token`
@@ -1554,846 +838,102 @@ Load-bearing defaults to keep in mind: **space-time autocorrect is OFF by defaul
 
 ## Compact View
 
-A denser 13x4 keyboard for small screens. Off by default; toggle in *Settings ->
-Appearance -> Panels -> Compact View*. The design, the measurements behind it,
-and the full rationale for every rule below live in
-`docs/architecture/COMPACT_VIEW.md`.
+Full write-up: `docs/architecture/COMPACT_VIEW.md` (section of the same name). Read it before changing this area.
 
-Load-bearing rules:
+A denser 13x4 keyboard, off by default (*Appearance -> Panels -> Compact View*).
 
-- **Every row in a compact layout must total the same unit count** (13.0 for
-  `qwerty-compact`). `Main.qml` centres any narrower row, so an unequal row
-  brings back the exact side gutters this view exists to remove. Enforced by
-  `tests/test_layouts.py::TestCompactLayout::test_every_row_is_exactly_13_units`.
-- **Layers are a QML-side view concept and the backends never see them.** Rows
-  carry an optional `"layer"` field and rows without one always render, which is
-  what keeps the full-size layouts working; a `"type": "layer"` key sets
-  `activeLayer` and deliberately does **not** call `keyboard.setLayout()` (that
-  would persist as the user's layout preference). `activeLayer` resets to
-  `"base"` on every layout change. Because the whole feature is data + QML, it
-  needed zero backend work on either backend (Python on `main`, C++ on
-  `cpp-rewrite`): don't "port" it.
-- **`totalKeyUnits` is derived, not hardcoded** (`_widestRow` in `Main.qml`
-  computes the widest visible row's units + gap count, and full-size layouts
-  resolve to exactly the historical 15.5u / 14 gaps). Don't reintroduce the
-  constant.
-- **Compact is orthogonal to letter arrangement.** `resolveLayoutId()` combines
-  `currentLayout` with the `compactView` bool into `<layout>-compact`, and a
-  layout with no compact variant falls back to full size, so the toggle is always
-  safe. Adding compact Dvorak is dropping `data/layouts/dvorak-compact.json` in
-  place, no code change.
-- **No panel that has to line up with the keyboard grid may use
-  `QtQuick.Layouts`.** It rounds every child up to a whole pixel, so 13 keys of
-  69.23 px each became 13 of 70, and the panel rendered 10 px wider than the grid
-  it sits flush with, overhanging the window and clipping its last key. Number
-  Row and Function Row are plain `Row`s, Navigation a plain `Grid`, Numpad a
-  `Column` of `Row`s. Guarded by
-  `tests/test_qml_compact_view.py::TestPanelsSitFlushWithTheGrid`.
-- **The accent fill on the editing keys (Esc, Tab, Shift, Backspace, Del) is a
-  derived wash over the theme's key colour, never the raw accent and never a
-  constant.** `root.accentWashFor()` walks the alpha down from 0.35 until the
-  theme's own `textColor` clears 4.5:1; a flat 35% dropped five of the nine
-  themes below WCAG AA, on exactly the keys the style exists to make findable.
-  The accent-coloured border carries the cue where the wash has to back off.
-  Full-size layouts are deliberately untouched.
-- **Del sits on the base layer, Esc on `?123`.** A 13u row has no spare unit, so
-  the two traded places. The Number Row panel puts a second Esc back at the
-  top-left and that duplicate is deliberate, so `?123` stays the fallback for a
-  future layout that shows the compact grid without the panel. Don't swap them
-  back without reading the rationale in the design doc.
-- **The symbol pages carry no Shift key**; Shift's slot switches to a second page
-  (`=\<`), the phone convention, which makes a glyph appearing twice on one
-  screen *structurally impossible* rather than merely absent. The bottom row and
-  the right-hand nav column are byte-identical on every layer, and the tests that
-  guard that derive the layer list from the file rather than naming base/sym.
-  `Main.qml`'s layer branch calls the idempotent `keyboard.releaseShift()` on
-  every switch (never `if (shiftOn) toggleShift()`), because the modifier is held
-  at the OS level and a Shift carried in from the letters page makes `1` emit `!`
-  with the keycap still reading `1`. Guarded by
-  `tests/test_layouts.py::TestNoDuplicateGlyphsWithinALayer` and
-  `tests/test_qml_compact_view.py::TestSecondSymbolPage`.
-- **Digits come back via a panel, not a fifth row, and not via a toggle.**
-  `qml/components/NumberRow.qml` (13 x 1u, flush with the compact grid) renders
-  above the keyboard whenever `Main.qml::showNumberRow` is true, which is
-  derived: true exactly when the active layout JSON carries no `number` row of
-  its own. That is the compact variants and nothing else, so digits are always
-  on screen in both views and a full-size layout can never end up with a
-  second, narrower number row stacked on the one built into its JSON. Keying it
-  off the layout rather than `compactView` matters because a letter arrangement
-  with no compact variant silently falls back to full size. Its leading key
-  is **Esc, not `` ` ``** (backtick lives on `?123` row 2).
-- **The panel is declared BELOW both function rows in `Main.qml`'s column**,
-  so the stack reads F13-F24, F1-F12, digits, letters. It was declared first
-  for one release, which on compact put F1-F12 between the digits and the
-  letters: nothing on a desk stacks that way, and it read as the F-keys
-  having been dropped into the middle of the keyboard. Full size never had
-  the fault, because there the digits are the first of the data-driven rows
-  and so already sit under both panels, which is exactly why this is worth
-  pinning: the two views build the same stack out of different pieces and
-  agree only by construction. Guarded by
-  `tests/test_qml_compact_view.py::TestTheRowsStackLikeAPhysicalKeyboard`,
-  which runs both views, and whose full-size half passes either way on
-  purpose, as the guard against them parting.
-- **The nav column reads Home / PgUp / PgDn / End top to bottom** (a scroll
-  ladder: top, page up, page down, bottom; Owen asked for Home above PgUp).
-  Pinned by
-  `test_layouts.py::TestCompactLayout::test_nav_column_reads_top_to_bottom`.
-- QML-only behaviour can't be covered by the Python suite, so
-  `tests/test_qml_compact_view.py` and `tests/test_qml_prediction_bar.py` load the
-  real `Main.qml` headlessly (`QT_QPA_PLATFORM=offscreen`) and fail on QML
-  warnings. That's the only guard against a binding error shipping as a blank
-  keyboard.
+- **Every row in a compact layout totals the same unit count** (13.0 for `qwerty-compact`).
+- **Layers are a QML-side view concept; the backend never sees them.** A `"type": "layer"` key sets `activeLayer` and must not call `keyboard.setLayout()`. Every layer switch calls the idempotent `keyboard.releaseShift()`. The symbol pages carry no Shift key (its slot is the second page), so a glyph cannot appear twice on one screen.
+- `totalKeyUnits` is derived (`_widestRow`), never a constant. `resolveLayoutId()` combines `currentLayout` with `compactView`; a layout with no compact variant falls back to full size.
+- **No panel that lines up with the grid may use `QtQuick.Layouts`** (it rounds children to whole pixels).
+- The accent fill on the editing keys is `root.accentWashFor()`, walked down until `textColor` clears 4.5:1; never the raw accent.
+- Del is on the base layer and Esc on `?123`; the Number Row panel's leading Esc is a deliberate duplicate.
+- `NumberRow.qml` shows whenever `Main.qml::showNumberRow` is true, which is **derived** from the layout carrying no `number` row. It is declared **below** both function rows, so the stack reads F13-F24, F1-F12, digits, letters. The nav column reads Home / PgUp / PgDn / End.
+- `tests/test_qml_compact_view.py` and `tests/test_qml_prediction_bar.py` load the real `Main.qml` headlessly and fail on QML warnings: the only guard against a binding error shipping as a blank keyboard.
 
 ## Dead space between keys
 
-Every `KeyButton`'s MouseArea reaches half a gap past the key's own slot
-(`hitMarginH` / `hitMarginV`, anchored with negative margins), so two
-neighbours meet in the middle of the gap between their caps and no strip of
-the grid types nothing.
+Full write-up: `docs/architecture/LAYOUT_GEOMETRY.md` (section of the same name). Read it before changing this area.
 
-The gap was `keySpacing` wide horizontally (1 px below a 1111 px window, 2 px
-above) and `rowSpacing` plus the positioner's rounding vertically, and a click
-landing in it was a **silent** miss. That is strictly worse than a click on
-the wrong key, which the prefix beam and the pointer-bias model between them
-usually recover, because no character is emitted for the engine to see at all.
-
-Four things about it are load-bearing:
-
-- **Half each, not all of it.** Two hit areas that overlap resolve to
-  whichever key was declared later (the right-hand or the lower one), never
-  the nearer one, so an over-generous margin quietly hands every borderline
-  click to the same side.
-- **The vertical share carries an extra half pixel, and that is not slop.** A
-  `Row` reports a height ceiled above its tallest key (53 against 52.719 at
-  one width), and the remainder sits below the keys, inside no key, on top of
-  `rowSpacing`. The gap between two rows is therefore `rowSpacing` plus up to
-  a pixel neither row can predict, so each key takes half a pixel more than
-  its half. Vertical neighbours then overlap by under a pixel instead of
-  leaving a strip under a pixel wide, which is the right way round: an
-  overlap resolves to the lower key, a gap resolves to nothing at all.
-- **`mouse.x` / `mouse.y` are relative to the enlarged area**, so the press
-  handler subtracts the margin back out before the ripple's origin and
-  `pressDx` / `pressDy`. A press in the gap then reads just past +/-0.5,
-  which is true, and is signal rather than noise for the pointer-bias model
-  (`PointerModel` clamps at 1.0).
-- **A new key or panel has to be passed both margins**; there is no cascade
-  and the default is 0, so a forgotten binding is a silently dead strip
-  rather than an error. `Main.qml` owns the numbers (`keyHitMarginH` /
-  `keyHitMarginV`, plus `panelHitMarginV` for the two side panels, which lay
-  their own rows out on `keySpacing` rather than `rowSpacing`) and hands them
-  to the grid delegate and to each of the four panels.
-
-Two alternatives were rejected. Growing the keycaps to fill the gap changes
-what the keyboard looks like. One MouseArea over the whole grid resolving
-each press to the nearest key is the swipe overlay's design flaw exactly (see
-*Removed: Swipe / Glide Typing*): an interceptor that owns every press turns
-every key it does not know about into a dead tap, and that bill was paid
-three times.
-
-`FunctionRow`'s deliberate `keySpacing * 4` between its three groups keeps a
-dead strip in the middle of it. That is the same trade as the gutter between
-two panels: a separator, not a gap nobody meant to leave.
-
-Guarded by `tests/test_qml_compact_view.py::TestNoDeadStripBetweenKeys`, which
-measures the live MouseArea rather than recomputing the rectangle from the
-same properties the QML sets, and which drives a real click at a whole pixel
-lying strictly between two key slots. That last part is the half that matters:
-no geometric assertion can tell you whether Qt still delivers a press to a
-child outside its parent's bounds, which is what the whole approach rests on.
+- Every `KeyButton`'s MouseArea reaches half a gap past its slot (`hitMarginH` / `hitMarginV`), so neighbours meet mid-gap and no strip is a silent miss. **Half each, never more** (an overlap resolves to the later-declared key, not the nearer one); the vertical share carries an extra half pixel on purpose.
+- The press handler subtracts the margin back out before the ripple origin and `pressDx` / `pressDy`.
+- **A new key or panel must be passed both margins**; the default is 0 and there is no cascade. `Main.qml` owns `keyHitMarginH` / `keyHitMarginV` / `panelHitMarginV`.
+- Rejected: growing the keycaps, and one MouseArea over the whole grid (the swipe overlay's flaw). `FunctionRow`'s group gap deliberately stays dead.
+- Test: `tests/test_qml_compact_view.py::TestNoDeadStripBetweenKeys`.
 
 ## Removed: the full-size symbol layer
 
-`qwerty` / `dvorak` / `colemak` briefly carried one symbol page of 34 glyphs
-(`° × ÷ ± € £ © ™ … → ¿`), reached from a `Sym` key at each end of the
-space row. It was removed on 2026-09-05, and the room those two keys held went
-to the space bar. Both halves had shipped together in #51.
+Full write-up: `docs/architecture/LAYOUT_GEOMETRY.md` (section of the same name). Read it before changing this area.
 
-**Why.** Every one of the 34 is also in the Symbols & Emoji window below,
-which is one click away in the suggestion bar on every layout, so the layer
-was a second route to a set that already had one, and it charged the two
-widest keys on the space row after the space bar for it. The two surfaces are
-genuinely different, which is why the layer was built: the picker is a
-*browsing* surface (categories, paging, a Recent page, a window that floats
-over the app you are typing into), the layer was a *positional* one (two
-clicks, nothing covering the screen, findable by memory). That distinction is
-not worth a fifth of the space row to a pointer that reaches for the space bar
-after every word.
-
-**What went with it**: the `sym-top` / `sym-home` / `sym-bottom` rows and the
-`"layer": "base"` fields on the three letter rows across the three full-size
-layout files (both were added by the same feature, so the files are back to
-declaring no layers at all), the two `Sym` keys, the `symLayer` case in
-`Main.qml`'s `isActive` switch, and the "a layer key whose target is already
-showing goes back to base" branch beside it. That branch existed only for
-`Sym`, whose entry key sat on the always-visible space row; every other layer
-key in the project targets something it is not on, so it was dead for them.
-`TestNoDuplicateGlyphsWithinALayer`'s helper still folds an unlayered row into
-whichever layer is being read, which is what compact needs and what full size
-needed before this page existed. All of it is recoverable in full from the
-commit before the removal.
-
-**The one thing that must not be undone.** The space bar's centre stays at
-8.25u, which is what makes the widening free rather than something to relearn:
-every click that landed on it before still lands on it, and the new target is
-added at both ends. On a flush row that centre is `(15.5 + left - right) / 2`,
-and since `left` is Ctrl + Win + Alt and `right` is Alt + Ctrl, the whole
-expression collapses to `(15.5 + Win) / 2` **as long as the four Ctrl / Alt
-keys are equal**. So the rule to keep if these widths are ever retuned is just
-that: Win stays 1.0u, and the four Ctrl / Alt keys stay equal to each other.
-Nothing else about the row matters to the centre. What moved instead is
-Ctrl / Win / Alt, outward on both sides, taken deliberately: the space bar is
-pressed after every word and those five are not. Pinned by
-`tests/test_layouts.py::TestTheFullSizeSpaceRow`.
-
-Two things this deliberately did **not** touch. Del stays off the full-size
-grid and Enter stays at 2.3u: those were the other half of the same commit and
-are what puts Q over A (see *Why nothing moves* under
-`TestTheLetterColumnsLineUp`). And Compact View's `?123` / `=\<` pages are
-**not** removable by the same argument: 13 units cannot hold letters and
-digits at once, so compact has no other route to either, and the picker is not
-a substitute for a digit.
+- The full-size `Sym` page was removed on 2026-09-05 (every glyph is in the Symbols & Emoji window) and its width went to the space bar. The full-size layout files declare no layers.
+- **The space bar's centre stays at 8.25u**: Win stays 1.0u and the four Ctrl / Alt keys stay equal to each other (`tests/test_layouts.py::TestTheFullSizeSpaceRow`).
+- Del stays off the full-size grid and Enter's width is what puts Q over A. Compact's `?123` / `=\<` pages are **not** removable by the same argument.
 
 ## Full-size rows are flush (every row is 15.5u)
 
-`Main.qml` centres each row against the widest one, so a row totalling less
-than the widest sits inside it by half the difference at each end. The
-full-size rows used to total 15.5 / 14.3 / 14.9 / 14.3 / 14.6, so the
-keyboard's left and right edges stepped in and out five times, by up to 0.6u
-(about 9 px at the default window). Reported as the keyboard looking "lumpy",
-which is the right word: nothing was wrong with any single key, but no two
-rows began in the same place.
+Full write-up: `docs/architecture/LAYOUT_GEOMETRY.md` (section of the same name). Read it before changing this area.
 
-**This is the rule Compact View has enforced from the start** (*every row in a
-compact layout must total the same unit count*, see that section), applied to
-full size at last. The two views are now held to one rule rather than two.
-
-The widths are **derived from each row's own middle-key budget, not chosen**,
-which is why they come out as tidily as they do. The middles are 12.0u, 11.0u
-and 10.0u, leaving 3.5u, 4.5u and 5.5u for the outer keys:
-
-- **top** splits its budget evenly, so Tab and `\` are both **1.75u**;
-- **home** must give Caps exactly what Tab has (see below), leaving Enter the
-  remainder, **2.75u**;
-- **bottom** splits evenly, so both Shifts are **2.75u**;
-- **space** is Ctrl / Win / Alt at 1.25 / 1.0 / 1.25 and the bar takes the
-  rest, **9.5u**.
-
-So the whole keyboard is 1.0u, 1.75u and 2.75u keys plus Backspace (1.5u) and
-the space bar. `TestEveryFullSizeRowIsFlush` pins the rule, the two symmetric
-rows, and that shared-width consequence.
-
-**Equal units are not equal pixels, and the second half is the one that
-bites.** A row measures `units * keyW + (keys - 1) * keySpacing`, and the rows
-carry very different key counts: 15, 14, 13, 12 and 6. The space row is
-therefore nine gaps short of the number row, which at the default window is
-18 px, and since each row is centred on its own it sat 9 px inside the grid at
-each end. Making the unit totals equal straightened four edges and left the
-fifth visibly short, which is exactly what was reported. Compact View has the
-same shape at a smaller scale (10 to 12 gaps across its rows).
-
-So **each row absorbs its own gap shortfall into its own keys**: the `Row`
-delegate in `Main.qml` derives `rowKeyW` as
-`keyW + (_widestRow.gaps - (keys - 1)) * keySpacing / rowUnits`. Three things
-follow, and each was a live alternative:
-
-- **Gaps stay identical everywhere.** Widening each row's `spacing` to fill
-  would also have squared the edges, and would have given the space row 5.6 px
-  gutters against 2 px elsewhere. Absorbing into the keys is invisible: about
-  1 px on a 60 px key.
-- **The widest row is unchanged by construction** (its shortfall is zero), so
-  `keyW`, the side panels and the window's width budget are all exactly what
-  they were. That is why this needed no change to `totalKeyUnits` or
-  `layoutFixedPixels`.
-- **It cannot be made exact, and the residual is the positioner's.** Qt Quick
-  snaps child positions to whole pixels, so a row of fractionally-wide keys
-  accumulates rounding along its length and its centred origin can land a pixel
-  either side of its neighbour's. Non-compact comes out exact; two of compact's
-  four rows sit 1 px across. `TestEveryGridRowIsPixelFlush` therefore asserts
-  equal *widths* exactly and equal *origins* to within a pixel, and keeps the
-  two apart deliberately, so a row that went genuinely short fails loudly
-  instead of hiding under the tolerance.
-
-One measurement trap that cost a while: a `Repeater` is itself a zero-sized
-`QQuickItem` sitting in the positioner beside its delegates, so a `Row`'s own
-`width` can carry a phantom pixel past the last key that draws nothing. Measure
-from the first key's left edge to the last key's right edge, not the row's
-bounding box, or two compact rows read as 1 px wider than they render.
-
-**The letter alignment got sturdier, and the mechanism changed.** W over S (for
-WASD) reduces to `inset_top + Tab == inset_home + Caps`. With the rows flush
-both insets are zero, so it is now simply **Tab and Caps must be the same
-width**. Before, the rows had different totals and the differing indents
-happened to cancel the differing Tab and Caps widths, so the alignment held by
-a coincidence between four numbers, and any one of them moving broke it. It did
-break once: a Del key past the backslash made the top row 0.9u wider than the
-home row and landed W between A and S. Del stays off the grid for that reason;
-see `TestTheLetterColumnsLineUp`.
-
-One thing that is *not* implied by the flush rule: the window's width budget
-comes from `_widestRow`, which tracks max units and max **gap count**
-independently rather than reading both off one row. So the tie the flush rule
-creates is harmless, and the gap budget still comes from the number row's 15
-keys. A row that gained keys would cost a `keySpacing` even though its unit
-total cannot change, which is the half
-`TestTheLetterColumnsLineUp::test_the_space_row_still_costs_no_window_width`
-still guards.
+- Every full-size row totals exactly 15.5u (compact 13.0u), or `Main.qml` centres it and the edges go ragged. Widths derive from each row's middle-key budget: Tab = `\` = Caps = 1.75u, Enter = both Shifts = 2.75u, space 9.5u.
+- **Equal units are not equal pixels**: each row absorbs its own gap shortfall into its keys (`rowKeyW` in the `Row` delegate), so gaps stay identical and the widest row is unchanged. Widths match exactly; origins match to within a pixel (the positioner's rounding).
+- W over S now reduces to **Tab and Caps being the same width**. Del stays off the grid for that reason.
+- Measure a row from first key edge to last key edge, not the `Row`'s bounding box (the Repeater adds a phantom pixel).
+- Tests: `TestEveryFullSizeRowIsFlush`, `TestEveryGridRowIsPixelFlush`, `TestTheLetterColumnsLineUp`.
 
 ## The three sections share one height
 
-`Main.qml`'s `sectionHeight`. The keyboard grid, the nav cluster and the
-numpad are laid out side by side in one `RowLayout`, and they used to be
-three different heights that the layout centred against one another. With
-the two separators (which carried `Layout.fillHeight`) that is **five
-different top edges and five different bottom edges**. Measured at a 1400 px
-window with both panels on, before the fix:
+Full write-up: `docs/architecture/LAYOUT_GEOMETRY.md` (section of the same name). Read it before changing this area.
 
-| | top | bottom | height |
-|---|---|---|---|
-| separators | 105 | 433 | 328 |
-| grid | 115 | 423 | 308 |
-| nav | 130 | 408 | 278 |
-| numpad | 134 | 404 | 270 |
-
-Nothing was wrong with any one section; no two of them began or ended in the
-same place. The arrow cluster floated 19 px clear of the bottom.
-
-Every section now lays out to `sectionHeight` and the panels divide it
-between their own five rows, so **the keys grow rather than the gaps**.
-Five things about it are load-bearing:
-
-- **The panels' `implicitHeight` is computed from `keyH`, never read back
-  off their own grid.** `rowH` derives from the height the layout hands the
-  panel, and the layout falls back to `implicitHeight` when it hands it
-  none, so a panel whose implicit height came from its grid would close a
-  binding loop. `Math.ceil(keyH)` in that expression is not slop: a `Row`
-  reports a height ceiled above its tallest key (the same fact
-  `keyHitMarginV` carries half a pixel for), so the ceiled figure is what
-  the grid actually renders at and anything else leaves the panel a pixel
-  short.
-- **`sectionHeight` is the grid's implicit height, and the panels fit it;
-  there is no max and no floor.** It was first written as a `Math.max` over
-  the grid and the panels' natural heights, with each panel's `rowH`
-  floored at `keyH`, to keep the panel keys at full height when the
-  function row is hidden (the panels are then the taller section, by the
-  nav gutter plus rounding). That cannot work: the grid's own implicit
-  height is what defines the section, so the grid cannot grow into a
-  larger one, and it sat centred 6 px inside the panels in exactly the
-  configuration a fresh install ships with (nav on, no function row, no
-  numpad), which is the ragged edge this exists to remove. The panels are
-  the side that can fit, so they fit, and with the function row hidden
-  their keys come out about 2 px shorter than the letters. That is the
-  trade: a straight edge for 2 px, in the one configuration where the
-  choice arises at all.
-- **The arrows land on the bottom rail with nothing positioning them there.**
-  `arrowGap` already opened *above* the Up key (a Grid aligns cell content
-  to the top, so the gutter had to be built that way), so once the panel is
-  as tall as the grid the cluster is flush by construction. Don't add a
-  bottom anchor; there is nothing to fix.
-- **The nav cluster keeps its arrow gutter and the numpad has none**, so
-  their rows do *not* line up with each other, and their keys differ in
-  height by the gutter's share (about 1.6 px). Both panels briefly shared
-  one rhythm (a matching gap after the numpad's third row) so their rows
-  would align; it was reversed on sight. A physical numpad has no seam
-  there, and one splitting the digits off the `0` key is more obviously
-  wrong than two panels whose rows drift a pixel or two apart. The property
-  that carried the gap lingered at zero for one revision "for a caller that
-  wants one" and was removed: nothing read it, and a field nothing reads is
-  worse than a field that does not exist yet.
-- **The separators take `Layout.preferredHeight: root.sectionHeight`**, not
-  `fillHeight`. `mainLayout` runs about 20 px taller than its contents
-  (the window's height is `outerLayout.implicitHeight + 80` against 60 px of
-  chrome), so filling ran them 10 px past the board at each end.
-
-The consequence to know: **with a function row showing, nav and numpad
-keys are taller than the letters**, about 12% at the default width. That
-is a gain rather than a cost, and it is the reason "grow the keys" was
-chosen over "grow the gaps": those are the arrows and the numpad, and a
-taller target is a cheaper click. The main grid is untouched in every
-configuration, so `keyW`, the window's width budget and every row's flush
-edges are exactly what they were. Guarded by
-`tests/test_qml_key_colors.py::TestTheSectionsShareOneHeight`, which
-measures live item positions rather than recomputing them from the
-properties the QML sets, and which covers the function row hidden and the
-shipped default configuration as well as the fixture's everything-on one.
-
-**A test that toggles a row has to force a frame before it measures**
-(`_relayout` in that file, which calls `grabWindow`). Qt Quick Layouts
-recompute in a polish step that runs before a frame is rendered, and the
-offscreen window renders none on its own: after hiding the function row,
-`mainKeyboard.implicitHeight` sat at its old value through 300 event-loop
-passes and moved only once a frame was forced. The first version of the
-no-function-row test settled with `processEvents` alone, measured the
-board *before* its own toggle had taken effect, and passed against the 6
-px ragged edge above. The live app is unaffected, since it renders frames
-continuously; only a headless test can measure a layout that has not
-happened yet. The test now also asserts the grid's span actually moved.
+- The grid, nav cluster, numpad and both separators all lay out to `Main.qml::sectionHeight`, which is **the grid's implicit height and nothing else** (a `Math.max` over the three was tried and cannot work). The panels fit it by growing their **key heights**, never their gaps.
+- A panel's `implicitHeight` is computed from `keyH` (`Math.ceil(keyH)` is deliberate), never read off its own grid, or it is a binding loop.
+- The nav cluster keeps its arrow gutter and the numpad has none, so their rows do not align; that was tried and reversed. Separators take `Layout.preferredHeight: root.sectionHeight`, not `fillHeight`.
+- **A headless test that toggles a row must force a frame before measuring** (`_relayout`, which calls `grabWindow`); `processEvents` alone measures the old layout.
+- Test: `tests/test_qml_key_colors.py::TestTheSectionsShareOneHeight`.
 
 ## Key Colours by role
 
-*Settings -> Appearance -> Key Colours*. A key's fill can encode **what the
-key does** rather than only which surface it sits on. Six schemes: `mono`
-(**the default**), `twotone`, `bands`, `ink`, `signal`, and `off` (the
-historical per-surface tinting). The engine is `qml/palette.js`; the wiring
-is `Main.qml`'s `keyRoles` / `keyRoleFor`, and the resolution is in
-`KeyButton`.
+Full write-up: `docs/architecture/KEY_COLOURS.md` (section of the same name). Read it before changing this area.
 
-**`mono` ships as the default** because it is the only scheme that cannot
-clash on any theme (it has no hue at all outside the live `toggle` state)
-while still telling the typing keys apart from the ones that do something.
+*Appearance -> Key Colours*: six schemes (`mono` **default**, `twotone`, `bands`, `ink`, `signal`, `off`). Engine `qml/palette.js`, wiring `Main.qml::keyRoles` / `keyRoleFor`, resolution in `KeyButton` (`_roleFill` / `_roleInk` / `_roleBar`), never at the call sites.
 
-**`off` hands down a null table and every surface reads null as "keep your
-own tint".** That is what keeps the pre-feature board reachable in one
-click, and it is why there is no per-surface `off` branch anywhere. Don't
-add one.
-
-**The resolution lives in `KeyButton`, not at the call sites.** Five
-surfaces draw keys (the main grid, both function rows, the number row, the
-two side panels) and between them they hold about fifty; a surface passes
-`roleColors` down once and names each key's `role`, and `KeyButton` resolves
-`_roleFill` / `_roleInk` / `_roleBar`. Resolving per site would be fifty
-copies of one rule, which is the parallel-blocks failure this file warns
-about for sticky-modifier release.
-
-### The colour theory, and why it is not HSL
-
-Two rules govern every colour, and both exist because nine themes ship:
-
-- **No hue is ever a literal.** Every family hue is rotated off the *active
-  theme's own accent*, so a Vaporwave board gets vaporwave role colours.
-  A fixed "#4a9eff for navigation" is either invisible or garish on about
-  half the themes.
-- **The rotation happens in OKLCh, not HSL.** Rotating hue in HSL holds the
-  *number* L constant while perceived lightness swings wildly (HSL yellow at
-  L=50% is far brighter than HSL blue at L=50%), so an evenly-spaced HSL
-  palette produces bands where some shout and others whisper. OKLCh is
-  perceptually uniform, so holding L and C while rotating h gives hues that
-  read as equal weight.
-
-Roles split into two classes, and the split is semantic:
-
-- **Anchored** (`kill` = Backspace/Del, `commit` = Enter, `mod` = the held
-  modifiers). Their meaning has to survive a theme change, so the hue starts
-  from a fixed anchor and is only *pulled* toward the accent, by 25% and
-  never more than 22 degrees. That is inside the band where a hue keeps its
-  name: enough to sit in the theme's world, not enough to stop meaning
-  "stop" or "go". A Backspace that came out green on some theme would be
-  worse than no colour at all.
-- **Family** (`edit`, `nav`, `fn`, `op`). Nothing about navigation is
-  inherently green, so these are pure theme derivation.
-
-**Family hues are placed by farthest-point dispersion, not by a harmony.**
-The first implementation used a square (tetradic) harmony rotated off the
-accent, which reads as tidier colour theory and measured worse: a square is
-four hues at a fixed 90 degrees, so its only freedom is one phase angle, and
-with the accent plus three anchored hues to avoid there are themes where no
-phase fits. On Amethyst the best available put `kill` 12 degrees from
-`edit`, i.e. Backspace and Tab the same colour on the one scheme whose whole
-purpose is telling them apart. Dispersion has a free choice per hue and
-degrades gracefully: the tightest pair on any theme is now **30 degrees**.
-
-**The hue's lightness comes from the key colour, clamped to [0.38, 0.84].**
-Matching the keycap's lightness means a wash moves hue and chroma while
-leaving brightness alone, so the bands carry equal weight and the board
-keeps one even tone. The clamp is not tidiness: sRGB holds almost no chroma
-near white or black, and on the Light theme (key colour `#ffffff`) every
-family hue gamut-fit its way back to pure white and the whole scheme
-collapsed to a single fill. `fromOklch` reduces chroma until the result fits
-in gamut rather than clamping channels, because clamping shifts the hue and
-does it worst exactly where the requested chroma is unreachable.
-
-### The contrast promise
-
-**Every fill goes through `washFor`, which walks the tint strength down
-until the theme's own `textColor` clears 4.5:1.** A scheme therefore cannot
-cost legibility on any theme: where a wash would bury the label, it yields.
-This is the same rule and the same walk `accentWashFor` already used for the
-compact view's editing keys, which is why `Main.qml`'s `accentWashFor` now
-**delegates to `palette.js`** rather than keeping a second copy of the WCAG
-maths (its `relativeLuminance` / `contrastRatio` wrappers went with it:
-nothing called them, and anything needing the maths imports `palette.js`).
-"Every fill" includes the lightness `step` toward the background that
-Monochrome and Function are built from; it skipped the wash at first,
-which happened to pass on nine themes and was a promise the code did not
-keep.
-
-The trap: a colour that is not a fill is easy to forget. The `ink` scheme
-dims punctuation rather than hueing it, and the ungated version put
-Vaporwave's punctuation at 4.32:1, under the bar the rest of the file
-promises. `_dimmedInk` guards it. The *stripe* under a key is deliberately
-not guarded, because it is not text and owes no ratio.
-
-**The hover lift is guarded too, and was the second place the promise
-broke.** `KeyButton` and the pills used to lift the fill with a plain
-`Qt.lighter` under the pointer, which on a fill the wash had left at
-exactly 4.5:1 overshoots the bar: Monochrome's Enter on Blackboard measured
-3.1:1 hovered, the Ink scheme's pill on Light 2.9:1, on the key the user is
-about to press. `palette.js::hoverFill` walks the lift down until the
-legend still clears what it cleared at rest, capped at 4.5 so a surface the
-theme itself put under the bar keeps its lift rather than losing it. The
-pill's *ink* is no longer lifted with the fill, since lightening both
-toward each other is what drains the contrast; the lift and the thicker
-ring are the cue. `legibleInk` picks its pole at `INK_POLE_LUMINANCE`
-(0.179, where black and white contrast equally with the ground), not at
-the 0.35 first used, which for a ground between the two walked toward the
-pole that cannot reach 4.5:1 and fell through to the fallback unchecked;
-no shipped theme sits in that band, so only a future one would have hit
-it.
-
-Guarded by `tests/test_qml_key_colors.py::TestEveryLegendStaysReadable`,
-which sweeps every scheme x every theme x every role (540 combinations,
-resting and hovered) rather than spot-checking the developer's own theme,
-and whose paired inverse asserts the bands stay *tellable apart* -- a
-scheme whose colours all collapsed to one fill would satisfy a contrast
-sweep perfectly.
-
-### Roles
-
-**A modifier's theme colour is its CLICK colour, not its resting one.**
-`mono`'s modifiers took a theme-accent wash for one revision, on a reading
-of "theme the modifier colours" that turned out to be the wrong one: it put
-a standing blue-grey on Caps and both Shifts, which is a keyboard with
-colour on it rather than a monochrome one. `KeyButton` already paints
-`accentColor` while a modifier is active and `keyPressedColor` while it is
-held, both fed straight from the theme, so the resting cap has no reason to
-carry it as well. `test_monochrome_really_is_monochrome` now asserts every
-role but `toggle` is neutral, and
-`test_a_modifiers_click_colour_is_theme_derived` pins the half that is
-actually wanted.
-
-**The prediction pills carry a role too (`pill`), and a scheme colours
-their RING, never their fill.** They were the one surface a scheme did not
-reach, which made them the only thing on screen that did not change when the
-board did. The fill is **flat, exactly the letter keys' own colour, on every
-scheme and every theme**; a scheme's pill colour goes in `pill.bar`, which
-`Main.qml` draws as the border, and a scheme that leaves it clear keeps the
-full theme accent ring. `Main.qml`'s `predPillFill` / `predPillInk` /
-`predPillBorder` are the wiring. **`bands` is the only scheme with a ring
-colour of its own** (the commit hue, so a pill reads as related to Enter
-without competing with it); `ink` was given one too and it was reversed on
-sight, because that scheme's legend is already a dim hue and a dim hairline
-round a dim word is the one combination that stops reading as something to
-reach for.
-
-**Three things about the pills have each been got wrong once, and all three
-read as either "washed out" or "coloured panel".**
-(1) Hueing the **fill** shipped for a release and was reversed on sight:
-eight pills are the widest block of one colour on the board and they sit
-*above* the keys rather than among them, so a wash across all eight reads as
-a coloured panel rather than as eight things to reach for.
-(2) Blending the **ring** toward the fill, so a coloured pill would read as
-outlined rather than ringed, drained the row: the ring is the only thing
-marking the pills as what the user is meant to reach for. A scheme may
-recolour the ring; it may not soften it.
-(3) `mono`'s pill fill was lifted toward the ink (tried at 0.14) and greyed
-out against the board. Flat plus a ring is what reads as crisp.
-Guarded by `tests/test_qml_key_colors.py::TestThePredictionPillsFollowTheScheme`,
-where "the fill never changes" and "the ring always changes" are each paired
-with the inverse, because either on its own is satisfied by a rule that has
-stopped colouring the pills at all.
-
-`roleForKey` reads the layout JSON's `type` **plus the key itself**, because
-the JSON says `char` for a letter, a digit and a bracket alike and those are
-three different jobs. `alpha` / `digit` / `punct` / `mod` / `edit` / `kill`
-/ `commit` / `nav` / `fn` / `op` / `toggle`. The schemes themselves are one
-builder each in `roleMap`'s `builders` object, and the set of ids the
-engine knows *is* that object's keys, so an unknown id (a settings file
-from a build with a scheme this one lacks) reads as `off` rather than as an
-empty table every surface would index into.
-
-Three role assignments are worth knowing:
-
-- **The numpad's roles follow NumLock.** With it off the digits *are* the
-  navigation keys and `.` *is* Delete, so a colour saying "digit" over a key
-  that pages up would be a lie. The role is `NumpadPanel.numRole`, one
-  property on the panel rather than a ternary on each of ten keys.
-- **`NumberRow` reads its own role inline** rather than through
-  `keyRoleFor`, because its `keyDefs` are its own shape rather than the
-  layout JSON's. Esc is `edit`; `-` and `=` are `punct`, not digits.
-- **The compact layouts embed the nav column in the grid**, as `special`
-  keys with `home` / `end` / `pageup` / `pagedown` / `insert` / arrow
-  actions, and `roleForKey` names those `nav`. Its first version read every
-  special key it did not know as `edit`, which painted Home the same as Tab
-  on the one layout that carries them this way. Guarded by
-  `TestKeysAreGivenTheRightJob::test_the_compact_grid_embeds_its_nav_column_as_navigation`.
-
-`KeyButton`'s role stripe hides itself whenever the key is pressed, active
-or locked: those states repaint the fill underneath it, and the lock bar
-draws in the same place, so two bars stacked would read as one smear rather
-than as the lock cue.
+- **`off` hands down a null table and every surface reads null as "keep your own tint".** No per-surface `off` branch. An unknown scheme id reads as `off`.
+- **No hue is a literal**: family hues are placed by farthest-point dispersion off the theme's accent in **OKLCh** (not HSL, not a tetradic harmony), lightness taken from the key colour clamped to [0.38, 0.84]. Anchored roles (`kill`, `commit`, `mod`) are pulled at most 22 degrees toward the accent. `fromOklch` reduces chroma to fit gamut rather than clamping channels.
+- **Every fill goes through `washFor`**, which walks tint strength down until `textColor` clears 4.5:1. `Main.qml::accentWashFor` delegates to `palette.js` (the single copy of the WCAG maths). Dimmed ink (`_dimmedInk`) and the hover lift (`hoverFill`) are guarded too; `legibleInk` picks its pole at `INK_POLE_LUMINANCE` (0.179).
+- A modifier's theme colour is its **click** colour; `mono` is neutral for every role but `toggle`.
+- **A scheme colours the prediction pills' ring (`pill.bar`), never their fill**, and may not soften the ring. Only `bands` has a ring colour of its own.
+- `roleForKey` reads the layout JSON `type` plus the key. The numpad's roles follow NumLock (`NumpadPanel.numRole`); `NumberRow` reads roles inline; compact's embedded nav keys are `nav`. The role stripe hides while a key is pressed, active or locked.
+- Tests: `tests/test_qml_key_colors.py` (a 540-combination contrast sweep, paired with "bands stay tellable apart").
 
 ## Symbols & Emoji window
 
-The only route to a glyph outside a physical keyboard's printing, on every
-layout, since the full-size symbol layer above was removed. Categories, a
-Recent page and several hundred glyphs do not fit on a key grid at a size an
-imprecise pointer can hit, which is why this is a window and not a layer. Opened from a smile button in the suggestion bar,
-immediately left of the Snippets bookmark, with a title-bar twin
-(`symbolsTitleBarButton`) visible only when `suggestionsEnabled` is false, for
-the reason the Snippets pair documents: the suggestion bar collapses to zero
-height with that setting and an unrelated toggle must not be the only thing
-between the user and a feature.
+Full write-up: `docs/architecture/SYMBOLS_WINDOW.md` (section of the same name). Read it before changing this area.
 
-Catalogue in `src/glyphs.py`, bridge slots `getGlyphCategories()`,
-`insertGlyph(str) -> bool` and `getRecentGlyphLimit()`, UI is the floating
-`symbolsWindow` in `qml/components/SymbolsWindow.qml`, instantiated from
-`Main.qml` the same way as `SnippetsWindow.qml`: required properties for
-theme colours and the helper functions it needs, and a `problem` signal so
-the `snippetProblemToast` it fires on a failed insert can stay on the
-keyboard window.
+The only route to a glyph outside a physical keyboard's printing, on every layout. Smile button in the suggestion bar (title-bar twin when suggestions are off). Catalogue `src/glyphs.py`, UI `qml/components/SymbolsWindow.qml`.
 
-### A tap types, it does not copy
-
-This is the one place the window deliberately diverges from Snippets, which
-copies to the clipboard and offers no way to type at all. The argument there
-is that a long address is expensive to retype, only lands when the caret is
-already in the right field, and **misses silently** when it does not. A glyph
-is a keystroke. Every key on the keyboard has exactly the same focus
-exposure, so paying two clicks and a clipboard round trip to type one
-character would make the window worse than the keys beside it.
-
-`insertGlyph` calls the **same `_commit_verbatim_insert` method `insertSnippet`
-calls**, rather than merely mirroring its shape, because a pair of
-nearly-identical blocks drifting apart is this codebase's recurring failure:
-one call runs the verbatim-insert prologue (`_release_sticky_modifiers()`, a
-deferred auto-space settled as prose, `_consume_auto_cap()`), sends through
-`_send_literal_text` so a held modifier cannot rewrite it, then clears
-`_current_word` / `_raw_token` / the pill row so the glyph cannot corrupt the
-next prefix match. Not gated on privacy mode, same rule as every other
-insert: the user tapped it, so it has to reach the app.
-
-**It returns a bool and QML honours it.** The bridge refuses while an edit
-field owns the keystrokes (the prediction-edit popup, the snippets editor).
-The window is somewhere else on the desktop, so a tap that silently did
-nothing is indistinguishable from one that missed and the user taps again;
-a refused tap flashes the problem toast and is **not** written to Recent,
-which would otherwise fill with glyphs that never reached anything.
-
-### Recent lives in the settings layer, not in a file
-
-It is a convenience the user rebuilds by tapping four glyphs. A file would
-have needed a loader, a size cap and a Data Backup decision for something
-worth none of the three, so it is `appSettings.savedRecentGlyphs`, a JSON
-array of strings, capped at `glyphs.MAX_RECENT` and deduplicated most-recent
-first. The cap lives in Python and QML asks for it, the same split
-`getSnippetLimit` uses: QML owns the storage, the bridge owns the bound.
-
-A malformed value is dropped rather than reported. The catalogue underneath
-it is intact and the user is one tap from refilling the list, so a dialog
-would cost more than the thing it is about.
-
-The window **opens on Recent once there is something in it**, and on the
-first catalogue tab before that: opening on an empty page teaches the user
-the window is empty.
-
-### The shell is the Snippets window's
-
-Same flags, same manual drag (never `startSystemMove()`), same
-desktop-wide `clampedWindowPos` restore, same write-position-on-release. It
-is found by `objectName` from `keyboard_app.py::_wire_floating_windows`,
-which now loops over both windows and re-applies `WS_EX_NOACTIVATE` on every
-`visibleChanged`; the per-window handler binds its target as a **default
-argument** rather than closing over the loop variable, which would otherwise
-leave both handlers styling whichever window was found last.
-
-The grid pages 8 x 4 and the Repeater's model is the **page size, not the
-glyphs remaining**, so a short last page keeps its empty cells and the pager
-underneath cannot walk up the window into a pointer already travelling toward
-it. An empty cell's MouseArea is disabled, so it is not a tap that silently
-does nothing. Switching category resets to page 0, or a tab switch lands on
-page 3 of a category with two.
-
-Category tabs are a **wrapping `Flow`, not a scrolling strip**: a scroll
-strip would put half the categories behind a drag gesture, which is the input
-this keyboard's users can least rely on. Three rows of chips is the cost.
-
-### Two font rules, and they pull in opposite directions
-
-The **chrome** obeys the project's usual rule: the smile and the close cross
-are `StrokeIcon` path data, never typeset, because Segoe UI Emoji renders a
-glyph in colour and ignores the ink it is given.
-
-The **cells** do the opposite and name no font family at all. Colour is the
-content here rather than chrome that has to obey an ink colour, and Qt's own
-fallback is what reaches the host emoji font. `font.families` (a list) does
-not exist on this Qt's grouped font property, and naming a single family
-would pin one platform's font and lose the glyph on the other two.
-
-`tests/test_qml_symbols.py::TestTheEntryButtonIcon` asserts the smile paints
-ink at all, which is the property its one hand-converted path can break:
-invalid path data paints **nothing** through `ctx.path` (measured: zero lit
-pixels), so a bad conversion ships as a blank circle on the suggestion bar
-rather than as an error.
-
-### The suggestion bar's button reserve is derived
-
-`predBar.predButtonCount` is now the number the reserve is computed from
-(`predPillHeight * count + predButtonGap * (count - 1) + 16`). It went from
-one button to two to three and each time the formula was re-derived by hand;
-the reserve is what stops a prediction pill rendering underneath a control,
-so a reserve that is merely near the truth is the bug the property exists to
-prevent. The new button is the **first** child of the right-anchored Row, so
-Snippets and the clear-context ring do not move.
-
-Guarded by `tests/test_qml_symbols.py`, `tests/test_glyphs.py`, and
-`tests/test_keyboard_bridge.py::TestTypingAGlyphFromThePicker`.
+- **A tap types, it does not copy** (unlike Snippets): `insertGlyph(str) -> bool` calls the same `_commit_verbatim_insert` `insertSnippet` does, and is not gated on privacy mode. QML honours the bool: a refused tap flashes the problem toast and is not written to Recent.
+- Recent lives in `appSettings.savedRecentGlyphs` (cap from `getRecentGlyphLimit()`), not a file; a malformed value is dropped silently. The window opens on Recent once it has content.
+- Same shell as the Snippets window (flags, manual drag, desktop-wide clamp, named in `_wire_floating_windows`, whose per-window handler binds its target as a default argument). Grid pages 8 x 4 with the model equal to the page size; category tabs are a wrapping `Flow`, not a scroll strip.
+- Chrome icons are `StrokeIcon`; **glyph cells name no font family** so Qt's fallback reaches the host emoji font.
+- `predBar.predButtonCount` derives the suggestion bar's button reserve; new buttons go first in the right-anchored Row.
+- Tests: `tests/test_qml_symbols.py`, `tests/test_glyphs.py`, `TestTypingAGlyphFromThePicker`.
 
 ## Switch-scanning targets (external scanners over UI Automation)
 
-Every visible key and prediction pill is published as a UI Automation
-`Button`, so an external switch-scanning application (Switchify PC, issue
-#106, and any other Windows-permitted assistive technology) can enumerate
-the targets, highlight them, and activate the user's selection through
-Invoke. Normative contract, with the measured findings behind each
-decision: `docs/architecture/UIA_TARGETS.md`. Guard:
-`tests/test_qml_scan_targets.py`.
+Every visible key and pill is published as a UI Automation `Button` so an external scanner (Switchify PC, issue #106) can enumerate and Invoke them. Normative contract: `docs/architecture/UIA_TARGETS.md`. Guard: `tests/test_qml_scan_targets.py`.
 
-**It is UI Automation rather than the IPC server the request asked for, and
-the deciding argument was authorization.** Alpha-OSK runs with
-`uiAccess="true"`, so it can send input to windows an ordinary same-user
-process cannot. A pipe that validated only the user would lend that ability
-to anything running as the user, which makes this app a confused deputy.
-Over UIA, Windows decides who may drive the keyboard, and we write no ACLs,
-no framing, no PID or token checks and no publisher policy. Do not "upgrade"
-this to a socket without re-reading that argument.
-
-- **Ids are `aosk.v1.<section>.<row>.<index>`** (`grid` / `fn1` / `fn2` /
-  `num` / `nav` / `pad`), predictions `aosk.v1.pred.<index>.g<generation>`.
-  **The format lives once**, in `Main.qml::scanTargetId`; six surfaces draw
-  targets and call it. Two surfaces computing it independently would
-  eventually collide, and a collision is invisible to the client (it reads
-  as one target that moved, not as a fault). Same parallel-blocks failure
-  this file documents for sticky-modifier release.
-- **Presence means activatable, and the check has to run at activation as
-  well.** A key on a hidden panel or an unshown layer is absent from the
-  tree: Qt prunes invisible items and `Accessible.ignored` removes anything
-  with no id. Pruning only shapes a *fresh traversal*, though, and hiding a
-  panel leaves every delegate inside it alive, so a client that retained a
-  target before the panel closed, or whose visibility check raced the close,
-  could Invoke it and type a key that was not on screen (reproduced against
-  `pad.0.0`). `KeyButton._scanActivatable` is the one condition behind both
-  the presence and the refusal, and it reads the key's own **effective**
-  `visible` (Qt propagates a false parent down, so it covers window, panel
-  and key at once) plus `enabled`, which is what takes the numpad's blank
-  centre key out with NumLock off. A `KeyButton` whose caller forgets
-  `targetId` is silently unreachable rather than broken-looking, which is
-  why the test walks the whole tree and fails on any visible key without
-  one.
-- **`Accessible.name` is a *speakable* label, not the keycap.** Taking the
-  cap verbatim is wrong in seven places on the shipped qwerty layout: the
-  space bar's cap is the empty string, and Backspace, Win and the four
-  arrows are glyphs with no spoken form, so a scanner announced seven
-  unlabelled or unpronounceable targets including the most-pressed key on
-  the board. `KeyButton._scanName` strips non-ASCII from the cap and falls
-  back to `keyText`, which every caller already sets to the key's own word.
-  No glyph table, no upkeep. **The numpad has to name both of its states**:
-  its ten dual keys change meaning with NumLock and four of the NumLock-off
-  caps are bare glyph arrows, so they bind `keyText` per state. The
-  default-state name check could not see that, because the panel ships with
-  NumLock on.
-- **Only real toggles report a toggle state.** The modifiers plus Caps and
-  NumLock. A **programmed F-key is not one**, even though `FunctionRow`
-  binds its `isActive`: there the accent means "this key was reassigned",
-  which is a fact about the key rather than a state it is in, and reporting
-  it would tell a scanner and a screen reader that F13 is switched on.
-- **Right-click lock rides in `Accessible.description`**, which Qt maps to
-  UIA **`FullDescription` (30159), NOT HelpText** (verified against a live
-  client; HelpText and ItemStatus both stay empty). That property is UIA3
-  only, so a legacy `System.Windows.Automation` client sees it as absent.
-  It is the one field in the contract a UIA2 client cannot read.
-- **Everything that can change the target set feeds the revision beacon, and
-  two things that could were missing.** `Main.qml::scanRevision` is the one
-  property a scanner polls, so a change it does not carry is a stale target
-  map for as long as nothing else moves. **NumLock** rewrites ten numpad
-  names and actions with every id unchanged; and **whether the pill row has
-  any targets at all** is a different question from `predictionGeneration`,
-  because dictation entering `listening` and the study's predictions-off
-  condition *remove* the pills rather than repopulating them, so the
-  generation never moves. `root.predictionsArePresent` is that condition,
-  read by the pill Repeater's model and by the beacon, so the two cannot
-  drift. The numpad's NumLock state lives on `root` for the same reason: the
-  beacon has to see it.
-- **An Invoke carries no click position, and that is a difference from a
-  click rather than a likeness.** `pressDx` / `pressDy` persist from the last
-  real press on a key, so an Invoke that left them alone handed the engine
-  the coordinates of a click that never happened, into the live fuzzy
-  scoring *and* into `observe_press`, which teaches the per-slot pointer
-  bias. For a user who scans sometimes and mouses at other times that is the
-  correction the prefix beam depends on, taught from presses nobody made.
-  The source travels with the keystroke (`KeyButton.pressFromPointer`, the
-  fourth argument to `pressKey` / `pressKeyLiteral`, defaulting True so
-  every existing caller is unchanged): the character resolves to its key's
-  centre, keeps its slot in `_word_offsets` so the sequence still lines up
-  with the word, and contributes no pointer sample. Zeroing the offsets was
-  the obvious fix and is wrong, since it trains an artificial dead-centre
-  click.
-- **Show, minimize and state go through the window's standard
-  WindowPattern, and three things make that safe; each was measured broken
-  first.** (1) **Restoring never takes the foreground**:
-  `windows_window.QuietRestoreFilter` declines `WM_QUERYOPEN` for the keyboard
-  and restores with `SW_SHOWNOACTIVATE`, because Qt restores with
-  `SW_SHOWNORMAL` whatever the flags, and the tray's restore code, a client's
-  `SetWindowVisualState(Normal)` and another process's `ShowWindow(SW_RESTORE)`
-  all made the keyboard the foreground window (a real taskbar-button click was
-  not measured). Its `_restoring` flag is load-bearing (without it the keyboard
-  declined its own restore in a loop), and `SWP_NOACTIVATE` in
-  `WM_WINDOWPOSCHANGING` does nothing, so do not "simplify" to it.
-  (2) **A close that is not a quit minimizes** (`Main.qml` `onClosing`,
-  Windows only), because Qt's default hid the keyboard with the process still
-  running, out of the tree and off the taskbar. Qt 6 cancels a quit if a
-  window refuses to close, so `keyboard_app._KeyboardApplication` sets the
-  window's `quitting` on `QEvent::Quit`; any new way to end the app must be a
-  real quit or it will be refused. (3) **A minimized keyboard offers no
-  targets**: keys and pills go `Accessible.ignored` and refuse Invoke, since
-  Windows keeps a minimized window's elements in the tree as onscreen. The
-  beacon carries `root.visibility` so a poll sees a minimize. None of this adds
-  capability (anything that can reach the window can already `ShowWindow` or
-  close it); it removes harm from calls that were standard.
-- **Invoke is a one-shot, never `_activate()`.**
-  `KeyButton.activateFromAssistiveClient` fires `keyPressed` without arming
-  the repeat timer, because a scanner has no release event and a single
-  Invoke on Backspace would otherwise repeat until the safety timer fired.
-  It flashes the key: a switch user is looking at the keyboard, not the text
-  field, so without it the only feedback is a character appearing elsewhere.
-- **The stale-prediction guarantee is two things, and the first was once
-  claimed for free and was not.** (1) Every pill-model entry carries the
-  prediction generation, so each round rebuilds the pills and an element held
-  from an earlier round cannot be invoked. `QQuickRepeater::setModel` returns
-  early on a list that compares equal to the current one, so a plain word
-  list kept the old pills across a round of identical words and a held one
-  still inserted; the external test client found it, after this file had
-  called it measured. (2) The pill's Invoke goes through
-  `invokeScanPrediction(word, generation)`, which refuses a generation that
-  is no longer live, so a pill that ever survives a round fails closed. The
-  id is built from the pill's own generation and never changes under a held
-  element. **Do not strip the generation from the model, and do not drop the
-  check as redundant**: each was the missing half once. Guarded by
-  `TestPredictionPillsGetAFreshIdentity`, where the identical-round and
-  dead-generation cases each fail on their own mutation.
-- **`scanRevision` is the one property a scanner polls**, exposed as the Name
-  of the `aosk.v1.revision` beacon; it folds in geometry, layout, panels,
-  layer, every modifier and lock, the prediction generation and visibility.
-  Its internal format is not part of the contract: compare, never parse. The
-  beacon has to be a real 1x1 `visible` item, since an invisible one is
-  pruned from the accessibility tree.
-- **The window is found by AutomationId `alphaOsk.alphaOskKeyboard`**,
-  which Qt builds from the application object's name and `Main.qml`'s
-  `objectName`. `keyboard_app.py::_name_for_ui_automation` pins the first
-  half, and it has to: Qt substitutes the class name for an unnamed object,
-  so the id was `QApplication.` in the shipped keyboard and `QGuiApplication.`
-  in the test harness, and the contract first published the harness's. Not the title (it is
-  user-facing text) and not the window class (Qt generates it and it moves on
-  a Qt upgrade), the same rule this file already states for compat detection.
-- **PySide cannot read an attached `Accessible.*` property at all**
-  (`QQmlProperty` reports it invalid), so every accessible value is kept in a
-  named property (`_scanName`, `_scanChecked`, `_scanDescription`,
-  `_scanIgnored`, the pill's `scanTargetId`) and the attached binding is a
-  bare pass-through. **Never inline an expression into the `Accessible`
-  block**: anything written only there is untestable, and that block is
-  already the one part of the contract the headless suite cannot see.
+- **UIA, not an IPC server**: the app runs with `uiAccess="true"`, so a user-validated pipe would make it a confused deputy. Don't "upgrade" to a socket.
+- Ids are `aosk.v1.<section>.<row>.<index>`; the format lives once in `Main.qml::scanTargetId`. Pills are `aosk.v1.pred.<index>.g<generation>`.
+- **Presence means activatable, and the check runs at activation too** (`KeyButton._scanActivatable`). A `KeyButton` without a `targetId` is silently unreachable.
+- `Accessible.name` is a speakable label (`_scanName`), not the keycap; the numpad names both NumLock states. Only real toggles report a toggle state (a programmed F-key is not one). The lock rides in `Accessible.description`, which is UIA `FullDescription`, not HelpText.
+- Everything that can change the target set feeds `Main.qml::scanRevision` (including NumLock and `root.predictionsArePresent`), exposed as the `aosk.v1.revision` beacon, a real 1x1 visible item. Compare, never parse.
+- **An Invoke carries no click position** (`pressFromPointer` false): it resolves to the key centre and teaches the pointer model nothing. Invoke is a one-shot (`activateFromAssistiveClient`), never `_activate()`, and flashes the key.
+- WindowPattern is safe because restoring never takes the foreground (`windows_window.QuietRestoreFilter`), a close that is not a quit minimizes (`_KeyboardApplication` sets `quitting`), and a minimized keyboard offers no targets.
+- **Stale pills**: every pill-model entry carries the generation, and `invokeScanPrediction(word, generation)` refuses a dead one. Keep both halves.
+- The window is found by AutomationId `alphaOsk.alphaOskKeyboard` (`_name_for_ui_automation`).
+- PySide cannot read attached `Accessible.*` properties: keep every value in a named property and **never inline an expression into the `Accessible` block**.
 
 ## Modular Layouts
 
-Design doc at `docs/architecture/MODULAR_LAYOUTS.md`. Inspired by Octavium's (`C:\Users\owenp\dev\Octavium`) Layout/KeyDef data model. Four levels of modularity: (1) Built-in JSON layout packs (video editing, gaming, streaming). (2) User-created layouts via editor. (3) Panel composition - snap independent panels (QWERTY, numpad, macros) into a grid. (4) App-aware auto-switching based on foreground window.
+Design doc at `docs/architecture/MODULAR_LAYOUTS.md`. Inspired by Octavium's (`C:\Users\Owen\dev\Octavium`) Layout/KeyDef data model. Four levels of modularity: (1) Built-in JSON layout packs (video editing, gaming, streaming). (2) User-created layouts via editor. (3) Panel composition - snap independent panels (QWERTY, numpad, macros) into a grid. (4) App-aware auto-switching based on foreground window.
 
 Action types: `char`, `special`, `hotkey`, `text`, `macro`, `launch`, `layout`, `midi`. Profiles bundle layout + theme + window position + auto-switch rules.
 
@@ -2450,10 +990,10 @@ Design doc at `docs/roadmap/ECOSYSTEM.md`. Alpha-OSK is part of a four-tool adap
 
 | Tool | Repo | Output |
 |------|------|--------|
-| **Alpha-OSK** | `C:\Users\owenp\dev\alpha-osk` | Keystrokes (SendInput) |
-| **MacroVox** | `C:\Users\owenp\dev\MacroVox` | Text (Deepgram STT -> clipboard) |
-| **Octavium** | `C:\Users\owenp\dev\Octavium` | MIDI (virtual piano/pads) |
-| **Nimbus** | `C:\Users\owenp\dev\Nimbus-Adaptive-Controller` | Joystick (vJoy/ViGEm) |
+| **Alpha-OSK** | `C:\Users\Owen\dev\alpha-osk` | Keystrokes (SendInput) |
+| **MacroVox** | `C:\Users\Owen\dev\MacroVox` | Text (Deepgram STT -> clipboard) |
+| **Octavium** | `C:\Users\Owen\dev\Octavium` | MIDI (virtual piano/pads) |
+| **Nimbus** | `C:\Users\Owen\dev\Nimbus-Adaptive-Controller` | Joystick (vJoy/ViGEm) |
 
 All four: same developer, same EV cert, PySide6/Qt (except MacroVox: Tauri), mouse-driven, accessibility-first. Integration phases: coexistence -> launch/trigger -> profile auto-switch -> shared input layer -> unified UI.
 
@@ -2499,7 +1039,7 @@ Rows carrying a `layer` other than the one being read are skipped, so compact's 
 
 Design: `docs/architecture/TELEMETRY.md`. User-facing privacy: `docs/PRIVACY.md`. Backend: `backend/cf-worker/` (Cloudflare Worker + D1).
 
-**Off by default.** When enabled (Settings -> Data & Privacy -> Privacy -> "Share anonymous usage stats"), the client sends a weekly POST containing nine integers: `anon_id`, `app_version`, `os`, `keystrokes`, `words`, `predictions`, `keystrokes_saved`, `minutes`, `sessions`, `prediction_offers`. These are exactly the lifetime counters already shown on the Analytics dashboard. **Never sent**: content, word frequencies, key frequencies, IP, hostname, or any per-session breakdown.
+**Off by default.** When enabled (Settings -> Data & Privacy -> Privacy -> "Share anonymous usage stats"), the client sends a weekly POST containing ten fields: `anon_id`, `app_version`, `os`, `keystrokes`, `words`, `predictions`, `keystrokes_saved`, `minutes`, `sessions`, `prediction_offers`. These are exactly the lifetime counters already shown on the Analytics dashboard. **Never sent**: content, word frequencies, key frequencies, IP, hostname, or any per-session breakdown.
 
 **Reached from QML as its own context property, not through the bridge.** `src/telemetry_bridge.py::TelemetryBridge` owns the `TelemetryClient` and the hourly submit timer, and is registered in `keyboard_app.py` as `telemetry` (alongside `keyboard`, the `KeyboardBridge`) - see *QML <-> Python Bridge Pattern*. `UnifiedSettingsPanel.qml` calls `telemetry.getEnabled()` / `telemetry.setEnabled(c)` / `telemetry.forgetData()`; `KeyboardBridge` no longer references telemetry at all. The headless QML test fixtures register both context properties through one helper, `tests/qml_context.py::install_context_properties`, rather than each hand-rolling `setContextProperty` calls.
 
@@ -2514,36 +1054,26 @@ Files, endpoint config, anon_id lifecycle, submit cadence, and the worker schema
 
 ## The user study
 
-The whitepaper's own stated limitation is that there is no user study, one long-term user, and that "keystroke savings is an upper bound, not a benefit": the gap between the benchmark's 49.1 / 50.4% and what a real person saves is the thing nobody has measured. `docs/research/STUDY_PROTOCOL.md` is the design that closes it, `docs/research/STUDY_CONSENT.md` is the form participants read, and `src/study/` is the harness. Both documents are published **before** enrolment and versioned in git deliberately: with no institutional affiliation and no IRB, that history is the only thing standing in for preregistration, and it is what stops the analysis being chosen after the data is seen.
+Design `docs/research/STUDY_PROTOCOL.md`, consent form `docs/research/STUDY_CONSENT.md` (both published before enrolment; their git history stands in for preregistration, so **don't edit them casually**), harness `src/study/`. Harness notes: `docs/research/STUDY_HARNESS.md`.
 
-All three candidate designs are documented rather than one being picked, because **the condition list is data**: `session.DESIGNS` holds A (predictions on vs off, recommended), B (plus a system-keyboard arm) and C (field study), so switching between them is configuration, not a rewrite.
-
-- **"Predictions off" must NOT be the `suggestionsEnabled` setting.** `Main.qml` binds the bar's height to it (`Layout.preferredHeight: root.suggestionsEnabled ? predPillHeight + 4 : 0`), so turning it off collapses the bar and **moves every key up**. Using it for the off condition confounds prediction with a change in key geometry, in a pointing task, on the population whose pointing accuracy is the thing under study. The off condition keeps the bar present, reserved and empty, and the harness asserts equal key geometry across conditions before counting a session.
-- **Learning is frozen for the whole session**, via `HybridPredictor.frozen_learning()`, a context manager gating the implicit-learning entry points (`learn`, `learn_word`, `unlearn_word`, `learn_token`, `learn_from_selection`, `mark_good_suggestion`, `learn_capitalization`, `set_capitalization`, plus `observe_press` and `record_typed_word`). **The list is not the interesting part; how it is kept complete is.** It first shipped covering only the eight methods with "learn" in the name, which left `observe_press` and `record_typed_word` writing on every keystroke of every trial: the first feeds the pointer bias that `FuzzyRecognizer.positions_for` reads back on the next prediction, so an unfrozen press moved the pills *inside* the block being measured and did so further the longer the block ran, and the second could put a word the participant had removed back on the bar part way through a condition. Measured on a 6,084-prefix sweep after one block's worth of presses, 44% of prefixes changed their top pill and 88% their top five. `tests/test_learning_freeze.py` now classifies **every** public method of `HybridPredictor` into must-freeze, known-leak or not-learning-state, and fails on any it has not been told about, so a new mutation cannot skip the freeze quietly. **Six explicit user actions are deliberately still unfrozen** (`blacklist_word`, `unblacklist_word`, `mark_bad_suggestion`, `remove_dispreference`, `unprefer`, `clear_user_data`): gating them silently would make a pill right-click read as a click that failed to register, so blocking them in the UI for the duration of a session is the likelier answer, and until that is decided the behaviour is pinned rather than merely absent. Without it the prediction-on block trains the model that same block is scored on, which inflates that condition and does so more the later it runs, so counterbalancing spreads the error rather than removing it. Gating each entry point individually is deliberate: there is no single choke point, the seven reach three different stores between them. **Privacy mode is not a substitute** (it kills prediction too, which is the condition under test). The freeze must also leave the participant's own model untouched, which is what lets withdrawal leave no residue. That is prevention only: `StudyBridge.withdraw()` thaws but snapshots nothing, so anything that does slip past the freeze is permanent, which is why the inventory test matters more than the guard list. `StudyBridge` holds it open across QML round trips in an `ExitStack` rather than a `with` block, and `shutdown()` / `withdraw()` both thaw: a session that raised must never leave a user's keyboard permanently unable to learn.
-- **A trial types into a `RecordingSynthesizer`, swapped in at `KeyboardBridge.begin_study_capture`, NOT through edit mode.** Edit mode returns before the prediction path ("skip everything else: password detection, analytics, predictions"), and predictions are the thing under study, so a trial run through it measures an engine that was switched off. Redirecting at the synthesiser instead means a trial inherits every invariant in `keyboard_bridge.py` for free (suffix-only insertion, sticky release, deferred auto-space, the context buffers, the pointer-bias model) with no study branch in `_press_char`, which is the most invariant-dense function in the project. The recorder **keeps a caret**, because a participant who arrows back to fix a letter is doing an ordinary thing and a blind append would report a transcript nobody typed. **Compat mode is forced off while capturing**: it has no application to work around here, and its BackSpace-and-retype would replace a one-click pill with a run of backspaces and score realised savings near zero. **Action kind is inferred from what arrived** (multi-character insert = pill, single = char) rather than from a flag a caller sets, because a caller who forgot would silently score a pill as typing.
-- **A pill tap is one input action, so KSPC goes below 1.0** and that is the point rather than a bug. `metrics.input_actions` is the single definition of "one click the participant paid for", and every measure derives from it, which is what makes `realised_savings` comparable to the offline KSR at all.
-- **Counterbalancing is a Williams design** (`session.williams_orders`), not a plain Latin square: it balances first-order carryover, so every condition follows every other equally often. Odd condition counts need the square and its mirror, which is why Design B costs six orders against A's two. Order is assigned by **enrolment position, not at random**, so the sample stays balanced if recruitment stops early, which it might.
-- **Phrases must be held out from the seed data.** `phrases.contamination_report` rejects a phrase appearing verbatim in the training corpus and, less obviously, one whose every adjacent word pair is a curated seed bigram: that phrase is not verbatim in anything and the context tables will still complete it end to end.
-- `src/study/config.py` resolves `get_config_dir` **inside the function, never at module scope**, unlike `src/snippets.py` and `src/key_actions.py`. Those each had to be named in `tests/conftest.py::_stay_off_the_real_config_dir` by hand, and the snippet store shipped before that happened and spent a while overwriting the developer's real saved email during test runs. Resolving at call time means the existing patch covers this module for free and cannot be forgotten.
-- **Nothing is transmitted until the participant reviews their own numbers and submits.** `export.review_summary` shows them their own realised savings against the benchmark, which is both the honest way to ask for consent to send and the thing they earned by spending 25 minutes on it. `build_bundle` carries the participant code, app version and OS and deliberately no hostname, username, locale or screen resolution: individually harmless, collectively a fingerprint.
-- **The study and the telemetry channel are separate things with separate consent** and neither module touches the other. See protocol section 10 for the split.
+- The condition list is data (`session.DESIGNS`: A, B, C).
+- **"Predictions off" must NOT be the `suggestionsEnabled` setting** (it collapses the bar and moves every key). The off condition keeps the bar reserved and empty.
+- **Learning is frozen for the whole session** via `HybridPredictor.frozen_learning()`. `tests/test_learning_freeze.py` classifies **every** public method of `HybridPredictor` and fails on an unclassified one. Six explicit user actions are deliberately unfrozen. Privacy mode is not a substitute. `StudyBridge` holds the freeze in an `ExitStack`; `shutdown()` and `withdraw()` both thaw.
+- A trial types into a `RecordingSynthesizer` swapped in at `KeyboardBridge.begin_study_capture`, **not through edit mode** (which skips prediction). The recorder keeps a caret; compat mode is forced off; action kind is inferred from what arrived.
+- A pill tap is one input action (`metrics.input_actions`), so KSPC goes below 1.0. Counterbalancing is a Williams design assigned by enrolment position. Phrases are held out from the seed data (`phrases.contamination_report`).
+- `src/study/config.py` resolves `get_config_dir` inside the function, never at module scope.
+- Nothing is transmitted until the participant reviews and submits. The study and telemetry are separate channels with separate consent.
 
 ## Telemetry: the installer invitation, and going live
 
-The installer's participation page (`build/windows/build.py`, `Page custom StudyInvitePage`) invites the user to share the ten anonymous counters. Five things about it are load-bearing:
+Full notes, including how to measure the installer page on a real dialog: `docs/architecture/TELEMETRY.md`.
 
-- **The checkbox ships TICKED, since 2026-09-08, and the rest of the page is what pays for it.** It shipped unticked before that. The argument against was **checked against primary sources rather than assumed**, and it is stronger than the usual cookie hand-wave, so do not re-derive it from memory: (a) this is inside **ePrivacy Art 5(3)** despite there being no browser and no cookie, because **EDPB Guidelines 2/2023 v2.0 (7 Oct 2024) para 33** covers software that is "distributed ... on the terminal equipment of the user that is stored and will then proactively call an ... API endpoint over the network", and para 44 puts the line at the point information "or any derivation of this information" leaves the device, which the weekly POST crosses; (b) **CJEU C-673/17 (Planet49)** and **GDPR Recital 32** both say a pre-ticked box is not consent; (c) **EDPB Opinion 5/2019 para 40** closes the escape, since Art 5(3) takes precedence over GDPR Art 6 for the storage/access step so **legitimate interests is not available** for it. Art 5(3) bites whether or not the payload is personal data, so the `anon_id` question does not rescue it either. It was ticked anyway, deliberately, on the grounds that the page states the purpose, shows the exact payload, and declines in one click, and that no DPA has been found to have enforced against a small desktop app over telemetry while VS Code, Firefox, Docker Desktop, the .NET SDK and Homebrew all default telemetry **on with no box at all**. **Those three page properties are now part of the default, not decoration**, which is why `TestTheCheckboxDefaultsToChecked` asserts all of them rather than the tick alone: weakening any one is what would make the default indefensible.
-- **This checkbox does not enrol anyone in the typing study**, which has its own consent form (see *The user study*, and protocol section 10 for the split). An earlier version of this note claimed a pre-ticked box weakened the study as research; that was wrong, and the research objection does not apply to this page. The page's own "Read more about the study" link is fine, because `study.html` on the site covers both the anonymous stats and the study.
-- **The page shows the message itself**, as a fixed-pitch block of the real field names from `TelemetryClient._build_payload` with plausible values. It is the only claim on the page that can be checked against the product, so a sample that drifted from the payload would be worse than no sample: a specific, checkable, wrong promise about what leaves the machine. `app_version` is `${APP_VERSION}` rather than a literal, so it cannot go stale, and it sits at the end of its row because a longer version number would shift the column to its right. `TestThePageShowsTheMessageItSends` pins both directions, that every field appears and that nothing field-shaped appears which is not one. The fixed pitch is not styling: in the dialog's proportional font two columns of key/value pairs do not line up and the block reads as prose rather than as a record.
-- **The 140u layout budget is now nearly spent** (the checkbox ends at 136u). Anything added to this page has to take room from something already on it, and a control placed past 140u is clipped by its parent and never draws while still reporting itself visible, which is how the Read more link shipped invisible once. `TestTheStudyPageFitsItsDialog` is the guard.
-- **How to actually check that page, since the source tests cannot.** `TestTheStudyPageFitsItsDialog` reads the coordinates the source asks for, which is not the same as where Windows put the control. Compile a throwaway `.nsi` carrying only this page, run it, and read the live geometry with `EnumChildWindows` + `GetWindowRect` against the parent's client rect, plus `BM_GETCHECK` for the checkbox and `Graphics.MeasureString` in the label's own `WM_GETFONT` font for the sample block. **Put `RequestExecutionLevel user` in the harness**: the real installer is `admin`, and UIPI then blocks a non-elevated script from sending it the click that advances off the Welcome page, so every measurement silently describes the wrong page. Do **not** reach for a screen capture, which is what the note above used to recommend: `CopyFromScreen` grabs whatever is on top at those coordinates, `SetForegroundWindow` from a background process does not reliably raise the window, and `PrintWindow` comes back blank for this dialog. Geometry is both the stronger check and the one that captures nothing off the developer's desktop.
-- **Build that harness from the generated script, never from `build.py`'s source.** Import `build/windows/build.py` and call `_generate_nsi_script(...)`, then lift the `Function ... FunctionEnd` blocks out of the string it **returns**; read the version from `src/__version__.py`, the same source the build uses. The template inside that function is a Python f-string, so its *source* still carries Python escaping and unresolved placeholders: the newline the sample block is built from arrives as literal backslashes on screen instead of a line break, and `!define APP_VERSION "{version}"` makes `${APP_VERSION}` expand to the characters `{version}`. Both render visibly wrong on the sample-payload block, and a harness that mangles its own content cannot be trusted to be faithful about the thing you built it to measure. Add `!include "WinMessages.nsh"` and the `Var`s the lifted functions use.
-- **Ship a BEFORE copy alongside the fixed one, and diff the two `.nsi` files before believing either.** Reinstate the defect in the generated text, build both, and click the same sequence through each. Without the failing control a harness that always reports success is indistinguishable from a fix, which is the same trap `TestTheClearButtonIcon` and the prediction-bar tests document: a check that cannot fail is not a check. A self-reporting `MessageBox` in the one `Section` keeps the click count low enough to be worth running, and the harness must write nothing and install nothing.
-- **The seed key is `HKLM\Software\alpha-osk-setup`, NOT `alpha-osk`.** Registry keys are case-insensitive and `Software\alpha-osk` is the Qt settings **organisation** key, the one an earlier uninstaller wiped on every upgrade (see *Where User Data Lives*). A seed key sharing that name is one rename away from repeating it.
-- **The installer cannot write the user's consent directly**: it runs elevated, possibly under a different account than the person who will use the keyboard, so `%APPDATA%` is the wrong profile. HKLM is a machine-wide seed that each user's first run consumes exactly once, through `TelemetryClient.apply_install_invite()`, which routes through the same `enable()` path the Settings toggle takes so the anon_id is minted normally. A missing key, an absent value or an unrecognised one all change nothing **and leave `_invite_applied` False**, so a machine installed before this feature existed can still be invited later.
-- A page function never runs during a silent install, which is what the auto-updater drives, so `$StudyInvite` stays empty on every auto-update and the key is left exactly as it was. The uninstaller's removal of it sits inside the same `IfSilent` guard as the `%APPDATA%` and organisation-key removal, for the same reason.
-
-**Going live is four coupled steps and doing two of them looks like it works.** Deploy the worker, set `DEFAULT_ENDPOINT` in `src/telemetry.py`, set the `TELEMETRY_ENDPOINT` repository variable, ship a build carrying the invitation. Miss the second and the consent toggle works while nothing is ever sent, which is invisible from the UI. Miss the third and `.github/workflows/telemetry-aggregate.yml` appends nothing, and since `/v1/aggregate` returns current totals and keeps no history, the series for that period cannot be reconstructed. Full checklist in `backend/cf-worker/README.md`.
+- The installer's participation page (`build/windows/build.py`, `StudyInvitePage`) **ships its checkbox ticked (since 2026-09-08)**. That default is defensible only because the page states the purpose, shows the exact payload, and declines in one click; `TestTheCheckboxDefaultsToChecked` asserts all of them. The ePrivacy / Planet49 argument against was checked against primary sources and is recorded in the doc; don't re-derive it from memory.
+- The checkbox does not enrol anyone in the typing study.
+- The page shows the real payload field names (`TestThePageShowsTheMessageItSends`); `app_version` is `${APP_VERSION}`. **The 140u layout budget is nearly spent**; a control past 140u is clipped and never draws (`TestTheStudyPageFitsItsDialog`).
+- To check the page for real, build a harness from the **generated** script (`_generate_nsi_script(...)`), with `RequestExecutionLevel user`, read live geometry with `EnumChildWindows`, and ship a BEFORE copy alongside. Never screen-capture.
+- **The seed key is `HKLM\Software\alpha-osk-setup`, NOT `alpha-osk`** (the Qt settings organisation key). Each user's first run consumes it once through `TelemetryClient.apply_install_invite()`. A silent install never runs the page.
+- **Going live is four coupled steps**: deploy the worker, set `DEFAULT_ENDPOINT`, set the `TELEMETRY_ENDPOINT` repository variable, ship a build with the invitation. Checklist in `backend/cf-worker/README.md`.
 
 ## Building & Signing a Release (Windows)
 
@@ -2714,162 +1244,24 @@ are in *Key rules* at the top of this file.
 
 ## Who rounds the window corners
 
-Every window here is frameless, and four of them (the keyboard, the Snippets
-and Symbols pickers, and the Dashboard) are `color: "transparent"`, which on
-Windows makes them `WS_EX_LAYERED`. They used to round their own corners
-with a `radius` on the QML background rectangle, which leaves the pixels
-outside the arc unpainted, and **on a layered window those do not composite
-the desktop the way a transparent pixel should: they come back white**. What
-the user sees is a small bright notch biting into a corner of the keyboard,
-appearing and disappearing depending on what happens to be behind it, which
-is why it looks intermittent and unrelated to anything. (Settings and Help
-are opaque `#1e1e1e` windows with a rounded panel inside; their corners show
-the window's own dark colour rather than white, so they are left alone.)
+Full write-up: `docs/architecture/WINDOW_CHROME.md` (section of the same name). Read it before changing this area.
 
-Measured on the real `Main.qml`, against a magenta backdrop placed behind
-all four corners:
-
-| configuration | corner pixel |
-|---|---|
-| radius 10, Windows 11 default rounding | `#ffffff` |
-| radius 10, `DWMWCP_DONOTROUND` | `#ffffff` |
-| radius 0, `DWMWCP_ROUND` | the backdrop, correctly |
-
-**Turning Windows' own rounding off fixes nothing, and that is the part
-worth remembering**: the notch is the unpainted region, not the rounding.
-The fix is to leave nothing unpainted. `Main.qml::selfRoundedCorners` is
-false on Windows, which takes `windowRadius` to 0 for the background, the
-title bar and the shadow, and
-`windows_window.py::_prefer_dwm_rounded_corners` sets
-`DWMWA_WINDOW_CORNER_PREFERENCE` to `DWMWCP_ROUND` so the compositor masks
-an opaque window, which it antialiases properly.
-
-Six things follow:
-
-- **The title bar's radius has to follow the background's.** Rounding it
-  while the background behind it is square swaps the notch for a lighter
-  wedge in each top corner, since what shows through is then the background
-  rather than the desktop. The Dashboard's header is the same case.
-- **The three floating windows are the same shape and needed the same fix.**
-  `SnippetsWindow`, `SymbolsWindow` and the Dashboard (`vizWindow`, whose
-  `ModelVisualization` panel draws the background) are all transparent with
-  a rounded background, so a fix reaching only the keyboard would have left
-  the notch on the windows that float over whatever the user is typing into.
-  The Dashboard was in fact missed by the first version. They take
-  `selfRoundedCorners` as a required property from `Main.qml` rather than
-  each reading `Qt.platform.os`, so the rule is stated once, and
-  `keyboard_app.py::_wire_floating_windows` names all three so the DWM call
-  reaches them once they are shown. The Dashboard gets only that call: it is
-  allowed to take focus (it has no keys on it), so it must not go through
-  `apply_extended_styles` and pick up `WS_EX_NOACTIVATE` with the corner.
-- **The DWM call runs before the style writes, not after.** Each of those
-  returns early on failure and is logged, and the corner needs nothing they
-  compute, so it must not be lost with them.
-- **The DWM call is best-effort and must stay that way.**
-  `DWMWA_WINDOW_CORNER_PREFERENCE` is Windows 11 and later; on Windows 10 it
-  fails and the window keeps the square corners QML gave it, which is what
-  every other window on that desktop looks like. A window that fails to
-  round is cosmetic, never a reason to fail startup.
-- **The screenshot script takes the rounding back.** `Qt.platform.os` still
-  reads `"windows"` under the offscreen plugin, but there is no compositor
-  behind it, so `scripts/capture_screenshots.py` sets `selfRoundedCorners`
-  back to true after loading `Main.qml` or every screenshot regenerated on
-  the Windows dev machine comes out with hard square corners. That is why
-  the property is not `readonly`.
-- **The offscreen render was correct the whole time the bug was on screen.**
-  `assets/screenshots/dark-theme-keyboard.png` had a properly antialiased
-  alpha-0 corner while the live window showed the notch, so a test that
-  rendered the corner and looked at it would have passed against the bug.
-  `tests/test_window_corners.py` therefore pins the checkable half (which
-  side is asked to round, that every transparent window agrees, what the DWM
-  call asks for and that it cannot raise) and says in its docstring why it
-  cannot pin the rest.
-
-Not yet checked on a real desktop: the background keeps its 1 px theme
-border while its radius is 0, so along the corner arc DWM's mask clips that
-border and draws its own. If that reads wrong on a light theme, the answer
-is `DWMWA_BORDER_COLOR`, not a radius on the QML side.
+- The keyboard, Snippets, Symbols and Dashboard windows are transparent, hence `WS_EX_LAYERED` on Windows, where pixels a QML `radius` leaves unpainted come back **white**. `Main.qml::selfRoundedCorners` is false on Windows (radius 0 for background, title bar, shadow) and `windows_window.py::_prefer_dwm_rounded_corners` asks DWM for `DWMWCP_ROUND`. Turning DWM rounding off fixes nothing.
+- The title bar's radius follows the background's. The floating windows take `selfRoundedCorners` as a required property and are named in `_wire_floating_windows`; the Dashboard gets only the DWM call (it may take focus, so no `WS_EX_NOACTIVATE`).
+- The DWM call runs before the style writes and is best-effort (Windows 11 only); it must never fail startup.
+- `scripts/capture_screenshots.py` sets `selfRoundedCorners` back to true, which is why it is not `readonly`.
+- The offscreen render was correct while the bug was live, so `tests/test_window_corners.py` pins only the checkable half.
 
 ## Title-bar window menu, and click-free Move
 
-Right-clicking the title bar opens the menu a real window's caption strip
-gives you: **Move**, **Minimize**, **Tuck away / Bring back** (X11 only),
-**Close**. The keyboard is frameless and `WS_EX_NOACTIVATE`, so it has no OS
-system menu and no gesture that reaches one (Alt+Space wants the focus we
-deliberately never take). Everything lives in `qml/Main.qml`; guarded by
-`tests/test_qml_window_menu.py`.
+Full write-up: `docs/architecture/WINDOW_CHROME.md` (section of the same name). Read it before changing this area.
 
-Three of the four entries also have a caption button a few pixels away, and
-that is the point rather than a redundancy: those are 28x24 targets bunched at
-the far right end of the bar, and the menu puts the same actions under the
-pointer wherever it already is on the strip the user grabs the window by.
+Right-clicking the title bar opens Move / Minimize / Tuck away (X11 only) / Close. Guard: `tests/test_qml_window_menu.py`.
 
-- **`titleBarMenuArea` is declared *before* every other input-taking child of
-  `titleBar` and accepts only `Qt.RightButton`.** Only the corner-rounding
-  Rectangle sits above it in the file, and that accepts nothing. Being first
-  puts it underneath
-  everything, and taking only the right button means it consumes nothing else:
-  a left press still reaches `dragArea` and the caption buttons above it,
-  while a right press finds no taker up there and falls through. That is what
-  makes the *whole* strip a menu target, buttons and the gaps between them
-  included, rather than only the region `dragArea` covers (which stops 332 px
-  short of the right edge). The failure mode to avoid is declaring it on top:
-  it would silently kill dragging the window. `dragArea` shields it well
-  enough that "a left press does not open the menu" is not a falsifiable test,
-  so the guard is
-  `TestRightClickingTheTitleBarOpensTheMenu::test_a_left_drag_on_the_strip_still_moves_the_window`,
-  which presses, travels and asserts the window followed.
-- **Rows come from a model (`windowMenu.actions`), not four near-identical
-  blocks**, and are **word-only, no icons**: any glyph small enough to sit in a
-  menu row is at the mercy of the host emoji font, which on Windows renders in
-  colour and ignores the ink it is given (same reason as the lock badge and the
-  clear-context ring). The Tuck row is built unconditionally and **collapses to
-  zero height** off X11, because a row for something that cannot happen is
-  worse than no row. **Close carries a rule and a 9 px gap above it**: it is
-  the one row that ends the session, there is no undo, and it must not sit
-  flush against Minimize under an imprecise pointer.
-
-### Move mode
-
-**The one entry with no button behind it, and the reason the menu is worth
-having.** Dragging the title bar means holding the button down for the whole
-travel, which is the single gesture this keyboard's user cannot reliably make
-(the same argument that removed swipe typing). Move mode splits it into two
-taps with a free hand in between: pick the window up, move it, put it down.
-
-- **The window follows the pointer by `(current - anchor)` in the overlay's own
-  coordinates, and that is self-correcting**: the window slides out from under
-  the pointer by exactly the delta, which puts the pointer back on the anchor
-  and makes the next delta zero. It converges instead of running away, and it
-  needs no global coordinates. A sub-pixel delta is left to accumulate rather
-  than rounded away, or the same delta stays pending on every later event.
-- **The anchor is dropped on `onExited` as well as on open.** A fast flick can
-  outrun the window it is dragging; measuring the way back in against the
-  anchor the excursion started from teleports the window by however far the
-  pointer went while it was away.
-- **`windowMoveOverlay` covers the whole window and is `enabled: root.moveMode`,
-  not merely hidden.** It has to swallow the click that ends the move, or that
-  click lands on a key, a pill or the Close button.
-- **Left puts it down, right puts it back** (`_moveReturnX/Y`). There is no
-  Escape: this window never holds focus, so a physical Escape goes to the app
-  behind us and the OSK's own Esc key is synthesised into that app too. The
-  cancel is what makes the mode safe to try for someone who could not recover
-  a window that landed somewhere unreachable, so don't drop it.
-- A hint banner rides on the overlay saying which click does which. It is not
-  garnish: a keyboard that has started following the pointer with nothing on
-  screen to say why is alarming, and the mode has no other tell.
-- The landing spot persists for free, since `onXChanged` / `onYChanged` already
-  restart `saveGeometryTimer`.
-
-**Testing note.** `tests/test_qml_window_menu.py` drives the pointer in
-*desktop* coordinates, not window-local ones. In move mode the two are not
-interchangeable: the window slides by exactly the delta, so the same local
-point maps back to the same global point and Qt drops the second event as a
-duplicate. Two other offscreen-plugin traps are pinned in that file: a window
-parked at a negative x is reported 4 px adrift of where it was put (hence
-`PARKED_X`/`PARKED_Y`), and a closed `Popup`'s rows all report
-`visible: false`, so any assertion about which rows are showing has to open the
-menu first or it passes against anything at all.
+- **`titleBarMenuArea` is declared before every other input-taking child of `titleBar` and accepts only `Qt.RightButton`**; on top it would kill dragging.
+- Rows come from `windowMenu.actions`, word-only. Close carries a rule and a gap above it.
+- **Move mode** is two taps with a free hand between: the window follows by `(current - anchor)` in the overlay's coordinates (self-correcting), the anchor is dropped on `onExited`, `windowMoveOverlay` is `enabled: root.moveMode` and swallows the ending click, left puts it down and right puts it back (`_moveReturnX/Y`); there is no Escape.
+- Tests drive the pointer in desktop coordinates; a closed `Popup`'s rows all report `visible: false`.
 
 ## Right-Click for Shifted Character
 

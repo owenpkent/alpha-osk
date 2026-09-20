@@ -309,3 +309,101 @@ alone, since it only affects letters.
 (`QT_QPA_PLATFORM=offscreen`) and asserts the layer switching and derived
 sizing behave, since a QML binding error is a runtime warning that would
 otherwise ship as a blank keyboard.
+
+---
+
+# Implementation notes (from CLAUDE.md)
+
+Moved verbatim from `CLAUDE.md` on 2026-09-20, which keeps a summary of the load-bearing rules. This is the full reasoning.
+
+## Compact View
+
+A denser 13x4 keyboard for small screens. Off by default; toggle in *Settings ->
+Appearance -> Panels -> Compact View*. The design, the measurements behind it,
+and the full rationale for every rule below live in
+`docs/architecture/COMPACT_VIEW.md`.
+
+Load-bearing rules:
+
+- **Every row in a compact layout must total the same unit count** (13.0 for
+  `qwerty-compact`). `Main.qml` centres any narrower row, so an unequal row
+  brings back the exact side gutters this view exists to remove. Enforced by
+  `tests/test_layouts.py::TestCompactLayout::test_every_row_is_exactly_13_units`.
+- **Layers are a QML-side view concept and the backends never see them.** Rows
+  carry an optional `"layer"` field and rows without one always render, which is
+  what keeps the full-size layouts working; a `"type": "layer"` key sets
+  `activeLayer` and deliberately does **not** call `keyboard.setLayout()` (that
+  would persist as the user's layout preference). `activeLayer` resets to
+  `"base"` on every layout change. Because the whole feature is data + QML, it
+  needed zero backend work on either backend (Python on `main`, C++ on
+  `cpp-rewrite`): don't "port" it.
+- **`totalKeyUnits` is derived, not hardcoded** (`_widestRow` in `Main.qml`
+  computes the widest visible row's units + gap count, and full-size layouts
+  resolve to exactly the historical 15.5u / 14 gaps). Don't reintroduce the
+  constant.
+- **Compact is orthogonal to letter arrangement.** `resolveLayoutId()` combines
+  `currentLayout` with the `compactView` bool into `<layout>-compact`, and a
+  layout with no compact variant falls back to full size, so the toggle is always
+  safe. Adding compact Dvorak is dropping `data/layouts/dvorak-compact.json` in
+  place, no code change.
+- **No panel that has to line up with the keyboard grid may use
+  `QtQuick.Layouts`.** It rounds every child up to a whole pixel, so 13 keys of
+  69.23 px each became 13 of 70, and the panel rendered 10 px wider than the grid
+  it sits flush with, overhanging the window and clipping its last key. Number
+  Row and Function Row are plain `Row`s, Navigation a plain `Grid`, Numpad a
+  `Column` of `Row`s. Guarded by
+  `tests/test_qml_compact_view.py::TestPanelsSitFlushWithTheGrid`.
+- **The accent fill on the editing keys (Esc, Tab, Shift, Backspace, Del) is a
+  derived wash over the theme's key colour, never the raw accent and never a
+  constant.** `root.accentWashFor()` walks the alpha down from 0.35 until the
+  theme's own `textColor` clears 4.5:1; a flat 35% dropped five of the nine
+  themes below WCAG AA, on exactly the keys the style exists to make findable.
+  The accent-coloured border carries the cue where the wash has to back off.
+  Full-size layouts are deliberately untouched.
+- **Del sits on the base layer, Esc on `?123`.** A 13u row has no spare unit, so
+  the two traded places. The Number Row panel puts a second Esc back at the
+  top-left and that duplicate is deliberate, so `?123` stays the fallback for a
+  future layout that shows the compact grid without the panel. Don't swap them
+  back without reading the rationale in the design doc.
+- **The symbol pages carry no Shift key**; Shift's slot switches to a second page
+  (`=\<`), the phone convention, which makes a glyph appearing twice on one
+  screen *structurally impossible* rather than merely absent. The bottom row and
+  the right-hand nav column are byte-identical on every layer, and the tests that
+  guard that derive the layer list from the file rather than naming base/sym.
+  `Main.qml`'s layer branch calls the idempotent `keyboard.releaseShift()` on
+  every switch (never `if (shiftOn) toggleShift()`), because the modifier is held
+  at the OS level and a Shift carried in from the letters page makes `1` emit `!`
+  with the keycap still reading `1`. Guarded by
+  `tests/test_layouts.py::TestNoDuplicateGlyphsWithinALayer` and
+  `tests/test_qml_compact_view.py::TestSecondSymbolPage`.
+- **Digits come back via a panel, not a fifth row, and not via a toggle.**
+  `qml/components/NumberRow.qml` (13 x 1u, flush with the compact grid) renders
+  above the keyboard whenever `Main.qml::showNumberRow` is true, which is
+  derived: true exactly when the active layout JSON carries no `number` row of
+  its own. That is the compact variants and nothing else, so digits are always
+  on screen in both views and a full-size layout can never end up with a
+  second, narrower number row stacked on the one built into its JSON. Keying it
+  off the layout rather than `compactView` matters because a letter arrangement
+  with no compact variant silently falls back to full size. Its leading key
+  is **Esc, not `` ` ``** (backtick lives on `?123` row 2).
+- **The panel is declared BELOW both function rows in `Main.qml`'s column**,
+  so the stack reads F13-F24, F1-F12, digits, letters. It was declared first
+  for one release, which on compact put F1-F12 between the digits and the
+  letters: nothing on a desk stacks that way, and it read as the F-keys
+  having been dropped into the middle of the keyboard. Full size never had
+  the fault, because there the digits are the first of the data-driven rows
+  and so already sit under both panels, which is exactly why this is worth
+  pinning: the two views build the same stack out of different pieces and
+  agree only by construction. Guarded by
+  `tests/test_qml_compact_view.py::TestTheRowsStackLikeAPhysicalKeyboard`,
+  which runs both views, and whose full-size half passes either way on
+  purpose, as the guard against them parting.
+- **The nav column reads Home / PgUp / PgDn / End top to bottom** (a scroll
+  ladder: top, page up, page down, bottom; Owen asked for Home above PgUp).
+  Pinned by
+  `test_layouts.py::TestCompactLayout::test_nav_column_reads_top_to_bottom`.
+- QML-only behaviour can't be covered by the Python suite, so
+  `tests/test_qml_compact_view.py` and `tests/test_qml_prediction_bar.py` load the
+  real `Main.qml` headlessly (`QT_QPA_PLATFORM=offscreen`) and fail on QML
+  warnings. That's the only guard against a binding error shipping as a blank
+  keyboard.
