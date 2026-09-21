@@ -535,13 +535,67 @@ class TestCompactLayout:
         assert {"pageup", "pagedown"} <= actions
         assert "/" in chars
 
-    def test_enter_and_backspace_are_double_width(self, compact: dict) -> None:
-        # Both are high-frequency; Backspace additionally auto-repeats, so a
-        # 1u target would be a regression against the full-size layout.
+    def test_enter_is_double_width(self, compact: dict) -> None:
+        # High-frequency and the one key on the grid with no neighbour to
+        # confuse it with, so it keeps the second unit Backspace gave up.
         for row in compact["rows"]:
             for key in row["keys"]:
-                if key.get("action") in ("return", "backspace"):
-                    assert key["width"] == 2.0, f"{key['action']} in {row['id']} is {key['width']}u"
+                if key.get("action") == "return":
+                    assert key["width"] == 2.0, f"return in {row['id']} is {key['width']}u"
+
+    def test_w_sits_above_s(self, compact: dict) -> None:
+        """The letter columns line up, the way they do at full size.
+
+        Compact used to open its top row with `q` and its home row with
+        Tab, so every letter on the home row sat half a key to the right
+        of the one above it: `w` was over `a`, and the number row panel's
+        digits were one column right of the letters they belong to. On a
+        board with no size cues that is the alignment a user reads the
+        grid by, so it is pinned here rather than left to whoever next
+        edits a row.
+
+        Full size gets this for free from Tab and Caps being the same
+        width (see `TestTheLetterColumnsLineUp`); compact now gets it the
+        same way, by leading both rows with a 1u key. There is no spare
+        unit in a 13u row, so that cost Backspace its second unit, which
+        is asserted here as the trade rather than somewhere it reads as
+        an oversight: it is still accent-filled and it still auto-repeats.
+        """
+
+        def offset(row: dict, char: str) -> float:
+            units = 0.0
+            for key in row["keys"]:
+                if key.get("key") == char:
+                    return units
+                units += key["width"]
+            raise AssertionError(f"{char} is not in {row['id']}")
+
+        rows = {r["id"]: r for r in compact["rows"]}
+        for top, home in (("q", "a"), ("w", "s"), ("e", "d"), ("p", "'")):
+            assert offset(rows["base-1"], top) == offset(rows["base-2"], home), (
+                f"{top} is not above {home}"
+            )
+
+        assert rows["base-1"]["keys"][0]["action"] == "tab"
+        assert rows["base-2"]["keys"][0]["action"] == "caps"
+        backspace = next(k for k in rows["base-1"]["keys"] if k.get("action") == "backspace")
+        assert backspace["width"] == 1.0, "Backspace paid for the alignment; see the docstring"
+
+    def test_the_left_column_is_the_same_on_both_layers(self, compact: dict) -> None:
+        """Tab and Caps hold their rows on ?123 too.
+
+        They lead the letter rows, so a symbol page that led with a glyph
+        instead would move them under the pointer on every layer hop, and
+        the one that led with Tab on the *home* row (which is where it was
+        before the alignment change) would swap Tab and Caps between
+        layers.
+        """
+        rows = {r["id"]: r for r in compact["rows"]}
+        for layer in sorted(self._other_layers(compact)):
+            for n in (1, 2):
+                assert rows[f"base-{n}"]["keys"][0] == rows[f"{layer}-{n}"]["keys"][0], (
+                    f"leading key differs between base-{n} and {layer}-{n}"
+                )
 
     def test_esc_is_still_reachable_from_the_sym_layer(self, compact: dict) -> None:
         """Del took Esc's base-layer slot; Esc took Del's on ?123.
