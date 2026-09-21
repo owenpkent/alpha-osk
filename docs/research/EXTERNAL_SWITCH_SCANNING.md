@@ -413,7 +413,7 @@ enumeration of bridge methods. In `qml/Main.qml`'s key delegate, that handler di
 `kd.type`: character keys reach `KeyboardBridge.pressKey` or `pressKeyLiteral`, special keys reach
 `pressSpecialKey`, modifier keys reach `toggleShift` / `toggleCapsLock` / `toggleCtrl` /
 `toggleAlt` / `toggleWin`, and prediction pills reach `pressPrediction`. **Layer keys are a fourth
-category and reach no bridge method at all**: switching to `?123` or `=\<` is a view-state change,
+category and reach no bridge method at all**: switching to `?123` or back is a view-state change,
 `root.activeLayer` plus a released Shift, by design, and the in-code comment explains why this must
 never call `setLayout`, which would persist the symbol layer as the user's chosen keyboard layout.
 A conformance test for "reaches the same handler as a click" must exempt layer keys rather than

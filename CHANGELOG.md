@@ -4,6 +4,13 @@ All notable changes to Alpha-OSK are documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+- **Compact View: the `?123` page opened with a second copy of the number row.** Reported directly. Compact keeps a standalone number row above the keyboard, and because it is derived from the layout rather than being a setting, it is on screen whatever page you are on. `?123` then drew `1 2 3 4 5 6 7 8 9 0` as its own top row, so the digits were on screen twice, one row apart. Row 2 was repeating `-` and `=` as well, and row 3 (`! @ # $ % : & ( )`) was the number row's own right-click set, so twelve of the page's twenty-eight symbol slots were spending themselves on glyphs already visible.
+
+  Those slots have gone back to symbols, which is enough to fit every ASCII symbol on one page, so the **second symbol page (`=\<`) and the hop to it are gone**. `?123` now opens with `! @ # $ % ^ & * ( )` in digit order, directly under the digits they belong to, which is the thing a keycap cannot tell you: the cap reads `6`, and nothing on it says `^` is one right-click away. Rows 2 and 3 carry the brackets, slashes, quoting marks and the rest. Thirteen non-ASCII glyphs the second page also held (`× ÷ ± ≈ ≠ ≤ ≥ ¥ ¢ § • © ®`) are in the Symbols & Emoji picker, one click away in the suggestion bar on every layout: the same trade that removed the full-size `Sym` row, since a picker is for browsing and a key is for reaching something whose position you already know.
+
+  The obvious fix, hiding the number row while a symbol page is up, was rejected: the keyboard would lose a row of height on the hop, so every key below it would move under the pointer, including the `ABC` key you leave by. Nothing else in this layout moves on a layer switch. Guarded by a test that states the rule rather than the instance, `no non-base layer may draw a digit`, derived from the layer list in the file so a page added later is covered without touching it.
+
 ## [1.5.0] (2026-09-16)
 
 ### Added

@@ -1,9 +1,9 @@
 """Static catalogue of characters for the "Symbols & Emoji" picker window.
 
 This is the long tail behind the keyboard's own symbol layer. That layer
-(``?123`` / ``sym2`` on the compact layouts, and the punctuation row on the
-full-size ones) holds roughly 34 glyphs, each worth a single click. Everything
-past that lives here instead: typographic punctuation, math and currency
+(``?123`` on the compact layouts, and the punctuation row on the full-size
+ones) holds roughly 28 glyphs, each worth a single click. Everything past
+that lives here instead: typographic punctuation, math and currency
 signs, accented Latin letters an English keyboard cannot reach, and the
 common emoji ranges. `keyboard_bridge.py` hands `categories()` to QML for a
 tabbed picker; nothing here is loaded lazily or cached, because the whole

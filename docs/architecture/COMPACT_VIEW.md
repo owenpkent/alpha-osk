@@ -52,7 +52,7 @@ what a pointer cannot use:
 |---|--:|
 | Duplicate right-hand Shift / Ctrl / Alt | 266 px |
 | Space at 6.0u → 3.0u | 173 px |
-| Dedicated number row (→ `?123` layer) | one full row of height |
+| Dedicated number row (→ standalone panel) | one full row of height |
 | Full-size Esc / `` ` `` / `[` / `]` / `\` | ~5u |
 
 Net at identical key size: **−33% area, −16% width, −20% height**, and mean
@@ -66,28 +66,48 @@ stretching or justification logic exists anywhere in the QML.
 
 ```
 Base layer                               ?123 layer
-  q w e r t y u i o p [ ⌫ ] Home           1 2 3 4 5 6 7 8 9 0 [ ⌫ ] Home
- Tab a s d f g h j k l ' Del PgUp         Tab - = [ ] \ ; ' ` Ins Esc Caps PgUp
-  ⇧ z x c v b n m , / [Enter] PgDn        =\< ! @ # $ % : & ( ) [Enter] PgDn
+  q w e r t y u i o p [ ⌫ ] Home           ! @ # $ % ^ & * ( ) [ ⌫ ] Home
+ Tab a s d f g h j k l ' Del PgUp         Tab [ { ] } \ | ; : Ins Esc Caps PgUp
+  ⇧ z x c v b n m , / [Enter] PgDn         ` ~ < > _ + ° € £ ™ [Enter] PgDn
  ?123 Ctl ⊞ Alt [space] . ← ↑ ↓ → End     ABC Ctl ⊞ Alt [space] . ← ↑ ↓ → End
-
-=\< layer (second symbol page)
-  ~ ^ * _ + { } | < > [ ⌫ ] Home
- Tab ° × ÷ ± ≈ ≠ ≤ ≥ Ins Esc Caps PgUp
- ?123 € £ ¥ ¢ § • © ® ™ [Enter] PgDn
- ABC Ctl ⊞ Alt [space] . ← ↑ ↓ → End
 ```
 
-**Three layers, and Shift is not one of them.** The `?123` page used to carry
-a Shift key, which re-rendered its row 1 as `! @ # $ % ^ & * ( )` while row 3
+**Two layers, and Shift is not one of them.** The `?123` page used to carry a
+Shift key, which re-rendered its row 1 as `! @ # $ % ^ & * ( )` while row 3
 already showed `! @ # $ % : & ( )` permanently: nine keys on screen saying the
-same thing as another key on screen. Shift's slot is now a switch to a second
+same thing as another key on screen. Shift's slot became a switch to a second
 symbol page (`=\<`), the phone convention, so every glyph Shift used to reach
-has a key of its own and the overlap is *structurally impossible* rather than
-merely absent. All three layers are 13.0u with matching key counts
-(12/13/12/11), so hopping pages never resizes a key. The `shifted` fields stay
-on the symbol keys: right-click still types them, and right-click output is
-never displayed, so it is a bonus rather than a duplicate.
+had a key of its own and the overlap was *structurally impossible* rather than
+merely absent. Both layers are 13.0u with matching key counts (12/13/12/11),
+so hopping pages never resizes a key. The `shifted` fields stay on the symbol
+keys: right-click still types them, and right-click output is never displayed,
+so it is a bonus rather than a duplicate.
+
+**The digits are not on `?123`, and the second page went with them.**
+Reported: "compact mode symbol mode duplicates number row". The page opened
+with `1 2 3 4 5 6 7 8 9 0`, and compact's standalone number row panel is on
+screen on *every* layer (it is derived from the layout carrying no `number`
+row of its own, not from a toggle), so hopping to `?123` put two identical
+digit rows one above the other. The page was also repeating `-` and `=` on
+row 2, and its row 3 (`! @ # $ % : & ( )`) was the number row's own
+right-click set. Twelve of twenty-eight symbol slots were being spent on
+glyphs already on screen.
+
+Reclaiming them is what made one page enough. Row 1 is now the number row's
+shifted set in digit order, which is the thing a keycap cannot show you (the
+cap reads `6`, and nothing on it says `^` is one right-click away), and rows 2
+and 3 carry every remaining ASCII symbol. The `=\<` page's thirteen non-ASCII
+glyphs (`× ÷ ± ≈ ≠ ≤ ≥ ¥ ¢ § • © ®`) moved to the Symbols & Emoji window,
+which is the same trade that removed the full-size `Sym` page: a picker is for
+browsing and a key is for reaching something whose position you already know,
+and nobody reaches for `≥` from muscle memory.
+
+The alternative fix was to hide the number row panel while a symbol page is
+up. It is a one-property change and it is wrong here: the compact keyboard
+would lose a whole row of height on the hop, so every key below it, including
+the `ABC` key you leave by, moves under the pointer. Nothing else in this
+layout is allowed to move on a layer switch, and the digits would stop being
+reachable without one.
 
 **The nav column reads top to bottom as a scroll ladder**: Home, PgUp, PgDn,
 End. Jump to the top, page up, page down, jump to the bottom.
@@ -109,21 +129,23 @@ Design rules, all enforced by `tests/test_layouts.py`:
   the pointer. The guarding tests derive the layer list from the file rather
   than naming layers: written against a hardcoded base/sym pair, they were blind
   to the second symbol page, which shipped with a bullet where every other layer
-  has a period.
+  had a period. That page is gone, but the derivation stays: it is what makes
+  a page added later covered for free.
 - **Arrows, Enter, Home, End, PgUp, PgDn and `/` are never behind a hop.** These
   were named explicitly as high-frequency keys.
 - **Enter and Backspace stay 2u.** Both are high-frequency and Backspace
   additionally auto-repeats, so a 1u target would regress against full size.
 - **Right-click covers the shifted variants**, so the base layer reaches more
   than it shows: `/`→`?`, `,`→`<`, `.`→`>`, `'`→`"`.
-- **`:` gets a dedicated key on the `?123` layer**, in the slot `^` used to
-  hold. Row 2 of that layer already carries `;`→`:` as a shifted variant, but a
-  shifted variant is invisible: the keycap reads `;` and nothing on screen says
-  a colon is one right-click away, so in practice the layer read as "no colon".
-  Row 3 exists to surface exactly those shifted glyphs as their own keys, and it
-  was already one short of the full set (`*` is missing for the same 13u
-  reason), so `^` — the rarest of the nine in prose — pays for it. `^` is
-  unchanged on row 1 as the shifted variant of `6`.
+- **Every glyph the `?123` layer offers has a key of its own**; none is
+  reachable only by right-click. A shifted variant is invisible: the keycap
+  reads `;` and nothing on screen says a colon is one right-click away, so for
+  a while the layer read as "no colon". `:`, `{`, `}`, `|` and `~` each have a
+  cap now, and `tests/test_layouts.py::test_every_shifted_variant_on_a_symbol_
+  page_has_its_own_key` states the rule rather than the instances. It is also
+  the constraint that sets the page's size: 28 slots, so 28 glyphs, which is
+  why the digits going back to the number row panel is what bought the second
+  page's removal rather than merely tidying it.
 - `.` sits beside Space (phone convention) rather than next to `,`; that is what
   pays for `/` on row 3 without a fourteenth column.
 
@@ -143,11 +165,18 @@ JSON. It keys off the layout rather than off `compactView` because a letter
 arrangement with no compact variant silently falls back to full size.
 
 It is a panel rather than a fifth row in the layout JSON because the compact
-layout's three layers must each be four rows of 13u
-(`test_has_three_layers_of_four_rows`), and because a panel is independent of
-which letter arrangement is selected. The digits behave like any other char key: shift shows and types the
-shifted glyph, right-click types it without flipping sticky shift, and both
-flash the key preview.
+layout's two layers must each be four rows of 13u
+(`test_has_two_layers_of_four_rows`), and because a panel is independent of
+which letter arrangement is selected. The digits behave like any other char
+key: shift shows and types the shifted glyph, right-click types it without
+flipping sticky shift, and both flash the key preview.
+
+**Being derived, it is on screen on every layer, so no layer may draw digits
+of its own.** That is not a style rule, it is the arithmetic: a digit on
+`?123` is this panel rendered twice, one row apart, which is what was
+reported and what `test_no_digit_appears_on_a_symbol_layer` now refuses. The
+panel is where the digits live in compact; a page that wants one should
+right-click the panel's own key or take the hop back to it.
 
 **The leading slot is `Esc`, not the physical keyboard's `` ` ``.** The Del/Esc
 trade above put Esc behind a hop, and "get me out of this dialog" is a bad key
@@ -365,11 +394,15 @@ Load-bearing rules:
   top-left and that duplicate is deliberate, so `?123` stays the fallback for a
   future layout that shows the compact grid without the panel. Don't swap them
   back without reading the rationale in the design doc.
-- **The symbol pages carry no Shift key**; Shift's slot switches to a second page
-  (`=\<`), the phone convention, which makes a glyph appearing twice on one
-  screen *structurally impossible* rather than merely absent. The bottom row and
-  the right-hand nav column are byte-identical on every layer, and the tests that
-  guard that derive the layer list from the file rather than naming base/sym.
+- **The symbol page carries no Shift key.** Shift's slot became a second page
+  (`=\<`), which made a glyph appearing twice on one screen *structurally
+  impossible* rather than merely absent; reclaiming the digits from row 1 then
+  made one page enough and the second page went. Shift does not come back: the
+  modifier is held at the *OS* level, so a held Shift would make a key emit one
+  glyph while displaying another, on a page with no Shift key to clear it from.
+  The bottom row and the right-hand nav column are byte-identical on every
+  layer, and the tests that guard that derive the layer list from the file
+  rather than naming base/sym.
   `Main.qml`'s layer branch calls the idempotent `keyboard.releaseShift()` on
   every switch (never `if (shiftOn) toggleShift()`), because the modifier is held
   at the OS level and a Shift carried in from the letters page makes `1` emit `!`

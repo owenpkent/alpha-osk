@@ -580,18 +580,32 @@ class TestEveryRowFitsTheContentArea:
         assert _real_warnings(warnings) == []
 
 
-class TestSecondSymbolPage:
-    r"""?123 -> =\< -> ?123, and what happens to a held Shift on the way.
+class TestTheSymbolPage:
+    r"""?123 -> ABC, the number row across the hop, and a held Shift.
 
-    Reported: on ?123, holding Shift re-rendered row 1 as ! @ # $ % ^ & * ( )
-    while row 3 already showed ! @ # $ % : & ( ). Shift on the symbol pages is
-    now a switch to a second page instead, which is the phone convention and
-    makes the overlap impossible rather than merely absent. The layout half of
-    that is asserted in tests/test_layouts.py; this is the QML half.
+    Two reports landed on this page. First: holding Shift on ?123 re-rendered
+    row 1 as the glyphs row 3 already showed, which is why Shift is not on the
+    symbol page at all. Then: the page opened with `1 2 3 4 5 6 7 8 9 0` under
+    a standalone number row that never goes away, so the digits were on screen
+    twice and the page was spending ten slots saying nothing new. Removing
+    them left room for every ASCII symbol on one page, so the second page
+    (`=\<`) and its hop are gone. The layout half is asserted in
+    tests/test_layouts.py; this is the QML half.
     """
 
     @staticmethod
+    def _panel(root, name: str):
+        panel = root.findChild(QQuickItem, name)
+        assert panel is not None, f"no panel named {name!r}"
+        return panel
+
+    @staticmethod
     def _key_items(root) -> list:
+        """Every key delegate under *root*.
+
+        `root` is either the window (walked from its contentItem) or a panel
+        item, which is already the thing to walk.
+        """
         out: list = []
 
         def walk(item) -> None:
@@ -600,7 +614,7 @@ class TestSecondSymbolPage:
                     out.append(child)
                 walk(child)
 
-        walk(root.property("contentItem"))
+        walk(root.property("contentItem") or root)
         return out
 
     @classmethod
@@ -641,32 +655,71 @@ class TestSecondSymbolPage:
         assert root.property("activeLayer") == "base"
         return root, warnings, bridge
 
-    def test_the_pages_chain_and_come_back(self, compact_shown) -> None:
+    def test_the_page_comes_back(self, compact_shown) -> None:
         root, warnings, _ = compact_shown
 
         self._tap(root, "sym")
         assert root.property("activeLayer") == "sym"
         assert len(_rows(root)) == 4
 
-        self._tap(root, "sym2")
-        assert root.property("activeLayer") == "sym2"
-        assert len(_rows(root)) == 4
-
-        # Back to ?123, then out to letters. A page you cannot leave is worse
-        # than a page that does not exist.
-        self._tap(root, "sym")
-        assert root.property("activeLayer") == "sym"
+        # A page you cannot leave is worse than a page that does not exist.
         self._tap(root, "base")
         assert root.property("activeLayer") == "base"
         assert _real_warnings(warnings) == []
 
-    def test_second_page_keys_are_the_same_size(self, compact_shown) -> None:
-        """All three pages are 13.0u with matching key counts, so hopping
+    def test_there_is_only_one_symbol_page(self, compact_shown) -> None:
+        """No key on ?123 hops anywhere but back to the letters.
+
+        Asserted over what is rendered rather than over the layout file,
+        because a second page left behind in the JSON would still be
+        reachable from here.
+        """
+        root, _, _ = compact_shown
+        self._tap(root, "sym")
+        targets = {
+            (i.property("kd") or {}).get("target")
+            for i in self._key_items(root)
+            if i.isVisible() and (i.property("kd") or {}).get("type") == "layer"
+        }
+        assert targets == {"base"}
+
+    def test_the_number_row_survives_the_hop_and_is_not_doubled(self, compact_shown) -> None:
+        """Reported: "compact mode symbol mode duplicates number row".
+
+        The panel is compact's number row and it is on screen on every layer,
+        so a digit drawn by the page itself is that row drawn twice. Both
+        halves are asserted together: the panel is still there after the hop
+        (the alternative fix was to hide it, which costs a whole row of
+        height and moves every key under the pointer), and nothing on the
+        page repeats it.
+        """
+        root, _, _ = compact_shown
+        self._tap(root, "sym")
+
+        assert self._panel(root, "numberRowPanel").isVisible(), (
+            "the digits went away on ?123; they must be reachable on every layer"
+        )
+        # The panel's own keys are inside the same tree, and they are the
+        # ones that are allowed to be digits, so take them back out.
+        panel_keys = {id(i) for i in self._key_items(self._panel(root, "numberRowPanel"))}
+        drawn = sorted(
+            {
+                key
+                for i in self._key_items(root)
+                if i.isVisible() and id(i) not in panel_keys
+                for key in [(i.property("kd") or {}).get("key") or ""]
+                if key.isdigit()
+            }
+        )
+        assert not drawn, f"?123 draws {drawn} under a number row that already shows them"
+
+    def test_symbol_page_keys_are_the_same_size(self, compact_shown) -> None:
+        """Both pages are 13.0u with matching key counts, so hopping
         between them must not resize anything under the pointer."""
         root, _, _ = compact_shown
         base_w, base_fixed = root.property("keyW"), root.property("layoutFixedPixels")
 
-        for target in ("sym", "sym2"):
+        for target in ("sym",):
             self._tap(root, target)
             assert root.property("keyW") == pytest.approx(base_w), f"keys resized on {target}"
             assert root.property("layoutFixedPixels") == pytest.approx(base_fixed)
@@ -692,10 +745,10 @@ class TestSecondSymbolPage:
         )
         assert _real_warnings(warnings) == []
 
-    def test_no_shift_key_exists_on_either_symbol_page(self, compact_shown) -> None:
+    def test_no_shift_key_exists_on_the_symbol_page(self, compact_shown) -> None:
         """Belt and braces against the QML rendering one anyway."""
         root, _, _ = compact_shown
-        for target in ("sym", "sym2"):
+        for target in ("sym",):
             self._tap(root, target)
             visible = [i for i in self._key_items(root) if i.isVisible()]
             assert visible, "no keys rendered"
@@ -721,7 +774,7 @@ class TestHoldingALetterRepeatsOnlyWhenAskedFor:
     @staticmethod
     def _repeat_flags(root) -> dict:
         out: dict = {}
-        for item in TestSecondSymbolPage._key_items(root):
+        for item in TestTheSymbolPage._key_items(root):
             kd = item.property("kd")
             if hasattr(kd, "toVariant"):
                 kd = kd.toVariant()

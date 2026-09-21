@@ -495,7 +495,7 @@ function roleForKey(kd) {
         return "alpha"
     if (kd.type === "modifier")
         return "mod"
-    // A compact layer key (?123, =\<) swaps the page rather than typing;
+    // A compact layer key (?123, ABC) swaps the page rather than typing;
     // it belongs with Tab and Esc.
     if (kd.type === "layer")
         return "edit"
