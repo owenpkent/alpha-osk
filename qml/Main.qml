@@ -3363,7 +3363,7 @@ Window {
                                             case "win": keyboard.toggleWin(); break
                                         }
                                     } else if (kd.type === "layer") {
-                                        // Layer switch (?123 / =\< / ABC),
+                                        // Layer switch (?123 / ABC),
                                         // purely a QML-side view change.
                                         // Deliberately does NOT go through
                                         // keyboard.setLayout: that would persist

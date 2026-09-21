@@ -843,12 +843,13 @@ Full write-up: `docs/architecture/COMPACT_VIEW.md` (section of the same name). R
 A denser 13x4 keyboard, off by default (*Appearance -> Panels -> Compact View*).
 
 - **Every row in a compact layout totals the same unit count** (13.0 for `qwerty-compact`).
-- **Layers are a QML-side view concept; the backend never sees them.** A `"type": "layer"` key sets `activeLayer` and must not call `keyboard.setLayout()`. Every layer switch calls the idempotent `keyboard.releaseShift()`. The symbol pages carry no Shift key (its slot is the second page), so a glyph cannot appear twice on one screen.
+- **Layers are a QML-side view concept; the backend never sees them.** A `"type": "layer"` key sets `activeLayer` and must not call `keyboard.setLayout()`. Every layer switch calls the idempotent `keyboard.releaseShift()`. The `?123` page carries no Shift key: a held Shift would make a key emit one glyph while showing another, with nothing on the page to clear it from. Every glyph it offers has a key of its own, so nothing there is reachable only by right-click; that rule is what caps the page at 28 glyphs.
 - `totalKeyUnits` is derived (`_widestRow`), never a constant. `resolveLayoutId()` combines `currentLayout` with `compactView`; a layout with no compact variant falls back to full size.
 - **No panel that lines up with the grid may use `QtQuick.Layouts`** (it rounds children to whole pixels).
 - The accent fill on the editing keys is `root.accentWashFor()`, walked down until `textColor` clears 4.5:1; never the raw accent.
 - Del is on the base layer and Esc on `?123`; the Number Row panel's leading Esc is a deliberate duplicate.
 - `NumberRow.qml` shows whenever `Main.qml::showNumberRow` is true, which is **derived** from the layout carrying no `number` row. It is declared **below** both function rows, so the stack reads F13-F24, F1-F12, digits, letters. The nav column reads Home / PgUp / PgDn / End.
+- **Being derived, the number row panel is on screen on every layer, so no compact layer may draw digits of its own.** `?123` used to open with `1 2 3 4 5 6 7 8 9 0` under it: the same row twice, one row apart. Hiding the panel on the symbol page is the wrong fix (the keyboard loses a row of height and every key below moves under the pointer, including the `ABC` key you leave by). Guard: `tests/test_layouts.py::test_no_digit_appears_on_a_symbol_layer`.
 - `tests/test_qml_compact_view.py` and `tests/test_qml_prediction_bar.py` load the real `Main.qml` headlessly and fail on QML warnings: the only guard against a binding error shipping as a blank keyboard.
 
 ## Dead space between keys
@@ -867,7 +868,7 @@ Full write-up: `docs/architecture/LAYOUT_GEOMETRY.md` (section of the same name)
 
 - The full-size `Sym` page was removed on 2026-09-05 (every glyph is in the Symbols & Emoji window) and its width went to the space bar. The full-size layout files declare no layers.
 - **The space bar's centre stays at 8.25u**: Win stays 1.0u and the four Ctrl / Alt keys stay equal to each other (`tests/test_layouts.py::TestTheFullSizeSpaceRow`).
-- Del stays off the full-size grid and Enter's width is what puts Q over A. Compact's `?123` / `=\<` pages are **not** removable by the same argument.
+- Del stays off the full-size grid and Enter's width is what puts Q over A. Compact's `?123` page is **not** removable by the same argument (13u cannot hold letters and digits at once). Its second page `=\<` was, and went on 2026-09-21: the digits came off `?123`, where they duplicated the always-visible number row panel, and the 28 freed slots made one page enough. See *Compact view*.
 
 ## Full-size rows are flush (every row is 15.5u)
 
