@@ -65,12 +65,28 @@ is nothing left to centre and the gutters vanish *by construction* — no
 stretching or justification logic exists anywhere in the QML.
 
 ```
-Base layer                               ?123 layer
-  q w e r t y u i o p [ ⌫ ] Home           ! @ # $ % ^ & * ( ) [ ⌫ ] Home
- Tab a s d f g h j k l ' Del PgUp         Tab [ { ] } \ | ; : Ins Esc Caps PgUp
-  ⇧ z x c v b n m , / [Enter] PgDn         ` ~ < > _ + ° € £ ™ [Enter] PgDn
- ?123 Ctl ⊞ Alt [space] . ← ↑ ↓ → End     ABC Ctl ⊞ Alt [space] . ← ↑ ↓ → End
+Base layer                                ?123 layer
+ Tab q w e r t y u i o p ⌫ Home            Tab ! @ # $ % ^ & * ( ) ⌫ Home
+Caps a s d f g h j k l ' Del PgUp         Caps [ { ] } \ | ; : Ins Esc " PgUp
+  ⇧ z x c v b n m , / [Enter] PgDn          ` ~ < > _ + ° € £ ™ [Enter] PgDn
+ ?123 Ctl ⊞ Alt [space] . ← ↑ ↓ → End      ABC Ctl ⊞ Alt [space] . ← ↑ ↓ → End
 ```
+
+**`w` sits above `s`, and that cost Backspace a unit.** The top row used to
+open with `q` while the home row opened with Tab, so every home-row letter sat
+one column right of the letter above it: `w` was over `a`, and the number row
+panel (whose own leading slot is `Esc`) put `1` over `w` rather than over `q`.
+On a grid where every key is the same size, that column relationship is most of
+what a user reads the board by, and it is the one thing full size gets for free
+(there, `w` is over `s` because Tab and Caps are the same width).
+
+Compact now gets it the same way: both letter rows open with a 1u key, Tab over
+Caps, which is also where a physical keyboard puts them. The left edge reads
+`Esc` / `Tab` / `Caps` / `⇧` / `?123` straight down, Caps stops being behind a
+hop, and the digits line up with the letters they belong to. A 13u row has no
+spare unit, so the top row's new slot had to be paid for, and Backspace's
+second unit is what paid: it is still accent-filled, still auto-repeats, and
+still has the whole right edge of the row to itself.
 
 **Two layers, and Shift is not one of them.** The `?123` page used to carry a
 Shift key, which re-rendered its row 1 as `! @ # $ % ^ & * ( )` while row 3
@@ -78,7 +94,7 @@ already showed `! @ # $ % : & ( )` permanently: nine keys on screen saying the
 same thing as another key on screen. Shift's slot became a switch to a second
 symbol page (`=\<`), the phone convention, so every glyph Shift used to reach
 had a key of its own and the overlap was *structurally impossible* rather than
-merely absent. Both layers are 13.0u with matching key counts (12/13/12/11),
+merely absent. Both layers are 13.0u with matching key counts (13/13/12/11),
 so hopping pages never resizes a key. The `shifted` fields stay on the symbol
 keys: right-click still types them, and right-click output is never displayed,
 so it is a bonus rather than a duplicate.
@@ -116,8 +132,8 @@ End. Jump to the top, page up, page down, jump to the bottom.
 forward-delete on the base layer had to cost something, and Esc was the only
 key there that isn't in the protected set below. Backspace-only editing means
 walking the caret past a mistake and back, which is several extra clicks with a
-pointer; Esc is comparatively rare in text entry. `Enter`/`Backspace` staying 2u
-and the nav column staying put both rule out the alternatives.
+pointer; Esc is comparatively rare in text entry. Enter staying 2u and the nav
+column staying put both rule out the alternatives.
 `tests/test_layouts.py::TestCompactLayout::test_esc_is_still_reachable_from_the_sym_layer`
 guards that this stayed a trade rather than becoming a deletion.
 
@@ -133,8 +149,9 @@ Design rules, all enforced by `tests/test_layouts.py`:
   a page added later covered for free.
 - **Arrows, Enter, Home, End, PgUp, PgDn and `/` are never behind a hop.** These
   were named explicitly as high-frequency keys.
-- **Enter and Backspace stay 2u.** Both are high-frequency and Backspace
-  additionally auto-repeats, so a 1u target would regress against full size.
+- **Enter stays 2u.** It is high-frequency and it is the one key on the grid
+  with no neighbour to confuse it with, so it keeps the second unit Backspace
+  gave up to the column alignment above.
 - **Right-click covers the shifted variants**, so the base layer reaches more
   than it shows: `/`→`?`, `,`→`<`, `.`→`>`, `'`→`"`.
 - **Every glyph the `?123` layer offers has a key of its own**; none is
@@ -143,9 +160,12 @@ Design rules, all enforced by `tests/test_layouts.py`:
   a while the layer read as "no colon". `:`, `{`, `}`, `|` and `~` each have a
   cap now, and `tests/test_layouts.py::test_every_shifted_variant_on_a_symbol_
   page_has_its_own_key` states the rule rather than the instances. It is also
-  the constraint that sets the page's size: 28 slots, so 28 glyphs, which is
+  the constraint that sets the page's size: 29 slots, so 29 glyphs, which is
   why the digits going back to the number row panel is what bought the second
-  page's removal rather than merely tidying it.
+  page's removal rather than merely tidying it. The twenty-ninth is `"`, which
+  landed there when Caps moved to the head of the row: it was the one common
+  ASCII glyph compact had no key of its own for, and the row already pairs a
+  base glyph with its shifted twin (`[` `{`, `]` `}`, `\` `|`, `;` `:`).
 - `.` sits beside Space (phone convention) rather than next to `,`; that is what
   pays for `/` on row 3 without a fourteenth column.
 
@@ -389,6 +409,13 @@ Load-bearing rules:
   themes below WCAG AA, on exactly the keys the style exists to make findable.
   The accent-coloured border carries the cue where the wash has to back off.
   Full-size layouts are deliberately untouched.
+- **Rows 1 and 2 open with Tab and Caps, so `w` sits above `s`.** Full size
+  reduces the same property to Tab and Caps being the same width; compact makes
+  it the same way, and pays for the extra slot out of Backspace's second unit
+  (1u on compact, 2u everywhere else). Both keys lead rows 1 and 2 on `?123`
+  too: a symbol page leading with a glyph would move them under the pointer on
+  every layer hop. Guards: `TestCompactLayout::test_w_sits_above_s` and
+  `::test_the_left_column_is_the_same_on_both_layers`.
 - **Del sits on the base layer, Esc on `?123`.** A 13u row has no spare unit, so
   the two traded places. The Number Row panel puts a second Esc back at the
   top-left and that duplicate is deliberate, so `?123` stays the fallback for a

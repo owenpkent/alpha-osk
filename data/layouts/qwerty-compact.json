@@ -2,12 +2,20 @@
   "id": "qwerty-compact",
   "name": "QWERTY Compact",
   "compactOf": "qwerty",
-  "_comment": "Compact view: 13 columns x 4 rows, every row exactly 13.0 units so there are no centring gutters. Rows carry a `layer` field; Main.qml renders only the active layer. Rows in layouts without a `layer` field always render, so the full-size layouts are unaffected. Design rationale and measurements: docs/architecture/COMPACT_VIEW.md",
+  "_comment": "Compact view: 13 columns x 4 rows, every row exactly 13.0 units so there are no centring gutters. Rows 1 and 2 open with Tab and Caps on every layer, which is what puts w above s and costs Backspace its second unit. Rows carry a `layer` field; Main.qml renders only the active layer. Rows in layouts without a `layer` field always render, so the full-size layouts are unaffected. Design rationale and measurements: docs/architecture/COMPACT_VIEW.md",
   "rows": [
     {
       "id": "base-1",
       "layer": "base",
       "keys": [
+        {
+          "type": "special",
+          "action": "tab",
+          "display": "Tab",
+          "width": 1.0,
+          "fontSize": 11,
+          "style": "accent"
+        },
         {
           "type": "char",
           "key": "q",
@@ -62,7 +70,7 @@
           "type": "special",
           "action": "backspace",
           "display": "⌫",
-          "width": 2.0,
+          "width": 1.0,
           "fontSize": 16,
           "style": "accent"
         },
@@ -81,12 +89,13 @@
       "layer": "base",
       "keys": [
         {
-          "type": "special",
-          "action": "tab",
-          "display": "Tab",
+          "type": "modifier",
+          "action": "caps",
+          "display": "Caps",
           "width": 1.0,
-          "fontSize": 11,
-          "style": "accent"
+          "fontSize": 10,
+          "stateKey": "capsOn",
+          "style": "special"
         },
         {
           "type": "char",
@@ -342,6 +351,14 @@
       "layer": "sym",
       "keys": [
         {
+          "type": "special",
+          "action": "tab",
+          "display": "Tab",
+          "width": 1.0,
+          "fontSize": 11,
+          "style": "accent"
+        },
+        {
           "type": "char",
           "key": "!",
           "width": 1.0,
@@ -415,7 +432,7 @@
           "type": "special",
           "action": "backspace",
           "display": "⌫",
-          "width": 2.0,
+          "width": 1.0,
           "fontSize": 16,
           "style": "accent"
         },
@@ -434,12 +451,13 @@
       "layer": "sym",
       "keys": [
         {
-          "type": "special",
-          "action": "tab",
-          "display": "Tab",
+          "type": "modifier",
+          "action": "caps",
+          "display": "Caps",
           "width": 1.0,
-          "fontSize": 11,
-          "style": "accent"
+          "fontSize": 10,
+          "stateKey": "capsOn",
+          "style": "special"
         },
         {
           "type": "char",
@@ -518,13 +536,11 @@
           "style": "accent"
         },
         {
-          "type": "modifier",
-          "action": "caps",
-          "display": "Caps",
+          "type": "char",
+          "key": "\"",
           "width": 1.0,
-          "fontSize": 10,
-          "stateKey": "capsOn",
-          "style": "special"
+          "fontSize": 14,
+          "style": "secondary"
         },
         {
           "type": "special",
