@@ -168,6 +168,58 @@
   appClosed:
 !macroend
 
+; Stamps System.AppUserModel.ID onto the .lnk whose path is on the stack, so
+; a shortcut pinned to the taskbar groups with the running keyboard, which
+; sets the same id on itself explicitly (keyboard_app.py::APP_USER_MODEL_ID;
+; build.py reads the constant from that file into ${APP_AUMI}, so the two
+; cannot drift).  Without the stamp, Windows derives an identity from the
+; shortcut's target path, the running window announces a different one, and
+; the taskbar shows two buttons for the same app, measured on a real
+; machine with one pre-1.2.0 pin (empty id) beside the running window's
+; explicit id.
+;
+; CreateShortCut cannot write property-store values, so this goes through
+; the shell's IPropertyStore on the finished .lnk via System::Call:
+;   - SHGetPropertyStoreFromParsingName with GPS_READWRITE (2) and
+;     IID_IPropertyStore {886d8eeb-8cf2-4446-8d02-cdba1dbdcf99}
+;   - PKEY_AppUserModel_ID is {9F4C2855-9F79-4B39-A8D0-E1D42DE1D5F3} pid 5
+;   - the PROPVARIANT is VT_LPWSTR (31): a WORD vt, three reserved WORDs
+;     (8 bytes together, so the union lands at the right offset on both
+;     x86 and x64), then the string pointer
+;   - vtable: SetValue is slot 6, Commit 7, Release 2
+;
+; Best-effort throughout: a missing .lnk (the user unchecked the shortcut
+; and none pre-existed) or a failed HRESULT is skipped silently, because a
+; lost taskbar stamp costs grouping, never the install.
+!macro customStampShortcutAppId
+  Exch $0
+  Push $1
+  Push $2
+  Push $3
+  Push $4
+  Push $5
+  ${If} ${FileExists} "$0"
+    System::Call 'shell32::SHGetPropertyStoreFromParsingName(w r0, p 0, i 2, g "{886d8eeb-8cf2-4446-8d02-cdba1dbdcf99}", *p .r1) i .r2'
+    ${If} $2 = 0
+      System::Call '*(g "{9F4C2855-9F79-4B39-A8D0-E1D42DE1D5F3}", i 5) p .r3'
+      System::Call '*(w "${APP_AUMI}") p .r4'
+      System::Call '*(&i2 31, &i2 0, &i2 0, &i2 0, p r4) p .r5'
+      System::Call '$1->6(p r3, p r5)'
+      System::Call '$1->7()'
+      System::Call '$1->2()'
+      System::Free $5
+      System::Free $4
+      System::Free $3
+    ${EndIf}
+  ${EndIf}
+  Pop $5
+  Pop $4
+  Pop $3
+  Pop $2
+  Pop $1
+  Pop $0
+!macroend
+
 ; Removes a previous Alpha-OSK installation recorded under ${ROOT}, given its
 ; InstallLocation in $2 and DisplayVersion in $1.
 ;

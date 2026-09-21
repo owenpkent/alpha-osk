@@ -590,13 +590,18 @@ def _install_exception_hooks() -> None:
     _exception_hooks_installed = True
 
 
-# Stable per-application identity for the Windows taskbar.  Must match the
-# AppUserModelID set on the installer's Start Menu / Desktop shortcuts so a
-# pinned shortcut groups with the running window.  Format convention is
-# ``Company.Product`` (see Microsoft's AppUserModelID guidance).  Kept here
-# rather than in windows_window.py: it must also match the AppUserModelID
-# stamped on the installer's shortcuts, which is an app packaging concern,
-# not a windowing one.
+# Stable per-application identity for the Windows taskbar.  MUST match the
+# AppUserModelID the installer stamps on its Start Menu / Desktop shortcuts
+# (build/windows/build.py reads this constant out of this file at build
+# time and hands it to installer.nsh::customStampShortcutAppId), or a
+# pinned shortcut and the running window read as two different apps and
+# Windows shows two taskbar buttons.  That is not hypothetical: shortcuts
+# went unstamped from the introduction of this id (v1.2.0) to 1.5.0, so
+# any pin made before then, or made from the installer's shortcuts since,
+# duplicated the icon.  Format convention is ``Company.Product`` (see
+# Microsoft's AppUserModelID guidance).  Kept here rather than in
+# windows_window.py: it must also match the shortcut stamp, which is an
+# app packaging concern, not a windowing one.
 APP_USER_MODEL_ID = "OKStudio.AlphaOSK"
 
 
@@ -741,13 +746,15 @@ class _KeyboardApplication(QApplication):
 
 def main() -> int:
     """Launch the Alpha-OSK on-screen keyboard."""
-    # CLI dispatch — the post-update relauncher re-invokes this binary
-    # with ``--update-relauncher`` and runs in a detached process owned
-    # by the user session, so it can launch the freshly-installed OSK
-    # at user IL after the elevated installer has exited. Skipping the
-    # singleton lock and the QApplication setup here keeps the helper
-    # cheap and side-effect-free; see ``src/_update_relauncher.py``
-    # for the polling logic and rationale.
+    # CLI dispatch — the post-update relauncher is this same binary,
+    # staged as a renamed copy in %TEMP% (see updater._spawn_relauncher
+    # for why it must be neither named alpha-osk.exe nor run from the
+    # install dir) and invoked with ``--update-relauncher``. It runs as
+    # a detached process owned by the user session, so it can launch
+    # the freshly-installed OSK at user IL after the elevated installer
+    # has exited. Skipping the singleton lock and the QApplication
+    # setup here keeps the helper cheap and side-effect-free; see
+    # ``src/_update_relauncher.py`` for the polling logic and rationale.
     if "--update-relauncher" in sys.argv:
         from src._update_relauncher import run_relauncher
 

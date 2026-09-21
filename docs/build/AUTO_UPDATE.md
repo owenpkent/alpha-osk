@@ -213,7 +213,7 @@ The on-startup ✓ Updated toast added in 1.0.17 fires *after* the gap and helps
 `_update_relauncher.run_relauncher` has three sequential waits, all silent in the original implementation:
 1. `_wait_for_parent_exit` — up to 60 s for the installer's taskkill to land (usually < 1 s).
 2. `time.sleep(_INSTALLER_GRACE_S)` — fixed 5 s for the installer to finish file copies.
-3. `_wait_for_new_exe` — up to 180 s polling for `$INSTDIR\alpha-osk.exe` mtime to advance past parent-death.
+3. `_wait_for_new_exe` — up to 180 s polling for `$INSTDIR\alpha-osk.exe` to look freshly installed (originally "mtime past parent-death", which could never fire in production; since 1.5.1 it is "mtime differs from the pre-install snapshot", see *The helper is a renamed copy in %TEMP%* below).
 
 So the floor is ~5 s and the ceiling is ~245 s. Real installs land at ~15-30 s on a healthy machine; AV scanning of the freshly-extracted DLLs can push it higher.
 
@@ -237,7 +237,7 @@ The interactive NSIS UI would solve the visibility problem trivially, but at the
 
 ### Files
 
-- `src/updater.py` — `download_and_install` accepts `on_installer_launching: Optional[HandoffCb]`; `_spawn_relauncher` adds `--show-splash` to the relauncher cmd in both frozen and dev paths.
+- `src/updater.py` — `download_and_install` accepts `on_installer_launching: Optional[HandoffCb]`; `_spawn_relauncher` adds `--show-splash` to the relauncher cmd (frozen installs only since 1.5.1; dev runs no longer spawn a helper at all).
 - `src/keyboard_bridge.py` — `updateInstallHandoffPending = Signal(str)`; `installUpdate` worker passes a callback that emits the signal then sleeps `_PRE_INSTALL_TOAST_DWELL_S` (1.8 s).
 - `src/_update_relauncher.py` — `run_relauncher` dispatch, `_run_headless` (legacy + fallback), `_run_with_splash` (Qt path), `_build_splash_widget`, `_new_exe_ready`, `_is_dev_target`.
 - `qml/Main.qml` — `updateStartingToast` Popup + the `Connections.onUpdateInstallHandoffPending` handler that flashes it.
@@ -292,11 +292,13 @@ a fresh one and draws it. `CREATE_NO_WINDOW` leaves it with a console that is
 merely invisible, which the re-exec inherits and never draws.
 
 Detachment is not lost along with the flag. Windows has no parent-death
-signal, so the child outlives us whether or not it is formally detached, and
-`CREATE_NEW_PROCESS_GROUP` is the part that actually keeps it clear of the
-installer's `taskkill`.
+signal, so the child outlives us whether or not it is formally detached.
+(This section's original text claimed `CREATE_NEW_PROCESS_GROUP` "keeps it
+clear of the installer's taskkill", and that was wrong in the way the next
+section documents: `taskkill /IM` matches by image name, which no creation
+flag can hide. Surviving the taskkill is the job of the helper's *name*.)
 
-Pinned by `tests/test_updater.py::TestRelauncherSpawnHasNoConsole`, which
+Pinned by `tests/test_updater.py::TestRelauncherSpawn`, which
 asserts `DETACHED_PROCESS` is **absent** as well as that `CREATE_NO_WINDOW` is
 present. The absence assertion is the load-bearing one: a test that only
 checked the `CREATE_NO_WINDOW` bit was set passed just as happily against the
@@ -335,12 +337,80 @@ found and fixed while chasing them. A blank console is close to anonymous
 from the outside, so enumerate `conhost.exe` and walk up to its parent's
 command line before believing whichever of your own tools you last ran.
 
-### Open: the helper never exits when its parent is already gone
+### Closed: the stray-helper class (see TODO.md's post-mortem)
 
-The remaining half is unfixed and tracked in `TODO.md`. `run_relauncher`
-polls for the parent to die, then for the new exe, then launches. There is no
-branch for "the parent PID does not resolve at all", which is the normal case
-when the spawn was incidental (a test) or the parent crashed. It should exit
-early there, and the overall wait should be bounded. Until then, a stray
-relauncher runs until it is killed; it no longer shows a window, so it is
-also no longer visible.
+An earlier revision of this section claimed the helper "never exits when its
+parent is already gone"; measured, `_wait_for_parent_exit` returns in 0.00 s
+for a dead pid. The real waste was the dev-mode new-exe wait (fixed by
+`_is_dev_target` and then made moot when dev spawns were removed entirely)
+plus the `_MAX_TOTAL_RUNTIME_S` ceiling. TODO.md carries the corrected
+diagnosis.
+
+## The helper is a renamed copy in %TEMP% (1.5.1)
+
+Two production defects were found together on 2026-09-18, from one machine's
+evidence: `relauncher.log` had **no production entry ever** (only dev runs),
+and the installed `alpha-osk.exe` carried an mtime two days *older* than the
+install that had just written it.
+
+### The installer was killing its own relauncher
+
+The helper was spawned as the installed exe re-invoked in place
+(`alpha-osk.exe --update-relauncher`), so it shared the app's image name.
+The installer closes the app with `taskkill /IM "alpha-osk.exe"`
+(`installer.nsh::customCloseAlphaOsk`), then polls `tasklist` for that image
+name to disappear, and force-kills whatever still matches. The helper kept
+matching, so every update first burned the full ~6-8 s wait budget (the loop
+was staring at the helper) and then force-killed it. The splash and the
+relaunch died before extraction began; the keyboard only ever came back via
+the `Exec explorer.exe` fallback the helper was built to replace.
+
+**Do not fix this by exempting the helper's PID from the taskkill.** That was
+the first design and it is worse than the bug: a process running from the
+install dir holds its own exe and every loaded DLL mapped, Windows will
+neither delete nor overwrite a mapped image, and a silent NSIS install that
+cannot write a file **aborts**, leaving the user with no keyboard at all.
+The accidental kill was the only reason updates succeeded.
+
+`updater._spawn_relauncher` therefore stages a full copy of the onedir
+bundle under `%TEMP%` (`alpha-osk-relauncher-*`), renames the exe to
+`alpha-osk-relauncher.exe`, and spawns that. Different image name: the
+taskkill and the wait loop never see it (updates also get ~8 s faster). Different
+location: the install dir stays unlocked. The copied exe keeps its
+Authenticode signature (same bytes), and a PyInstaller onedir exe runs from
+any directory as long as `_internal` sits beside it, which is why the whole
+bundle is copied rather than the bare exe. A running helper cannot delete
+its own image, so each update leaves one stage behind;
+`_purge_stale_relauncher_stages` sweeps the previous ones at the next spawn.
+Dev runs spawn nothing at all now: there is no installed bundle to copy and
+no installer to wait for.
+
+### The "new exe is ready" gate could never fire
+
+`_wait_for_new_exe` required the exe's mtime to be *newer than the parent's
+death*, and NSIS restores each extracted file's build-machine timestamp
+(`SetDateSave` defaults on), so the fresh exe's mtime predates the install
+by however old the build is. Even a helper that survived the taskkill would
+have polled the full 180 s and then claimed the update failed: a
+three-minute "Updating Alpha-OSK…" splash for a ~30 s install.
+
+The updater now snapshots the installed exe's mtime immediately before the
+install and passes it as `--old-exe-mtime`; the helper waits for the mtime
+to **differ** (`_new_exe_looks_fresh`, shared by the blocking wait and the
+splash's single-shot check). Two builds never share a timestamp, so
+inequality is exact; the one blind spot is reinstalling the *same* build,
+which the auto-updater never does. Without a snapshot the helper falls back
+to the legacy comparison, so a helper spawned by an older updater keeps its
+old behaviour.
+
+Both sides of each fix ship in the same release, so, like the
+settings-preserving uninstall, **the fix cannot protect the upgrade that
+delivers it**: the update *to* the first release carrying this still runs
+the old spawn and dies as before. Every update after that gets the splash,
+the fast close, and the prompt relaunch.
+
+Pinned by `tests/test_updater.py::TestRelauncherSpawn` (image name, staging
+location, snapshot in the argv, sweep, non-fatal staging failure) and
+`tests/test_update_relauncher.py::TestAFreshInstallIsSeenThroughItsBuildTimestamp`
+(the build-stamped-mtime case end to end, plus the no-snapshot fallback in
+both directions).

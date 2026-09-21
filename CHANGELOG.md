@@ -4,6 +4,13 @@ All notable changes to Alpha-OSK are documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+- **Updates are faster, and the progress window finally appears and finishes.** The helper that is supposed to show "Updating Alpha-OSK" and bring the keyboard back was being closed by the installer itself moments after it started, because it ran under the keyboard's own program name and the installer closes everything by that name; the installer also spent about eight extra seconds waiting for it before doing so. The keyboard still came back, but only through a fallback, with nothing on screen during the gap. The helper now runs under its own name from a temporary copy, so it survives the install, the extra wait is gone, and the progress window shows each step and closes when the new keyboard appears.
+
+  Separately, the helper's test for "the new version is installed" could never pass, because installed files keep the timestamp of the machine that built them rather than the moment they were written; on the rare occasions the helper survived, it watched for three minutes and then reported the update had failed when it had not. It now compares against a snapshot taken before the install, which sees the change immediately. Both fixes take effect on the update after the one that delivers them.
+
+- **Pinning Alpha-OSK to the taskbar no longer produces a second icon.** The installer's shortcuts did not carry the taskbar identity the running keyboard announces, so Windows treated a pinned shortcut and the running window as two different programs and showed two buttons. The installer now writes that identity onto the Start Menu and desktop shortcuts, including ones an earlier version created. An existing duplicated pin fixes itself by unpinning it and pinning again.
+
 ## [1.5.0] (2026-09-16)
 
 ### Added
