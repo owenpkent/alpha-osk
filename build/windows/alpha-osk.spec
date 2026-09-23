@@ -36,12 +36,30 @@ Notes
   doesn't auto-detect.
 """
 
+import importlib.util
 import os
+import sys
 from pathlib import Path
 
 # This spec lives at build/windows/alpha-osk.spec — project root is 2 levels up.
 PROJECT_ROOT = Path(SPECPATH).parent.parent
 SPEC_DIR = Path(SPECPATH)
+
+# The exe's version resource (FileDescription, ProductName, the numeric
+# version), generated from src/__version__.py at build time so it cannot go
+# stale.  Without one the shell names a taskbar pin made from the running
+# button after the bare filename, "alpha-osk".  See version_resource.py.
+sys.path.insert(0, str(PROJECT_ROOT))
+from src.__version__ import __version__ as APP_VERSION
+
+_vr_spec = importlib.util.spec_from_file_location(
+    'alpha_osk_version_resource', SPEC_DIR / 'version_resource.py'
+)
+_vr = importlib.util.module_from_spec(_vr_spec)
+_vr_spec.loader.exec_module(_vr)
+VERSION_FILE = Path(workpath) / 'alpha-osk-version-info.txt'
+VERSION_FILE.parent.mkdir(parents=True, exist_ok=True)
+VERSION_FILE.write_text(_vr.version_info_text(APP_VERSION), encoding='utf-8')
 
 block_cipher = None
 
@@ -204,6 +222,8 @@ exe = EXE(
     manifest=str(SPEC_DIR / 'alpha-osk.exe.manifest'),
     # Icon for the executable (replace with a professional .ico if desired)
     icon=str(SPEC_DIR / 'alpha-osk.ico'),
+    # Version resource: FileDescription is what a taskbar pin is named from.
+    version=str(VERSION_FILE),
 )
 
 coll = COLLECT(

@@ -408,6 +408,7 @@ The `.spec` file (`build/windows/alpha-osk.spec`) can be customized:
 | `upx` | `True` | Compress binaries with UPX |
 | `manifest` | `alpha-osk.exe.manifest` | Path to the UIAccess manifest |
 | `icon` | (none) | Path to `.ico` file for the exe icon |
+| `version` | generated | Version resource (FileDescription, ProductName, version). Written by the spec from `version_resource.py` and `src/__version__.py` into the work directory on every build; nothing to bump |
 
 ---
 
@@ -944,6 +945,7 @@ Or check the startup log output:
 | `run.py` | MODIFIED — Cross-platform venv paths and dep checks |
 | `build/windows/alpha-osk.exe.manifest` | NEW — UIAccess manifest for EV signing |
 | `build/windows/alpha-osk.spec` | NEW — PyInstaller build specification |
+| `build/windows/version_resource.py` | NEW — the exe's version resource, generated from `src/__version__.py` |
 
 ### Key Design Decisions
 

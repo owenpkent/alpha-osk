@@ -43,6 +43,7 @@ See Also
 --------
 - ``build/windows/sign.py`` — Signing script with retry logic.
 - ``build/windows/alpha-osk.spec`` — PyInstaller build specification.
+- ``build/windows/version_resource.py`` — the exe's version resource.
 - ``build/windows/installer.nsh`` — NSIS installer customizations.
 - ``docs/build/WINDOWS.md`` — Full Windows guide.
 """
