@@ -82,6 +82,11 @@ class StudyBridge(QObject):
 
     # --- consent ---
 
+    @Slot(object)
+    def set_predictor(self, predictor: Any) -> None:
+        """Attach the engine after startup, before a study can begin."""
+        self._predictor = predictor
+
     @Slot(result=bool)
     def hasConsented(self) -> bool:
         """Whether this participant has agreed to the CURRENT consent version.
@@ -135,7 +140,11 @@ class StudyBridge(QObject):
         pool cannot fill the design, because both are recoverable states the
         UI has to be able to show a message for.
         """
-        if not self.hasConsented():
+        # No engine, no session: the freeze that keeps a block from training
+        # the model it is scored on has nothing to hold, so a session started
+        # here would run unfrozen.  The engine arrives through set_predictor
+        # once startup finishes loading it.
+        if self._predictor is None or not self.hasConsented():
             return False
         state = self._store.state
         design = DESIGNS.get(state.design_id, DEFAULT_DESIGN)

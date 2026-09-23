@@ -15,6 +15,8 @@ from __future__ import annotations
 import logging
 import math
 import threading
+import time
+from collections.abc import Callable
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Dict, Iterable, Iterator, List, Optional, Sequence, Tuple
@@ -71,6 +73,18 @@ def _short_word_allowed(word: str, profile: LanguageProfile = ENGLISH) -> bool:
     return profile.is_short_word(word)
 
 
+class LoadAborted(Exception):
+    """Raised inside ``HybridPredictor.__init__`` when ``abort_check`` says stop.
+
+    The startup loader builds the engine on a worker thread and the user may
+    close the keyboard before it finishes.  Cancelling only the *publication*
+    leaves the worker constructing an object nobody will use, and finishing
+    that construction during Qt teardown is what crashed early quits.  The
+    constructor asks ``abort_check`` between its phases and raises this, so a
+    cancel is honoured within about one phase rather than at the end.
+    """
+
+
 class HybridPredictor(QObject):
     """
     Hybrid prediction engine combining multiple approaches:
@@ -97,6 +111,7 @@ class HybridPredictor(QObject):
         enable_llm: bool = True,
         parent: Optional[QObject] = None,
         profile: LanguageProfile = ENGLISH,
+        abort_check: Optional[Callable[[], bool]] = None,
     ):
         """
         Initialize the hybrid predictor.
@@ -107,8 +122,14 @@ class HybridPredictor(QObject):
             parent: Qt parent object
             profile: Language profile driving tokenization, word shapes
                 and which wordlists load.  See language.py.
+            abort_check: Polled between the constructor's phases; returning
+                True raises ``LoadAborted``.  Only the startup loader passes
+                one.  Each poll also yields the GIL for a moment, which is
+                what keeps a UI thread responsive while this pure-Python
+                build runs beside it.
         """
         super().__init__(parent)
+        self._abort_check = abort_check
 
         # Set up model directory (cross-platform: AppData on Windows, .config on Linux)
         if model_dir is None:
@@ -121,9 +142,11 @@ class HybridPredictor(QObject):
         # Initialize n-gram predictor (always available)
         ngram_path = self._model_dir / "ngram_model.json"
         self._ngram = NgramPredictor(ngram_path if ngram_path.exists() else None, profile)
+        self._checkpoint()
 
         # Load base dictionary for better initial predictions
         self._ngram.load_base_dictionary()
+        self._checkpoint()
         # Load common bigrams and trigrams for next-word prediction
         self._ngram.load_common_bigrams()
         self._ngram.load_common_trigrams()
@@ -133,12 +156,14 @@ class HybridPredictor(QObject):
         # one you go and edit when a pair is wrong.
         self._ngram.load_seed_ngrams()
         self._ngram.load_seed_ngrams(_DATA_DIR / "seed_trigrams.txt")
+        self._checkpoint()
         _logger.info("N-gram predictor initialized")
 
         # Initialize PPM predictor (character-level, Dasher algorithm)
         ppm_path = self._model_dir / "ppm_model.json"
         self._ppm = PPMPredictor(model_path=ppm_path if ppm_path.exists() else None)
         self._ppm_word = PPMWordPredictor(ppm=self._ppm)
+        self._checkpoint()
         self._enable_ppm = True
         # The character model keeps training and persisting, but its word
         # candidates no longer enter the merge.  Measured with the prefix
@@ -173,6 +198,7 @@ class HybridPredictor(QObject):
         self._fuzzy.pointer = self._ngram.pointer
         data_dir = _DATA_DIR
         self._fuzzy.load_dictionary(profile.dictionary)
+        self._checkpoint()
         # Load common-misspellings fast-path table for autocorrect.
         self._misspellings = CommonMisspellings()
         self._misspellings.load(data_dir / "common_misspellings.txt")
@@ -180,6 +206,7 @@ class HybridPredictor(QObject):
 
         # Load training corpus for better predictions
         self._load_training_corpus()
+        self._checkpoint()
         # Inject n-gram unigram frequencies so candidate ranking prefers
         # common words ("the") over rare ones ("tha").  Learning during a
         # session pushes each changed word through
@@ -206,10 +233,12 @@ class HybridPredictor(QObject):
         self._filter_explicit = True
 
         self._fuzzy.set_frequencies(self._fuzzy_frequencies())
+        self._checkpoint()
         # Build the packed prefix index now rather than on the first typed
         # prefix: it is the same work either way, and paying it here keeps
         # it off the keystroke path, where a stall is felt.
         self._fuzzy.prepare_prefix_index()
+        self._checkpoint()
 
         # Initialize vocabulary pack manager
         self._pack_manager = PackManager()
@@ -236,6 +265,19 @@ class HybridPredictor(QObject):
         # opt-in alternatives surfaced via Settings → Smart Typing → Suggestion Engine.
         # See ``docs/architecture/HYBRID_MERGING.md`` for the trade-offs.
         self._merge_strategy: str = "rank"
+
+    def _checkpoint(self) -> None:
+        """Between two construction phases: yield the GIL, then honour a cancel.
+
+        ``time.sleep(0)`` releases the GIL so a UI thread waiting on it gets
+        a turn at a predictable cadence (the phases are each a few hundred
+        milliseconds of pure Python).  The abort check comes second so a
+        cancel that arrived during the phase is seen before the next one
+        starts.
+        """
+        time.sleep(0)
+        if self._abort_check is not None and self._abort_check():
+            raise LoadAborted()
 
     def _load_llm_async(self) -> None:
         """Load the LLM in a background thread."""

@@ -634,6 +634,7 @@ Window {
     // Predictions from hybrid engine
     property var predictions: []
     property bool predictionsLoading: false
+    readonly property string predictionStatus: keyboard ? keyboard.predictionStatus : "loading"
 
     // Keyboard layout (data-driven from JSON)
     property var layoutRows: keyboard ? keyboard.getLayoutRows() : []
@@ -716,6 +717,7 @@ Window {
     readonly property bool predictionsArePresent:
         root.suggestionsEnabled && !root.privacyMode
         && !root.dictationActive && !study.suppressPredictions
+        && root.predictionStatus === "ready"
     readonly property string scanRevision: [
         root.predictionGeneration,
         // Everything that decides whether the pills are there at all, not
@@ -1411,6 +1413,10 @@ Window {
         function onPredictionsChanged(preds) { root.predictions = preds }
         function onPredictionsRefined(preds) { root.predictions = preds }
         function onPredictionLoading(loading) { root.predictionsLoading = loading }
+        function onPredictionStatusChanged() {
+            if (keyboard.predictionStatus === "ready" && root.showVisualization)
+                vizContent.refresh()
+        }
         
         // Layout updates
         // Always land on the base layer after a layout swap — leaving the
@@ -2266,6 +2272,100 @@ Window {
                 clip: true
 
                 Behavior on Layout.preferredHeight { NumberAnimation { duration: 150 } }
+
+                // Startup occupies only the suggestion area; keys remain usable.
+                Item {
+                    objectName: "predictionStartupStatus"
+                    x: predBar.micReserve + 8
+                    width: Math.max(0, predBar.width - predBar.micReserve - predBar.clearCtxReserve - 16)
+                    height: parent.height
+                    visible: root.suggestionsEnabled && !root.privacyMode
+                             && !root.dictationActive && !study.suppressPredictions
+                             && root.predictionStatus !== "ready"
+
+                    RowLayout {
+                        anchors.centerIn: parent
+                        width: Math.min(parent.width, implicitWidth)
+                        spacing: 8
+
+                        // Drawn, not a Controls BusyIndicator: every other
+                        // control on this bar is a plain item so no widget
+                        // style can restyle or warn about it, and this one
+                        // matches the theme the same way.
+                        Canvas {
+                            id: predictionStartupSpinner
+                            objectName: "predictionStartupSpinner"
+                            Layout.preferredWidth: 20
+                            Layout.preferredHeight: 20
+                            visible: root.predictionStatus === "loading"
+                            readonly property bool running: visible && parent.parent.visible
+                            onPaint: {
+                                var ctx = getContext("2d")
+                                ctx.reset()
+                                ctx.lineWidth = 2.5
+                                ctx.lineCap = "round"
+                                ctx.strokeStyle = root.themeAccent
+                                ctx.beginPath()
+                                ctx.arc(width / 2, height / 2, width / 2 - 2, 0, Math.PI * 1.4)
+                                ctx.stroke()
+                            }
+                            onVisibleChanged: requestPaint()
+                            RotationAnimation on rotation {
+                                from: 0; to: 360
+                                duration: 900
+                                loops: Animation.Infinite
+                                running: predictionStartupSpinner.running
+                            }
+                        }
+                        Text {
+                            objectName: "predictionStartupText"
+                            Layout.fillWidth: true
+                            text: root.predictionStatus === "error"
+                                  ? qsTr("Suggestions unavailable") : qsTr("Loading suggestions...")
+                            textFormat: Text.PlainText
+                            color: root.themeTextColor
+                            font.pixelSize: 13
+                            elide: Text.ElideRight
+                            Accessible.role: Accessible.StaticText
+                            Accessible.name: text
+                        }
+                        // Same idiom as every other button on the bar: a
+                        // Rectangle plus a MouseArea, sized for an imprecise
+                        // pointer.  A Controls Button takes the widget style's
+                        // colours, which no theme here controls.
+                        Rectangle {
+                            id: predictionStartupRetry
+                            objectName: "predictionStartupRetry"
+                            signal clicked()
+                            visible: root.predictionStatus === "error"
+                            Layout.preferredHeight: 34
+                            Layout.preferredWidth: retryLabel.implicitWidth + 28
+                            radius: 8
+                            color: retryArea.containsMouse ? root.themeKeyPressed : root.themeKeyColor
+                            border.color: root.themeAccent
+                            border.width: 1.5
+                            Text {
+                                id: retryLabel
+                                anchors.centerIn: parent
+                                text: qsTr("Retry")
+                                textFormat: Text.PlainText
+                                color: root.themeTextColor
+                                font.pixelSize: 13
+                                font.bold: true
+                            }
+                            MouseArea {
+                                id: retryArea
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: predictionStartupRetry.clicked()
+                            }
+                            onClicked: if (keyboard) keyboard.startPredictionLoading()
+                            Accessible.role: Accessible.Button
+                            Accessible.name: retryLabel.text
+                        }
+                    }
+                }
 
                 // Privacy mode indicator (replaces predictions)
                 Row {

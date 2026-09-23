@@ -55,7 +55,7 @@ from pathlib import Path
 from types import TracebackType
 from typing import cast
 
-from PySide6.QtCore import QEvent, QObject, QSettings, QSharedMemory, Qt, QUrl
+from PySide6.QtCore import QEvent, QObject, QSettings, QSharedMemory, Qt, QTimer, QUrl
 from PySide6.QtGui import QIcon, QWindow
 from PySide6.QtQml import QQmlApplicationEngine
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
@@ -829,7 +829,7 @@ def main() -> int:
         _logger.warning("App icon not found")
 
     # Create the bridge (auto-detects platform key synthesizer)
-    bridge = KeyboardBridge()
+    bridge = KeyboardBridge(defer_predictions=True)
 
     # Telemetry lives on its own QObject rather than on the bridge -- see
     # docs/architecture/STRUCTURAL_REVIEW.md section 3.1.  Parented to the
@@ -853,6 +853,7 @@ def main() -> int:
         os_name=CURRENT_PLATFORM,
         parent=bridge,
     )
+    bridge.predictionEngineReady.connect(study.set_predictor)
 
     if not bridge.synthAvailable:
         if CURRENT_PLATFORM == "linux":
@@ -958,6 +959,7 @@ def main() -> int:
         bridge.shutdown()
 
     app.aboutToQuit.connect(_on_about_to_quit)
+    QTimer.singleShot(0, bridge.startPredictionLoading)
     _ = quiet_restore
 
     return app.exec()
