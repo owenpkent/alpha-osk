@@ -2126,7 +2126,7 @@ than as the lock cue.
 The only route to a glyph outside a physical keyboard's printing, on every
 layout, since the full-size symbol layer above was removed. Categories, a
 Recent page and several hundred glyphs do not fit on a key grid at a size an
-imprecise pointer can hit, which is why this is a window and not a layer. Opened from a smile button in the suggestion bar,
+imprecise pointer can hit, which is why this is a window and not a layer. Opened from an α button (Tabler's `alpha` icon) in the suggestion bar,
 immediately left of the Snippets bookmark, with a title-bar twin
 (`symbolsTitleBarButton`) visible only when `suggestionsEnabled` is false, for
 the reason the Snippets pair documents: the suggestion bar collapses to zero
@@ -2208,7 +2208,7 @@ this keyboard's users can least rely on. Three rows of chips is the cost.
 
 ### Two font rules, and they pull in opposite directions
 
-The **chrome** obeys the project's usual rule: the smile and the close cross
+The **chrome** obeys the project's usual rule: the α and the close cross
 are `StrokeIcon` path data, never typeset, because Segoe UI Emoji renders a
 glyph in colour and ignores the ink it is given.
 
@@ -2218,11 +2218,18 @@ fallback is what reaches the host emoji font. `font.families` (a list) does
 not exist on this Qt's grouped font property, and naming a single family
 would pin one platform's font and lose the glyph on the other two.
 
-`tests/test_qml_symbols.py::TestTheEntryButtonIcon` asserts the smile paints
-ink at all, which is the property its one hand-converted path can break:
+`tests/test_qml_symbols.py::TestTheEntryButtonIcon` asserts the α paints
+ink at all, which is the property a bad edit to its path data breaks:
 invalid path data paints **nothing** through `ctx.path` (measured: zero lit
-pixels), so a bad conversion ships as a blank circle on the suggestion bar
-rather than as an error.
+pixels), so a broken path ships as a blank circle on the suggestion bar
+rather than as an error. The test keeps the picker **closed** and counts only
+the inside of the circle: with the picker open the ring is drawn in the accent
+colour, the ring alone cleared the bar, and the test passed with the path
+deleted for as long as the smile was there. The α is drawn larger than its neighbours with a
+thinner stroke (a letter fills less of its 24-unit box than a circle or a
+bookmark), so the line weight matches in pixels; change `boxFraction` and
+`strokeWidth` together or it will read bolder or fainter than the icons
+beside it.
 
 ### The suggestion bar's button reserve is derived
 
