@@ -1599,11 +1599,20 @@ Window {
                 }
             }
 
-            // Drag area (most of title bar)
+            // Drag area: everything on the strip up to the caption buttons.
+            // The reserve is the button row's measured extent, never a
+            // constant. It was a hard-coded 332 px, sized for a row that
+            // has never been that wide (198 px plus its margin in a typical
+            // session), which left a 126 px band between the grip region and
+            // the first button that neither dragged nor did anything else,
+            // and on the narrower compact window that band was a sixth of
+            // the bar. Row lays out only its visible children, so the
+            // mirrors and the X11-only Tuck button come and go without
+            // anything here needing to know.
             MouseArea {
                 id: dragArea
                 anchors.fill: parent
-                anchors.rightMargin: 332  // Leave space for buttons (Learning switch, Snippets, Tuck, etc.)
+                anchors.rightMargin: titleButtons.width + titleButtons.anchors.rightMargin
                 cursorShape: Qt.SizeAllCursor
                 
                 property real startMouseX
@@ -1678,6 +1687,7 @@ Window {
             
             // Title bar buttons (right side)
             Row {
+                id: titleButtons
                 anchors.right: parent.right
                 anchors.rightMargin: 8
                 anchors.verticalCenter: parent.verticalCenter
@@ -1848,8 +1858,9 @@ Window {
                     id: privacyToggle
                     // Sized for track + gap + "Learning" at 11 px
                     // DemiBold.  The label is static so this never
-                    // reflows; if you change it, bump this width AND
-                    // dragArea.rightMargin further up together.
+                    // reflows. dragArea's reserve follows the row's
+                    // measured width, so changing this needs no
+                    // matching edit there.
                     width: 96
                     height: 24
                     radius: 4

@@ -2812,13 +2812,26 @@ pointer wherever it already is on the strip the user grabs the window by.
   a left press still reaches `dragArea` and the caption buttons above it,
   while a right press finds no taker up there and falls through. That is what
   makes the *whole* strip a menu target, buttons and the gaps between them
-  included, rather than only the region `dragArea` covers (which stops 332 px
-  short of the right edge). The failure mode to avoid is declaring it on top:
+  included, rather than only the region `dragArea` covers (which stops at the
+  button row's left edge). The failure mode to avoid is declaring it on top:
   it would silently kill dragging the window. `dragArea` shields it well
   enough that "a left press does not open the menu" is not a falsifiable test,
   so the guard is
   `TestRightClickingTheTitleBarOpensTheMenu::test_a_left_drag_on_the_strip_still_moves_the_window`,
   which presses, travels and asserts the window followed.
+- **`dragArea` reserves the button row's measured width, never a constant.**
+  It reserved a hard-coded 332 px for a row that measures 198 px plus its
+  margin in a typical session, which left a 126 px band between the grip
+  region and the first button that dragged nothing, and on the 812 px
+  compact window that was a sixth of the strip (reported as "the full title
+  bar on compact is not draggable"). The margin is bound to
+  `titleButtons.width`, and `Row` lays out only visible children, so the
+  suggestion-bar mirrors and the X11-only Tuck button come and go without a
+  matching edit. Guarded by
+  `tests/test_qml_window_menu.py::TestTheWholeStripDrags`, which drags from
+  a point inside the old reserve on the compact window and is paired with a
+  press on the Learning switch that must toggle it rather than move the
+  window.
 - **Rows come from a model (`windowMenu.actions`), not four near-identical
   blocks**, and are **word-only, no icons**: any glyph small enough to sit in a
   menu row is at the mercy of the host emoji font, which on Windows renders in

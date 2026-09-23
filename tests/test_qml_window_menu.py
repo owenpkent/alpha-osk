@@ -50,10 +50,10 @@ QML_MAIN = REPO_ROOT / "qml" / "Main.qml"
 
 IGNORED_WARNING_FRAGMENTS = ("does not support customization",)
 
-# The title bar is 48 px tall, and dragArea leaves the right-hand 332 px of it
-# to the caption buttons.  That split is exactly what the menu has to straddle.
+# The title bar is 48 px tall, and dragArea leaves the caption buttons' own
+# measured width at its right end to them.  That split is exactly what the
+# menu has to straddle.
 TITLE_BAR_HEIGHT = 48
-CAPTION_BUTTON_RESERVE = 332
 
 # Somewhere with both coordinates comfortably positive.  The saved-geometry
 # restore lands the window at a negative x under the offscreen plugin, and a
@@ -221,6 +221,96 @@ def _begin_move(root) -> tuple[int, int]:
     return _pos(root)
 
 
+def _drag(root, local_x: int, dx: int, dy: int) -> tuple[int, int]:
+    """Press at (local_x, mid-strip), travel by (dx, dy), release; report
+    where the window ended up."""
+    before = _pos(root)
+    grab = (before[0] + local_x, before[1] + TITLE_BAR_HEIGHT // 2)
+    QTest.mousePress(
+        root,
+        Qt.MouseButton.LeftButton,
+        Qt.KeyboardModifier.NoModifier,
+        QPoint(local_x, TITLE_BAR_HEIGHT // 2),
+    )
+    _hover(root, grab[0] + dx, grab[1] + dy)
+    moved = _pos(root)
+    QTest.mouseRelease(
+        root,
+        Qt.MouseButton.LeftButton,
+        Qt.KeyboardModifier.NoModifier,
+        QPoint(grab[0] + dx - moved[0], grab[1] + dy - moved[1]),
+    )
+    QGuiApplication.processEvents()
+    return moved
+
+
+class TestTheWholeStripDrags:
+    """Every pixel left of the caption buttons moves the window.
+
+    dragArea used to reserve a hard-coded 332 px for a button row that
+    measures about 200 px, which left a band of the strip that dragged
+    nothing.  On the full-size window it was easy to miss; on the narrower
+    compact window it was a sixth of the bar, and that is where it was
+    reported.  These drag from inside that old reserve, so they fail against
+    the constant and pass against the measured width.
+    """
+
+    @pytest.mark.parametrize("compact", [False, True], ids=["full-size", "compact"])
+    def test_a_drag_from_just_left_of_the_buttons_moves_the_window(self, qml_root, compact):
+        root, warnings = qml_root
+        root.setProperty("compactView", compact)
+        QGuiApplication.processEvents()
+        QGuiApplication.processEvents()
+        _park(root)
+        before = _pos(root)
+
+        # The pixel just left of the button row.  Under the old reserve this
+        # sat well inside the dead band (the row is about 200 px against a
+        # 332 px reserve), so a version that regressed to a constant fails
+        # here rather than on a point that happened to drag either way.
+        buttons_left = int(_eval(root, "titleButtons.x"))
+        grab_x = buttons_left - 4
+        assert grab_x > root.property("width") - 332, "the grab must lie inside the old reserve"
+
+        moved = _drag(root, grab_x, 60, 35)
+
+        assert moved == (before[0] + 60, before[1] + 35)
+        assert not _eval(root, "windowMenu.visible")
+        assert _real_warnings(warnings) == []
+
+    def test_a_press_on_a_caption_button_still_reaches_the_button(self, qml_root):
+        """The inverse: the reserve is the buttons' own width and no less.
+
+        A drag that started on the Learning switch has to toggle learning
+        and leave the window where it was.  Without this, a reserve of zero
+        would pass the test above while burying every button under the drag.
+        """
+        root, warnings = qml_root
+        root.setProperty("compactView", True)
+        QGuiApplication.processEvents()
+        QGuiApplication.processEvents()
+        _park(root)
+        before = _pos(root)
+        assert not root.property("privacyMode")
+
+        switch_x = int(_eval(root, "titleButtons.x + privacyToggle.x + privacyToggle.width / 2"))
+        moved = _drag(root, switch_x, 60, 35)
+        assert moved == before
+        assert _pos(root) == before
+
+        # The switch answers a completed click, so the drag above (released
+        # 60 px away) is rightly not one.  A click in place has to reach it.
+        _click(
+            root,
+            before[0] + switch_x,
+            before[1] + TITLE_BAR_HEIGHT // 2,
+            Qt.MouseButton.LeftButton,
+        )
+        assert root.property("privacyMode"), "the press never reached the switch"
+        assert _pos(root) == before
+        assert _real_warnings(warnings) == []
+
+
 class TestRightClickingTheTitleBarOpensTheMenu:
     """The gesture itself, and the left press it must not steal."""
 
@@ -241,14 +331,14 @@ class TestRightClickingTheTitleBarOpensTheMenu:
     def test_a_right_press_over_the_caption_buttons_opens_it_too(self, qml_root):
         """The whole strip is a menu target, the way a real caption bar is.
 
-        dragArea stops 332 px short of the right edge to leave the buttons
-        alone, so a menu wired to *it* would be dead over the half of the bar
+        dragArea stops at the button row's left edge to leave the buttons
+        alone, so a menu wired to *it* would be dead over the part of the bar
         the buttons occupy, including the gaps between them.
         """
         root, warnings = qml_root
         width = root.property("width")
         offset = width - 40
-        assert offset > width - CAPTION_BUTTON_RESERVE, "the point must be inside the button strip"
+        assert offset > _eval(root, "titleButtons.x"), "the point must be inside the button strip"
 
         _click(
             root,
