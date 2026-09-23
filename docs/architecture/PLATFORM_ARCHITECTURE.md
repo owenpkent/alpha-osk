@@ -306,6 +306,17 @@ and writing the bit directly leaves the band untouched, producing a
 window that reports itself as topmost while sitting behind ordinary
 windows. See `apply_extended_styles()` for the full story.
 
+The style bits alone do not give the window a taskbar button. The shell
+decides that at the moment a window becomes visible, and this one becomes
+visible (QML `visible: true`) before the styles are written, so the shell
+had filed it as a tool window and did not look again until a click
+activated it: the button sat in its pinned, half-size state on every
+launch. `apply_extended_styles()` therefore hides the window with
+`ShowWindow(SW_HIDE)` before the writes and shows it again with
+`ShowWindow(SW_SHOWNOACTIVATE)` after the frame flush, which is the
+sequence Windows documents for changing a visible window's taskbar
+presence. The re-show is in a `finally` and never activates.
+
 ---
 
 ## Configuration and Data Storage
