@@ -3,9 +3,9 @@
 # Source URL: https://sourceforge.net/projects/wordlist/files/speller/2026.02.25/wordlist-en_US-2026.02.25.zip/download
 # Archive SHA-256: caeb6ee8a38e98ccbd6e5c717889a1bab68073dcba8a9c0ca6570641926913e9.
 # License and original notices: data/licenses/ESDB.txt.
-# No content is excluded here. Explicit words are in this list,
-# and data/explicit_words.txt decides whether the prediction bar
-# volunteers them, under a user setting. See CLAUDE.md.
+# Slurs (data/slurs.txt, exact words) are excluded. Profanity is
+# kept, and data/explicit_words.txt decides whether the prediction
+# bar volunteers it, under a user setting. See CLAUDE.md.
 # Filter: lowercase ASCII words, no possessives, length > 2,
 # vowel and consonant required, excluding existing Alpha-OSK words.
 # Selection: every remaining size-60 word; no sampling or length cutoff.
@@ -11688,8 +11688,6 @@ coolies
 coolly
 coolness
 cools
-coon
-coons
 coonskin
 coonskins
 cooped
@@ -13382,9 +13380,6 @@ daftly
 daftness
 dagger
 daggers
-dago
-dagoes
-dagos
 dags
 daguerreotype
 daguerreotyped
@@ -13522,8 +13517,6 @@ darkeners
 darkening
 darkens
 darkest
-darkie
-darkies
 darkish
 darkly
 darkroom
@@ -20085,8 +20078,6 @@ faffs
 fag
 fagged
 fagging
-faggot
-faggots
 fagot
 fagoting
 fagots
@@ -23965,8 +23956,6 @@ googling
 googly
 gooier
 gooiest
-gook
-gooks
 goon
 goons
 goop
@@ -24877,12 +24866,8 @@ gynecological
 gynecologist
 gynecologists
 gynecology
-gyp
-gypped
 gypper
 gyppers
-gypping
-gyps
 gypsies
 gypster
 gypsters
@@ -26511,10 +26496,8 @@ honk
 honked
 honker
 honkers
-honkies
 honking
 honks
-honky
 honorableness
 honorably
 honorarily
@@ -30669,8 +30652,6 @@ kidneys
 kidskin
 kielbasa
 kielbasas
-kike
-kikes
 killdeer
 killdeers
 killings
@@ -30941,8 +30922,6 @@ kowtowing
 kowtows
 kraal
 kraals
-kraut
-krauts
 krill
 krona
 krone
@@ -36536,7 +36515,6 @@ negotiates
 negotiator
 negotiators
 negritude
-negroid
 neigh
 neighbored
 neighborliness
@@ -36783,15 +36761,10 @@ niff
 niffy
 niftier
 niftiest
-nigga
 niggard
 niggardliness
 niggardly
 niggards
-niggas
-niggaz
-nigger
-niggers
 niggle
 niggled
 niggler
@@ -46029,7 +46002,6 @@ redshifted
 redshifting
 redshifts
 redshirt
-redskin
 reducer
 reducers
 reducible
@@ -47529,15 +47501,12 @@ retaliation
 retaliations
 retaliative
 retaliatory
-retard
 retardant
 retardants
 retardation
-retarded
 retarder
 retarders
 retarding
-retards
 retaught
 retch
 retched
@@ -53286,14 +53255,12 @@ sphincter
 sphincters
 sphinx
 sphinxes
-spic
 spiced
 spicier
 spiciest
 spicily
 spiciness
 spicing
-spics
 spicule
 spicules
 spiderweb
@@ -53750,14 +53717,12 @@ squatter
 squatters
 squattest
 squatting
-squaw
 squawk
 squawked
 squawker
 squawkers
 squawking
 squawks
-squaws
 squeak
 squeaked
 squeaker
@@ -63033,8 +62998,6 @@ westernizing
 westernmost
 westward
 westwards
-wetback
-wetbacks
 wetly
 wetness
 wets
@@ -63723,8 +63686,6 @@ woefuller
 woefullest
 woefully
 woefulness
-wog
-wogs
 wok
 woken
 woker
@@ -63855,8 +63816,6 @@ wooziest
 woozily
 wooziness
 woozy
-wop
-wops
 wordage
 wordbook
 wordbooks
@@ -64255,8 +64214,6 @@ yeti
 yetis
 yew
 yews
-yid
-yids
 yikes
 yip
 yipe

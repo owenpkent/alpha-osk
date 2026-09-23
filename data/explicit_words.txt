@@ -6,7 +6,7 @@
 #
 # Derived by matching curated stems against the shipped wordlists with a
 # closed suffix set, never by substring. See the generator for why.
-# stems: 101  shipped words scanned: 65012  flagged: 202
+# stems: 65  shipped words scanned: 74939  flagged: 152
 asshole
 assholes
 bastard
@@ -36,6 +36,7 @@ buggered
 buggering
 buggers
 buggery
+bullshit
 bullshits
 bullshitted
 bullshitter
@@ -44,8 +45,6 @@ bullshitting
 chickenshit
 chickenshits
 chink
-chinked
-chinking
 chinks
 cock
 cocked
@@ -59,13 +58,8 @@ cocks
 cocksucker
 cocksuckers
 cocky
-coon
-coons
 cunt
 cunts
-dago
-dagoes
-dagos
 damn
 damnable
 damnably
@@ -74,8 +68,6 @@ damned
 damnedest
 damning
 damns
-darkie
-darkies
 dick
 dicker
 dickers
@@ -90,8 +82,6 @@ dykes
 fag
 fagged
 fagging
-faggot
-faggots
 fags
 fuck
 fucked
@@ -103,30 +93,14 @@ fucking
 fucks
 goddamn
 goddamned
-gook
-gooks
-gyp
-gyps
-honky
 horseshit
 jackass
 jackasses
-japed
-japes
-japing
-kike
-kikes
-kraut
-krauts
 micks
 motherfucker
 motherfuckers
 motherfucking
-nigga
-niggas
-niggaz
-nigger
-niggers
+negro
 piss
 pissed
 pisser
@@ -143,13 +117,6 @@ pornographic
 pornographically
 pornography
 pussy
-redskin
-retard
-retarded
-retarder
-retarders
-retarding
-retards
 sex
 sexed
 sexes
@@ -177,15 +144,6 @@ sluttish
 slutty
 sonofabitch
 sonsofbitches
-spic
-spiced
-spicier
-spiciest
-spicily
-spicing
-spics
-squaw
-squaws
 twat
 twats
 wank
@@ -194,8 +152,6 @@ wanker
 wankers
 wanking
 wanks
-wetback
-wetbacks
 whore
 whorehouse
 whorehouses
@@ -203,9 +159,3 @@ whoreish
 whores
 whoring
 whorish
-wog
-wogs
-wop
-wops
-yid
-yids
