@@ -2790,6 +2790,37 @@ border while its radius is 0, so along the corner arc DWM's mask clips that
 border and draws its own. If that reads wrong on a light theme, the answer
 is `DWMWA_BORDER_COLOR`, not a radius on the QML side.
 
+## The taskbar button appears on launch (hide, restyle, re-show)
+
+Reported as the taskbar icon "not fully inflating until you click it". The
+right style bits were not the whole answer: the shell decides whether a
+window gets a taskbar button **at the moment it becomes visible**, and the
+keyboard becomes visible from QML's `visible: true` before
+`apply_extended_styles` runs, so the shell files it as a tool window and
+never looks again. Measured on the installed build four seconds after
+launch: `APPWINDOW` set, `TOOLWINDOW` clear, and no running-window button
+at all, only the 66 px pinned stub with no label and no running dot, until
+a click on that stub activated the window.
+
+- MSDN's rule for changing a visible window's taskbar presence is hide,
+  change the style, show. `apply_extended_styles` does exactly that on the
+  `taskbar_button` path: `ShowWindow(SW_HIDE)` before the style writes,
+  `ShowWindow(SW_SHOWNOACTIVATE)` after the `SWP_FRAMECHANGED` flush.
+  Proven from outside first: that pair on the running keyboard, with no
+  style change at all, attached it as "Alpha-OSK - 1 running window" at
+  once and left the foreground alone.
+- **The re-show is in a `finally`**, because every early return in the
+  style writes now happens with the keyboard hidden, and a keyboard that
+  vanishes at launch is worse than the bug. It is `SW_SHOWNOACTIVATE`,
+  never `SW_SHOW` / `SW_SHOWNORMAL`, which take the foreground.
+- A window that was not visible is left alone, and the floating windows
+  (`taskbar_button=False`) are never blinked: they must not have a button.
+- The offscreen suite cannot see the shell, so `tests/test_windows_window.py::
+  TestTheTaskbarButtonAppearsOnLaunch` pins the call order and the failure
+  paths; the live check is a UI Automation walk of `Shell_TrayWnd` for a
+  button named `Alpha-OSK - 1 running window` (as opposed to the pinned
+  stub) a few seconds after launch, with no click.
+
 ## Title-bar window menu, and click-free Move
 
 Right-clicking the title bar opens the menu a real window's caption strip

@@ -186,6 +186,13 @@ itself as topmost while sitting behind ordinary ones. See
 `apply_extended_styles()` in `src/platform/windows_window.py` for the full
 story.
 
+The taskbar button needs one more thing than the right bits: the shell
+decides whether a window gets a button when it first becomes visible, and
+the keyboard is visible before the styles are written. So the write is
+wrapped in `ShowWindow(SW_HIDE)` / `ShowWindow(SW_SHOWNOACTIVATE)`, the
+documented way to change a visible window's taskbar presence. Without it
+the button stayed in its pinned, half-size state until clicked.
+
 ---
 
 ## UIAccess and EV Code Signing
@@ -877,6 +884,7 @@ higher-integrity windows) without granting broad admin access.  See the
 | Keyboard steals focus on click | `WS_EX_NOACTIVATE` not applied | Check logs for "Failed to apply Windows extended styles" |
 | Keyboard has no taskbar entry / minimize button has nowhere to go | `WS_EX_TOOLWINDOW` clear or `WS_EX_APPWINDOW` set failed | Check logs for "Failed to apply Windows extended styles". Note: the keyboard appearing in Alt+Tab is expected, not a bug (see "How This Is Achieved on Windows" above); don't re-add `WS_EX_TOOLWINDOW` to "fix" it. |
 | Keyboard disappears behind other windows | Topmost not working | Try restarting Alpha-OSK |
+| Taskbar button stays small and unlabelled until clicked | The hide / re-show around the style write did not run | Check logs for "Failed to apply Windows extended styles"; the re-show is in a `finally`, so a hidden keyboard means the hide itself failed |
 | **Window becomes massive after moving to a different monitor** | Qt's default DPI rounding multiplies logical window dimensions when crossing monitors with different scale factors | Fixed: `PassThrough` DPI rounding policy set in `keyboard_app.py`; `onScreenChanged` in `Main.qml` clamps width to the new screen's available width |
 
 ### Build Issues

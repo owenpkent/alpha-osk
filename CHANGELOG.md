@@ -4,6 +4,9 @@ All notable changes to Alpha-OSK are documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+- **The taskbar button appears when the keyboard does, instead of after you click it.** Reported directly: on launch the icon sat in its pinned, half-size state with no label and no running dot until it was clicked. The window had every style it needed; the problem was timing. Windows decides whether a window gets a taskbar button at the moment it first becomes visible, and the keyboard becomes visible before its styles are written, so the shell filed it as a tool window and did not look again until a click activated it. Measured on the installed build four seconds after launch: styles correct, no running-window button at all. The keyboard is now hidden for the instant its styles are written and shown again, the way Windows documents for changing a visible window's taskbar presence, and it is shown without activating so the app you were typing into keeps its focus. Verified the same way the bug was found: a walk of the taskbar a few seconds after launch now finds "Alpha-OSK - 1 running window" with nothing clicked. The re-show runs even if a style write fails, so a launch can never end with the keyboard hidden.
+
 ## [1.5.0] (2026-09-16)
 
 ### Added

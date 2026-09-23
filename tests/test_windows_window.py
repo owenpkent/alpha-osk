@@ -15,6 +15,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from src.platform.windows_window import (
+    SW_HIDE,
     SW_SHOWNOACTIVATE,
     WM_QUERYOPEN,
     QuietRestoreFilter,
@@ -175,8 +176,19 @@ class TestTheKeyboardKeepsItsTaskbarButton:
 
         user32.SetWindowLongW.side_effect = _set_window_long
         user32.SetWindowPos.side_effect = _set_window_pos
+
+        # The keyboard is already on screen when this runs (QML's
+        # `visible: true`), which is the case the hide / re-show exists for.
+        user32.IsWindowVisible.return_value = 1
+
+        def _show_window(hwnd, cmd):
+            user32.call_order.append(("ShowWindow", cmd))
+            return 1
+
+        user32.ShowWindow.side_effect = _show_window
         kernel32 = MagicMock()
         kernel32.GetLastError.return_value = 0
+        user32.kernel32 = kernel32
         # apply_extended_styles also asks DWM to round the corners; without
         # this the call raised AttributeError into its own except clause and
         # every test here exercised the failure path without saying so.
@@ -203,6 +215,10 @@ class TestTheKeyboardKeepsItsTaskbarButton:
         root = MagicMock()
         root.winId.return_value = 0x1234
         return root
+
+    @staticmethod
+    def _shows(win32) -> list:
+        return [cmd for call, cmd in win32.call_order if call == "ShowWindow"]
 
     def test_toolwindow_is_cleared(self, win32) -> None:
         apply_extended_styles(self._root(), taskbar_button=True)
@@ -302,6 +318,99 @@ class TestTheKeyboardKeepsItsTaskbarButton:
             "MINIMIZEBOX / SYSMENU bits just written are not guaranteed to have "
             "been flushed into the cached frame data"
         )
+
+
+class TestTheTaskbarButtonAppearsOnLaunch:
+    """Reported as the taskbar icon not fully inflating until it is clicked.
+
+    Having the right style bits is not enough: the shell decides whether a
+    window gets a button at the moment it becomes visible, and ours became
+    visible as a tool window before any of this ran.  Measured on the live
+    keyboard four seconds after launch: APPWINDOW set, TOOLWINDOW clear,
+    and no running-window button at all, only the 66 px pinned stub with
+    no label and no dot.  Hiding and re-showing that same window from
+    outside, with no style change, attached it as "Alpha-OSK - 1 running
+    window" at once, so that pair is the fix and these pin its shape.
+    """
+
+    # Same fake Win32 layer as the class above; not inherited, or its tests
+    # would run a second time under this name.
+    win32 = TestTheKeyboardKeepsItsTaskbarButton.win32
+    _root = staticmethod(TestTheKeyboardKeepsItsTaskbarButton._root)
+    _shows = staticmethod(TestTheKeyboardKeepsItsTaskbarButton._shows)
+
+    def test_the_window_is_hidden_before_the_style_write(self, win32) -> None:
+        apply_extended_styles(self._root(), taskbar_button=True)
+
+        order = win32.call_order
+        hides = [i for i, (c, a) in enumerate(order) if c == "ShowWindow" and a == SW_HIDE]
+        ex_writes = [i for i, (c, a) in enumerate(order) if c == "SetWindowLongW" and a == -20]
+        assert hides, "the window was never hidden, so the shell never re-evaluates it"
+        assert ex_writes, "GWL_EXSTYLE was never written"
+        assert hides[0] < ex_writes[0], (
+            "the hide came after the style write; the shell must see the window "
+            "become visible with the new styles already on it"
+        )
+
+    def test_and_reshown_after_the_frame_flush(self, win32) -> None:
+        apply_extended_styles(self._root(), taskbar_button=True)
+
+        order = win32.call_order
+        shows = [
+            i for i, (c, a) in enumerate(order) if c == "ShowWindow" and a == SW_SHOWNOACTIVATE
+        ]
+        flush = [i for i, (c, _a) in enumerate(order) if c == "SetWindowPos"]
+        assert shows, "the window was hidden and never shown again"
+        assert flush[-1] < shows[0], (
+            "the re-show ran before SetWindowPos(SWP_FRAMECHANGED), so the shell "
+            "saw the window come back before its new frame styles were flushed"
+        )
+
+    def test_the_reshow_never_activates(self, win32) -> None:
+        """SW_SHOW and SW_SHOWNORMAL both take the foreground, which is the
+        one thing this window must never do: the next keystroke would land
+        on the keyboard instead of the app the user was typing into."""
+        apply_extended_styles(self._root(), taskbar_button=True)
+
+        assert self._shows(win32) == [SW_HIDE, SW_SHOWNOACTIVATE]
+
+    def test_a_failed_style_write_still_brings_the_window_back(self, win32) -> None:
+        """Every early return inside the style writes now happens with the
+        keyboard hidden; a missing re-show there is a keyboard that
+        vanished at launch, which is worse than the bug being fixed."""
+        win32.GetWindowLongW.return_value = 0
+        win32.kernel32.GetLastError.return_value = 5  # ERROR_ACCESS_DENIED
+
+        apply_extended_styles(self._root(), taskbar_button=True)
+
+        assert not win32.SetWindowLongW.called, "the failure path was not taken"
+        assert self._shows(win32) == [SW_HIDE, SW_SHOWNOACTIVATE]
+
+    def test_an_exception_in_the_style_write_still_brings_the_window_back(self, win32) -> None:
+        win32.SetWindowLongW.side_effect = OSError("no")
+
+        apply_extended_styles(self._root(), taskbar_button=True)
+
+        assert self._shows(win32) == [SW_HIDE, SW_SHOWNOACTIVATE]
+
+    def test_a_window_that_was_not_visible_is_left_alone(self, win32) -> None:
+        """The dance exists to make the shell look again at a window it has
+        already seen; a window nobody has shown yet gets its button the
+        ordinary way, and showing it here would be a visibility change this
+        function has no business making."""
+        win32.IsWindowVisible.return_value = 0
+
+        apply_extended_styles(self._root(), taskbar_button=True)
+
+        assert self._shows(win32) == []
+
+    def test_a_subordinate_window_is_not_hidden(self, win32) -> None:
+        """The snippets and symbols windows ask for focus suppression only;
+        blinking them off and on for a taskbar button they must not have
+        would be a visible flicker for nothing."""
+        apply_extended_styles(self._root())
+
+        assert self._shows(win32) == []
 
 
 class TestTheModuleIsASafeNoOpOffWindows:
