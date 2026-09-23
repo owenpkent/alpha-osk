@@ -4,6 +4,12 @@ All notable changes to Alpha-OSK are documented in this file.
 
 ## [Unreleased]
 
+### Changed
+- **Slurs are gone from the dictionary.** The word list added in 1.5.0 came from a spell checker and carried ethnic, racial and other slurs. They are now removed outright rather than hidden by the *Filter Explicit Words* setting, so the suggestion bar never offers them whatever that setting says, and a model saved by an earlier version loses them on its next start. They can still be typed letter by letter, and a word you type yourself is learned as usual. Swearing is unchanged: it stays in the dictionary, and the setting still decides whether it is suggested.
+
+### Fixed
+- **The explicit-word filter no longer hides ordinary words.** Because it matched word stems, it was keeping `spiced`, `spicier`, `japes`, `chinking`, `retarder` and a few others off the suggestion bar. Those are offered again. It also now covers the supplementary word list, which it had missed.
+
 ## [1.5.0] (2026-09-16)
 
 ### Added

@@ -1,0 +1,93 @@
+# Slurs removed from every shipped wordlist and seed file, and stripped
+# from a saved model's base counts on load. Unlike data/explicit_words.txt
+# (profanity, suppressed from suggestions under a user setting), no setting
+# brings these back: the keyboard never volunteers them.
+#
+# They are still typable character by character, and still learnable: a
+# word the user types three times enters their own vocabulary like any
+# other, because at that point it is their register, not ours.
+#
+# EXACT WORDS, never stems. A stem-plus-suffix rule is what the suggestion
+# filter used, and it caught "spiced" (spic+ed), "japes" (jap+es),
+# "chinking" and "retarder". A wrongly removed word is one nobody can ever
+# have predicted, so this list names every form it removes.
+#
+# A word goes here when its main modern use is a slur. A word with a
+# common ordinary sense (chink, dyke, fag, negro in a proper name) stays
+# in the vocabulary and is left to the suggestion filter instead: see
+# FILTER_ONLY_WORDS in scripts/gen_explicit_words.py.
+#
+# Lowercase, one per line. Forms not in today's data are listed anyway so
+# that a regenerated wordlist cannot bring them in.
+coon
+coons
+dago
+dagoes
+dagos
+darkie
+darkies
+darky
+faggot
+faggots
+gook
+gooks
+gyp
+gypped
+gypping
+gyps
+halfbreed
+halfbreeds
+heeb
+heebs
+honkie
+honkies
+honky
+injun
+injuns
+jap
+japs
+kike
+kikes
+kraut
+krauts
+negress
+negresses
+negroid
+negroids
+nigga
+niggas
+niggaz
+nigger
+niggers
+paki
+pakis
+pickaninnies
+pickaninny
+raghead
+ragheads
+redskin
+redskins
+retard
+retarded
+retards
+sambo
+sambos
+spic
+spick
+spicks
+spics
+squaw
+squaws
+trannie
+trannies
+tranny
+wetback
+wetbacks
+wog
+wogs
+wop
+wops
+yid
+yids
+zipperhead
+zipperheads

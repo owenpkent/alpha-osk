@@ -12,8 +12,8 @@
 
 \data\
 order=2
-contexts=13437
-edges=65694
+contexts=13436
+edges=65689
 
 \backoff:
 <s> -2.33381
@@ -9735,7 +9735,6 @@ redirect -0.212025
 redirected -0.325878
 redo -0.38906
 reds -0.218337
-redskins -0.029102
 reduce -0.276425
 reduced -0.264109
 reduces -0.240231
@@ -60915,11 +60914,6 @@ reds in 10
 reds are 9
 reds i 6
 reds on 6
-redskins and 17
-redskins fans 14
-redskins game 9
-redskins defense 5
-redskins franchise 5
 reduce the 29
 reduce it 6
 reduce your 6

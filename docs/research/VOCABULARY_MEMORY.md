@@ -5,7 +5,8 @@
 > moved out of generation and into a user setting, so the explicit words
 > it had removed came back. The counts here are left as measured rather
 > than restated against a vocabulary they were not run on; the shipped
-> totals are 64,443 and 83,386.
+> totals were 64,443 and 83,386 in 1.5.0. Removing slurs (2026-09-23,
+> `data/slurs.txt`) took the SCOWL half to 64,400.
 
 Research date: 2026-09-15. Baseline code: `cb101da`, on
 `feat/vocab-next-release`. Implemented milestones are packed SymSpell, packed

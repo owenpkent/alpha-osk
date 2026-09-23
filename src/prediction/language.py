@@ -99,6 +99,12 @@ class LanguageProfile:
     #: what the bar volunteers, not what exists.
     explicit_words: Optional[Path] = None
 
+    #: Slurs, as exact words. Removed from every shipped wordlist at
+    #: generation time and stripped from a saved model's base counts on
+    #: load, so no setting brings them back. Still typable, and learnable
+    #: by typing them: the strip spares anything in ``user_vocab``.
+    slurs: Optional[Path] = None
+
     def is_short_word(self, word: str) -> bool:
         """True if ``word`` is short enough to need the allow-list and on it.
 
@@ -173,6 +179,7 @@ ENGLISH = LanguageProfile(
     frequency=_DATA_DIR / "google-10000-english-usa-no-swears.txt",
     extra_vocabulary=_DATA_DIR / "english-expanded.txt",
     explicit_words=_DATA_DIR / "explicit_words.txt",
+    slurs=_DATA_DIR / "slurs.txt",
 )
 
 

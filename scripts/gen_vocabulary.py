@@ -2,7 +2,13 @@
 
 The input is the plain en_US.txt member from the pinned ESDB release archive.
 Output is deterministic and contains only lower-case ASCII words, excluding
-possessives, short fragments, and words already shipped by Alpha-OSK.
+possessives, short fragments, words already shipped by Alpha-OSK, and the
+slurs named in data/slurs.txt.
+
+Slurs are the one content exclusion made here. Profanity is deliberately kept
+and left to the suggestion filter (data/explicit_words.txt), which a user
+setting governs; a slur is never volunteered under any setting, so it is
+removed at the source. data/slurs.txt is an exact word list, never stems.
 """
 
 from __future__ import annotations
@@ -19,6 +25,9 @@ SOURCE_URL = (
     "https://sourceforge.net/projects/wordlist/files/speller/2026.02.25/"
     "wordlist-en_US-2026.02.25.zip/download"
 )
+SLURS = Path(__file__).resolve().parent.parent / "data" / "slurs.txt"
+
+
 def words_from_file(path: Path) -> set[str]:
     words: set[str] = set()
     for line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
@@ -40,6 +49,7 @@ def main() -> None:
         raise SystemExit(f"source SHA-256 mismatch: expected {SOURCE_SHA256}, got {digest}")
 
     existing = set().union(*(words_from_file(path) for path in args.base))
+    slurs = words_from_file(SLURS)
     with zipfile.ZipFile(args.archive) as archive:
         raw = archive.read("en_US.txt").decode("utf-8")
 
@@ -48,7 +58,7 @@ def main() -> None:
         word = raw_word.strip()
         if word != word.lower() or not WORD_RE.fullmatch(word):
             continue
-        if len(word) <= 2 or word.endswith("'s") or word in existing:
+        if len(word) <= 2 or word.endswith("'s") or word in existing or word in slurs:
             continue
         if not any(char in "aeiouy" for char in word):
             continue
@@ -62,9 +72,9 @@ def main() -> None:
         f"# Source URL: {SOURCE_URL}\n"
         f"# Archive SHA-256: {SOURCE_SHA256}.\n"
         "# License and original notices: data/licenses/ESDB.txt.\n"
-        "# No content is excluded here. Explicit words are in this list,\n"
-        "# and data/explicit_words.txt decides whether the prediction bar\n"
-        "# volunteers them, under a user setting. See CLAUDE.md.\n"
+        "# Slurs (data/slurs.txt, exact words) are excluded. Profanity is\n"
+        "# kept, and data/explicit_words.txt decides whether the prediction\n"
+        "# bar volunteers it, under a user setting. See CLAUDE.md.\n"
         "# Filter: lowercase ASCII words, no possessives, length > 2,\n"
         "# vowel and consonant required, excluding existing Alpha-OSK words.\n"
         "# Selection: every remaining size-60 word; no sampling or length cutoff.\n"
@@ -72,6 +82,7 @@ def main() -> None:
         + "\n".join(sorted(selected))
         + "\n",
         encoding="utf-8",
+        newline="\n",
     )
     args.out.with_suffix(".manifest").write_text(
         f"source_url={SOURCE_URL}\n"
@@ -82,8 +93,10 @@ def main() -> None:
         "selection=all words remaining after filtering, sorted alphabetically\n"
         "filter=lowercase ASCII words, internal apostrophes, length greater than 2, "
         "vowel and consonant, no possessives, existing words excluded\n"
-        "content=unfiltered; data/explicit_words.txt governs suggestions instead\n",
+        "content=slurs excluded (data/slurs.txt); profanity kept, "
+        "data/explicit_words.txt governs suggestions\n",
         encoding="utf-8",
+        newline="\n",
     )
     print(f"generated {len(selected)} words")
 
