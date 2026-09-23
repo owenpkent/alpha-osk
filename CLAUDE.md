@@ -95,13 +95,38 @@ loading/ready/error state; a failed load offers Retry without disabling typing.
 Direct bridge construction stays synchronous for tests and embedding callers.
 
 `prediction/loader.py` builds a parentless `HybridPredictor` in a daemon thread,
-moves the completed object to the UI thread, and publishes it through a UI timer.
-Cancellation and publication share a lock; shutdown cancels without waiting and
-never saves a partially loaded model. Before publishing suggestions, the bridge
-applies the latest settings/layout and rechecks focus and password state. It uses
-the existing privacy-aware typing buffers, with no separate keystroke queue.
-Model data changes and study sessions wait for readiness. Regression coverage:
-`tests/test_prediction_startup.py` (including the real QML loading/retry surface).
+moves the completed object to the UI thread, and publishes it through a
+`_Notifier` the job owns (a queued signal, not a poll: the notifier outlives a
+loader the keyboard destroyed mid-build, so the worker always emits on a live
+sender and Qt drops the delivery itself if the receiver is gone). Four things are
+load-bearing:
+
+- **Every exit of `_build` marks the job done**, in a `finally`. The first
+  version set it on two paths, and a hand-over failure left the bar on "Loading
+  suggestions..." for ever with no Retry.
+- **A cancel stops the CPU work, not only the publication.** The factory gets an
+  abort callable, and `HybridPredictor(abort_check=...)` polls it at
+  `_checkpoint()` between its construction phases, raising `LoadAborted`.
+  `shutdown()` then joins the worker for up to `_LOADER_SHUTDOWN_WAIT_S`.
+  Without both, quitting in the first seconds left the worker constructing
+  QObjects while Qt tore down.
+- **The build lowers `sys.setswitchinterval` for its duration** (restored in the
+  same `finally`) and each checkpoint yields the GIL, because a pure-Python
+  build on a thread otherwise held the UI thread off for up to 113 ms at a time,
+  inside every keystroke-timing window the keyboard has.
+- **Readiness guards are inventoried, not remembered.**
+  `TestEveryPredictorCallSiteIsGuarded` walks the bridge source and fails on a
+  method that reaches `self._predictor.<attr>` before comparing it with None.
+
+Before publishing suggestions, the bridge applies the latest settings/layout and
+rechecks focus and password state. It uses the existing privacy-aware typing
+buffers, with no separate keystroke queue. Model data changes and study sessions
+wait for readiness, and the three Settings controls that write to the engine
+(Save Now, Clear Learned Data, pack import) dim and say why while it is not
+there; `StudyBridge.startSession` refuses without an engine. The bar's spinner
+and Retry are plain items, not Controls, like every other button on it.
+Regression coverage: `tests/test_prediction_startup.py` (including the real QML
+loading/retry surface).
 
 ## Prediction Engine
 

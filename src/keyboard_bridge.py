@@ -1022,6 +1022,9 @@ class KeyboardBridge(QObject):
         self._dictation_config = DictationConfig.load()
         self._dictation: Optional[DictationController] = None
 
+    # How long shutdown gives a still-running engine build to stop.
+    _LOADER_SHUTDOWN_WAIT_S = 1.5
+
     def _connect_predictor(self, predictor: HybridPredictor) -> None:
         self._predictor = predictor
         predictor.setParent(self)
@@ -1041,15 +1044,17 @@ class KeyboardBridge(QObject):
             return
         self._prediction_status = "loading"
         self.predictionStatusChanged.emit()
-        loader = PredictionLoader(lambda: HybridPredictor(enable_llm=False), self)
+        loader = PredictionLoader(
+            lambda abort: HybridPredictor(enable_llm=False, abort_check=abort), self
+        )
         self._prediction_loader = loader
         loader.loaded.connect(self._finish_prediction_load)
         loader.failed.connect(self._prediction_load_failed)
         loader.start()
 
-    def _release_prediction_loader(self) -> None:
+    def _release_prediction_loader(self, wait: float = 0.0) -> None:
         if self._prediction_loader is not None:
-            self._prediction_loader.cancel()
+            self._prediction_loader.cancel(wait=wait)
             self._prediction_loader.deleteLater()
             self._prediction_loader = None
 
@@ -4750,7 +4755,11 @@ class KeyboardBridge(QObject):
         press and release it manually.
         """
         self._shutting_down = True
-        self._release_prediction_loader()
+        # Bounded: the build polls the cancel between phases, so this is
+        # normally instant; the bound covers a phase that is mid-way.  Not
+        # waiting is how an early quit crashed, with the worker still
+        # constructing QObjects while Qt tore down.
+        self._release_prediction_loader(wait=self._LOADER_SHUTDOWN_WAIT_S)
         for timer in (
             getattr(self, "_password_timer", None),
             getattr(self, "_foreground_timer", None),

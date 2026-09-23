@@ -58,6 +58,9 @@ def install_context_properties(
         telemetry = TelemetryBridge(bridge.analytics.get_session_stats, parent=bridge)
     if study is None:
         study = StudyBridge(keyboard=bridge, predictor=bridge._predictor, parent=bridge)
+        # A deferred bridge has no engine yet; hand it over when it lands,
+        # the same wiring keyboard_app.main makes.
+        bridge.predictionEngineReady.connect(study.set_predictor)
     engine.rootContext().setContextProperty("keyboard", bridge)
     engine.rootContext().setContextProperty("telemetry", telemetry)
     engine.rootContext().setContextProperty("study", study)

@@ -57,13 +57,11 @@ class StudyBridge(QObject):
         app_version: str = "",
         os_name: str = "",
         config_dir: Optional[Path] = None,
-        require_predictor: bool = False,
         parent: Optional[QObject] = None,
     ) -> None:
         super().__init__(parent)
         self._keyboard = keyboard
         self._predictor = predictor
-        self._require_predictor = require_predictor
         self._app_version = app_version
         self._os_name = os_name
         self._store = StudyStore(config_dir)
@@ -142,7 +140,11 @@ class StudyBridge(QObject):
         pool cannot fill the design, because both are recoverable states the
         UI has to be able to show a message for.
         """
-        if (self._require_predictor and self._predictor is None) or not self.hasConsented():
+        # No engine, no session: the freeze that keeps a block from training
+        # the model it is scored on has nothing to hold, so a session started
+        # here would run unfrozen.  The engine arrives through set_predictor
+        # once startup finishes loading it.
+        if self._predictor is None or not self.hasConsented():
             return False
         state = self._store.state
         design = DESIGNS.get(state.design_id, DEFAULT_DESIGN)

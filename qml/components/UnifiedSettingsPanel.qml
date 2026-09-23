@@ -8,6 +8,18 @@ import "../palette.js" as Palette
 Item {
     id: unifiedSettings
 
+    // Whether the prediction engine is there to act on.  The three
+    // controls that write to it (Save Now, Clear Learned Data, pack
+    // import) read this, and the label they show while it is false names
+    // the state rather than leaving a live-looking button that does
+    // nothing.  Error is not loading: nothing resolves it but Retry.
+    readonly property bool predictionsReady:
+        !keyboard || keyboard.predictionStatus === "ready"
+    readonly property string notReadyLabel:
+        keyboard && keyboard.predictionStatus === "error"
+            ? "Suggestions unavailable (Retry on the keyboard)"
+            : "Loading suggestions..."
+
     // Layout properties
     property bool showFunctionRow: false
     property bool showExtraFunctionRow: false
@@ -1592,12 +1604,25 @@ Item {
                                         font.pixelSize: 12
                                     }
 
+                                    // A valid folder picked before the engine
+                                    // is ready used to come back as "Failed
+                                    // (needs dictionary.txt)", a wrong
+                                    // diagnosis of a good pack, because the
+                                    // bridge returns an empty id for both.
+                                    // Say why instead of opening the dialog.
                                     MouseArea {
                                         id: importPackArea
                                         anchors.fill: parent
                                         hoverEnabled: true
                                         cursorShape: Qt.PointingHandCursor
-                                        onClicked: packFolderDialog.open()
+                                        onClicked: {
+                                            if (unifiedSettings.predictionsReady) {
+                                                packFolderDialog.open()
+                                            } else {
+                                                vocabColumn.importStatus = unifiedSettings.notReadyLabel
+                                                importStatusTimer.restart()
+                                            }
+                                        }
                                     }
 
                                     Timer {
@@ -1660,23 +1685,33 @@ Item {
                                 }
 
                                 // Save model button
+                                // While the engine is loading (or failed to
+                                // load) the button is dimmed and its label
+                                // says why, rather than a live-looking button
+                                // whose tap silently does nothing: a silent
+                                // tap is indistinguishable from one that
+                                // missed, so the user taps again.
                                 Rectangle {
+                                    objectName: "saveModelButton"
                                     Layout.fillWidth: true
                                     implicitHeight: 30
                                     radius: 5
+                                    opacity: unifiedSettings.predictionsReady ? 1.0 : 0.45
                                     color: saveArea.containsMouse ? "#3a5a3a" : "#2a3a2a"
                                     border.color: "#4a6a4a"
 
                                     Text {
+                                        objectName: "saveModelLabel"
                                         anchors.centerIn: parent
-                                        text: "Save Now"
+                                        text: unifiedSettings.predictionsReady
+                                              ? "Save Now" : unifiedSettings.notReadyLabel
                                         color: "#aaffaa"
                                         font.pixelSize: 12
                                     }
 
                                     MouseArea {
                                         id: saveArea
-                                        enabled: keyboard && keyboard.predictionStatus === "ready"
+                                        enabled: unifiedSettings.predictionsReady
                                         anchors.fill: parent
                                         hoverEnabled: true
                                         cursorShape: Qt.PointingHandCursor
@@ -1687,9 +1722,11 @@ Item {
                                 // Clear user data button with multi-step confirmation
                                 Rectangle {
                                     id: clearBtn
+                                    objectName: "clearModelButton"
                                     Layout.fillWidth: true
                                     implicitHeight: 30
                                     radius: 5
+                                    opacity: unifiedSettings.predictionsReady ? 1.0 : 0.45
 
                                     property int confirmStep: 0  // 0=idle, 1=first click, 2=confirmed
 
@@ -1702,8 +1739,10 @@ Item {
                                     border.width: confirmStep === 1 ? 2 : 1
 
                                     Text {
+                                        objectName: "clearModelLabel"
                                         anchors.centerIn: parent
                                         text: {
+                                            if (!unifiedSettings.predictionsReady) return unifiedSettings.notReadyLabel
                                             if (clearBtn.confirmStep === 2) return "Cleared!"
                                             if (clearBtn.confirmStep === 1) return "Are you sure? Click again to confirm"
                                             return "Clear Learned Data"
@@ -1725,7 +1764,7 @@ Item {
 
                                     MouseArea {
                                         id: clearArea
-                                        enabled: keyboard && keyboard.predictionStatus === "ready"
+                                        enabled: unifiedSettings.predictionsReady
                                         anchors.fill: parent
                                         hoverEnabled: true
                                         cursorShape: Qt.PointingHandCursor

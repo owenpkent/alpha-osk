@@ -232,6 +232,13 @@ Window {
     // ---- Instructions ----
     function beginSession() {
         startError = ""
+        // Two different situations, and only one of them resolves on its
+        // own: after a failed load nothing is loading, so telling the
+        // participant to wait would have them waiting for ever.
+        if (keyboard && keyboard.predictionStatus === "error") {
+            startError = qsTr("Suggestions failed to load. Use Retry on the suggestion bar of the keyboard, then start the study.")
+            return
+        }
         if (keyboard && keyboard.predictionStatus !== "ready") {
             startError = qsTr("Wait for suggestions to finish loading before starting the study.")
             return

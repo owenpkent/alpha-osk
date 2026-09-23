@@ -849,7 +849,6 @@ def main() -> int:
     study = StudyBridge(
         keyboard=bridge,
         predictor=bridge._predictor,
-        require_predictor=True,
         app_version=__version__,
         os_name=CURRENT_PLATFORM,
         parent=bridge,
