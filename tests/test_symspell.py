@@ -9,6 +9,8 @@ path could not reach now surface).
 
 from __future__ import annotations
 
+from itertools import combinations, product
+
 import pytest
 
 from src.prediction.symspell import SymSpell, damerau_levenshtein
@@ -67,6 +69,23 @@ def _single_edit_neighborhood(word: str) -> set[str]:
         if word[i] != word[i + 1]
     )
     return probes
+
+
+@pytest.mark.parametrize("distance", [0, 1, 2, 3])
+@pytest.mark.parametrize("prefix_length", [4, 7])
+def test_index_variants_match_all_nonempty_subsequences(distance, prefix_length):
+    index = SymSpell(max_edit_distance=distance, prefix_length=prefix_length)
+    words = ["", "can't", "na\u00efve", "\u732b\U0001f600\u732b", "a\ud800b", "abcdefghij"]
+    words.extend("".join(chars) for length in range(1, 7) for chars in product("ab", repeat=length))
+    for word in words:
+        prefix = word[:prefix_length]
+        expected = {prefix}
+        for length in range(max(1, len(prefix) - distance), len(prefix)):
+            expected.update("".join(chars) for chars in combinations(prefix, length))
+        variants = list(index._index_variants(word))
+        assert set(variants) == expected
+        # Repeated letters must not duplicate a word's posting in a bucket.
+        assert len(variants) == len(expected)
 
 
 class TestDamerauLevenshtein:
@@ -304,14 +323,14 @@ class TestSymSpellPreparedAndIncrementalBehavior:
         index.add_dictionary([("hello", 10), ("world", 8)])
 
         calls = 0
-        original = index._deletion_variants
+        original = index._index_variants
 
-        def counted(word, max_deletes):
+        def counted(word):
             nonlocal calls
             calls += 1
-            return original(word, max_deletes)
+            return original(word)
 
-        monkeypatch.setattr(index, "_deletion_variants", counted)
+        monkeypatch.setattr(index, "_index_variants", counted)
         index.prepare()
         first_prepare_calls = calls
         index.prepare()

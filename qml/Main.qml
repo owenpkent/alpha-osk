@@ -634,6 +634,7 @@ Window {
     // Predictions from hybrid engine
     property var predictions: []
     property bool predictionsLoading: false
+    readonly property string predictionStatus: keyboard ? keyboard.predictionStatus : "loading"
 
     // Keyboard layout (data-driven from JSON)
     property var layoutRows: keyboard ? keyboard.getLayoutRows() : []
@@ -716,6 +717,7 @@ Window {
     readonly property bool predictionsArePresent:
         root.suggestionsEnabled && !root.privacyMode
         && !root.dictationActive && !study.suppressPredictions
+        && root.predictionStatus === "ready"
     readonly property string scanRevision: [
         root.predictionGeneration,
         // Everything that decides whether the pills are there at all, not
@@ -1411,6 +1413,10 @@ Window {
         function onPredictionsChanged(preds) { root.predictions = preds }
         function onPredictionsRefined(preds) { root.predictions = preds }
         function onPredictionLoading(loading) { root.predictionsLoading = loading }
+        function onPredictionStatusChanged() {
+            if (keyboard.predictionStatus === "ready" && root.showVisualization)
+                vizContent.refresh()
+        }
         
         // Layout updates
         // Always land on the base layer after a layout swap — leaving the
@@ -2266,6 +2272,51 @@ Window {
                 clip: true
 
                 Behavior on Layout.preferredHeight { NumberAnimation { duration: 150 } }
+
+                // Startup occupies only the suggestion area; keys remain usable.
+                Item {
+                    objectName: "predictionStartupStatus"
+                    x: predBar.micReserve + 8
+                    width: Math.max(0, predBar.width - predBar.micReserve - predBar.clearCtxReserve - 16)
+                    height: parent.height
+                    visible: root.suggestionsEnabled && !root.privacyMode
+                             && !root.dictationActive && !study.suppressPredictions
+                             && root.predictionStatus !== "ready"
+
+                    RowLayout {
+                        anchors.centerIn: parent
+                        width: Math.min(parent.width, implicitWidth)
+                        spacing: 8
+
+                        BusyIndicator {
+                            objectName: "predictionStartupSpinner"
+                            Layout.preferredWidth: 24
+                            Layout.preferredHeight: 24
+                            visible: root.predictionStatus === "loading"
+                            running: visible && parent.parent.visible
+                        }
+                        Text {
+                            objectName: "predictionStartupText"
+                            Layout.fillWidth: true
+                            text: root.predictionStatus === "error"
+                                  ? qsTr("Suggestions unavailable") : qsTr("Loading suggestions...")
+                            textFormat: Text.PlainText
+                            color: root.themeTextColor
+                            font.pixelSize: 13
+                            elide: Text.ElideRight
+                            Accessible.role: Accessible.StaticText
+                            Accessible.name: text
+                        }
+                        Button {
+                            objectName: "predictionStartupRetry"
+                            text: qsTr("Retry")
+                            focusPolicy: Qt.NoFocus
+                            visible: root.predictionStatus === "error"
+                            Layout.preferredHeight: 34
+                            onClicked: if (keyboard) keyboard.startPredictionLoading()
+                        }
+                    }
+                }
 
                 // Privacy mode indicator (replaces predictions)
                 Row {

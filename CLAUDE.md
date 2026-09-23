@@ -85,6 +85,24 @@ User clicks key (QML)
 | `build/` | Packaging pipelines - `build/windows/` (PyInstaller + NSIS + EV signing) and `build/linux/` (PyInstaller + optional AppImage). `build/launcher.py` is the shared frozen-mode entry point. |
 | `tests/` | pytest suite |
 
+## Startup
+
+`keyboard_app.main()` creates `KeyboardBridge(defer_predictions=True)` and
+starts its prediction loader after loading the window and entering the event
+loop. Ordinary keys, modifiers, snippets and privacy detection work while the
+prediction bar says "Loading suggestions...". `predictionStatus` is the single
+loading/ready/error state; a failed load offers Retry without disabling typing.
+Direct bridge construction stays synchronous for tests and embedding callers.
+
+`prediction/loader.py` builds a parentless `HybridPredictor` in a daemon thread,
+moves the completed object to the UI thread, and publishes it through a UI timer.
+Cancellation and publication share a lock; shutdown cancels without waiting and
+never saves a partially loaded model. Before publishing suggestions, the bridge
+applies the latest settings/layout and rechecks focus and password state. It uses
+the existing privacy-aware typing buffers, with no separate keystroke queue.
+Model data changes and study sessions wait for readiness. Regression coverage:
+`tests/test_prediction_startup.py` (including the real QML loading/retry surface).
+
 ## Prediction Engine
 
 All in `src/prediction/`. Orchestrated by `hybrid_predictor.py`:

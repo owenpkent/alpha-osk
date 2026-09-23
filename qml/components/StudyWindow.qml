@@ -232,6 +232,10 @@ Window {
     // ---- Instructions ----
     function beginSession() {
         startError = ""
+        if (keyboard && keyboard.predictionStatus !== "ready") {
+            startError = qsTr("Wait for suggestions to finish loading before starting the study.")
+            return
+        }
         if (!study.startSession()) {
             startError = qsTr("Could not start the session. Ask the researcher to check your consent record and try again.")
             return

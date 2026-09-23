@@ -57,11 +57,13 @@ class StudyBridge(QObject):
         app_version: str = "",
         os_name: str = "",
         config_dir: Optional[Path] = None,
+        require_predictor: bool = False,
         parent: Optional[QObject] = None,
     ) -> None:
         super().__init__(parent)
         self._keyboard = keyboard
         self._predictor = predictor
+        self._require_predictor = require_predictor
         self._app_version = app_version
         self._os_name = os_name
         self._store = StudyStore(config_dir)
@@ -81,6 +83,11 @@ class StudyBridge(QObject):
         self._freeze = ExitStack()
 
     # --- consent ---
+
+    @Slot(object)
+    def set_predictor(self, predictor: Any) -> None:
+        """Attach the engine after startup, before a study can begin."""
+        self._predictor = predictor
 
     @Slot(result=bool)
     def hasConsented(self) -> bool:
@@ -135,7 +142,7 @@ class StudyBridge(QObject):
         pool cannot fill the design, because both are recoverable states the
         UI has to be able to show a message for.
         """
-        if not self.hasConsented():
+        if (self._require_predictor and self._predictor is None) or not self.hasConsented():
             return False
         state = self._store.state
         design = DESIGNS.get(state.design_id, DEFAULT_DESIGN)

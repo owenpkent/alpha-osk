@@ -1520,20 +1520,28 @@ Item {
 
                             ColumnLayout {
                                 id: vocabColumn
+                                objectName: "vocabularyPackSettings"
                                 Layout.fillWidth: true
                                 spacing: 4
 
                                 property var availablePacks: []
                                 property var enabledPacks: []
+                                property string packsDir: ""
                                 property string importStatus: ""
 
                                 function refresh() {
                                     if (!keyboard) return
                                     availablePacks = keyboard.getAvailablePacks()
                                     enabledPacks = keyboard.getEnabledPacks()
+                                    packsDir = keyboard.getUserPacksDir()
                                 }
 
                                 Component.onCompleted: refresh()
+
+                                Connections {
+                                    target: keyboard
+                                    function onPredictionStatusChanged() { vocabColumn.refresh() }
+                                }
 
                                 // Empty-state explainer.  Visible only
                                 // when nothing has been imported yet.
@@ -1618,7 +1626,7 @@ Item {
                                 }
 
                                 Text {
-                                    text: "Custom packs: " + (keyboard ? keyboard.getUserPacksDir() : "")
+                                    text: "Custom packs: " + vocabColumn.packsDir
                                     color: "#666"
                                     font.pixelSize: 9
                                     wrapMode: Text.WrapAnywhere
@@ -1668,6 +1676,7 @@ Item {
 
                                     MouseArea {
                                         id: saveArea
+                                        enabled: keyboard && keyboard.predictionStatus === "ready"
                                         anchors.fill: parent
                                         hoverEnabled: true
                                         cursorShape: Qt.PointingHandCursor
@@ -1716,6 +1725,7 @@ Item {
 
                                     MouseArea {
                                         id: clearArea
+                                        enabled: keyboard && keyboard.predictionStatus === "ready"
                                         anchors.fill: parent
                                         hoverEnabled: true
                                         cursorShape: Qt.PointingHandCursor
