@@ -4,6 +4,9 @@ All notable changes to Alpha-OSK are documented in this file.
 
 ## [Unreleased]
 
+### Changed
+- **The Symbols & Emoji button shows an α instead of a smiley face**, in the suggestion bar and in the title-bar copy that appears when suggestions are off. It is drawn at the same line weight as the Snippets and clear-context buttons beside it.
+
 ## [1.5.0] (2026-09-16)
 
 ### Added
