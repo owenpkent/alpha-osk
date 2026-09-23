@@ -4,6 +4,9 @@ All notable changes to Alpha-OSK are documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+- **The application exe now says what it is.** It shipped with no version resource, so anywhere Windows names a program from the file, a taskbar pin made from the running button, Task Manager, the file properties dialog, showed the bare filename `alpha-osk`, and Explorer had suffixed one such pin `(2)` because a pin of that name already existed. The build now stamps `Alpha-OSK`, the publisher and the version into the exe, generated from the one version file at build time so it cannot lag a release.
+
 ## [1.5.0] (2026-09-16)
 
 ### Added
