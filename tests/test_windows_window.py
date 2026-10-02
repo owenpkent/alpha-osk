@@ -19,6 +19,7 @@ from src.platform.windows_window import (
     WM_QUERYOPEN,
     QuietRestoreFilter,
     apply_extended_styles,
+    restore_without_activating,
     set_app_user_model_id,
     surface_existing_instance,
 )
@@ -453,3 +454,102 @@ class TestRestoringTheKeyboardLeavesTheForegroundAlone:
             False,
             0,
         )
+
+
+class TestASecondLaunchLeavesTheForegroundAlone:
+    """Launching Alpha-OSK while it is already running (a shortcut key, a
+    Start-menu click, an assistive device's "open keyboard" button) hands
+    off to ``surface_existing_instance`` in the losing process. It used to
+    finish with ``SetForegroundWindow``, and measured on the installed
+    keyboard that left it as the foreground window: the next key clicked
+    went to the keyboard itself instead of the application in front.
+
+    The pure half pins the decision on any platform. The Windows half runs
+    the real function against a fake ``user32`` and asserts on an
+    **allow-list** of the calls it may make, so any activation call added
+    back (``SetForegroundWindow``, ``BringWindowToTop``, ``SetActiveWindow``,
+    ``SwitchToThisWindow``...) fails here whatever its name."""
+
+    HWND = 0x4242
+
+    def _restore(self, *, minimized: bool) -> list:
+        shown: list = []
+        restore_without_activating(
+            self.HWND,
+            is_iconic=lambda hwnd: minimized,
+            show_window=lambda hwnd, cmd: shown.append((hwnd, cmd)),
+        )
+        return shown
+
+    def test_a_minimized_keyboard_is_restored_without_activating(self) -> None:
+        assert self._restore(minimized=True) == [(self.HWND, SW_SHOWNOACTIVATE)]
+
+    def test_a_keyboard_already_on_screen_is_not_touched(self) -> None:
+        assert self._restore(minimized=False) == []
+
+    class _FakeUser32:
+        """Records every user32 call; argtypes / restype assignments land
+        on the recording function and are ignored."""
+
+        def __init__(self, windows: dict, minimized: set) -> None:
+            self.windows = windows
+            self.minimized = minimized
+            self.calls: list = []
+
+        def __getattr__(self, name: str):
+            fake = self
+
+            class _Fn:
+                def __call__(self, *args):
+                    fake.calls.append((name, args))
+                    handler = type(fake).__dict__.get("_" + name)
+                    return handler(fake, *args) if handler else 0
+
+            fn = _Fn()
+            object.__setattr__(self, name, fn)
+            return fn
+
+        def _EnumWindows(self, proc, lparam):
+            for hwnd in self.windows:
+                if not proc(hwnd, lparam):
+                    break
+            return True
+
+        def _IsWindowVisible(self, hwnd):
+            return True
+
+        def _GetWindowTextW(self, hwnd, buf, n):
+            buf.value = self.windows[hwnd]
+            return len(buf.value)
+
+        def _IsIconic(self, hwnd):
+            return hwnd in self.minimized
+
+    ALLOWED = {"EnumWindows", "IsWindowVisible", "GetWindowTextW", "IsIconic", "ShowWindow"}
+
+    def _surface(self, monkeypatch: pytest.MonkeyPatch, *, minimized: bool):
+        import ctypes
+
+        fake = self._FakeUser32(
+            {0x1111: "Untitled - Notepad", self.HWND: "Alpha-OSK"},
+            {self.HWND} if minimized else set(),
+        )
+        monkeypatch.setattr(ctypes, "windll", types.SimpleNamespace(user32=fake))
+        surface_existing_instance("Alpha-OSK")
+        return fake.calls
+
+    @pytest.mark.skipif(sys.platform != "win32", reason="drives the real ctypes callback")
+    def test_the_second_launch_restores_the_keyboard_quietly(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls = self._surface(monkeypatch, minimized=True)
+        assert ("ShowWindow", (self.HWND, SW_SHOWNOACTIVATE)) in calls
+        assert {name for name, _ in calls} <= self.ALLOWED
+
+    @pytest.mark.skipif(sys.platform != "win32", reason="drives the real ctypes callback")
+    def test_and_does_nothing_when_it_is_already_showing(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls = self._surface(monkeypatch, minimized=False)
+        assert not [c for c in calls if c[0] == "ShowWindow"]
+        assert {name for name, _ in calls} <= self.ALLOWED
