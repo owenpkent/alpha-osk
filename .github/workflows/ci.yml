@@ -334,7 +334,10 @@ jobs:
   # pinning lxml>=6.1.0 in requirements-dev.txt.  If a future CVE
   # appears and we genuinely can't fix it before the next push,
   # quarantine it with an `osv-scanner.toml` ignore entry rather
-  # than flipping this back to false globally.
+  # than flipping this back to false globally.  The scanner reads that
+  # file only from the scanned lockfile's own directory, so a worker
+  # entry goes in backend/cf-worker/osv-scanner.toml; one at the repo
+  # root is silently ignored.
   #
   # upload-sarif: false by default.  Originally because the source repo
   # was private and GitHub Advanced Security (required for SARIF upload
