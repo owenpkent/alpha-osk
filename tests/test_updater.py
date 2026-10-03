@@ -525,11 +525,15 @@ class TestPowerShellSingleQuoteEscaping:
         tricky = str(tmp_path / "O'Brien's Files" / "installer.exe")
         escaped = _ps_single_quote_escape(tricky)
         script = f"Write-Output '{escaped}'"
+        # The timeout guards a hang, not speed. A cold Windows PowerShell
+        # start on a CI runner shared by four xdist workers has taken more
+        # than 30 s, and that timeout once stranded a Dependabot security
+        # fix whose auto-merge waited on this shard.
         result = subprocess.run(
             ["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
             capture_output=True,
             text=True,
-            timeout=30,
+            timeout=120,
         )
         assert result.returncode == 0, result.stderr
         assert result.stdout.strip() == tricky
