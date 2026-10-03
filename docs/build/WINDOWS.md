@@ -748,7 +748,7 @@ gh api repos/google/osv-scanner-action/git/refs/tags/<tag> --jq '.object.sha'
 
 Update the `@<sha> # <tag>` line in `ci.yml` and commit.
 
-**Quarantining an unfixable advisory.** With `fail-on-vuln: true`, an unpatched CVE will block every PR until it's addressed. The normal path is to upgrade the affected package (bump the direct dep, or pin a transitive constraint as we did for `lxml`). If a fix genuinely is not yet available upstream, add an `osv-scanner.toml` at the repo root listing the specific advisory IDs to ignore, with a reason and a review date:
+**Quarantining an unfixable advisory.** With `fail-on-vuln: true`, an unpatched CVE against a dependency already on `main` fails the full scan on every push to `main` and the daily `osv-nightly.yml` run until it's addressed (pull requests fail only on advisories they introduce). The normal path is to upgrade the affected package (bump the direct dep, or pin a transitive constraint as we did for `lxml`). If a fix genuinely is not yet available upstream, add an `osv-scanner.toml` **beside the lockfile it applies to** (the repo root for `requirements-dev.txt`, `backend/cf-worker/` for the worker; the scanner does not look anywhere else, so a worker entry at the root is silently ignored) listing the specific advisory IDs to ignore, with a reason and a review date:
 
 ```toml
 [[IgnoredVulns]]
