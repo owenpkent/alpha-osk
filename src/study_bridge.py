@@ -27,6 +27,7 @@ from typing import Any, Dict, List, Optional
 
 from PySide6.QtCore import Property, QObject, Signal, Slot
 
+from .prediction.null_predictor import is_loaded
 from .study import export, metrics, phrases
 from .study.capture import RecordingSynthesizer
 from .study.config import StudyStore
@@ -142,9 +143,11 @@ class StudyBridge(QObject):
         """
         # No engine, no session: the freeze that keeps a block from training
         # the model it is scored on has nothing to hold, so a session started
-        # here would run unfrozen.  The engine arrives through set_predictor
-        # once startup finishes loading it.
-        if self._predictor is None or not self.hasConsented():
+        # here would run unfrozen.  While the keyboard loads, what it hands
+        # over is the stand-in (prediction/null_predictor.py), not None, so
+        # this asks is_loaded rather than comparing with None.  The engine
+        # arrives through set_predictor once startup finishes loading it.
+        if not is_loaded(self._predictor) or not self.hasConsented():
             return False
         state = self._store.state
         design = DESIGNS.get(state.design_id, DEFAULT_DESIGN)
@@ -171,11 +174,14 @@ class StudyBridge(QObject):
             _logger.warning("could not build session: %s", e)
             return False
 
+        # Frozen before the session is published, so a freeze that raises
+        # (the stand-in refuses outright) leaves no session behind to run
+        # unfrozen.
+        if design.freeze_learning:
+            self._freeze.enter_context(self._predictor.frozen_learning())
+
         session.cursor = min(state.cursor, len(session.plan))
         self._session = session
-
-        if design.freeze_learning and self._predictor is not None:
-            self._freeze.enter_context(self._predictor.frozen_learning())
 
         self.stepChanged.emit()
         return True

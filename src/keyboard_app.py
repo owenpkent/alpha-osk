@@ -845,7 +845,9 @@ def main() -> int:
     # The research study is a third feature surface off the bridge, same
     # shape as telemetry (STRUCTURAL_REVIEW.md section 3.1). It needs the
     # bridge (to redirect keystrokes during a trial) and the predictor (to
-    # freeze learning for the session's duration).
+    # freeze learning for the session's duration).  The predictor is the
+    # loading stand-in at this point, which startSession refuses; the
+    # engine arrives through predictionEngineReady.
     study = StudyBridge(
         keyboard=bridge,
         predictor=bridge._predictor,

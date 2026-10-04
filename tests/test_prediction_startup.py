@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import ast
-import inspect
 import os
 import sys
 import threading
@@ -33,6 +31,7 @@ from PySide6.QtTest import QTest
 from src import keyboard_bridge as kb
 from src.prediction.hybrid_predictor import HybridPredictor, LoadAborted
 from src.prediction.loader import _BUILD_SWITCH_INTERVAL_S, PredictionLoader
+from src.prediction.null_predictor import NullPredictor
 from src.study.capture import RecordingSynthesizer
 from src.study_bridge import StudyBridge
 from tests.qml_context import install_context_properties
@@ -151,7 +150,7 @@ def test_typing_and_event_loop_work_before_predictions_then_use_current_context(
     wait_for(lambda: heartbeat)
     assert synth.transcript == "hel"
     assert bridge.predictionStatus == "loading"
-    assert bridge._predictor is None
+    assert isinstance(bridge._predictor, NullPredictor)
 
     bridge.setFilterExplicit(False)
     bridge.setMergeStrategy("rrf")
@@ -210,7 +209,7 @@ def test_closing_during_load_does_not_save_or_publish_a_partial_model(pending, t
     release.set()
     wait_for(lambda: job.done)
     assert ready == []
-    assert bridge._predictor is None
+    assert isinstance(bridge._predictor, NullPredictor)
     assert saved.read_text(encoding="utf-8") == '{"sentinel": true}'
 
 
@@ -518,70 +517,6 @@ def test_publication_does_not_poll(qapp):
     parent = QObject()
     loader = PredictionLoader(lambda abort: PredictorDouble(), parent)
     assert not [c for c in loader.children() if isinstance(c, QTimer)]
-
-
-class TestEveryPredictorCallSiteIsGuarded:
-    """Readiness is a rule every call site has to remember, so it is inventoried.
-
-    ``_predictor`` is None until the loader finishes, and a slot that reaches
-    it unguarded is an AttributeError on a keystroke in the first seconds of
-    every launch: invisible in the synchronous test bridges, which are
-    always ready, and loud in the frozen build.  This walks the bridge's
-    source and fails on any method that touches ``self._predictor.<attr>``
-    without first comparing ``self._predictor`` against None, the same way
-    ``test_learning_freeze.py`` inventories the predictor's own mutators.
-    """
-
-    # Methods that only ever run with the engine in hand: the one that
-    # installs it, and the loader callback that receives it.
-    KNOWN_READY = {"_connect_predictor", "_finish_prediction_load"}
-
-    @staticmethod
-    def _is_predictor_attr(node):
-        return (
-            isinstance(node, ast.Attribute)
-            and isinstance(node.value, ast.Name)
-            and node.value.id == "self"
-            and node.attr == "_predictor"
-        )
-
-    def _unguarded_methods(self):
-        tree = ast.parse(inspect.getsource(kb))
-        bridge = next(
-            n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "KeyboardBridge"
-        )
-        offenders = []
-        for fn in bridge.body:
-            if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                continue
-            uses = [
-                n.lineno
-                for n in ast.walk(fn)
-                if isinstance(n, ast.Attribute) and self._is_predictor_attr(n.value)
-            ]
-            if not uses:
-                continue
-            guards = [
-                n.lineno
-                for n in ast.walk(fn)
-                if isinstance(n, ast.Compare)
-                and self._is_predictor_attr(n.left)
-                and all(isinstance(op, (ast.Is, ast.IsNot)) for op in n.ops)
-            ]
-            if not guards or min(uses) < min(guards):
-                offenders.append(fn.name)
-        return offenders
-
-    def test_every_method_that_reaches_the_engine_checks_it_is_there(self):
-        assert sorted(set(self._unguarded_methods()) - self.KNOWN_READY) == []
-
-    def test_the_inventory_can_fail(self):
-        """A walker that found nothing would pass the test above for ever."""
-        src = "class KeyboardBridge:\n    def f(self):\n        return self._predictor.x\n"
-        tree = ast.parse(src)
-        fn = tree.body[0].body[0]
-        uses = [n for n in ast.walk(fn) if isinstance(n, ast.Attribute)]
-        assert any(self._is_predictor_attr(u.value) for u in uses)
 
 
 def test_settings_buttons_say_why_they_are_inert_and_the_study_names_retry(pending, qapp):

@@ -114,19 +114,33 @@ load-bearing:
   same `finally`) and each checkpoint yields the GIL, because a pure-Python
   build on a thread otherwise held the UI thread off for up to 113 ms at a time,
   inside every keystroke-timing window the keyboard has.
-- **Readiness guards are inventoried, not remembered.**
-  `TestEveryPredictorCallSiteIsGuarded` walks the bridge source and fails on a
-  method that reaches `self._predictor.<attr>` before comparing it with None.
+- **Until the engine loads, `_predictor` is a stand-in, never None.**
+  `prediction/null_predictor.py::NullPredictor` answers every call the bridge
+  and `StudyBridge` make the way an engine with nothing to say would: no
+  suggestions, learning dropped, `save` a no-op. The first version used about
+  fifty hand-copied `if self._predictor is None` guards, and a call site added
+  without its copy raised on a keystroke during startup, invisible to the
+  always-ready synchronous test bridges. `tests/test_null_predictor.py` walks
+  both bridges' source (local aliases such as `ngram = self._predictor._ngram`
+  included) and fails on any path the stand-in lacks or any method whose
+  parameters differ from `HybridPredictor`'s, then drives the keyboard
+  against it. **The stand-in's `frozen_learning` raises**, so a study can
+  never freeze an object that is about to be replaced and run unfrozen on the
+  real engine.
 
 Before publishing suggestions, the bridge applies the latest settings/layout and
 rechecks focus and password state. It uses the existing privacy-aware typing
-buffers, with no separate keystroke queue. Model data changes and study sessions
-wait for readiness, and the three Settings controls that write to the engine
-(Save Now, Clear Learned Data, pack import) dim and say why while it is not
-there; `StudyBridge.startSession` refuses without an engine. The bar's spinner
-and Retry are plain items, not Controls, like every other button on it.
+buffers, with no separate keystroke queue. The slots whose honest answer while
+loading is "not yet" refuse through an explicit readiness check
+(`_engine_loaded()` / `null_predictor.is_loaded`, never `is None`, which the
+stand-in makes dead code): Data Backup export and import, Save Now, Clear
+Learned Data, pack import, text import and `StudyBridge.startSession`. A
+no-op there would report success for work that was thrown away. The three
+Settings controls that write to the engine (Save Now, Clear Learned Data, pack
+import) dim and say why while it is not there. The bar's spinner and Retry are
+plain items, not Controls, like every other button on it.
 Regression coverage: `tests/test_prediction_startup.py` (including the real QML
-loading/retry surface).
+loading/retry surface) and `tests/test_null_predictor.py`.
 
 ## Prediction Engine
 

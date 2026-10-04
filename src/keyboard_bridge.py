@@ -30,6 +30,7 @@ from typing import (
     Sequence,
     Set,
     Tuple,
+    Union,
 )
 
 from PySide6.QtCore import Property, QObject, QTimer, QUrl, Signal, Slot
@@ -68,6 +69,7 @@ from .platform.pointer import external_click_detected
 from .prediction import HybridPredictor
 from .prediction.fuzzy_recognizer import positions_from_layout
 from .prediction.loader import PredictionLoader
+from .prediction.null_predictor import NullPredictor, is_loaded
 from .prediction.token_predictor import TokenPredictor
 from .snippets import MAX_SNIPPETS, SNIPPET_COLORS, SnippetStore
 from .text_patterns import (
@@ -734,7 +736,11 @@ class KeyboardBridge(QObject):
         # hasn't started interacting yet.
         self._synth.reset_modifier_state()
 
-        self._predictor: Optional[HybridPredictor] = None
+        # A stand-in until the engine loads, never None, so no call site
+        # needs a readiness guard of its own: see
+        # prediction/null_predictor.py.  The few slots that must refuse
+        # while loading ask _engine_loaded() explicitly.
+        self._predictor: Union[HybridPredictor, NullPredictor] = NullPredictor()
         self._prediction_loader: Optional[PredictionLoader] = None
         self._prediction_status = "loading" if defer_predictions else "ready"
         self._shutting_down = False
@@ -1033,14 +1039,19 @@ class KeyboardBridge(QObject):
         predictor.modelLoading.connect(self.predictionLoading.emit)
         predictor.llmAvailableChanged.connect(self.llmAvailableChanged.emit)
 
+    def _engine_loaded(self) -> bool:
+        """Whether the real engine is installed rather than the stand-in.
+
+        Only for the slots whose honest answer while loading is "not
+        yet": there the stand-in's no-op would report success for work
+        that was thrown away.  Everything else calls the stand-in.
+        """
+        return is_loaded(self._predictor)
+
     @Slot()
     def startPredictionLoading(self) -> None:
         """Start once the keyboard is visible; also retries a failed load."""
-        if (
-            self._shutting_down
-            or self._predictor is not None
-            or self._prediction_loader is not None
-        ):
+        if self._shutting_down or self._engine_loaded() or self._prediction_loader is not None:
             return
         self._prediction_status = "loading"
         self.predictionStatusChanged.emit()
@@ -1826,7 +1837,7 @@ class KeyboardBridge(QObject):
             if not self._offsets_spell(so_far):
                 self._word_offsets = [(c, None) for c in so_far]
             self._word_offsets.append((char, offset))
-            if offset is not None and self._predictor is not None:
+            if offset is not None:
                 self._predictor.observe_press(char, offset[0], offset[1])
             # Track whether Caps Lock was on for any char in this word
             # — gates whether all-caps typing is allowed to be learned
@@ -1852,7 +1863,7 @@ class KeyboardBridge(QObject):
                 sentence = self._sentence_buffer
                 if not self._take_lost_prefix():
                     sentence += self._current_word
-                if sentence.strip() and self._predictor is not None:
+                if sentence.strip():
                     new_words = self._predictor.learn(sentence.strip())
                     if new_words:
                         for nw in new_words:
@@ -2048,7 +2059,6 @@ class KeyboardBridge(QObject):
             and self._current_word
             and not self._privacy_mode
             and self._autocorrect_enabled
-            and self._predictor is not None
         ):
             correction = self._predictor.check_autocorrect(
                 self._current_word,
@@ -2111,11 +2121,7 @@ class KeyboardBridge(QObject):
             elif self._current_word:
                 self._add_debug_log(f'Word completed: "{self._current_word}"')
                 # Auto-rehabilitate blacklisted words typed repeatedly
-                rehabilitated = (
-                    self._predictor.record_typed_word(self._current_word)
-                    if self._predictor is not None
-                    else None
-                )
+                rehabilitated = self._predictor.record_typed_word(self._current_word)
                 if rehabilitated:
                     self._add_debug_log(f"Auto-rehabilitated: {rehabilitated}")
                 self._analytics.record_word_completed(self._current_word)
@@ -2127,7 +2133,7 @@ class KeyboardBridge(QObject):
                 # each letter to type all-caps, which is a strong
                 # signal ("HVAC", "ROFL").
                 allow_uppercase = not self._word_typed_under_caps_lock
-                if self._predictor is not None and self._predictor.learn_capitalization(
+                if self._predictor.learn_capitalization(
                     self._current_word, allow_uppercase=allow_uppercase
                 ):
                     self._add_debug_log(f'Learned capitalization: "{self._current_word}"')
@@ -2135,11 +2141,7 @@ class KeyboardBridge(QObject):
                 self._sentence_buffer += self._current_word + " "
                 self._context_buffer += self._current_word + " "
                 # Learn bigrams/trigrams from the running sentence
-                new_words = (
-                    self._predictor.learn(self._sentence_buffer.strip())
-                    if self._predictor is not None
-                    else []
-                )
+                new_words = self._predictor.learn(self._sentence_buffer.strip())
                 if new_words:
                     for nw in new_words:
                         self._add_debug_log(f'NEW WORD learned: "{nw}"')
@@ -2208,7 +2210,7 @@ class KeyboardBridge(QObject):
                 self._add_debug_log(f'Word completed: "{self._current_word}"')
                 self._analytics.record_word_completed(self._current_word)
                 self._sentence_buffer += self._current_word
-            if self._sentence_buffer.strip() and self._predictor is not None:
+            if self._sentence_buffer.strip():
                 new_words = self._predictor.learn(self._sentence_buffer.strip())
                 if new_words:
                     for nw in new_words:
@@ -2730,7 +2732,7 @@ class KeyboardBridge(QObject):
         # Learn from selection — use context_buffer only, not the typed
         # fragment (_current_word) which is being *replaced* by the prediction.
         # Suppressed in privacy mode: this persists into the model.
-        if not self._privacy_mode and self._predictor is not None:
+        if not self._privacy_mode:
             self._predictor.learn_from_selection(self._context_buffer, word)
 
         # Capture casing intent.  If the user typed *any* uppercase
@@ -2755,7 +2757,6 @@ class KeyboardBridge(QObject):
             not self._privacy_mode
             and self._current_word
             and self._current_word != self._current_word.lower()
-            and self._predictor is not None
         ):
             allow_uppercase = not self._word_typed_under_caps_lock
             self._predictor.learn_capitalization(word, allow_uppercase=allow_uppercase)
@@ -2792,7 +2793,7 @@ class KeyboardBridge(QObject):
 
         next_preds = (
             self._predictor.predict(context_for_prediction, n=self._prediction_count)
-            if self._predictor is not None and not self._privacy_mode
+            if not self._privacy_mode
             else []
         )
         _logger.info("Next-word predictions (count=%d)", len(next_preds))
@@ -3536,7 +3537,7 @@ class KeyboardBridge(QObject):
 
     def _update_predictions(self) -> None:
         """Request updated predictions from the engine."""
-        if self._predictor is None or self._privacy_mode:
+        if self._privacy_mode:
             return
         context = self._context_buffer + self._current_word
         # Click positions only travel when they were recorded under the
@@ -3642,8 +3643,6 @@ class KeyboardBridge(QObject):
         it with itself.  Enforced on both branches below, and by
         ``TokenPredictor.predict`` for its own half.
         """
-        if self._predictor is None:
-            return ("", [])
         tok = self._raw_token
         at = tok.rfind("@")
         if at > 0:
@@ -3886,8 +3885,6 @@ class KeyboardBridge(QObject):
         Nothing here is logged.  The argument is typed content, and the
         diagnostic log is attached to bug reports.
         """
-        if self._predictor is None:
-            return
         if self._privacy_mode or not token:
             return
         # One user action must not count as two sightings.  Tapping an
@@ -3941,7 +3938,7 @@ class KeyboardBridge(QObject):
         )
         self._current_word = self._context_buffer[last_ws + 1 :]
         self._context_buffer = self._context_buffer[: last_ws + 1] if last_ws >= 0 else ""
-        if self._current_word and not self._privacy_mode and self._predictor is not None:
+        if self._current_word and not self._privacy_mode:
             self._predictor.unlearn_word(self._current_word)
 
     def _display_cased(self, predictions: List[str]) -> List[str]:
@@ -4049,7 +4046,10 @@ class KeyboardBridge(QObject):
         it now does deliberately: refusing leaves the previous good file
         on disk, which is the outcome worth protecting.
         """
-        if self._predictor is None:
+        # Refused while loading rather than handed to the stand-in: its
+        # save is a no-op, and nothing reachable before the engine exists
+        # may come near the write that replaces the user's model.
+        if not self._engine_loaded():
             return
         try:
             self._predictor.save()
@@ -4204,7 +4204,7 @@ class KeyboardBridge(QObject):
         Saves the in-memory model to disk first so the export
         reflects the running session and not a stale on-disk copy.
         """
-        if self._predictor is None:
+        if not self._engine_loaded():
             return "Suggestions are not ready. Please try again after they load."
         from . import data_export
 
@@ -4269,7 +4269,7 @@ class KeyboardBridge(QObject):
 
         Returns empty string on success, error message on failure.
         """
-        if self._predictor is None:
+        if not self._engine_loaded():
             return "Suggestions are not ready. Please try again after they load."
         from . import data_export
 
@@ -4814,7 +4814,10 @@ class KeyboardBridge(QObject):
     @Slot()
     def clearUserData(self) -> None:
         """Clear user-learned vocabulary and overwrite saved models on disk."""
-        if self._predictor is None:
+        # Refused while loading: a clear against the stand-in would do
+        # nothing, and the real engine would then load the very data the
+        # user asked to remove.
+        if not self._engine_loaded():
             return
         self._predictor.clear_user_data()
         # Save immediately so stale model files don't restore old data on
@@ -4834,17 +4837,14 @@ class KeyboardBridge(QObject):
     @Slot()
     def reloadDictionary(self) -> None:
         """Reload the base dictionary."""
-        if self._predictor is None:
-            return
-        self._predictor.reload_dictionary()
-        _logger.info("Dictionary reloaded")
+        if self._predictor.reload_dictionary():
+            _logger.info("Dictionary reloaded")
 
     @Slot(bool)
     def setLlmEnabled(self, enabled: bool) -> None:
         """Enable/disable LLM predictions."""
         self._llm_enabled = enabled
-        if self._predictor is not None:
-            self._predictor.enable_llm = enabled
+        self._predictor.enable_llm = enabled
         self.llmEnabledChanged.emit(enabled)
         _logger.info("LLM enabled: %s", enabled)
 
@@ -4882,8 +4882,7 @@ class KeyboardBridge(QObject):
     def setFilterExplicit(self, enabled: bool) -> None:
         """Toggle the explicit-content filter on prediction suggestions."""
         self._filter_explicit = enabled
-        if self._predictor is not None:
-            self._predictor.set_explicit_filter(enabled)
+        self._predictor.set_explicit_filter(enabled)
         _logger.info("Filter explicit words: %s", enabled)
 
     @Slot(str)
@@ -4899,8 +4898,7 @@ class KeyboardBridge(QObject):
         """
         if strategy in HybridPredictor._VALID_MERGE_STRATEGIES:
             self._merge_strategy = strategy
-        if self._predictor is not None:
-            self._predictor.set_merge_strategy(strategy)
+        self._predictor.set_merge_strategy(strategy)
 
     @Slot(bool)
     def setCompatMode(self, enabled: bool) -> None:
@@ -5538,14 +5536,14 @@ class KeyboardBridge(QObject):
     @Slot(result=dict)
     def getPredictionStats(self) -> dict:
         """Get prediction engine statistics."""
-        if self._predictor is None:
-            return {}
         return self._predictor.get_stats()
 
     @Slot(str, result=bool)
     def importTextFile(self, file_path: str) -> bool:
         """Import a text file to train the prediction model."""
-        if self._predictor is None:
+        # Refused while loading: the stand-in would accept the text, keep
+        # none of it, and this slot would report the import as done.
+        if not self._engine_loaded():
             return False
         from pathlib import Path
 
@@ -5623,8 +5621,6 @@ class KeyboardBridge(QObject):
 
         Returns corrected word or empty string if no correction.
         """
-        if self._predictor is None:
-            return ""
         correction = self._predictor.check_autocorrect(typed_word, self._context_buffer)
         if correction:
             self._add_debug_log(f"Autocorrect: {typed_word} -> {correction}")
@@ -5638,8 +5634,6 @@ class KeyboardBridge(QObject):
 
         Returns list of [key, probability] pairs.
         """
-        if self._predictor is None:
-            return []
         probs = self._predictor.get_key_alternatives(key)
         return [[k, v] for k, v in sorted(probs.items(), key=lambda x: -x[1])[:5]]
 
@@ -5648,22 +5642,16 @@ class KeyboardBridge(QObject):
     @Slot(result=list)
     def getAvailablePacks(self) -> list:
         """Get metadata for all available vocabulary packs."""
-        if self._predictor is None:
-            return []
         return self._predictor.get_available_packs()
 
     @Slot(result=list)
     def getEnabledPacks(self) -> list:
         """Get list of enabled pack IDs."""
-        if self._predictor is None:
-            return []
         return self._predictor.get_enabled_packs()
 
     @Slot(str, result=bool)
     def enableVocabularyPack(self, pack_id: str) -> bool:
         """Enable a vocabulary pack by ID (the directory name under user_packs_dir)."""
-        if self._predictor is None:
-            return False
         result = self._predictor.enable_vocabulary_pack(pack_id)
         if result:
             self._add_debug_log(f"Vocabulary pack enabled: {pack_id}")
@@ -5672,8 +5660,6 @@ class KeyboardBridge(QObject):
     @Slot(str, result=bool)
     def disableVocabularyPack(self, pack_id: str) -> bool:
         """Disable a vocabulary pack by ID."""
-        if self._predictor is None:
-            return False
         result = self._predictor.disable_vocabulary_pack(pack_id)
         if result:
             self._add_debug_log(f"Vocabulary pack disabled: {pack_id}")
@@ -5682,7 +5668,10 @@ class KeyboardBridge(QObject):
     @Slot(str, result=str)
     def importVocabularyPack(self, folder_path: str) -> str:
         """Import a custom vocabulary pack from a folder. Returns pack ID or empty."""
-        if self._predictor is None:
+        # Refused here rather than by the stand-in, whose empty id would be
+        # logged below as a failed pack: the pack is fine, the engine is
+        # not there yet.  Settings says why before opening the picker.
+        if not self._engine_loaded():
             return ""
         pack_id = self._predictor.import_vocabulary_pack(folder_path)
         if pack_id:
@@ -5694,8 +5683,6 @@ class KeyboardBridge(QObject):
     @Slot(result=str)
     def getUserPacksDir(self) -> str:
         """Get the user custom packs directory path."""
-        if self._predictor is None:
-            return ""
         return self._predictor.get_user_packs_dir()
 
     # --- Word Suppression ---
@@ -5703,8 +5690,6 @@ class KeyboardBridge(QObject):
     @Slot(str)
     def blacklistWord(self, word: str) -> None:
         """Remove a word from all future predictions."""
-        if self._predictor is None:
-            return
         # A right-click menu tap on a pill still on the bar is exactly the
         # race pressPrediction / editPrediction guard against: if focus
         # landed on a password field in the 200 ms poll window just before
@@ -5728,8 +5713,6 @@ class KeyboardBridge(QObject):
     @Slot(str)
     def markBadSuggestion(self, word: str) -> None:
         """Downweight a word in future predictions."""
-        if self._predictor is None:
-            return
         # See blacklistWord above for why this closes the password-field
         # race and bails out entirely rather than typing-gating each call.
         self._check_password_field_sync()
@@ -5747,8 +5730,6 @@ class KeyboardBridge(QObject):
         reinforcement and records the boost so the dashboard can show it
         and the user can undo it later.
         """
-        if self._predictor is None:
-            return
         # See blacklistWord above for why this closes the password-field
         # race and bails out entirely rather than typing-gating each call.
         self._check_password_field_sync()
@@ -5762,8 +5743,6 @@ class KeyboardBridge(QObject):
     @Slot(str)
     def unprefer(self, word: str) -> None:
         """Roll back an explicit user boost (dashboard restore action)."""
-        if self._predictor is None:
-            return
         # Deliberately NOT privacy-gated, unlike markGoodSuggestion above.
         # This doesn't learn anything from typing: it rolls back a boost
         # that is already sitting in the persisted model and showing as a
@@ -5776,8 +5755,6 @@ class KeyboardBridge(QObject):
     @Slot(str)
     def unblacklistWord(self, word: str) -> None:
         """Restore a previously blacklisted word to predictions."""
-        if self._predictor is None:
-            return
         # Same reasoning as unprefer above: a rollback of recorded state,
         # not a fresh learn from typing, so no privacy gate.
         self._predictor.unblacklist_word(word)
@@ -5786,8 +5763,6 @@ class KeyboardBridge(QObject):
     @Slot(str)
     def undisprefer(self, word: str) -> None:
         """Remove dispreference penalty from a word."""
-        if self._predictor is None:
-            return
         # Same reasoning as unprefer above: a rollback of recorded state,
         # not a fresh learn from typing, so no privacy gate.
         self._predictor.remove_dispreference(word)
@@ -5815,8 +5790,6 @@ class KeyboardBridge(QObject):
 
         Nothing is logged here.  Every value is typed content.
         """
-        if self._predictor is None:
-            return []
         tokens = self._predictor._ngram.tokens.tokens
         return [
             {"token": token, "count": count}
@@ -5832,8 +5805,6 @@ class KeyboardBridge(QObject):
         typed, and the diagnostic log is what gets attached to bug
         reports.
         """
-        if self._predictor is None:
-            return False
         return self._predictor._ngram.tokens.forget(token)
 
     # Maximum length for a user-edited prediction.  Well above any real
@@ -5895,7 +5866,7 @@ class KeyboardBridge(QObject):
 
         # Learn the preferred capitalization. Suppressed in privacy mode:
         # this persists into the model, same as pressPrediction's guards.
-        if not self._privacy_mode and self._predictor is not None:
+        if not self._privacy_mode:
             corrected = edited.lower() != original.strip().lower()
             self._predictor.learn_from_selection(self._context_buffer, edited, explicit=corrected)
             self._predictor.set_capitalization(edited, edited)
@@ -5925,7 +5896,7 @@ class KeyboardBridge(QObject):
         self.predictionsChanged.emit([])
         next_preds = (
             self._predictor.predict(self._context_buffer, n=self._prediction_count)
-            if self._predictor is not None and not self._privacy_mode
+            if not self._privacy_mode
             else []
         )
         display = self._display_cased(next_preds)
@@ -6004,7 +5975,7 @@ class KeyboardBridge(QObject):
         if not rows:
             return
         positions = positions_from_layout(rows)
-        if positions and self._predictor is not None:
+        if positions:
             self._predictor.set_key_positions(positions)
 
     @Slot(result=list)
@@ -6050,13 +6021,6 @@ class KeyboardBridge(QObject):
     @Slot(result="QVariant")
     def getVisualizationData(self) -> Dict[str, Any]:
         """Return language-model data for the visualisation panel."""
-        if self._predictor is None:
-            return {
-                "words": [],
-                "edges": [],
-                "stats": {"blacklist": [], "dispreference": [], "preferred": []},
-                "analytics": self._analytics.get_session_stats(),
-            }
         ngram = self._predictor._ngram
 
         # Top words by frequency — only words the user has actually typed
@@ -6121,15 +6085,6 @@ class KeyboardBridge(QObject):
         understanding the model's view of the word, not just the user's
         contribution.
         """
-        if self._predictor is None:
-            return {
-                "word": word,
-                "count": 0,
-                "userCount": 0,
-                "successors": [],
-                "predecessors": [],
-                "trigrams": [],
-            }
         ngram = self._predictor._ngram
         key = (word or "").lower().strip()
         if not key:
@@ -6192,10 +6147,10 @@ class KeyboardBridge(QObject):
         return self._predictions
 
     def _get_llm_enabled(self) -> bool:
-        return self._predictor.enable_llm if self._predictor is not None else self._llm_enabled
+        return self._predictor.enable_llm
 
     def _get_llm_available(self) -> bool:
-        return self._predictor.llm_available if self._predictor is not None else False
+        return self._predictor.llm_available
 
     def _get_prediction_count(self) -> int:
         return getattr(self, "_prediction_count", 5)
