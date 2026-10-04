@@ -2361,12 +2361,12 @@ class KeyboardBridge(QObject):
         release so a single character keystroke still drops Shift the
         same way it always did.
         """
-        self._shift_active = not self._shift_active
         if self._shift_active:
-            self._synth.hold_modifier("shift")
-        else:
-            self._synth.release_modifier("shift")
+            self._release_held("shift")
             self._clear_lock("shift")  # a tap also clears a right-click lock
+        else:
+            self._shift_active = True
+            self._synth.hold_modifier("shift")
         self._update_layer()
         self.shiftActiveChanged.emit(self._shift_active)
         self._recase_visible_predictions()
@@ -2394,8 +2394,7 @@ class KeyboardBridge(QObject):
         """
         if not self._shift_active:
             return
-        self._shift_active = False
-        self._synth.release_modifier("shift")
+        self._release_held("shift")
         self._clear_lock("shift")
         self._update_layer()
         self.shiftActiveChanged.emit(False)
@@ -2449,34 +2448,34 @@ class KeyboardBridge(QObject):
     @Slot()
     def toggleCtrl(self) -> None:
         """Toggle ctrl modifier (sticky). Holds/releases at the OS level."""
-        self._ctrl_active = not self._ctrl_active
         if self._ctrl_active:
-            self._synth.hold_modifier("ctrl")
-        else:
-            self._synth.release_modifier("ctrl")
+            self._release_held("ctrl")
             self._clear_lock("ctrl")
+        else:
+            self._ctrl_active = True
+            self._synth.hold_modifier("ctrl")
         self.ctrlActiveChanged.emit(self._ctrl_active)
 
     @Slot()
     def toggleAlt(self) -> None:
         """Toggle alt modifier (sticky). Holds/releases at the OS level."""
-        self._alt_active = not self._alt_active
         if self._alt_active:
-            self._synth.hold_modifier("alt")
-        else:
-            self._synth.release_modifier("alt")
+            self._release_held("alt")
             self._clear_lock("alt")
+        else:
+            self._alt_active = True
+            self._synth.hold_modifier("alt")
         self.altActiveChanged.emit(self._alt_active)
 
     @Slot()
     def toggleWin(self) -> None:
         """Toggle Windows/Super modifier (sticky). Holds/releases at the OS level."""
-        self._win_active = not self._win_active
         if self._win_active:
-            self._synth.hold_modifier("win")
-        else:
-            self._synth.release_modifier("win")
+            self._release_held("win")
             self._clear_lock("win")
+        else:
+            self._win_active = True
+            self._synth.hold_modifier("win")
         self.winActiveChanged.emit(self._win_active)
 
     @Slot()
@@ -2510,6 +2509,10 @@ class KeyboardBridge(QObject):
         if self._win_active:
             self._win_active = False
             self.winActiveChanged.emit(False)
+        # Locked always implies active, so a lock must not outlive the reset:
+        # a stale one turns the next right-click into an unlock.
+        for name in self._MODIFIERS:
+            self._clear_lock(name)
         # Shift feeds the upper/lower layer; resync after clearing it.
         self._update_layer()
 
@@ -2555,13 +2558,25 @@ class KeyboardBridge(QObject):
                 continue
             if name == "shift" and self._caps_lock_active:
                 continue
-            setattr(self, f"_{name}_active", False)
-            self._synth.release_modifier(name)
+            self._release_held(name)
             if name == "shift":
                 # Shift drives the upper/lower layer; resync the keycaps
                 # before the change signal, matching every keystroke site.
                 self._update_layer()
             getattr(self, f"{name}ActiveChanged").emit(False)
+
+    def _release_held(self, name: str) -> None:
+        """Key-up at the OS, then clear the flag, in that order.
+
+        If the key-up raises, the flag stays set: the keycap stays lit, a tap
+        can retry, and ``shutdown()`` still releases it. Clearing the flag
+        first left the OS holding a modifier nothing on screen showed, so
+        every click in every other app arrived modified. A failed key-down is
+        the recoverable direction (a lit key the user taps off), which is why
+        the hold paths set the flag before calling ``hold_modifier``.
+        """
+        self._synth.release_modifier(name)
+        setattr(self, f"_{name}_active", False)
 
     def _clear_lock(self, name: str) -> None:
         """Drop a right-click lock without touching the active/held state.
