@@ -38,7 +38,7 @@ Owen is a wheelchair user with muscular dystrophy. Typing is hard - be proactive
 
 - Temporary files: use a scoped `tempfile.TemporaryDirectory` under the system temp directory for experiments and scratch models, with cleanup on success, errors and interruption. Do not create `.tmp-*` folders in the checkout. Clean up your own scratch files before finishing; never sweep unrelated folders or delete explicitly supplied model directories. Pytest removes its generated test directories after a passing run and keeps a failed test's for the post-mortem (`tmp_path_retention_policy = "failed"`); if supplying `--basetemp`, put it inside your own cleanup scope. The KSR benchmark cleans up its default model directory automatically and keeps `--model-dir`.
 - Run: `python run.py` (creates venv, installs deps, launches the keyboard).
-- Test: `python -m pytest` (around 2,250 tests; `python -m pytest --collect-only -q` prints the live count, so don't restate it elsewhere; also `-k fuzzy`, `-k property`, or a single file like `tests/test_keyboard_bridge.py`).
+- Test: `python -m pytest` (around 2,900 tests; `python -m pytest --collect-only -q` prints the live count, so don't restate it elsewhere; also `-k fuzzy`, `-k property`, or a single file like `tests/test_keyboard_bridge.py`).
 - Pre-push gate, the same checks as CI (`ruff check`, `ruff format --check`, `mypy` under **both** `--platform linux` and `--platform win32`, `pytest`): `python check.py` (~60s); `python check.py --full` adds the `--cov-fail-under=60` coverage gate (~110s, full CI parity). `python check.py --install-hook` wires it to `git push` so it runs automatically rather than by hand (`--no-verify` skips it once). CI additionally runs `osv-scanner` over the lockfiles. Formatting is gated separately from linting because `ruff check` ignores layout; fix a format failure with `ruff format src/ tests/`. The two mypy passes are both required and neither substitutes for the other: `linux` is what the runner uses (typeshed gates whole symbols on platform, so `ctypes.WinDLL` degrades to `Any` there and trips `warn_return_any`), and `win32` is the only thing that type-checks the `if sys.platform == "win32"` bodies at all, since mypy prunes them as unreachable under the other.
 
 ## Conventions
@@ -208,6 +208,51 @@ checksum, source manifest, and full bundled license are documented in
 Hybrid startup and full dictionary rebuilds call `prepare_prefix_index()`
 after frequency injection, keeping construction off the first typed prefix.
 Standalone fuzzy callers still prepare lazily; layout changes reuse the index.
+
+**Both packed structures, and the validated wordlist, are built once per
+process and shared between instances.** This is the half that makes the
+expanded vocabulary affordable, and it rests entirely on the packed
+representation being immutable: every method on `PackedDeletes` and
+`PackedPrefixes` past `__init__` is a read accessor, and everything that
+changes as the user types goes to the mutable overlay beside them. The
+application builds one predictor per launch, so on its own this would be a
+startup cost; the test suite builds roughly 1,300, which is what took every
+CI shard past its 20 minute timeout at 56% complete.
+
+- **`src/prediction/packed_cache.py`** keys on a BLAKE2b digest of the exact
+  input mapping plus the build parameters, not on where the words came from,
+  because a caller may pass any mapping and two equal mappings must yield
+  equal indexes. **The digest has to be collision-resistant**: Python's own
+  `hash` is not, and a collision here would not raise, it would quietly
+  answer one vocabulary's predictions from another vocabulary's index. Two
+  slots, which is a memory ceiling as much as a hit rate, since an entry
+  retains its buffers for the life of the process.
+- **`NgramPredictor._validated_extra_words`** caches the parsed and validated
+  wordlist (`_EXTRA_VOCABULARY_CACHE`). Validation is still re-run rather
+  than trusted from the generator, the rule the token store follows, because
+  the file can be hand-edited or arrive in an imported archive. The key
+  covers the file's mtime and size, so an edited file is re-validated rather
+  than served stale, and the per-instance half (what is already in
+  `_base_unigrams`) stays per instance, since that depends on the saved model
+  and on which packs are enabled.
+- **The taught-acronym override takes a guard, not an ordering assumption.**
+  `_is_plausible_word` can admit a word through `is_taught_acronym`, which
+  reads **`taught_capitalization`**, not `capitalization`. Note which: proper
+  nouns fill the latter and leave the former empty, and guarding on the wrong
+  one bypasses the cache on every construction so the caching silently does
+  nothing, which is how the first version shipped. An instance that already
+  holds a taught acronym does the full pass, so reordering the constructor
+  can cost time but cannot cost correctness. That matters because the two
+  call paths already disagree: the constructor loads proper nouns first,
+  `clear_user_data` loads them last.
+
+Measured: `NgramPredictor()` 153 ms to 43 ms (28 ms is the no-wordlist
+baseline), a warm `HybridPredictor()` cheaper than `main`'s was at a quarter
+of the vocabulary, and the suite 389 s to 103 s. **Cold construction is still
+about 3 s against 0.8 s before**, paid once at launch before the window
+appears, which is the release's known cost and is not closed by any of this.
+Guarded by `tests/test_expanded_vocabulary.py` (sharing, re-validation after
+an edit, and the guard) and `tests/test_packed_prefixes.py`.
 
 The existing `allow_short_prefix` rescue remains tied to the fixed five-candidate
 floor, independent of the requested pill count. New rare words can make a
@@ -1447,7 +1492,7 @@ Theme picker in settings shows labeled color swatches with mini key previews.
 
 ## Vocabulary
 
-- **Base**: Google 10K wordlist (`data/google-10000-english-usa-no-swears.txt`) + 10K supplement (`data/google-20000-supplement.txt`, filtered for explicit content) + `data/english-expanded.txt`, 64,443 words from SCOWL size 60 by way of the ESDB bundle (permissively licensed, see `data/licenses/ESDB.txt`, pinned by sha256 in `data/english-expanded.manifest`). ~83K total. The SCOWL half enters at **one base count each**, so it supplies coverage without competing with conversational frequencies or reading as personal history. It is a speller's list, which is why it carries explicit content that the curated lists do not: see *Explicit content is filtered from suggestions*.
+- **Base**: Google 10K wordlist (`data/google-10000-english-usa-no-swears.txt`) + 10K supplement (`data/google-20000-supplement.txt`, filtered for explicit content) + `data/english-expanded.txt`, 64,400 words from SCOWL size 60 by way of the ESDB bundle (permissively licensed, see `data/licenses/ESDB.txt`, pinned by sha256 in `data/english-expanded.manifest`). ~83K total. The SCOWL half enters at **one base count each**, so it supplies coverage without competing with conversational frequencies or reading as personal history. It is a speller's list, which is why it carries explicit content that the curated lists do not: see *Explicit content is filtered from suggestions*. Slurs are removed from it at generation (`data/slurs.txt`), which is why the count is 43 below the 64,443 of 1.5.0.
 - **Packs**: No built-ins ship. The system is import-only - see *Vocabulary Packs* section. Imported packs appear as toggles in Settings -> Your Language Model -> Vocabulary Packs.
 - **Numpad**: Toggles between numbers and navigation keys (Home/End/PgUp/PgDn/arrows/Ins/Del) via NumLock. Key 5 is blank in nav mode. Layout mirrors a physical numpad: rows `7 8 9 /`, `4 5 6 *`, `1 2 3 -`, `0(span 2) . +`, `Enter(span 3) NumLock`. NumLock sits at the bottom-right (active highlight uses the theme accent), Enter is the wide bottom-row key. Earlier builds put NumLock on the top row and stretched `+` / Enter as 2-row spans on the right column. The flat 5-row layout was the user's request to match a physical 10-key.
 
@@ -1460,10 +1505,11 @@ The setting decides only what the prediction bar **volunteers**.
 
 That is deliberate and was the owner's call (2026-09-16): a keyboard that
 cannot swear is a dignity problem for an AAC user, so the answer is not to
-remove the words but to let the user decide whether the bar offers them. The
-shipped wordlist is therefore unfiltered, including slurs, and the filter is
-the control over it. Do not re-litigate the content question; do keep the
-filter honest.
+remove the words but to let the user decide whether the bar offers them.
+**Slurs are the exception, also the owner's call (2026-09-23)**: they are
+removed outright, see *Slurs are removed, not filtered* below. Profanity
+stays in the wordlist and the filter is the control over it. Do not
+re-litigate either decision; do keep the filter honest.
 
 - **`data/explicit_words.txt` is generated, not hand-edited**
   (`scripts/gen_explicit_words.py`). It is a list of **exact words**, so the
@@ -1485,9 +1531,10 @@ filter honest.
   **slurs but no common profanity**, which is the exact inverse of what
   anyone wanted: you could not predict `fuck` at all, while the slurs were
   one keystroke from a pill. The stems now only *seed* the suggestion
-  filter, the wordlist ships unfiltered, and the file was renamed because a
-  file called "exclusions" that excludes nothing is how the two jobs got
-  confused in the first place.
+  filter, profanity ships in the wordlist, and the file was renamed because
+  a file called "exclusions" that excludes nothing is how the two jobs got
+  confused in the first place. (Slurs are now excluded at generation, but
+  from their own exact-word list, never from these stems.)
 - **The filter is applied in exactly one place**, `_finalize_scores`, beside
   the short-word gate, because every suggestion from every strategy passes
   through there. A second copy at another emit site is the parallel-blocks
@@ -1510,6 +1557,49 @@ filter that suggested nothing at all would satisfy the first alone), and the
 flag list is checked against the shipped **no-swears** frequency list as
 ground truth, so a false positive is caught by construction rather than by
 anyone's judgement.
+
+### Slurs are removed, not filtered
+
+`data/slurs.txt`, since 2026-09-23. A slur is not a register the keyboard
+should ever volunteer, so no setting brings these back: they are gone from
+every shipped wordlist and seed file, and stripped from an old saved model
+on load. They are still typable letter by letter, and a word the user types
+three times is learned like any other, because at that point it is their
+vocabulary rather than ours.
+
+- **Exact words, never stems, and that is the fix for the second bug.** The
+  suggestion filter used to carry slurs as stems with the suffix rule, which
+  flagged `spiced` / `spicier` / `spicily` (`spic`), `japes` / `japed`
+  (`jap`), `chinked` / `chinking` (`chink`) and `retarder` / `retarding`
+  (`retard`). A wrongly *filtered* word is merely withheld; a wrongly
+  *removed* one can never be predicted, so this list names every form it
+  removes, including forms absent from today's data so a regenerated list
+  cannot bring them in.
+- **A word with a common ordinary sense stays and is filtered instead**
+  (`FILTER_ONLY_WORDS` in `scripts/gen_explicit_words.py`: `chink` the gap,
+  `dyke` the dike spelling, `fag` the British cigarette, `negro` in historical
+  proper names, `micks`). Deciding which list a word belongs on is the whole
+  judgement here: removal when the main modern use is a slur, filtering when
+  it is not.
+- **Removed at three layers, and each one was needed.** `gen_vocabulary.py`
+  excludes the list from the SCOWL wordlist. The hand-curated files
+  (`google-20000-supplement.txt`, `seed_bigrams.txt`) had the words taken out
+  directly; `redskins` was in both, and the seeds gave it five continuations
+  of its own. And `NgramPredictor.load` strips a slur from the persisted
+  merged `unigrams` table unless it is in `user_vocab`, because that table is
+  saved and restored wholesale, so an upgrade would otherwise carry the old
+  base count forward indefinitely (the same shape as the corpus-prior bug in
+  *Shipped corpus prior*). The path is `LanguageProfile.slurs`; a missing
+  file fails open, and `_load_slurs` says why.
+- **`gen_explicit_words.py` now scans the supplement too.** It scanned only
+  the SCOWL list and the base dictionary, which left `bullshit` and `negro`
+  unflagged although the bar could offer both.
+
+Guarded by `tests/test_slurs.py`: every data file is scanned for the list,
+paired with the near-misses (`spiced`, `japes`, `chinking`, `retardant`,
+`sauerkraut`, `tycoon`, `gypsum`) that must still ship and must not be
+flagged, and the load strip is paired with an ordinary word written the same
+way (which must survive) and with a word the user taught (which must too).
 
 ## Vocabulary Packs
 
@@ -1598,6 +1688,39 @@ Load-bearing rules:
   themes below WCAG AA, on exactly the keys the style exists to make findable.
   The accent-coloured border carries the cue where the wash has to back off.
   Full-size layouts are deliberately untouched.
+- **Enter wears that wash too, and no hue of its own** (`Main.qml`'s `keyColor`
+  switch, where `accent` and `enter` share a case). It was a flat `#2a5a2a`: the
+  only fill in the file that skipped `washFor`'s contrast walk, and the only
+  literal hue in a project whose first colour rule is that there are none. It
+  measured 1.89:1 on Typewriter, 2.15 on Light and 3.28 on Vaporwave, all under
+  WCAG AA. **Only the `off` scheme reaches that line**, which is why it lasted:
+  every other scheme resolves Enter through `_roleFill`, and Monochrome (the
+  default) already makes Enter the brightest key. Sharing `accentKeyColor` fixes
+  the ratio for free (it is walked per theme already) and spends no new colour,
+  at the cost of Enter and Backspace being identical under `off`. **Do not
+  "simplify" this by marking Enter `style: "accent"` in the layout JSON**: that
+  paints it the same and hands it the accent ring, which is a different decision
+  and was not the one taken. `NumpadPanel.enterKeyColor` is bound from `Main.qml`
+  for the same reason and defaults to an ordinary key. Guarded by
+  `tests/test_qml_compact_view.py::TestEnterSharesTheEditingKeysWash`, whose two
+  inverses are the load-bearing half: Enter must not gain a ring, and the role
+  schemes must still tell commit from kill.
+- **The two keys that destroy text wear the wash but never that border**
+  (`Main.qml::keyBorderFor`, exempting the `kill` role). All five accent keys
+  used to ring, and Enter is `style: "enter"` so it rings on no scheme at all:
+  a saturated ring beats a lightness step at a glance, so the compact grid
+  emphasised Backspace over Enter, four rings against nought. The fills were
+  never the problem and did not move (13.8 and 11.8 OKLab dE from a plain key
+  on Dark, which is level). The exemption reads off `Palette.roleForKey`
+  rather than naming the two actions here, because that is already the
+  project's one answer to "does this key destroy text". Worth knowing that
+  **this border is the one colour on a key Key Colours does not reach**: it
+  keys off the layout JSON's `style` while every fill keys off `role`, which
+  is why the ring won even on Monochrome, whose whole intent is to make Enter
+  the brightest key on the board. Making the border follow the scheme is the
+  larger change that was on the table and was not taken. Guarded by
+  `tests/test_qml_compact_view.py::TestTheKeysThatDestroyTextTakeNoRing`,
+  where dropping every ring and restoring all five each fail a different half.
 - **Del sits on the base layer, Esc on `?123`.** A 13u row has no spare unit, so
   the two traded places. The Number Row panel puts a second Esc back at the
   top-left and that duplicate is deliberate, so `?123` stays the fallback for a
@@ -2128,7 +2251,7 @@ than as the lock cue.
 The only route to a glyph outside a physical keyboard's printing, on every
 layout, since the full-size symbol layer above was removed. Categories, a
 Recent page and several hundred glyphs do not fit on a key grid at a size an
-imprecise pointer can hit, which is why this is a window and not a layer. Opened from a smile button in the suggestion bar,
+imprecise pointer can hit, which is why this is a window and not a layer. Opened from an α button (Tabler's `alpha` icon) in the suggestion bar,
 immediately left of the Snippets bookmark, with a title-bar twin
 (`symbolsTitleBarButton`) visible only when `suggestionsEnabled` is false, for
 the reason the Snippets pair documents: the suggestion bar collapses to zero
@@ -2210,7 +2333,7 @@ this keyboard's users can least rely on. Three rows of chips is the cost.
 
 ### Two font rules, and they pull in opposite directions
 
-The **chrome** obeys the project's usual rule: the smile and the close cross
+The **chrome** obeys the project's usual rule: the α and the close cross
 are `StrokeIcon` path data, never typeset, because Segoe UI Emoji renders a
 glyph in colour and ignores the ink it is given.
 
@@ -2220,11 +2343,18 @@ fallback is what reaches the host emoji font. `font.families` (a list) does
 not exist on this Qt's grouped font property, and naming a single family
 would pin one platform's font and lose the glyph on the other two.
 
-`tests/test_qml_symbols.py::TestTheEntryButtonIcon` asserts the smile paints
-ink at all, which is the property its one hand-converted path can break:
+`tests/test_qml_symbols.py::TestTheEntryButtonIcon` asserts the α paints
+ink at all, which is the property a bad edit to its path data breaks:
 invalid path data paints **nothing** through `ctx.path` (measured: zero lit
-pixels), so a bad conversion ships as a blank circle on the suggestion bar
-rather than as an error.
+pixels), so a broken path ships as a blank circle on the suggestion bar
+rather than as an error. The test keeps the picker **closed** and counts only
+the inside of the circle: with the picker open the ring is drawn in the accent
+colour, the ring alone cleared the bar, and the test passed with the path
+deleted for as long as the smile was there. The α is drawn larger than its neighbours with a
+thinner stroke (a letter fills less of its 24-unit box than a circle or a
+bookmark), so the line weight matches in pixels; change `boxFraction` and
+`strokeWidth` together or it will read bolder or fainter than the icons
+beside it.
 
 ### The suggestion bar's button reserve is derived
 
@@ -2339,6 +2469,14 @@ this to a socket without re-reading that argument.
   not measured). Its `_restoring` flag is load-bearing (without it the keyboard
   declined its own restore in a loop), and `SWP_NOACTIVATE` in
   `WM_WINDOWPOSCHANGING` does nothing, so do not "simplify" to it.
+  The **second-launch hand-off** (`windows_window.surface_existing_instance`,
+  what a shortcut key or an assistive device's "open keyboard" button runs)
+  is the same rule from the other side: it restores with `SW_SHOWNOACTIVATE`
+  and never calls `SetForegroundWindow`. It used to, and measured against the
+  installed keyboard that left it as the foreground window, so the next key
+  clicked typed into nothing. Guarded by
+  `tests/test_windows_window.py::TestASecondLaunchLeavesTheForegroundAlone`,
+  which asserts an allow-list of user32 calls rather than naming the bad one.
   (2) **A close that is not a quit minimizes** (`Main.qml` `onClosing`,
   Windows only), because Qt's default hid the keyboard with the process still
   running, out of the tree and off the taskbar. Qt 6 cancels a quit if a
@@ -2561,13 +2699,15 @@ Full step-by-step release checklist, signing details, troubleshooting table, and
 
 The eToken-non-elevated requirement is the single most common build trap: SafeNet exposes the cert to the user session only, so elevated shells get "Cannot find certificate."
 
+**The exe carries a version resource** (`build/windows/version_resource.py`), generated by the spec into the PyInstaller work directory from `src/__version__.py` and never checked in. Without one the shell names things after the bare filename: a taskbar pin made from the *running* button came out as `alpha-osk`, and Explorer suffixed it `(2)` because a pin of that name already existed, since a pin is named from `FileDescription`. The publisher string must stay equal to `APP_PUBLISHER` in `build.py`, which `tests/test_windows_version_resource.py` checks, and the round-trip test loads the text through PyInstaller's own parser when it is installed. **This does not rename a pin that already exists.** A pin's name is its own `.lnk` file name in `User Pinned\TaskBar`, and the taskbar's registry record (`Taskband\Favorites`) stores that name. A display-name override in that folder's `desktop.ini` (`[LocalizedFileNames]`) was tried and does not work: File Explorer showed the new name, but the taskbar was back to `alpha-osk (2)` after the next Explorer restart. The fix for an existing pin is to unpin and re-pin once the installed build carries this resource and the shortcuts carry the app ID (#138).
+
 ### Release artefacts (EULA, lockfile, SBOM, CVE scanning)
 
 Reference detail moved to **`docs/build/RELEASE.md`**. The essentials:
 - **Clickwrap EULA**: the NSIS installer shows a `MUI_PAGE_LICENSE` page (checkbox-gated) backed by `build/windows/LICENSE.rtf`; keep that RTF and the repo-root plaintext `LICENSE` in sync. Silent install (`/S`, auto-updater) bypasses it, so it only blocks the first interactive install.
 - **Lockfile + SBOM**: every build emits a `pip freeze` lockfile *and* a CycloneDX 1.6 SBOM into `release/` (filenames encode the version), even on `--skip-build`. Upload both as release assets alongside the installer.
 - **Exact-pinned dependencies**: `requirements.txt` and `requirements-dev.txt` pin every dependency to an exact `==` version (most were `>=` floors before), so a fresh install is reproducible and an `osv-scanner` hit names a version you can actually go look up. The macOS-only `pyobjc-framework-*` entries are the deliberate exception and stay on `>=` floors. Hash pinning (`--require-hashes`) is a known follow-up, not done yet.
-- **CI CVE scanning**: `.github/workflows/ci.yml` runs `osv-scanner` over both lockfiles with `fail-on-vuln: true`. A new advisory blocks every PR - fix the dep or quarantine with a time-boxed `osv-scanner.toml` entry; never flip `fail-on-vuln` off globally.
+- **CI CVE scanning**: `osv-scanner` runs over both lockfiles with `fail-on-vuln: true`, in two modes. **On a PR it fails only on vulnerabilities the PR introduces** (`osv-scanner-reusable-pr.yml` scans base and head); **main is scanned in full** on every push and daily by `.github/workflows/osv-nightly.yml`. Before that split (2026-10-03), an advisory published against something already on main failed every open PR at once and also failed the Dependabot PR fixing it whenever a second advisory remained. So a new advisory now shows up as a failed nightly run, not a red X on PRs: fix the dep or quarantine it with a time-boxed `osv-scanner.toml` entry, and never flip `fail-on-vuln` off. **The toml is read only from the scanned lockfile's own directory**: repo root for `requirements-dev.txt`, `backend/cf-worker/` for the worker; a worker entry at the root is silently ignored. The PR job's name is load-bearing, since branch protection requires `OSV Scanner (deps CVE check) / osv-scan` by name.
 
 ## macOS build (in progress)
 
@@ -2667,7 +2807,13 @@ branch with no upstream at all is never a candidate, since never-pushed
 work exists nowhere else and renders the same empty tracking field an
 up-to-date branch does; `gh` being missing or unauthenticated keeps
 every branch rather than deleting them all; and `main` and the
-checked-out branch are refused by name.
+checked-out branch are refused by name. **A merged branch checked out
+in any other worktree is kept too, with the worktree named**: git
+refuses to delete it anyway, and that refusal used to escape as an
+uncaught error that ended the run, leaving every later branch behind.
+It is usually another session still working there, so it is reported,
+not retried. Any other refused delete is reported as `failed`, the run
+carries on, and the exit code is 1.
 
 **"Automatic" here means `git pull`, because there is no local event for
 a merge.** The merge happens on GitHub and nothing on this machine is
@@ -2792,6 +2938,37 @@ border while its radius is 0, so along the corner arc DWM's mask clips that
 border and draws its own. If that reads wrong on a light theme, the answer
 is `DWMWA_BORDER_COLOR`, not a radius on the QML side.
 
+## The taskbar button appears on launch (hide, restyle, re-show)
+
+Reported as the taskbar icon "not fully inflating until you click it". The
+right style bits were not the whole answer: the shell decides whether a
+window gets a taskbar button **at the moment it becomes visible**, and the
+keyboard becomes visible from QML's `visible: true` before
+`apply_extended_styles` runs, so the shell files it as a tool window and
+never looks again. Measured on the installed build four seconds after
+launch: `APPWINDOW` set, `TOOLWINDOW` clear, and no running-window button
+at all, only the 66 px pinned stub with no label and no running dot, until
+a click on that stub activated the window.
+
+- MSDN's rule for changing a visible window's taskbar presence is hide,
+  change the style, show. `apply_extended_styles` does exactly that on the
+  `taskbar_button` path: `ShowWindow(SW_HIDE)` before the style writes,
+  `ShowWindow(SW_SHOWNOACTIVATE)` after the `SWP_FRAMECHANGED` flush.
+  Proven from outside first: that pair on the running keyboard, with no
+  style change at all, attached it as "Alpha-OSK - 1 running window" at
+  once and left the foreground alone.
+- **The re-show is in a `finally`**, because every early return in the
+  style writes now happens with the keyboard hidden, and a keyboard that
+  vanishes at launch is worse than the bug. It is `SW_SHOWNOACTIVATE`,
+  never `SW_SHOW` / `SW_SHOWNORMAL`, which take the foreground.
+- A window that was not visible is left alone, and the floating windows
+  (`taskbar_button=False`) are never blinked: they must not have a button.
+- The offscreen suite cannot see the shell, so `tests/test_windows_window.py::
+  TestTheTaskbarButtonAppearsOnLaunch` pins the call order and the failure
+  paths; the live check is a UI Automation walk of `Shell_TrayWnd` for a
+  button named `Alpha-OSK - 1 running window` (as opposed to the pinned
+  stub) a few seconds after launch, with no click.
+
 ## Title-bar window menu, and click-free Move
 
 Right-clicking the title bar opens the menu a real window's caption strip
@@ -2814,13 +2991,26 @@ pointer wherever it already is on the strip the user grabs the window by.
   a left press still reaches `dragArea` and the caption buttons above it,
   while a right press finds no taker up there and falls through. That is what
   makes the *whole* strip a menu target, buttons and the gaps between them
-  included, rather than only the region `dragArea` covers (which stops 332 px
-  short of the right edge). The failure mode to avoid is declaring it on top:
+  included, rather than only the region `dragArea` covers (which stops at the
+  button row's left edge). The failure mode to avoid is declaring it on top:
   it would silently kill dragging the window. `dragArea` shields it well
   enough that "a left press does not open the menu" is not a falsifiable test,
   so the guard is
   `TestRightClickingTheTitleBarOpensTheMenu::test_a_left_drag_on_the_strip_still_moves_the_window`,
   which presses, travels and asserts the window followed.
+- **`dragArea` reserves the button row's measured width, never a constant.**
+  It reserved a hard-coded 332 px for a row that measures 198 px plus its
+  margin in a typical session, which left a 126 px band between the grip
+  region and the first button that dragged nothing, and on the 812 px
+  compact window that was a sixth of the strip (reported as "the full title
+  bar on compact is not draggable"). The margin is bound to
+  `titleButtons.width`, and `Row` lays out only visible children, so the
+  suggestion-bar mirrors and the X11-only Tuck button come and go without a
+  matching edit. Guarded by
+  `tests/test_qml_window_menu.py::TestTheWholeStripDrags`, which drags from
+  a point inside the old reserve on the compact window and is paired with a
+  press on the Learning switch that must toggle it rather than move the
+  window.
 - **Rows come from a model (`windowMenu.actions`), not four near-identical
   blocks**, and are **word-only, no icons**: any glyph small enough to sit in a
   menu row is at the mercy of the host emoji font, which on Windows renders in
