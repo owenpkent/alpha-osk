@@ -199,8 +199,16 @@ Seven things about it are deliberate:
   suite does not cover. The job reads the ecosystem from
   `fetch-metadata`'s `package-ecosystem` output, which is the second
   segment of Dependabot's branch name (`dependabot/github_actions/...`).
-  The one action not exercised by a pull request is the nightly OSV
-  workflow's reusable call, and it is the same pin `ci.yml` uses.
+  What that gate establishes is narrower than "the new version works
+  everywhere it is used": it covers the invocations in `ci.yml`, with the
+  options `ci.yml` passes. Two uses of the same pins sit outside it. The
+  telemetry aggregation workflow runs only on schedule or by hand, and
+  its checkout asks for full history and keeps its credentials for a
+  later push, where CI's checkouts do neither. The nightly OSV workflow
+  and CI's push run on main call `osv-scanner-reusable.yml`, while a pull
+  request calls `osv-scanner-reusable-pr.yml` at the same commit. A
+  breakage confined to one of those shows up on the next scheduled run,
+  not on the pull request.
 - **`dependabot/fetch-metadata` is pinned to a commit hash**, like every
   other action here, and Dependabot keeps that pin current.
 - **It approves what it merges.** Branch protection requires one approving

@@ -600,7 +600,9 @@ each one fixed: `docs/build/CI.md`. The rules that outlive the reasoning:
 - **Dependabot patch and minor updates merge themselves once the required
   checks pass** (`.github/workflows/dependabot-auto-merge.yml`); a library
   major waits for a person, while a GitHub Actions bump merges at any level
-  because the PR's own checks run the changed workflow. Needs the
+  because the PR's own checks run the changed workflow (the `ci.yml` uses;
+  the scheduled telemetry and nightly OSV uses are outside that gate and
+  surface on their next run). Needs the
   repository's "Allow auto-merge" setting on. The job
   runs only when Dependabot opened the PR *and* caused the event, and never
   checks out PR code. To take a Dependabot PR over, `gh pr merge <n>
