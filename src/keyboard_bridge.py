@@ -30,6 +30,7 @@ from typing import (
     Sequence,
     Set,
     Tuple,
+    Union,
 )
 
 from PySide6.QtCore import Property, QObject, QTimer, QUrl, Signal, Slot
@@ -67,6 +68,8 @@ from .platform.password_detect import (
 from .platform.pointer import external_click_detected
 from .prediction import HybridPredictor
 from .prediction.fuzzy_recognizer import positions_from_layout
+from .prediction.loader import PredictionLoader
+from .prediction.null_predictor import NullPredictor, is_loaded
 from .prediction.token_predictor import TokenPredictor
 from .snippets import MAX_SNIPPETS, SNIPPET_COLORS, SnippetStore
 from .text_patterns import (
@@ -575,6 +578,8 @@ class KeyboardBridge(QObject):
     predictionsChanged = Signal(list)  # Instant predictions
     predictionsRefined = Signal(list)  # LLM-refined predictions
     predictionLoading = Signal(bool)  # LLM loading state
+    predictionStatusChanged = Signal()
+    predictionEngineReady = Signal(object)
     llmEnabledChanged = Signal(bool)  # LLM enabled state
     llmAvailableChanged = Signal(bool)  # LLM available state
     predictionCountChanged = Signal(int)  # Prediction count changed
@@ -683,7 +688,9 @@ class KeyboardBridge(QObject):
     # a return to the idle state.
     dictationError = Signal(str)
 
-    def __init__(self, parent: Optional[QObject] = None) -> None:
+    def __init__(
+        self, parent: Optional[QObject] = None, *, defer_predictions: bool = False
+    ) -> None:
         super().__init__(parent)
         self._shift_active = False
         self._caps_lock_active = False
@@ -729,13 +736,19 @@ class KeyboardBridge(QObject):
         # hasn't started interacting yet.
         self._synth.reset_modifier_state()
 
-        # Initialize prediction engine (LLM disabled by default - overkill for keyboard)
-        self._predictor = HybridPredictor(enable_llm=False, parent=self)
-        self._predictor.predictionsReady.connect(self._on_predictions_ready)
-        self._predictor.predictionsRefined.connect(self._on_predictions_refined)
-        self._predictor.modelLoading.connect(self.predictionLoading.emit)
-        self._predictor.llmAvailableChanged.connect(self.llmAvailableChanged.emit)
-        _logger.info("Prediction engine initialized")
+        # A stand-in until the engine loads, never None, so no call site
+        # needs a readiness guard of its own: see
+        # prediction/null_predictor.py.  The few slots that must refuse
+        # while loading ask _engine_loaded() explicitly.
+        self._predictor: Union[HybridPredictor, NullPredictor] = NullPredictor()
+        self._prediction_loader: Optional[PredictionLoader] = None
+        self._prediction_status = "loading" if defer_predictions else "ready"
+        self._shutting_down = False
+        self._filter_explicit = True
+        self._merge_strategy = "rank"
+        self._llm_enabled = False
+        if not defer_predictions:
+            self._connect_predictor(HybridPredictor(enable_llm=False, parent=self))
 
         # Prediction settings
         self._prediction_count = 8
@@ -1014,6 +1027,83 @@ class KeyboardBridge(QObject):
         # function-scoped fixture.
         self._dictation_config = DictationConfig.load()
         self._dictation: Optional[DictationController] = None
+
+    # How long shutdown gives a still-running engine build to stop.
+    _LOADER_SHUTDOWN_WAIT_S = 1.5
+
+    def _connect_predictor(self, predictor: HybridPredictor) -> None:
+        self._predictor = predictor
+        predictor.setParent(self)
+        predictor.predictionsReady.connect(self._on_predictions_ready)
+        predictor.predictionsRefined.connect(self._on_predictions_refined)
+        predictor.modelLoading.connect(self.predictionLoading.emit)
+        predictor.llmAvailableChanged.connect(self.llmAvailableChanged.emit)
+
+    def _engine_loaded(self) -> bool:
+        """Whether the real engine is installed rather than the stand-in.
+
+        Only for the slots whose honest answer while loading is "not
+        yet": there the stand-in's no-op would report success for work
+        that was thrown away.  Everything else calls the stand-in.
+        """
+        return is_loaded(self._predictor)
+
+    @Slot()
+    def startPredictionLoading(self) -> None:
+        """Start once the keyboard is visible; also retries a failed load."""
+        if self._shutting_down or self._engine_loaded() or self._prediction_loader is not None:
+            return
+        self._prediction_status = "loading"
+        self.predictionStatusChanged.emit()
+        loader = PredictionLoader(
+            lambda abort: HybridPredictor(enable_llm=False, abort_check=abort), self
+        )
+        self._prediction_loader = loader
+        loader.loaded.connect(self._finish_prediction_load)
+        loader.failed.connect(self._prediction_load_failed)
+        loader.start()
+
+    def _release_prediction_loader(self, wait: float = 0.0) -> None:
+        if self._prediction_loader is not None:
+            self._prediction_loader.cancel(wait=wait)
+            self._prediction_loader.deleteLater()
+            self._prediction_loader = None
+
+    @Slot(object)
+    def _finish_prediction_load(self, predictor: HybridPredictor) -> None:
+        self._release_prediction_loader()
+        if self._shutting_down:
+            predictor.deleteLater()
+            return
+        self._connect_predictor(predictor)
+        predictor.set_explicit_filter(self._filter_explicit)
+        predictor.set_merge_strategy(self._merge_strategy)
+        if self._llm_enabled:
+            predictor.enable_llm = True
+        self._apply_layout_key_positions()
+        self._prediction_status = "ready"
+        self.predictionStatusChanged.emit()
+        self.predictionEngineReady.emit(predictor)
+        # The caret and privacy state may have changed while loading. Use
+        # the current buffers, never a startup snapshot or queued keystrokes.
+        self._check_foreground_window()
+        self._last_sync_password_check = 0.0
+        self._check_password_field_sync()
+        if not self._privacy_mode:
+            self._refresh_prediction_bar()
+        _logger.info("Prediction engine ready")
+
+    @Slot()
+    def _prediction_load_failed(self) -> None:
+        self._release_prediction_loader()
+        if not self._shutting_down:
+            self._prediction_status = "error"
+            self.predictionStatusChanged.emit()
+
+    def _get_prediction_status(self) -> str:
+        return self._prediction_status
+
+    predictionStatus = Property(str, _get_prediction_status, notify=predictionStatusChanged)
 
     # --- Key synthesis (delegated to platform layer) ---
 
@@ -2701,7 +2791,11 @@ class KeyboardBridge(QObject):
             context_for_prediction.endswith(" "),
         )
 
-        next_preds = self._predictor.predict(context_for_prediction, n=self._prediction_count)
+        next_preds = (
+            self._predictor.predict(context_for_prediction, n=self._prediction_count)
+            if not self._privacy_mode
+            else []
+        )
         _logger.info("Next-word predictions (count=%d)", len(next_preds))
 
         # Update with next-word predictions
@@ -3443,6 +3537,8 @@ class KeyboardBridge(QObject):
 
     def _update_predictions(self) -> None:
         """Request updated predictions from the engine."""
+        if self._privacy_mode:
+            return
         context = self._context_buffer + self._current_word
         # Click positions only travel when they were recorded under the
         # word on screen; otherwise the beam uses key centres, which is
@@ -3950,6 +4046,11 @@ class KeyboardBridge(QObject):
         it now does deliberately: refusing leaves the previous good file
         on disk, which is the outcome worth protecting.
         """
+        # Refused while loading rather than handed to the stand-in: its
+        # save is a no-op, and nothing reachable before the engine exists
+        # may come near the write that replaces the user's model.
+        if not self._engine_loaded():
+            return
         try:
             self._predictor.save()
         except Exception as exc:  # noqa: BLE001 - never break the quit path
@@ -4103,6 +4204,8 @@ class KeyboardBridge(QObject):
         Saves the in-memory model to disk first so the export
         reflects the running session and not a stale on-disk copy.
         """
+        if not self._engine_loaded():
+            return "Suggestions are not ready. Please try again after they load."
         from . import data_export
 
         try:
@@ -4166,6 +4269,8 @@ class KeyboardBridge(QObject):
 
         Returns empty string on success, error message on failure.
         """
+        if not self._engine_loaded():
+            return "Suggestions are not ready. Please try again after they load."
         from . import data_export
 
         try:
@@ -4649,6 +4754,12 @@ class KeyboardBridge(QObject):
         keyboard behaves as though the modifier is stuck until they
         press and release it manually.
         """
+        self._shutting_down = True
+        # Bounded: the build polls the cancel between phases, so this is
+        # normally instant; the bound covers a phase that is mid-way.  Not
+        # waiting is how an early quit crashed, with the worker still
+        # constructing QObjects while Qt tore down.
+        self._release_prediction_loader(wait=self._LOADER_SHUTDOWN_WAIT_S)
         for timer in (
             getattr(self, "_password_timer", None),
             getattr(self, "_foreground_timer", None),
@@ -4703,6 +4814,11 @@ class KeyboardBridge(QObject):
     @Slot()
     def clearUserData(self) -> None:
         """Clear user-learned vocabulary and overwrite saved models on disk."""
+        # Refused while loading: a clear against the stand-in would do
+        # nothing, and the real engine would then load the very data the
+        # user asked to remove.
+        if not self._engine_loaded():
+            return
         self._predictor.clear_user_data()
         # Save immediately so stale model files don't restore old data on
         # restart.  Guarded for the same reason savePredictionModel is:
@@ -4721,12 +4837,13 @@ class KeyboardBridge(QObject):
     @Slot()
     def reloadDictionary(self) -> None:
         """Reload the base dictionary."""
-        self._predictor.reload_dictionary()
-        _logger.info("Dictionary reloaded")
+        if self._predictor.reload_dictionary():
+            _logger.info("Dictionary reloaded")
 
     @Slot(bool)
     def setLlmEnabled(self, enabled: bool) -> None:
         """Enable/disable LLM predictions."""
+        self._llm_enabled = enabled
         self._predictor.enable_llm = enabled
         self.llmEnabledChanged.emit(enabled)
         _logger.info("LLM enabled: %s", enabled)
@@ -4764,6 +4881,7 @@ class KeyboardBridge(QObject):
     @Slot(bool)
     def setFilterExplicit(self, enabled: bool) -> None:
         """Toggle the explicit-content filter on prediction suggestions."""
+        self._filter_explicit = enabled
         self._predictor.set_explicit_filter(enabled)
         _logger.info("Filter explicit words: %s", enabled)
 
@@ -4778,6 +4896,8 @@ class KeyboardBridge(QObject):
         reapplied on every launch via the QML
         ``Component.onCompleted`` block.
         """
+        if strategy in HybridPredictor._VALID_MERGE_STRATEGIES:
+            self._merge_strategy = strategy
         self._predictor.set_merge_strategy(strategy)
 
     @Slot(bool)
@@ -5421,6 +5541,10 @@ class KeyboardBridge(QObject):
     @Slot(str, result=bool)
     def importTextFile(self, file_path: str) -> bool:
         """Import a text file to train the prediction model."""
+        # Refused while loading: the stand-in would accept the text, keep
+        # none of it, and this slot would report the import as done.
+        if not self._engine_loaded():
+            return False
         from pathlib import Path
 
         path = Path(file_path)
@@ -5544,6 +5668,11 @@ class KeyboardBridge(QObject):
     @Slot(str, result=str)
     def importVocabularyPack(self, folder_path: str) -> str:
         """Import a custom vocabulary pack from a folder. Returns pack ID or empty."""
+        # Refused here rather than by the stand-in, whose empty id would be
+        # logged below as a failed pack: the pack is fine, the engine is
+        # not there yet.  Settings says why before opening the picker.
+        if not self._engine_loaded():
+            return ""
         pack_id = self._predictor.import_vocabulary_pack(folder_path)
         if pack_id:
             self._add_debug_log(f"Imported vocabulary pack: {pack_id}")
@@ -5765,7 +5894,11 @@ class KeyboardBridge(QObject):
         # Refresh predictions
         self._predictions = []
         self.predictionsChanged.emit([])
-        next_preds = self._predictor.predict(self._context_buffer, n=self._prediction_count)
+        next_preds = (
+            self._predictor.predict(self._context_buffer, n=self._prediction_count)
+            if not self._privacy_mode
+            else []
+        )
         display = self._display_cased(next_preds)
         self._predictions = display
         self.predictionsChanged.emit(display)

@@ -52,7 +52,7 @@ what a pointer cannot use:
 |---|--:|
 | Duplicate right-hand Shift / Ctrl / Alt | 266 px |
 | Space at 6.0u → 3.0u | 173 px |
-| Dedicated number row (→ `?123` layer) | one full row of height |
+| Dedicated number row (→ standalone panel) | one full row of height |
 | Full-size Esc / `` ` `` / `[` / `]` / `\` | ~5u |
 
 Net at identical key size: **−33% area, −16% width, −20% height**, and mean
@@ -65,29 +65,65 @@ is nothing left to centre and the gutters vanish *by construction* — no
 stretching or justification logic exists anywhere in the QML.
 
 ```
-Base layer                               ?123 layer
-  q w e r t y u i o p [ ⌫ ] Home           1 2 3 4 5 6 7 8 9 0 [ ⌫ ] Home
- Tab a s d f g h j k l ' Del PgUp         Tab - = [ ] \ ; ' ` Ins Esc Caps PgUp
-  ⇧ z x c v b n m , / [Enter] PgDn        =\< ! @ # $ % : & ( ) [Enter] PgDn
- ?123 Ctl ⊞ Alt [space] . ← ↑ ↓ → End     ABC Ctl ⊞ Alt [space] . ← ↑ ↓ → End
-
-=\< layer (second symbol page)
-  ~ ^ * _ + { } | < > [ ⌫ ] Home
- Tab ° × ÷ ± ≈ ≠ ≤ ≥ Ins Esc Caps PgUp
- ?123 € £ ¥ ¢ § • © ® ™ [Enter] PgDn
- ABC Ctl ⊞ Alt [space] . ← ↑ ↓ → End
+Base layer                                ?123 layer
+ Tab q w e r t y u i o p ⌫ Home            Tab ! @ # $ % ^ & * ( ) ⌫ Home
+Caps a s d f g h j k l ' Del PgUp         Caps [ { ] } \ | ; : Ins Esc " PgUp
+  ⇧ z x c v b n m , / [Enter] PgDn          ` ~ < > _ + ° € £ ™ [Enter] PgDn
+ ?123 Ctl ⊞ Alt [space] . ← ↑ ↓ → End      ABC Ctl ⊞ Alt [space] . ← ↑ ↓ → End
 ```
 
-**Three layers, and Shift is not one of them.** The `?123` page used to carry
-a Shift key, which re-rendered its row 1 as `! @ # $ % ^ & * ( )` while row 3
+**`w` sits above `s`, and that cost Backspace a unit.** The top row used to
+open with `q` while the home row opened with Tab, so every home-row letter sat
+one column right of the letter above it: `w` was over `a`, and the number row
+panel (whose own leading slot is `Esc`) put `1` over `w` rather than over `q`.
+On a grid where every key is the same size, that column relationship is most of
+what a user reads the board by, and it is the one thing full size gets for free
+(there, `w` is over `s` because Tab and Caps are the same width).
+
+Compact now gets it the same way: both letter rows open with a 1u key, Tab over
+Caps, which is also where a physical keyboard puts them. The left edge reads
+`Esc` / `Tab` / `Caps` / `⇧` / `?123` straight down, Caps stops being behind a
+hop, and the digits line up with the letters they belong to. A 13u row has no
+spare unit, so the top row's new slot had to be paid for, and Backspace's
+second unit is what paid: it is still accent-filled, still auto-repeats, and
+still has the whole right edge of the row to itself.
+
+**Two layers, and Shift is not one of them.** The `?123` page used to carry a
+Shift key, which re-rendered its row 1 as `! @ # $ % ^ & * ( )` while row 3
 already showed `! @ # $ % : & ( )` permanently: nine keys on screen saying the
-same thing as another key on screen. Shift's slot is now a switch to a second
+same thing as another key on screen. Shift's slot became a switch to a second
 symbol page (`=\<`), the phone convention, so every glyph Shift used to reach
-has a key of its own and the overlap is *structurally impossible* rather than
-merely absent. All three layers are 13.0u with matching key counts
-(12/13/12/11), so hopping pages never resizes a key. The `shifted` fields stay
-on the symbol keys: right-click still types them, and right-click output is
-never displayed, so it is a bonus rather than a duplicate.
+had a key of its own and the overlap was *structurally impossible* rather than
+merely absent. Both layers are 13.0u with matching key counts (13/13/12/11),
+so hopping pages never resizes a key. The `shifted` fields stay on the symbol
+keys: right-click still types them, and right-click output is never displayed,
+so it is a bonus rather than a duplicate.
+
+**The digits are not on `?123`, and the second page went with them.**
+Reported: "compact mode symbol mode duplicates number row". The page opened
+with `1 2 3 4 5 6 7 8 9 0`, and compact's standalone number row panel is on
+screen on *every* layer (it is derived from the layout carrying no `number`
+row of its own, not from a toggle), so hopping to `?123` put two identical
+digit rows one above the other. The page was also repeating `-` and `=` on
+row 2, and its row 3 (`! @ # $ % : & ( )`) was the number row's own
+right-click set. Twelve of twenty-eight symbol slots were being spent on
+glyphs already on screen.
+
+Reclaiming them is what made one page enough. Row 1 is now the number row's
+shifted set in digit order, which is the thing a keycap cannot show you (the
+cap reads `6`, and nothing on it says `^` is one right-click away), and rows 2
+and 3 carry every remaining ASCII symbol. The `=\<` page's thirteen non-ASCII
+glyphs (`× ÷ ± ≈ ≠ ≤ ≥ ¥ ¢ § • © ®`) moved to the Symbols & Emoji window,
+which is the same trade that removed the full-size `Sym` page: a picker is for
+browsing and a key is for reaching something whose position you already know,
+and nobody reaches for `≥` from muscle memory.
+
+The alternative fix was to hide the number row panel while a symbol page is
+up. It is a one-property change and it is wrong here: the compact keyboard
+would lose a whole row of height on the hop, so every key below it, including
+the `ABC` key you leave by, moves under the pointer. Nothing else in this
+layout is allowed to move on a layer switch, and the digits would stop being
+reachable without one.
 
 **The nav column reads top to bottom as a scroll ladder**: Home, PgUp, PgDn,
 End. Jump to the top, page up, page down, jump to the bottom.
@@ -96,8 +132,8 @@ End. Jump to the top, page up, page down, jump to the bottom.
 forward-delete on the base layer had to cost something, and Esc was the only
 key there that isn't in the protected set below. Backspace-only editing means
 walking the caret past a mistake and back, which is several extra clicks with a
-pointer; Esc is comparatively rare in text entry. `Enter`/`Backspace` staying 2u
-and the nav column staying put both rule out the alternatives.
+pointer; Esc is comparatively rare in text entry. Enter staying 2u and the nav
+column staying put both rule out the alternatives.
 `tests/test_layouts.py::TestCompactLayout::test_esc_is_still_reachable_from_the_sym_layer`
 guards that this stayed a trade rather than becoming a deletion.
 
@@ -109,21 +145,27 @@ Design rules, all enforced by `tests/test_layouts.py`:
   the pointer. The guarding tests derive the layer list from the file rather
   than naming layers: written against a hardcoded base/sym pair, they were blind
   to the second symbol page, which shipped with a bullet where every other layer
-  has a period.
+  had a period. That page is gone, but the derivation stays: it is what makes
+  a page added later covered for free.
 - **Arrows, Enter, Home, End, PgUp, PgDn and `/` are never behind a hop.** These
   were named explicitly as high-frequency keys.
-- **Enter and Backspace stay 2u.** Both are high-frequency and Backspace
-  additionally auto-repeats, so a 1u target would regress against full size.
+- **Enter stays 2u.** It is high-frequency and it is the one key on the grid
+  with no neighbour to confuse it with, so it keeps the second unit Backspace
+  gave up to the column alignment above.
 - **Right-click covers the shifted variants**, so the base layer reaches more
   than it shows: `/`→`?`, `,`→`<`, `.`→`>`, `'`→`"`.
-- **`:` gets a dedicated key on the `?123` layer**, in the slot `^` used to
-  hold. Row 2 of that layer already carries `;`→`:` as a shifted variant, but a
-  shifted variant is invisible: the keycap reads `;` and nothing on screen says
-  a colon is one right-click away, so in practice the layer read as "no colon".
-  Row 3 exists to surface exactly those shifted glyphs as their own keys, and it
-  was already one short of the full set (`*` is missing for the same 13u
-  reason), so `^` — the rarest of the nine in prose — pays for it. `^` is
-  unchanged on row 1 as the shifted variant of `6`.
+- **Every glyph the `?123` layer offers has a key of its own**; none is
+  reachable only by right-click. A shifted variant is invisible: the keycap
+  reads `;` and nothing on screen says a colon is one right-click away, so for
+  a while the layer read as "no colon". `:`, `{`, `}`, `|` and `~` each have a
+  cap now, and `tests/test_layouts.py::test_every_shifted_variant_on_a_symbol_
+  page_has_its_own_key` states the rule rather than the instances. It is also
+  the constraint that sets the page's size: 29 slots, so 29 glyphs, which is
+  why the digits going back to the number row panel is what bought the second
+  page's removal rather than merely tidying it. The twenty-ninth is `"`, which
+  landed there when Caps moved to the head of the row: it was the one common
+  ASCII glyph compact had no key of its own for, and the row already pairs a
+  base glyph with its shifted twin (`[` `{`, `]` `}`, `\` `|`, `;` `:`).
 - `.` sits beside Space (phone convention) rather than next to `,`; that is what
   pays for `/` on row 3 without a fourteenth column.
 
@@ -143,11 +185,18 @@ JSON. It keys off the layout rather than off `compactView` because a letter
 arrangement with no compact variant silently falls back to full size.
 
 It is a panel rather than a fifth row in the layout JSON because the compact
-layout's three layers must each be four rows of 13u
-(`test_has_three_layers_of_four_rows`), and because a panel is independent of
-which letter arrangement is selected. The digits behave like any other char key: shift shows and types the
-shifted glyph, right-click types it without flipping sticky shift, and both
-flash the key preview.
+layout's two layers must each be four rows of 13u
+(`test_has_two_layers_of_four_rows`), and because a panel is independent of
+which letter arrangement is selected. The digits behave like any other char
+key: shift shows and types the shifted glyph, right-click types it without
+flipping sticky shift, and both flash the key preview.
+
+**Being derived, it is on screen on every layer, so no layer may draw digits
+of its own.** That is not a style rule, it is the arithmetic: a digit on
+`?123` is this panel rendered twice, one row apart, which is what was
+reported and what `test_no_digit_appears_on_a_symbol_layer` now refuses. The
+panel is where the digits live in compact; a page that wants one should
+right-click the panel's own key or take the hop back to it.
 
 **The leading slot is `Esc`, not the physical keyboard's `` ` ``.** The Del/Esc
 trade above put Esc behind a hop, and "get me out of this dialog" is a bad key
@@ -236,7 +285,7 @@ Full-size layouts are deliberately untouched.
 The fill is a **wash of the accent over the theme's key colour, not the raw
 accent**. Three themes have a pale accent (Blackboard `#ffffaa`, Spaceship
 `#00ff9f`) and Typewriter is a light theme with near-black text, so a saturated
-fill would destroy the label contrast. Same reason Enter is a muted `#2a5a2a`.
+fill would destroy the label contrast. Enter takes that same wash (see below).
 
 **The wash strength is derived, not fixed.** A flat 35% was measured against all
 nine themes and dropped the label below WCAG AA on five of them:
@@ -259,10 +308,59 @@ Accent keys also take an accent-coloured border, which carries the cue on the
 themes where the wash has to back off to 0.12-0.21; a border sits beside the
 label rather than behind it, so it costs no contrast.
 
+**Enter is painted with that same wash and carries no hue of its own**, so the
+board under this scheme has one colour on it rather than two. It used to be a
+flat `#2a5a2a`: the only fill in `Main.qml` that skipped the contrast walk, and
+the only literal hue left in a project whose first colour rule is that there are
+none. It measured 1.89:1 on Typewriter, 2.15 on Light and 3.28 on Vaporwave, all
+under WCAG AA, and it went unnoticed for so long because **only the `off` scheme
+reaches that line** -- every other scheme resolves Enter through `_roleFill`, and
+Monochrome, which ships, already makes Enter the brightest key on the board.
+
+Sharing `accentKeyColor` fixes the ratio for free, since that colour is already
+walked to 4.5:1 per theme, and spends no new colour doing it. What it costs is
+that Enter and Backspace are now identical under `off`: same wash, both 2u, two
+rows apart, with position the only thing separating them. That was the accepted
+trade, taken over three alternatives that were rendered and rejected as more
+colour rather than less (a muted commit-hue wash; keeping the green and flipping
+the label white; the commit hue at full chroma, which additionally needs a
+per-key ink override to clear Vaporwave and so new plumbing on `NumpadPanel`).
+
+**Marking Enter as `style: "accent"` in the layout JSON is not the same change**
+and is the likely way to undo this by accident: `keyBorderFor` gives accent keys
+the accent ring, so it would paint Enter correctly and hand it a ring the commit
+key is not supposed to have. `NumpadPanel.enterKeyColor` is bound from `Main.qml`
+for the same reason and defaults to an ordinary key rather than to a hue.
+
+**Backspace and Del are exempt from that border.** All five rang at first, and
+Enter carries `style: "enter"`, which takes no ring on any scheme, so the grid
+put a full-strength accent ring on the destructive key and nothing at all on
+the committing one: four rings against nought, and a saturated outline outranks
+a lightness step at a glance. Only the ring moved. The fills measure 13.8 and
+11.8 OKLab dE from a plain key on Dark, which is level, and they are untouched:
+the wash is still what marks Backspace.
+
+`Main.qml::keyBorderFor` is the rule, and it asks `Palette.roleForKey` whether
+the key is a `kill` rather than naming the two actions itself, since that
+function is already this project's single answer to "does this key destroy
+text". Two alternatives were rendered and not taken: giving Enter a commit-hue
+ring of its own (a fifth ring on a 13-wide grid), and making the border follow
+the colour scheme the way every fill does, with `kill` red and `commit` green.
+The second is the structurally complete fix, because **this border is the one
+colour on a key that Key Colours never reaches** -- it keys off the layout
+JSON's `style` while the fills key off `role`, which is why the ring won even
+on Monochrome, whose stated intent is to make Enter the brightest key on the
+board. It is the bigger change and is still available.
+
 Pinned by `tests/test_layouts.py::TestCompactEditingKeysAreAccented` (which
 keys) and `tests/test_qml_compact_view.py::TestAccentKeysStayReadable` (the
 contrast floor, plus the inverse test that the wash is still visible, so "stop
-tinting" cannot pass as a fix).
+tinting" cannot pass as a fix). The border split is
+`TestTheKeysThatDestroyTextTakeNoRing`, where restoring all five rings and
+dropping every ring each fail a different half, and Enter's fill is
+`TestEnterSharesTheEditingKeysWash`, whose two inverses are the ones that bite:
+that Enter did not also become an accent key, and that the role schemes still
+tell commit from kill.
 
 ## No panel that lines up with the grid may use `QtQuick.Layouts`
 
@@ -360,16 +458,60 @@ Load-bearing rules:
   themes below WCAG AA, on exactly the keys the style exists to make findable.
   The accent-coloured border carries the cue where the wash has to back off.
   Full-size layouts are deliberately untouched.
+- **Rows 1 and 2 open with Tab and Caps, so `w` sits above `s`.** Full size
+  reduces the same property to Tab and Caps being the same width; compact makes
+  it the same way, and pays for the extra slot out of Backspace's second unit
+  (1u on compact, 2u everywhere else). Both keys lead rows 1 and 2 on `?123`
+  too: a symbol page leading with a glyph would move them under the pointer on
+  every layer hop. Guards: `TestCompactLayout::test_w_sits_above_s` and
+  `::test_the_left_column_is_the_same_on_both_layers`.
+- **Enter wears that wash too, and no hue of its own** (`Main.qml`'s `keyColor`
+  switch, where `accent` and `enter` share a case). It was a flat `#2a5a2a`: the
+  only fill in the file that skipped `washFor`'s contrast walk, and the only
+  literal hue in a project whose first colour rule is that there are none. It
+  measured 1.89:1 on Typewriter, 2.15 on Light and 3.28 on Vaporwave, all under
+  WCAG AA. **Only the `off` scheme reaches that line**, which is why it lasted:
+  every other scheme resolves Enter through `_roleFill`, and Monochrome (the
+  default) already makes Enter the brightest key. Sharing `accentKeyColor` fixes
+  the ratio for free (it is walked per theme already) and spends no new colour,
+  at the cost of Enter and Backspace being identical under `off`. **Do not
+  "simplify" this by marking Enter `style: "accent"` in the layout JSON**: that
+  paints it the same and hands it the accent ring, which is a different decision
+  and was not the one taken. `NumpadPanel.enterKeyColor` is bound from `Main.qml`
+  for the same reason and defaults to an ordinary key. Guarded by
+  `tests/test_qml_compact_view.py::TestEnterSharesTheEditingKeysWash`, whose two
+  inverses are the load-bearing half: Enter must not gain a ring, and the role
+  schemes must still tell commit from kill.
+- **The two keys that destroy text wear the wash but never that border**
+  (`Main.qml::keyBorderFor`, exempting the `kill` role). All five accent keys
+  used to ring, and Enter is `style: "enter"` so it rings on no scheme at all:
+  a saturated ring beats a lightness step at a glance, so the compact grid
+  emphasised Backspace over Enter, four rings against nought. The fills were
+  never the problem and did not move (13.8 and 11.8 OKLab dE from a plain key
+  on Dark, which is level). The exemption reads off `Palette.roleForKey`
+  rather than naming the two actions here, because that is already the
+  project's one answer to "does this key destroy text". Worth knowing that
+  **this border is the one colour on a key Key Colours does not reach**: it
+  keys off the layout JSON's `style` while every fill keys off `role`, which
+  is why the ring won even on Monochrome, whose whole intent is to make Enter
+  the brightest key on the board. Making the border follow the scheme is the
+  larger change that was on the table and was not taken. Guarded by
+  `tests/test_qml_compact_view.py::TestTheKeysThatDestroyTextTakeNoRing`,
+  where dropping every ring and restoring all five each fail a different half.
 - **Del sits on the base layer, Esc on `?123`.** A 13u row has no spare unit, so
   the two traded places. The Number Row panel puts a second Esc back at the
   top-left and that duplicate is deliberate, so `?123` stays the fallback for a
   future layout that shows the compact grid without the panel. Don't swap them
   back without reading the rationale in the design doc.
-- **The symbol pages carry no Shift key**; Shift's slot switches to a second page
-  (`=\<`), the phone convention, which makes a glyph appearing twice on one
-  screen *structurally impossible* rather than merely absent. The bottom row and
-  the right-hand nav column are byte-identical on every layer, and the tests that
-  guard that derive the layer list from the file rather than naming base/sym.
+- **The symbol page carries no Shift key.** Shift's slot became a second page
+  (`=\<`), which made a glyph appearing twice on one screen *structurally
+  impossible* rather than merely absent; reclaiming the digits from row 1 then
+  made one page enough and the second page went. Shift does not come back: the
+  modifier is held at the *OS* level, so a held Shift would make a key emit one
+  glyph while displaying another, on a page with no Shift key to clear it from.
+  The bottom row and the right-hand nav column are byte-identical on every
+  layer, and the tests that guard that derive the layer list from the file
+  rather than naming base/sym.
   `Main.qml`'s layer branch calls the idempotent `keyboard.releaseShift()` on
   every switch (never `if (shiftOn) toggleShift()`), because the modifier is held
   at the OS level and a Shift carried in from the letters page makes `1` emit `!`

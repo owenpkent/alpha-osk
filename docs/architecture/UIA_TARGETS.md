@@ -564,6 +564,14 @@ this to a socket without re-reading that argument.
   not measured). Its `_restoring` flag is load-bearing (without it the keyboard
   declined its own restore in a loop), and `SWP_NOACTIVATE` in
   `WM_WINDOWPOSCHANGING` does nothing, so do not "simplify" to it.
+  The **second-launch hand-off** (`windows_window.surface_existing_instance`,
+  what a shortcut key or an assistive device's "open keyboard" button runs)
+  is the same rule from the other side: it restores with `SW_SHOWNOACTIVATE`
+  and never calls `SetForegroundWindow`. It used to, and measured against the
+  installed keyboard that left it as the foreground window, so the next key
+  clicked typed into nothing. Guarded by
+  `tests/test_windows_window.py::TestASecondLaunchLeavesTheForegroundAlone`,
+  which asserts an allow-list of user32 calls rather than naming the bad one.
   (2) **A close that is not a quit minimizes** (`Main.qml` `onClosing`,
   Windows only), because Qt's default hid the keyboard with the process still
   running, out of the tree and off the taskbar. Qt 6 cancels a quit if a

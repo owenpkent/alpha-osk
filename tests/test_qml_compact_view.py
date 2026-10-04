@@ -580,18 +580,32 @@ class TestEveryRowFitsTheContentArea:
         assert _real_warnings(warnings) == []
 
 
-class TestSecondSymbolPage:
-    r"""?123 -> =\< -> ?123, and what happens to a held Shift on the way.
+class TestTheSymbolPage:
+    r"""?123 -> ABC, the number row across the hop, and a held Shift.
 
-    Reported: on ?123, holding Shift re-rendered row 1 as ! @ # $ % ^ & * ( )
-    while row 3 already showed ! @ # $ % : & ( ). Shift on the symbol pages is
-    now a switch to a second page instead, which is the phone convention and
-    makes the overlap impossible rather than merely absent. The layout half of
-    that is asserted in tests/test_layouts.py; this is the QML half.
+    Two reports landed on this page. First: holding Shift on ?123 re-rendered
+    row 1 as the glyphs row 3 already showed, which is why Shift is not on the
+    symbol page at all. Then: the page opened with `1 2 3 4 5 6 7 8 9 0` under
+    a standalone number row that never goes away, so the digits were on screen
+    twice and the page was spending ten slots saying nothing new. Removing
+    them left room for every ASCII symbol on one page, so the second page
+    (`=\<`) and its hop are gone. The layout half is asserted in
+    tests/test_layouts.py; this is the QML half.
     """
 
     @staticmethod
+    def _panel(root, name: str):
+        panel = root.findChild(QQuickItem, name)
+        assert panel is not None, f"no panel named {name!r}"
+        return panel
+
+    @staticmethod
     def _key_items(root) -> list:
+        """Every key delegate under *root*.
+
+        `root` is either the window (walked from its contentItem) or a panel
+        item, which is already the thing to walk.
+        """
         out: list = []
 
         def walk(item) -> None:
@@ -600,7 +614,7 @@ class TestSecondSymbolPage:
                     out.append(child)
                 walk(child)
 
-        walk(root.property("contentItem"))
+        walk(root.property("contentItem") or root)
         return out
 
     @classmethod
@@ -641,32 +655,71 @@ class TestSecondSymbolPage:
         assert root.property("activeLayer") == "base"
         return root, warnings, bridge
 
-    def test_the_pages_chain_and_come_back(self, compact_shown) -> None:
+    def test_the_page_comes_back(self, compact_shown) -> None:
         root, warnings, _ = compact_shown
 
         self._tap(root, "sym")
         assert root.property("activeLayer") == "sym"
         assert len(_rows(root)) == 4
 
-        self._tap(root, "sym2")
-        assert root.property("activeLayer") == "sym2"
-        assert len(_rows(root)) == 4
-
-        # Back to ?123, then out to letters. A page you cannot leave is worse
-        # than a page that does not exist.
-        self._tap(root, "sym")
-        assert root.property("activeLayer") == "sym"
+        # A page you cannot leave is worse than a page that does not exist.
         self._tap(root, "base")
         assert root.property("activeLayer") == "base"
         assert _real_warnings(warnings) == []
 
-    def test_second_page_keys_are_the_same_size(self, compact_shown) -> None:
-        """All three pages are 13.0u with matching key counts, so hopping
+    def test_there_is_only_one_symbol_page(self, compact_shown) -> None:
+        """No key on ?123 hops anywhere but back to the letters.
+
+        Asserted over what is rendered rather than over the layout file,
+        because a second page left behind in the JSON would still be
+        reachable from here.
+        """
+        root, _, _ = compact_shown
+        self._tap(root, "sym")
+        targets = {
+            (i.property("kd") or {}).get("target")
+            for i in self._key_items(root)
+            if i.isVisible() and (i.property("kd") or {}).get("type") == "layer"
+        }
+        assert targets == {"base"}
+
+    def test_the_number_row_survives_the_hop_and_is_not_doubled(self, compact_shown) -> None:
+        """Reported: "compact mode symbol mode duplicates number row".
+
+        The panel is compact's number row and it is on screen on every layer,
+        so a digit drawn by the page itself is that row drawn twice. Both
+        halves are asserted together: the panel is still there after the hop
+        (the alternative fix was to hide it, which costs a whole row of
+        height and moves every key under the pointer), and nothing on the
+        page repeats it.
+        """
+        root, _, _ = compact_shown
+        self._tap(root, "sym")
+
+        assert self._panel(root, "numberRowPanel").isVisible(), (
+            "the digits went away on ?123; they must be reachable on every layer"
+        )
+        # The panel's own keys are inside the same tree, and they are the
+        # ones that are allowed to be digits, so take them back out.
+        panel_keys = {id(i) for i in self._key_items(self._panel(root, "numberRowPanel"))}
+        drawn = sorted(
+            {
+                key
+                for i in self._key_items(root)
+                if i.isVisible() and id(i) not in panel_keys
+                for key in [(i.property("kd") or {}).get("key") or ""]
+                if key.isdigit()
+            }
+        )
+        assert not drawn, f"?123 draws {drawn} under a number row that already shows them"
+
+    def test_symbol_page_keys_are_the_same_size(self, compact_shown) -> None:
+        """Both pages are 13.0u with matching key counts, so hopping
         between them must not resize anything under the pointer."""
         root, _, _ = compact_shown
         base_w, base_fixed = root.property("keyW"), root.property("layoutFixedPixels")
 
-        for target in ("sym", "sym2"):
+        for target in ("sym",):
             self._tap(root, target)
             assert root.property("keyW") == pytest.approx(base_w), f"keys resized on {target}"
             assert root.property("layoutFixedPixels") == pytest.approx(base_fixed)
@@ -692,10 +745,10 @@ class TestSecondSymbolPage:
         )
         assert _real_warnings(warnings) == []
 
-    def test_no_shift_key_exists_on_either_symbol_page(self, compact_shown) -> None:
+    def test_no_shift_key_exists_on_the_symbol_page(self, compact_shown) -> None:
         """Belt and braces against the QML rendering one anyway."""
         root, _, _ = compact_shown
-        for target in ("sym", "sym2"):
+        for target in ("sym",):
             self._tap(root, target)
             visible = [i for i in self._key_items(root) if i.isVisible()]
             assert visible, "no keys rendered"
@@ -721,7 +774,7 @@ class TestHoldingALetterRepeatsOnlyWhenAskedFor:
     @staticmethod
     def _repeat_flags(root) -> dict:
         out: dict = {}
-        for item in TestSecondSymbolPage._key_items(root):
+        for item in TestTheSymbolPage._key_items(root):
             kd = item.property("kd")
             if hasattr(kd, "toVariant"):
                 kd = kd.toVariant()
@@ -1248,6 +1301,312 @@ class TestAccentKeysStayReadable:
                 f"{delta:.3f} of a plain key {plain.name()}, so the style no "
                 "longer marks anything"
             )
+        assert _real_warnings(warnings) == []
+
+
+class TestTheKeysThatDestroyTextTakeNoRing:
+    """Backspace and Del wear the accent wash but never the accent border.
+
+    The border used to key off the layout JSON's `style` alone, so all five
+    accent keys (Esc / Tab / Shift / Backspace / Del) took a full-strength
+    theme-accent ring and Enter, which is `style: "enter"`, took none. A
+    saturated ring outranks a lightness step at a glance, so the compact
+    grid emphasised the destructive key over the committing one: four rings
+    against nought, reported as Backspace being "more emphasized than
+    enter".
+
+    The fills are not what changed and are not what was wrong: measured on
+    Dark they sit 13.8 and 11.8 OKLab dE from a plain key, which is level.
+    Only the ring moved, and only for the `kill` role.
+
+    Every case below is paired with the inverse it must still reject,
+    because each half alone is satisfied by a rule that has stopped doing
+    anything: "no key has the accent border" passes the first test, and
+    "every key has it" passes the second.
+    """
+
+    _RINGED = ("tab", "shift")
+    _BARE = ("backspace", "delete")
+
+    @staticmethod
+    def _key_items(root) -> list:
+        out: list = []
+
+        def walk(item) -> None:
+            for child in item.childItems():
+                if child.property("kd") is not None:
+                    out.append(child)
+                walk(child)
+
+        walk(root.property("contentItem"))
+        return out
+
+    @classmethod
+    def _borders(cls, root) -> dict:
+        """Live `borderColor` per action name, visible keys only.
+
+        Read off the rendered KeyButtons rather than recomputed from
+        `keyBorderFor`, so a delegate that stopped calling it at all still
+        fails here.
+        """
+        out: dict = {}
+        for item in cls._key_items(root):
+            if not item.isVisible():
+                continue
+            kd = item.property("kd") or {}
+            action = kd.get("action")
+            if action:
+                out[action] = item.property("borderColor").name()
+        return out
+
+    @pytest.fixture
+    def compact_borders(self, qml_root):
+        root, warnings, _ = qml_root
+        root.setProperty("compactView", True)
+        root.show()
+        _pump_until(lambda: len(self._key_items(root)))
+        QCoreApplication.processEvents()
+        return root, warnings
+
+    def test_backspace_and_delete_carry_the_plain_border(self, compact_borders) -> None:
+        root, warnings = compact_borders
+        plain = root.property("themeBorder").name()
+        borders = self._borders(root)
+        for action in self._BARE:
+            assert action in borders, f"no visible {action} key on the compact grid"
+            assert borders[action] == plain, (
+                f"{action} rings in {borders[action]} rather than the plain "
+                f"border {plain}: the key that destroys text is back to being "
+                "the loudest thing on the grid"
+            )
+        assert _real_warnings(warnings) == []
+
+    def test_the_other_accent_keys_still_ring(self, compact_borders) -> None:
+        """The inverse: dropping the ring from every key is not the fix.
+
+        Esc / Tab / Shift are why the accent style exists at all -- the
+        compact grid is uniform and has no size cues to tell them from the
+        letters. Only the `kill` role gives its ring up.
+        """
+        root, warnings = compact_borders
+        accent = root.property("accentKeyBorder").name()
+        plain = root.property("themeBorder").name()
+        assert accent != plain, "the fixture theme cannot tell the two borders apart"
+        borders = self._borders(root)
+        for action in self._RINGED:
+            assert action in borders, f"no visible {action} key on the compact grid"
+            assert borders[action] == accent, (
+                f"{action} lost its accent border ({borders[action]}), so the "
+                "style no longer marks the editing keys it exists for"
+            )
+        assert _real_warnings(warnings) == []
+
+    def test_backspace_no_longer_outranks_enter(self, compact_borders) -> None:
+        """The user-facing claim, stated directly rather than inferred.
+
+        Both tests above can pass while Enter has somehow gained a ring of
+        its own, which would be option A rather than the one that was
+        chosen. What was asked for is that the two agree.
+        """
+        root, warnings = compact_borders
+        borders = self._borders(root)
+        assert "return" in borders, "no visible Enter key on the compact grid"
+        assert borders["backspace"] == borders["return"], (
+            f"Backspace ({borders['backspace']}) and Enter ({borders['return']}) "
+            "no longer share a border, so one of them is still shouting over "
+            "the other"
+        )
+        assert _real_warnings(warnings) == []
+
+    def test_it_holds_on_every_theme(self, compact_borders) -> None:
+        """The border is theme-derived on both sides, so it has to be swept.
+
+        `accentKeyBorder` is the raw theme accent and `themeBorder` is the
+        theme's own border; nine themes ship and they are not uniformly far
+        apart, so a rule that happened to resolve correctly on the fixture's
+        default theme alone would prove very little.
+        """
+        root, warnings = compact_borders
+        for theme in _theme_names(root):
+            root.setProperty("currentTheme", theme)
+            QCoreApplication.processEvents()
+            plain = root.property("themeBorder").name()
+            accent = root.property("accentKeyBorder").name()
+            borders = self._borders(root)
+            for action in self._BARE:
+                assert borders[action] == plain, (
+                    f"theme {theme!r}: {action} rings in {borders[action]} rather than {plain}"
+                )
+            if accent == plain:
+                # Typewriter-style themes could in principle pick a border
+                # equal to their accent; there is then nothing to assert.
+                continue
+            for action in self._RINGED:
+                assert borders[action] == accent, (
+                    f"theme {theme!r}: {action} lost its ring "
+                    f"({borders[action]} rather than {accent})"
+                )
+        assert _real_warnings(warnings) == []
+
+
+class TestEnterSharesTheEditingKeysWash:
+    """Under Key Colours `off`, Enter is painted with `accentKeyColor`.
+
+    It used to be a flat `"#2a5a2a"`: the only fill in Main.qml that skipped
+    the contrast walk, and the only literal hue left in a project whose first
+    colour rule is that there are none. It measured 1.89:1 on Typewriter,
+    2.15 on Light and 3.28 on Vaporwave, all under WCAG AA, and it survived
+    because every scheme except `off` resolves Enter through `_roleFill` and
+    never reaches that line.
+
+    Sharing the editing keys' wash fixes the ratio without spending a colour:
+    the board carries one hue under this scheme rather than two, and the
+    guarantee comes for free because `accentKeyColor` is already walked to
+    4.5:1 per theme.
+
+    Read off `_roleFill`, which is what a KeyButton actually paints at rest
+    under any scheme, rather than off `keyColor`, which is only the same
+    thing while `roleColors` is null.
+    """
+
+    MIN_RATIO = 4.5
+
+    @staticmethod
+    def _key_items(root) -> list:
+        out: list = []
+
+        def walk(item) -> None:
+            for child in item.childItems():
+                if child.property("kd") is not None:
+                    out.append(child)
+                walk(child)
+
+        walk(root.property("contentItem"))
+        return out
+
+    @classmethod
+    def _fills(cls, root) -> dict:
+        out: dict = {}
+        for item in cls._key_items(root):
+            if not item.isVisible():
+                continue
+            action = (item.property("kd") or {}).get("action")
+            if action:
+                out[action] = item.property("_roleFill").name()
+        return out
+
+    @staticmethod
+    def _relative_luminance(color) -> float:
+        def channel(v: float) -> float:
+            return v / 12.92 if v <= 0.03928 else ((v + 0.055) / 1.055) ** 2.4
+
+        return (
+            0.2126 * channel(color.redF())
+            + 0.7152 * channel(color.greenF())
+            + 0.0722 * channel(color.blueF())
+        )
+
+    @classmethod
+    def _contrast(cls, a, b) -> float:
+        la, lb = cls._relative_luminance(a), cls._relative_luminance(b)
+        return (max(la, lb) + 0.05) / (min(la, lb) + 0.05)
+
+    @pytest.fixture
+    def compact(self, qml_root):
+        root, warnings, _ = qml_root
+        root.setProperty("compactView", True)
+        root.show()
+        _pump_until(lambda: len(self._key_items(root)))
+        QCoreApplication.processEvents()
+        return root, warnings
+
+    def test_enter_is_painted_with_the_editing_keys_wash(self, compact) -> None:
+        root, warnings = compact
+        root.setProperty("keyColorScheme", "off")
+        QCoreApplication.processEvents()
+        accent = root.property("accentKeyColor").name()
+        fills = self._fills(root)
+        assert "return" in fills, "no visible Enter key on the compact grid"
+        assert fills["return"] == accent, (
+            f"Enter is painted {fills['return']} rather than the editing keys' "
+            f"wash {accent}: it has a hue of its own again, so the board under "
+            "this scheme carries two colours"
+        )
+        assert fills["return"] == fills["backspace"], (
+            f"Enter ({fills['return']}) and Backspace ({fills['backspace']}) no longer share a fill"
+        )
+        assert _real_warnings(warnings) == []
+
+    def test_enter_did_not_become_an_accent_key(self, compact) -> None:
+        """The inverse: sharing a fill must not hand Enter a ring as well.
+
+        `keyBorderFor` gives `style: "accent"` keys the accent border, so
+        "just mark Enter as an accent key in the layout JSON" would satisfy
+        the fill test above and quietly put a ring back on the commit key --
+        which is a different option than the one that was chosen.
+        """
+        root, warnings = compact
+        root.setProperty("keyColorScheme", "off")
+        QCoreApplication.processEvents()
+        plain = root.property("themeBorder").name()
+        borders = {}
+        for item in self._key_items(root):
+            if not item.isVisible():
+                continue
+            action = (item.property("kd") or {}).get("action")
+            if action:
+                borders[action] = item.property("borderColor").name()
+        assert borders["return"] == plain, (
+            f"Enter picked up a border of {borders['return']} rather than the "
+            f"plain {plain}: it is being treated as an accent key, not merely "
+            "painted like one"
+        )
+        assert _real_warnings(warnings) == []
+
+    def test_the_colour_schemes_still_tell_them_apart(self, compact) -> None:
+        """The other inverse: this must not leak past the `off` scheme.
+
+        Monochrome is the shipped default and deliberately steps `commit`
+        toward the ink so Enter is the brightest key on the board. A change
+        that made Enter share Backspace's fill *everywhere* would satisfy
+        both tests above and flatten that.
+        """
+        root, warnings = compact
+        root.setProperty("keyColorScheme", "mono")
+        QCoreApplication.processEvents()
+        fills = self._fills(root)
+        assert fills["return"] != fills["backspace"], (
+            "under Monochrome, Enter and Backspace resolve to the same fill "
+            f"({fills['return']}), so the role scheme has stopped "
+            "distinguishing commit from kill"
+        )
+        assert _real_warnings(warnings) == []
+
+    def test_the_fill_is_theme_derived_and_legible_on_every_theme(self, compact) -> None:
+        """Sweep the nine, which is what a literal cannot survive.
+
+        Two properties at once: the fill moves with the theme (a constant
+        would not), and the label clears AA on it (the constant did not, on
+        three of the nine).
+        """
+        root, warnings = compact
+        root.setProperty("keyColorScheme", "off")
+        QCoreApplication.processEvents()
+        seen = set()
+        for theme in _theme_names(root):
+            root.setProperty("currentTheme", theme)
+            QCoreApplication.processEvents()
+            fill = self._fills(root)["return"]
+            seen.add(fill)
+            ratio = self._contrast(root.property("themeTextColor"), root.property("accentKeyColor"))
+            assert ratio >= self.MIN_RATIO, (
+                f"theme {theme!r}: Enter's fill {fill} leaves the label at "
+                f"{ratio:.2f}:1, below WCAG AA ({self.MIN_RATIO}:1)"
+            )
+        assert len(seen) > 1, (
+            f"Enter resolved to the same fill {seen} on all nine themes, so it "
+            "is a literal again rather than derived from the theme"
+        )
         assert _real_warnings(warnings) == []
 
 

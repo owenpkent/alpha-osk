@@ -6,12 +6,11 @@ Run from the repository root:
     python scripts/gen_explicit_words.py
 
 **This is a flag list, not an exclusion list, and the difference is the
-point.** ``data/explicit_stems.txt`` is applied by
-``gen_vocabulary.py`` when the wordlist is built, so the words it names
-are simply absent and no setting can bring them back. The list written
-here is consulted at *suggestion* time instead, so the words stay in the
-dictionary, stay typable and stay learnable, and a user setting decides
-whether the prediction bar volunteers them.
+point.** ``data/slurs.txt`` is the exclusion list: ``gen_vocabulary.py``
+leaves its words out of the wordlist, so no setting can bring them back.
+The list written here is consulted at *suggestion* time instead, so the
+words stay in the dictionary, stay typable and stay learnable, and a user
+setting decides whether the prediction bar volunteers them.
 
 That makes being wrong far cheaper than it is for an exclusion, which is
 what allows a mechanical rule here at all. A word wrongly flagged is one
@@ -39,68 +38,40 @@ SUFFIXES = ("", "s", "es", "ed", "ing", "er", "ers", "y", "ies", "ish", "ier", "
 
 #: Sources of shipped vocabulary. Anything not in one of these cannot be
 #: suggested, so flagging it would be noise in a file meant to be audited.
-SOURCES = ("english-expanded.txt", "base_dictionary.txt")
+#: The supplement was missing from this list at first, which left
+#: "bullshit" and "negro" unflagged although the bar could offer both.
+SOURCES = ("english-expanded.txt", "base_dictionary.txt", "google-20000-supplement.txt")
 
-#: Slur stems. These are the gap the exclusion list left: it was built to
-#: cover swearing, so the generated wordlist has no common profanity in it
-#: at all, while ethnic, sexual and disability slurs came through intact.
-#: Kept in a separate block from the profanity stems below because the two
-#: were found by different routes and a future reviewer should be able to
-#: tell which is which.
-SLUR_STEMS = (
-    "chink",
-    "coon",
-    "dago",
-    "darkie",
-    "darky",
-    "dyke",
-    "fag",
-    "faggot",
-    "gook",
-    "gyp",
-    "halfbreed",
-    "heeb",
-    "honky",
-    "injun",
-    "jap",
-    "kike",
-    "kraut",
-    "mick",
-    "negress",
-    "negro",
-    "nigger",
-    "nigga",
-    "paki",
-    "pickaninny",
-    "raghead",
-    "redskin",
-    "retard",
-    "sambo",
-    "spic",
-    # "spook" is deliberately absent. Its slur sense is real but rare, and
-    # the stem also produces "spooky" and "spooked", which are ordinary
-    # words. A filter that visibly swallows common words is one the user
-    # turns off and leaves off, so the false positive costs more than the
-    # miss.
-    "squaw",
-    "tranny",
-    "wetback",
-    "wog",
-    "wop",
-    "yid",
-    "zipperhead",
+#: Words with a slur sense AND a common ordinary one, so they stay in the
+#: vocabulary and are only kept off the bar while the filter is on. Exact
+#: words, never stems: the stem list this replaced ("spic", "jap", "chink",
+#: "retard") also caught "spiced", "japes", "chinking" and "retarder".
+#:
+#: Words whose main modern use is a slur are not here. They are removed from
+#: the shipped wordlists outright (data/slurs.txt), so no setting offers
+#: them and there is nothing left in the vocabulary for this file to flag.
+FILTER_ONLY_WORDS = (
+    "chink",  # a narrow gap: "a chink in the armour", "chinks of light"
+    "chinks",
+    "dyke",  # a variant spelling of "dike"
+    "dykes",
+    "fag",  # British for a cigarette
+    "fags",
+    "micks",  # plural of the name Mick
+    "negro",  # historical proper names: the Negro Leagues
+    "negroes",
 )
 
 
 def load_stems() -> list[str]:
-    """The profanity stems already curated, plus the slur stems above."""
+    """The curated profanity stems."""
     path = DATA / "explicit_stems.txt"
     profanity = [
         line.strip().lower()
         for line in path.read_text(encoding="utf-8").splitlines()
         if line.strip() and not line.startswith("#")
     ]
-    return sorted(set(profanity) | set(SLUR_STEMS))
+    return sorted(set(profanity))
 
 
 def shipped_words() -> set[str]:
@@ -122,7 +93,7 @@ def main() -> int:
     words = shipped_words()
 
     forms = {stem + suffix for stem in stems for suffix in SUFFIXES}
-    flagged = sorted(words & forms)
+    flagged = sorted(words & (forms | set(FILTER_ONLY_WORDS)))
 
     out = DATA / "explicit_words.txt"
     header = (
@@ -136,7 +107,9 @@ def main() -> int:
         "# closed suffix set, never by substring. See the generator for why.\n"
         f"# stems: {len(stems)}  shipped words scanned: {len(words)}  flagged: {len(flagged)}\n"
     )
-    out.write_text(header + "\n".join(flagged) + "\n", encoding="utf-8")
+    # LF on every platform: write_text translates "\n" to CRLF on Windows,
+    # and the repo stores LF.
+    out.write_text(header + "\n".join(flagged) + "\n", encoding="utf-8", newline="\n")
 
     print(f"stems              : {len(stems)}")
     print(f"shipped words      : {len(words)}")
