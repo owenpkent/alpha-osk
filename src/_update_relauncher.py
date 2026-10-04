@@ -37,7 +37,9 @@ Flow
    can never fire: NSIS restores each extracted file's build-time
    timestamp (``SetDateSave`` is on by default), so the fresh exe's
    mtime *predates* the install by however old the build is.
-3. Launch the new exe via ``subprocess.Popen`` from the user session.
+3. Launch the new exe through ``explorer.exe`` from the user session
+   (``_launch_command``: a UIAccess exe started by anything other than
+   Explorer comes up without UIAccess).
 4. Write ``update_handoff.json`` next to ``$APPDATA/alpha-osk/`` so the
    newly launched OSK can flash a "✓ Updated to vX.Y.Z" toast.
 
@@ -271,12 +273,37 @@ def _wait_for_new_exe(
         time.sleep(_POLL_INTERVAL_S)
 
 
+def _launch_command(exe_path: Path) -> list[str]:
+    """The argv that brings the freshly-installed keyboard back.
+
+    On Windows the keyboard is launched **through Explorer**, never by
+    creating the process ourselves. Measured on 2026-10-04 against
+    Windows' own ``osk.exe`` (signed, in System32, ``uiAccess="true"``):
+    a UIAccess application started with ``CreateProcess`` or even
+    ``ShellExecuteEx`` from a process that has no UIAccess itself comes
+    up with ``TokenUIAccess=0``, while the same exe started by
+    ``explorer.exe`` comes up with ``TokenUIAccess=1``. This helper runs
+    from a renamed copy of the bundle in %TEMP%, outside every secure
+    location, so it has no UIAccess to hand down, and a direct launch
+    would bring the keyboard back unable to type into elevated windows
+    until the user next started it from the Start menu. Explorer runs at
+    the user's integrity level, exactly as this helper does, so the relay
+    that failed when the *elevated installer* tried it (see the module
+    docstring) has no integrity boundary to fail across here.
+    """
+    if sys.platform == "win32":
+        explorer = Path(os.environ.get("WINDIR", r"C:\Windows")) / "explorer.exe"
+        return [str(explorer), str(exe_path)]
+    return [str(exe_path)]
+
+
 def _launch_new_osk(exe_path: Path) -> bool:
     """Spawn the freshly-installed ``alpha-osk.exe`` as a detached process.
 
     Returns True on launch success (i.e. ``Popen`` didn't raise). Note
     that "spawn succeeded" is not "OSK is running" — but if Popen fails
-    we know to log the error rather than silently exiting.
+    we know to log the error rather than silently exiting. See
+    ``_launch_command`` for why Windows goes through Explorer.
     """
     try:
         flags = 0
@@ -288,7 +315,7 @@ def _launch_new_osk(exe_path: Path) -> bool:
                 subprocess, "CREATE_NEW_PROCESS_GROUP", 0
             )
         subprocess.Popen(
-            [str(exe_path)],
+            _launch_command(exe_path),
             creationflags=flags,
             close_fds=True,
             cwd=str(exe_path.parent),

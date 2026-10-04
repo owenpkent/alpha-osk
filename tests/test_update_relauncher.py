@@ -852,3 +852,41 @@ class TestShowSplashFlag:
 
         assert rc == 0
         assert len(launch_calls) == 1, "headless fallback must still launch the OSK"
+
+
+class TestTheKeyboardComesBackThroughExplorer:
+    """_launch_command: a UIAccess exe only gets UIAccess when Explorer starts it.
+
+    Measured 2026-10-04 with Windows' own osk.exe: launched by CreateProcess
+    or ShellExecuteEx from a process without UIAccess it comes up with
+    TokenUIAccess=0; launched by explorer.exe it comes up with 1. The helper
+    runs from %TEMP% and has none to hand down, so it must go via Explorer.
+    """
+
+    def test_on_windows_explorer_is_the_launcher(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(relauncher.sys, "platform", "win32")
+        monkeypatch.setenv("WINDIR", str(tmp_path / "Windows"))
+        exe = tmp_path / "Alpha-OSK" / "alpha-osk.exe"
+        argv = relauncher._launch_command(exe)
+        assert argv == [str(tmp_path / "Windows" / "explorer.exe"), str(exe)]
+
+    def test_elsewhere_the_exe_is_launched_directly(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(relauncher.sys, "platform", "linux")
+        exe = tmp_path / "alpha-osk"
+        assert relauncher._launch_command(exe) == [str(exe)]
+
+    def test_the_launcher_hands_that_argv_to_popen(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(relauncher.sys, "platform", "win32")
+        monkeypatch.setenv("WINDIR", str(tmp_path / "Windows"))
+        exe = tmp_path / "Alpha-OSK" / "alpha-osk.exe"
+        calls = []
+        with patch.object(relauncher.subprocess, "Popen", lambda argv, **kw: calls.append(argv)):
+            assert relauncher._launch_new_osk(exe) is True
+        assert calls == [[str(tmp_path / "Windows" / "explorer.exe"), str(exe)]]
+
+    def test_a_failed_spawn_is_reported_not_raised(self, tmp_path):
+        def boom(*a, **kw):
+            raise OSError("no")
+
+        with patch.object(relauncher.subprocess, "Popen", boom):
+            assert relauncher._launch_new_osk(tmp_path / "alpha-osk.exe") is False
