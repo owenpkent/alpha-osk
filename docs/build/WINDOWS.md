@@ -415,6 +415,7 @@ The `.spec` file (`build/windows/alpha-osk.spec`) can be customized:
 | `upx` | `True` | Compress binaries with UPX |
 | `manifest` | `alpha-osk.exe.manifest` | Path to the UIAccess manifest |
 | `icon` | (none) | Path to `.ico` file for the exe icon |
+| `version` | generated | Version resource (FileDescription, ProductName, version). Written by the spec from `version_resource.py` and `src/__version__.py` into the work directory on every build; nothing to bump |
 
 ---
 
@@ -755,7 +756,7 @@ gh api repos/google/osv-scanner-action/git/refs/tags/<tag> --jq '.object.sha'
 
 Update the `@<sha> # <tag>` line in `ci.yml` and commit.
 
-**Quarantining an unfixable advisory.** With `fail-on-vuln: true`, an unpatched CVE will block every PR until it's addressed. The normal path is to upgrade the affected package (bump the direct dep, or pin a transitive constraint as we did for `lxml`). If a fix genuinely is not yet available upstream, add an `osv-scanner.toml` at the repo root listing the specific advisory IDs to ignore, with a reason and a review date:
+**Quarantining an unfixable advisory.** With `fail-on-vuln: true`, an unpatched CVE against a dependency already on `main` fails the full scan on every push to `main` and the daily `osv-nightly.yml` run until it's addressed (pull requests fail only on advisories they introduce). The normal path is to upgrade the affected package (bump the direct dep, or pin a transitive constraint as we did for `lxml`). If a fix genuinely is not yet available upstream, add an `osv-scanner.toml` **beside the lockfile it applies to** (the repo root for `requirements-dev.txt`, `backend/cf-worker/` for the worker; the scanner does not look anywhere else, so a worker entry at the root is silently ignored) listing the specific advisory IDs to ignore, with a reason and a review date:
 
 ```toml
 [[IgnoredVulns]]
@@ -952,6 +953,7 @@ Or check the startup log output:
 | `run.py` | MODIFIED — Cross-platform venv paths and dep checks |
 | `build/windows/alpha-osk.exe.manifest` | NEW — UIAccess manifest for EV signing |
 | `build/windows/alpha-osk.spec` | NEW — PyInstaller build specification |
+| `build/windows/version_resource.py` | NEW — the exe's version resource, generated from `src/__version__.py` |
 
 ### Key Design Decisions
 

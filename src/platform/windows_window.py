@@ -44,11 +44,27 @@ _logger = logging.getLogger("windows_window")
 
 
 def surface_existing_instance(title: str = "Alpha-OSK") -> None:
-    """Best-effort: un-minimise and bring the running instance forward.
+    """Best-effort: bring the running instance back without taking focus.
 
-    Walks top-level windows looking for one titled ``title``, then calls
-    ``ShowWindow(SW_RESTORE)`` and ``SetForegroundWindow``. All failures are
-    silent -- this is a courtesy to the user, not a correctness requirement.
+    Runs in the *second* process, the one that lost the single-instance
+    race, which is what a launcher hotkey, a Start-menu click or an
+    assistive device's "open keyboard" button all start. It finds the
+    running keyboard's top-level window by title and, if it is minimized,
+    restores it with ``SW_SHOWNOACTIVATE``.
+
+    **It never asks for the foreground.** It used to restore with
+    ``SW_RESTORE`` and then call ``AllowSetForegroundWindow`` and
+    ``SetForegroundWindow``, and measured on the installed keyboard (a
+    shortcut-key launch with Notepad in front) that left the keyboard as
+    the foreground window for as long as anyone watched: the next key
+    clicked was sent to the keyboard itself, and the user had to click back
+    into their application before typing. An on-screen keyboard has no use
+    for the foreground (see ``QuietRestoreFilter``, which takes the
+    activation out of every other restore route for the same reason).
+
+    A keyboard that is already on screen is left exactly as it is: it sits
+    in the topmost band, so there is nothing to bring forward. All failures
+    are silent: this is a courtesy, not a correctness requirement.
     """
     if sys.platform != "win32":
         return
@@ -65,8 +81,9 @@ def surface_existing_instance(title: str = "Alpha-OSK") -> None:
         user32.GetWindowTextW.restype = ctypes.c_int
         user32.IsWindowVisible.argtypes = [wintypes.HWND]
         user32.IsWindowVisible.restype = ctypes.c_bool
+        user32.IsIconic.argtypes = [wintypes.HWND]
+        user32.IsIconic.restype = ctypes.c_bool
 
-        SW_RESTORE = 9
         target: list[int] = []
 
         def _enum(hwnd: int, _lparam: int) -> bool:
@@ -81,21 +98,27 @@ def surface_existing_instance(title: str = "Alpha-OSK") -> None:
 
         user32.EnumWindows(EnumWindowsProc(_enum), 0)
         if target:
-            hwnd = target[0]
-            user32.ShowWindow(hwnd, SW_RESTORE)
-            # AllowSetForegroundWindow first lets SetForegroundWindow
-            # succeed across processes; ASFW_ANY = -1.
-            try:
-                user32.AllowSetForegroundWindow(-1)
-            except Exception:
-                # Probe-only: if AllowSetForegroundWindow isn't available
-                # the next SetForegroundWindow may flash the taskbar
-                # instead of stealing focus, which is acceptable degraded
-                # behaviour for a single-instance surface.
-                pass
-            user32.SetForegroundWindow(hwnd)
+            restore_without_activating(
+                target[0], is_iconic=user32.IsIconic, show_window=user32.ShowWindow
+            )
     except Exception as exc:
         _logger.debug("Surfacing existing instance failed: %s", exc)
+
+
+def restore_without_activating(
+    hwnd: int,
+    *,
+    is_iconic: Callable[[int], object],
+    show_window: Callable[[int, int], object],
+) -> None:
+    """Un-minimize ``hwnd`` without making it the foreground window.
+
+    The decision half of ``surface_existing_instance``, with the two Win32
+    calls injected so it can be tested on any platform. A window that is
+    not minimized is not touched at all.
+    """
+    if is_iconic(hwnd):
+        show_window(hwnd, SW_SHOWNOACTIVATE)
 
 
 def apply_extended_styles(root: QWindow, *, taskbar_button: bool = False) -> None:
