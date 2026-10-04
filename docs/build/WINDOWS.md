@@ -687,6 +687,8 @@ The lockfile (~5-10 KB) is the human/pip-friendly answer; the SBOM (~100 KB) is 
 
 To add it to an already-published release: `gh release view vX.Y.Z --repo owenpkent/alpha-osk-releases --json body --jq .body > body.md`, prepend the block, then `gh release edit vX.Y.Z --repo owenpkent/alpha-osk-releases --notes-file body.md`. See *SmartScreen warnings are NOT a signing failure* under Code Signing for why this is reputation, not a signing bug.
 
+**First release after 1.5.0: tell users to start the keyboard once from the Start menu after updating.** That one upgrade is relaunched by 1.5.0's own post-update helper (the helper is copied from the version being replaced), which starts the keyboard without UIAccess, so until its next start from the Start menu it cannot type into windows running as administrator. Upgrades started from that release onward relaunch through Explorer and need nothing; drop this line once it has shipped. See `AUTO_UPDATE.md`.
+
 ### 8. Confirm alphaosk.com picked it up
 
 **There is nothing to edit and nothing to deploy.** The site (`owenpkent/alpha-osk-website`) reads
