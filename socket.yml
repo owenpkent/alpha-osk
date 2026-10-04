@@ -1,0 +1,13 @@
+# Socket Security's GitHub app (https://docs.socket.dev/docs/socket-yml).
+#
+# The dependency overview comment, a table of five scores the app posts on
+# any pull request that adds a direct dependency, is off. The scores are
+# informational: the only ones that have gone amber (hypothesis on #14,
+# pyinstaller on #159) were the license class and Socket's supply-chain
+# heuristics, and both are recorded in SECURITY-EXCEPTIONS.md rather than
+# acted on. The alert check run, which is the part that can block a merge,
+# stays on, as does the project report on commits.
+version: 2
+
+githubApp:
+  dependencyOverviewEnabled: false

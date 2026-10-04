@@ -77,6 +77,34 @@ finding.
   at which point the installer would be distributing MPL code and the
   notice/source-availability obligations become real.
 
+## socket/Supply Chain 73, License 70 -- pypi/pyinstaller@6.21.0
+
+- **Finding:** Socket Security's overview comment on PR #159, which
+  added `pyinstaller==6.21.0` to `requirements-dev.txt` so the UIAccess
+  manifest tests can drive PyInstaller's own parser, scores it 73/100
+  on Supply Chain Security and 70/100 on License. Vulnerability,
+  Quality and Maintenance are 100. The per-alert breakdown behind the
+  supply-chain number lives on the Socket dashboard and was not read
+  for this entry; the license number is the license class.
+- **Decided:** 2026-10-04. Skip, and switch the overview comment off
+  (`socket.yml`), leaving the alert check run on.
+- **Reason:** PyInstaller is the build tool behind every
+  Windows release; it was a documented manual install before
+  #159 and is only now declared where Dependabot and the OSV scan can
+  see it, which is an improvement in exposure, not a new exposure.
+  Its license page describes a dual GPL 2.0 and Apache 2.0 scheme with
+  an exception for bundling: the executables it builds "can be shipped
+  with whatever license you want, as long as it complies with the
+  licenses of your dependencies", with no attribution owed. That
+  exception is what covers the bootloader embedded in the shipped
+  `alpha-osk.exe`, and it has covered it since 1.0.0. The package is
+  pinned exactly, never imported under `src/`, and bumped only by
+  Dependabot through the auto-merge gate.
+- **Revisit when:** Socket's alert check run (not the overview comment)
+  fails on a pyinstaller bump, or the project starts modifying
+  PyInstaller itself, at which point the GPL terms on modifications
+  apply.
+
 ## How to add an exception
 
 Document the finding (rule ID + score), the date the decision was
