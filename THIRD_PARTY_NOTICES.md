@@ -19,7 +19,7 @@ fed to a `Canvas` via `ctx.path` (see `qml/components/StrokeIcon.qml`).
 
 - Project: https://github.com/feathericons/feather
 - Icons: `rotate-ccw` (clear-context button), `bookmark` (Snippets),
-  `smile` (Symbols & Emoji), `mic` (Dictation), `x` (close buttons)
+  `mic` (Dictation), `x` (close buttons)
 - Licence: MIT
 - Icons in use, all in [`qml/Main.qml`](qml/Main.qml):
   - `rotate-ccw`, the clear-context button in the suggestion bar
@@ -28,15 +28,47 @@ fed to a `Canvas` via `ctx.path` (see `qml/components/StrokeIcon.qml`).
   - `chevron-left` / `chevron-right`, the Snippets window's back control and
     its page pager
 
-The one place the source is not reproduced character for character is `smile`:
-`StrokeIcon` takes path data only, so that icon's `<circle>` is written as the
-equivalent pair of arcs. Everything else, including the zero-length lines
-Feather uses for the eyes, is upstream's own data.
-
 ```
 The MIT License (MIT)
 
 Copyright (c) 2013-2023 Cole Bemis
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
+---
+
+## Tabler Icons
+
+The Symbols & Emoji buttons draw Tabler's `alpha`. Its path data is embedded
+verbatim in [`qml/Main.qml`](qml/Main.qml), for the same reason as the Feather
+icons above.
+
+- Project: https://github.com/tabler/tabler-icons
+- Icon: `alpha` (outline), the Symbols & Emoji buttons in the suggestion bar
+  and the title bar
+- Licence: MIT
+
+```
+MIT License
+
+Copyright (c) 2020-2026 Paweł Kuna
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal

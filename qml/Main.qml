@@ -1951,13 +1951,20 @@ Window {
                     // off, taking every control in it, and an unrelated
                     // setting must not be the only thing standing between the
                     // user and a feature.
+                    //
+                    // Drawn at 20 px with a thinner stroke rather than at the
+                    // 16 px its neighbours use: a letter fills far less of its
+                    // 24-unit box than a circle or a bookmark does, so at 16
+                    // it read as the smallest icon on the bar. The stroke is
+                    // scaled down by the same ratio so the line weight still
+                    // matches theirs (1.33 px).
                     Comp.StrokeIcon {
                         anchors.centerIn: parent
-                        width: 16
-                        height: 16
-                        paths: ["M2 12 A10 10 0 0 1 22 12 A10 10 0 0 1 2 12",
-                                "M8 14s1.5 2 4 2 4-2 4-2",
-                                "M9 9L9.01 9", "M15 9L15.01 9"]
+                        width: 20
+                        height: 20
+                        strokeWidth: 1.6
+                        inkOffsetX: 0.5
+                        paths: ["M18.1 6c-1.1 2.913 -1.9 4.913 -2.4 6c-1.879 4.088 -3.713 6 -6 6c-2.4 0 -4.8 -2.4 -4.8 -6s2.4 -6 4.8 -6c2.267 0 4.135 1.986 6 6c.512 1.102 1.312 3.102 2.4 6"]
                         ink: symbolsWindow.visible ? root.themeAccent : "#999"
                     }
 
@@ -2902,23 +2909,29 @@ Window {
                     ToolTip.text: qsTr("Symbols & emoji: tap one to type it")
                     ToolTip.delay: 400
 
-                    // Feather's "smile", MIT, (c) 2013-2023 Cole Bemis.
-                    // See THIRD_PARTY_NOTICES.md.  One deviation, and it is
-                    // forced: StrokeIcon takes path data only, so the
-                    // source's <circle> is written as the equivalent pair of
-                    // arcs.  The eyes are upstream's zero-length lines,
-                    // verbatim, which rely on the SVG round-cap rule and
-                    // were measured rendering correctly through Canvas
-                    // rather than assumed to.  Drawn rather than typeset for
-                    // the usual reason: a smiley in a Text resolves through
-                    // Segoe UI Emoji on Windows and comes out as a colour
-                    // glyph that ignores the ink it is given.
+                    // Tabler's "alpha", MIT, (c) 2020-2026 Paweł Kuna. See
+                    // THIRD_PARTY_NOTICES.md.  Verbatim from the 24x24
+                    // source, which follows the same stroke-2, round-cap
+                    // convention as the Feather icons beside it.  Drawn
+                    // rather than typed as a Greek letter so it takes the
+                    // same line weight and ink as its neighbours instead of
+                    // whatever the host font makes of U+03B1.
+                    //
+                    // Sized to match them by eye rather than by box: a
+                    // letter fills far less of its 24-unit box than a circle
+                    // or a bookmark does, so the box is larger (0.84 against
+                    // their 0.62) and the stroke is thinner by the same
+                    // ratio, which keeps the line weight equal in pixels.
+                    // Its ink spans x 3.9 to 19.1 of the 24-unit box, so it
+                    // sits half a unit left of centre; inkOffsetX puts that
+                    // back. Measured from a render at the default window:
+                    // 0.5 px left of centre without it, centred with it.
                     Comp.StrokeIcon {
                         anchors.fill: parent
-                        paths: ["M2 12 A10 10 0 0 1 22 12 A10 10 0 0 1 2 12",
-                                "M8 14s1.5 2 4 2 4-2 4-2",
-                                "M9 9L9.01 9", "M15 9L15.01 9"]
-                        boxFraction: 0.62
+                        paths: ["M18.1 6c-1.1 2.913 -1.9 4.913 -2.4 6c-1.879 4.088 -3.713 6 -6 6c-2.4 0 -4.8 -2.4 -4.8 -6s2.4 -6 4.8 -6c2.267 0 4.135 1.986 6 6c.512 1.102 1.312 3.102 2.4 6"]
+                        boxFraction: 0.84
+                        strokeWidth: 1.5
+                        inkOffsetX: 0.5
                         ink: symbolsWindow.visible ? root.themeAccent
                              : (symbolsBarBtn.containsMouse ? root.themeTextColor : "#bbb")
                     }
