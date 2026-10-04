@@ -90,6 +90,104 @@ class TestWaitForNewExe:
         assert ok is False
 
 
+class TestAFreshInstallIsSeenThroughItsBuildTimestamp:
+    """The readiness check asks "did the mtime change", never "is it newer".
+
+    NSIS restores each extracted file's build-machine timestamp
+    (``SetDateSave`` defaults on), so the freshly-installed exe's mtime
+    *predates* the install by however old the build is; measured on a
+    real machine, an install that ran at 19:13 left an exe stamped two
+    days earlier.  The pre-fix gate required ``mtime > parent-death``
+    and therefore could never fire in production: every real update
+    burned the full new-exe timeout and then reported failure.  The
+    updater now snapshots the old exe's mtime before the install and
+    the helper waits for it to *differ*.
+    """
+
+    def test_a_build_stamped_exe_older_than_the_kill_is_ready(self, tmp_path):
+        # The production case this class exists for: the new exe's mtime
+        # is in the past relative to the parent's death, but differs
+        # from the pre-install snapshot.
+        exe = tmp_path / "alpha-osk.exe"
+        exe.write_bytes(b"new build")
+        build_time = time.time() - 2 * 86400
+        os.utime(exe, (build_time, build_time))
+        old_snapshot = build_time - 30 * 86400  # the previous build's stamp
+        parent_death = time.time()
+        assert relauncher._new_exe_looks_fresh(exe, old_snapshot, parent_death) is True
+
+    def test_the_old_exe_still_in_place_is_not_ready(self, tmp_path):
+        # Mid-install, before extraction reaches the exe: identical
+        # mtime to the snapshot means nothing has been written yet.
+        exe = tmp_path / "alpha-osk.exe"
+        exe.write_bytes(b"old build")
+        build_time = time.time() - 30 * 86400
+        os.utime(exe, (build_time, build_time))
+        snapshot = exe.stat().st_mtime
+        assert relauncher._new_exe_looks_fresh(exe, snapshot, time.time()) is False
+
+    def test_no_snapshot_falls_back_to_the_legacy_comparison(self, tmp_path):
+        # A helper spawned by an updater too old to pass --old-exe-mtime
+        # must keep the behaviour it always had, in both directions.
+        exe = tmp_path / "alpha-osk.exe"
+        exe.write_bytes(b"contents")
+        fresh = time.time() + 3600
+        os.utime(exe, (fresh, fresh))
+        assert relauncher._new_exe_looks_fresh(exe, 0.0, time.time()) is True
+        stale = time.time() - 3600
+        os.utime(exe, (stale, stale))
+        assert relauncher._new_exe_looks_fresh(exe, 0.0, time.time()) is False
+
+    def test_the_wait_loop_and_the_splash_check_share_the_rule(self, tmp_path):
+        # Both entry points must see the production case; a fix applied
+        # to only one of them leaves the other burning its timeout.
+        exe = tmp_path / "alpha-osk.exe"
+        exe.write_bytes(b"new build")
+        build_time = time.time() - 2 * 86400
+        os.utime(exe, (build_time, build_time))
+        old_snapshot = build_time - 30 * 86400
+        parent_death = time.time()
+        assert relauncher._wait_for_new_exe(exe, parent_death, 0.6, old_snapshot) is True
+        assert relauncher._new_exe_ready(exe, parent_death, old_snapshot) is True
+
+    def test_run_relauncher_carries_the_snapshot_end_to_end(self, tmp_path):
+        # The argv plumbing: a build-stamped exe (older than the kill)
+        # plus a differing --old-exe-mtime must relaunch, where the
+        # legacy gate would have timed out and returned 3.
+        exe = tmp_path / "alpha-osk.exe"
+        exe.write_bytes(b"freshly installed")
+        build_time = time.time() - 2 * 86400
+        os.utime(exe, (build_time, build_time))
+        config_dir = tmp_path / "config"
+
+        argv = [
+            "alpha-osk-relauncher.exe",
+            "--update-relauncher",
+            "--parent-pid",
+            "999999999",  # already dead
+            "--new-version",
+            "1.0.16",
+            "--previous-version",
+            "1.0.15",
+            "--target-exe",
+            str(exe),
+            "--old-exe-mtime",
+            str(build_time - 30 * 86400),
+            "--config-dir",
+            str(config_dir),
+        ]
+
+        with (
+            patch.object(relauncher, "_INSTALLER_GRACE_S", 0),
+            patch.object(relauncher, "_NEW_EXE_TIMEOUT_S", 2),
+            patch.object(relauncher, "_launch_new_osk", return_value=True) as mock_launch,
+        ):
+            rc = relauncher.run_relauncher(argv)
+
+        assert rc == 0
+        mock_launch.assert_called_once()
+
+
 class TestWriteHandoff:
     """_write_handoff — drops a JSON breadcrumb for the new OSK to read."""
 
