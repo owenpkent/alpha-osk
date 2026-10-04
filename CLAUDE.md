@@ -93,7 +93,7 @@ Each section below that is marked *Full write-up* keeps only its load-bearing ru
 | Area | Doc |
 |------|-----|
 | Prediction engine (context tables, corpus prior, prefix beam, fuzzy refresh, pointer bias, apostrophe, acronyms) | `docs/architecture/PREDICTION_NOTES.md` |
-| Per-algorithm detail | `FUZZY_RECOGNITION.md`, `PPM.md`, `HYBRID_MERGING.md`, `NGRAM_SEEDS.md` |
+| Per-algorithm detail | `docs/architecture/FUZZY_RECOGNITION.md`, `docs/architecture/PPM.md`, `docs/architecture/HYBRID_MERGING.md`, `docs/architecture/NGRAM_SEEDS.md` |
 | Where user data lives, the log, the installer's registry handling | `docs/architecture/USER_DATA.md` |
 | Modifiers, casing, pill widths | `docs/architecture/MODIFIERS_AND_CASING.md` |
 | Spacing, snippet detection, structured tokens | `docs/architecture/TEXT_PATTERNS.md` |
