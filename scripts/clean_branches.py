@@ -35,7 +35,7 @@ the question a squash-merging repo can actually answer.  A branch whose
 PR is still open, closed unmerged, or absent is left alone and said so,
 because those are the three shapes real unlanded work comes in.
 
-Two guards on top of that, both for the case where the ledger and the
+Three guards on top of that, all for the case where the ledger and the
 tree disagree:
 
 * **The upstream must be gone.**  GitHub deletes the remote branch on
@@ -44,6 +44,14 @@ tree disagree:
 * **Never the current branch, and never main.**  Deleting the branch you
   are standing on fails anyway; refusing it by name gives a better
   message than git's.
+* **Never a branch checked out in another worktree.**  Git refuses those
+  too, and the refusal used to escape as an uncaught error that ended
+  the run part way through, leaving every branch after it untouched.
+  A worktree holding a merged branch is usually another session still
+  working in it, so the branch is kept and the worktree named.
+
+And one backstop: if git refuses a delete for any other reason, that
+branch is reported and the run carries on to the rest.
 """
 
 from __future__ import annotations
@@ -53,7 +61,7 @@ import json
 import subprocess
 import sys
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 PROTECTED = {"main", "master"}
 
@@ -116,6 +124,30 @@ def _branches_with_gone_upstreams() -> List[str]:
         if track.strip() == "[gone]":
             gone.append(name)
     return gone
+
+
+def _branches_in_worktrees() -> Dict[str, str]:
+    """Branch name -> path of the worktree that has it checked out.
+
+    Reads ``git worktree list --porcelain``, where each worktree is a
+    block carrying ``worktree <path>`` and then either
+    ``branch refs/heads/<name>`` or ``detached``.  A detached worktree
+    holds no branch, so it shields nothing.  If the listing itself
+    fails this returns nothing and the delete backstop in ``main``
+    catches whatever git then refuses.
+    """
+    try:
+        out = _git("worktree", "list", "--porcelain")
+    except subprocess.CalledProcessError:
+        return {}
+    held: Dict[str, str] = {}
+    path = ""
+    for line in out.splitlines():
+        if line.startswith("worktree "):
+            path = line[len("worktree ") :]
+        elif line.startswith("branch refs/heads/"):
+            held[line[len("branch refs/heads/") :]] = path
+    return held
 
 
 def _merged_pr(branch: str) -> Tuple[bool, str]:
@@ -204,6 +236,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         print("nothing to clean: no local branch has a deleted upstream")
         return 0
 
+    held = _branches_in_worktrees()
     to_delete: List[Tuple[str, str]] = []
     kept: List[Tuple[str, str]] = []
     for branch in candidates:
@@ -211,6 +244,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             kept.append((branch, "protected branch"))
         elif branch == current:
             kept.append((branch, "you are on it (switch away first)"))
+        elif branch in held:
+            kept.append((branch, f"checked out in worktree {held[branch]}"))
         else:
             ok, reason = _merged_pr(branch)
             (to_delete if ok else kept).append((branch, reason))
@@ -218,22 +253,36 @@ def main(argv: Optional[List[str]] = None) -> int:
     width = max(len(b) for b, _ in to_delete + kept)
     for branch, reason in kept:
         print(f"  keep    {branch:<{width}}  {reason}")
+    deleted = 0
+    failed = 0
     for branch, reason in to_delete:
         sha = _git("rev-parse", "--short", branch)
-        verb = "would delete" if args.dry_run else "deleted"
-        if not args.dry_run:
-            subprocess.run(["git", "branch", "-D", branch], capture_output=True, check=True)
-        print(f"  {verb} {branch:<{width}}  {reason}  (was {sha})")
+        if args.dry_run:
+            print(f"  would delete {branch:<{width}}  {reason}  (was {sha})")
+            continue
+        # Not check=True: one refusal must not end the run and leave
+        # every branch after it untouched.
+        result = subprocess.run(["git", "branch", "-D", branch], capture_output=True, text=True)
+        if result.returncode != 0:
+            failed += 1
+            why = (result.stderr or "").strip().splitlines()
+            print(f"  failed  {branch:<{width}}  {why[-1] if why else 'git refused'}")
+            continue
+        deleted += 1
+        print(f"  deleted {branch:<{width}}  {reason}  (was {sha})")
 
-    if not to_delete:
-        print("\nnothing deleted")
-    elif args.dry_run:
+    if args.dry_run and to_delete:
         print(f"\n{len(to_delete)} branch(es) would be deleted; re-run without --dry-run")
+    elif not deleted:
+        print("\nnothing deleted")
     else:
         # The sha is the whole recovery story for a squash-merged branch:
         # `git branch <name> <sha>` brings it back, and the reflog keeps
         # it reachable for the usual 90 days.
-        print(f"\n{len(to_delete)} branch(es) deleted. Recover one with: git branch <name> <sha>")
+        print(f"\n{deleted} branch(es) deleted. Recover one with: git branch <name> <sha>")
+    if failed:
+        print(f"{failed} branch(es) could not be deleted; see 'failed' above", file=sys.stderr)
+        return 1
     return 0
 
 

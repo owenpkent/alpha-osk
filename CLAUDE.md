@@ -2665,7 +2665,13 @@ branch with no upstream at all is never a candidate, since never-pushed
 work exists nowhere else and renders the same empty tracking field an
 up-to-date branch does; `gh` being missing or unauthenticated keeps
 every branch rather than deleting them all; and `main` and the
-checked-out branch are refused by name.
+checked-out branch are refused by name. **A merged branch checked out
+in any other worktree is kept too, with the worktree named**: git
+refuses to delete it anyway, and that refusal used to escape as an
+uncaught error that ended the run, leaving every later branch behind.
+It is usually another session still working there, so it is reported,
+not retried. Any other refused delete is reported as `failed`, the run
+carries on, and the exit code is 1.
 
 **"Automatic" here means `git pull`, because there is no local event for
 a merge.** The merge happens on GitHub and nothing on this machine is
