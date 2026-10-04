@@ -1596,6 +1596,39 @@ Load-bearing rules:
   themes below WCAG AA, on exactly the keys the style exists to make findable.
   The accent-coloured border carries the cue where the wash has to back off.
   Full-size layouts are deliberately untouched.
+- **Enter wears that wash too, and no hue of its own** (`Main.qml`'s `keyColor`
+  switch, where `accent` and `enter` share a case). It was a flat `#2a5a2a`: the
+  only fill in the file that skipped `washFor`'s contrast walk, and the only
+  literal hue in a project whose first colour rule is that there are none. It
+  measured 1.89:1 on Typewriter, 2.15 on Light and 3.28 on Vaporwave, all under
+  WCAG AA. **Only the `off` scheme reaches that line**, which is why it lasted:
+  every other scheme resolves Enter through `_roleFill`, and Monochrome (the
+  default) already makes Enter the brightest key. Sharing `accentKeyColor` fixes
+  the ratio for free (it is walked per theme already) and spends no new colour,
+  at the cost of Enter and Backspace being identical under `off`. **Do not
+  "simplify" this by marking Enter `style: "accent"` in the layout JSON**: that
+  paints it the same and hands it the accent ring, which is a different decision
+  and was not the one taken. `NumpadPanel.enterKeyColor` is bound from `Main.qml`
+  for the same reason and defaults to an ordinary key. Guarded by
+  `tests/test_qml_compact_view.py::TestEnterSharesTheEditingKeysWash`, whose two
+  inverses are the load-bearing half: Enter must not gain a ring, and the role
+  schemes must still tell commit from kill.
+- **The two keys that destroy text wear the wash but never that border**
+  (`Main.qml::keyBorderFor`, exempting the `kill` role). All five accent keys
+  used to ring, and Enter is `style: "enter"` so it rings on no scheme at all:
+  a saturated ring beats a lightness step at a glance, so the compact grid
+  emphasised Backspace over Enter, four rings against nought. The fills were
+  never the problem and did not move (13.8 and 11.8 OKLab dE from a plain key
+  on Dark, which is level). The exemption reads off `Palette.roleForKey`
+  rather than naming the two actions here, because that is already the
+  project's one answer to "does this key destroy text". Worth knowing that
+  **this border is the one colour on a key Key Colours does not reach**: it
+  keys off the layout JSON's `style` while every fill keys off `role`, which
+  is why the ring won even on Monochrome, whose whole intent is to make Enter
+  the brightest key on the board. Making the border follow the scheme is the
+  larger change that was on the table and was not taken. Guarded by
+  `tests/test_qml_compact_view.py::TestTheKeysThatDestroyTextTakeNoRing`,
+  where dropping every ring and restoring all five each fail a different half.
 - **Del sits on the base layer, Esc on `?123`.** A 13u row has no spare unit, so
   the two traded places. The Number Row panel puts a second Esc back at the
   top-left and that duplicate is deliberate, so `?123` stays the fallback for a
