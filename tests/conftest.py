@@ -110,6 +110,17 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
 if sys.platform == "win32":
     os.environ.setdefault("QT_QPA_FONTDIR", r"C:\Windows\Fonts")
 
+# Headless QML tests run under the Qt Quick Controls style the app ships
+# with. `keyboard_app._setup_platform_env` sets "Basic" before Qt starts, so
+# no shipped build ever runs a native style; a test process that left the
+# choice to Qt got the native style on Windows, which warns "does not support
+# customization" for every customised control in the app. Those warnings then
+# had to be whitelisted, and a whitelist on a fail-on-any-QML-warning test is
+# a hole in it. Set here rather than per module because Qt fixes the style
+# for the whole process at the first Controls import, and xdist puts
+# unrelated modules in one worker.
+os.environ.setdefault("QT_QUICK_CONTROLS_STYLE", "Basic")
+
 try:
     from hypothesis import HealthCheck, Verbosity, settings
 except ImportError:  # pragma: no cover - hypothesis is a dev-only dep

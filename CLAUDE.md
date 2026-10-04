@@ -140,7 +140,12 @@ Settings controls that write to the engine (Save Now, Clear Learned Data, pack
 import) dim and say why while it is not there. The bar's spinner and Retry are
 plain items, not Controls, like every other button on it.
 Regression coverage: `tests/test_prediction_startup.py` (including the real QML
-loading/retry surface) and `tests/test_null_predictor.py`.
+loading/retry surface) and `tests/test_null_predictor.py`. Its QML tests allow
+**no** warnings, with no whitelist: `tests/conftest.py` runs the suite in the
+Controls style the app ships (`Basic`, from `_setup_platform_env`), which emits
+none of the native style's "does not support customization" chatter, and
+`test_the_suite_renders_qml_in_the_controls_style_the_app_ships` keeps the two
+choices in step.
 
 ## Prediction Engine
 

@@ -37,16 +37,6 @@ from src.study_bridge import StudyBridge
 from tests.qml_context import install_context_properties
 from tests.qt_settings_scope import TEST_APP, TEST_ORG
 
-# The same fragment every other headless QML module ignores: Controls
-# elsewhere in Main.qml (Popup, Slider, ToolTip) warn under the native style
-# regardless of this feature.  The startup surface itself is drawn from
-# plain items so it adds nothing to that list.
-IGNORED_WARNING_FRAGMENTS = ("does not support customization",)
-
-
-def real_warnings(warnings):
-    return [w for w in warnings if not any(frag in w for frag in IGNORED_WARNING_FRAGMENTS)]
-
 
 class PredictorDouble(QObject):
     predictionsReady = Signal(list)
@@ -356,7 +346,7 @@ def test_window_displays_loading_then_suggestions_without_covering_keys(pending,
         assert packs.property("availablePacks") == [{"id": "care", "name": "Care", "words": 3}]
         assert packs.property("enabledPacks") == ["care"]
         assert packs.property("packsDir") == "/test/packs"
-        assert real_warnings(warnings) == []
+        assert warnings == []
     finally:
         bridge.shutdown()
         del engine
@@ -519,6 +509,23 @@ def test_publication_does_not_poll(qapp):
     assert not [c for c in loader.children() if isinstance(c, QTimer)]
 
 
+def test_the_suite_renders_qml_in_the_controls_style_the_app_ships(monkeypatch):
+    """The QML tests here allow no warnings at all, and that rests on this.
+
+    tests/conftest.py picks the Qt Quick Controls style for the suite; the
+    app picks its own in keyboard_app._setup_platform_env.  If the two parted,
+    the suite would be measuring a keyboard nobody runs, and under a native
+    style it would also start warning "does not support customization" for
+    every customised control, which is how a whitelist crept in last time.
+    """
+    from src import keyboard_app
+
+    suite_style = os.environ["QT_QUICK_CONTROLS_STYLE"]
+    monkeypatch.delenv("QT_QUICK_CONTROLS_STYLE")
+    keyboard_app._setup_platform_env()
+    assert os.environ["QT_QUICK_CONTROLS_STYLE"] == suite_style
+
+
 def test_settings_buttons_say_why_they_are_inert_and_the_study_names_retry(pending, qapp):
     """A disabled MouseArea with no visible change is a silent dead tap."""
     bridge, _, entered, release = pending
@@ -557,7 +564,7 @@ def test_settings_buttons_say_why_they_are_inert_and_the_study_names_retry(pendi
         assert save_label.property("text") == "Save Now"
         assert clear_label.property("text") == "Clear Learned Data"
         assert save_button.property("opacity") == 1.0
-        assert real_warnings(warnings) == []
+        assert warnings == []
     finally:
         bridge.shutdown()
         del engine
