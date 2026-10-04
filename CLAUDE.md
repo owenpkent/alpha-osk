@@ -38,7 +38,7 @@ Owen is a wheelchair user with muscular dystrophy. Typing is hard - be proactive
 
 - Temporary files: use a scoped `tempfile.TemporaryDirectory` under the system temp directory for experiments and scratch models, with cleanup on success, errors and interruption. Do not create `.tmp-*` folders in the checkout. Clean up your own scratch files before finishing; never sweep unrelated folders or delete explicitly supplied model directories. Pytest removes its generated test directories after a passing run and keeps a failed test's for the post-mortem (`tmp_path_retention_policy = "failed"`); if supplying `--basetemp`, put it inside your own cleanup scope. The KSR benchmark cleans up its default model directory automatically and keeps `--model-dir`.
 - Run: `python run.py` (creates venv, installs deps, launches the keyboard).
-- Test: `python -m pytest` (around 2,250 tests; `python -m pytest --collect-only -q` prints the live count, so don't restate it elsewhere; also `-k fuzzy`, `-k property`, or a single file like `tests/test_keyboard_bridge.py`).
+- Test: `python -m pytest` (around 2,900 tests; `python -m pytest --collect-only -q` prints the live count, so don't restate it elsewhere; also `-k fuzzy`, `-k property`, or a single file like `tests/test_keyboard_bridge.py`).
 - Pre-push gate, the same checks as CI (`ruff check`, `ruff format --check`, `mypy` under **both** `--platform linux` and `--platform win32`, `pytest`): `python check.py` (~60s); `python check.py --full` adds the `--cov-fail-under=60` coverage gate (~110s, full CI parity). `python check.py --install-hook` wires it to `git push` so it runs automatically rather than by hand (`--no-verify` skips it once). CI additionally runs `osv-scanner` over the lockfiles. Formatting is gated separately from linting because `ruff check` ignores layout; fix a format failure with `ruff format src/ tests/`. The two mypy passes are both required and neither substitutes for the other: `linux` is what the runner uses (typeshed gates whole symbols on platform, so `ctypes.WinDLL` degrades to `Any` there and trips `warn_return_any`), and `win32` is the only thing that type-checks the `if sys.platform == "win32"` bodies at all, since mypy prunes them as unreachable under the other.
 
 ## Conventions
@@ -208,6 +208,51 @@ checksum, source manifest, and full bundled license are documented in
 Hybrid startup and full dictionary rebuilds call `prepare_prefix_index()`
 after frequency injection, keeping construction off the first typed prefix.
 Standalone fuzzy callers still prepare lazily; layout changes reuse the index.
+
+**Both packed structures, and the validated wordlist, are built once per
+process and shared between instances.** This is the half that makes the
+expanded vocabulary affordable, and it rests entirely on the packed
+representation being immutable: every method on `PackedDeletes` and
+`PackedPrefixes` past `__init__` is a read accessor, and everything that
+changes as the user types goes to the mutable overlay beside them. The
+application builds one predictor per launch, so on its own this would be a
+startup cost; the test suite builds roughly 1,300, which is what took every
+CI shard past its 20 minute timeout at 56% complete.
+
+- **`src/prediction/packed_cache.py`** keys on a BLAKE2b digest of the exact
+  input mapping plus the build parameters, not on where the words came from,
+  because a caller may pass any mapping and two equal mappings must yield
+  equal indexes. **The digest has to be collision-resistant**: Python's own
+  `hash` is not, and a collision here would not raise, it would quietly
+  answer one vocabulary's predictions from another vocabulary's index. Two
+  slots, which is a memory ceiling as much as a hit rate, since an entry
+  retains its buffers for the life of the process.
+- **`NgramPredictor._validated_extra_words`** caches the parsed and validated
+  wordlist (`_EXTRA_VOCABULARY_CACHE`). Validation is still re-run rather
+  than trusted from the generator, the rule the token store follows, because
+  the file can be hand-edited or arrive in an imported archive. The key
+  covers the file's mtime and size, so an edited file is re-validated rather
+  than served stale, and the per-instance half (what is already in
+  `_base_unigrams`) stays per instance, since that depends on the saved model
+  and on which packs are enabled.
+- **The taught-acronym override takes a guard, not an ordering assumption.**
+  `_is_plausible_word` can admit a word through `is_taught_acronym`, which
+  reads **`taught_capitalization`**, not `capitalization`. Note which: proper
+  nouns fill the latter and leave the former empty, and guarding on the wrong
+  one bypasses the cache on every construction so the caching silently does
+  nothing, which is how the first version shipped. An instance that already
+  holds a taught acronym does the full pass, so reordering the constructor
+  can cost time but cannot cost correctness. That matters because the two
+  call paths already disagree: the constructor loads proper nouns first,
+  `clear_user_data` loads them last.
+
+Measured: `NgramPredictor()` 153 ms to 43 ms (28 ms is the no-wordlist
+baseline), a warm `HybridPredictor()` cheaper than `main`'s was at a quarter
+of the vocabulary, and the suite 389 s to 103 s. **Cold construction is still
+about 3 s against 0.8 s before**, paid once at launch before the window
+appears, which is the release's known cost and is not closed by any of this.
+Guarded by `tests/test_expanded_vocabulary.py` (sharing, re-validation after
+an edit, and the guard) and `tests/test_packed_prefixes.py`.
 
 The existing `allow_short_prefix` rescue remains tied to the fixed five-candidate
 floor, independent of the requested pill count. New rare words can make a
