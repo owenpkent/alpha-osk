@@ -84,7 +84,7 @@ _SNIPPETS = [
     ("lower", "hello world"),
     ("multi", "line one\nline two"),
 ]
-_FAILABLE = ["send_key", "send_text", "replace_text", "hold_modifier"]
+_FAILABLE = ["send_key", "send_text", "replace_text", "hold_modifier", "release_modifier"]
 _OWNERS = ["prediction", "snippets", "keyaction"]
 
 _SETTINGS = settings(
@@ -277,12 +277,6 @@ class KeystrokeStateMachine(_BridgeMachine):
     def reset_context(self) -> None:
         self.bridge.resetContext()
 
-    # Excluded path: ``resetModifiers`` while a right-click lock is up leaves
-    # ``_<name>_locked`` set with the modifier released (see
-    # ``TestKnownDefects`` below), which breaks the lock-implies-active
-    # invariant on purpose-built grounds.  It is called once at startup, when
-    # no lock exists, so that is the case the rule keeps covering.
-    @precondition(lambda self: not any(self._locked(n) for n in MODIFIER_NAMES))
     @rule()
     def reset_modifiers(self) -> None:
         self.bridge.resetModifiers()
@@ -302,8 +296,6 @@ class FailingOSStateMachine(_BridgeMachine):
     strict = False
 
     def _act(self, n: int, act) -> None:
-        # ``release_modifier`` is excluded: a failed key-up leaves the OS
-        # holding a key the bridge already forgot (``TestKnownDefects``).
         self.fake.fail_after(n, methods=_FAILABLE)
         try:
             act()
@@ -353,23 +345,15 @@ def rig(tmp_path: Path):
     bridge.shutdown()
 
 
-class TestKnownDefects:
-    """Minimal repros of what the state machines found, pinned as strict xfails.
+class TestDefectsTheMachinesFound:
+    """Minimal repros of the two defects the state machines found, now fixed.
 
-    The machines above exclude each of these paths (named in their comments)
-    so they stay green and keep hunting everything else.  When a defect is
-    fixed its test starts passing, ``strict=True`` turns that into a failure,
-    and the matching exclusion should be removed with the xfail marker.
+    ``resetModifiers`` left a right-click lock behind as a phantom, and a
+    key-up that raised left the OS holding a modifier the bridge had already
+    forgotten. The machines above now cover both paths too; these keep the
+    reduced cases readable.
     """
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "resetModifiers() clears the active flags but not _<name>_locked, so a "
-            "right-click lock survives as a phantom: the next right-click 'unlocks' "
-            "it instead of locking, and the modifier never goes down"
-        ),
-    )
     def test_a_lock_can_be_taken_again_after_reset_modifiers(self, rig) -> None:
         bridge, fake = rig
         bridge.lockModifier("ctrl")
@@ -389,15 +373,6 @@ class TestKnownDefects:
         assert bridge.ctrlActive
         assert fake.held == {"ctrl"}
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "_release_sticky_modifiers clears the active flag before it calls "
-            "release_modifier, so a key-up that raises leaves the OS holding Shift "
-            "while the bridge reports it released: no keycap lit, and shutdown() "
-            "skips it too"
-        ),
-    )
     def test_a_failed_key_up_does_not_strand_a_modifier(self, rig) -> None:
         bridge, fake = rig
         bridge.toggleShift()
