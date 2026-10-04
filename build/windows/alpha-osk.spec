@@ -31,7 +31,8 @@ After Building
 Notes
 -----
 - We use ``--windowed`` (no console window) since Alpha-OSK is a GUI app.
-- The manifest is embedded via the ``manifest`` parameter.
+- The manifest is embedded via the ``manifest`` parameter, and UIAccess
+  is requested via ``uac_uiaccess=True`` (see the comment in ``EXE()``).
 - Hidden imports are listed for PySide6 QML plugins that PyInstaller
   doesn't auto-detect.
 """
@@ -218,8 +219,14 @@ exe = EXE(
     console=False,
     # Disable UPX for PySide6 DLLs (they don't compress well)
     upx_exclude=['PySide6'],
-    # Embed the UIAccess manifest
+    # Embed the UIAccess manifest.  The file supplies everything else in it
+    # (identity, DPI awareness, Common Controls), but uac_uiaccess is what
+    # requests UIAccess: PyInstaller 6 rewrites requestedExecutionLevel from
+    # uac_admin / uac_uiaccess and ignores the attribute in the file, so
+    # without the flag 1.2.0 through 1.5.0 shipped uiAccess="false".
+    # build.py reads the built exe's manifest back and fails if it slips.
     manifest=str(SPEC_DIR / 'alpha-osk.exe.manifest'),
+    uac_uiaccess=True,
     # Icon for the executable (replace with a professional .ico if desired)
     icon=str(SPEC_DIR / 'alpha-osk.ico'),
     # Version resource: FileDescription is what a taskbar pin is named from.
