@@ -2363,6 +2363,8 @@ Window {
                             onClicked: if (keyboard) keyboard.startPredictionLoading()
                             Accessible.role: Accessible.Button
                             Accessible.name: retryLabel.text
+                            // Assistive clients invoke Press, not the MouseArea; the guard stops a stale accessible reference acting after the button hides.
+                            Accessible.onPressAction: if (visible && enabled) clicked()
                         }
                     }
                 }

@@ -26,7 +26,7 @@ from PySide6.QtCore import (
     QUrl,
     Signal,
 )
-from PySide6.QtGui import QGuiApplication
+from PySide6.QtGui import QAccessible, QAccessibleActionInterface, QGuiApplication
 from PySide6.QtQml import QQmlApplicationEngine
 from PySide6.QtTest import QTest
 
@@ -359,6 +359,45 @@ def test_window_displays_loading_then_suggestions_without_covering_keys(pending,
         assert packs.property("packsDir") == "/test/packs"
         assert real_warnings(warnings) == []
     finally:
+        bridge.shutdown()
+        del engine
+
+
+def test_an_assistive_clients_press_action_retries_the_load(pending, qapp):
+    """A switch scanner or screen reader invokes Press, never the MouseArea.
+
+    The sibling test calls the `clicked` signal directly, which an
+    assistive client cannot do; this one goes through the accessibility
+    action interface, which is the only route such a client has.
+    """
+    bridge, _, entered, release = pending
+    settings = QSettings(TEST_ORG, TEST_APP)
+    settings.clear()
+    settings.setValue("ui/savedAutoCheckUpdates", False)
+    settings.sync()
+    engine = QQmlApplicationEngine()
+    warnings = []
+    engine.warnings.connect(lambda errors: warnings.extend(e.toString() for e in errors))
+    install_context_properties(engine, bridge)
+    engine.load(QUrl.fromLocalFile(str(Path(__file__).resolve().parents[1] / "qml" / "Main.qml")))
+    try:
+        assert engine.rootObjects(), warnings
+        root = engine.rootObjects()[0]
+        wait_for(lambda: root.isVisible())
+        bridge._prediction_load_failed()
+        retry = root.findChild(QObject, "predictionStartupRetry")
+        assert retry.property("visible")
+        assert bridge.predictionStatus == "error"
+        QAccessible.setActive(True)
+        iface = QAccessible.queryAccessibleInterface(retry)
+        assert iface is not None
+        actions = iface.actionInterface()
+        assert actions is not None
+        actions.doAction(QAccessibleActionInterface.pressAction())
+        assert entered.wait(2)
+        assert bridge.predictionStatus == "loading"
+    finally:
+        release.set()
         bridge.shutdown()
         del engine
 
