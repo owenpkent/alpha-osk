@@ -145,14 +145,6 @@ class TestParity:
     def test_privacy_doc(self) -> None:
         _assert_exact(_privacy_fields(_read("docs/PRIVACY.md")), "docs/PRIVACY.md")
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "docs/architecture/TELEMETRY.md's wire example also lists `ts`, which the "
-            "doc itself says is set server-side and which the client never sends. "
-            "Doc and payload disagree today; reported, not fixed here."
-        ),
-    )
     def test_architecture_doc(self) -> None:
         _assert_exact(
             _architecture_fields(_read("docs/architecture/TELEMETRY.md")),
