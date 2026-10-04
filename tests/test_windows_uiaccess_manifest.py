@@ -169,3 +169,7 @@ class TestTheBuildRefusesAnExeWithoutUIAccess:
     def test_an_exe_with_no_manifest_fails_the_build(self, guard, tmp_path: Path) -> None:
         shutil.copyfile(r"C:\Windows\System32\kernel32.dll", tmp_path / "alpha-osk.exe")
         assert guard.verify_exe_requests_uiaccess() is False
+
+    def test_a_missing_exe_fails_the_build(self, guard) -> None:
+        """An empty or incomplete dist directory must not pass the guard."""
+        assert guard.verify_exe_requests_uiaccess() is False

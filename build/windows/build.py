@@ -1214,8 +1214,8 @@ def verify_exe_requests_uiaccess() -> bool:
     step("Checking the exe's manifest requests UIAccess...")
     main_exe = DIST_DIR / "alpha-osk.exe"
     if not main_exe.exists():
-        warning(f"Main exe not found, skipping UIAccess check: {main_exe}")
-        return True
+        error(f"Main exe not found, cannot check UIAccess: {main_exe}")
+        return False
 
     if str(SCRIPT_DIR) not in sys.path:
         sys.path.insert(0, str(SCRIPT_DIR))
