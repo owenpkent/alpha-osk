@@ -9,7 +9,7 @@
     "deploy": "wrangler deploy",
     "schema:local": "wrangler d1 execute alpha-osk-telemetry --local --file schema.sql",
     "schema:remote": "wrangler d1 execute alpha-osk-telemetry --remote --file schema.sql",
-    "sbom": "npm sbom --sbom-format cyclonedx --sbom-type application > cf-worker-sbom.cyclonedx.json"
+    "sbom": "npm sbom --sbom-format cyclonedx --sbom-type application --package-lock-only >cf-worker-sbom.cyclonedx.json"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20261001.1",
