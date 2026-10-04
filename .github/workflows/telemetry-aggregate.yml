@@ -92,13 +92,17 @@ jobs:
           # spreadsheet opening the committed file would run it as a formula.
           # Only a compromised worker could send one, so this is the cheap
           # second-order guard, not the first line.
+          #
+          # Every field is rounded to a whole number. minutes is a REAL sum in
+          # D1, so it arrives as 51973.899999999994; a whole minute is finer
+          # than anything quoted from this series.
           row=$(printf '%s' "$body" | jq -er '
             [
               .users, .keystrokes, .words, .predictions,
               .keystrokes_saved, .minutes, .sessions, .prediction_offers
             ] as $n
             | if ($n | all(type == "number")) then
-                [(now | strftime("%Y-%m-%d"))] + $n | @csv
+                [(now | strftime("%Y-%m-%d"))] + ($n | map(round)) | @csv
               else error("aggregate returned a non-numeric field") end
           ')
 
