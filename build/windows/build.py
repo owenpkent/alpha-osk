@@ -44,6 +44,7 @@ See Also
 - ``build/windows/sign.py`` — Signing script with retry logic.
 - ``build/windows/alpha-osk.spec`` — PyInstaller build specification.
 - ``build/windows/version_resource.py`` — the exe's version resource.
+- ``build/windows/manifest_check.py`` - reads the built exe's manifest back.
 - ``build/windows/installer.nsh`` — NSIS installer customizations.
 - ``docs/build/WINDOWS.md`` — Full Windows guide.
 """
@@ -1198,14 +1199,61 @@ def verify_installer_version() -> bool:
     return True
 
 
+def verify_exe_requests_uiaccess() -> bool:
+    """Check the built exe's embedded manifest asks Windows for UIAccess.
+
+    Releases 1.2.0 through 1.5.0 shipped ``uiAccess="false"``: PyInstaller
+    6 rewrites ``requestedExecutionLevel`` from ``EXE(uac_uiaccess=...)``
+    and ignores the attribute in ``alpha-osk.exe.manifest``, so the file
+    said one thing and the exe another.  Nothing fails visibly when that
+    happens: the keyboard runs, it just cannot type into an elevated
+    window, and the only symptom is a user finding out.  So it is read
+    back off the artefact here, the way the loader reads it, rather than
+    trusted to the spec having been right.
+    """
+    step("Checking the exe's manifest requests UIAccess...")
+    main_exe = DIST_DIR / "alpha-osk.exe"
+    if not main_exe.exists():
+        warning(f"Main exe not found, skipping UIAccess check: {main_exe}")
+        return True
+
+    if str(SCRIPT_DIR) not in sys.path:
+        sys.path.insert(0, str(SCRIPT_DIR))
+    from manifest_check import read_embedded_manifest, requested_execution_level
+
+    # ElementTree's ParseError is a SyntaxError, not an OSError.
+    try:
+        manifest = read_embedded_manifest(main_exe)
+        level = (requested_execution_level(manifest) if manifest else None) or {}
+    except (OSError, SyntaxError) as exc:
+        error(f"Could not read the exe's embedded manifest: {exc}")
+        return False
+
+    ui_access = level.get("uiAccess")
+    if ui_access != "true":
+        error(
+            f"{main_exe.name} requests uiAccess={ui_access!r}, expected 'true'. "
+            "Windows will start it without UIAccess, so it cannot type into "
+            "elevated windows.  PyInstaller sets this from EXE(uac_uiaccess=...), "
+            "not from the manifest file: check alpha-osk.spec passes uac_uiaccess=True."
+        )
+        return False
+
+    success(f"{main_exe.name} requests uiAccess='true' (level={level.get('level')!r})")
+    return True
+
+
 def verify_build(signtool_path: str) -> bool:
-    """Verify signatures on the main exe and installer."""
+    """Verify signatures on the main exe and installer, the installer's
+    embedded version, and that the exe's manifest requests UIAccess."""
     header("Verifying Signatures")
 
     sys.path.insert(0, str(SCRIPT_DIR))
     from sign import verify_file
 
     all_ok = verify_installer_version()
+    if not verify_exe_requests_uiaccess():
+        all_ok = False
 
     # Verify main exe
     main_exe = DIST_DIR / "alpha-osk.exe"
@@ -1304,6 +1352,14 @@ def main() -> int:
         if not DIST_DIR.exists():
             error(f"Dist directory not found: {DIST_DIR}")
             return 1
+
+    # --- UIAccess ---
+    # Checked here, before anything is signed or packaged, as well as in
+    # verify_build: an exe that does not request UIAccess is not fit to
+    # ship whether or not it is signed, and verify_build's result is not
+    # what decides this script's exit code.
+    if not verify_exe_requests_uiaccess():
+        return 1
 
     # --- Capture dependency lockfile + SBOM ---
     # Both run even on --skip-build because they reflect the current

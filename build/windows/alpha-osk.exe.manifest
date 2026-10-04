@@ -34,8 +34,11 @@
   =========================
   ALL THREE conditions must be met:
 
-  1. This manifest must be embedded in the .exe (PyInstaller does this
-     automatically when you specify the manifest in the .spec file).
+  1. This manifest must be embedded in the .exe AND request UIAccess.
+     PyInstaller embeds it from the .spec file's manifest= argument, but
+     it rewrites requestedExecutionLevel from EXE(uac_uiaccess=...) and
+     ignores the uiAccess attribute below, so the spec must also pass
+     uac_uiaccess=True.  build.py checks the built exe for it.
   2. The .exe must be signed with an EV (Extended Validation) code
      signing certificate.  Standard OV certificates are NOT sufficient.
   3. The .exe must be installed in a "secure location":

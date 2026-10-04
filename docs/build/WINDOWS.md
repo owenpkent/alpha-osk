@@ -222,7 +222,7 @@ privileges:
 
 ### Requirements for UIAccess
 
-All **three** conditions must be met:
+All **four** conditions must be met:
 
 1. **UIAccess manifest**: The `.exe` must embed a manifest with
    `uiAccess="true"`.  Alpha-OSK's manifest is at
@@ -236,6 +236,16 @@ All **three** conditions must be met:
    - `C:\Program Files\`
    - `C:\Program Files (x86)\`
    - `C:\Windows\System32\`
+
+4. **`uac_uiaccess=True` in the spec**: `build/windows/alpha-osk.spec`
+   must pass `uac_uiaccess=True` to `EXE(...)`.  The manifest file alone
+   is not enough, because PyInstaller 6 rewrites `requestedExecutionLevel`
+   from that flag and overwrites the file's `uiAccess="true"` with
+   `"false"` when it is absent.  That is how every release from 1.2.0
+   (the first built with PyInstaller 6; 5.x kept the file's attribute)
+   through 1.5.0 shipped `uiAccess="false"`.  `build.py` now reads the
+   built exe's embedded manifest back (`manifest_check.py`) and fails the
+   build if it does not request UIAccess.
 
 If any condition is not met, Windows silently ignores `uiAccess="true"` and
 launches the process with standard privileges.  The keyboard still works,
@@ -414,6 +424,7 @@ The `.spec` file (`build/windows/alpha-osk.spec`) can be customized:
 | `console` | `False` | Set `True` to show a console window for debugging |
 | `upx` | `True` | Compress binaries with UPX |
 | `manifest` | `alpha-osk.exe.manifest` | Path to the UIAccess manifest |
+| `uac_uiaccess` | `True` | What actually requests UIAccess: PyInstaller writes `requestedExecutionLevel` from this flag and ignores the manifest file's attribute. Never remove it |
 | `icon` | (none) | Path to `.ico` file for the exe icon |
 | `version` | generated | Version resource (FileDescription, ProductName, version). Written by the spec from `version_resource.py` and `src/__version__.py` into the work directory on every build; nothing to bump |
 
