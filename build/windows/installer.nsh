@@ -186,6 +186,12 @@
 ;   - the PROPVARIANT is VT_LPWSTR (31): a WORD vt, three reserved WORDs
 ;     (8 bytes together, so the union lands at the right offset on both
 ;     x86 and x64), then the string pointer
+;   - that pointer must be the address of the CHARACTERS: the id is copied
+;     into an inline &w129 array (the 128 characters Windows allows an
+;     AppUserModelID, plus the terminator).  Not *(w "..."): that allocates
+;     a struct holding a pointer to the string, so its address made the
+;     shell read pointer bytes as UTF-16 and store garbage, with every
+;     HRESULT reporting success.
 ;   - vtable: SetValue is slot 6, Commit 7, Release 2
 ;
 ; Best-effort throughout: a missing .lnk (the user unchecked the shortcut
@@ -202,7 +208,7 @@
     System::Call 'shell32::SHGetPropertyStoreFromParsingName(w r0, p 0, i 2, g "{886d8eeb-8cf2-4446-8d02-cdba1dbdcf99}", *p .r1) i .r2'
     ${If} $2 = 0
       System::Call '*(g "{9F4C2855-9F79-4B39-A8D0-E1D42DE1D5F3}", i 5) p .r3'
-      System::Call '*(w "${APP_AUMI}") p .r4'
+      System::Call '*(&w129 "${APP_AUMI}") p .r4'
       System::Call '*(&i2 31, &i2 0, &i2 0, &i2 0, p r4) p .r5'
       System::Call '$1->6(p r3, p r5)'
       System::Call '$1->7()'

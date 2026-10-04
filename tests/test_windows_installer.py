@@ -28,6 +28,7 @@ user was looking at with no wizard on screen to explain the wait.
 from __future__ import annotations
 
 import importlib.util
+import os
 import re
 import shutil
 import subprocess
@@ -1089,10 +1090,27 @@ class TestTheShortcutsCarryTheTaskbarIdentity:
         code = _macro_code(nsh, "customStampShortcutAppId")
         assert "${If} ${FileExists}" in code
 
-    @pytest.mark.skipif(not Path(MAKENSIS).is_file(), reason="makensis is not installed")
-    def test_the_stamping_macro_compiles(self, tmp_path: Path) -> None:
-        """System::Call struct specs and LogicLib nesting only fail under
-        makensis; the text assertions above cannot see a malformed one."""
+    def test_the_id_is_copied_into_the_struct_not_pointed_at(self, nsh: str) -> None:
+        # The PROPVARIANT's payload must be the address of the characters.
+        # ``*(w "...")`` allocates a struct whose one member is a POINTER to
+        # the string, so its address handed to SetValue as a VT_LPWSTR made
+        # the shell read pointer bytes as UTF-16: every HRESULT succeeded
+        # and the shortcut carried garbage.  An inline ``&wN`` array puts
+        # the characters themselves at that address.  N has room for the
+        # longest id Windows allows (128 characters, per "How to Form an
+        # Application-Defined AppUserModelID") plus its terminator, so no
+        # future rename can silently lose the terminator.
+        code = _macro_code(nsh, "customStampShortcutAppId")
+        assert '*(w "${APP_AUMI}")' not in code
+        match = re.search(r'\*\(&w(\d+) "\$\{APP_AUMI\}"\) p \.r4', code)
+        assert match, "the id must be copied into an inline WCHAR array"
+        assert len(self._app_id()) <= 128, "Windows caps an AppUserModelID at 128 characters"
+        assert int(match.group(1)) >= 129
+        assert re.search(r"&i2 31, &i2 0, &i2 0, &i2 0, p r4\)", code)
+
+    def _compile_harness(self, tmp_path: Path, app_aumi: str, section: list[str]) -> Path:
+        """Compile the real macro, from the real installer.nsh, into a
+        throwaway per-user installer whose one Section is ``section``."""
         harness = tmp_path / "harness.nsi"
         harness.write_text(
             "\n".join(
@@ -1104,18 +1122,19 @@ class TestTheShortcutsCarryTheTaskbarIdentity:
                     '!define APP_GUID "alpha-osk-keyboard"',
                     '!define APP_ORG "alpha-osk"',
                     '!define APP_VERSION "9.9.9"',
-                    '!define APP_AUMI "OKStudio.AlphaOSK"',
+                    f'!define APP_AUMI "{app_aumi}"',
                     "Var StudyInvite",
                     'OutFile "harness.exe"',
-                    'InstallDir "$TEMP\\alpha-osk-harness"',
+                    f'InstallDir "{_nsis_literal(tmp_path)}"',
+                    # Never admin: the real installer is, and UIPI would then
+                    # stand between this test and the process it drives.
                     "RequestExecutionLevel user",
                     f'!include "{INSTALLER_NSH}"',
                     "Function StampShortcutAppId",
                     "  !insertmacro customStampShortcutAppId",
                     "FunctionEnd",
                     "Section",
-                    '  Push "$TEMP\\does-not-exist.lnk"',
-                    "  Call StampShortcutAppId",
+                    *section,
                     "SectionEnd",
                     "",
                 ]
@@ -1130,4 +1149,77 @@ class TestTheShortcutsCarryTheTaskbarIdentity:
             timeout=120,
         )
         assert result.returncode == 0, result.stdout + result.stderr
-        assert (tmp_path / "harness.exe").is_file()
+        exe = tmp_path / "harness.exe"
+        assert exe.is_file()
+        return exe
+
+    @pytest.mark.skipif(not Path(MAKENSIS).is_file(), reason="makensis is not installed")
+    def test_the_stamping_macro_compiles(self, tmp_path: Path) -> None:
+        """System::Call struct specs and LogicLib nesting only fail under
+        makensis; the text assertions above cannot see a malformed one."""
+        self._compile_harness(
+            tmp_path,
+            "OKStudio.AlphaOSK",
+            ['  Push "$TEMP\\does-not-exist.lnk"', "  Call StampShortcutAppId"],
+        )
+
+    @pytest.mark.skipif(sys.platform != "win32", reason="stamps and reads a Windows shortcut")
+    @pytest.mark.skipif(not Path(MAKENSIS).is_file(), reason="makensis is not installed")
+    def test_a_stamped_shortcut_reads_back_the_id(self, nsi: str, tmp_path: Path) -> None:
+        """Write the id through the real macro, then read it back.
+
+        The only test here that can see what the shell actually stored.
+        Every HRESULT in the macro succeeds whether the PROPVARIANT points
+        at the characters or at a pointer to them, and both compile, so a
+        wrong allocation passes everything above and ships a shortcut whose
+        id is garbage: which is to say, the duplicate taskbar button this
+        feature exists to remove.  The id is the generated script's own
+        define, so the harness stamps exactly what the installer would.
+        """
+        app_aumi = _expand_defines(nsi, "${APP_AUMI}")
+        lnk = tmp_path / "Alpha-OSK.lnk"
+        exe = self._compile_harness(
+            tmp_path,
+            app_aumi,
+            [
+                f'  CreateShortCut "{_nsis_literal(lnk)}" "$EXEPATH"',
+                f'  Push "{_nsis_literal(lnk)}"',
+                "  Call StampShortcutAppId",
+            ],
+        )
+        # The stub unpacks System.dll into %TEMP%; keep that inside tmp_path
+        # too, so the run writes nothing outside it.
+        env = {**os.environ, "TEMP": str(tmp_path), "TMP": str(tmp_path)}
+        no_window = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        run = subprocess.run(
+            [str(exe), "/S"], cwd=tmp_path, env=env, timeout=60, creationflags=no_window
+        )
+        assert run.returncode == 0
+        assert lnk.is_file(), "the harness did not create its shortcut"
+
+        def ps_quote(text: str) -> str:
+            return "'" + text.replace("'", "''") + "'"
+
+        script = (
+            "[Console]::OutputEncoding = [Text.Encoding]::UTF8; "
+            "(New-Object -ComObject Shell.Application)"
+            f".Namespace({ps_quote(str(tmp_path))})"
+            f".ParseName({ps_quote(lnk.name)})"
+            ".ExtendedProperty('System.AppUserModel.ID')"
+        )
+        read = subprocess.run(
+            ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=60,
+            creationflags=no_window,
+        )
+        assert read.returncode == 0, read.stderr
+        assert read.stdout.strip() == app_aumi == self._app_id()
+
+
+def _nsis_literal(path: Path) -> str:
+    """A path as an NSIS string literal: ``$`` is NSIS's only escape."""
+    return str(path).replace("$", "$$")
