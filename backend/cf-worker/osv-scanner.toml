@@ -5,16 +5,3 @@
 #
 # Every entry is time-boxed. When the date passes the CI gate fails again,
 # which is the reminder to check whether a fix has been published.
-
-[[IgnoredVulns]]
-# http-cache-semantics through 4.2.0: a shared cache can serve one user's
-# zeroed response, Set-Cookie included, to another. No fixed version exists
-# as of 2026-10-03. Reached only through the SBOM tool's optional XML
-# validator (@cyclonedx/cyclonedx-npm -> libxmljs2 -> node-gyp ->
-# make-fetch-happen), which uses it to cache Node headers for a native
-# build on one developer's machine: no shared cache, no second user, no
-# session cookies. Dev-only, never bundled into the worker, and the SBOM
-# script emits JSON, so libxmljs2 is not even exercised.
-id = "GHSA-ch52-4w7c-c8xp"
-ignoreUntil = 2026-11-03
-reason = "No fix published; dev-only path through the SBOM tool's optional XML validator, single-user local cache, not exploitable here"

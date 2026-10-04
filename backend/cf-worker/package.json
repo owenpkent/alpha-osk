@@ -9,22 +9,16 @@
     "deploy": "wrangler deploy",
     "schema:local": "wrangler d1 execute alpha-osk-telemetry --local --file schema.sql",
     "schema:remote": "wrangler d1 execute alpha-osk-telemetry --remote --file schema.sql",
-    "sbom": "cyclonedx-npm --spec-version 1.6 --output-reproducible --output-format JSON --output-file cf-worker-sbom.cyclonedx.json"
+    "sbom": "npm sbom --sbom-format cyclonedx --sbom-type application > cf-worker-sbom.cyclonedx.json"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20261001.1",
-    "@cyclonedx/cyclonedx-npm": "^6.0.1",
     "typescript": "^7.0.2",
     "wrangler": "^4.145.0"
   },
   "overrides": {
     "ws": "^8.20.1",
     "undici": "^7.29.0",
-    "tar": "^7.5.21",
-    "js-yaml": "^4.3.2",
-    "brace-expansion": "^2.1.7",
-    "fast-uri": "^3.1.8",
-    "ip-address": "^10.7.1",
     "sharp": "^0.35.4"
   }
 }
