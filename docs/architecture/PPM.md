@@ -220,3 +220,35 @@ and still loads and saves `ppm_model.json`, so a fusion of its
 per-character probabilities inside `prefix_beam.py` (the VelociTap shape)
 remains the intended next use. See the *Fuzzy dictionary refresh, and PPM
 out of the merge* section of `CLAUDE.md`.
+
+## Measured cross-entropy (2026-10-04)
+
+Dasher's intrinsic metric: bits per character, the mean of
+-log2 p(true next char | preceding context), on held-out text with no UI in the
+loop. `scripts/bench/bpc.py` builds the PPM as the app does (default alphabet,
+`max_order` 8, trained on `data/training_corpus.txt`, about 14,000 characters,
+round-tripped through a temporary model directory) and scores each held-out
+sentence from an empty context with `get_probabilities`. Evaluation sentences
+that also occur as a line of the training corpus are excluded (9 of aac-dev, 6
+of aac-test, 0 of builtin). No character was outside the model's alphabet
+(0 unknown, because `ksr.normalise` keeps only letters and apostrophes) and no
+probability was exactly zero (0 floored). The uniform baseline over the
+32-symbol alphabet is 5.044 bits/char.
+
+| Corpus (held out) | Sentences | Chars scored | Bits/char (order 8) | Perplexity | Order 5 | Order 3 | Order 0 |
+|---|---|---|---|---|---|---|---|
+| builtin | 30 | 1,581 | 2.607 | 6.09 | 2.523 | 2.597 | n/a |
+| aac-dev | 541 | 13,119 | 2.944 | 7.70 | 2.862 | 2.840 | n/a |
+| aac-test | 554 | 12,024 | 2.854 | 7.23 | 2.780 | 2.763 | 4.392 |
+
+The shipped order 8 is slightly worse than orders 3 to 5 on every corpus: the
+training text is small, so deep contexts are mostly unseen and cost escapes.
+Reproduce with:
+
+    python scripts/bench/bpc.py --order 8 --order 5 --order 3
+    python scripts/bench/bpc.py --corpus aac-test --order 0 --order 2
+
+The whole run takes about 1.5 seconds. These numbers measure the character
+model alone, not keystroke savings (see `scripts/bench/ksr.py`), and the
+`get_probabilities` blend mixes 10% uniform into every distribution, which
+puts a floor under its confidence.
