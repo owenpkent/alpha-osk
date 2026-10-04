@@ -1319,6 +1319,8 @@ Full write-up: `docs/architecture/WINDOW_CHROME.md` (section of the same name). 
 - A UIAccess process's always-on-top window is in `ZBID_UIACCESS`, above toasts and taskbar previews. **The band follows topmost-ness both ways** (measured with a signed probe): there is no topmost-in-the-ordinary-band state, so don't try to "just stay in `ZBID_DESKTOP`".
 - `windows_window.ShellPopupYielder` (installed by `install_shell_popup_yield`, held alive in `main()` because it owns the ctypes callback) drops our visible always-on-top windows to `HWND_NOTOPMOST` while a toast or preview is up and restores them after, **both passes keyboard first** (`keyboard_app._always_on_top_windows`) so pickers stay above it.
 - A toast is `Windows.UI.Core.CoreWindow` **in the notification band** (the class alone matches every store app) and shows by uncloaking; previews are Explorer's `XamlExplorerHostIslandWindow`. Never match on the title: it is localised.
+- **`HWND_NOTOPMOST` is a one-shot, so the yield is held**: while stepped aside, every `EVENT_SYSTEM_FOREGROUND` and every poll tick re-raises our windows with `HWND_TOP` (no activation), keyboard first, or the next application the user activates covers the keys for the life of the toast.
+- **A hook that took is unhooked if a later one fails**: the three hooks share one ctypes callback that is a local until success pins it, and a hook left behind calls freed memory on the next window shown anywhere.
 - Tests: `tests/test_shell_popup_yield.py`.
 
 ## Right-Click for Shifted Character

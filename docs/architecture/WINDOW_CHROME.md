@@ -325,10 +325,37 @@ recorder:
   that session, so the host alone covers them. `TaskListThumbnailWnd` is the
   Windows 10 preview window.
 
+**The demotion has to be held, not fired once.** `HWND_NOTOPMOST` places a
+window above the ordinary ones at the moment of the call and nothing more: the
+next application the user activates, or that raises a window of its own, goes
+above it, and the keyboard never takes focus so it cannot climb back by being
+clicked. Review reproduced it with the real yielder and two hidden windows: the
+keyboard was above the application right after yielding, and below it, for as
+long as the toast stayed up, after the application was raised with
+`SetWindowPos(HWND_TOP, SWP_NOACTIVATE)`. A maximised application would hide
+every key for the life of a notification. So `EVENT_SYSTEM_FOREGROUND` is hooked
+too, and while stepped aside every foreground change (and every poll tick, for
+a window raised without activation, which fires nothing we hook) raises our
+windows to `HWND_TOP` without activating them, keyboard first. Within the
+ordinary group that is above every application and still below the shell's
+popups. On top, the event is ignored: topmost already beats everything.
+
 A 150 ms restore delay keeps a toast replaced by the next one, or the pointer
 sliding between taskbar buttons, from flickering the Z-order, and a 1 s poll
 while stepped aside drops a popup that is gone, hidden or cloaked without its
 event having arrived.
+
+**Partial hook registration is rolled back.** The three `SetWinEventHook`
+calls share one ctypes callback, and that callback is a local of the installer
+until it is pinned to the yielder on success. The first version returned `None`
+when any hook failed and left the ones that had taken registered, so the
+callback was collected while Windows still held its function pointer (a hook
+is only dropped with its thread, never by returning from the function), and
+the next window shown anywhere on the desktop would have called freed memory.
+Every hook that takes is now unhooked if a later one fails or anything in the
+installer raises, before the callback can go out of scope.
+`tests/test_shell_popup_yield.py::TestInstallingTheHooks` drives the real
+registration path against a fake `user32` for each partial-success order.
 
 The live check that does not need a signed build: a throwaway always-on-top
 `QWindow` with the yield installed, a real toast fired from PowerShell, and

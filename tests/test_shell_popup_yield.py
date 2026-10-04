@@ -9,7 +9,10 @@ injected, so this drives it with fakes on any platform.
 
 from __future__ import annotations
 
+import sys
+import types
 from typing import Callable, Optional
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -19,8 +22,10 @@ from src.platform.windows_window import (
     EVENT_OBJECT_HIDE,
     EVENT_OBJECT_SHOW,
     EVENT_OBJECT_UNCLOAKED,
+    EVENT_SYSTEM_FOREGROUND,
     ZBID_IMMERSIVE_NOTIFICATION,
     ShellPopupYielder,
+    install_shell_popup_yield,
     is_shell_popup,
 )
 
@@ -30,6 +35,7 @@ TOAST = 1
 PREVIEW = 2
 TOOLTIP = 3
 APP_COREWINDOW = 4
+APP = 5  # an ordinary application window, say a maximised browser
 
 DESKTOP_BAND = 1
 CLASSES: dict[int, tuple[str, Optional[int]]] = {
@@ -45,11 +51,13 @@ class Harness:
     def __init__(self, windows: list[int] | None = None) -> None:
         self.windows = [KEYBOARD] if windows is None else windows
         self.calls: list[tuple[int, bool]] = []
+        self.raised: list[int] = []
         self.showing: set[int] = set()
         self.timers: list[tuple[int, Callable[[], None]]] = []
         self.yielder = ShellPopupYielder(
             windows=lambda: list(self.windows),
             set_topmost=lambda h, top: self.calls.append((h, top)),
+            raise_window=self.raised.append,
             describe=CLASSES.get,
             still_showing=lambda h: h in self.showing,
             schedule=lambda ms, fn: self.timers.append((ms, fn)),
@@ -62,6 +70,10 @@ class Harness:
     def vanish(self, hwnd: int, event: int = EVENT_OBJECT_HIDE) -> None:
         self.showing.discard(hwnd)
         self.yielder.on_event(event, hwnd)
+
+    def activate(self, hwnd: int) -> None:
+        """The user switches to (or an app opens) an ordinary window."""
+        self.yielder.on_event(EVENT_SYSTEM_FOREGROUND, hwnd)
 
     def run_timers(self, ms: Optional[int] = None) -> None:
         """Fire the pending timers (only those of one interval, if given)."""
@@ -196,3 +208,112 @@ class TestThePickersStayAboveTheKeyboard:
         h = Harness(windows=[])
         h.appear(TOAST, EVENT_OBJECT_UNCLOAKED)
         assert h.calls == []
+
+
+class TestTheKeyboardStaysAboveApplicationsWhileAside:
+    """HWND_NOTOPMOST is a one-shot: the next application the user activates
+    goes above a stepped-aside keyboard, and a window that never takes focus
+    cannot climb back on its own.  Found in review by raising an ordinary
+    window over the demoted keyboard during a toast and watching it stay
+    there, so the guarantee that the keyboard stays above applications has
+    to be re-asserted for as long as the yield lasts."""
+
+    def test_an_app_activated_during_a_toast_is_put_below_the_keyboard_again(self) -> None:
+        h = Harness()
+        h.appear(TOAST, EVENT_OBJECT_UNCLOAKED)
+        h.activate(APP)
+        assert h.raised == [KEYBOARD]
+        assert h.calls == [(KEYBOARD, False)], "re-raised within the ordinary group, not topmost"
+        assert h.yielder.stepped_aside, "the toast is still up"
+
+    def test_every_activation_re_raises(self) -> None:
+        h = Harness()
+        h.appear(PREVIEW)
+        h.activate(APP)
+        h.activate(APP + 1)
+        assert h.raised == [KEYBOARD, KEYBOARD]
+
+    def test_the_pickers_are_raised_after_the_keyboard(self) -> None:
+        h = Harness(windows=[KEYBOARD, PICKER])
+        h.appear(TOAST, EVENT_OBJECT_UNCLOAKED)
+        h.activate(APP)
+        assert h.raised == [KEYBOARD, PICKER]
+
+    def test_a_window_raised_without_activation_is_caught_by_the_poll(self) -> None:
+        # SetWindowPos(HWND_TOP) from the app fires no event we hook.
+        h = Harness()
+        h.appear(PREVIEW)
+        h.run_timers(1000)
+        assert h.raised == [KEYBOARD]
+        assert h.yielder.stepped_aside
+
+    def test_an_activation_while_on_top_does_nothing(self) -> None:
+        # Topmost already beats every application; there is nothing to fix.
+        h = Harness()
+        h.activate(APP)
+        assert h.raised == []
+        assert h.calls == []
+
+    def test_an_activation_after_the_restore_does_nothing(self) -> None:
+        h = Harness()
+        h.appear(TOAST, EVENT_OBJECT_UNCLOAKED)
+        h.vanish(TOAST, EVENT_OBJECT_CLOAKED)
+        h.run_timers(150)
+        h.activate(APP)
+        assert h.raised == []
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="builds the real ctypes callback")
+class TestInstallingTheHooks:
+    """The installer registers three WinEvent hooks against one ctypes
+    callback.  If a later registration fails, the earlier ones must be
+    unhooked before the callback goes out of scope: Windows only drops a
+    hook with its thread, so a hook left behind would call freed memory on
+    the next window shown anywhere.  Found in review with injected hook
+    results; the yielder's own tests never reach this path."""
+
+    @pytest.fixture
+    def user32(self, monkeypatch: pytest.MonkeyPatch) -> MagicMock:
+        import ctypes
+
+        user32 = MagicMock()
+        user32.SetWindowPos.return_value = 1
+        monkeypatch.setattr(
+            ctypes,
+            "windll",
+            types.SimpleNamespace(user32=user32, dwmapi=MagicMock()),
+        )
+        return user32
+
+    @staticmethod
+    def _hooks(user32: MagicMock) -> list[tuple[int, int]]:
+        return [(c.args[0], c.args[1]) for c in user32.SetWinEventHook.call_args_list]
+
+    def test_all_three_hooks_take_and_the_callback_is_pinned(self, user32: MagicMock) -> None:
+        user32.SetWinEventHook.side_effect = [11, 22, 33]
+        yielder = install_shell_popup_yield(lambda: [])
+        assert yielder is not None
+        assert yielder._hooks == [11, 22, 33]
+        assert yielder._callback is not None
+        user32.UnhookWinEvent.assert_not_called()
+        assert (EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND) in self._hooks(user32)
+
+    @pytest.mark.parametrize(
+        "results, expect_unhooked",
+        [
+            ([0], []),
+            ([11, 0], [11]),
+            ([11, 22, 0], [11, 22]),
+        ],
+    )
+    def test_a_failed_registration_unhooks_the_ones_before_it(
+        self, user32: MagicMock, results: list[int], expect_unhooked: list[int]
+    ) -> None:
+        user32.SetWinEventHook.side_effect = results
+        assert install_shell_popup_yield(lambda: []) is None
+        assert [c.args[0] for c in user32.UnhookWinEvent.call_args_list] == expect_unhooked
+
+    def test_an_exception_during_registration_unhooks_too(self, user32: MagicMock) -> None:
+        user32.SetWinEventHook.side_effect = [11, RuntimeError("no more hooks")]
+        assert install_shell_popup_yield(lambda: []) is None
+        assert [c.args[0] for c in user32.UnhookWinEvent.call_args_list] == [11]

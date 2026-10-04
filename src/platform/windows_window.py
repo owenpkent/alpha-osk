@@ -499,6 +499,7 @@ def install_quiet_restore(window: QWindow) -> Optional[QuietRestoreFilter]:
 
 # WinEvent ids (winuser.h).  Plain integers so the yielder below can be
 # driven by tests on any platform.
+EVENT_SYSTEM_FOREGROUND = 0x0003
 EVENT_OBJECT_DESTROY = 0x8001
 EVENT_OBJECT_SHOW = 0x8002
 EVENT_OBJECT_HIDE = 0x8003
@@ -561,6 +562,16 @@ class ShellPopupYielder:
     the windows in the same order (the keyboard first), so the floating
     pickers still end up above the keyboard rather than under it.
 
+    **The demotion is not a one-shot.**  ``HWND_NOTOPMOST`` places a window
+    above the ordinary ones only at the moment of the call; the next
+    application the user activates (or that raises a window of its own)
+    goes above it, and the keyboard, which never takes focus, has no way of
+    coming back on its own.  A maximised application would then cover the
+    keys for as long as the toast stayed up.  So while stepped aside, every
+    foreground change and every poll tick raises our windows to the top of
+    the ordinary group again (``HWND_TOP``, without activating), keyboard
+    first, which keeps the popup above them and the applications below.
+
     A short ``restore_delay_ms`` stops a toast being replaced by the next
     one, or the pointer sliding between taskbar buttons, from flickering
     the Z-order.  A slow ``poll_ms`` re-check covers a lost hide event: a
@@ -574,6 +585,7 @@ class ShellPopupYielder:
         *,
         windows: Callable[[], list[int]],
         set_topmost: Callable[[int, bool], object],
+        raise_window: Callable[[int], object],
         describe: Callable[[int], Optional[tuple[str, Optional[int]]]],
         still_showing: Callable[[int], bool],
         schedule: Optional[Callable[[int, Callable[[], None]], None]] = None,
@@ -582,6 +594,7 @@ class ShellPopupYielder:
     ) -> None:
         self._windows = windows
         self._set_topmost = set_topmost
+        self._raise_window = raise_window
         self._describe = describe
         self._still_showing = still_showing
         self._schedule = schedule or (lambda ms, fn: QTimer.singleShot(ms, fn))
@@ -598,7 +611,13 @@ class ShellPopupYielder:
         return self._aside
 
     def on_event(self, event: int, hwnd: int) -> None:
-        """Feed one WinEvent (already filtered to whole top-level windows)."""
+        """Feed one WinEvent (already filtered to whole windows)."""
+        if event == EVENT_SYSTEM_FOREGROUND:
+            # The newly active application is now above everything
+            # non-topmost, our stepped-aside windows included.
+            if self._aside:
+                self._reassert()
+            return
         if event in _VANISH_EVENTS:
             if hwnd in self._popups:
                 self._popups.discard(hwnd)
@@ -627,6 +646,11 @@ class ShellPopupYielder:
         for hwnd in self._windows():
             self._set_topmost(hwnd, True)
 
+    def _reassert(self) -> None:
+        """Put our windows back at the top of the ordinary group, keyboard first."""
+        for hwnd in self._windows():
+            self._raise_window(hwnd)
+
     def _schedule_restore(self) -> None:
         generation = self._generation
 
@@ -647,6 +671,9 @@ class ShellPopupYielder:
             if not self._popups:
                 self._restore()
                 return
+            # A window raised over us without a foreground change (an app
+            # calling SetWindowPos itself) sends no event we hook.
+            self._reassert()
             self._schedule_poll()
 
         self._schedule(self._poll_ms, poll)
@@ -675,6 +702,7 @@ def install_shell_popup_yield(
         dwmapi = ctypes.windll.dwmapi
         OBJID_WINDOW = 0
         WINEVENT_OUTOFCONTEXT = 0x0000
+        HWND_TOP = 0
         HWND_TOPMOST = -1
         HWND_NOTOPMOST = -2
         SWP_FLAGS = 0x0001 | 0x0002 | 0x0010  # NOSIZE | NOMOVE | NOACTIVATE
@@ -728,6 +756,11 @@ def install_shell_popup_yield(
             after = HWND_TOPMOST if topmost else HWND_NOTOPMOST
             return user32.SetWindowPos(hwnd, after, 0, 0, 0, 0, SWP_FLAGS)
 
+        def raise_window(hwnd: int) -> object:
+            # Top of the window's own group: for a non-topmost window that
+            # is above every application and still below the shell's popups.
+            return user32.SetWindowPos(hwnd, HWND_TOP, 0, 0, 0, 0, SWP_FLAGS)
+
         def window_ids() -> list[int]:
             ids = []
             for win in windows():
@@ -740,6 +773,7 @@ def install_shell_popup_yield(
         yielder = ShellPopupYielder(
             windows=window_ids,
             set_topmost=set_topmost,
+            raise_window=raise_window,
             describe=describe,
             still_showing=still_showing,
         )
@@ -777,23 +811,30 @@ def install_shell_popup_yield(
             wintypes.DWORD,
         ]
         user32.SetWinEventHook.restype = wintypes.HANDLE
+        user32.UnhookWinEvent.argtypes = [wintypes.HANDLE]
         # Out of context: the callback runs on this (the GUI) thread, which
         # Qt's event loop pumps, and nothing is injected into other processes.
-        hooks = [
-            user32.SetWinEventHook(
-                EVENT_OBJECT_DESTROY, EVENT_OBJECT_HIDE, None, callback, 0, 0, WINEVENT_OUTOFCONTEXT
-            ),
-            user32.SetWinEventHook(
-                EVENT_OBJECT_CLOAKED,
-                EVENT_OBJECT_UNCLOAKED,
-                None,
-                callback,
-                0,
-                0,
-                WINEVENT_OUTOFCONTEXT,
-            ),
-        ]
-        if not all(hooks):
+        ranges = (
+            (EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND),
+            (EVENT_OBJECT_DESTROY, EVENT_OBJECT_HIDE),
+            (EVENT_OBJECT_CLOAKED, EVENT_OBJECT_UNCLOAKED),
+        )
+        # Every hook that took is unhooked again if a later one does not, or
+        # anything below raises.  A hook left behind outlives the callback
+        # object it points at (Windows only drops it with the thread), and
+        # the next window shown anywhere would call freed memory.
+        hooks: list[int] = []
+        try:
+            for low, high in ranges:
+                hook = user32.SetWinEventHook(
+                    low, high, None, callback, 0, 0, WINEVENT_OUTOFCONTEXT
+                )
+                if not hook:
+                    raise OSError("SetWinEventHook returned no hook")
+                hooks.append(int(hook))
+        except Exception:
+            for hook in hooks:
+                user32.UnhookWinEvent(hook)
             _logger.warning("Could not hook window events; popups may open behind the keyboard")
             return None
         # Pinned to the yielder so the callback lives exactly as long as it.
