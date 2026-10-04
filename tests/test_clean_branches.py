@@ -27,10 +27,26 @@ from scripts import clean_branches
 class _FakeGit:
     """Stands in for `git` and `gh`, recording what was asked of it."""
 
-    def __init__(self, refs: str, prs: dict, current: str = "main") -> None:
+    def __init__(
+        self,
+        refs: str,
+        prs: dict,
+        current: str = "main",
+        worktrees: str | None = None,
+        refuse: frozenset[str] = frozenset(),
+    ) -> None:
         self._refs = refs
         self._prs = prs
         self._current = current
+        # `git worktree list --porcelain`: by default only the main
+        # checkout, standing on `current`, which is what a repo with no
+        # extra worktrees reports.
+        self._worktrees = (
+            worktrees
+            if worktrees is not None
+            else f"worktree C:/repo\nHEAD abc1234\nbranch refs/heads/{current}\n"
+        )
+        self._refuse = refuse
         self.deleted: list[str] = []
         self.fetched = False
 
@@ -54,7 +70,13 @@ class _FakeGit:
             return subprocess.CompletedProcess(cmd, 0, stdout=self._current, stderr="")
         if cmd[1] == "rev-parse":
             return subprocess.CompletedProcess(cmd, 0, stdout="abc1234", stderr="")
+        if cmd[1] == "worktree":
+            return subprocess.CompletedProcess(cmd, 0, stdout=self._worktrees, stderr="")
         if cmd[1] == "branch" and cmd[2] == "-D":
+            if cmd[3] in self._refuse:
+                return subprocess.CompletedProcess(
+                    cmd, 1, stdout="", stderr=f"error: cannot delete branch '{cmd[3]}'\n"
+                )
             self.deleted.append(cmd[3])
             return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
         raise AssertionError(f"unexpected git command: {cmd}")
@@ -171,6 +193,81 @@ class TestTheGuardsThatDoNotDependOnGitHub:
         _install(monkeypatch, fake)
         assert clean_branches.main([]) == 0
         assert fake.deleted == []
+
+
+class TestBranchesHeldByAnotherWorktree:
+    """A merged branch that another worktree has checked out is kept.
+
+    Git refuses to delete it anyway, and that refusal used to escape as
+    an uncaught ``CalledProcessError`` that ended the run part way
+    through, so every branch after it was left behind.  Found on a real
+    run: another session's worktree still had its merged branch checked
+    out.
+    """
+
+    ELSEWHERE = (
+        "worktree C:/repo\nHEAD abc1234\nbranch refs/heads/main\n\n"
+        "worktree C:/repo/.claude/worktrees/other\nHEAD def5678\n"
+        "branch refs/heads/feat/elsewhere\n"
+    )
+
+    def test_it_is_kept_and_the_worktree_named(self, monkeypatch, capsys) -> None:
+        fake = _FakeGit(
+            "feat/elsewhere\t[gone]\n",
+            {"feat/elsewhere": _merged(9)},
+            worktrees=self.ELSEWHERE,
+        )
+        _install(monkeypatch, fake)
+        assert clean_branches.main([]) == 0
+        assert fake.deleted == []
+        assert "C:/repo/.claude/worktrees/other" in capsys.readouterr().out
+
+    def test_the_same_branch_in_no_worktree_is_deleted(self, monkeypatch) -> None:
+        """The inverse, so a guard that kept every branch cannot pass."""
+        fake = _FakeGit("feat/elsewhere\t[gone]\n", {"feat/elsewhere": _merged(9)})
+        _install(monkeypatch, fake)
+        assert clean_branches.main([]) == 0
+        assert fake.deleted == ["feat/elsewhere"]
+
+    def test_a_detached_worktree_shields_nothing(self, monkeypatch) -> None:
+        """A detached HEAD holds no branch, so it must not keep one."""
+        detached = (
+            "worktree C:/repo\nHEAD abc1234\nbranch refs/heads/main\n\n"
+            "worktree C:/repo/.worktrees/review\nHEAD def5678\ndetached\n"
+        )
+        fake = _FakeGit("feat/landed\t[gone]\n", {"feat/landed": _merged(4)}, worktrees=detached)
+        _install(monkeypatch, fake)
+        assert clean_branches.main([]) == 0
+        assert fake.deleted == ["feat/landed"]
+
+    def test_the_listing_maps_each_branch_to_its_own_worktree(self, monkeypatch) -> None:
+        fake = _FakeGit("", {}, worktrees=self.ELSEWHERE)
+        _install(monkeypatch, fake)
+        assert clean_branches._branches_in_worktrees() == {
+            "main": "C:/repo",
+            "feat/elsewhere": "C:/repo/.claude/worktrees/other",
+        }
+
+
+class TestOneRefusalDoesNotEndTheRun:
+    """If git refuses a delete for any other reason, the run carries on."""
+
+    REFS = "feat/first\t[gone]\nfeat/second\t[gone]\n"
+    PRS = {"feat/first": _merged(1), "feat/second": _merged(2)}
+
+    def test_the_branches_after_a_refusal_are_still_deleted(self, monkeypatch, capsys) -> None:
+        fake = _FakeGit(self.REFS, self.PRS, refuse=frozenset({"feat/first"}))
+        _install(monkeypatch, fake)
+        assert clean_branches.main([]) == 1
+        assert fake.deleted == ["feat/second"]
+        assert "failed  feat/first" in capsys.readouterr().out
+
+    def test_a_clean_run_still_reports_success(self, monkeypatch) -> None:
+        """The inverse: the non-zero exit is the refusal's, not the run's."""
+        fake = _FakeGit(self.REFS, self.PRS)
+        _install(monkeypatch, fake)
+        assert clean_branches.main([]) == 0
+        assert fake.deleted == ["feat/first", "feat/second"]
 
 
 class TestDryRun:

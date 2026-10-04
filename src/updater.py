@@ -69,6 +69,7 @@ import json
 import logging
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -782,6 +783,29 @@ def _launch_installer(dest: Path) -> Tuple[bool, str]:
     return True, ""
 
 
+_RELAUNCHER_EXE_NAME = "alpha-osk-relauncher.exe"
+_RELAUNCHER_STAGE_PREFIX = "alpha-osk-relauncher-"
+
+
+def _purge_stale_relauncher_stages() -> None:
+    """Best-effort removal of staging copies left by previous updates.
+
+    Each spawn stages a full copy of the app bundle under ``%TEMP%``
+    (see ``_spawn_relauncher`` for why), and a running helper cannot
+    delete its own image, so every update leaves one stage behind.
+    Sweeping the previous ones at the next spawn bounds the litter at
+    a single stage between updates.  ``ignore_errors`` covers the one
+    stage that could still be live (a helper from an update minutes
+    ago): its locked files simply survive the sweep.
+    """
+    try:
+        temp_root = Path(tempfile.gettempdir())
+        for stale in temp_root.glob(_RELAUNCHER_STAGE_PREFIX + "*"):
+            shutil.rmtree(stale, ignore_errors=True)
+    except OSError:
+        pass
+
+
 def _spawn_relauncher(new_version: str) -> bool:
     """Spawn the user-IL relauncher helper before kicking off the installer.
 
@@ -794,6 +818,45 @@ def _spawn_relauncher(new_version: str) -> bool:
     ``alpha-osk.exe``. See ``src/_update_relauncher.py`` for the full
     flow + rationale.
 
+    **The helper runs from a renamed copy of the bundle in %TEMP%, and
+    both halves of that are load-bearing.** It first shipped as the
+    installed exe re-invoked in place (``alpha-osk.exe
+    --update-relauncher``), which is doubly incompatible with the
+    install it is meant to outlive:
+
+    * *The name*: the installer closes the app with ``taskkill /IM
+      "alpha-osk.exe"``, polls ``tasklist`` for that image name to
+      disappear, and force-kills whatever still matches.  A helper
+      sharing the name first cost every update the full ~6 s wait
+      budget (the loop was staring at the helper) and then its own
+      life, which is why ``relauncher.log`` never carried a production
+      entry: the splash and the relaunch were dead before the install
+      began, and the keyboard only ever came back via the installer's
+      ``Exec explorer.exe`` fallback.
+    * *The location*: a process running from the install dir holds its
+      own exe and every loaded DLL mapped, and Windows will neither
+      delete nor overwrite a mapped image.  A helper that survived the
+      taskkill would therefore make the old uninstaller's ``Delete``
+      and NSIS's ``File`` extraction fail, and a silent install that
+      cannot write a file aborts, leaving the user with no keyboard at
+      all.  The accidental kill was the only reason updates succeeded.
+
+    Copying the whole bundle costs a few seconds of disk once per
+    update and is swept on the next spawn
+    (``_purge_stale_relauncher_stages``); the copied exe keeps its
+    Authenticode signature, since the bytes are unchanged.
+
+    The spawn also snapshots the installed exe's mtime and hands it to
+    the helper (``--old-exe-mtime``): NSIS restores build-time
+    timestamps on extracted files, so "the mtime changed" is the signal
+    that the install finished, where "the mtime is newer than the kill"
+    never fires.  See ``_new_exe_looks_fresh``.
+
+    Dev runs (not frozen) spawn nothing and return False: there is no
+    installed bundle to copy, no installer will replace the target, and
+    the old dev spawn's only observable behaviour was a detached
+    process waiting out its timeout.
+
     Returns True on successful spawn (not "relaunch succeeded" — we'll
     be dead before we could observe that). False is logged but the
     install proceeds anyway: the in-installer ``Exec explorer.exe``
@@ -801,6 +864,9 @@ def _spawn_relauncher(new_version: str) -> bool:
     sometimes works, so we'd rather try-and-maybe-fail than abort the
     update.
     """
+    if not getattr(sys, "frozen", False):
+        _logger.info("Not a frozen install; skipping the relauncher spawn")
+        return False
     try:
         # Lazy import — keeps the module load cost off normal startup.
         try:
@@ -812,79 +878,58 @@ def _spawn_relauncher(new_version: str) -> bool:
         except ImportError:
             from .__version__ import __version__ as current_version  # type: ignore
 
-        # Resolve target install dir. In frozen mode ``sys.executable``
-        # IS the installed alpha-osk.exe; in dev we don't actually
-        # auto-update so this branch is academic, but we still write
-        # something deterministic so tests can drive the path.
-        if getattr(sys, "frozen", False):
-            target_exe = Path(sys.executable)
-            cmd = [
-                str(target_exe),
-                "--update-relauncher",
-                "--parent-pid",
-                str(os.getpid()),
-                "--new-version",
-                new_version,
-                "--previous-version",
-                current_version,
-                "--target-exe",
-                str(target_exe),
-                "--config-dir",
-                str(get_config_dir()),
-                "--show-splash",
-            ]
-        else:
-            # Dev mode — use python -m for the relauncher, target exe
-            # is whatever sys.executable points at (no install dir to
-            # poll, so the wait loop will time out harmlessly).
-            target_exe = Path(sys.executable)
-            cmd = [
-                sys.executable,
-                "-m",
-                "src.keyboard_app",
-                "--update-relauncher",
-                "--parent-pid",
-                str(os.getpid()),
-                "--new-version",
-                new_version,
-                "--previous-version",
-                current_version,
-                "--target-exe",
-                str(target_exe),
-                "--config-dir",
-                str(get_config_dir()),
-                "--show-splash",
-            ]
+        target_exe = Path(sys.executable)
+
+        _purge_stale_relauncher_stages()
+        stage = Path(tempfile.mkdtemp(prefix=_RELAUNCHER_STAGE_PREFIX))
+        helper_dir = stage / "bundle"
+        shutil.copytree(target_exe.parent, helper_dir)
+        helper_exe = helper_dir / _RELAUNCHER_EXE_NAME
+        os.replace(helper_dir / target_exe.name, helper_exe)
+
+        try:
+            old_exe_mtime = target_exe.stat().st_mtime
+        except OSError:
+            # No snapshot: the helper falls back to its weaker
+            # existence check rather than not spawning at all.
+            old_exe_mtime = 0.0
+
+        cmd = [
+            str(helper_exe),
+            "--update-relauncher",
+            "--parent-pid",
+            str(os.getpid()),
+            "--new-version",
+            new_version,
+            "--previous-version",
+            current_version,
+            "--target-exe",
+            str(target_exe),
+            "--old-exe-mtime",
+            str(old_exe_mtime),
+            "--config-dir",
+            str(get_config_dir()),
+            "--show-splash",
+        ]
 
         flags = 0
         if sys.platform == "win32":
-            # Detach so the helper survives our taskkill, and suppress the
-            # console explicitly.
-            #
             # CREATE_NO_WINDOW *instead of* DETACHED_PROCESS, not
             # alongside it.  Windows documents the two as mutually
             # exclusive -- "CREATE_NO_WINDOW ... is ignored if it is used
             # with either CREATE_NEW_CONSOLE or DETACHED_PROCESS" -- so
             # OR-ing them, which is what this did first, silently left
             # DETACHED_PROCESS winning and the console suppression inert.
+            # (The helper exe is a windowed build and allocates no console
+            # of its own, but the flag is kept so a console-subsystem dev
+            # build of the bundle cannot regress this quietly.)
             #
-            # The console has to be suppressed rather than absent because
-            # the flags do not propagate: in dev mode `cmd` starts
-            # `venv\Scripts\python.exe`, that interpreter re-executes as
-            # the base interpreter, and the re-exec is a fresh
-            # CreateProcess carrying none of them.  Under DETACHED_PROCESS
-            # the parent has no console for that child to inherit, so the
-            # child allocates one -- observed as a live `venv python ->
-            # base python -> conhost.exe` tree, one empty console window
-            # per relauncher, titled with the working directory because
-            # the helper writes nothing to it.  Under CREATE_NO_WINDOW the
-            # parent has a console that is merely invisible, the re-exec
-            # inherits it, and nothing is drawn.
-            #
-            # Detachment is not lost with DETACHED_PROCESS gone: Windows
-            # has no parent-death signal, so the child already outlives
-            # us, and CREATE_NEW_PROCESS_GROUP keeps it out of our console
-            # group so the installer's taskkill cannot sweep it up.
+            # Detachment needs no flag: Windows has no parent-death
+            # signal, so the child already outlives us.
+            # CREATE_NEW_PROCESS_GROUP keeps it out of our Ctrl-event
+            # group; surviving the installer's taskkill is the job of the
+            # helper's image name, not of any creation flag (taskkill
+            # matches by name, and the helper no longer shares ours).
             flags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) | getattr(
                 subprocess, "CREATE_NO_WINDOW", 0
             )

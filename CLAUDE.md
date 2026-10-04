@@ -26,6 +26,7 @@ Owen is a wheelchair user with muscular dystrophy. Typing is hard - be proactive
 - Releases: `src/__version__.py` is the single source of version truth; publish to the separate `owenpkent/alpha-osk-releases` repo with an explicit `--repo` (the updater API URL is hard-pinned there); the installer asset name must be exactly `Alpha-OSK-Setup-{version}.exe`. The marketing site is a **third** repo, `owenpkent/alpha-osk-website`, and a release deliberately does not touch it: it reads the latest tag from the releases API at page load, so there is no version to bump there and no step to forget (see *The website*).
 - The install path is computed, never read from the registry: every silent install passes an explicit `/S /D=<dir>` from `updater.py::_install_target_dir()`. NSIS requires `/D=` last on the command line and unquoted even when the path has spaces, so don't reorder or requote the installer arguments (full reasoning under *Auto-Update*).
 - `run.py::ensure_admin_windows()` runs after dependency installation, not as the first statement in `main()`, so `pip install` never executes with an admin token; `--dashboard` never elevates at all. The repo tree is still user-writable, so this narrows the blast radius rather than closing it.
+- Until the prediction engine loads, `KeyboardBridge._predictor` is a `NullPredictor` stand-in, never None: a new bridge or `StudyBridge` call site must not test `is None`, and a slot that cannot honestly succeed before the engine exists refuses through `_engine_loaded()` (see *Startup*).
 - Load-bearing invariants: merge-strategy default MUST stay `"rank"`; `NgramPredictor._user_total == sum(user_vocab.values())`; `NgramPredictor.bigrams[p][w] >= round(_user_bigrams[p][w])` (the merged context tables never drop below the user's share, and only that share is ever persisted, see *Context tables*); window height is content-bound (never persist or assign it); every full-size layout row must total exactly 15.5u and every compact row 13.0u, or that row is centred inside the grid and the keyboard's edges go ragged (see *Full-size rows are flush*); every `KeyButton` needs a share of the gap around it (`hitMarginH` / `hitMarginV`) or the strip between it and its neighbour is dead; every analytics metric needs both a session and an `_alltime_*` form; Windows subprocess calls need `CREATE_NO_WINDOW` when they suppress output *or* may run without a console to inherit (a git hook, a frozen GUI build).
 
 ## Stack & layout
@@ -38,7 +39,7 @@ Owen is a wheelchair user with muscular dystrophy. Typing is hard - be proactive
 
 - Temporary files: use a scoped `tempfile.TemporaryDirectory` under the system temp directory for experiments and scratch models, with cleanup on success, errors and interruption. Do not create `.tmp-*` folders in the checkout. Clean up your own scratch files before finishing; never sweep unrelated folders or delete explicitly supplied model directories. Pytest removes its generated test directories after a passing run and keeps a failed test's for the post-mortem (`tmp_path_retention_policy = "failed"`); if supplying `--basetemp`, put it inside your own cleanup scope. The KSR benchmark cleans up its default model directory automatically and keeps `--model-dir`.
 - Run: `python run.py` (creates venv, installs deps, launches the keyboard).
-- Test: `python -m pytest` (around 2,250 tests; `python -m pytest --collect-only -q` prints the live count, so don't restate it elsewhere; also `-k fuzzy`, `-k property`, or a single file like `tests/test_keyboard_bridge.py`).
+- Test: `python -m pytest` (around 2,900 tests; `python -m pytest --collect-only -q` prints the live count, so don't restate it elsewhere; also `-k fuzzy`, `-k property`, or a single file like `tests/test_keyboard_bridge.py`).
 - Pre-push gate, the same checks as CI (`ruff check`, `ruff format --check`, `mypy` under **both** `--platform linux` and `--platform win32`, `pytest`): `python check.py` (~60s); `python check.py --full` adds the `--cov-fail-under=60` coverage gate (~110s, full CI parity). `python check.py --install-hook` wires it to `git push` so it runs automatically rather than by hand (`--no-verify` skips it once). CI additionally runs `osv-scanner` over the lockfiles. Formatting is gated separately from linting because `ruff check` ignores layout; fix a format failure with `ruff format src/ tests/`. The two mypy passes are both required and neither substitutes for the other: `linux` is what the runner uses (typeshed gates whole symbols on platform, so `ctypes.WinDLL` degrades to `Any` there and trips `warn_return_any`), and `win32` is the only thing that type-checks the `if sys.platform == "win32"` bodies at all, since mypy prunes them as unreachable under the other.
 
 ## Conventions
@@ -92,8 +93,8 @@ Each section below that is marked *Full write-up* keeps only its load-bearing ru
 
 | Area | Doc |
 |------|-----|
-| Prediction engine (context tables, corpus prior, prefix beam, fuzzy refresh, pointer bias, apostrophe, acronyms) | `docs/architecture/PREDICTION_NOTES.md` |
-| Per-algorithm detail | `FUZZY_RECOGNITION.md`, `PPM.md`, `HYBRID_MERGING.md`, `NGRAM_SEEDS.md` |
+| Prediction engine (startup loader, context tables, corpus prior, prefix beam, fuzzy refresh and shared caches, pointer bias, apostrophe, acronyms, slur removal) | `docs/architecture/PREDICTION_NOTES.md` |
+| Per-algorithm detail | `docs/architecture/FUZZY_RECOGNITION.md`, `docs/architecture/PPM.md`, `docs/architecture/HYBRID_MERGING.md`, `docs/architecture/NGRAM_SEEDS.md` |
 | Where user data lives, the log, the installer's registry handling | `docs/architecture/USER_DATA.md` |
 | Modifiers, casing, pill widths | `docs/architecture/MODIFIERS_AND_CASING.md` |
 | Spacing, snippet detection, structured tokens | `docs/architecture/TEXT_PATTERNS.md` |
@@ -104,13 +105,22 @@ Each section below that is marked *Full write-up* keeps only its load-bearing ru
 | Key colours | `docs/architecture/KEY_COLOURS.md` |
 | Layout geometry (flush rows, section height, dead space) | `docs/architecture/LAYOUT_GEOMETRY.md` |
 | Compact view | `docs/architecture/COMPACT_VIEW.md` |
-| Window chrome (corners, title-bar menu, Move mode, snapping) | `docs/architecture/WINDOW_CHROME.md` |
+| Window chrome (corners, taskbar button, title-bar menu, Move mode, snapping) | `docs/architecture/WINDOW_CHROME.md` |
 | Switch scanning over UI Automation | `docs/architecture/UIA_TARGETS.md` |
 | Dictation | `docs/architecture/DICTATION.md` |
 | Telemetry, and the installer invitation | `docs/architecture/TELEMETRY.md` |
 | Gotchas not repeated here | `docs/architecture/GOTCHAS.md` |
 | Build and release | `docs/build/WINDOWS.md`, `RELEASE.md`, `AUTO_UPDATE.md`, `CI.md`, `LINUX.md`, `MACOS.md` |
 | User study | `docs/research/STUDY_PROTOCOL.md`, `STUDY_CONSENT.md`, `STUDY_HARNESS.md` |
+
+## Startup
+
+Full write-up: `docs/architecture/PREDICTION_NOTES.md` (section of the same name). Read it before changing this area.
+
+- `keyboard_app.main()` builds `KeyboardBridge(defer_predictions=True)`, and `prediction/loader.py` constructs the `HybridPredictor` on a daemon thread while ordinary keys, modifiers, snippets and privacy detection already work. `predictionStatus` is the single loading/ready/error state; a failed load offers Retry without disabling typing. Direct bridge construction stays synchronous for tests and embedding callers.
+- Every exit of the loader's `_build` marks the job done (in a `finally`), and a cancel stops the CPU work, not only the publication (`HybridPredictor(abort_check=...)` polled at `_checkpoint()`, then `shutdown()` joins the worker).
+- **Until the engine loads, `_predictor` is a `NullPredictor`, never None.** Slots whose honest answer is "not yet" refuse through `_engine_loaded()` / `null_predictor.is_loaded`, never `is None`. The stand-in's `frozen_learning` raises.
+- Tests: `tests/test_prediction_startup.py`, `tests/test_null_predictor.py` (which fails on any call the stand-in lacks or whose parameters differ from `HybridPredictor`'s).
 
 ## Prediction Engine
 
@@ -167,7 +177,8 @@ Full write-up: `docs/architecture/PREDICTION_NOTES.md` (section of the same name
 - **The fuzzy dictionary follows the vocabulary.** Every learning path pushes changed words through `HybridPredictor._refresh_fuzzy_frequencies(words)` -> `FuzzyRecognizer.update_word` (in place, safe on the keystroke path). The events that *shrink* the vocabulary (`clear_user_data`, `reload_from_disk`, `unprefer`) go through `_rebuild_fuzzy_dictionary`. `unlearn_word` is deliberately not followed.
 - **Every injection into the fuzzy dictionary goes through `HybridPredictor._fuzzy_frequency(word)`** (the n-gram's belief on the base count's scale, never the raw merged count). `PrefixBeam._protect_exact_completions` (`FREQUENCY_MAY_BUY` -1.5) keeps frequency from buying a multi-slip candidate past exact completions; a hard exact-first tier was tried and reversed (`teh` must still offer `the`).
 - **PPM contributes no word candidates** (`HybridPredictor._ppm_in_merge = False`, since 2026-09-03). It still trains, loads and saves. Text describing the merge as "n-gram + PPM + fuzzy" predates this.
-- SymSpell and `PrefixIndex` are packed immutable indexes (`packed_deletes.py`, `packed_prefixes.py`) with mutable overlays for personal words; base postings merge before overlay postings to keep tie order. Hybrid startup and rebuilds call `prepare_prefix_index()`. Base vocabulary is 83,386 words (`LanguageProfile.extra_vocabulary` owns the extra list; see `docs/research/VOCABULARY_MEMORY.md`). Equal n-gram scores sort lexically.
+- SymSpell and `PrefixIndex` are packed immutable indexes (`packed_deletes.py`, `packed_prefixes.py`) with mutable overlays for personal words; base postings merge before overlay postings to keep tie order. Hybrid startup and rebuilds call `prepare_prefix_index()`. Base vocabulary was 83,386 words in 1.5.0, 43 fewer since slurs were removed (`LanguageProfile.extra_vocabulary` owns the extra list; see `docs/research/VOCABULARY_MEMORY.md`). Equal n-gram scores sort lexically.
+- **Both packed structures, and the validated wordlist, are built once per process and shared** (`packed_cache.py`, keyed on a collision-resistant BLAKE2b digest of the input, two slots; `NgramPredictor._validated_extra_words`). That rests on the packed data staying immutable: everything that changes as the user types goes to the overlay. The taught-acronym bypass guards on `taught_capitalization`, not `capitalization`.
 - Tests: `tests/test_fuzzy_refresh.py`, `tests/test_ngram_candidate_index.py`.
 
 ## Click position and the learned pointer bias
@@ -531,8 +542,10 @@ for tests nobody has written yet rather than being patched in case by case:
 - **`_no_real_update_relauncher`** stubs `updater._spawn_relauncher`. Several
   `download_and_install` tests stub only `_launch_installer` and reached the
   real spawn, which launches a *detached* process by design; it outlives the
-  pytest worker and never exits, so every run of `tests/test_updater.py`
-  stranded four of them, each holding a console window.
+  pytest worker, so every run of `tests/test_updater.py` stranded four of
+  them, each holding a console window. (Today the real spawn is also a
+  bundle-sized copy into the developer's temp dir, one more reason no test
+  may reach it.)
 
 Both fail the same way when absent: something outside the test survives it.
 A test wanting the real behaviour patches the same name and wins, since its
@@ -729,7 +742,7 @@ Theme picker in settings shows labeled color swatches with mini key previews.
 
 ## Vocabulary
 
-- **Base**: Google 10K wordlist (`data/google-10000-english-usa-no-swears.txt`) + 10K supplement (`data/google-20000-supplement.txt`, filtered for explicit content) + `data/english-expanded.txt`, 64,443 words from SCOWL size 60 by way of the ESDB bundle (permissively licensed, see `data/licenses/ESDB.txt`, pinned by sha256 in `data/english-expanded.manifest`). ~83K total. The SCOWL half enters at **one base count each**, so it supplies coverage without competing with conversational frequencies or reading as personal history. It is a speller's list, which is why it carries explicit content that the curated lists do not: see *Explicit content is filtered from suggestions*.
+- **Base**: Google 10K wordlist (`data/google-10000-english-usa-no-swears.txt`) + 10K supplement (`data/google-20000-supplement.txt`, filtered for explicit content) + `data/english-expanded.txt`, 64,400 words from SCOWL size 60 by way of the ESDB bundle (permissively licensed, see `data/licenses/ESDB.txt`, pinned by sha256 in `data/english-expanded.manifest`). ~83K total. The SCOWL half enters at **one base count each**, so it supplies coverage without competing with conversational frequencies or reading as personal history. It is a speller's list, which is why it carries explicit content that the curated lists do not: see *Explicit content is filtered from suggestions*. Slurs are removed from it at generation (`data/slurs.txt`), which is why the count is 43 below the 64,443 of 1.5.0.
 - **Packs**: No built-ins ship. The system is import-only - see *Vocabulary Packs* section. Imported packs appear as toggles in Settings -> Your Language Model -> Vocabulary Packs.
 - **Numpad**: Toggles between numbers and navigation keys (Home/End/PgUp/PgDn/arrows/Ins/Del) via NumLock. Key 5 is blank in nav mode. Layout mirrors a physical numpad: rows `7 8 9 /`, `4 5 6 *`, `1 2 3 -`, `0(span 2) . +`, `Enter(span 3) NumLock`. NumLock sits at the bottom-right (active highlight uses the theme accent), Enter is the wide bottom-row key. Earlier builds put NumLock on the top row and stretched `+` / Enter as 2-row spans on the right column. The flat 5-row layout was the user's request to match a physical 10-key.
 
@@ -742,10 +755,11 @@ The setting decides only what the prediction bar **volunteers**.
 
 That is deliberate and was the owner's call (2026-09-16): a keyboard that
 cannot swear is a dignity problem for an AAC user, so the answer is not to
-remove the words but to let the user decide whether the bar offers them. The
-shipped wordlist is therefore unfiltered, including slurs, and the filter is
-the control over it. Do not re-litigate the content question; do keep the
-filter honest.
+remove the words but to let the user decide whether the bar offers them.
+**Slurs are the exception, also the owner's call (2026-09-23)**: they are
+removed outright, see *Slurs are removed, not filtered* below. Profanity
+stays in the wordlist and the filter is the control over it. Do not
+re-litigate either decision; do keep the filter honest.
 
 - **`data/explicit_words.txt` is generated, not hand-edited**
   (`scripts/gen_explicit_words.py`). It is a list of **exact words**, so the
@@ -767,9 +781,10 @@ filter honest.
   **slurs but no common profanity**, which is the exact inverse of what
   anyone wanted: you could not predict `fuck` at all, while the slurs were
   one keystroke from a pill. The stems now only *seed* the suggestion
-  filter, the wordlist ships unfiltered, and the file was renamed because a
-  file called "exclusions" that excludes nothing is how the two jobs got
-  confused in the first place.
+  filter, profanity ships in the wordlist, and the file was renamed because
+  a file called "exclusions" that excludes nothing is how the two jobs got
+  confused in the first place. (Slurs are now excluded at generation, but
+  from their own exact-word list, never from these stems.)
 - **The filter is applied in exactly one place**, `_finalize_scores`, beside
   the short-word gate, because every suggestion from every strategy passes
   through there. A second copy at another emit site is the parallel-blocks
@@ -792,6 +807,14 @@ filter that suggested nothing at all would satisfy the first alone), and the
 flag list is checked against the shipped **no-swears** frequency list as
 ground truth, so a false positive is caught by construction rather than by
 anyone's judgement.
+
+### Slurs are removed, not filtered
+
+Full write-up: `docs/architecture/PREDICTION_NOTES.md` (section of the same name). Read it before changing this area.
+
+- `data/slurs.txt` (since 2026-09-23) lists **exact words, never stems**. They are excluded from the SCOWL list at generation (`gen_vocabulary.py`), were taken out of the curated files by hand, and are stripped from a saved model's merged `unigrams` on load unless the word is in `user_vocab`. No setting brings them back; they stay typable and learnable.
+- A word with a common ordinary sense stays and is filtered instead (`FILTER_ONLY_WORDS` in `scripts/gen_explicit_words.py`).
+- Tests: `tests/test_slurs.py`, where every removal is paired with the near-misses that must still ship.
 
 ## Vocabulary Packs
 
@@ -847,6 +870,7 @@ A denser 13x4 keyboard, off by default (*Appearance -> Panels -> Compact View*).
 - `totalKeyUnits` is derived (`_widestRow`), never a constant. `resolveLayoutId()` combines `currentLayout` with `compactView`; a layout with no compact variant falls back to full size.
 - **No panel that lines up with the grid may use `QtQuick.Layouts`** (it rounds children to whole pixels).
 - The accent fill on the editing keys is `root.accentWashFor()`, walked down until `textColor` clears 4.5:1; never the raw accent.
+- **Enter wears that same wash and no hue of its own** (`accent` and `enter` share a case in `keyColor`); don't mark it `style: "accent"`, which would also hand it the ring. **Backspace and Del wear the wash but never the accent border** (`Main.qml::keyBorderFor` exempts the `kill` role).
 - Del is on the base layer and Esc on `?123`; the Number Row panel's leading Esc is a deliberate duplicate.
 - **Both letter rows open with a 1u key, Tab over Caps, so `w` sits above `s`** (the same reduction full size makes, see *Full-size rows are flush*). The top row opened with `q` until 2026-09-21, which put every home-row letter one column right of the one above it and the number row panel's digits one column right of their letters. A 13u row has no spare unit, so **compact's Backspace is 1u** and that is the trade, not an oversight; Enter keeps its 2u. Tab and Caps lead rows 1 and 2 on `?123` too, or they would swap rows on a layer hop. Guards: `TestCompactLayout::test_w_sits_above_s`, `::test_the_left_column_is_the_same_on_both_layers`.
 - `NumberRow.qml` shows whenever `Main.qml::showNumberRow` is true, which is **derived** from the layout carrying no `number` row. It is declared **below** both function rows, so the stack reads F13-F24, F1-F12, digits, letters. The nav column reads Home / PgUp / PgDn / End.
@@ -909,7 +933,7 @@ Full write-up: `docs/architecture/KEY_COLOURS.md` (section of the same name). Re
 
 Full write-up: `docs/architecture/SYMBOLS_WINDOW.md` (section of the same name). Read it before changing this area.
 
-The only route to a glyph outside a physical keyboard's printing, on every layout. Smile button in the suggestion bar (title-bar twin when suggestions are off). Catalogue `src/glyphs.py`, UI `qml/components/SymbolsWindow.qml`.
+The only route to a glyph outside a physical keyboard's printing, on every layout. An α button (Tabler's `alpha` icon) in the suggestion bar (title-bar twin when suggestions are off). Catalogue `src/glyphs.py`, UI `qml/components/SymbolsWindow.qml`.
 
 - **A tap types, it does not copy** (unlike Snippets): `insertGlyph(str) -> bool` calls the same `_commit_verbatim_insert` `insertSnippet` does, and is not gated on privacy mode. QML honours the bool: a refused tap flashes the problem toast and is not written to Recent.
 - Recent lives in `appSettings.savedRecentGlyphs` (cap from `getRecentGlyphLimit()`), not a file; a malformed value is dropped silently. The window opens on Recent once it has content.
@@ -928,14 +952,14 @@ Every visible key and pill is published as a UI Automation `Button` so an extern
 - `Accessible.name` is a speakable label (`_scanName`), not the keycap; the numpad names both NumLock states. Only real toggles report a toggle state (a programmed F-key is not one). The lock rides in `Accessible.description`, which is UIA `FullDescription`, not HelpText.
 - Everything that can change the target set feeds `Main.qml::scanRevision` (including NumLock and `root.predictionsArePresent`), exposed as the `aosk.v1.revision` beacon, a real 1x1 visible item. Compare, never parse.
 - **An Invoke carries no click position** (`pressFromPointer` false): it resolves to the key centre and teaches the pointer model nothing. Invoke is a one-shot (`activateFromAssistiveClient`), never `_activate()`, and flashes the key.
-- WindowPattern is safe because restoring never takes the foreground (`windows_window.QuietRestoreFilter`), a close that is not a quit minimizes (`_KeyboardApplication` sets `quitting`), and a minimized keyboard offers no targets.
+- WindowPattern is safe because restoring never takes the foreground (`windows_window.QuietRestoreFilter`), a close that is not a quit minimizes (`_KeyboardApplication` sets `quitting`), and a minimized keyboard offers no targets. The second-launch hand-off (`windows_window.surface_existing_instance`) restores with `SW_SHOWNOACTIVATE` and never calls `SetForegroundWindow`.
 - **Stale pills**: every pill-model entry carries the generation, and `invokeScanPrediction(word, generation)` refuses a dead one. Keep both halves.
 - The window is found by AutomationId `alphaOsk.alphaOskKeyboard` (`_name_for_ui_automation`).
 - PySide cannot read attached `Accessible.*` properties: keep every value in a named property and **never inline an expression into the `Accessible` block**.
 
 ## Modular Layouts
 
-Design doc at `docs/architecture/MODULAR_LAYOUTS.md`. Inspired by Octavium's (`C:\Users\Owen\dev\Octavium`) Layout/KeyDef data model. Four levels of modularity: (1) Built-in JSON layout packs (video editing, gaming, streaming). (2) User-created layouts via editor. (3) Panel composition - snap independent panels (QWERTY, numpad, macros) into a grid. (4) App-aware auto-switching based on foreground window.
+Design doc at `docs/architecture/MODULAR_LAYOUTS.md`. Inspired by Octavium's (`C:\Users\owenp\dev\Octavium`) Layout/KeyDef data model. Four levels of modularity: (1) Built-in JSON layout packs (video editing, gaming, streaming). (2) User-created layouts via editor. (3) Panel composition - snap independent panels (QWERTY, numpad, macros) into a grid. (4) App-aware auto-switching based on foreground window.
 
 Action types: `char`, `special`, `hotkey`, `text`, `macro`, `launch`, `layout`, `midi`. Profiles bundle layout + theme + window position + auto-switch rules.
 
@@ -953,9 +977,9 @@ Version source of truth is `src/__version__.py`. The release-asset filename **mu
 
 ### Update progress UI
 
-Full walkthrough (the four pieces from "user clicks install" to "new keyboard appears", plus the v1.0.19 file list) is in `docs/build/AUTO_UPDATE.md`. The non-obvious bits to remember: **never expose the download URL to QML** (the bridge only emits primitive ints); the pre-install toast sleeps `_PRE_INSTALL_TOAST_DWELL_S` (1.8 s) in the worker so it paints before the installer's taskkill; the relauncher splash is a `QTimer` state machine with an indeterminate `QProgressBar` (NSIS silent install has no real percentage); `_run_headless` is preserved as the test target and no-display fallback; and `_is_dev_target()` routes `python`/`pythonw` straight to headless so dev runs don't hang waiting for an exe mtime that never changes.
+Full walkthrough (the four pieces from "user clicks install" to "new keyboard appears", plus the v1.0.19 file list) is in `docs/build/AUTO_UPDATE.md`. The non-obvious bits to remember: **never expose the download URL to QML** (the bridge only emits primitive ints); the pre-install toast sleeps `_PRE_INSTALL_TOAST_DWELL_S` (1.8 s) in the worker so it paints before the installer's taskkill; the relauncher splash is a `QTimer` state machine with an indeterminate `QProgressBar` (NSIS silent install has no real percentage); `_run_headless` is preserved as the test target and no-display fallback; and `_is_dev_target()` makes a helper handed a `python`/`pythonw` target exit at once rather than wait for an installer that is never coming (belt-and-braces now that dev runs spawn no helper at all).
 
-**`_spawn_relauncher` must pass `CREATE_NO_WINDOW` *instead of* `DETACHED_PROCESS`, not alongside it.** Windows documents the two as mutually exclusive ("CREATE_NO_WINDOW ... is ignored if it is used with either CREATE_NEW_CONSOLE or DETACHED_PROCESS"), so OR-ing them, which this did first, leaves `DETACHED_PROCESS` winning and the console suppression inert. The console has to be *suppressed* rather than absent because the flags do not propagate: in dev mode the command starts `venv\Scripts\python.exe`, that interpreter re-execs as the base interpreter, and the re-exec is a fresh `CreateProcess` carrying none of them. Under `DETACHED_PROCESS` there is no console for it to inherit so it allocates one (an empty terminal per relauncher, titled with the working directory); under `CREATE_NO_WINDOW` it inherits a console that is merely invisible. Detachment is not lost: Windows has no parent-death signal, so the child already outlives us, and `CREATE_NEW_PROCESS_GROUP` keeps it clear of the installer's taskkill. Relatedly, **no test may reach the real `_spawn_relauncher`** (an autouse guard in `tests/conftest.py` enforces it): several `download_and_install` tests stub only `_launch_installer`, and each real spawn is a detached process that outlives the pytest worker and never exits, because the helper has no branch for a parent PID that is already gone. That last part is still open, see `TODO.md`. Full write-up in `docs/build/AUTO_UPDATE.md`.
+**The relauncher helper runs from a renamed copy of the bundle in `%TEMP%` (`alpha-osk-relauncher.exe`), and both halves are load-bearing.** It must NOT share the app's image name: the installer closes the app with `taskkill /IM "alpha-osk.exe"`, polls `tasklist` for that name to disappear, and force-kills whatever still matches, so a helper named `alpha-osk.exe` cost every update the full ~8 s wait budget and then its own life (which is why `relauncher.log` never held a production entry, and the keyboard only came back via the installer's `Exec explorer.exe` fallback). And it must NOT run from the install dir: a running process holds its exe and DLLs mapped, NSIS cannot overwrite a mapped file, and a silent install that cannot write **aborts**, so "exempt the helper from the taskkill" is worse than the bug it fixes. `_spawn_relauncher` stages the whole onedir bundle (the exe cannot start without `_internal`), sweeps previous stages on the next spawn, snapshots the installed exe's mtime and passes `--old-exe-mtime`: NSIS restores build-time timestamps on extracted files (`SetDateSave`), so the helper's readiness check is "mtime *differs* from the snapshot", never "mtime is newer than the kill", which structurally cannot fire. Dev runs spawn nothing. `CREATE_NO_WINDOW` *instead of* `DETACHED_PROCESS`, not alongside it (Windows ignores the former when the latter is set); detachment needs no flag since Windows has no parent-death signal. Relatedly, **no test may reach the real `_spawn_relauncher`** (an autouse guard in `tests/conftest.py` enforces it): a real spawn writes a bundle-sized copy to the developer's temp dir and launches a detached process. Full write-up in `docs/build/AUTO_UPDATE.md`.
 
 ## The website (alphaosk.com)
 
@@ -992,10 +1016,10 @@ Design doc at `docs/roadmap/ECOSYSTEM.md`. Alpha-OSK is part of a four-tool adap
 
 | Tool | Repo | Output |
 |------|------|--------|
-| **Alpha-OSK** | `C:\Users\Owen\dev\alpha-osk` | Keystrokes (SendInput) |
-| **MacroVox** | `C:\Users\Owen\dev\MacroVox` | Text (Deepgram STT -> clipboard) |
-| **Octavium** | `C:\Users\Owen\dev\Octavium` | MIDI (virtual piano/pads) |
-| **Nimbus** | `C:\Users\Owen\dev\Nimbus-Adaptive-Controller` | Joystick (vJoy/ViGEm) |
+| **Alpha-OSK** | `C:\Users\owenp\dev\alpha-osk` | Keystrokes (SendInput) |
+| **MacroVox** | `C:\Users\owenp\dev\MacroVox` | Text (Deepgram STT -> clipboard) |
+| **Octavium** | `C:\Users\owenp\dev\Octavium` | MIDI (virtual piano/pads) |
+| **Nimbus** | `C:\Users\owenp\dev\Nimbus-Adaptive-Controller` | Joystick (vJoy/ViGEm) |
 
 All four: same developer, same EV cert, PySide6/Qt (except MacroVox: Tauri), mouse-driven, accessibility-first. Integration phases: coexistence -> launch/trigger -> profile auto-switch -> shared input layer -> unified UI.
 
@@ -1091,13 +1115,15 @@ Full step-by-step release checklist, signing details, troubleshooting table, and
 
 The eToken-non-elevated requirement is the single most common build trap: SafeNet exposes the cert to the user session only, so elevated shells get "Cannot find certificate."
 
+**The exe carries a version resource** (`build/windows/version_resource.py`), generated by the spec into the PyInstaller work directory from `src/__version__.py` and never checked in. Without one the shell names things after the bare filename: a taskbar pin made from the *running* button came out as `alpha-osk`, and Explorer suffixed it `(2)` because a pin of that name already existed, since a pin is named from `FileDescription`. The publisher string must stay equal to `APP_PUBLISHER` in `build.py`, which `tests/test_windows_version_resource.py` checks, and the round-trip test loads the text through PyInstaller's own parser when it is installed. **This does not rename a pin that already exists.** A pin's name is its own `.lnk` file name in `User Pinned\TaskBar`, and the taskbar's registry record (`Taskband\Favorites`) stores that name. A display-name override in that folder's `desktop.ini` (`[LocalizedFileNames]`) was tried and does not work: File Explorer showed the new name, but the taskbar was back to `alpha-osk (2)` after the next Explorer restart. The fix for an existing pin is to unpin and re-pin once the installed build carries this resource and the shortcuts carry the app ID (#138).
+
 ### Release artefacts (EULA, lockfile, SBOM, CVE scanning)
 
 Reference detail moved to **`docs/build/RELEASE.md`**. The essentials:
 - **Clickwrap EULA**: the NSIS installer shows a `MUI_PAGE_LICENSE` page (checkbox-gated) backed by `build/windows/LICENSE.rtf`; keep that RTF and the repo-root plaintext `LICENSE` in sync. Silent install (`/S`, auto-updater) bypasses it, so it only blocks the first interactive install.
 - **Lockfile + SBOM**: every build emits a `pip freeze` lockfile *and* a CycloneDX 1.6 SBOM into `release/` (filenames encode the version), even on `--skip-build`. Upload both as release assets alongside the installer.
 - **Exact-pinned dependencies**: `requirements.txt` and `requirements-dev.txt` pin every dependency to an exact `==` version (most were `>=` floors before), so a fresh install is reproducible and an `osv-scanner` hit names a version you can actually go look up. The macOS-only `pyobjc-framework-*` entries are the deliberate exception and stay on `>=` floors. Hash pinning (`--require-hashes`) is a known follow-up, not done yet.
-- **CI CVE scanning**: `.github/workflows/ci.yml` runs `osv-scanner` over both lockfiles with `fail-on-vuln: true`. A new advisory blocks every PR - fix the dep or quarantine with a time-boxed `osv-scanner.toml` entry; never flip `fail-on-vuln` off globally.
+- **CI CVE scanning**: `osv-scanner` runs over both lockfiles with `fail-on-vuln: true`, in two modes. **On a PR it fails only on vulnerabilities the PR introduces** (`osv-scanner-reusable-pr.yml` scans base and head); **main is scanned in full** on every push and daily by `.github/workflows/osv-nightly.yml`. Before that split (2026-10-03), an advisory published against something already on main failed every open PR at once and also failed the Dependabot PR fixing it whenever a second advisory remained. So a new advisory now shows up as a failed nightly run, not a red X on PRs: fix the dep or quarantine it with a time-boxed `osv-scanner.toml` entry, and never flip `fail-on-vuln` off. **The toml is read only from the scanned lockfile's own directory**: repo root for `requirements-dev.txt`, `backend/cf-worker/` for the worker; a worker entry at the root is silently ignored. The PR job's name is load-bearing, since branch protection requires `OSV Scanner (deps CVE check) / osv-scan` by name.
 
 ## macOS build (in progress)
 
@@ -1197,7 +1223,13 @@ branch with no upstream at all is never a candidate, since never-pushed
 work exists nowhere else and renders the same empty tracking field an
 up-to-date branch does; `gh` being missing or unauthenticated keeps
 every branch rather than deleting them all; and `main` and the
-checked-out branch are refused by name.
+checked-out branch are refused by name. **A merged branch checked out
+in any other worktree is kept too, with the worktree named**: git
+refuses to delete it anyway, and that refusal used to escape as an
+uncaught error that ended the run, leaving every later branch behind.
+It is usually another session still working there, so it is reported,
+not retried. Any other refused delete is reported as `failed`, the run
+carries on, and the exit code is 1.
 
 **"Automatic" here means `git pull`, because there is no local event for
 a merge.** The merge happens on GitHub and nothing on this machine is
@@ -1254,6 +1286,13 @@ Full write-up: `docs/architecture/WINDOW_CHROME.md` (section of the same name). 
 - `scripts/capture_screenshots.py` sets `selfRoundedCorners` back to true, which is why it is not `readonly`.
 - The offscreen render was correct while the bug was live, so `tests/test_window_corners.py` pins only the checkable half.
 
+## The taskbar button appears on launch (hide, restyle, re-show)
+
+Full write-up: `docs/architecture/WINDOW_CHROME.md` (section of the same name). Read it before changing this area.
+
+- The shell decides whether a window gets a taskbar button when it becomes visible, so on the `taskbar_button` path `apply_extended_styles` hides the keyboard, writes the styles and re-shows it. The re-show is in a `finally` and is `SW_SHOWNOACTIVATE`, never `SW_SHOW` / `SW_SHOWNORMAL`. A window that was not visible is left alone, and the floating windows (`taskbar_button=False`) are never blinked.
+- Tests: `tests/test_windows_window.py::TestTheTaskbarButtonAppearsOnLaunch` (the live check is a UI Automation walk of `Shell_TrayWnd`).
+
 ## Title-bar window menu, and click-free Move
 
 Full write-up: `docs/architecture/WINDOW_CHROME.md` (section of the same name). Read it before changing this area.
@@ -1261,6 +1300,7 @@ Full write-up: `docs/architecture/WINDOW_CHROME.md` (section of the same name). 
 Right-clicking the title bar opens Move / Minimize / Tuck away (X11 only) / Close. Guard: `tests/test_qml_window_menu.py`.
 
 - **`titleBarMenuArea` is declared before every other input-taking child of `titleBar` and accepts only `Qt.RightButton`**; on top it would kill dragging.
+- **`dragArea` reserves the button row's measured width (`titleButtons.width`), never a constant**, so the whole strip drags on every window width. Guard: `TestTheWholeStripDrags`.
 - Rows come from `windowMenu.actions`, word-only. Close carries a rule and a gap above it.
 - **Move mode** is two taps with a free hand between: the window follows by `(current - anchor)` in the overlay's coordinates (self-correcting), the anchor is dropped on `onExited`, `windowMoveOverlay` is `enabled: root.moveMode` and swallows the ending click, left puts it down and right puts it back (`_moveReturnX/Y`); there is no Escape.
 - Tests drive the pointer in desktop coordinates; a closed `Popup`'s rows all report `visible: false`.

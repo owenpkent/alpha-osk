@@ -170,8 +170,12 @@ work.
 Six things about it are deliberate:
 
 - **The required checks are the gate, and nothing merges past them.** Lint,
-  Type Check, Tests and the OSV scan must all pass, so an update with a known
-  advisory against it fails the OSV scan and stays open.
+  Type Check, Tests and the OSV scan must all pass, so an update that
+  introduces a known advisory fails the OSV scan and stays open. The PR
+  scan compares against the base branch, which is also what lets a
+  Dependabot PR fixing one advisory merge while another is still open on
+  `main`; when every PR was scanned in full, that fix failed too and its
+  auto-merge waited forever (#153).
 - **It runs only when Dependabot both opened the PR and caused the event.**
   If a person pushes a commit onto a Dependabot branch, the job does not run
   for that push. Auto-merge switched on earlier is not switched off by a push

@@ -366,7 +366,7 @@ class TestTheOffConditionBlanksTheBarWithoutMovingIt:
         from src.study_bridge import StudyBridge
 
         kb = KeyboardBridge()
-        sb = StudyBridge(keyboard=kb, predictor=None, config_dir=tmp_path)
+        sb = StudyBridge(keyboard=kb, predictor=kb._predictor, config_dir=tmp_path)
         sb.recordConsent("A", 0)
         assert sb.startSession()
         # Walk to the first step of the condition we want.

@@ -17,9 +17,12 @@ def _module():
 
 
 def test_the_generator_no_longer_filters_content():
-    """Content filtering moved out of generation and into suggestion time.
+    """Profanity filtering moved out of generation and into suggestion time.
 
-    The stems now seed ``scripts/gen_explicit_words.py``, so the words stay
+    Slurs are the one exception, matched as exact words from
+    ``data/slurs.txt`` rather than by this stem machinery (see
+    ``test_generator_drops_slurs_and_keeps_their_neighbours``). The stems
+    now seed ``scripts/gen_explicit_words.py``, so the words stay
     in the vocabulary and a user setting decides whether the bar offers
     them. This asserts the old machinery is gone rather than merely unused:
     while it existed, a future change could quietly start calling it again,
@@ -102,6 +105,31 @@ def test_generator_preserves_long_words_and_filters_source_noise(tmp_path, monke
         assert noise not in words
 
 
+def test_generator_drops_slurs_and_keeps_their_neighbours(tmp_path, monkeypatch):
+    """Slurs are the one content exclusion made at generation time.
+
+    Matched as exact words, so the ordinary words a stem rule would take
+    with them ("spiced" is spic+ed) come through. Profanity comes through
+    too: it is the suggestion filter's job, under a user setting.
+    """
+    generator = _module()
+    archive = tmp_path / "source.zip"
+    with zipfile.ZipFile(archive, "w") as handle:
+        handle.writestr("en_US.txt", "spic\nspics\nspiced\nspicy\nwetback\nwetland\nfucking\n")
+    monkeypatch.setattr(
+        generator, "SOURCE_SHA256", hashlib.sha256(archive.read_bytes()).hexdigest()
+    )
+    base = tmp_path / "base.txt"
+    base.write_text("cloud\n", encoding="utf-8")
+    output = tmp_path / "out.txt"
+    monkeypatch.setattr(
+        sys, "argv", ["gen_vocabulary.py", str(archive), "--out", str(output), "--base", str(base)]
+    )
+    generator.main()
+    words = [line for line in output.read_text().splitlines() if not line.startswith("#")]
+    assert words == ["fucking", "spiced", "spicy", "wetland"]
+
+
 def test_shipped_supplement_matches_its_manifest():
     generator = _module()
     data = Path(__file__).parents[1] / "data"
@@ -111,7 +139,7 @@ def test_shipped_supplement_matches_its_manifest():
     manifest = (data / "english-expanded.manifest").read_text(encoding="utf-8")
     assert f"output_words={len(words)}\n" in manifest
     assert f"source_sha256={generator.SOURCE_SHA256}\n" in manifest
-    assert "content=unfiltered" in manifest
+    assert "content=slurs excluded" in manifest
 
 
 def test_the_shipped_wordlist_is_unfiltered_and_the_flag_list_covers_it():
