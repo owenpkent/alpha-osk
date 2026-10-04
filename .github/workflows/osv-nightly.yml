@@ -1,0 +1,42 @@
+name: OSV nightly
+
+# A full OSV scan of main once a day.
+#
+# The OSV job in ci.yml fails a pull request only on vulnerabilities that
+# pull request introduces, so an advisory published against a dependency
+# already on main never shows up on a PR. This is where it shows up: the
+# run fails, and GitHub emails the user who last modified the cron line
+# below. Fix the dependency, or quarantine the advisory with a time-boxed
+# osv-scanner.toml entry beside the lockfile it applies to (see the
+# comment on the OSV job in ci.yml).
+#
+# Two things can quietly stop this. GitHub disables scheduled workflows in
+# a public repository after 60 days with no repository activity, and the
+# notification goes to whoever last edited the cron line, so a change to it
+# by someone else moves the email to them.
+#
+# Same scan arguments and the same pinned SHA as ci.yml. Bump both
+# together.
+
+on:
+  schedule:
+    - cron: "23 7 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  osv-scan:
+    name: OSV Scanner (nightly full scan of main)
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+    uses: google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@a345acffa64b0eaede81a3d9aae6141214d9c8fc # v2.6.0
+    with:
+      scan-args: |-
+        --lockfile=requirements-dev.txt
+        --lockfile=backend/cf-worker/package-lock.json
+      fail-on-vuln: true
+      upload-sarif: false

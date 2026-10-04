@@ -634,6 +634,7 @@ Window {
     // Predictions from hybrid engine
     property var predictions: []
     property bool predictionsLoading: false
+    readonly property string predictionStatus: keyboard ? keyboard.predictionStatus : "loading"
 
     // Keyboard layout (data-driven from JSON)
     property var layoutRows: keyboard ? keyboard.getLayoutRows() : []
@@ -716,6 +717,7 @@ Window {
     readonly property bool predictionsArePresent:
         root.suggestionsEnabled && !root.privacyMode
         && !root.dictationActive && !study.suppressPredictions
+        && root.predictionStatus === "ready"
     readonly property string scanRevision: [
         root.predictionGeneration,
         // Everything that decides whether the pills are there at all, not
@@ -1313,7 +1315,40 @@ Window {
     // so accent keys also take an accent-coloured border (accentKeyBorder).
     // A border sits beside the label rather than behind it, so it can be the
     // full-strength accent on every theme without costing any contrast.
-    // The same "muted, not raw" reasoning is why Enter uses "#2a5a2a".
+    //
+    // ENTER TAKES THAT SAME WASH AND NO HUE OF ITS OWN, so the board under
+    // this scheme carries one colour rather than two.  It used to be a flat
+    // "#2a5a2a": the only fill in this file that skipped the walk above, and
+    // the only literal hue left in a project whose first colour rule is that
+    // there are none.  It measured 1.89:1 on Typewriter, 2.15 on Light and
+    // 3.28 on Vaporwave, all under WCAG AA, and it went unnoticed because
+    // every scheme but `off` resolves Enter through `_roleFill` and never
+    // reaches this line.  Sharing `accentKeyColor` fixes the ratio for free
+    // (it is already walked per theme) and spends no new colour to do it.
+    // The keys stay told apart by the border and by the role schemes, which
+    // is where that job belongs.
+    //
+    // THE KEYS THAT DESTROY TEXT ARE EXEMPT FROM THAT BORDER, and the
+    // exception is the rule working rather than a carve-off from it.  A
+    // saturated ring outranks a lightness step at a glance, so Backspace
+    // and Del wearing one while Enter wears none made the destructive key
+    // the loudest thing on the compact grid: reported as "more emphasized
+    // than enter", and it was, four rings (Backspace, Tab, Del, Shift)
+    // against nought.  The FILLS were never the problem and are untouched
+    // here: measured on Dark they sit 13.8 and 11.8 OKLab dE from a plain
+    // key, which is level.  It was only ever the ring.
+    //
+    // It also has to be read off the ROLE rather than a list of actions
+    // spelled out here.  `Palette.roleForKey` is already this project's one
+    // answer to "does this key destroy text" (it is what paints the `kill`
+    // band), and a second list in this file is exactly the pair of parallel
+    // blocks that drift.  Note this border is the one colour on a key that
+    // Key Colours does NOT reach, since it keys off the layout JSON's
+    // `style` and every fill keys off `role`: that is why the ring won even
+    // on Monochrome, whose whole intent is to make Enter the brightest key
+    // on the board.  Widening this to follow the scheme properly was the
+    // other option on the table and is the bigger change; this one is the
+    // smallest thing that puts Enter back on top.
     // The wash delegates to palette.js, which is the single copy of the
     // WCAG maths in the project: two copies of a contrast rule is exactly
     // how the two drift apart (see the `luminance` note above, which this
@@ -1325,6 +1360,13 @@ Window {
     readonly property color accentKeyColor: root.accentWashFor(
         root.themeKeyColor, root.themeAccent, root.themeTextColor)
     readonly property color accentKeyBorder: root.themeAccent
+    function keyBorderFor(kd) {
+        if ((kd.style || "default") !== "accent")
+            return root.themeBorder
+        // Backspace and Del: the wash still marks them, the ring does not.
+        return root.keyRoleFor(kd) === "kill" ? root.themeBorder
+                                              : root.accentKeyBorder
+    }
     property color themeBorder: activeTheme.border
 
     // ===== Key colouring by role =====
@@ -1411,6 +1453,10 @@ Window {
         function onPredictionsChanged(preds) { root.predictions = preds }
         function onPredictionsRefined(preds) { root.predictions = preds }
         function onPredictionLoading(loading) { root.predictionsLoading = loading }
+        function onPredictionStatusChanged() {
+            if (keyboard.predictionStatus === "ready" && root.showVisualization)
+                vizContent.refresh()
+        }
         
         // Layout updates
         // Always land on the base layer after a layout swap — leaving the
@@ -1599,11 +1645,20 @@ Window {
                 }
             }
 
-            // Drag area (most of title bar)
+            // Drag area: everything on the strip up to the caption buttons.
+            // The reserve is the button row's measured extent, never a
+            // constant. It was a hard-coded 332 px, sized for a row that
+            // has never been that wide (198 px plus its margin in a typical
+            // session), which left a 126 px band between the grip region and
+            // the first button that neither dragged nor did anything else,
+            // and on the narrower compact window that band was a sixth of
+            // the bar. Row lays out only its visible children, so the
+            // mirrors and the X11-only Tuck button come and go without
+            // anything here needing to know.
             MouseArea {
                 id: dragArea
                 anchors.fill: parent
-                anchors.rightMargin: 332  // Leave space for buttons (Learning switch, Snippets, Tuck, etc.)
+                anchors.rightMargin: titleButtons.width + titleButtons.anchors.rightMargin
                 cursorShape: Qt.SizeAllCursor
                 
                 property real startMouseX
@@ -1678,6 +1733,7 @@ Window {
             
             // Title bar buttons (right side)
             Row {
+                id: titleButtons
                 anchors.right: parent.right
                 anchors.rightMargin: 8
                 anchors.verticalCenter: parent.verticalCenter
@@ -1848,8 +1904,9 @@ Window {
                     id: privacyToggle
                     // Sized for track + gap + "Learning" at 11 px
                     // DemiBold.  The label is static so this never
-                    // reflows; if you change it, bump this width AND
-                    // dragArea.rightMargin further up together.
+                    // reflows. dragArea's reserve follows the row's
+                    // measured width, so changing this needs no
+                    // matching edit there.
                     width: 96
                     height: 24
                     radius: 4
@@ -1951,13 +2008,20 @@ Window {
                     // off, taking every control in it, and an unrelated
                     // setting must not be the only thing standing between the
                     // user and a feature.
+                    //
+                    // Drawn at 20 px with a thinner stroke rather than at the
+                    // 16 px its neighbours use: a letter fills far less of its
+                    // 24-unit box than a circle or a bookmark does, so at 16
+                    // it read as the smallest icon on the bar. The stroke is
+                    // scaled down by the same ratio so the line weight still
+                    // matches theirs (1.33 px).
                     Comp.StrokeIcon {
                         anchors.centerIn: parent
-                        width: 16
-                        height: 16
-                        paths: ["M2 12 A10 10 0 0 1 22 12 A10 10 0 0 1 2 12",
-                                "M8 14s1.5 2 4 2 4-2 4-2",
-                                "M9 9L9.01 9", "M15 9L15.01 9"]
+                        width: 20
+                        height: 20
+                        strokeWidth: 1.6
+                        inkOffsetX: 0.5
+                        paths: ["M18.1 6c-1.1 2.913 -1.9 4.913 -2.4 6c-1.879 4.088 -3.713 6 -6 6c-2.4 0 -4.8 -2.4 -4.8 -6s2.4 -6 4.8 -6c2.267 0 4.135 1.986 6 6c.512 1.102 1.312 3.102 2.4 6"]
                         ink: symbolsWindow.visible ? root.themeAccent : "#999"
                     }
 
@@ -2266,6 +2330,102 @@ Window {
                 clip: true
 
                 Behavior on Layout.preferredHeight { NumberAnimation { duration: 150 } }
+
+                // Startup occupies only the suggestion area; keys remain usable.
+                Item {
+                    objectName: "predictionStartupStatus"
+                    x: predBar.micReserve + 8
+                    width: Math.max(0, predBar.width - predBar.micReserve - predBar.clearCtxReserve - 16)
+                    height: parent.height
+                    visible: root.suggestionsEnabled && !root.privacyMode
+                             && !root.dictationActive && !study.suppressPredictions
+                             && root.predictionStatus !== "ready"
+
+                    RowLayout {
+                        anchors.centerIn: parent
+                        width: Math.min(parent.width, implicitWidth)
+                        spacing: 8
+
+                        // Drawn, not a Controls BusyIndicator: every other
+                        // control on this bar is a plain item so no widget
+                        // style can restyle or warn about it, and this one
+                        // matches the theme the same way.
+                        Canvas {
+                            id: predictionStartupSpinner
+                            objectName: "predictionStartupSpinner"
+                            Layout.preferredWidth: 20
+                            Layout.preferredHeight: 20
+                            visible: root.predictionStatus === "loading"
+                            readonly property bool running: visible && parent.parent.visible
+                            onPaint: {
+                                var ctx = getContext("2d")
+                                ctx.reset()
+                                ctx.lineWidth = 2.5
+                                ctx.lineCap = "round"
+                                ctx.strokeStyle = root.themeAccent
+                                ctx.beginPath()
+                                ctx.arc(width / 2, height / 2, width / 2 - 2, 0, Math.PI * 1.4)
+                                ctx.stroke()
+                            }
+                            onVisibleChanged: requestPaint()
+                            RotationAnimation on rotation {
+                                from: 0; to: 360
+                                duration: 900
+                                loops: Animation.Infinite
+                                running: predictionStartupSpinner.running
+                            }
+                        }
+                        Text {
+                            objectName: "predictionStartupText"
+                            Layout.fillWidth: true
+                            text: root.predictionStatus === "error"
+                                  ? qsTr("Suggestions unavailable") : qsTr("Loading suggestions...")
+                            textFormat: Text.PlainText
+                            color: root.themeTextColor
+                            font.pixelSize: 13
+                            elide: Text.ElideRight
+                            Accessible.role: Accessible.StaticText
+                            Accessible.name: text
+                        }
+                        // Same idiom as every other button on the bar: a
+                        // Rectangle plus a MouseArea, sized for an imprecise
+                        // pointer.  A Controls Button takes the widget style's
+                        // colours, which no theme here controls.
+                        Rectangle {
+                            id: predictionStartupRetry
+                            objectName: "predictionStartupRetry"
+                            signal clicked()
+                            visible: root.predictionStatus === "error"
+                            Layout.preferredHeight: 34
+                            Layout.preferredWidth: retryLabel.implicitWidth + 28
+                            radius: 8
+                            color: retryArea.containsMouse ? root.themeKeyPressed : root.themeKeyColor
+                            border.color: root.themeAccent
+                            border.width: 1.5
+                            Text {
+                                id: retryLabel
+                                anchors.centerIn: parent
+                                text: qsTr("Retry")
+                                textFormat: Text.PlainText
+                                color: root.themeTextColor
+                                font.pixelSize: 13
+                                font.bold: true
+                            }
+                            MouseArea {
+                                id: retryArea
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: predictionStartupRetry.clicked()
+                            }
+                            onClicked: if (keyboard) keyboard.startPredictionLoading()
+                            Accessible.role: Accessible.Button
+                            Accessible.name: retryLabel.text
+                            // Assistive clients invoke Press, not the MouseArea; the guard stops a stale accessible reference acting after the button hides.
+                            Accessible.onPressAction: if (visible && enabled) clicked()
+                        }
+                    }
+                }
 
                 // Privacy mode indicator (replaces predictions)
                 Row {
@@ -2902,23 +3062,29 @@ Window {
                     ToolTip.text: qsTr("Symbols & emoji: tap one to type it")
                     ToolTip.delay: 400
 
-                    // Feather's "smile", MIT, (c) 2013-2023 Cole Bemis.
-                    // See THIRD_PARTY_NOTICES.md.  One deviation, and it is
-                    // forced: StrokeIcon takes path data only, so the
-                    // source's <circle> is written as the equivalent pair of
-                    // arcs.  The eyes are upstream's zero-length lines,
-                    // verbatim, which rely on the SVG round-cap rule and
-                    // were measured rendering correctly through Canvas
-                    // rather than assumed to.  Drawn rather than typeset for
-                    // the usual reason: a smiley in a Text resolves through
-                    // Segoe UI Emoji on Windows and comes out as a colour
-                    // glyph that ignores the ink it is given.
+                    // Tabler's "alpha", MIT, (c) 2020-2026 Paweł Kuna. See
+                    // THIRD_PARTY_NOTICES.md.  Verbatim from the 24x24
+                    // source, which follows the same stroke-2, round-cap
+                    // convention as the Feather icons beside it.  Drawn
+                    // rather than typed as a Greek letter so it takes the
+                    // same line weight and ink as its neighbours instead of
+                    // whatever the host font makes of U+03B1.
+                    //
+                    // Sized to match them by eye rather than by box: a
+                    // letter fills far less of its 24-unit box than a circle
+                    // or a bookmark does, so the box is larger (0.84 against
+                    // their 0.62) and the stroke is thinner by the same
+                    // ratio, which keeps the line weight equal in pixels.
+                    // Its ink spans x 3.9 to 19.1 of the 24-unit box, so it
+                    // sits half a unit left of centre; inkOffsetX puts that
+                    // back. Measured from a render at the default window:
+                    // 0.5 px left of centre without it, centred with it.
                     Comp.StrokeIcon {
                         anchors.fill: parent
-                        paths: ["M2 12 A10 10 0 0 1 22 12 A10 10 0 0 1 2 12",
-                                "M8 14s1.5 2 4 2 4-2 4-2",
-                                "M9 9L9.01 9", "M15 9L15.01 9"]
-                        boxFraction: 0.62
+                        paths: ["M18.1 6c-1.1 2.913 -1.9 4.913 -2.4 6c-1.879 4.088 -3.713 6 -6 6c-2.4 0 -4.8 -2.4 -4.8 -6s2.4 -6 4.8 -6c2.267 0 4.135 1.986 6 6c.512 1.102 1.312 3.102 2.4 6"]
+                        boxFraction: 0.84
+                        strokeWidth: 1.5
+                        inkOffsetX: 0.5
                         ink: symbolsWindow.visible ? root.themeAccent
                              : (symbolsBarBtn.containsMouse ? root.themeTextColor : "#bbb")
                     }
@@ -3284,8 +3450,15 @@ Window {
                                     switch(kd.style || "default") {
                                         case "secondary": return Qt.darker(root.themeKeyColor, 1.3)
                                         case "special": return Qt.darker(root.themeKeyColor, 1.15)
-                                        case "accent": return root.accentKeyColor
-                                        case "enter": return "#2a5a2a"
+                                        // Enter shares the editing keys'
+                                        // wash rather than carrying a hue of
+                                        // its own: one colour on the board,
+                                        // not two.  The two styles still part
+                                        // company on the border, where
+                                        // `accent` takes a ring and `enter`
+                                        // does not (see keyBorderFor).
+                                        case "accent":
+                                        case "enter": return root.accentKeyColor
                                         default: return root.themeKeyColor
                                     }
                                 }
@@ -3295,9 +3468,11 @@ Window {
                                 // Accent keys carry the cue on their border as
                                 // well as their fill: the fill has to stay weak
                                 // enough to keep the label readable (see
-                                // accentWashFor), the border does not.
-                                borderColor: (kd.style || "default") === "accent"
-                                             ? root.accentKeyBorder : root.themeBorder
+                                // accentWashFor), the border does not.  The
+                                // keys that destroy text are the exception and
+                                // take no ring at all; `keyBorderFor` carries
+                                // the reasoning.
+                                borderColor: root.keyBorderFor(kd)
 
                                 // Repeat-worthy specials always; character
                                 // keys only when the user asked for it (see
@@ -3519,7 +3694,7 @@ Window {
                 specialKeyColor: Qt.darker(root.themeKeyColor, 1.15)
                 keyPressedColor: root.themeKeyPressed
                 keyTextColor: root.themeTextColor
-                enterKeyColor: "#2a5a2a"
+                enterKeyColor: root.accentKeyColor
                 accentColor: root.themeAccent
                 borderColor: root.themeBorder
                 characterRepeat: root.characterRepeat

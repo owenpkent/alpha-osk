@@ -186,6 +186,13 @@ itself as topmost while sitting behind ordinary ones. See
 `apply_extended_styles()` in `src/platform/windows_window.py` for the full
 story.
 
+The taskbar button needs one more thing than the right bits: the shell
+decides whether a window gets a button when it first becomes visible, and
+the keyboard is visible before the styles are written. So the write is
+wrapped in `ShowWindow(SW_HIDE)` / `ShowWindow(SW_SHOWNOACTIVATE)`, the
+documented way to change a visible window's taskbar presence. Without it
+the button stayed in its pinned, half-size state until clicked.
+
 ---
 
 ## UIAccess and EV Code Signing
@@ -408,6 +415,7 @@ The `.spec` file (`build/windows/alpha-osk.spec`) can be customized:
 | `upx` | `True` | Compress binaries with UPX |
 | `manifest` | `alpha-osk.exe.manifest` | Path to the UIAccess manifest |
 | `icon` | (none) | Path to `.ico` file for the exe icon |
+| `version` | generated | Version resource (FileDescription, ProductName, version). Written by the spec from `version_resource.py` and `src/__version__.py` into the work directory on every build; nothing to bump |
 
 ---
 
@@ -748,7 +756,7 @@ gh api repos/google/osv-scanner-action/git/refs/tags/<tag> --jq '.object.sha'
 
 Update the `@<sha> # <tag>` line in `ci.yml` and commit.
 
-**Quarantining an unfixable advisory.** With `fail-on-vuln: true`, an unpatched CVE will block every PR until it's addressed. The normal path is to upgrade the affected package (bump the direct dep, or pin a transitive constraint as we did for `lxml`). If a fix genuinely is not yet available upstream, add an `osv-scanner.toml` at the repo root listing the specific advisory IDs to ignore, with a reason and a review date:
+**Quarantining an unfixable advisory.** With `fail-on-vuln: true`, an unpatched CVE against a dependency already on `main` fails the full scan on every push to `main` and the daily `osv-nightly.yml` run until it's addressed (pull requests fail only on advisories they introduce). The normal path is to upgrade the affected package (bump the direct dep, or pin a transitive constraint as we did for `lxml`). If a fix genuinely is not yet available upstream, add an `osv-scanner.toml` **beside the lockfile it applies to** (the repo root for `requirements-dev.txt`, `backend/cf-worker/` for the worker; the scanner does not look anywhere else, so a worker entry at the root is silently ignored) listing the specific advisory IDs to ignore, with a reason and a review date:
 
 ```toml
 [[IgnoredVulns]]
@@ -877,6 +885,7 @@ higher-integrity windows) without granting broad admin access.  See the
 | Keyboard steals focus on click | `WS_EX_NOACTIVATE` not applied | Check logs for "Failed to apply Windows extended styles" |
 | Keyboard has no taskbar entry / minimize button has nowhere to go | `WS_EX_TOOLWINDOW` clear or `WS_EX_APPWINDOW` set failed | Check logs for "Failed to apply Windows extended styles". Note: the keyboard appearing in Alt+Tab is expected, not a bug (see "How This Is Achieved on Windows" above); don't re-add `WS_EX_TOOLWINDOW` to "fix" it. |
 | Keyboard disappears behind other windows | Topmost not working | Try restarting Alpha-OSK |
+| Taskbar button stays small and unlabelled until clicked | The hide / re-show around the style write did not run | Check logs for "Failed to apply Windows extended styles"; the re-show is in a `finally`, so a hidden keyboard means the hide itself failed |
 | **Window becomes massive after moving to a different monitor** | Qt's default DPI rounding multiplies logical window dimensions when crossing monitors with different scale factors | Fixed: `PassThrough` DPI rounding policy set in `keyboard_app.py`; `onScreenChanged` in `Main.qml` clamps width to the new screen's available width |
 
 ### Build Issues
@@ -944,6 +953,7 @@ Or check the startup log output:
 | `run.py` | MODIFIED — Cross-platform venv paths and dep checks |
 | `build/windows/alpha-osk.exe.manifest` | NEW — UIAccess manifest for EV signing |
 | `build/windows/alpha-osk.spec` | NEW — PyInstaller build specification |
+| `build/windows/version_resource.py` | NEW — the exe's version resource, generated from `src/__version__.py` |
 
 ### Key Design Decisions
 

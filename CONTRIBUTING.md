@@ -20,7 +20,7 @@ welcome, especially from users of adaptive technology.
 - **Report bugs** using the bug report template. Attach the diagnostic log if you have one: *Settings > Data & Privacy > Diagnostics > Open Log Folder*, or `alpha-osk.log` in the config directory. It carries crash tracebacks and never carries typed content.
 - **Request features** using the feature request template.
 - **Improve docs** — typos, clearer wording, missing context.
-- **Add tests**: the suite is large (~2,250) but coverage gaps exist.
+- **Add tests**: the suite is large (`python -m pytest --collect-only -q` prints the count) but coverage gaps exist.
 - **Code changes** — see "Development setup" below.
 
 If you are unsure whether a change is wanted, open an issue first to
@@ -190,9 +190,12 @@ runs on any machine with nothing to set up first.
 5. CI runs ruff + ruff-format + mypy + pytest + OSV vulnerability scan. `main` is a
    protected branch: the merge button stays disabled until five required
    checks pass green: `Lint`, `Type Check`, `Test (ubuntu-latest)`,
-   `Test (windows-latest)`, and `OSV Scanner (deps CVE check)`. A new CVE
-   advisory in a dependency lockfile fails the OSV gate and blocks the
-   merge just like a failing test would.
+   `Test (windows-latest)`, and `OSV Scanner (deps CVE check)`. On a PR the
+   OSV gate compares your branch with its base and fails only on a known
+   vulnerability your change introduces, which blocks the merge just like a
+   failing test would. Advisories against dependencies already on `main`
+   are caught by a full scan on every push to `main` and a nightly run,
+   not by your PR.
 6. A maintainer will review. Iterate as needed.
 
 If your PR touches the prediction engine, build pipeline, or telemetry,

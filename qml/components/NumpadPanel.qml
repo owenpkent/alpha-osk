@@ -36,7 +36,11 @@ Item {
     property color specialKeyColor: "#333333"
     property color keyPressedColor: "#5a5a5a"
     property color keyTextColor: "#e0e0e0"
-    property color enterKeyColor: "#2a5a2a"
+    // Enter's fill. Defaults to an ordinary key rather than to a hue of
+    // its own: Main.qml binds it to the editing keys' wash (see the
+    // keyColor switch there), and a literal default is how the green
+    // this replaced outlived every theme it was unreadable on.
+    property color enterKeyColor: keyColor
     property color accentColor: "#4a9eff"
     property color borderColor: "#505050"
     // Key Colours table from Main.qml; null (the default) leaves every

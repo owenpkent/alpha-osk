@@ -176,7 +176,22 @@ class SymSpell:
         indexed = word[: self.prefix_length] if len(word) > self.prefix_length else word
         # The indexed prefix is itself a "zero-deletion variant".
         yield indexed
-        yield from self._deletion_variants(indexed, self.max_edit_distance)
+        if self.max_edit_distance != 2 or len(indexed) <= 1:
+            yield from self._deletion_variants(indexed, self.max_edit_distance)
+            return
+
+        # Generate each pair of deleted positions once. The breadth-first
+        # query path reaches each pair in both orders and tracks a frontier
+        # for each level, which is costly across two full vocabulary passes.
+        # Keep that path unchanged: its set iteration breaks lookup score ties.
+        variants: Set[str] = set()
+        for first in range(len(indexed)):
+            reduced = indexed[:first] + indexed[first + 1 :]
+            variants.add(reduced)
+            if len(reduced) > 1:
+                for second in range(first, len(reduced)):
+                    variants.add(reduced[:second] + reduced[second + 1 :])
+        yield from variants
 
     def _index_overlay_word(self, word: str) -> None:
         for variant in self._index_variants(word):
