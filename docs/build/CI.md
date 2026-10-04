@@ -162,12 +162,13 @@ write access approves it, which is the point. Decided out of the September
 
 `.github/workflows/dependabot-auto-merge.yml` queues Dependabot's patch and
 minor updates to squash-merge once every required check has passed, using
-GitHub's documented pattern. A major version bump waits for a person,
-because that is where an upgrade can change behaviour the tests do not
-cover. The repository's "Allow auto-merge" setting has to stay on for it to
-work.
+GitHub's documented pattern. A major version bump of a library waits for a
+person, because that is where an upgrade can change behaviour the tests do
+not cover. A bump to a GitHub Action merges at any level, majors included,
+for the reason given below. The repository's "Allow auto-merge" setting has
+to stay on for it to work.
 
-Six things about it are deliberate:
+Seven things about it are deliberate:
 
 - **The required checks are the gate, and nothing merges past them.** Lint,
   Type Check, Tests and the OSV scan must all pass, so an update that
@@ -188,6 +189,18 @@ Six things about it are deliberate:
 - **`update-type` is the highest change in the PR.** The pip group bundles
   minor and patch updates, so a grouped PR auto-merges; a major update arrives
   as its own PR and waits.
+- **A GitHub Actions bump merges whatever its semver level.** Actions version
+  by major tag, so nearly every bump Dependabot opens for them is a major
+  (`actions/checkout` 4 to 7, #115), and under the library rule each one
+  waited for a person while changing nothing the suite could see. The
+  difference from a library is that the pull request's own checks run the
+  changed workflow: an action major that breaks CI fails its own gate,
+  where a library major can pass the suite and still change behaviour the
+  suite does not cover. The job reads the ecosystem from
+  `fetch-metadata`'s `package-ecosystem` output, which is the second
+  segment of Dependabot's branch name (`dependabot/github_actions/...`).
+  The one action not exercised by a pull request is the nightly OSV
+  workflow's reusable call, and it is the same pin `ci.yml` uses.
 - **`dependabot/fetch-metadata` is pinned to a commit hash**, like every
   other action here, and Dependabot keeps that pin current.
 - **It approves what it merges.** Branch protection requires one approving
