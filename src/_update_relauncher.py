@@ -37,7 +37,12 @@ Flow
    can never fire: NSIS restores each extracted file's build-time
    timestamp (``SetDateSave`` is on by default), so the fresh exe's
    mtime *predates* the install by however old the build is.
-3. Launch the new exe via ``subprocess.Popen`` from the user session.
+3. Launch the new exe through ``explorer.exe`` from the user session
+   (``_launch_command``: a UIAccess exe started by anything other than
+   Explorer comes up without UIAccess), then confirm an
+   ``alpha-osk.exe`` process actually appeared
+   (``_wait_for_new_osk_process``): with Explorer in between, a
+   successful ``Popen`` only proves Explorer started.
 4. Write ``update_handoff.json`` next to ``$APPDATA/alpha-osk/`` so the
    newly launched OSK can flash a "✓ Updated to vX.Y.Z" toast.
 
@@ -69,10 +74,22 @@ _PARENT_EXIT_TIMEOUT_S = 60
 _NEW_EXE_TIMEOUT_S = 180
 _INSTALLER_GRACE_S = 5  # after parent dies, wait for installer file copy
 
+# After the launch: how long the new keyboard's process has to appear,
+# and how often we look. A successful Popen only proves Explorer started
+# (see _launch_command); the keyboard is Explorer's child, not ours, so
+# nothing else tells us it came up. The relay itself is quick, so 15 s is
+# headroom for whatever can delay the first start of an exe written
+# seconds ago (an antivirus scan is the likely one). It waits for the
+# process to exist, not for its window, so the keyboard's own few seconds
+# of startup are not inside it. Each look is a whole-system process
+# snapshot, hence 250 ms steps rather than a tight loop.
+_NEW_OSK_APPEAR_TIMEOUT_S = 15
+_NEW_OSK_POLL_INTERVAL_S = 0.25
+
 # Ceiling on the whole run, enforced by clamping each phase to what is
 # left of it rather than by a watchdog thread.
 #
-# The phases already sum to 245 s, so this changes nothing today, and
+# The phases already sum to 260 s, so this changes nothing today, and
 # that is the point: it is here so that a future phase, or a phase whose
 # timeout someone raises, cannot extend the total without saying so.
 # This process is *detached* and has no console, so anything it fails to
@@ -271,12 +288,180 @@ def _wait_for_new_exe(
         time.sleep(_POLL_INTERVAL_S)
 
 
+def _launch_command(exe_path: Path) -> list[str]:
+    """The argv that brings the freshly-installed keyboard back.
+
+    On Windows the keyboard is launched **through Explorer**, never by
+    creating the process ourselves. Measured on 2026-10-04 against
+    Windows' own ``osk.exe`` (signed, in System32, ``uiAccess="true"``):
+    a UIAccess application started with ``CreateProcess`` or even
+    ``ShellExecuteEx`` from a process that has no UIAccess itself comes
+    up with ``TokenUIAccess=0``, while the same exe started by
+    ``explorer.exe`` comes up with ``TokenUIAccess=1``. This helper runs
+    from a renamed copy of the bundle in %TEMP%, outside every secure
+    location, so it has no UIAccess to hand down, and a direct launch
+    would bring the keyboard back unable to type into elevated windows
+    until the user next started it from the Start menu. Explorer runs at
+    the user's integrity level, exactly as this helper does, so the relay
+    that failed when the *elevated installer* tried it (see the module
+    docstring) has no integrity boundary to fail across here.
+    """
+    if sys.platform == "win32":
+        explorer = Path(os.environ.get("WINDIR", r"C:\Windows")) / "explorer.exe"
+        return [str(explorer), str(exe_path)]
+    return [str(exe_path)]
+
+
+def _running_image_names() -> Optional[list[str]]:
+    """The image name of every process we can see, or None if we cannot look.
+
+    Windows is the real implementation, and the only platform the
+    updater runs on: a Toolhelp process snapshot read through ctypes,
+    rather than a ``tasklist`` subprocess, which would cost a process
+    per poll and need ``CREATE_NO_WINDOW``. Elsewhere it reads the
+    target of each ``/proc/<pid>/exe`` where there is a ``/proc``, and
+    returns None where there is not (macOS).
+
+    None means "cannot tell", never "nothing is running", and that
+    includes a ``Process32FirstW`` that fails on the first entry, which
+    is what a wrong structure size looks like: a broken enumeration must
+    not read as a keyboard that never started.
+    """
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            class _ProcessEntry32W(ctypes.Structure):
+                _fields_ = [
+                    ("dwSize", wintypes.DWORD),
+                    ("cntUsage", wintypes.DWORD),
+                    ("th32ProcessID", wintypes.DWORD),
+                    ("th32DefaultHeapID", ctypes.c_size_t),  # ULONG_PTR
+                    ("th32ModuleID", wintypes.DWORD),
+                    ("cntThreads", wintypes.DWORD),
+                    ("th32ParentProcessID", wintypes.DWORD),
+                    ("pcPriClassBase", wintypes.LONG),
+                    ("dwFlags", wintypes.DWORD),
+                    ("szExeFile", wintypes.WCHAR * 260),  # MAX_PATH
+                ]
+
+            th32cs_snapprocess = 0x00000002
+            invalid_handle_value = ctypes.c_void_p(-1).value
+            # A private WinDLL so the prototypes below do not leak into
+            # every other caller of ctypes.windll.kernel32. An undeclared
+            # restype is c_int, which truncates a 64-bit handle.
+            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            entry_ptr = ctypes.POINTER(_ProcessEntry32W)
+            kernel32.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
+            kernel32.CreateToolhelp32Snapshot.argtypes = [wintypes.DWORD, wintypes.DWORD]
+            kernel32.Process32FirstW.restype = wintypes.BOOL
+            kernel32.Process32FirstW.argtypes = [wintypes.HANDLE, entry_ptr]
+            kernel32.Process32NextW.restype = wintypes.BOOL
+            kernel32.Process32NextW.argtypes = [wintypes.HANDLE, entry_ptr]
+            kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+
+            snapshot = kernel32.CreateToolhelp32Snapshot(th32cs_snapprocess, 0)
+            if snapshot is None or snapshot == invalid_handle_value:
+                return None
+            try:
+                entry = _ProcessEntry32W()
+                entry.dwSize = ctypes.sizeof(_ProcessEntry32W)
+                if not kernel32.Process32FirstW(snapshot, ctypes.byref(entry)):
+                    return None
+                names: list[str] = []
+                while True:
+                    names.append(str(entry.szExeFile))
+                    if not kernel32.Process32NextW(snapshot, ctypes.byref(entry)):
+                        return names
+            finally:
+                kernel32.CloseHandle(snapshot)
+        except Exception as exc:  # noqa: BLE001
+            _logger.warning("Could not snapshot the process list: %s", exc)
+            return None
+    proc = Path("/proc")
+    if not proc.is_dir():
+        return None
+    found: list[str] = []
+    for pid_dir in proc.iterdir():
+        if not pid_dir.name.isdigit():
+            continue
+        try:
+            found.append(Path(os.readlink(pid_dir / "exe")).name)
+        except OSError:
+            # Another user's process, a kernel thread, or one that has
+            # just exited: none of them is the keyboard we launched.
+            continue
+    return found
+
+
+def _process_image_running(image_name: str) -> bool:
+    """Is a process with exactly this image name running right now?
+
+    The whole name, compared case-insensitively as Windows compares
+    image names, so the helper's own ``alpha-osk-relauncher.exe`` never
+    counts as the keyboard's ``alpha-osk.exe``. The old keyboard cannot
+    be what this finds either: the helper waited for its parent to exit
+    before launching, and the installer force-kills every
+    ``alpha-osk.exe`` before it writes the new one. What can match
+    besides our launch is a keyboard the user started by hand in the
+    meantime, or the one the installer's own Explorer fallback starts;
+    both are a keyboard on screen, which is the question being asked, so
+    neither is a false positive worth guarding against.
+
+    True when the process list cannot be read at all. The check exists
+    to stop a false "Done!", and an unreadable list is no evidence that
+    the launch failed, so it falls back to what the helper reported
+    before the check existed.
+    """
+    names = _running_image_names()
+    if names is None:
+        _logger.warning("Could not list running processes; assuming %s started", image_name)
+        return True
+    wanted = image_name.casefold()
+    return any(name.casefold() == wanted for name in names)
+
+
+def _wait_for_new_osk_process(image_name: str, timeout_s: float) -> bool:
+    """Block until a process named ``image_name`` is running, or time out.
+
+    The headless path's confirmation that the launch brought the
+    keyboard back. The splash path asks :func:`_process_image_running`
+    once per QTimer tick instead, so its window keeps painting through
+    the wait; both go through that one rule. Looks before the clock, like
+    the other waits, so a budget clamped to 0 still gets one look.
+    """
+    deadline = time.monotonic() + timeout_s
+    while True:
+        if _process_image_running(image_name):
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(_NEW_OSK_POLL_INTERVAL_S)
+
+
+def _log_new_osk_missing(image_name: str, budget_s: float) -> None:
+    """The one log line both paths write when the keyboard never appears.
+
+    Names the image and the budget actually waited, and nothing else.
+    """
+    _logger.error(
+        "No %s process appeared within %.0fs of the launch; reporting failure",
+        image_name,
+        budget_s,
+    )
+
+
 def _launch_new_osk(exe_path: Path) -> bool:
     """Spawn the freshly-installed ``alpha-osk.exe`` as a detached process.
 
-    Returns True on launch success (i.e. ``Popen`` didn't raise). Note
-    that "spawn succeeded" is not "OSK is running" — but if Popen fails
-    we know to log the error rather than silently exiting.
+    Returns True when ``Popen`` did not raise. On Windows that proves
+    only that Explorer started (see ``_launch_command`` for why Windows
+    goes through it), not that the keyboard did, so both callers go on
+    to confirm the keyboard's own process appeared before reporting
+    success: :func:`_wait_for_new_osk_process` on the headless path, and
+    :func:`_process_image_running` per tick on the splash path. A False
+    here is logged rather than silently exiting.
     """
     try:
         flags = 0
@@ -288,7 +473,7 @@ def _launch_new_osk(exe_path: Path) -> bool:
                 subprocess, "CREATE_NEW_PROCESS_GROUP", 0
             )
         subprocess.Popen(
-            [str(exe_path)],
+            _launch_command(exe_path),
             creationflags=flags,
             close_fds=True,
             cwd=str(exe_path.parent),
@@ -473,6 +658,14 @@ def _run_headless(args: argparse.Namespace, overall_deadline: Optional[float] = 
     if not _launch_new_osk(target_exe):
         return 4
 
+    # Popen succeeding only proves Explorer started. A keyboard that then
+    # never appears is a failed launch: same exit code, and, like one, no
+    # handoff for a later manual start to read.
+    appear_budget = _remaining(overall_deadline, _NEW_OSK_APPEAR_TIMEOUT_S)
+    if not _wait_for_new_osk_process(target_exe.name, appear_budget):
+        _log_new_osk_missing(target_exe.name, appear_budget)
+        return 4
+
     _write_handoff(config_dir, args.new_version, args.previous_version)
     _logger.info("Relauncher done")
     return 0
@@ -575,6 +768,7 @@ def _run_with_splash(args: argparse.Namespace, overall_deadline: Optional[float]
         # console, so the log is the only post-mortem there is.
         parent_budget: float = 0.0
         new_exe_budget: float = 0.0
+        appear_budget: float = 0.0
 
     state = _SplashState()
 
@@ -644,14 +838,38 @@ def _run_with_splash(args: argparse.Namespace, overall_deadline: Optional[float]
             return
         QTimer.singleShot(int(_POLL_INTERVAL_S * 1000), _poll_new_exe)
 
+    def _launch_failed() -> None:
+        _set_message("Couldn't launch the new keyboard.\nFind Alpha-OSK in your Start Menu.")
+        _settle_progress(full=False)
+        QTimer.singleShot(_FAILURE_DWELL_MS, lambda: _finish(4))
+
     def _launch() -> None:
         _set_message("Launching the new keyboard…")
         if not _launch_new_osk(target_exe):
             _logger.error("Launch failed")
-            _set_message("Couldn't launch the new keyboard.\nFind Alpha-OSK in your Start Menu.")
-            _settle_progress(full=False)
-            QTimer.singleShot(_FAILURE_DWELL_MS, lambda: _finish(4))
+            _launch_failed()
             return
+        # Popen succeeding only proves Explorer started, so "Done!" waits
+        # for the keyboard's own process. Polled per tick rather than via
+        # the blocking _wait_for_new_osk_process, which would freeze the
+        # marquee for up to the whole budget, and a window that pumps no
+        # messages for five seconds is one Windows counts as not
+        # responding, at the moment the user is reading it.
+        state.appear_budget = _remaining(ceiling, _NEW_OSK_APPEAR_TIMEOUT_S)
+        state.deadline = time.monotonic() + state.appear_budget
+        QTimer.singleShot(0, _poll_new_osk)
+
+    def _poll_new_osk() -> None:
+        if _process_image_running(target_exe.name):
+            _launched()
+            return
+        if time.monotonic() >= state.deadline:
+            _log_new_osk_missing(target_exe.name, state.appear_budget)
+            _launch_failed()
+            return
+        QTimer.singleShot(int(_NEW_OSK_POLL_INTERVAL_S * 1000), _poll_new_osk)
+
+    def _launched() -> None:
         _write_handoff(config_dir, args.new_version, args.previous_version)
         # Brief "Done" pause so the splash doesn't vanish a frame
         # before the new OSK draws its first window — otherwise
