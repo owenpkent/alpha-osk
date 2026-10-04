@@ -96,6 +96,68 @@ these sets, and it is certainly not evidence on 30 sentences. Tune against
 
 Moved verbatim from `CLAUDE.md` on 2026-09-20, which keeps a summary of the load-bearing rules. This is the full reasoning.
 
+## Startup
+
+`keyboard_app.main()` creates `KeyboardBridge(defer_predictions=True)` and
+starts its prediction loader after loading the window and entering the event
+loop. Ordinary keys, modifiers, snippets and privacy detection work while the
+prediction bar says "Loading suggestions...". `predictionStatus` is the single
+loading/ready/error state; a failed load offers Retry without disabling typing.
+Direct bridge construction stays synchronous for tests and embedding callers.
+
+`prediction/loader.py` builds a parentless `HybridPredictor` in a daemon thread,
+moves the completed object to the UI thread, and publishes it through a
+`_Notifier` the job owns (a queued signal, not a poll: the notifier outlives a
+loader the keyboard destroyed mid-build, so the worker always emits on a live
+sender and Qt drops the delivery itself if the receiver is gone). Four things are
+load-bearing:
+
+- **Every exit of `_build` marks the job done**, in a `finally`. The first
+  version set it on two paths, and a hand-over failure left the bar on "Loading
+  suggestions..." for ever with no Retry.
+- **A cancel stops the CPU work, not only the publication.** The factory gets an
+  abort callable, and `HybridPredictor(abort_check=...)` polls it at
+  `_checkpoint()` between its construction phases, raising `LoadAborted`.
+  `shutdown()` then joins the worker for up to `_LOADER_SHUTDOWN_WAIT_S`.
+  Without both, quitting in the first seconds left the worker constructing
+  QObjects while Qt tore down.
+- **The build lowers `sys.setswitchinterval` for its duration** (restored in the
+  same `finally`) and each checkpoint yields the GIL, because a pure-Python
+  build on a thread otherwise held the UI thread off for up to 113 ms at a time,
+  inside every keystroke-timing window the keyboard has.
+- **Until the engine loads, `_predictor` is a stand-in, never None.**
+  `prediction/null_predictor.py::NullPredictor` answers every call the bridge
+  and `StudyBridge` make the way an engine with nothing to say would: no
+  suggestions, learning dropped, `save` a no-op. The first version used about
+  fifty hand-copied `if self._predictor is None` guards, and a call site added
+  without its copy raised on a keystroke during startup, invisible to the
+  always-ready synchronous test bridges. `tests/test_null_predictor.py` walks
+  both bridges' source (local aliases such as `ngram = self._predictor._ngram`
+  included) and fails on any path the stand-in lacks or any method whose
+  parameters differ from `HybridPredictor`'s, then drives the keyboard
+  against it. **The stand-in's `frozen_learning` raises**, so a study can
+  never freeze an object that is about to be replaced and run unfrozen on the
+  real engine.
+
+Before publishing suggestions, the bridge applies the latest settings/layout and
+rechecks focus and password state. It uses the existing privacy-aware typing
+buffers, with no separate keystroke queue. The slots whose honest answer while
+loading is "not yet" refuse through an explicit readiness check
+(`_engine_loaded()` / `null_predictor.is_loaded`, never `is None`, which the
+stand-in makes dead code): Data Backup export and import, Save Now, Clear
+Learned Data, pack import, text import and `StudyBridge.startSession`. A
+no-op there would report success for work that was thrown away. The three
+Settings controls that write to the engine (Save Now, Clear Learned Data, pack
+import) dim and say why while it is not there. The bar's spinner and Retry are
+plain items, not Controls, like every other button on it.
+Regression coverage: `tests/test_prediction_startup.py` (including the real QML
+loading/retry surface) and `tests/test_null_predictor.py`. Its QML tests allow
+**no** warnings, with no whitelist: `tests/conftest.py` runs the suite in the
+Controls style the app ships (`Basic`, from `_setup_platform_env`), which emits
+none of the native style's "does not support customization" chatter, and
+`test_the_suite_renders_qml_in_the_controls_style_the_app_ships` keeps the two
+choices in step.
+
 ## Context tables: base and user halves
 
 `NgramPredictor.bigrams` / `.trigrams` are **merged views**. The user's share lives in `_user_bigrams` / `_user_trigrams` (floats), and that share is the **only context that is persisted** (`user_bigrams` / `user_trigrams` keys in `ngram_model.json`). The base share (curated seeds at +50 per pair from `data/common_bigrams.txt` / `common_trigrams.txt`, the training corpus at +1, vocabulary packs) is rebuilt from the data files on every launch and never written. Invariant: `bigrams[p][w] >= round(_user_bigrams[p][w])`; base is whatever is left over.
@@ -202,6 +264,51 @@ checksum, source manifest, and full bundled license are documented in
 Hybrid startup and full dictionary rebuilds call `prepare_prefix_index()`
 after frequency injection, keeping construction off the first typed prefix.
 Standalone fuzzy callers still prepare lazily; layout changes reuse the index.
+
+**Both packed structures, and the validated wordlist, are built once per
+process and shared between instances.** This is the half that makes the
+expanded vocabulary affordable, and it rests entirely on the packed
+representation being immutable: every method on `PackedDeletes` and
+`PackedPrefixes` past `__init__` is a read accessor, and everything that
+changes as the user types goes to the mutable overlay beside them. The
+application builds one predictor per launch, so on its own this would be a
+startup cost; the test suite builds roughly 1,300, which is what took every
+CI shard past its 20 minute timeout at 56% complete.
+
+- **`src/prediction/packed_cache.py`** keys on a BLAKE2b digest of the exact
+  input mapping plus the build parameters, not on where the words came from,
+  because a caller may pass any mapping and two equal mappings must yield
+  equal indexes. **The digest has to be collision-resistant**: Python's own
+  `hash` is not, and a collision here would not raise, it would quietly
+  answer one vocabulary's predictions from another vocabulary's index. Two
+  slots, which is a memory ceiling as much as a hit rate, since an entry
+  retains its buffers for the life of the process.
+- **`NgramPredictor._validated_extra_words`** caches the parsed and validated
+  wordlist (`_EXTRA_VOCABULARY_CACHE`). Validation is still re-run rather
+  than trusted from the generator, the rule the token store follows, because
+  the file can be hand-edited or arrive in an imported archive. The key
+  covers the file's mtime and size, so an edited file is re-validated rather
+  than served stale, and the per-instance half (what is already in
+  `_base_unigrams`) stays per instance, since that depends on the saved model
+  and on which packs are enabled.
+- **The taught-acronym override takes a guard, not an ordering assumption.**
+  `_is_plausible_word` can admit a word through `is_taught_acronym`, which
+  reads **`taught_capitalization`**, not `capitalization`. Note which: proper
+  nouns fill the latter and leave the former empty, and guarding on the wrong
+  one bypasses the cache on every construction so the caching silently does
+  nothing, which is how the first version shipped. An instance that already
+  holds a taught acronym does the full pass, so reordering the constructor
+  can cost time but cannot cost correctness. That matters because the two
+  call paths already disagree: the constructor loads proper nouns first,
+  `clear_user_data` loads them last.
+
+Measured: `NgramPredictor()` 153 ms to 43 ms (28 ms is the no-wordlist
+baseline), a warm `HybridPredictor()` cheaper than `main`'s was at a quarter
+of the vocabulary, and the suite 389 s to 103 s. **Cold construction is still
+about 3 s against 0.8 s before**, paid once at launch before the window
+appears, which is the release's known cost and is not closed by any of this.
+Guarded by `tests/test_expanded_vocabulary.py` (sharing, re-validation after
+an edit, and the guard) and `tests/test_packed_prefixes.py`.
 
 The existing `allow_short_prefix` rescue remains tied to the fixed five-candidate
 floor, independent of the requested pill count. New rare words can make a
@@ -361,3 +468,48 @@ because that is one click for the whole word and therefore no evidence
 about it. Guarded by `tests/test_ngram_predictor.py::TestTaughtAcronymsAreLearnable`
 and `tests/test_hybrid_predictor.py::TestTaughtAcronymsReachTheBar`, where
 every positive case is paired with the near-miss it must still reject.
+
+## Slurs are removed, not filtered
+
+Moved from `CLAUDE.md`, where it follows *Explicit content is filtered from suggestions, not from the vocabulary*, which keeps the filter's own rules.
+
+`data/slurs.txt`, since 2026-09-23. A slur is not a register the keyboard
+should ever volunteer, so no setting brings these back: they are gone from
+every shipped wordlist and seed file, and stripped from an old saved model
+on load. They are still typable letter by letter, and a word the user types
+three times is learned like any other, because at that point it is their
+vocabulary rather than ours.
+
+- **Exact words, never stems, and that is the fix for the second bug.** The
+  suggestion filter used to carry slurs as stems with the suffix rule, which
+  flagged `spiced` / `spicier` / `spicily` (`spic`), `japes` / `japed`
+  (`jap`), `chinked` / `chinking` (`chink`) and `retarder` / `retarding`
+  (`retard`). A wrongly *filtered* word is merely withheld; a wrongly
+  *removed* one can never be predicted, so this list names every form it
+  removes, including forms absent from today's data so a regenerated list
+  cannot bring them in.
+- **A word with a common ordinary sense stays and is filtered instead**
+  (`FILTER_ONLY_WORDS` in `scripts/gen_explicit_words.py`: `chink` the gap,
+  `dyke` the dike spelling, `fag` the British cigarette, `negro` in historical
+  proper names, `micks`). Deciding which list a word belongs on is the whole
+  judgement here: removal when the main modern use is a slur, filtering when
+  it is not.
+- **Removed at three layers, and each one was needed.** `gen_vocabulary.py`
+  excludes the list from the SCOWL wordlist. The hand-curated files
+  (`google-20000-supplement.txt`, `seed_bigrams.txt`) had the words taken out
+  directly; `redskins` was in both, and the seeds gave it five continuations
+  of its own. And `NgramPredictor.load` strips a slur from the persisted
+  merged `unigrams` table unless it is in `user_vocab`, because that table is
+  saved and restored wholesale, so an upgrade would otherwise carry the old
+  base count forward indefinitely (the same shape as the corpus-prior bug in
+  *Shipped corpus prior*). The path is `LanguageProfile.slurs`; a missing
+  file fails open, and `_load_slurs` says why.
+- **`gen_explicit_words.py` now scans the supplement too.** It scanned only
+  the SCOWL list and the base dictionary, which left `bullshit` and `negro`
+  unflagged although the bar could offer both.
+
+Guarded by `tests/test_slurs.py`: every data file is scanned for the list,
+paired with the near-misses (`spiced`, `japes`, `chinking`, `retardant`,
+`sauerkraut`, `tycoon`, `gypsum`) that must still ship and must not be
+flagged, and the load strip is paired with an ordinary word written the same
+way (which must survive) and with a word the user taught (which must too).

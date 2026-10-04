@@ -1,4 +1,4 @@
-# Window chrome: corners, title-bar menu, Move mode, magnetic edges
+# Window chrome: corners, taskbar button, title-bar menu, Move mode, magnetic edges
 
 Moved verbatim from `CLAUDE.md` on 2026-09-20, which keeps a summary of the load-bearing rules. This is the full reasoning.
 
@@ -80,6 +80,37 @@ border while its radius is 0, so along the corner arc DWM's mask clips that
 border and draws its own. If that reads wrong on a light theme, the answer
 is `DWMWA_BORDER_COLOR`, not a radius on the QML side.
 
+## The taskbar button appears on launch (hide, restyle, re-show)
+
+Reported as the taskbar icon "not fully inflating until you click it". The
+right style bits were not the whole answer: the shell decides whether a
+window gets a taskbar button **at the moment it becomes visible**, and the
+keyboard becomes visible from QML's `visible: true` before
+`apply_extended_styles` runs, so the shell files it as a tool window and
+never looks again. Measured on the installed build four seconds after
+launch: `APPWINDOW` set, `TOOLWINDOW` clear, and no running-window button
+at all, only the 66 px pinned stub with no label and no running dot, until
+a click on that stub activated the window.
+
+- MSDN's rule for changing a visible window's taskbar presence is hide,
+  change the style, show. `apply_extended_styles` does exactly that on the
+  `taskbar_button` path: `ShowWindow(SW_HIDE)` before the style writes,
+  `ShowWindow(SW_SHOWNOACTIVATE)` after the `SWP_FRAMECHANGED` flush.
+  Proven from outside first: that pair on the running keyboard, with no
+  style change at all, attached it as "Alpha-OSK - 1 running window" at
+  once and left the foreground alone.
+- **The re-show is in a `finally`**, because every early return in the
+  style writes now happens with the keyboard hidden, and a keyboard that
+  vanishes at launch is worse than the bug. It is `SW_SHOWNOACTIVATE`,
+  never `SW_SHOW` / `SW_SHOWNORMAL`, which take the foreground.
+- A window that was not visible is left alone, and the floating windows
+  (`taskbar_button=False`) are never blinked: they must not have a button.
+- The offscreen suite cannot see the shell, so `tests/test_windows_window.py::
+  TestTheTaskbarButtonAppearsOnLaunch` pins the call order and the failure
+  paths; the live check is a UI Automation walk of `Shell_TrayWnd` for a
+  button named `Alpha-OSK - 1 running window` (as opposed to the pinned
+  stub) a few seconds after launch, with no click.
+
 ## Title-bar window menu, and click-free Move
 
 Right-clicking the title bar opens the menu a real window's caption strip
@@ -102,13 +133,26 @@ pointer wherever it already is on the strip the user grabs the window by.
   a left press still reaches `dragArea` and the caption buttons above it,
   while a right press finds no taker up there and falls through. That is what
   makes the *whole* strip a menu target, buttons and the gaps between them
-  included, rather than only the region `dragArea` covers (which stops 332 px
-  short of the right edge). The failure mode to avoid is declaring it on top:
+  included, rather than only the region `dragArea` covers (which stops at the
+  button row's left edge). The failure mode to avoid is declaring it on top:
   it would silently kill dragging the window. `dragArea` shields it well
   enough that "a left press does not open the menu" is not a falsifiable test,
   so the guard is
   `TestRightClickingTheTitleBarOpensTheMenu::test_a_left_drag_on_the_strip_still_moves_the_window`,
   which presses, travels and asserts the window followed.
+- **`dragArea` reserves the button row's measured width, never a constant.**
+  It reserved a hard-coded 332 px for a row that measures 198 px plus its
+  margin in a typical session, which left a 126 px band between the grip
+  region and the first button that dragged nothing, and on the 812 px
+  compact window that was a sixth of the strip (reported as "the full title
+  bar on compact is not draggable"). The margin is bound to
+  `titleButtons.width`, and `Row` lays out only visible children, so the
+  suggestion-bar mirrors and the X11-only Tuck button come and go without a
+  matching edit. Guarded by
+  `tests/test_qml_window_menu.py::TestTheWholeStripDrags`, which drags from
+  a point inside the old reserve on the compact window and is paired with a
+  press on the Learning switch that must toggle it rather than move the
+  window.
 - **Rows come from a model (`windowMenu.actions`), not four near-identical
   blocks**, and are **word-only, no icons**: any glyph small enough to sit in a
   menu row is at the mercy of the host emoji font, which on Windows renders in

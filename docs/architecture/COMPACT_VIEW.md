@@ -236,7 +236,7 @@ Full-size layouts are deliberately untouched.
 The fill is a **wash of the accent over the theme's key colour, not the raw
 accent**. Three themes have a pale accent (Blackboard `#ffffaa`, Spaceship
 `#00ff9f`) and Typewriter is a light theme with near-black text, so a saturated
-fill would destroy the label contrast. Same reason Enter is a muted `#2a5a2a`.
+fill would destroy the label contrast. Enter takes that same wash (see below).
 
 **The wash strength is derived, not fixed.** A flat 35% was measured against all
 nine themes and dropped the label below WCAG AA on five of them:
@@ -259,10 +259,59 @@ Accent keys also take an accent-coloured border, which carries the cue on the
 themes where the wash has to back off to 0.12-0.21; a border sits beside the
 label rather than behind it, so it costs no contrast.
 
+**Enter is painted with that same wash and carries no hue of its own**, so the
+board under this scheme has one colour on it rather than two. It used to be a
+flat `#2a5a2a`: the only fill in `Main.qml` that skipped the contrast walk, and
+the only literal hue left in a project whose first colour rule is that there are
+none. It measured 1.89:1 on Typewriter, 2.15 on Light and 3.28 on Vaporwave, all
+under WCAG AA, and it went unnoticed for so long because **only the `off` scheme
+reaches that line** -- every other scheme resolves Enter through `_roleFill`, and
+Monochrome, which ships, already makes Enter the brightest key on the board.
+
+Sharing `accentKeyColor` fixes the ratio for free, since that colour is already
+walked to 4.5:1 per theme, and spends no new colour doing it. What it costs is
+that Enter and Backspace are now identical under `off`: same wash, both 2u, two
+rows apart, with position the only thing separating them. That was the accepted
+trade, taken over three alternatives that were rendered and rejected as more
+colour rather than less (a muted commit-hue wash; keeping the green and flipping
+the label white; the commit hue at full chroma, which additionally needs a
+per-key ink override to clear Vaporwave and so new plumbing on `NumpadPanel`).
+
+**Marking Enter as `style: "accent"` in the layout JSON is not the same change**
+and is the likely way to undo this by accident: `keyBorderFor` gives accent keys
+the accent ring, so it would paint Enter correctly and hand it a ring the commit
+key is not supposed to have. `NumpadPanel.enterKeyColor` is bound from `Main.qml`
+for the same reason and defaults to an ordinary key rather than to a hue.
+
+**Backspace and Del are exempt from that border.** All five rang at first, and
+Enter carries `style: "enter"`, which takes no ring on any scheme, so the grid
+put a full-strength accent ring on the destructive key and nothing at all on
+the committing one: four rings against nought, and a saturated outline outranks
+a lightness step at a glance. Only the ring moved. The fills measure 13.8 and
+11.8 OKLab dE from a plain key on Dark, which is level, and they are untouched:
+the wash is still what marks Backspace.
+
+`Main.qml::keyBorderFor` is the rule, and it asks `Palette.roleForKey` whether
+the key is a `kill` rather than naming the two actions itself, since that
+function is already this project's single answer to "does this key destroy
+text". Two alternatives were rendered and not taken: giving Enter a commit-hue
+ring of its own (a fifth ring on a 13-wide grid), and making the border follow
+the colour scheme the way every fill does, with `kill` red and `commit` green.
+The second is the structurally complete fix, because **this border is the one
+colour on a key that Key Colours never reaches** -- it keys off the layout
+JSON's `style` while the fills key off `role`, which is why the ring won even
+on Monochrome, whose stated intent is to make Enter the brightest key on the
+board. It is the bigger change and is still available.
+
 Pinned by `tests/test_layouts.py::TestCompactEditingKeysAreAccented` (which
 keys) and `tests/test_qml_compact_view.py::TestAccentKeysStayReadable` (the
 contrast floor, plus the inverse test that the wash is still visible, so "stop
-tinting" cannot pass as a fix).
+tinting" cannot pass as a fix). The border split is
+`TestTheKeysThatDestroyTextTakeNoRing`, where restoring all five rings and
+dropping every ring each fail a different half, and Enter's fill is
+`TestEnterSharesTheEditingKeysWash`, whose two inverses are the ones that bite:
+that Enter did not also become an accent key, and that the role schemes still
+tell commit from kill.
 
 ## No panel that lines up with the grid may use `QtQuick.Layouts`
 
@@ -360,6 +409,39 @@ Load-bearing rules:
   themes below WCAG AA, on exactly the keys the style exists to make findable.
   The accent-coloured border carries the cue where the wash has to back off.
   Full-size layouts are deliberately untouched.
+- **Enter wears that wash too, and no hue of its own** (`Main.qml`'s `keyColor`
+  switch, where `accent` and `enter` share a case). It was a flat `#2a5a2a`: the
+  only fill in the file that skipped `washFor`'s contrast walk, and the only
+  literal hue in a project whose first colour rule is that there are none. It
+  measured 1.89:1 on Typewriter, 2.15 on Light and 3.28 on Vaporwave, all under
+  WCAG AA. **Only the `off` scheme reaches that line**, which is why it lasted:
+  every other scheme resolves Enter through `_roleFill`, and Monochrome (the
+  default) already makes Enter the brightest key. Sharing `accentKeyColor` fixes
+  the ratio for free (it is walked per theme already) and spends no new colour,
+  at the cost of Enter and Backspace being identical under `off`. **Do not
+  "simplify" this by marking Enter `style: "accent"` in the layout JSON**: that
+  paints it the same and hands it the accent ring, which is a different decision
+  and was not the one taken. `NumpadPanel.enterKeyColor` is bound from `Main.qml`
+  for the same reason and defaults to an ordinary key. Guarded by
+  `tests/test_qml_compact_view.py::TestEnterSharesTheEditingKeysWash`, whose two
+  inverses are the load-bearing half: Enter must not gain a ring, and the role
+  schemes must still tell commit from kill.
+- **The two keys that destroy text wear the wash but never that border**
+  (`Main.qml::keyBorderFor`, exempting the `kill` role). All five accent keys
+  used to ring, and Enter is `style: "enter"` so it rings on no scheme at all:
+  a saturated ring beats a lightness step at a glance, so the compact grid
+  emphasised Backspace over Enter, four rings against nought. The fills were
+  never the problem and did not move (13.8 and 11.8 OKLab dE from a plain key
+  on Dark, which is level). The exemption reads off `Palette.roleForKey`
+  rather than naming the two actions here, because that is already the
+  project's one answer to "does this key destroy text". Worth knowing that
+  **this border is the one colour on a key Key Colours does not reach**: it
+  keys off the layout JSON's `style` while every fill keys off `role`, which
+  is why the ring won even on Monochrome, whose whole intent is to make Enter
+  the brightest key on the board. Making the border follow the scheme is the
+  larger change that was on the table and was not taken. Guarded by
+  `tests/test_qml_compact_view.py::TestTheKeysThatDestroyTextTakeNoRing`,
+  where dropping every ring and restoring all five each fail a different half.
 - **Del sits on the base layer, Esc on `?123`.** A 13u row has no spare unit, so
   the two traded places. The Number Row panel puts a second Esc back at the
   top-left and that duplicate is deliberate, so `?123` stays the fallback for a

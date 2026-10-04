@@ -24,6 +24,20 @@ NSIS_CANDIDATES = (
     Path(r"C:\Program Files\NSIS\makensis.exe"),
 )
 
+# The stand-ins below read what differs between runs (the org's random
+# suffix from RUN_ENV, their own folder from $EXEDIR) when they run, not
+# when they compile, so each script compiles to the same bytes every run.
+# Baking those values in made every run a set of never-seen executables,
+# and Defender holds each one for a cloud scan ("Security scan required",
+# up to 10 seconds) and uploads it as a sample. The prefix stays compiled
+# in, so an unset variable can only ever reach a key named for the harness.
+ORG_PREFIX = "Alpha-OSK-UpgradeHarness-"
+RUN_ENV = "ALPHA_OSK_HARNESS_RUN"
+
+
+def _harness_env(run: str) -> dict[str, str]:
+    return {**os.environ, RUN_ENV: run}
+
 
 def _makensis() -> Path:
     found = shutil.which("makensis")
@@ -53,30 +67,33 @@ def _compile(makensis: Path, source: str, output: Path) -> None:
     assert result.returncode == 0, result.stdout + result.stderr
 
 
-def _old_source(org: str, marker: Path) -> str:
-    return f'''Name "legacy"
+def _old_source() -> str:
+    return f"""Name "legacy"
 OutFile "@OUTPUT@"
 RequestExecutionLevel user
 SilentInstall silent
 Section
-  FileOpen $0 "{marker}" w
+  FileOpen $0 "$EXEDIR\\old-ran.txt" w
   FileWrite $0 "ran"
   FileClose $0
-  DeleteRegKey HKCU "Software\\{org}"
+  ReadEnvStr $1 {RUN_ENV}
+  DeleteRegKey HKCU "Software\\{ORG_PREFIX}$1"
   SetErrorLevel @EXIT_CODE@
 SectionEnd
-'''
+"""
 
 
-def _new_source(org: str, old: Path, helper: Path = HELPER) -> str:
-    return f'''!define APP_ORG "{org}"
+def _new_source(helper: Path = HELPER) -> str:
+    return f'''Var HarnessRun
+!define APP_ORG "{ORG_PREFIX}$HarnessRun"
 !include "{helper}"
 Name "bridge"
 OutFile "@OUTPUT@"
 RequestExecutionLevel user
 SilentInstall silent
 Section
-  Push '"{old}" /S'
+  ReadEnvStr $HarnessRun {RUN_ENV}
+  Push '"$EXEDIR\\legacy.exe" /S'
   Call RunPreviousUninstaller
 SectionEnd
 '''
@@ -112,13 +129,16 @@ def test_legacy_uninstaller_preserves_typed_nested_settings(tmp_path: Path, exit
     identically. Backup and restore failures are the ones that stay
     fail-closed, and they have their own tests below.
     """
-    org = "Alpha-OSK-UpgradeHarness-" + uuid.uuid4().hex
+    run = uuid.uuid4().hex
+    org = ORG_PREFIX + run
     old, bridge, marker = tmp_path / "legacy.exe", tmp_path / "bridge.exe", tmp_path / "old-ran.txt"
     try:
-        _compile(_makensis(), _old_source(org, marker).replace("@EXIT_CODE@", str(exit_code)), old)
-        _compile(_makensis(), _new_source(org, old), bridge)
+        _compile(_makensis(), _old_source().replace("@EXIT_CODE@", str(exit_code)), old)
+        _compile(_makensis(), _new_source(), bridge)
         _seed(org)
-        result = subprocess.run([str(bridge), "/S"], capture_output=True, text=True, timeout=30)
+        result = subprocess.run(
+            [str(bridge), "/S"], capture_output=True, text=True, timeout=30, env=_harness_env(run)
+        )
         assert marker.read_text(encoding="utf-8") == "ran"
         assert result.returncode == 0, result.stdout + result.stderr
         _assert_seed(org)
@@ -138,12 +158,15 @@ def test_a_failing_uninstaller_with_nothing_to_preserve_still_continues(tmp_path
     box claimed the settings had been preserved, about settings that never
     existed.
     """
-    org = "Alpha-OSK-UpgradeHarness-" + uuid.uuid4().hex
+    run = uuid.uuid4().hex
+    org = ORG_PREFIX + run
     old, bridge, marker = tmp_path / "legacy.exe", tmp_path / "bridge.exe", tmp_path / "old-ran.txt"
     try:
-        _compile(_makensis(), _old_source(org, marker).replace("@EXIT_CODE@", "9"), old)
-        _compile(_makensis(), _new_source(org, old), bridge)
-        result = subprocess.run([str(bridge), "/S"], capture_output=True, text=True, timeout=30)
+        _compile(_makensis(), _old_source().replace("@EXIT_CODE@", "9"), old)
+        _compile(_makensis(), _new_source(), bridge)
+        result = subprocess.run(
+            [str(bridge), "/S"], capture_output=True, text=True, timeout=30, env=_harness_env(run)
+        )
         assert result.returncode == 0, result.stdout + result.stderr
         assert marker.read_text(encoding="utf-8") == "ran"
         with pytest.raises(FileNotFoundError):
@@ -154,12 +177,15 @@ def test_a_failing_uninstaller_with_nothing_to_preserve_still_continues(tmp_path
 
 
 def test_fresh_install_runs_old_uninstaller_without_backup(tmp_path: Path) -> None:
-    org = "Alpha-OSK-UpgradeHarness-" + uuid.uuid4().hex
+    run = uuid.uuid4().hex
+    org = ORG_PREFIX + run
     old, bridge, marker = tmp_path / "legacy.exe", tmp_path / "bridge.exe", tmp_path / "old-ran.txt"
     try:
-        _compile(_makensis(), _old_source(org, marker).replace("@EXIT_CODE@", "0"), old)
-        _compile(_makensis(), _new_source(org, old), bridge)
-        result = subprocess.run([str(bridge), "/S"], capture_output=True, text=True, timeout=30)
+        _compile(_makensis(), _old_source().replace("@EXIT_CODE@", "0"), old)
+        _compile(_makensis(), _new_source(), bridge)
+        result = subprocess.run(
+            [str(bridge), "/S"], capture_output=True, text=True, timeout=30, env=_harness_env(run)
+        )
         assert result.returncode == 0, result.stdout + result.stderr
         assert marker.read_text(encoding="utf-8") == "ran"
         with pytest.raises(FileNotFoundError):
@@ -170,7 +196,8 @@ def test_fresh_install_runs_old_uninstaller_without_backup(tmp_path: Path) -> No
 
 
 def _failure_case(tmp_path: Path, restore: bool) -> None:
-    org = "Alpha-OSK-UpgradeHarness-" + uuid.uuid4().hex
+    run = uuid.uuid4().hex
+    org = ORG_PREFIX + run
     key_path = "Software\\" + org
     old, bridge, marker = tmp_path / "legacy.exe", tmp_path / "bridge.exe", tmp_path / "old-ran.txt"
     broken = tmp_path / "upgrade_settings_broken.nsh"
@@ -184,10 +211,12 @@ def _failure_case(tmp_path: Path, restore: bool) -> None:
     helper = helper_text.replace(needle, "StrCpy $1 5", 1)
     try:
         broken.write_text(helper, encoding="utf-8")
-        _compile(_makensis(), _old_source(org, marker).replace("@EXIT_CODE@", "0"), old)
-        _compile(_makensis(), _new_source(org, old, broken), bridge)
+        _compile(_makensis(), _old_source().replace("@EXIT_CODE@", "0"), old)
+        _compile(_makensis(), _new_source(broken), bridge)
         _seed(org)
-        result = subprocess.run([str(bridge), "/S"], capture_output=True, text=True, timeout=30)
+        result = subprocess.run(
+            [str(bridge), "/S"], capture_output=True, text=True, timeout=30, env=_harness_env(run)
+        )
         assert result.returncode != 0
         assert marker.exists() is restore
         if restore:
@@ -234,35 +263,38 @@ def test_restore_failure_retains_recovery_copy(tmp_path: Path) -> None:
 _UNINSTALLER_SLEEP_MS = 3000
 
 
-def _uninstaller_maker_source(org: str, marker: Path, install_dir: Path) -> str:
+def _uninstaller_maker_source() -> str:
     """An installer whose only job is to write the uninstaller under test."""
-    return f'''Name "legacy"
+    return f"""Name "legacy"
 OutFile "@OUTPUT@"
 RequestExecutionLevel user
 SilentInstall silent
-InstallDir "{install_dir}"
 Section
+  StrCpy $INSTDIR "$EXEDIR\\install"
   SetOutPath "$INSTDIR"
   WriteUninstaller "$INSTDIR\\uninstall.exe"
 SectionEnd
 Section "Uninstall"
   Sleep {_UNINSTALLER_SLEEP_MS}
-  DeleteRegKey HKCU "Software\\{org}"
-  FileOpen $0 "{marker}" w
+  ReadEnvStr $1 {RUN_ENV}
+  DeleteRegKey HKCU "Software\\{ORG_PREFIX}$1"
+  FileOpen $0 "$INSTDIR\\old-ran.txt" w
   FileWrite $0 "ran"
   FileClose $0
 SectionEnd
-'''
+"""
 
 
-def _bridge_source(org: str, command: str) -> str:
-    return f'''!define APP_ORG "{org}"
+def _bridge_source(command: str) -> str:
+    return f'''Var HarnessRun
+!define APP_ORG "{ORG_PREFIX}$HarnessRun"
 !include "{HELPER}"
 Name "bridge"
 OutFile "@OUTPUT@"
 RequestExecutionLevel user
 SilentInstall silent
 Section
+  ReadEnvStr $HarnessRun {RUN_ENV}
   Push '{command}'
   Call RunPreviousUninstaller
 SectionEnd
@@ -271,22 +303,25 @@ SectionEnd
 
 def _run_against_a_real_uninstaller(tmp_path: Path, *, in_place: bool) -> bool:
     """Drive the guard against a genuine uninstaller. True if settings survived."""
-    org = "Alpha-OSK-UpgradeHarness-" + uuid.uuid4().hex
-    install_dir = tmp_path / ("inplace" if in_place else "detached")
-    install_dir.mkdir()
-    maker = tmp_path / f"maker-{'a' if in_place else 'b'}.exe"
-    bridge = tmp_path / f"bridge-{'a' if in_place else 'b'}.exe"
-    marker = tmp_path / f"old-ran-{'a' if in_place else 'b'}.txt"
-    uninstaller = install_dir / "uninstall.exe"
+    run = uuid.uuid4().hex
+    org = ORG_PREFIX + run
+    maker = tmp_path / "maker.exe"
+    bridge = tmp_path / "bridge.exe"
     makensis = _makensis()
     try:
-        _compile(makensis, _uninstaller_maker_source(org, marker, install_dir), maker)
+        _compile(makensis, _uninstaller_maker_source(), maker)
         subprocess.run([str(maker), "/S"], capture_output=True, text=True, timeout=30, check=True)
-        assert uninstaller.exists(), "the harness did not produce an uninstaller"
-        command = f'"{uninstaller}" /S _?={install_dir}' if in_place else f'"{uninstaller}" /S'
-        _compile(makensis, _bridge_source(org, command), bridge)
+        assert (tmp_path / "install" / "uninstall.exe").exists(), (
+            "the harness did not produce an uninstaller"
+        )
+        command = '"$EXEDIR\\install\\uninstall.exe" /S'
+        if in_place:
+            command += " _?=$EXEDIR\\install"
+        _compile(makensis, _bridge_source(command), bridge)
         _seed(org)
-        result = subprocess.run([str(bridge), "/S"], capture_output=True, text=True, timeout=60)
+        result = subprocess.run(
+            [str(bridge), "/S"], capture_output=True, text=True, timeout=60, env=_harness_env(run)
+        )
         assert result.returncode == 0, result.stdout + result.stderr
         # Let a detached temp copy finish, so the comparison is about
         # ordering rather than about which process we happened to outrun.

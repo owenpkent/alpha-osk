@@ -1163,6 +1163,28 @@ class NgramPredictor:
                 words.append(word)
         return tuple(words)
 
+    def _load_slurs(self) -> frozenset[str]:
+        """The profile's slur list, or an empty set if it cannot be read.
+
+        Fails open for the reason ``_load_extra_vocabulary`` does: this runs
+        on the load path, and a missing data file must not stop the keyboard
+        starting. The shipped wordlists already exclude these words, so the
+        only cost of failing is that an old saved model keeps them a while.
+        """
+        path = self.profile.slurs
+        if path is None:
+            return frozenset()
+        try:
+            text = path.read_text(encoding="utf-8")
+        except Exception:  # noqa: BLE001 - see the docstring
+            _logger.warning("Could not read slur list %s; not stripping", path)
+            return frozenset()
+        return frozenset(
+            line.strip().lower()
+            for line in text.splitlines()
+            if line.strip() and not line.startswith("#")
+        )
+
     def _load_extra_vocabulary(self) -> None:
         """Add the profile's unranked vocabulary to the base prior only.
 
@@ -2157,6 +2179,16 @@ class NgramPredictor:
             user_vocab_clean = {
                 w: c for w, c in user_vocab_clean.items() if self._is_plausible_word(w)
             }
+            # The merged table is persisted, so a model saved before a
+            # word was dropped from the shipped lists would carry its old
+            # base count forward forever (the corpus-prior bug, again).
+            # Only the base share goes: a word the user typed themselves
+            # is theirs to keep.
+            slurs = self._load_slurs()
+            if slurs:
+                unigrams = {
+                    w: c for w, c in unigrams.items() if w not in slurs or w in user_vocab_clean
+                }
 
             self.unigrams = defaultdict(int, unigrams)
             self._user_bigrams, self.bigrams = self._adopt_user_context(bigrams)
