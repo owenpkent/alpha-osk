@@ -5,12 +5,32 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sys
 import time
 from unittest.mock import patch
 
 import pytest
 
 from src import _update_relauncher as relauncher
+from src import updater
+
+# Taken before the autouse stub below replaces it, for the tests that are
+# about the rule itself rather than about the flow around it.
+_REAL_PROCESS_IMAGE_RUNNING = relauncher._process_image_running
+
+
+@pytest.fixture(autouse=True)
+def _the_relaunched_keyboard_appears(monkeypatch):
+    """Every test here sees the new keyboard come up unless it says otherwise.
+
+    The real check reads this machine's process list. Left alone, a flow
+    test would pass on a developer's machine because their own keyboard
+    is running, and on CI wait out the 15 s budget and then fail: the
+    result decided by something outside the test. A test wanting another
+    answer patches the same name and wins, since its patch is applied
+    after this one.
+    """
+    monkeypatch.setattr(relauncher, "_process_image_running", lambda name: True)
 
 
 class TestProcessAlive:
@@ -358,7 +378,7 @@ class TestTheRunIsBounded:
     nobody opens.  TODO.md used to claim the cause was a missing exit
     path for an already-dead parent.  That was wrong, and measurably so
     (``_wait_for_parent_exit`` returns in 0.00 s for a dead pid, and the
-    phases have always summed to a bounded 245 s).  The real waste was
+    phases have always had a bounded sum).  The real waste was
     narrower: a dev-mode target waits the full new-exe timeout for an
     mtime that cannot advance.
     """
@@ -890,3 +910,144 @@ class TestTheKeyboardComesBackThroughExplorer:
 
         with patch.object(relauncher.subprocess, "Popen", boom):
             assert relauncher._launch_new_osk(tmp_path / "alpha-osk.exe") is False
+
+
+class TestTheLaunchIsConfirmedByTheKeyboardAppearing:
+    """With Explorer in between, a successful Popen only proves Explorer started.
+
+    Both paths treated it as success, so the splash could say "Done!"
+    with no keyboard on screen. They now wait, bounded, for a process
+    with the keyboard's exact image name, and a launch that never
+    produces one is reported as the failed launch it is.
+    """
+
+    def _argv(self, target_exe, config_dir):
+        return [
+            "alpha-osk-relauncher.exe",
+            "--update-relauncher",
+            "--parent-pid",
+            "999999999",  # already dead
+            "--new-version",
+            "1.5.1",
+            "--previous-version",
+            "1.5.0",
+            "--target-exe",
+            str(target_exe),
+            "--config-dir",
+            str(config_dir),
+        ]
+
+    def _fresh_exe(self, tmp_path):
+        exe = tmp_path / "alpha-osk.exe"
+        exe.write_bytes(b"freshly installed")
+        future = time.time() + 3600
+        os.utime(exe, (future, future))
+        return exe
+
+    def test_a_relay_that_starts_no_keyboard_is_a_failed_launch(self, tmp_path, caplog):
+        exe = self._fresh_exe(tmp_path)
+        config_dir = tmp_path / "config"
+        with (
+            patch.object(relauncher, "_INSTALLER_GRACE_S", 0),
+            patch.object(relauncher, "_NEW_EXE_TIMEOUT_S", 2),
+            patch.object(relauncher, "_NEW_OSK_APPEAR_TIMEOUT_S", 0.3),
+            patch.object(relauncher, "_launch_new_osk", return_value=True),
+            patch.object(relauncher, "_process_image_running", lambda name: False),
+            caplog.at_level("ERROR", logger="UpdateRelauncher"),
+        ):
+            rc = relauncher.run_relauncher(self._argv(exe, config_dir))
+
+        assert rc == 4, "a keyboard that never appeared must not be reported as success"
+        assert not (config_dir / "update_handoff.json").is_file()
+        assert any("alpha-osk.exe" in r.getMessage() for r in caplog.records), caplog.text
+
+    def test_a_relay_that_brings_the_keyboard_back_succeeds(self, tmp_path):
+        """The inverse, so "always report failure" cannot pass as the fix.
+
+        The keyboard turns up on the third look, as a relay through
+        Explorer does: a moment after Popen returns, not at once.
+        """
+        exe = self._fresh_exe(tmp_path)
+        config_dir = tmp_path / "config"
+        asked: list[str] = []
+
+        def appears_on_the_third_look(name):
+            asked.append(name)
+            return len(asked) >= 3
+
+        with (
+            patch.object(relauncher, "_INSTALLER_GRACE_S", 0),
+            patch.object(relauncher, "_NEW_EXE_TIMEOUT_S", 2),
+            patch.object(relauncher, "_NEW_OSK_POLL_INTERVAL_S", 0.01),
+            patch.object(relauncher, "_launch_new_osk", return_value=True),
+            patch.object(relauncher, "_process_image_running", appears_on_the_third_look),
+        ):
+            rc = relauncher.run_relauncher(self._argv(exe, config_dir))
+
+        assert rc == 0
+        assert asked == ["alpha-osk.exe"] * 3, "it must ask for the keyboard, by its image name"
+        assert (config_dir / "update_handoff.json").is_file()
+
+    def test_the_helpers_own_image_does_not_count_as_the_keyboard(self):
+        # The helper is running while it waits, under a name that starts
+        # with the keyboard's. A prefix or substring match would confirm
+        # the launch on the strength of the helper itself.
+        assert updater._RELAUNCHER_EXE_NAME.startswith("alpha-osk")
+        running = ["System", "explorer.exe", updater._RELAUNCHER_EXE_NAME]
+        with patch.object(relauncher, "_running_image_names", lambda: running):
+            assert _REAL_PROCESS_IMAGE_RUNNING("alpha-osk.exe") is False
+
+    def test_the_keyboard_counts_whatever_the_case_of_its_image_name(self):
+        # Windows compares image names case-insensitively, and so must we.
+        running = ["explorer.exe", updater._RELAUNCHER_EXE_NAME, "Alpha-OSK.EXE"]
+        with patch.object(relauncher, "_running_image_names", lambda: running):
+            assert _REAL_PROCESS_IMAGE_RUNNING("alpha-osk.exe") is True
+
+    def test_an_unreadable_process_list_is_not_a_failed_launch(self):
+        # No evidence either way falls back to what the helper reported
+        # before the check existed, rather than a false failure message.
+        with patch.object(relauncher, "_running_image_names", lambda: None):
+            assert _REAL_PROCESS_IMAGE_RUNNING("alpha-osk.exe") is True
+
+    def test_the_wait_steps_rather_than_spinning(self):
+        looks: list[str] = []
+
+        def never(name):
+            looks.append(name)
+            return False
+
+        with patch.object(relauncher, "_process_image_running", never):
+            assert relauncher._wait_for_new_osk_process("alpha-osk.exe", 0.6) is False
+        # 0.6 s at 250 ms steps is three or four looks; a tight loop
+        # would be thousands, each one a whole-system process snapshot.
+        assert 2 <= len(looks) <= 6, len(looks)
+
+    def test_an_exhausted_budget_still_looks_once(self):
+        looks: list[str] = []
+
+        def present(name):
+            looks.append(name)
+            return True
+
+        with patch.object(relauncher, "_process_image_running", present):
+            assert relauncher._wait_for_new_osk_process("alpha-osk.exe", 0.0) is True
+        assert looks == ["alpha-osk.exe"], "the look was skipped, not merely cut short"
+
+    @pytest.mark.skipif(
+        sys.platform != "win32" and not os.path.isdir("/proc"),
+        reason="no process enumeration on this platform",
+    )
+    def test_the_real_enumerator_finds_this_process(self):
+        """The ctypes structure has to be laid out right to list anything.
+
+        A wrong ``dwSize`` fails ``Process32FirstW`` and reads as "cannot
+        tell"; a wrong field offset garbles every name. Either way this
+        process, which is certainly running, would not be found.
+        """
+        if sys.platform == "win32":
+            own_name = os.path.basename(sys.executable)
+        else:
+            own_name = os.path.basename(os.readlink("/proc/self/exe"))
+        names = relauncher._running_image_names()
+        assert names is not None
+        assert own_name.casefold() in {n.casefold() for n in names}, own_name
