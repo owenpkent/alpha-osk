@@ -295,7 +295,7 @@ class DictationConfig:
                 data = json.load(fh)
             if not isinstance(data, dict):
                 return cfg
-        except (OSError, json.JSONDecodeError, ValueError):
+        except (OSError, json.JSONDecodeError, ValueError, RecursionError):
             _logger.warning("dictation.json could not be read, using defaults", exc_info=True)
             return cfg
 
@@ -313,9 +313,15 @@ class DictationConfig:
                 cfg.api_key = stored[:MAX_KEY_LEN]
 
         model = data.get("model")
-        cfg.model = model if model in {m for m, _ in MODELS} else cls.model
+        cfg.model = (
+            model if isinstance(model, str) and model in {m for m, _ in MODELS} else cls.model
+        )
         language = data.get("language")
-        cfg.language = language if language in {c for c, _ in LANGUAGES} else cls.language
+        cfg.language = (
+            language
+            if isinstance(language, str) and language in {c for c, _ in LANGUAGES}
+            else cls.language
+        )
         device = data.get("device")
         cfg.device = device[:256] if isinstance(device, str) else ""
         cfg.max_seconds = _clip_int(

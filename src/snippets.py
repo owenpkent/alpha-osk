@@ -183,7 +183,7 @@ class SnippetStore:
                 return
             with open(self._path, "r", encoding="utf-8") as fh:
                 data = json.load(fh)
-        except (OSError, ValueError) as exc:
+        except (OSError, ValueError, RecursionError) as exc:
             _logger.warning("Failed to load snippets (%s) — using defaults", exc)
             self._seed_defaults()
             return

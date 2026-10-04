@@ -377,9 +377,20 @@ class PPMPredictor:
     def load(self, path: Path) -> None:
         """Load model from JSON file."""
 
-        def dict_to_node(d: dict) -> PPMNode:
-            node = PPMNode(count=d.get("count", 0))
-            for char, child_dict in d.get("children", {}).items():
+        def dict_to_node(d: object) -> PPMNode:
+            # Every field is arithmetic later (counts are summed, children
+            # are walked), so a wrong type is rejected here, with the whole
+            # file, rather than surviving to crash a keystroke.
+            if not isinstance(d, dict):
+                raise TypeError("PPM node is not an object")
+            count = d.get("count", 0)
+            if isinstance(count, bool) or not isinstance(count, int) or count < 0:
+                raise TypeError("PPM node count is not a non-negative integer")
+            children = d.get("children", {})
+            if not isinstance(children, dict):
+                raise TypeError("PPM node children is not an object")
+            node = PPMNode(count=count)
+            for char, child_dict in children.items():
                 node.children[char] = dict_to_node(child_dict)
             return node
 
@@ -396,10 +407,26 @@ class PPMPredictor:
             with open(path) as f:
                 data = json.load(f)
 
-            self.max_order = data.get("max_order", self.max_order)
-            self.alphabet = set(data.get("alphabet", self.alphabet))
-            self.total_chars = data.get("total_chars", 0)
-            self.root = dict_to_node(data.get("root", {}))
+            # Parse everything into locals and publish once, so a bad field
+            # cannot leave a half-applied model (a new max_order over the old
+            # trie, say).
+            max_order = data.get("max_order", self.max_order)
+            if isinstance(max_order, bool) or not isinstance(max_order, int):
+                raise TypeError("PPM max_order is not an integer")
+            if not 1 <= max_order <= 64:
+                raise ValueError("PPM max_order is out of range")
+            alphabet = set(data.get("alphabet", self.alphabet))
+            if not all(isinstance(c, str) for c in alphabet):
+                raise TypeError("PPM alphabet holds a non-string")
+            total_chars = data.get("total_chars", 0)
+            if isinstance(total_chars, bool) or not isinstance(total_chars, int) or total_chars < 0:
+                raise TypeError("PPM total_chars is not a non-negative integer")
+            root = dict_to_node(data.get("root", {}))
+
+            self.max_order = max_order
+            self.alphabet = alphabet
+            self.total_chars = total_chars
+            self.root = root
 
             _logger.info("PPM model loaded from %s (%d chars)", path, self.total_chars)
         except Exception as e:
