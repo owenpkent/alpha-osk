@@ -267,6 +267,38 @@ having here, since the project handles a Deepgram API key
 reporting the leak afterwards, by which point the secret is public and has
 to be rotated.
 
+## Nightly fuzzing
+
+`.github/workflows/fuzz-nightly.yml` runs the three `tests/test_property_*`
+modules once a day (and on demand) under the `alpha-osk-deep` Hypothesis
+profile, registered beside the default in `tests/conftest.py`. The default
+profile is `derandomize=True` with 150 examples, so a pull request is judged
+on a fixed set of inputs. The deep profile has 3000 examples and
+`derandomize=False`: each night explores new space, and a failure is
+allowed to be news. The job is not a required check and never gates a merge.
+
+`tests/test_property_loader_fuzz.py` is the main customer. It feeds every
+on-disk loader (n-gram and PPM models, snippets, key actions, analytics,
+dictation config, telemetry state, the token store) both raw bytes and
+structurally mutated valid JSON, and fuzzes `src/text_patterns.py` for
+exceptions and for quadratic time on 10k-character runs. The practice is
+borrowed from PowerToys, which fuzzes its file parsers with libFuzzer on a
+pipeline separate from its unit tests.
+
+To reproduce a nightly failure locally, copy the `@reproduce_failure(...)`
+line from the log onto the failing test and run it (it replays exactly, on
+any profile), or rerun the module with the same profile and let Hypothesis
+search again:
+
+```
+python -m pytest tests/test_property_loader_fuzz.py --hypothesis-profile=alpha-osk-deep
+```
+
+Then fix the loader and add the minimal input as a named regression test in
+the normal suite, so the fix is guarded on every pull request rather than
+only on the night that happens to redraw it. Like the OSV nightly, scheduled
+workflows stop after 60 days without repository activity.
+
 ## Concurrency
 
 The workflow sets `concurrency: group: ci-${{ github.ref }}` with

@@ -148,6 +148,17 @@ else:
         parent=settings.get_profile("alpha-osk"),
         max_examples=25,
     )
+    # The nightly fuzz job (.github/workflows/fuzz-nightly.yml). Not
+    # derandomized, so each night draws new examples; `print_blob` makes a
+    # failure print the `@reproduce_failure` line that replays it exactly.
+    # Never the default: select it with `--hypothesis-profile=alpha-osk-deep`.
+    settings.register_profile(
+        "alpha-osk-deep",
+        parent=settings.get_profile("alpha-osk"),
+        max_examples=3000,
+        derandomize=False,
+        print_blob=True,
+    )
     settings.load_profile("alpha-osk")
 
 
