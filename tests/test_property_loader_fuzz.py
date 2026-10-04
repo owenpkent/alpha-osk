@@ -557,6 +557,23 @@ def test_regression_ppm_bad_root_leaves_no_half_applied_state(tmp_path: Path) ->
     assert (p.max_order, p.total_chars) == (8, 0)
 
 
+def test_an_order_zero_model_survives_a_reload(tmp_path: Path) -> None:
+    """Order 0 is a real PPM (bare character frequencies), and the bits-per-char
+    benchmark saves and reloads one, so the range check must admit it. The
+    inverse, an order past the cap, is still rejected whole."""
+    trained = PPMPredictor(max_order=0)
+    trained.train("abracadabra")
+    trained.save(tmp_path / "ppm_model.json")
+    reloaded = PPMPredictor(max_order=0, model_path=tmp_path / "ppm_model.json")
+    assert reloaded.total_chars == trained.total_chars > 0
+
+    doc = {"max_order": 65, "total_chars": 99, "root": {"count": 1, "children": {}}}
+    path = _write(tmp_path, "too_deep.json", _encode(doc))
+    p = PPMPredictor()
+    p.load(path)
+    assert (p.max_order, p.total_chars) == (8, 0)
+
+
 @pytest.mark.parametrize("name", ["snippets", "key_actions", "analytics", "telemetry", "dictation"])
 def test_regression_deeply_nested_json_is_not_fatal(name: str, tmp_path: Path) -> None:
     """json raises RecursionError (not ValueError) on deep nesting."""

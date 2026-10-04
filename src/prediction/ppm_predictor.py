@@ -413,7 +413,7 @@ class PPMPredictor:
             max_order = data.get("max_order", self.max_order)
             if isinstance(max_order, bool) or not isinstance(max_order, int):
                 raise TypeError("PPM max_order is not an integer")
-            if not 1 <= max_order <= 64:
+            if not 0 <= max_order <= 64:
                 raise ValueError("PPM max_order is out of range")
             alphabet = set(data.get("alphabet", self.alphabet))
             if not all(isinstance(c, str) for c in alphabet):
