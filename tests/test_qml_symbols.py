@@ -372,18 +372,23 @@ class TestRecentSurvivesABadSettingsValue:
 
 
 class TestTheEntryButtonIcon:
-    """The smile is drawn from path data, not typeset.
+    """The alpha is drawn from path data, not typeset.
 
-    Two of its four paths are hand-converted from Feather's source (a
-    <circle> written as arcs, and eyes that upstream draws as zero-length
-    <line>s relying on the SVG round-cap rule). Both conversions are exactly
-    the kind that fail *silently*: a path string the parser rejects paints
-    nothing at all and leaves a blank circle on the suggestion bar. So this
-    asserts there is ink, which is the property the conversion can break.
+    It is Tabler's path verbatim, written in compact SVG path grammar (the
+    `s` shorthand, numbers like `c.512` with no separator), which is easy to
+    break by hand and fails *silently*: a path string the parser rejects
+    paints nothing at all and leaves a blank circle on the suggestion bar.
+    So this asserts there is ink, which is the property a bad edit breaks.
+
+    Two things keep that assertion honest, and it had neither for as long as
+    the smile was there: it passed with the path deleted. The picker is left
+    **closed**, because an open picker draws the button's ring in the accent
+    colour and the ring alone clears the bar; and only the inside of the
+    circle is counted, so no state of the ring can stand in for the icon.
     """
 
-    def test_the_icon_paints_something(self, picker) -> None:
-        root, _window, _bridge, _warnings = picker
+    def test_the_icon_paints_something(self, picker_factory) -> None:
+        root, _window, _bridge, _warnings = picker_factory(open_now=False)
         root.show()
         QCoreApplication.processEvents()
 
@@ -397,7 +402,13 @@ class TestTheEntryButtonIcon:
 
         top_left = button.mapToScene(button.boundingRect().topLeft())
         size = round(button.property("width"))
-        crop = shot.copy(round(top_left.x()), round(top_left.y()), size, size)
+        inset = round(size * 0.2)
+        crop = shot.copy(
+            round(top_left.x()) + inset,
+            round(top_left.y()) + inset,
+            size - 2 * inset,
+            size - 2 * inset,
+        )
 
         lit = 0
         for y in range(crop.height()):

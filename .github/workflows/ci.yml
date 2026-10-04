@@ -325,27 +325,64 @@ jobs:
 
   # Reads the committed lockfiles (requirements-dev.txt for Python,
   # backend/cf-worker/package-lock.json for the worker) and queries
-  # the OSV database for known CVEs.  Pinned to the v2.3.8 SHA per
-  # the audit-driven hardening posture (tag refs are mutable).
+  # the OSV database for known CVEs.  Pinned by SHA per the
+  # audit-driven hardening posture (tag refs are mutable).
   #
-  # fail-on-vuln: true gates merges on unknown CVEs.  The known
+  # Two modes, chosen by event:
+  #
+  # - On a pull request, osv-scanner-reusable-pr.yml scans the base
+  #   branch and the PR and fails only on vulnerabilities the PR
+  #   introduces.  Scanning everything here meant an advisory published
+  #   against a dependency already on main failed every open PR at once,
+  #   whatever it touched, and also failed the Dependabot PR fixing one
+  #   advisory while any other remained (2026-10-02: #153, #154).
+  # - On a push to main, osv-scan-main below scans everything, and
+  #   osv-nightly.yml does the same daily, so a new advisory against
+  #   main shows up as one failed scheduled run rather than as a red X
+  #   on every PR.
+  #
+  # The PR job's `name` is load-bearing: branch protection requires the
+  # check "OSV Scanner (deps CVE check) / osv-scan", which is this
+  # caller name plus the reusable workflow's own `osv-scan` job.
+  # Renaming it means reconfiguring protection in the same change.
+  #
+  # fail-on-vuln: true in both modes.  The known
   # Wrangler-3.x esbuild/undici findings were resolved by upgrading
   # to Wrangler 4.x; the transitive lxml advisory was resolved by
   # pinning lxml>=6.1.0 in requirements-dev.txt.  If a future CVE
   # appears and we genuinely can't fix it before the next push,
   # quarantine it with an `osv-scanner.toml` ignore entry rather
-  # than flipping this back to false globally.
+  # than flipping this back to false globally.  The scanner reads that
+  # file only from the scanned lockfile's own directory, so a worker
+  # entry goes in backend/cf-worker/osv-scanner.toml; one at the repo
+  # root is silently ignored.
   #
   # upload-sarif: false by default.  Originally because the source repo
   # was private and GitHub Advanced Security (required for SARIF upload
   # to the Security tab on private repos) was not enabled.  The repo
   # went public on 2026-05-16, so code scanning is now free and SARIF
-  # upload could be flipped on — kept off for now because findings still
-  # surface in the action's job summary / annotations, and surfacing
+  # upload could be flipped on.  It is kept off for now because findings
+  # still surface in the action's job summary / annotations, and surfacing
   # them in the public Security tab also publishes them to anyone
   # watching.  Flip to true once you're comfortable with that.
   osv-scan:
     name: OSV Scanner (deps CVE check)
+    if: github.event_name == 'pull_request'
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+    uses: google/osv-scanner-action/.github/workflows/osv-scanner-reusable-pr.yml@a345acffa64b0eaede81a3d9aae6141214d9c8fc # v2.6.0
+    with:
+      scan-args: |-
+        --lockfile=requirements-dev.txt
+        --lockfile=backend/cf-worker/package-lock.json
+      fail-on-vuln: true
+      upload-sarif: false
+
+  osv-scan-main:
+    name: OSV Scanner (full scan of main)
+    if: github.event_name == 'push'
     permissions:
       actions: read
       contents: read

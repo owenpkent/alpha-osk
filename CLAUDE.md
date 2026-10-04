@@ -1641,6 +1641,39 @@ Load-bearing rules:
   themes below WCAG AA, on exactly the keys the style exists to make findable.
   The accent-coloured border carries the cue where the wash has to back off.
   Full-size layouts are deliberately untouched.
+- **Enter wears that wash too, and no hue of its own** (`Main.qml`'s `keyColor`
+  switch, where `accent` and `enter` share a case). It was a flat `#2a5a2a`: the
+  only fill in the file that skipped `washFor`'s contrast walk, and the only
+  literal hue in a project whose first colour rule is that there are none. It
+  measured 1.89:1 on Typewriter, 2.15 on Light and 3.28 on Vaporwave, all under
+  WCAG AA. **Only the `off` scheme reaches that line**, which is why it lasted:
+  every other scheme resolves Enter through `_roleFill`, and Monochrome (the
+  default) already makes Enter the brightest key. Sharing `accentKeyColor` fixes
+  the ratio for free (it is walked per theme already) and spends no new colour,
+  at the cost of Enter and Backspace being identical under `off`. **Do not
+  "simplify" this by marking Enter `style: "accent"` in the layout JSON**: that
+  paints it the same and hands it the accent ring, which is a different decision
+  and was not the one taken. `NumpadPanel.enterKeyColor` is bound from `Main.qml`
+  for the same reason and defaults to an ordinary key. Guarded by
+  `tests/test_qml_compact_view.py::TestEnterSharesTheEditingKeysWash`, whose two
+  inverses are the load-bearing half: Enter must not gain a ring, and the role
+  schemes must still tell commit from kill.
+- **The two keys that destroy text wear the wash but never that border**
+  (`Main.qml::keyBorderFor`, exempting the `kill` role). All five accent keys
+  used to ring, and Enter is `style: "enter"` so it rings on no scheme at all:
+  a saturated ring beats a lightness step at a glance, so the compact grid
+  emphasised Backspace over Enter, four rings against nought. The fills were
+  never the problem and did not move (13.8 and 11.8 OKLab dE from a plain key
+  on Dark, which is level). The exemption reads off `Palette.roleForKey`
+  rather than naming the two actions here, because that is already the
+  project's one answer to "does this key destroy text". Worth knowing that
+  **this border is the one colour on a key Key Colours does not reach**: it
+  keys off the layout JSON's `style` while every fill keys off `role`, which
+  is why the ring won even on Monochrome, whose whole intent is to make Enter
+  the brightest key on the board. Making the border follow the scheme is the
+  larger change that was on the table and was not taken. Guarded by
+  `tests/test_qml_compact_view.py::TestTheKeysThatDestroyTextTakeNoRing`,
+  where dropping every ring and restoring all five each fail a different half.
 - **Del sits on the base layer, Esc on `?123`.** A 13u row has no spare unit, so
   the two traded places. The Number Row panel puts a second Esc back at the
   top-left and that duplicate is deliberate, so `?123` stays the fallback for a
@@ -2171,7 +2204,7 @@ than as the lock cue.
 The only route to a glyph outside a physical keyboard's printing, on every
 layout, since the full-size symbol layer above was removed. Categories, a
 Recent page and several hundred glyphs do not fit on a key grid at a size an
-imprecise pointer can hit, which is why this is a window and not a layer. Opened from a smile button in the suggestion bar,
+imprecise pointer can hit, which is why this is a window and not a layer. Opened from an α button (Tabler's `alpha` icon) in the suggestion bar,
 immediately left of the Snippets bookmark, with a title-bar twin
 (`symbolsTitleBarButton`) visible only when `suggestionsEnabled` is false, for
 the reason the Snippets pair documents: the suggestion bar collapses to zero
@@ -2253,7 +2286,7 @@ this keyboard's users can least rely on. Three rows of chips is the cost.
 
 ### Two font rules, and they pull in opposite directions
 
-The **chrome** obeys the project's usual rule: the smile and the close cross
+The **chrome** obeys the project's usual rule: the α and the close cross
 are `StrokeIcon` path data, never typeset, because Segoe UI Emoji renders a
 glyph in colour and ignores the ink it is given.
 
@@ -2263,11 +2296,18 @@ fallback is what reaches the host emoji font. `font.families` (a list) does
 not exist on this Qt's grouped font property, and naming a single family
 would pin one platform's font and lose the glyph on the other two.
 
-`tests/test_qml_symbols.py::TestTheEntryButtonIcon` asserts the smile paints
-ink at all, which is the property its one hand-converted path can break:
+`tests/test_qml_symbols.py::TestTheEntryButtonIcon` asserts the α paints
+ink at all, which is the property a bad edit to its path data breaks:
 invalid path data paints **nothing** through `ctx.path` (measured: zero lit
-pixels), so a bad conversion ships as a blank circle on the suggestion bar
-rather than as an error.
+pixels), so a broken path ships as a blank circle on the suggestion bar
+rather than as an error. The test keeps the picker **closed** and counts only
+the inside of the circle: with the picker open the ring is drawn in the accent
+colour, the ring alone cleared the bar, and the test passed with the path
+deleted for as long as the smile was there. The α is drawn larger than its neighbours with a
+thinner stroke (a letter fills less of its 24-unit box than a circle or a
+bookmark), so the line weight matches in pixels; change `boxFraction` and
+`strokeWidth` together or it will read bolder or fainter than the icons
+beside it.
 
 ### The suggestion bar's button reserve is derived
 
@@ -2382,6 +2422,14 @@ this to a socket without re-reading that argument.
   not measured). Its `_restoring` flag is load-bearing (without it the keyboard
   declined its own restore in a loop), and `SWP_NOACTIVATE` in
   `WM_WINDOWPOSCHANGING` does nothing, so do not "simplify" to it.
+  The **second-launch hand-off** (`windows_window.surface_existing_instance`,
+  what a shortcut key or an assistive device's "open keyboard" button runs)
+  is the same rule from the other side: it restores with `SW_SHOWNOACTIVATE`
+  and never calls `SetForegroundWindow`. It used to, and measured against the
+  installed keyboard that left it as the foreground window, so the next key
+  clicked typed into nothing. Guarded by
+  `tests/test_windows_window.py::TestASecondLaunchLeavesTheForegroundAlone`,
+  which asserts an allow-list of user32 calls rather than naming the bad one.
   (2) **A close that is not a quit minimizes** (`Main.qml` `onClosing`,
   Windows only), because Qt's default hid the keyboard with the process still
   running, out of the tree and off the taskbar. Qt 6 cancels a quit if a
@@ -2604,13 +2652,15 @@ Full step-by-step release checklist, signing details, troubleshooting table, and
 
 The eToken-non-elevated requirement is the single most common build trap: SafeNet exposes the cert to the user session only, so elevated shells get "Cannot find certificate."
 
+**The exe carries a version resource** (`build/windows/version_resource.py`), generated by the spec into the PyInstaller work directory from `src/__version__.py` and never checked in. Without one the shell names things after the bare filename: a taskbar pin made from the *running* button came out as `alpha-osk`, and Explorer suffixed it `(2)` because a pin of that name already existed, since a pin is named from `FileDescription`. The publisher string must stay equal to `APP_PUBLISHER` in `build.py`, which `tests/test_windows_version_resource.py` checks, and the round-trip test loads the text through PyInstaller's own parser when it is installed. **This does not rename a pin that already exists.** A pin's name is its own `.lnk` file name in `User Pinned\TaskBar`, and the taskbar's registry record (`Taskband\Favorites`) stores that name. A display-name override in that folder's `desktop.ini` (`[LocalizedFileNames]`) was tried and does not work: File Explorer showed the new name, but the taskbar was back to `alpha-osk (2)` after the next Explorer restart. The fix for an existing pin is to unpin and re-pin once the installed build carries this resource and the shortcuts carry the app ID (#138).
+
 ### Release artefacts (EULA, lockfile, SBOM, CVE scanning)
 
 Reference detail moved to **`docs/build/RELEASE.md`**. The essentials:
 - **Clickwrap EULA**: the NSIS installer shows a `MUI_PAGE_LICENSE` page (checkbox-gated) backed by `build/windows/LICENSE.rtf`; keep that RTF and the repo-root plaintext `LICENSE` in sync. Silent install (`/S`, auto-updater) bypasses it, so it only blocks the first interactive install.
 - **Lockfile + SBOM**: every build emits a `pip freeze` lockfile *and* a CycloneDX 1.6 SBOM into `release/` (filenames encode the version), even on `--skip-build`. Upload both as release assets alongside the installer.
 - **Exact-pinned dependencies**: `requirements.txt` and `requirements-dev.txt` pin every dependency to an exact `==` version (most were `>=` floors before), so a fresh install is reproducible and an `osv-scanner` hit names a version you can actually go look up. The macOS-only `pyobjc-framework-*` entries are the deliberate exception and stay on `>=` floors. Hash pinning (`--require-hashes`) is a known follow-up, not done yet.
-- **CI CVE scanning**: `.github/workflows/ci.yml` runs `osv-scanner` over both lockfiles with `fail-on-vuln: true`. A new advisory blocks every PR - fix the dep or quarantine with a time-boxed `osv-scanner.toml` entry; never flip `fail-on-vuln` off globally.
+- **CI CVE scanning**: `osv-scanner` runs over both lockfiles with `fail-on-vuln: true`, in two modes. **On a PR it fails only on vulnerabilities the PR introduces** (`osv-scanner-reusable-pr.yml` scans base and head); **main is scanned in full** on every push and daily by `.github/workflows/osv-nightly.yml`. Before that split (2026-10-03), an advisory published against something already on main failed every open PR at once and also failed the Dependabot PR fixing it whenever a second advisory remained. So a new advisory now shows up as a failed nightly run, not a red X on PRs: fix the dep or quarantine it with a time-boxed `osv-scanner.toml` entry, and never flip `fail-on-vuln` off. **The toml is read only from the scanned lockfile's own directory**: repo root for `requirements-dev.txt`, `backend/cf-worker/` for the worker; a worker entry at the root is silently ignored. The PR job's name is load-bearing, since branch protection requires `OSV Scanner (deps CVE check) / osv-scan` by name.
 
 ## macOS build (in progress)
 
@@ -2710,7 +2760,13 @@ branch with no upstream at all is never a candidate, since never-pushed
 work exists nowhere else and renders the same empty tracking field an
 up-to-date branch does; `gh` being missing or unauthenticated keeps
 every branch rather than deleting them all; and `main` and the
-checked-out branch are refused by name.
+checked-out branch are refused by name. **A merged branch checked out
+in any other worktree is kept too, with the worktree named**: git
+refuses to delete it anyway, and that refusal used to escape as an
+uncaught error that ended the run, leaving every later branch behind.
+It is usually another session still working there, so it is reported,
+not retried. Any other refused delete is reported as `failed`, the run
+carries on, and the exit code is 1.
 
 **"Automatic" here means `git pull`, because there is no local event for
 a merge.** The merge happens on GitHub and nothing on this machine is
@@ -2835,6 +2891,37 @@ border while its radius is 0, so along the corner arc DWM's mask clips that
 border and draws its own. If that reads wrong on a light theme, the answer
 is `DWMWA_BORDER_COLOR`, not a radius on the QML side.
 
+## The taskbar button appears on launch (hide, restyle, re-show)
+
+Reported as the taskbar icon "not fully inflating until you click it". The
+right style bits were not the whole answer: the shell decides whether a
+window gets a taskbar button **at the moment it becomes visible**, and the
+keyboard becomes visible from QML's `visible: true` before
+`apply_extended_styles` runs, so the shell files it as a tool window and
+never looks again. Measured on the installed build four seconds after
+launch: `APPWINDOW` set, `TOOLWINDOW` clear, and no running-window button
+at all, only the 66 px pinned stub with no label and no running dot, until
+a click on that stub activated the window.
+
+- MSDN's rule for changing a visible window's taskbar presence is hide,
+  change the style, show. `apply_extended_styles` does exactly that on the
+  `taskbar_button` path: `ShowWindow(SW_HIDE)` before the style writes,
+  `ShowWindow(SW_SHOWNOACTIVATE)` after the `SWP_FRAMECHANGED` flush.
+  Proven from outside first: that pair on the running keyboard, with no
+  style change at all, attached it as "Alpha-OSK - 1 running window" at
+  once and left the foreground alone.
+- **The re-show is in a `finally`**, because every early return in the
+  style writes now happens with the keyboard hidden, and a keyboard that
+  vanishes at launch is worse than the bug. It is `SW_SHOWNOACTIVATE`,
+  never `SW_SHOW` / `SW_SHOWNORMAL`, which take the foreground.
+- A window that was not visible is left alone, and the floating windows
+  (`taskbar_button=False`) are never blinked: they must not have a button.
+- The offscreen suite cannot see the shell, so `tests/test_windows_window.py::
+  TestTheTaskbarButtonAppearsOnLaunch` pins the call order and the failure
+  paths; the live check is a UI Automation walk of `Shell_TrayWnd` for a
+  button named `Alpha-OSK - 1 running window` (as opposed to the pinned
+  stub) a few seconds after launch, with no click.
+
 ## Title-bar window menu, and click-free Move
 
 Right-clicking the title bar opens the menu a real window's caption strip
@@ -2857,13 +2944,26 @@ pointer wherever it already is on the strip the user grabs the window by.
   a left press still reaches `dragArea` and the caption buttons above it,
   while a right press finds no taker up there and falls through. That is what
   makes the *whole* strip a menu target, buttons and the gaps between them
-  included, rather than only the region `dragArea` covers (which stops 332 px
-  short of the right edge). The failure mode to avoid is declaring it on top:
+  included, rather than only the region `dragArea` covers (which stops at the
+  button row's left edge). The failure mode to avoid is declaring it on top:
   it would silently kill dragging the window. `dragArea` shields it well
   enough that "a left press does not open the menu" is not a falsifiable test,
   so the guard is
   `TestRightClickingTheTitleBarOpensTheMenu::test_a_left_drag_on_the_strip_still_moves_the_window`,
   which presses, travels and asserts the window followed.
+- **`dragArea` reserves the button row's measured width, never a constant.**
+  It reserved a hard-coded 332 px for a row that measures 198 px plus its
+  margin in a typical session, which left a 126 px band between the grip
+  region and the first button that dragged nothing, and on the 812 px
+  compact window that was a sixth of the strip (reported as "the full title
+  bar on compact is not draggable"). The margin is bound to
+  `titleButtons.width`, and `Row` lays out only visible children, so the
+  suggestion-bar mirrors and the X11-only Tuck button come and go without a
+  matching edit. Guarded by
+  `tests/test_qml_window_menu.py::TestTheWholeStripDrags`, which drags from
+  a point inside the old reserve on the compact window and is paired with a
+  press on the Learning switch that must toggle it rather than move the
+  window.
 - **Rows come from a model (`windowMenu.actions`), not four near-identical
   blocks**, and are **word-only, no icons**: any glyph small enough to sit in a
   menu row is at the mercy of the host emoji font, which on Windows renders in
