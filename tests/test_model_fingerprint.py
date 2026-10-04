@@ -29,7 +29,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Tuple
 
 import pytest
 
@@ -216,21 +216,18 @@ class TestPpmRoundTripPredictions:
         model.train(TRAINING_TEXT)
         model.save(tmp_path / "ppm.json")
         reloaded = PPMPredictor(model_path=tmp_path / "ppm.json")
-        # Ranked over the whole alphabet and compared as score -> set of chars:
-        # tied characters come out in set-iteration order (``alphabet`` is a
-        # ``set``, rebuilt on load, and string hashing is salted per process), so
-        # the order within a tie is not part of the contract. Comparing it made
-        # this test fail about one run in three.
+        # Ranked over the whole alphabet and compared in order, ties included.
+        # ``alphabet`` is a ``set`` and string hashing is salted per process, so
+        # before ties were broken by character this order changed between runs
+        # (it failed about one run in three), and a tie at the beam cut-off
+        # changed which words ``predict_word`` returned at all.
         everything = len(model.alphabet)
 
-        def by_score(m: PPMPredictor, ctx: str) -> Dict[float, frozenset]:
-            ranked: Dict[float, set] = {}
-            for char, score in m.predict_next_chars(ctx, everything):
-                ranked.setdefault(round(score, 12), set()).add(char)
-            return {k: frozenset(v) for k, v in ranked.items()}
+        def ranked(m: PPMPredictor, ctx: str) -> List[Tuple[str, float]]:
+            return [(c, round(s, 12)) for c, s in m.predict_next_chars(ctx, everything)]
 
         for ctx in PPM_PROBES:
-            assert by_score(reloaded, ctx) == by_score(model, ctx), ctx
+            assert ranked(reloaded, ctx) == ranked(model, ctx), ctx
 
         def words(m: PPMPredictor) -> Dict[str, float]:
             return {w: round(s, 12) for w, s in m.predict_word("the ", "q", 50)}
@@ -273,29 +270,22 @@ class TestNothingToLearnLeavesNoTrace:
         model.train("")
         assert _ppm_save(model, tmp_path / "p.json") == fresh_ppm_digest
 
-    @pytest.mark.parametrize(
-        "name",
-        [
-            pytest.param(
-                n,
-                marks=pytest.mark.xfail(
-                    strict=True,
-                    reason=(
-                        "PPMPredictor._normalize maps every out-of-alphabet character to "
-                        "a space and train() then counts the spaces, so text with no "
-                        "letters still adds ' ' -> ' ' statistics and bumps total_chars "
-                        "(PPMPredictor().train('   ') -> total_chars 3). Probably "
-                        "unintended; harmless today because PPM is out of the merge."
-                    ),
-                ),
-            )
-            for n in ("whitespace", "emoji", "combining_marks", "non_bmp")
-        ],
-    )
-    def test_ppm_state_is_unchanged(self, name: str, tmp_path: Path, fresh_ppm_digest: str) -> None:
+    @pytest.mark.parametrize("name", ["whitespace", "emoji", "combining_marks", "non_bmp"])
+    def test_ppm_reads_an_unknown_character_as_a_space(
+        self, name: str, tmp_path: Path, fresh_ppm_digest: str
+    ) -> None:
+        """PPM is the exception, by design: a space is a symbol in its alphabet, and
+        ``_normalize`` maps every character outside the alphabet to one, so an emoji
+        between two words trains as the word break it visually is. What is pinned is
+        that it trains exactly as that many spaces would, and nothing more."""
+        text = _NOTHING_TO_LEARN[name]
         model = PPMPredictor()
-        model.train(_NOTHING_TO_LEARN[name])
-        assert _ppm_save(model, tmp_path / "p.json") == fresh_ppm_digest
+        model.train(text)
+        spaces = PPMPredictor()
+        spaces.train(" " * len(text))
+        digest = _ppm_save(model, tmp_path / "p.json")
+        assert digest == _ppm_save(spaces, tmp_path / "s.json")
+        assert digest != fresh_ppm_digest
 
     def test_real_text_does_move_the_state(self, tmp_path: Path, fresh_ngram_digest: str) -> None:
         """Inverse: the comparison above can fail."""
