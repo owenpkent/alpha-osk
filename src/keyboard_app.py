@@ -264,6 +264,22 @@ def _apply_window_flags(root: QWindow) -> None:
         macos_window.apply_window_flags(root)
 
 
+def _always_on_top_windows(root: QWindow) -> list[QWindow]:
+    """Our visible always-on-top windows, the keyboard first.
+
+    The order is the order they are stepped aside and restored in, so the
+    floating pickers, raised after the keyboard, stay above it.  See
+    ``windows_window.ShellPopupYielder``.
+    """
+    on_top = Qt.WindowType.WindowStaysOnTopHint
+    others = [
+        w
+        for w in QApplication.topLevelWindows()
+        if w is not root and w.isVisible() and w.flags() & on_top
+    ]
+    return ([root] if root.isVisible() else []) + others
+
+
 def _wire_floating_windows(root: QWindow) -> None:
     """Apply the Win32 styling the floating windows need once they are shown.
 
@@ -917,12 +933,17 @@ def main() -> int:
     # the top-level QML Window, i.e. a QWindow, at runtime.
     root = cast(QWindow, engine.rootObjects()[0])
     quiet_restore = None
+    shell_popup_yield = None
     if root:
         _apply_window_flags(root)
         _wire_floating_windows(root)
         # Held for the life of the event loop: Qt does not own a filter
         # installed from Python.  See QuietRestoreFilter for the why.
         quiet_restore = windows_window.install_quiet_restore(root)
+        # Held for the same reason: it owns the WinEvent callback.
+        shell_popup_yield = windows_window.install_shell_popup_yield(
+            lambda: _always_on_top_windows(root)
+        )
         app.keyboard_window = root
 
     # --- System tray icon ---
@@ -969,7 +990,7 @@ def main() -> int:
 
     app.aboutToQuit.connect(_on_about_to_quit)
     QTimer.singleShot(0, bridge.startPredictionLoading)
-    _ = quiet_restore
+    _ = (quiet_restore, shell_popup_yield)
 
     return app.exec()
 

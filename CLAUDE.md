@@ -106,7 +106,7 @@ Each section below that is marked *Full write-up* keeps only its load-bearing ru
 | Key colours | `docs/architecture/KEY_COLOURS.md` |
 | Layout geometry (flush rows, section height, dead space) | `docs/architecture/LAYOUT_GEOMETRY.md` |
 | Compact view | `docs/architecture/COMPACT_VIEW.md` |
-| Window chrome (corners, taskbar button, title-bar menu, Move mode, snapping) | `docs/architecture/WINDOW_CHROME.md` |
+| Window chrome (corners, taskbar button, title-bar menu, Move mode, snapping, stepping aside for notifications) | `docs/architecture/WINDOW_CHROME.md` |
 | Switch scanning over UI Automation | `docs/architecture/UIA_TARGETS.md` |
 | Dictation | `docs/architecture/DICTATION.md` |
 | Telemetry, and the installer invitation | `docs/architecture/TELEMETRY.md` |
@@ -1311,6 +1311,15 @@ Right-clicking the title bar opens Move / Minimize / Tuck away (X11 only) / Clos
 - **Move mode** is two taps with a free hand between: the window follows by `(current - anchor)` in the overlay's coordinates (self-correcting), the anchor is dropped on `onExited`, `windowMoveOverlay` is `enabled: root.moveMode` and swallows the ending click, left puts it down and right puts it back (`_moveReturnX/Y`); there is no Escape.
 - **Magnetic edges** (*Appearance -> Window -> Snap to Screen Edges*, default ON): both move paths go through `Main.qml::snapWindowPos`, `snapThreshold` 24 px, against `screenBoundsAt` (the window's own screen), axes independent, horizontal centre is a target and vertical centre is not. **The snapped value is never written back into what the caller accumulates** (Move mode keeps `freeX` / `freeY`) and Move mode re-anchors by how far the window actually went, or an edge becomes a trap.
 - Tests drive the pointer in desktop coordinates; `_park` turns snapping off; a closed `Popup`'s rows all report `visible: false`.
+
+## Notifications and taskbar previews draw over the keyboard
+
+Full write-up: `docs/architecture/WINDOW_CHROME.md` (section of the same name). Read it before changing this area.
+
+- A UIAccess process's always-on-top window is in `ZBID_UIACCESS`, above toasts and taskbar previews. **The band follows topmost-ness both ways** (measured with a signed probe): there is no topmost-in-the-ordinary-band state, so don't try to "just stay in `ZBID_DESKTOP`".
+- `windows_window.ShellPopupYielder` (installed by `install_shell_popup_yield`, held alive in `main()` because it owns the ctypes callback) drops our visible always-on-top windows to `HWND_NOTOPMOST` while a toast or preview is up and restores them after, **both passes keyboard first** (`keyboard_app._always_on_top_windows`) so pickers stay above it.
+- A toast is `Windows.UI.Core.CoreWindow` **in the notification band** (the class alone matches every store app) and shows by uncloaking; previews are Explorer's `XamlExplorerHostIslandWindow`. Never match on the title: it is localised.
+- Tests: `tests/test_shell_popup_yield.py`.
 
 ## Right-Click for Shifted Character
 

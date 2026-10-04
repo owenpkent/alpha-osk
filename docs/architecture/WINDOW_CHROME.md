@@ -268,3 +268,69 @@ parked at a negative x is reported 4 px adrift of where it was put (hence
 `PARKED_X`/`PARKED_Y`), and a closed `Popup`'s rows all report
 `visible: false`, so any assertion about which rows are showing has to open the
 menu first or it passes against anything at all.
+
+## Notifications and taskbar previews draw over the keyboard
+
+Reported on 1.6.0 as "Slack notifications go under the keyboard, and window
+previews". The cause is UIAccess itself, which 1.6.0 was the first build to
+actually run with. A UIAccess process's always-on-top window lives in the
+`ZBID_UIACCESS` Z-order band, above the notification band (toasts, which is
+how Slack notifies) and above Explorer's own topmost windows (taskbar
+previews). Windows' `osk.exe` sits in the same band and covers them the same
+way.
+
+**There is no "topmost but in the ordinary band" state to settle into.** A
+signed UIAccess probe installed under Program Files measured it on
+2026-10-04 (`GetWindowBand`, 1 = `ZBID_DESKTOP`, 2 = `ZBID_UIACCESS`):
+
+| Window | Band |
+|--------|------|
+| `CreateWindowEx` with `WS_EX_TOPMOST` | 2 |
+| `CreateWindowEx` plain | 1 |
+| ... then `SetWindowPos(HWND_TOPMOST)` | 2 |
+| a topmost one after `SetWindowPos(HWND_NOTOPMOST)` | 1 |
+| ... and `HWND_TOPMOST` again | 2 |
+| `CreateWindowInBand(ZBID_DESKTOP)` with `WS_EX_TOPMOST` | 1 |
+| ... then `SetWindowPos(HWND_TOPMOST)` | 2 |
+
+The band follows topmost-ness both ways. The one exception (created in
+`ZBID_DESKTOP` with the style already set) is undone by the next
+`HWND_TOPMOST`, which Qt issues on its own, and Qt creates its windows with
+`CreateWindowEx` anyway. Giving UIAccess up would cost typing into elevated
+windows, which is what 1.6.0 shipped to fix.
+
+**So the keyboard steps aside.** `windows_window.ShellPopupYielder` listens to
+out-of-context WinEvents (show / hide / destroy / cloak / uncloak, filtered to
+whole windows) and, while one recognised popup is on screen, makes every
+visible always-on-top window of ours `HWND_NOTOPMOST`. That leaves the keyboard
+above every ordinary application but below the shell's topmost windows. When
+the last popup goes it makes them topmost again. Both passes walk the windows
+in one order, keyboard first (`keyboard_app._always_on_top_windows`), so an
+open picker stays above the keyboard rather than being buried under it.
+
+What counts (`is_shell_popup`), measured on Windows 11 24H2 with a WinEvent
+recorder:
+
+- **A toast** is ShellExperienceHost's `Windows.UI.Core.CoreWindow` in
+  `ZBID_IMMERSIVE_NOTIFICATION` (4). It is *uncloaked* to show and *cloaked* to
+  dismiss, and the same window is reused for the next toast, which is why the
+  cloak events are hooked and why a snapshot of "new visible windows" never
+  saw it. The class alone is not enough: every store app's window is a
+  `CoreWindow`, so the band is what marks a toast. The title ("New
+  notification") is localised and is not used.
+- **Taskbar previews** are hosted in Explorer's full-screen
+  `XamlExplorerHostIslandWindow`, shown when the pointer reaches a taskbar
+  button and hidden when it leaves the taskbar. The per-button
+  `Xaml_WindowedPopupClass` popups (owned by `Shell_TrayWnd`) live inside
+  that session, so the host alone covers them. `TaskListThumbnailWnd` is the
+  Windows 10 preview window.
+
+A 150 ms restore delay keeps a toast replaced by the next one, or the pointer
+sliding between taskbar buttons, from flickering the Z-order, and a 1 s poll
+while stepped aside drops a popup that is gone, hidden or cloaked without its
+event having arrived.
+
+The live check that does not need a signed build: a throwaway always-on-top
+`QWindow` with the yield installed, a real toast fired from PowerShell, and
+`WS_EX_TOPMOST` sampled every 50 ms. It went `False` 0.3 s after the toast and
+`True` again when the toast was dismissed. Tests: `tests/test_shell_popup_yield.py`.
