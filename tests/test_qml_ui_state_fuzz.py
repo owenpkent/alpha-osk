@@ -185,7 +185,7 @@ class TestPanelStateMachineFuzz:
             ("showFunctionRow", lambda: rng.choice([True, False])),
             ("currentLayout", lambda: rng.choice(self.LAYOUTS)),
             ("width", lambda: rng.randint(700, 1600)),
-            ("activeLayer", lambda: rng.choice(["base", "sym", "sym2"])),
+            ("activeLayer", lambda: rng.choice(["base", "sym"])),
         ]
         # Turning a side panel on while compact is already active is not a
         # reachable operation: the Settings toggles are disabled in compact

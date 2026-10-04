@@ -343,80 +343,70 @@
       "keys": [
         {
           "type": "char",
-          "key": "1",
-          "shifted": "!",
+          "key": "!",
           "width": 1.0,
           "fontSize": 14,
           "style": "secondary"
         },
         {
           "type": "char",
-          "key": "2",
-          "shifted": "@",
+          "key": "@",
           "width": 1.0,
           "fontSize": 14,
           "style": "secondary"
         },
         {
           "type": "char",
-          "key": "3",
-          "shifted": "#",
+          "key": "#",
           "width": 1.0,
           "fontSize": 14,
           "style": "secondary"
         },
         {
           "type": "char",
-          "key": "4",
-          "shifted": "$",
+          "key": "$",
           "width": 1.0,
           "fontSize": 14,
           "style": "secondary"
         },
         {
           "type": "char",
-          "key": "5",
-          "shifted": "%",
+          "key": "%",
           "width": 1.0,
           "fontSize": 14,
           "style": "secondary"
         },
         {
           "type": "char",
-          "key": "6",
-          "shifted": "^",
+          "key": "^",
           "width": 1.0,
           "fontSize": 14,
           "style": "secondary"
         },
         {
           "type": "char",
-          "key": "7",
-          "shifted": "&",
+          "key": "&",
           "width": 1.0,
           "fontSize": 14,
           "style": "secondary"
         },
         {
           "type": "char",
-          "key": "8",
-          "shifted": "*",
+          "key": "*",
           "width": 1.0,
           "fontSize": 14,
           "style": "secondary"
         },
         {
           "type": "char",
-          "key": "9",
-          "shifted": "(",
+          "key": "(",
           "width": 1.0,
           "fontSize": 14,
           "style": "secondary"
         },
         {
           "type": "char",
-          "key": "0",
-          "shifted": ")",
+          "key": ")",
           "width": 1.0,
           "fontSize": 14,
           "style": "secondary"
@@ -453,24 +443,15 @@
         },
         {
           "type": "char",
-          "key": "-",
-          "shifted": "_",
-          "width": 1.0,
-          "fontSize": 14,
-          "style": "secondary"
-        },
-        {
-          "type": "char",
-          "key": "=",
-          "shifted": "+",
-          "width": 1.0,
-          "fontSize": 14,
-          "style": "secondary"
-        },
-        {
-          "type": "char",
           "key": "[",
           "shifted": "{",
+          "width": 1.0,
+          "fontSize": 14,
+          "style": "secondary"
+        },
+        {
+          "type": "char",
+          "key": "{",
           "width": 1.0,
           "fontSize": 14,
           "style": "secondary"
@@ -485,8 +466,22 @@
         },
         {
           "type": "char",
+          "key": "}",
+          "width": 1.0,
+          "fontSize": 14,
+          "style": "secondary"
+        },
+        {
+          "type": "char",
           "key": "\\",
           "shifted": "|",
+          "width": 1.0,
+          "fontSize": 14,
+          "style": "secondary"
+        },
+        {
+          "type": "char",
+          "key": "|",
           "width": 1.0,
           "fontSize": 14,
           "style": "secondary"
@@ -501,16 +496,7 @@
         },
         {
           "type": "char",
-          "key": "'",
-          "shifted": "\"",
-          "width": 1.0,
-          "fontSize": 14,
-          "style": "secondary"
-        },
-        {
-          "type": "char",
-          "key": "`",
-          "shifted": "~",
+          "key": ":",
           "width": 1.0,
           "fontSize": 14,
           "style": "secondary"
@@ -555,195 +541,13 @@
       "layer": "sym",
       "keys": [
         {
-          "type": "layer",
-          "action": "layer",
-          "target": "sym2",
-          "display": "=\\<",
-          "width": 1.0,
-          "fontSize": 11,
-          "style": "special"
-        },
-        {
           "type": "char",
-          "key": "!",
+          "key": "`",
+          "shifted": "~",
           "width": 1.0,
           "fontSize": 14,
           "style": "secondary"
         },
-        {
-          "type": "char",
-          "key": "@",
-          "width": 1.0,
-          "fontSize": 14,
-          "style": "secondary"
-        },
-        {
-          "type": "char",
-          "key": "#",
-          "width": 1.0,
-          "fontSize": 14,
-          "style": "secondary"
-        },
-        {
-          "type": "char",
-          "key": "$",
-          "width": 1.0,
-          "fontSize": 14,
-          "style": "secondary"
-        },
-        {
-          "type": "char",
-          "key": "%",
-          "width": 1.0,
-          "fontSize": 14,
-          "style": "secondary"
-        },
-        {
-          "type": "char",
-          "key": ":",
-          "width": 1.0,
-          "fontSize": 14,
-          "style": "secondary"
-        },
-        {
-          "type": "char",
-          "key": "&",
-          "width": 1.0,
-          "fontSize": 14,
-          "style": "secondary"
-        },
-        {
-          "type": "char",
-          "key": "(",
-          "width": 1.0,
-          "fontSize": 14,
-          "style": "secondary"
-        },
-        {
-          "type": "char",
-          "key": ")",
-          "width": 1.0,
-          "fontSize": 14,
-          "style": "secondary"
-        },
-        {
-          "type": "special",
-          "action": "return",
-          "display": "Enter",
-          "width": 2.0,
-          "fontSize": 12,
-          "style": "enter"
-        },
-        {
-          "type": "special",
-          "action": "pagedown",
-          "display": "PgDn",
-          "width": 1.0,
-          "fontSize": 11,
-          "style": "special"
-        }
-      ]
-    },
-    {
-      "id": "sym-4",
-      "layer": "sym",
-      "keys": [
-        {
-          "type": "layer",
-          "action": "layer",
-          "target": "base",
-          "display": "ABC",
-          "width": 1.0,
-          "fontSize": 11,
-          "style": "special"
-        },
-        {
-          "type": "modifier",
-          "action": "ctrl",
-          "display": "Ctrl",
-          "width": 1.0,
-          "fontSize": 11,
-          "stateKey": "ctrlOn",
-          "style": "special"
-        },
-        {
-          "type": "modifier",
-          "action": "win",
-          "display": "⊞",
-          "width": 1.0,
-          "fontSize": 16,
-          "stateKey": "winOn",
-          "style": "special"
-        },
-        {
-          "type": "modifier",
-          "action": "alt",
-          "display": "Alt",
-          "width": 1.0,
-          "fontSize": 11,
-          "stateKey": "altOn",
-          "style": "special"
-        },
-        {
-          "type": "special",
-          "action": "space",
-          "display": "",
-          "width": 3.0
-        },
-        {
-          "type": "char",
-          "key": ".",
-          "shifted": ">",
-          "width": 1.0,
-          "fontSize": 14,
-          "style": "secondary"
-        },
-        {
-          "type": "special",
-          "action": "left",
-          "display": "←",
-          "width": 1.0,
-          "fontSize": 15,
-          "style": "special"
-        },
-        {
-          "type": "special",
-          "action": "up",
-          "display": "↑",
-          "width": 1.0,
-          "fontSize": 15,
-          "style": "special"
-        },
-        {
-          "type": "special",
-          "action": "down",
-          "display": "↓",
-          "width": 1.0,
-          "fontSize": 15,
-          "style": "special"
-        },
-        {
-          "type": "special",
-          "action": "right",
-          "display": "→",
-          "width": 1.0,
-          "fontSize": 15,
-          "style": "special"
-        },
-        {
-          "type": "special",
-          "action": "end",
-          "display": "End",
-          "width": 1.0,
-          "fontSize": 11,
-          "style": "special"
-        }
-      ]
-    },
-    {
-      "id": "sym2-1",
-      "layer": "sym2",
-      "keys": [
         {
           "type": "char",
           "key": "~",
@@ -753,14 +557,14 @@
         },
         {
           "type": "char",
-          "key": "^",
+          "key": "<",
           "width": 1.0,
           "fontSize": 14,
           "style": "secondary"
         },
         {
           "type": "char",
-          "key": "*",
+          "key": ">",
           "width": 1.0,
           "fontSize": 14,
           "style": "secondary"
@@ -781,172 +585,10 @@
         },
         {
           "type": "char",
-          "key": "{",
-          "width": 1.0,
-          "fontSize": 14,
-          "style": "secondary"
-        },
-        {
-          "type": "char",
-          "key": "}",
-          "width": 1.0,
-          "fontSize": 14,
-          "style": "secondary"
-        },
-        {
-          "type": "char",
-          "key": "|",
-          "width": 1.0,
-          "fontSize": 14,
-          "style": "secondary"
-        },
-        {
-          "type": "char",
-          "key": "<",
-          "width": 1.0,
-          "fontSize": 14,
-          "style": "secondary"
-        },
-        {
-          "type": "char",
-          "key": ">",
-          "width": 1.0,
-          "fontSize": 14,
-          "style": "secondary"
-        },
-        {
-          "type": "special",
-          "action": "backspace",
-          "display": "⌫",
-          "width": 2.0,
-          "fontSize": 16,
-          "style": "accent"
-        },
-        {
-          "type": "special",
-          "action": "home",
-          "display": "Home",
-          "width": 1.0,
-          "fontSize": 11,
-          "style": "special"
-        }
-      ]
-    },
-    {
-      "id": "sym2-2",
-      "layer": "sym2",
-      "keys": [
-        {
-          "type": "special",
-          "action": "tab",
-          "display": "Tab",
-          "width": 1.0,
-          "fontSize": 11,
-          "style": "accent"
-        },
-        {
-          "type": "char",
           "key": "°",
           "width": 1.0,
           "fontSize": 14,
           "style": "secondary"
-        },
-        {
-          "type": "char",
-          "key": "×",
-          "width": 1.0,
-          "fontSize": 14,
-          "style": "secondary"
-        },
-        {
-          "type": "char",
-          "key": "÷",
-          "width": 1.0,
-          "fontSize": 14,
-          "style": "secondary"
-        },
-        {
-          "type": "char",
-          "key": "±",
-          "width": 1.0,
-          "fontSize": 14,
-          "style": "secondary"
-        },
-        {
-          "type": "char",
-          "key": "≈",
-          "width": 1.0,
-          "fontSize": 14,
-          "style": "secondary"
-        },
-        {
-          "type": "char",
-          "key": "≠",
-          "width": 1.0,
-          "fontSize": 14,
-          "style": "secondary"
-        },
-        {
-          "type": "char",
-          "key": "≤",
-          "width": 1.0,
-          "fontSize": 14,
-          "style": "secondary"
-        },
-        {
-          "type": "char",
-          "key": "≥",
-          "width": 1.0,
-          "fontSize": 14,
-          "style": "secondary"
-        },
-        {
-          "type": "special",
-          "action": "insert",
-          "display": "Ins",
-          "width": 1.0,
-          "fontSize": 11,
-          "style": "special"
-        },
-        {
-          "type": "special",
-          "action": "escape",
-          "display": "Esc",
-          "width": 1.0,
-          "fontSize": 11,
-          "style": "accent"
-        },
-        {
-          "type": "modifier",
-          "action": "caps",
-          "display": "Caps",
-          "width": 1.0,
-          "fontSize": 10,
-          "stateKey": "capsOn",
-          "style": "special"
-        },
-        {
-          "type": "special",
-          "action": "pageup",
-          "display": "PgUp",
-          "width": 1.0,
-          "fontSize": 11,
-          "style": "special"
-        }
-      ]
-    },
-    {
-      "id": "sym2-3",
-      "layer": "sym2",
-      "keys": [
-        {
-          "type": "layer",
-          "action": "layer",
-          "target": "sym",
-          "display": "?123",
-          "width": 1.0,
-          "fontSize": 11,
-          "style": "special"
         },
         {
           "type": "char",
@@ -958,48 +600,6 @@
         {
           "type": "char",
           "key": "£",
-          "width": 1.0,
-          "fontSize": 14,
-          "style": "secondary"
-        },
-        {
-          "type": "char",
-          "key": "¥",
-          "width": 1.0,
-          "fontSize": 14,
-          "style": "secondary"
-        },
-        {
-          "type": "char",
-          "key": "¢",
-          "width": 1.0,
-          "fontSize": 14,
-          "style": "secondary"
-        },
-        {
-          "type": "char",
-          "key": "§",
-          "width": 1.0,
-          "fontSize": 14,
-          "style": "secondary"
-        },
-        {
-          "type": "char",
-          "key": "•",
-          "width": 1.0,
-          "fontSize": 14,
-          "style": "secondary"
-        },
-        {
-          "type": "char",
-          "key": "©",
-          "width": 1.0,
-          "fontSize": 14,
-          "style": "secondary"
-        },
-        {
-          "type": "char",
-          "key": "®",
           "width": 1.0,
           "fontSize": 14,
           "style": "secondary"
@@ -1030,8 +630,8 @@
       ]
     },
     {
-      "id": "sym2-4",
-      "layer": "sym2",
+      "id": "sym-4",
+      "layer": "sym",
       "keys": [
         {
           "type": "layer",

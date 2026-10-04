@@ -460,18 +460,22 @@ class TestCompactLayout:
                 "unequal rows get centred and the side gutters come back"
             )
 
-    def test_has_three_layers_of_four_rows(self, compact: dict) -> None:
-        r"""base, ?123 and =\< , four rows each.
+    def test_has_two_layers_of_four_rows(self, compact: dict) -> None:
+        r"""base and ?123, four rows each.
 
-        The second symbol page exists because Shift on ?123 re-rendered row 1
-        as the glyphs row 3 already showed. Replacing Shift with a page switch
-        is the phone convention and makes the overlap structurally impossible;
-        see TestNoDuplicateGlyphsWithinALayer.
+        There were three. The second symbol page (`=\<`) existed to hold the
+        glyphs that would not fit once Shift was removed from ?123, and its
+        first page was spending ten of its twenty-eight slots on the digits
+        the standalone number row already shows. Reclaiming those slots made
+        one page enough for every ASCII symbol, so the second page and its
+        hop are gone; the thirteen non-ASCII glyphs it also carried moved to
+        the Symbols & Emoji window, the same trade that removed the full-size
+        Sym page.
         """
         layers: dict[str, list] = {}
         for row in compact["rows"]:
             layers.setdefault(row["layer"], []).append(row)
-        assert set(layers) == {"base", "sym", "sym2"}
+        assert set(layers) == {"base", "sym"}
         for name, rows in layers.items():
             assert len(rows) == 4, f"{name} has {len(rows)} rows, expected 4"
 
@@ -564,15 +568,42 @@ class TestCompactLayout:
         }
         assert letters == set("abcdefghijklmnopqrstuvwxyz")
 
-    def test_digits_are_complete_on_the_sym_layer(self, compact: dict) -> None:
-        sym_rows = [r for r in compact["rows"] if r["layer"] == "sym"]
-        digits = {
-            k["key"]
-            for r in sym_rows
-            for k in r["keys"]
-            if k.get("type") == "char" and k["key"].isdigit()
-        }
-        assert digits == set("0123456789")
+    def test_the_layout_carries_no_number_row_of_its_own(self, compact: dict) -> None:
+        """Which is what puts the standalone panel on screen.
+
+        `Main.qml::showNumberRow` is derived, not a setting: it is true when
+        no row in the layout JSON is `id: "number"`. Compact relies on that,
+        so the digits are always visible whatever layer is showing. The
+        assertion pins the premise the next test depends on.
+        """
+        assert not [r for r in compact["rows"] if r["id"] == "number"]
+
+    def test_no_digit_appears_on_a_symbol_layer(self, compact: dict) -> None:
+        """Reported: "compact mode symbol mode duplicates number row".
+
+        The ?123 page opened with `1 2 3 4 5 6 7 8 9 0`, and the standalone
+        number row above it is on screen on every layer (the test above), so
+        hopping to ?123 put two identical digit rows one above the other and
+        spent ten of the page's twenty-eight symbol slots on them. The panel
+        is the compact layouts' number row; a layer that draws its own is
+        drawing it twice.
+
+        Stated over every non-base layer rather than over `sym` by name, so
+        a page added later is covered without touching this test.
+        """
+        for layer in sorted(self._other_layers(compact)):
+            rows = [r for r in compact["rows"] if r["layer"] == layer]
+            digits = sorted(
+                {
+                    k["key"]
+                    for r in rows
+                    for k in r["keys"]
+                    if k.get("type") == "char" and k["key"].isdigit()
+                }
+            )
+            assert not digits, (
+                f"{layer} draws {digits}, which the always-visible number row panel already shows"
+            )
 
     def test_colon_has_a_dedicated_key_on_the_sym_layer(self, compact: dict) -> None:
         """A shifted variant is invisible, so `;`→`:` read as "no colon".
@@ -586,15 +617,19 @@ class TestCompactLayout:
         chars = [k for r in sym_rows for k in r["keys"] if k.get("type") == "char"]
         assert ":" in {k["key"] for k in chars}
 
-    def test_caret_survives_the_colon_taking_its_slot(self, compact: dict) -> None:
-        """`^` paid for the colon's 1u — a trade, not a deletion.
+    def test_the_number_rows_shifted_set_is_visible_on_the_sym_layer(self, compact: dict) -> None:
+        """`! @ # $ % ^ & * ( )` each get a key, in digit order.
 
-        It is the rarest of row 3's symbols in prose, and it stays
-        reachable as the shifted variant of `6` on row 1.
+        These are exactly the glyphs the always-visible number row hides
+        behind a right-click, and a shifted variant is invisible: the keycap
+        reads `6`, and nothing on screen says `^` is one right-click away.
+        Surfacing them is what the page's first row is for now that the
+        digits themselves have gone, and it is why the row reads in digit
+        order rather than by glyph.
         """
-        sym_rows = [r for r in compact["rows"] if r["layer"] == "sym"]
-        chars = [k for r in sym_rows for k in r["keys"] if k.get("type") == "char"]
-        assert "^" in {k.get("shifted") for k in chars}
+        row = next(r for r in compact["rows"] if r["id"] == "sym-1")
+        keys = [k["key"] for k in row["keys"] if k.get("type") == "char"]
+        assert keys == list("!@#$%^&*()")
 
     def test_shifted_variants_cover_the_punctuation_owen_asked_for(self, compact: dict) -> None:
         """Right-click types `shifted`, so `/` must carry `?`."""
@@ -647,8 +682,8 @@ class TestBridgeDiscoversCompactLayout:
         rows = bridge.getLayoutRows()
         # The bridge is layer-agnostic — it hands QML every row and the
         # filtering happens there. Guard that contract explicitly.
-        assert len(rows) == 12
-        assert {r["layer"] for r in rows} == {"base", "sym", "sym2"}
+        assert len(rows) == 8
+        assert {r["layer"] for r in rows} == {"base", "sym"}
 
 
 @pytest.mark.parametrize("path", all_layout_files(), ids=lambda p: p.stem)

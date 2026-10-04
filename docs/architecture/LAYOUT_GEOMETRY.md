@@ -106,10 +106,12 @@ pressed after every word and those five are not. Pinned by
 Two things this deliberately did **not** touch. Del stays off the full-size
 grid and Enter stays at 2.3u: those were the other half of the same commit and
 are what puts Q over A (see *Why nothing moves* under
-`TestTheLetterColumnsLineUp`). And Compact View's `?123` / `=\<` pages are
-**not** removable by the same argument: 13 units cannot hold letters and
-digits at once, so compact has no other route to either, and the picker is not
-a substitute for a digit.
+`TestTheLetterColumnsLineUp`). And Compact View's `?123` page is **not**
+removable by the same argument: 13 units cannot hold letters and digits at
+once, so compact has no other route to either, and the picker is not a
+substitute for a digit. Its second page (`=\<`) *was* removable on exactly
+that argument, and went in 2026-09; what paid for it was taking the digits
+off the first page, where they duplicated the standalone number row.
 
 ## Full-size rows are flush (every row is 15.5u)
 
