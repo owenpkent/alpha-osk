@@ -1445,7 +1445,7 @@ Theme picker in settings shows labeled color swatches with mini key previews.
 
 ## Vocabulary
 
-- **Base**: Google 10K wordlist (`data/google-10000-english-usa-no-swears.txt`) + 10K supplement (`data/google-20000-supplement.txt`, filtered for explicit content) + `data/english-expanded.txt`, 64,443 words from SCOWL size 60 by way of the ESDB bundle (permissively licensed, see `data/licenses/ESDB.txt`, pinned by sha256 in `data/english-expanded.manifest`). ~83K total. The SCOWL half enters at **one base count each**, so it supplies coverage without competing with conversational frequencies or reading as personal history. It is a speller's list, which is why it carries explicit content that the curated lists do not: see *Explicit content is filtered from suggestions*.
+- **Base**: Google 10K wordlist (`data/google-10000-english-usa-no-swears.txt`) + 10K supplement (`data/google-20000-supplement.txt`, filtered for explicit content) + `data/english-expanded.txt`, 64,400 words from SCOWL size 60 by way of the ESDB bundle (permissively licensed, see `data/licenses/ESDB.txt`, pinned by sha256 in `data/english-expanded.manifest`). ~83K total. The SCOWL half enters at **one base count each**, so it supplies coverage without competing with conversational frequencies or reading as personal history. It is a speller's list, which is why it carries explicit content that the curated lists do not: see *Explicit content is filtered from suggestions*. Slurs are removed from it at generation (`data/slurs.txt`), which is why the count is 43 below the 64,443 of 1.5.0.
 - **Packs**: No built-ins ship. The system is import-only - see *Vocabulary Packs* section. Imported packs appear as toggles in Settings -> Your Language Model -> Vocabulary Packs.
 - **Numpad**: Toggles between numbers and navigation keys (Home/End/PgUp/PgDn/arrows/Ins/Del) via NumLock. Key 5 is blank in nav mode. Layout mirrors a physical numpad: rows `7 8 9 /`, `4 5 6 *`, `1 2 3 -`, `0(span 2) . +`, `Enter(span 3) NumLock`. NumLock sits at the bottom-right (active highlight uses the theme accent), Enter is the wide bottom-row key. Earlier builds put NumLock on the top row and stretched `+` / Enter as 2-row spans on the right column. The flat 5-row layout was the user's request to match a physical 10-key.
 
@@ -1458,10 +1458,11 @@ The setting decides only what the prediction bar **volunteers**.
 
 That is deliberate and was the owner's call (2026-09-16): a keyboard that
 cannot swear is a dignity problem for an AAC user, so the answer is not to
-remove the words but to let the user decide whether the bar offers them. The
-shipped wordlist is therefore unfiltered, including slurs, and the filter is
-the control over it. Do not re-litigate the content question; do keep the
-filter honest.
+remove the words but to let the user decide whether the bar offers them.
+**Slurs are the exception, also the owner's call (2026-09-23)**: they are
+removed outright, see *Slurs are removed, not filtered* below. Profanity
+stays in the wordlist and the filter is the control over it. Do not
+re-litigate either decision; do keep the filter honest.
 
 - **`data/explicit_words.txt` is generated, not hand-edited**
   (`scripts/gen_explicit_words.py`). It is a list of **exact words**, so the
@@ -1483,9 +1484,10 @@ filter honest.
   **slurs but no common profanity**, which is the exact inverse of what
   anyone wanted: you could not predict `fuck` at all, while the slurs were
   one keystroke from a pill. The stems now only *seed* the suggestion
-  filter, the wordlist ships unfiltered, and the file was renamed because a
-  file called "exclusions" that excludes nothing is how the two jobs got
-  confused in the first place.
+  filter, profanity ships in the wordlist, and the file was renamed because
+  a file called "exclusions" that excludes nothing is how the two jobs got
+  confused in the first place. (Slurs are now excluded at generation, but
+  from their own exact-word list, never from these stems.)
 - **The filter is applied in exactly one place**, `_finalize_scores`, beside
   the short-word gate, because every suggestion from every strategy passes
   through there. A second copy at another emit site is the parallel-blocks
@@ -1508,6 +1510,49 @@ filter that suggested nothing at all would satisfy the first alone), and the
 flag list is checked against the shipped **no-swears** frequency list as
 ground truth, so a false positive is caught by construction rather than by
 anyone's judgement.
+
+### Slurs are removed, not filtered
+
+`data/slurs.txt`, since 2026-09-23. A slur is not a register the keyboard
+should ever volunteer, so no setting brings these back: they are gone from
+every shipped wordlist and seed file, and stripped from an old saved model
+on load. They are still typable letter by letter, and a word the user types
+three times is learned like any other, because at that point it is their
+vocabulary rather than ours.
+
+- **Exact words, never stems, and that is the fix for the second bug.** The
+  suggestion filter used to carry slurs as stems with the suffix rule, which
+  flagged `spiced` / `spicier` / `spicily` (`spic`), `japes` / `japed`
+  (`jap`), `chinked` / `chinking` (`chink`) and `retarder` / `retarding`
+  (`retard`). A wrongly *filtered* word is merely withheld; a wrongly
+  *removed* one can never be predicted, so this list names every form it
+  removes, including forms absent from today's data so a regenerated list
+  cannot bring them in.
+- **A word with a common ordinary sense stays and is filtered instead**
+  (`FILTER_ONLY_WORDS` in `scripts/gen_explicit_words.py`: `chink` the gap,
+  `dyke` the dike spelling, `fag` the British cigarette, `negro` in historical
+  proper names, `micks`). Deciding which list a word belongs on is the whole
+  judgement here: removal when the main modern use is a slur, filtering when
+  it is not.
+- **Removed at three layers, and each one was needed.** `gen_vocabulary.py`
+  excludes the list from the SCOWL wordlist. The hand-curated files
+  (`google-20000-supplement.txt`, `seed_bigrams.txt`) had the words taken out
+  directly; `redskins` was in both, and the seeds gave it five continuations
+  of its own. And `NgramPredictor.load` strips a slur from the persisted
+  merged `unigrams` table unless it is in `user_vocab`, because that table is
+  saved and restored wholesale, so an upgrade would otherwise carry the old
+  base count forward indefinitely (the same shape as the corpus-prior bug in
+  *Shipped corpus prior*). The path is `LanguageProfile.slurs`; a missing
+  file fails open, and `_load_slurs` says why.
+- **`gen_explicit_words.py` now scans the supplement too.** It scanned only
+  the SCOWL list and the base dictionary, which left `bullshit` and `negro`
+  unflagged although the bar could offer both.
+
+Guarded by `tests/test_slurs.py`: every data file is scanned for the list,
+paired with the near-misses (`spiced`, `japes`, `chinking`, `retardant`,
+`sauerkraut`, `tycoon`, `gypsum`) that must still ship and must not be
+flagged, and the load strip is paired with an ordinary word written the same
+way (which must survive) and with a word the user taught (which must too).
 
 ## Vocabulary Packs
 
