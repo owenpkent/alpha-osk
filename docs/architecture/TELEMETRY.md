@@ -1,4 +1,4 @@
-# Telemetry — Design
+# Telemetry: Design
 
 Anonymous, opt-in usage statistics that aggregate into a public "X million keystrokes saved" counter. **Off by default.** Distinct from federated learning (`../roadmap/FEDERATED_LEARNING.md`): telemetry collects a handful of integer counters; federated learning collects model deltas. They could share infrastructure later but currently do not.
 
@@ -145,7 +145,7 @@ DEFAULT_ENDPOINT = "https://alpha-osk-telemetry.<your-cf-subdomain>.workers.dev"
 
 This is the kill switch. Before 1.4.0 it shipped as the empty string, which the client treats as "not configured": every submit silently no-ops (the consent toggle in Settings still works, just no data leaves the machine). It has pointed at the production worker since 1.4.0, and an empty value is still how submits would be disabled. A non-empty value activates the pipeline for any user who has the toggle on.
 
-Commit this change. Treat it like a configuration constant, not a secret — it's the public-facing endpoint and will be visible in any decompiled binary anyway.
+Commit this change. Treat it like a configuration constant, not a secret; it's the public-facing endpoint and will be visible in any decompiled binary anyway.
 
 ### 3. Test in dev, then ship a release
 
@@ -156,7 +156,7 @@ In dev (`python run.py`):
 - Check the D1 table for the row. Confirm the `anon_id` matches the one in `telemetry.json`.
 - Click "Delete my contributed data" (two-step). Confirm the D1 row disappears.
 - Toggle off. Confirm the `anon_id` in `telemetry.json` is cleared.
-- Toggle back on. Confirm a NEW `anon_id` is generated (this is the unlinkable-cycle guarantee — verify it actually works).
+- Toggle back on. Confirm a NEW `anon_id` is generated (this is the unlinkable-cycle guarantee, verify it actually works).
 
 After dev validation, follow the normal release checklist in `../build/WINDOWS.md`. The release-checklist line for telemetry is: "verify `DEFAULT_ENDPOINT` is set to the production worker URL, not empty / not a staging URL".
 

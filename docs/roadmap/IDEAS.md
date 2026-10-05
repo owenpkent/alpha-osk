@@ -1,6 +1,6 @@
 # Ideas
 
-A scratchpad for features, experiments, and directions worth exploring. Nothing here is committed to — it's a place to capture thoughts before they get lost.
+A scratchpad for features, experiments, and directions worth exploring. Nothing here is committed to; it's a place to capture thoughts before they get lost.
 
 To add an idea, drop it under the right heading with a short description. If it matures into real work, move it to `TODO.md` or `ROADMAP.md`.
 
@@ -8,13 +8,13 @@ To add an idea, drop it under the right heading with a short description. If it 
 
 ## Word Prediction Board (Drum Pad Mode)
 
-A dedicated word-focused input surface — less keyboard, more instrument. Think a grid of large, tappable word tiles (like a drum pad or Launchpad) that updates dynamically based on context.
+A dedicated word-focused input surface, less keyboard, more instrument. Think a grid of large, tappable word tiles (like a drum pad or Launchpad) that updates dynamically based on context.
 
 **Core concept:**
 - Grid of word buttons (e.g., 4x4 or configurable) instead of letter keys
 - Each tile shows a predicted word, sized or colored by probability
 - Tapping a word inserts it and refreshes the entire grid with new predictions
-- Optimizes for word-level input speed — fewer taps per sentence than letter-by-letter typing
+- Optimizes for word-level input speed, fewer taps per sentence than letter-by-letter typing
 
 **Open questions:**
 - How does the user start a new word that isn't predicted? Fall back to the keyboard, or have a "spell it out" tile?
@@ -26,7 +26,7 @@ A dedicated word-focused input surface — less keyboard, more instrument. Think
 
 ## Modern UI Overhaul
 
-Bring the look and feel up to current design standards — the keyboard should feel like a polished, native app, not a utility.
+Bring the look and feel up to current design standards, the keyboard should feel like a polished, native app, not a utility.
 
 **Audio feedback:**
 - Key click sounds on press (subtle, not annoying)
@@ -52,7 +52,7 @@ Bring the look and feel up to current design standards — the keyboard should f
 
 ## Future Ideas (Unsorted)
 
-Drop new ideas here. One line is fine — expand later if it gains traction.
+Drop new ideas here. One line is fine, expand later if it gains traction.
 
 - Emoji panel with search and recently-used
 - Clipboard history panel (last N copied items, one-tap paste)

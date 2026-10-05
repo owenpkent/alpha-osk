@@ -1,4 +1,4 @@
-# PPM — Character-Level Prediction
+# PPM: Character-Level Prediction
 
 > **Status (2026-09-03).** PPM's word candidates are out of the prediction
 > merge (`HybridPredictor._ppm_in_merge` defaults to False). The model still
@@ -10,7 +10,7 @@
 PPM (**Prediction by Partial Matching**) is Alpha-OSK's character-level
 language model.  It complements the word-level n-gram predictor by
 handling the case where the user is *mid-word* with a partial prefix
-the dictionary hasn't seen yet — PPM will gracefully back off to
+the dictionary hasn't seen yet, PPM will gracefully back off to
 shorter and shorter contexts until it finds one that has.
 
 PPM is the same algorithm [Dasher](https://www.inference.org.uk/dasher/)
@@ -27,7 +27,7 @@ Implementation: `src/prediction/ppm_predictor.py`.
 | `PPMPredictor` | Character trie + probability blending + beam search over characters. |
 | `PPMWordPredictor` | Dictionary-constrained wrapper.  Re-ranks dictionary words by the PPM character model. |
 
-## Data Structure — The PPM Trie
+## Data Structure: The PPM Trie
 
 Every prefix of length ≤ `max_order` (default 8) that has been
 observed in training has a `PPMNode` in the trie.  Each node stores:
@@ -41,18 +41,18 @@ class PPMNode:
 `add_child(c)` creates the node if needed and returns it.  Updates walk
 down the trie, bumping counts.
 
-### `_update(context, char)` — training
+### `_update(context, char)`: training
 
 For every suffix of the current context (from empty up to
 `max_order`), navigate to that suffix's node and add/increment a
 child for `char`.  So one character observation updates up to
-`max_order + 1` nodes — one for each context length.
+`max_order + 1` nodes; one for each context length.
 
 This is what makes PPM a *variable-order* Markov model: it
 simultaneously maintains unigram, bigram, trigram, …, 9-gram statistics
 over characters.
 
-## Probability Estimation — The Escape Mechanism
+## Probability Estimation: The Escape Mechanism
 
 `get_probabilities(context)` returns a distribution over the next
 character, blended across all context lengths.  This is the heart of
@@ -61,7 +61,7 @@ PPM.
 ### The problem
 
 A pure 8-gram character model would give zero probability to any
-9-character string never seen before — useless for an adaptive
+9-character string never seen before, useless for an adaptive
 system that learns as it goes.
 
 ### PPMD's solution
@@ -71,7 +71,7 @@ system that learns as it goes.
 2. **Emit each character with probability** `count / (total + unique)`.
    The `+ unique` in the denominator is the PPMD escape reservation.
 3. **Reserve some probability mass for "something I haven't seen at
-   this order"** — the **escape probability**
+   this order"**, the **escape probability**
    `unique / (total + unique)`.
 4. **Shorten the context by one character and repeat**, but skip any
    character already assigned probability at a higher order (tracked
@@ -83,7 +83,7 @@ system that learns as it goes.
    non-zero probability.
 
 ```
-# Pseudocode — see _blend_probabilities()
+# Pseudocode: see _blend_probabilities()
 excluded       = {}
 escape_weight  = 1.0
 for order in [len(context), …, 1, 0]:
@@ -108,10 +108,10 @@ higher order.
 
 `get_probabilities` further mixes in a uniform distribution over
 `self.alphabet` with weights `0.1 · uniform + 0.9 · ppm`.  This means
-every alphabet character has at least ~0.1 / |alphabet| probability —
+every alphabet character has at least ~0.1 / |alphabet| probability,
 useful for robustness to out-of-distribution text.
 
-## Word Completion — `predict_word` / `_beam_search_words`
+## Word Completion: `predict_word` / `_beam_search_words`
 
 Beam search builds words character-by-character:
 
@@ -127,11 +127,11 @@ for step in range(max_length - len(partial)):
     beam = top beam_width of new_beam
 ```
 
-Width defaults to `n · 3` — enough to keep alternative branches alive
+Width defaults to `n · 3`, enough to keep alternative branches alive
 while staying fast.  Space is the terminator; deduplication happens at
 the end.
 
-## Dictionary Constraint — `PPMWordPredictor`
+## Dictionary Constraint: `PPMWordPredictor`
 
 Raw PPM beam search can produce non-words.  `PPMWordPredictor` fixes
 this:
@@ -161,7 +161,7 @@ keystroke.
 - `save(path)` serialises the whole trie to JSON (recursive
   `node_to_dict`).  `load(path)` rebuilds it.
 - `get_context_entropy(context)` returns Shannon entropy of the next-
-  character distribution — useful for debugging "how confident is the
+  character distribution, useful for debugging "how confident is the
   model here?"
 
 ## Parameters
@@ -182,14 +182,14 @@ which it is not by default (PPM is out of the merge since 2026-09-03).
 than n-gram for next-word prediction (0.3 vs 3.0) and **near equal**
 for mid-word completion (0.8 vs 1.0).  These weights are shared
 across every merge strategy (Default / Consensus boost /
-Confidence-weighted / Multiplicative) — the formula varies by
+Confidence-weighted / Multiplicative), the formula varies by
 strategy, the relative trust between predictors does not.  The
 rationale: n-gram *is* the word-level authority; PPM shines when the
 word is partial or absent from the dictionary.  See
 `HYBRID_MERGING.md` for the full scoring rules and strategy
 trade-offs.
 
-PPM emits scores via `predict_with_scores()` — raw chained-character
+PPM emits scores via `predict_with_scores()`, raw chained-character
 probabilities for dictionary completions, beam-search probabilities
 for novel completions.  These live on different scales and are
 normalised per source by the linear / log-linear strategies before
@@ -216,8 +216,8 @@ positional rank only.
   data compression systems.*  PhD thesis.  (PPMD escape.)
 - Moffat, A. (1990).  *Implementing the PPM data compression scheme.*
   IEEE Transactions on Communications.  (Exclusions trick.)
-- Ward, D. J., Blackwell, A. F., & MacKay, D. J. C. (2000).  *Dasher
-  — a data entry interface using continuous gestures and language
+- Ward, D. J., Blackwell, A. F., & MacKay, D. J. C. (2000).  *Dasher,
+  a data entry interface using continuous gestures and language
   models.*  UIST.  (PPM for assistive text input.)
 
 ## Status (2026-09-03): trained, persisted, out of the word merge

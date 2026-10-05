@@ -2,7 +2,7 @@
 
 ## Current State
 
-**Implemented in v1.0.3; updater endpoint corrected in v1.0.5.** Alpha-OSK checks GitHub Releases on startup (3 s after launch) and shows an in-app banner when a newer signed installer is available. Click *Install* and the app downloads the installer, verifies its Authenticode signature against our pinned EV-cert thumbprint, and runs it silently — the NSIS installer kills the running app, runs the previous uninstaller, and installs the new build.
+**Implemented in v1.0.3; updater endpoint corrected in v1.0.5.** Alpha-OSK checks GitHub Releases on startup (3 s after launch) and shows an in-app banner when a newer signed installer is available. Click *Install* and the app downloads the installer, verifies its Authenticode signature against our pinned EV-cert thumbprint, and runs it silently, the NSIS installer kills the running app, runs the previous uninstaller, and installs the new build.
 
 Code lives in `src/updater.py` (network + signature verification), `src/keyboard_bridge.py` (`checkForUpdate` / `installUpdate` / `dismissUpdate` slots, `updateAvailable` / `updateUnavailable` / `updateInstallStarted` / `updateInstallFailed` signals), `qml/Main.qml` (banner + Connections), `qml/components/UnifiedSettingsPanel.qml` (Updates section). Tests in `tests/test_updater.py`.
 
@@ -24,23 +24,23 @@ A move that cannot be done as a GitHub transfer (collapsing releases into the so
 
 ## Threat model
 
-The updater is the highest-value MITM target in the app — a successful attacker gets to ship arbitrary signed code on every user's machine. Defences are layered so no single layer compromise unlocks code execution:
+The updater is the highest-value MITM target in the app, a successful attacker gets to ship arbitrary signed code on every user's machine. Defences are layered so no single layer compromise unlocks code execution:
 
 | Threat                                                  | Defence                                                                                                |
 |---------------------------------------------------------|--------------------------------------------------------------------------------------------------------|
 | TLS strip / MITM                                        | `urllib` cert validation + scheme whitelist (https only)                                              |
-| DNS hijack to attacker host                             | Authenticode pin — attacker can't sign with our key                                                   |
+| DNS hijack to attacker host                             | Authenticode pin, attacker can't sign with our key                                                   |
 | Compromised GitHub asset                                | Authenticode pin: `Status == Valid` AND thumbprint matches `fc22b522…` AND signer CN matches `OK Studio Inc.` |
 | Asset URL points off-host                               | Host whitelist: `github.com`, `objects.githubusercontent.com`, `release-assets.githubusercontent.com` (only)                                             |
 | Post-redirect host swap                                 | Re-validate `resp.geturl()` after `urlopen` follows redirects                                          |
 | Disk-fill                                               | `_MAX_DOWNLOAD_BYTES = 500 MB` aborts runaway downloads                                                |
 | Downgrade attack                                        | Strict semver compare (`is_newer`); equal/older silently refused                                       |
 | Downgrade via a re-signed / relabeled older installer   | `_verify_signature` also checks the exe's embedded `FileVersion` against the claimed version, so a validly-signed old installer renamed to a newer-looking filename still fails verification |
-| Pre-release/garbage tag confusion (`v1.0.3-evil`)       | Regex `^\d+\.\d+\.\d+$` only — pre-release/+build refused                                              |
+| Pre-release/garbage tag confusion (`v1.0.3-evil`)       | Regex `^\d+\.\d+\.\d+$` only, pre-release/+build refused                                              |
 | Misnamed asset                                          | Filename pattern locked to `Alpha-OSK-Setup-{version}.exe`                                             |
 | Attacker-writable install directory                     | `InstallDirRegKey HKCU` removed (it was a dangling read of a key nothing in the build ever wrote); `_install_target_dir()` computes the target explicitly and the install runs with `/S /D=<dir>` |
 | Tag confusion across repos                              | Endpoint hard-pinned to `https://api.github.com/repos/owenpkent/alpha-osk-releases/releases/latest` and the `api_url` prefix is checked at call time |
-| QML-side URL injection                                  | QML never sees the URL — it only triggers `installUpdate()`; the bridge holds `self._update_info`     |
+| QML-side URL injection                                  | QML never sees the URL, it only triggers `installUpdate()`; the bridge holds `self._update_info`     |
 | Release-notes injection                                 | `_sanitize_notes` strips C0 controls and caps length to 4 KB                                          |
 
 What's **not** covered: compromise of the EV signing key. That's a build-pipeline / cert-rotation response, not a client-side fix.
@@ -57,7 +57,7 @@ Three related fixes landed together because they all touch how much the updater 
 
 ## Original design
 
-## Implemented: Option A — GitHub Releases + Silent Installer (with hardening)
+## Implemented: Option A: GitHub Releases + Silent Installer (with hardening)
 
 The simplest path that leverages existing infrastructure.
 
@@ -72,7 +72,7 @@ The simplest path that leverages existing infrastructure.
 3. If newer, show an in-app banner in the keyboard window offering Install or Later.
 4. User clicks → app downloads the installer `.exe` from the release assets to `%TEMP%`.
 5. App launches the installer silently: `Alpha-OSK-Setup-1.0.2.exe /S /D=<install dir>` (the directory comes from `_install_target_dir()`)
-6. The NSIS installer kills the running instance (`taskkill /F /IM alpha-osk.exe` in `customInit`), uninstalls the old version, installs the new one, and **relaunches the new app** via `explorer.exe` (drops admin IL → user IL — see `build/windows/installer.nsh`'s `customInstall`). The `IfSilent` gate scopes auto-relaunch to the auto-update path only; an interactive install does not auto-launch the app on completion.
+6. The NSIS installer kills the running instance (`taskkill /F /IM alpha-osk.exe` in `customInit`), uninstalls the old version, installs the new one, and **relaunches the new app** via `explorer.exe` (drops admin IL → user IL, see `build/windows/installer.nsh`'s `customInstall`). The `IfSilent` gate scopes auto-relaunch to the auto-update path only; an interactive install does not auto-launch the app on completion.
 
 **The helper launches the new keyboard through `explorer.exe`, never with `CreateProcess` directly** (`_update_relauncher._launch_command`). A UIAccess application started by a process that has no UIAccess itself, whether by `CreateProcess` or `ShellExecuteEx`, comes up with `TokenUIAccess=0`; started by Explorer it comes up with 1 (measured 2026-10-04 against `osk.exe`). The helper runs from `%TEMP%`, outside every secure location, so it has none to pass on. This is the same relay `installer.nsh` uses for its own launch, and it is safe here because the helper and Explorer both run at the user's integrity level; the relay only failed when the elevated installer tried it, which is what the helper was created to replace. With Explorer in between, a successful `Popen` only proves Explorer started, so both paths then wait up to `_NEW_OSK_APPEAR_TIMEOUT_S` (15 s) for an `alpha-osk.exe` process, matched on the exact image name so the helper's own `alpha-osk-relauncher.exe` never counts, and report a failed launch (exit 4, the splash's Start-menu message, no handoff) when none appears. The helper is a copy taken from the version that *started* the update, so this only governs upgrades started by a build that carries it: the first upgrade from 1.5.0 (or earlier) into such a build is relaunched by 1.5.0's helper, which still calls `Popen([exe])` directly, and that keyboard has no UIAccess until its next start from the Start menu (a one-time instruction, carried in the 1.6.0 release notes).
 
@@ -81,8 +81,8 @@ The simplest path that leverages existing infrastructure.
 This section used to hold the original pre-implementation design sketch (a bare `urlretrieve` plus `/S`, a system-tray entry). It was superseded by the shipped implementation in `src/updater.py` (`check_for_update`, `is_newer`, `_download_with_cap`, `_HTTP_TIMEOUT_SECONDS`), which is the reference.
 
 ### Pros
-- Zero new infrastructure — uses GitHub Releases you already have
-- Installer is already EV-signed — no SmartScreen issues
+- Zero new infrastructure: uses GitHub Releases you already have
+- Installer is already EV-signed: no SmartScreen issues
 - NSIS silent upgrade already works (tested)
 - Simple code (~50 lines)
 
@@ -93,7 +93,7 @@ This section used to hold the original pre-implementation design sketch (a bare 
 
 ### Security
 - Download over HTTPS (GitHub CDN)
-- Installer is EV-signed — Windows verifies Authenticode before executing
+- Installer is EV-signed: Windows verifies Authenticode before executing
 - No code execution from the update check itself (just JSON parsing)
 - User must explicitly click to install (no silent background installs)
 
@@ -101,21 +101,21 @@ This section used to hold the original pre-implementation design sketch (a bare 
 
 ## Alternative Options (for future consideration)
 
-### Option B — Delta Updates
+### Option B: Delta Updates
 
 Ship a small updater binary alongside the app. Maintain a version manifest on S3/CloudFront. Compute binary diffs between releases. Updater downloads only changed files.
 
 - **Pros**: Much smaller downloads (~5-20MB vs 164MB)
-- **Cons**: Complex — need diff computation, manifest hosting, rollback logic, a separate updater exe that survives the update process
+- **Cons**: Complex, need diff computation, manifest hosting, rollback logic, a separate updater exe that survives the update process
 - **When**: If user base grows large enough that bandwidth matters
 
-### Option C — WinGet
+### Option C: WinGet
 
 Publish to [WinGet](https://github.com/microsoft/winget-pkgs) (Microsoft's package manager). Users update via `winget upgrade alpha-osk`.
 
 - **Pros**: OS-integrated, familiar to developers, free hosting
 - **Cons**: Requires submitting a manifest PR to microsoft/winget-pkgs for each release (or setting up a WinGet REST source). Not discoverable for non-technical users.
-- **When**: Good to add alongside Option A — it's just a YAML manifest per release
+- **When**: Good to add alongside Option A, it's just a YAML manifest per release
 
 **WinGet manifest example** (`manifests/o/OKStudio/AlphaOSK/1.0.1/`):
 ```yaml
@@ -137,7 +137,7 @@ License: Proprietary
 PackageUrl: https://github.com/owenpkent/alpha-osk
 ```
 
-### Option D — Microsoft Store
+### Option D: Microsoft Store
 
 Publish as an MSIX package to the Microsoft Store.
 
@@ -164,9 +164,9 @@ The on-startup ✓ Updated toast added in 1.0.17 fires *after* the gap and helps
 ### Where the gap comes from
 
 `_update_relauncher.run_relauncher` has three sequential waits, all silent in the original implementation:
-1. `_wait_for_parent_exit` — up to 60 s for the installer's taskkill to land (usually < 1 s).
-2. `time.sleep(_INSTALLER_GRACE_S)` — fixed 5 s for the installer to finish file copies.
-3. `_wait_for_new_exe` — up to 180 s polling for `$INSTDIR\alpha-osk.exe` to look freshly installed (originally "mtime past parent-death", which could never fire in production; since 1.5.1 it is "mtime differs from the pre-install snapshot", see *The helper is a renamed copy in %TEMP%* below).
+1. `_wait_for_parent_exit`: up to 60 s for the installer's taskkill to land (usually < 1 s).
+2. `time.sleep(_INSTALLER_GRACE_S)`: fixed 5 s for the installer to finish file copies.
+3. `_wait_for_new_exe`: up to 180 s polling for `$INSTDIR\alpha-osk.exe` to look freshly installed (originally "mtime past parent-death", which could never fire in production; since 1.5.1 it is "mtime differs from the pre-install snapshot", see *The helper is a renamed copy in %TEMP%* below).
 
 So the floor is ~5 s and the ceiling is ~245 s. Real installs land at ~15-30 s on a healthy machine; AV scanning of the freshly-extracted DLLs can push it higher.
 
@@ -174,15 +174,15 @@ So the floor is ~5 s and the ceiling is ~245 s. Real installs land at ~15-30 s o
 
 **Layer 1: pre-update expectation-setting in the live OSK.** Before `updater.download_and_install` spawns the installer (after download + signature verify succeed), it invokes a new optional `on_installer_launching` callback. The bridge wires this to emit `updateInstallHandoffPending(version)` and then sleep 1.8 s in the worker thread, so the toast paints and is legible before the installer's taskkill arrives. The QML side adds an `updateStartingToast` Popup ("Installing v1.0.X. The keyboard will disappear briefly and come back.") modeled on the existing `updateAppliedToast`. Worth noting: the toast deliberately has no auto-close timer, because the installer's taskkill closes the whole process within ~1-2 s anyway, and a timer that fires just before the taskkill would leave the user with the same silence we're trying to avoid.
 
-**Layer 2: visible relauncher splash during the gap.** `_update_relauncher` grew a `--show-splash` flag that the production caller (`updater._spawn_relauncher`) always passes. When the flag is set, `run_relauncher` dispatches to `_run_with_splash` instead of the original `_run_headless`. The splash is a frameless `WindowStaysOnTopHint` `QWidget` (not `QSplashScreen` — the latter's image-background model didn't fit the text-and-progress display we wanted). The polling logic was refactored into a `QTimer` state machine driven by `_poll_parent` → `_start_new_exe_phase` → `_poll_new_exe` → `_launch`, with a new `_new_exe_ready` single-shot helper replacing the blocking `_wait_for_new_exe` poll loop so the event loop can repaint between checks. Phase-aware messages: "Waiting for the installer to finish…" → "Installing files…" → "Launching the new keyboard…" → "Done!" (800 ms dwell so the splash doesn't vanish a frame before the new OSK draws its first window). Failure paths surface a "Find Alpha-OSK in your Start Menu" message for 6 s instead of vanishing silently. Splash colours match the in-app toast (`#1e3354` background, `#4a8eff` border, `#7ec8ff` title, `#cfe0ff` body) so it visually belongs to Alpha-OSK rather than looking like a stray system dialog.
+**Layer 2: visible relauncher splash during the gap.** `_update_relauncher` grew a `--show-splash` flag that the production caller (`updater._spawn_relauncher`) always passes. When the flag is set, `run_relauncher` dispatches to `_run_with_splash` instead of the original `_run_headless`. The splash is a frameless `WindowStaysOnTopHint` `QWidget` (not `QSplashScreen`, the latter's image-background model didn't fit the text-and-progress display we wanted). The polling logic was refactored into a `QTimer` state machine driven by `_poll_parent` → `_start_new_exe_phase` → `_poll_new_exe` → `_launch`, with a new `_new_exe_ready` single-shot helper replacing the blocking `_wait_for_new_exe` poll loop so the event loop can repaint between checks. Phase-aware messages: "Waiting for the installer to finish…" → "Installing files…" → "Launching the new keyboard…" → "Done!" (800 ms dwell so the splash doesn't vanish a frame before the new OSK draws its first window). Failure paths surface a "Find Alpha-OSK in your Start Menu" message for 6 s instead of vanishing silently. Splash colours match the in-app toast (`#1e3354` background, `#4a8eff` border, `#7ec8ff` title, `#cfe0ff` body) so it visually belongs to Alpha-OSK rather than looking like a stray system dialog.
 
-If the splash path raises (PySide6 import error, no display server), `run_relauncher` logs and falls back to `_run_headless` rather than aborting the relaunch — better to silently relaunch than to leave the user with nothing.
+If the splash path raises (PySide6 import error, no display server), `run_relauncher` logs and falls back to `_run_headless` rather than aborting the relaunch, better to silently relaunch than to leave the user with nothing.
 
 **Headless path preserved.** `_run_headless` is the original blocking-poll implementation, kept intact. Tests target it (so they don't have to stand up a `QApplication`), and it serves as the splash-failure fallback. Production never reaches it on a healthy machine because `--show-splash` is always passed.
 
-**Dismiss button.** The splash has a small ✕ in the top-right corner that *hides* the splash without aborting the relaunch — the user is dismissing the visual, not the work. Polling continues invisibly so the new OSK still launches when ready. A real-world test session left a splash stuck at "Installing files…" for the full `_NEW_EXE_TIMEOUT_S` window because dev mode (see below) had no escape; the dismiss button is the user-facing safety valve.
+**Dismiss button.** The splash has a small ✕ in the top-right corner that *hides* the splash without aborting the relaunch, the user is dismissing the visual, not the work. Polling continues invisibly so the new OSK still launches when ready. A real-world test session left a splash stuck at "Installing files…" for the full `_NEW_EXE_TIMEOUT_S` window because dev mode (see below) had no escape; the dismiss button is the user-facing safety valve.
 
-**Dev-mode short-circuit.** `updater._spawn_relauncher` passes `--target-exe sys.executable` in dev mode (since there's no real install dir to poll). The splash's `_new_exe_ready` check then waits for `python.exe`'s mtime to advance past parent-death, which never happens, so the splash would sit at "Installing files…" until the 180 s timeout. New `_is_dev_target()` helper detects target paths whose basename starts with `python` / `pythonw` and routes those straight to headless. The check is gated only on the target-exe basename, so a real production install (which always points at `alpha-osk.exe`) is unaffected. This was the original cause of the stuck-splash incident — discovered immediately after the initial commit and patched the same session.
+**Dev-mode short-circuit.** `updater._spawn_relauncher` passes `--target-exe sys.executable` in dev mode (since there's no real install dir to poll). The splash's `_new_exe_ready` check then waits for `python.exe`'s mtime to advance past parent-death, which never happens, so the splash would sit at "Installing files…" until the 180 s timeout. New `_is_dev_target()` helper detects target paths whose basename starts with `python` / `pythonw` and routes those straight to headless. The check is gated only on the target-exe basename, so a real production install (which always points at `alpha-osk.exe`) is unaffected. This was the original cause of the stuck-splash incident, discovered immediately after the initial commit and patched the same session.
 
 ### Why not just make the installer non-silent?
 
@@ -190,26 +190,26 @@ The interactive NSIS UI would solve the visibility problem trivially, but at the
 
 ### Files
 
-- `src/updater.py` — `download_and_install` accepts `on_installer_launching: Optional[HandoffCb]`; `_spawn_relauncher` adds `--show-splash` to the relauncher cmd (frozen installs only since 1.5.1; dev runs no longer spawn a helper at all).
-- `src/keyboard_bridge.py` — `updateInstallHandoffPending = Signal(str)`; `installUpdate` worker passes a callback that emits the signal then sleeps `_PRE_INSTALL_TOAST_DWELL_S` (1.8 s).
-- `src/_update_relauncher.py` — `run_relauncher` dispatch, `_run_headless` (legacy + fallback), `_run_with_splash` (Qt path), `_build_splash_widget`, `_new_exe_ready`, `_is_dev_target`.
-- `qml/Main.qml` — `updateStartingToast` Popup + the `Connections.onUpdateInstallHandoffPending` handler that flashes it.
+- `src/updater.py`: `download_and_install` accepts `on_installer_launching: Optional[HandoffCb]`; `_spawn_relauncher` adds `--show-splash` to the relauncher cmd (frozen installs only since 1.5.1; dev runs no longer spawn a helper at all).
+- `src/keyboard_bridge.py`: `updateInstallHandoffPending = Signal(str)`; `installUpdate` worker passes a callback that emits the signal then sleeps `_PRE_INSTALL_TOAST_DWELL_S` (1.8 s).
+- `src/_update_relauncher.py`: `run_relauncher` dispatch, `_run_headless` (legacy + fallback), `_run_with_splash` (Qt path), `_build_splash_widget`, `_new_exe_ready`, `_is_dev_target`.
+- `qml/Main.qml`: `updateStartingToast` Popup + the `Connections.onUpdateInstallHandoffPending` handler that flashes it.
 - Tests: `tests/test_updater.py::TestInstallerLaunchingCallback` (4), `tests/test_update_relauncher.py::TestNewExeReady` (5), `TestShowSplashFlag` (4 incl. dev-mode skip), `TestIsDevTarget` (4).
 
 ### Download progress + splash progress bar (v1.0.19 follow-up)
 
 The T40 work covered the gap *after* the user clicked Install. Two more silent surfaces remained: the download phase before the splash spawns (silent on the in-app side), and the install phase inside the splash (silent on the splash side because NSIS `/S` suppresses its own UI). v1.0.19 fills both.
 
-**Live download progress in the in-app update popup.** A new `KeyboardBridge.updateDownloadProgress(bytes, total)` Signal is emitted from the install worker thread; `installUpdate` passes a throttled callback into `download_and_install(progress=...)`. The throttle is the load-bearing detail: the downloader's 64 KB chunk size would fire ~1300 signals on an 85 MB installer, so the callback coalesces to one emit per 256 KB and always forces the final chunk (so the bar lands at 100 % rather than at 99.4 %). QML wires `onUpdateDownloadProgress` into two new properties on the root (`updateDownloadBytes`, `updateDownloadTotal`) and the existing update popup now shows `Downloading X.X / Y.Y MB (N%)` plus a determinate `ProgressBar`. When the server omits `Content-Length` (`total` is `-1`) the popup falls back to an indeterminate bar and shows only the byte count. `onUpdateInstallStarted` zeros both properties so a retry doesn't briefly show the previous attempt's numbers. **The download URL still never reaches QML** — the bridge only ever emits primitive ints, the URL stays behind `self._update_info`.
+**Live download progress in the in-app update popup.** A new `KeyboardBridge.updateDownloadProgress(bytes, total)` Signal is emitted from the install worker thread; `installUpdate` passes a throttled callback into `download_and_install(progress=...)`. The throttle is the load-bearing detail: the downloader's 64 KB chunk size would fire ~1300 signals on an 85 MB installer, so the callback coalesces to one emit per 256 KB and always forces the final chunk (so the bar lands at 100 % rather than at 99.4 %). QML wires `onUpdateDownloadProgress` into two new properties on the root (`updateDownloadBytes`, `updateDownloadTotal`) and the existing update popup now shows `Downloading X.X / Y.Y MB (N%)` plus a determinate `ProgressBar`. When the server omits `Content-Length` (`total` is `-1`) the popup falls back to an indeterminate bar and shows only the byte count. `onUpdateInstallStarted` zeros both properties so a retry doesn't briefly show the previous attempt's numbers. **The download URL still never reaches QML**, the bridge only ever emits primitive ints, the URL stays behind `self._update_info`.
 
-**Indeterminate progress bar on the relauncher splash.** `_build_splash_widget` grew a `QProgressBar` under the message label, sized to 10 px tall, range `(0, 0)` (Qt's marquee mode). The splash window's fixed height bumped from 140 to 170 px to fit it without overlapping. A new closure `_settle_progress(full)` is wired into the terminal phases — `_launch`'s success path calls `_settle_progress(full=True)` to pin the bar full on Done, and both failure paths in `_poll_new_exe` and `_launch` call `_settle_progress(full=False)` to empty it. Without that, the bar would still be sliding the instant the splash vanished, which reads as "still working". The stylesheet matches the existing splash palette (`#4a8eff` chunk on `#14233a` track with a `#2a4570` border) so it visually belongs to Alpha-OSK.
+**Indeterminate progress bar on the relauncher splash.** `_build_splash_widget` grew a `QProgressBar` under the message label, sized to 10 px tall, range `(0, 0)` (Qt's marquee mode). The splash window's fixed height bumped from 140 to 170 px to fit it without overlapping. A new closure `_settle_progress(full)` is wired into the terminal phases, `_launch`'s success path calls `_settle_progress(full=True)` to pin the bar full on Done, and both failure paths in `_poll_new_exe` and `_launch` call `_settle_progress(full=False)` to empty it. Without that, the bar would still be sliding the instant the splash vanished, which reads as "still working". The stylesheet matches the existing splash palette (`#4a8eff` chunk on `#14233a` track with a `#2a4570` border) so it visually belongs to Alpha-OSK.
 
 **Why a marquee, not real %?** NSIS `/S` suppresses the installer's own UI, so we have no real percentage to report from outside. Reading installer state from the splash would require either parsing NSIS's log output (not stable across NSIS versions and the silent installer doesn't log to a known path anyway) or shelling a sidecar that watches `$INSTDIR\alpha-osk.exe` for mtime + size growth, which is already approximately what `_new_exe_ready` does. The marquee is the same trade-off every commercial installer makes for the silent phase: constant motion signals liveness without lying about progress.
 
 **Files added/changed in v1.0.19:**
-- `src/keyboard_bridge.py` — `updateDownloadProgress = Signal(int, int)`; throttled `_on_progress` callback in `installUpdate`'s worker (256 KB cadence + always-final-chunk).
-- `src/_update_relauncher.py` — `QProgressBar` import + insert into splash; `_settle_progress(full)` helper wired into all three terminal-phase branches; splash height 140 → 170 px.
-- `qml/Main.qml` — `updateDownloadBytes` / `updateDownloadTotal` root properties; `onUpdateDownloadProgress` handler; `Connections.onUpdateInstallStarted` zeros the counters; popup text computes MB/% from the two properties; new `ProgressBar` inside the popup `contentItem`, indeterminate when `updateDownloadTotal <= 0`.
+- `src/keyboard_bridge.py`: `updateDownloadProgress = Signal(int, int)`; throttled `_on_progress` callback in `installUpdate`'s worker (256 KB cadence + always-final-chunk).
+- `src/_update_relauncher.py`: `QProgressBar` import + insert into splash; `_settle_progress(full)` helper wired into all three terminal-phase branches; splash height 140 → 170 px.
+- `qml/Main.qml`: `updateDownloadBytes` / `updateDownloadTotal` root properties; `onUpdateDownloadProgress` handler; `Connections.onUpdateInstallStarted` zeros the counters; popup text computes MB/% from the two properties; new `ProgressBar` inside the popup `contentItem`, indeterminate when `updateDownloadTotal <= 0`.
 
 ## The relauncher spawn: no console, and no strays
 

@@ -27,8 +27,8 @@ Alpha-OSK started as a Linux-only on-screen keyboard.  The Windows port
 was added by introducing a **platform abstraction layer** (`src/platform/`)
 that encapsulates all OS-specific behaviour behind a common interface.
 
-The rest of the codebase — UI (QML), prediction engine, keyboard bridge
-logic, data files — is **100% shared** between platforms.
+The rest of the codebase, UI (QML), prediction engine, keyboard bridge
+logic, data files, is **100% shared** between platforms.
 
 ```
                     ┌──────────────────────────────────────┐
@@ -70,7 +70,7 @@ logic, data files — is **100% shared** between platforms.
 ### 1. Shared Code by Default
 
 The platform layer is the **only** place where `if windows` / `if linux`
-logic exists.  Everything else — QML, bridge, prediction, data — is
+logic exists.  Everything else (QML, bridge, prediction, data) is
 platform-agnostic.
 
 ### 2. Program Against Interfaces
@@ -89,7 +89,7 @@ eliminates dependency management complexity and version conflicts.
 ### 4. Fail Gracefully
 
 If the platform layer can't find a working backend (e.g. no `xdotool` on
-Linux), the keyboard still launches — it just can't send keystrokes.
+Linux), the keyboard still launches, it just can't send keystrokes.
 Predictions, UI, settings all still work.
 
 ### 5. Document Everything
@@ -125,25 +125,25 @@ build/
 └── macos/                    # PyInstaller BUNDLE + optional .dmg (in progress)
 ```
 
-### `__init__.py` — The Public API
+### `__init__.py`: The Public API
 
 Exports:
-- `CURRENT_PLATFORM` — `"windows"`, `"linux"`, or `"unsupported"`
-- `create_key_synthesizer()` — Factory that returns the correct backend
-- `get_platform_info()` — Diagnostic info dict for logging/UI
-- `get_config_dir()` — Platform-appropriate config directory
-- `get_model_dir()` — Platform-appropriate model storage directory
+- `CURRENT_PLATFORM`: `"windows"`, `"linux"`, or `"unsupported"`
+- `create_key_synthesizer()`: Factory that returns the correct backend
+- `get_platform_info()`: Diagnostic info dict for logging/UI
+- `get_config_dir()`: Platform-appropriate config directory
+- `get_model_dir()`: Platform-appropriate model storage directory
 
-### `base.py` — The Interface
+### `base.py`: The Interface
 
 Defines `KeySynthesizerBase` with these abstract methods:
-- `is_available()` — Can we send keys?
-- `backend_name()` — Human-readable name for logs
-- `send_key(key_name, modifiers)` — Send a single keystroke
-- `send_text(text)` — Type a Unicode string
-- `send_combination(keys)` — Send a key chord (e.g. Ctrl+C)
+- `is_available()`: Can we send keys?
+- `backend_name()`: Human-readable name for logs
+- `send_key(key_name, modifiers)`: Send a single keystroke
+- `send_text(text)`: Type a Unicode string
+- `send_combination(keys)`: Send a key chord (e.g. Ctrl+C)
 
-### `linux.py` — Linux Backend
+### `linux.py`: Linux Backend
 
 - Detects `xdotool` or `ydotool` on `$PATH`
 - Prefers `ydotool` on Wayland, `xdotool` on X11
@@ -176,10 +176,10 @@ Defines `KeySynthesizerBase` with these abstract methods:
   selection. ydotool: frames N `Left` presses with explicit
   `--key-down shift` / `--key-up shift`, then a `type`. The base-class
   fallback (N sequential `BackSpace` sends) raced with xdotool's
-  subprocess latency in practice — the overrides collapse that to two
+  subprocess latency in practice: the overrides collapse that to two
   synchronous commands, matching the Windows single-`SendInput` path.
 
-### `windows.py` — Windows Backend
+### `windows.py`: Windows Backend
 
 - Uses `ctypes.windll.user32.SendInput` directly
 - Virtual-key mode for special keys and modifier combos
@@ -223,14 +223,14 @@ real keyboard isn't left feeling "held".
 
 `KeyboardBridge.__init__` additionally calls
 `LinuxKeySynthesizer.reset_modifier_state()` to issue a defensive `keyup`
-on Ctrl/Alt/Shift/Super at startup. This catches the cross-session case
-— a prior alpha-osk instance that crashed or was SIGKILL'd before it
-could release — without which the new session's UI shows every modifier
+on Ctrl/Alt/Shift/Super at startup. This catches the cross-session case:
+a prior alpha-osk instance that crashed or was SIGKILL'd before it
+could release: without which the new session's UI shows every modifier
 inactive while the X server still thinks (say) Alt is held, and the user
 sees symptoms like Chrome treating link-clicks as Alt+click (download
 instead of navigate). We only reset on startup because a periodic
 release would also clobber a modifier the user is physically holding
-(Alt-codes, Ctrl-scroll-wheel, etc.) — safe reconciliation would need
+(Alt-codes, Ctrl-scroll-wheel, etc.), safe reconciliation would need
 `XQueryKeymap` to distinguish "held" from "should-be-released".
 
 ### Windows: SendInput
@@ -293,7 +293,7 @@ Applied in `src/platform/windows_window.py` → `apply_extended_styles()`:
 | `WS_EX_TOOLWINDOW` | `0x00000080` | Actively *cleared* (not written): Qt adds it on its own once these flags reach an already-shown window, and clearing it is what keeps the taskbar entry the minimise button needs. Accepted trade-off: the OSK also appears in Alt+Tab. |
 | `WS_EX_APPWINDOW` | `0x00040000` | Set alongside the `WS_EX_TOOLWINDOW` clear, so the taskbar entry doesn't depend on Qt leaving the rest of the style word alone |
 
-`WS_EX_NOACTIVATE` is the most important — without it, clicking any key
+`WS_EX_NOACTIVATE` is the most important, without it, clicking any key
 on the OSK would steal focus from the user's text editor, making the
 keyboard useless.  Qt's `WindowDoesNotAcceptFocus` is a Qt-level hint that
 doesn't always work on Windows; `WS_EX_NOACTIVATE` is the OS-level
@@ -336,8 +336,8 @@ presence. The re-show is in a `finally` and never activates.
 | Windows | `%APPDATA%\alpha-osk\models\` |
 
 Models stored:
-- `ngram_model.json` — N-gram word frequency model
-- `ppm_model.json` — PPM character-level model (Dasher algorithm)
+- `ngram_model.json`: N-gram word frequency model
+- `ppm_model.json`: PPM character-level model (Dasher algorithm)
 
 ### How It's Implemented
 
@@ -489,7 +489,7 @@ assert synth._resolve_vk("F1") == 0x70
 **Decision**: Implement our own synthesizer using `SendInput`.
 
 **Rationale**:
-- `pynput` and `keyboard` are generic input libraries — we need
+- `pynput` and `keyboard` are generic input libraries, we need
   OSK-specific behaviour (UIAccess, no-focus, modifier management).
 - Neither supports UIAccess manifests.
 - Both add unnecessary abstraction layers and dependencies.
@@ -534,7 +534,7 @@ toolkit-specific APIs.
 - Walking the accessibility tree on every poll would be too slow (GNOME's
   desktop tree can have thousands of accessibles). Event-driven updates
   are O(1) per focus change and free between events.
-- PyGObject is a soft dependency — if the user doesn't install
+- PyGObject is a soft dependency, if the user doesn't install
   `python3-gi` + `gir1.2-atspi-2.0`, the detector reports unavailable and
   we fall back to the null detector; manual privacy toggle still works.
   We don't ship these in the AppImage because they'd bloat the bundle by
@@ -544,7 +544,7 @@ toolkit-specific APIs.
   about password state inside a browser.
 
 **Trade-off**: The daemon thread owning a GLib main loop runs alongside
-Qt's event loop — two main loops in one process. They don't share state
+Qt's event loop: two main loops in one process. They don't share state
 so they don't fight, but shutdown order matters: the thread is
 `daemon=True` so interpreter exit kills it without needing an explicit
 `Atspi.event_quit()` call (which would require marshaling back onto the
@@ -558,7 +558,7 @@ and listening for `_NET_ACTIVE_WINDOW` property changes via
 `XSelectInput`.
 
 **Rationale**:
-- xdotool is already a hard runtime dependency for key synthesis — no
+- xdotool is already a hard runtime dependency for key synthesis, no
   new deps.
 - At 4 Hz the amortized cost is ~20 ms/s of CPU, invisible at typing
   cadence.
@@ -579,7 +579,7 @@ and listening for `_NET_ACTIVE_WINDOW` property changes via
 - Easy to add new platforms without modifying existing code (Open/Closed
   Principle).
 - Each platform file can be understood independently.
-- Makes testing easier — you can instantiate a specific backend directly.
+- Makes testing easier: you can instantiate a specific backend directly.
 - Avoids `if sys.platform == ...` scattered throughout the codebase.
 
 ### Why PassThrough DPI Rounding Policy?
@@ -591,7 +591,7 @@ before creating `QGuiApplication` on all platforms.
 - Qt 6's default `RoundPreferFloor` policy rounds each monitor's scale factor
   (e.g. 1.5 → 1.0).  When the window moves to a monitor whose rounded factor
   differs from the source monitor's rounded factor, Qt re-scales the logical
-  window dimensions — making the keyboard grow or shrink unexpectedly.
+  window dimensions: making the keyboard grow or shrink unexpectedly.
 - `PassThrough` uses the exact fractional DPI ratio from the OS, so no
   rounding discontinuity occurs across monitor transitions.
 - A complementary `onScreenChanged` handler in `Main.qml` clamps `root.width`
@@ -603,10 +603,10 @@ before creating `QGuiApplication` on all platforms.
 **Decision**: Use NSIS for the Windows installer.
 
 **Rationale**:
-- Same installer technology used by gitconnect — proven patterns we can
+- Same installer technology used by gitconnect, proven patterns we can
   reuse (`installer.nsh` macros, shortcut creation, old-version cleanup).
 - Free and open source.
-- Widely supported — users trust NSIS installers.
+- Widely supported: users trust NSIS installers.
 - Easily automated from `build/windows/build.py` by generating `.nsi` scripts
   programmatically.
 
@@ -666,7 +666,7 @@ retry logic (matching gitconnect's `build/sign.js`).
 | File | Purpose |
 |------|---------|
 | `../build/WINDOWS.md` | Windows setup, signing, NSIS, UIAccess, troubleshooting |
-| `PLATFORM_ARCHITECTURE.md` | This file — design rationale and decisions |
+| `PLATFORM_ARCHITECTURE.md` | This file, design rationale and decisions |
 
 ---
 

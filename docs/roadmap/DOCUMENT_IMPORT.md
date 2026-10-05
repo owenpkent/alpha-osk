@@ -1,4 +1,4 @@
-# Document Import — Learning from User Writing Style
+# Document Import: Learning from User Writing Style
 
 ## Goal
 
@@ -23,10 +23,10 @@ The existing prediction engine (n-gram, with a PPM character model trained along
 | Tone/formality adaptation | LLM or classifier | Yes |
 
 The n-gram approach is:
-- **Fast** — predictions in <10ms, no GPU needed
-- **Private** — all processing is local, no data leaves the device
-- **Incremental** — learns from each new document without retraining
-- **Lightweight** — model is a JSON file, typically <5MB even after heavy use
+- **Fast**: predictions in <10ms, no GPU needed
+- **Private**: all processing is local, no data leaves the device
+- **Incremental**: learns from each new document without retraining
+- **Lightweight**: model is a JSON file, typically <5MB even after heavy use
 
 ### When AI Would Help
 
@@ -57,10 +57,10 @@ def importFolder(self, folder_path: str) -> int:
 ```
 
 These feed text into `NgramPredictor.learn()`, which updates:
-- **Unigrams** — individual word frequencies
-- **Bigrams** — word pair frequencies (prev_word → next_word)
-- **Trigrams** — three-word sequence frequencies
-- **User vocab** — personal boost scores with recency decay
+- **Unigrams**: individual word frequencies
+- **Bigrams**: word pair frequencies (prev_word → next_word)
+- **Trigrams**: three-word sequence frequencies
+- **User vocab**: personal boost scores with recency decay
 
 The PPM model (`PPMPredictor`) also learns character-level patterns but is not currently trained from imported files.
 
@@ -70,7 +70,7 @@ The PPM model (`PPMPredictor`) also learns character-level patterns but is not c
 
 ### Phase 1: Basic File Import (UI + Plumbing)
 
-**Effort: Small — mostly UI work, backend already exists.**
+**Effort: Small, mostly UI work, backend already exists.**
 
 1. Add an "Import Documents" button to the Settings panel (under Data section)
 2. Open a native file dialog (`FileDialog` in QML or `QFileDialog`)
@@ -95,7 +95,7 @@ For Phase 1, start with `.txt` and `.md` only (zero dependencies). Add other for
 
 ### Phase 2: Folder Import + Smart Filtering
 
-1. "Import Folder" button — imports all supported files recursively
+1. "Import Folder" button, imports all supported files recursively
 2. Filter out code/config (skip files that are mostly non-English)
 3. Skip binary files, very large files (>10MB), and duplicates
 4. Show summary: "Imported 47 files, 23,400 words. Top new words: ..."
@@ -105,7 +105,7 @@ For Phase 1, start with `.txt` and `.md` only (zero dependencies). Add other for
 
 Some users may not have documents saved as files. Let them:
 1. Paste text directly into an import dialog
-2. "Learn from clipboard" button — grabs current clipboard content
+2. "Learn from clipboard" button, grabs current clipboard content
 3. Good for: chat logs, social media posts, email threads
 
 ### Phase 4: Email Client Integration (Advanced)
@@ -170,7 +170,7 @@ The recency decay system (`_decay_factor = 0.95` every 50 learns) naturally prun
 
 ### Privacy Considerations
 
-- All imported text is processed locally — nothing is sent to any server
+- All imported text is processed locally; nothing is sent to any server
 - The model stores word frequencies, not original text (you can't reconstruct documents from the model)
 - "Clear Learned Data" button in settings wipes all imported knowledge
 - If LLM re-ranking is enabled, it also runs locally (DistilGPT-2 on-device)
@@ -196,7 +196,7 @@ In the Settings panel, under the existing "Data" section:
 
 After import, show a brief toast/notification:
 ```
-✓ Imported "meeting_notes.txt" — 2,340 words learned
+✓ Imported "meeting_notes.txt", 2,340 words learned
 ```
 
 ---
@@ -205,9 +205,9 @@ After import, show a brief toast/notification:
 
 | Question | Answer |
 |----------|--------|
-| Do we need AI? | No — n-grams learn writing style effectively |
-| Does AI help? | Yes — LLM re-ranking improves context-aware suggestions, but is optional |
+| Do we need AI? | No, n-grams learn writing style effectively |
+| Does AI help? | Yes, LLM re-ranking improves context-aware suggestions, but is optional |
 | What's the minimum viable version? | File dialog → read .txt/.md → feed to existing `learn()` → done |
 | What dependencies are needed? | None for .txt/.md; `python-docx` for Word; `PyMuPDF` for PDF |
-| Is it private? | Yes — all local, model stores frequencies not original text |
+| Is it private? | Yes, all local, model stores frequencies not original text |
 | How much work? | Phase 1 is small (UI only, backend exists). Phase 2-5 are incremental. |

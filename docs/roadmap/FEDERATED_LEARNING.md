@@ -110,7 +110,7 @@ def merge_community_model(local: dict, community: dict) -> dict:
             # User's own frequency wins; community provides a floor
             merged[word] = max(local[word], freq)
         else:
-            # New word from community — add with reduced weight
+            # New word from community, add with reduced weight
             merged[word] = freq // 2
     return merged
 ```
@@ -121,7 +121,7 @@ def merge_community_model(local: dict, community: dict) -> dict:
 - Track baseline model state at session start
 - Compute delta at session end
 - Show "what would be shared" in analytics dashboard
-- No actual transmission — just build the infrastructure
+- No actual transmission, just build the infrastructure
 
 ### Phase 2: Opt-In Upload
 - Add "Contribute to community predictions" toggle in Settings
@@ -155,7 +155,7 @@ The aggregation server is intentionally simple:
 - **Publishes**: Static JSON file (community model update)
 - **No database**: Flat files or S3 objects
 - **No auth**: Anonymous submissions (rate-limited by IP)
-- **No PII**: Nothing to breach — deltas are pre-noised and anonymous
+- **No PII**: Nothing to breach, deltas are pre-noised and anonymous
 
 Estimated hosting cost: ~$5/month for thousands of users.
 
@@ -167,7 +167,7 @@ Estimated hosting cost: ~$5/month for thousands of users.
 | Privacy leak via frequency analysis | Differential privacy noise, minimum frequency threshold for sharing |
 | User distrust | Transparent preview of exact data shared, opt-in only, open-source server |
 | Low adoption | Start with Phase 1 (local-only) to build trust, show value before asking for contribution |
-| Model divergence | Community model is always additive — it can only add words or boost frequencies, never remove |
+| Model divergence | Community model is always additive; it can only add words or boost frequencies, never remove |
 
 ## UI Design
 
@@ -176,7 +176,7 @@ Estimated hosting cost: ~$5/month for thousands of users.
 [ ] Contribute to community predictions
     Help improve predictions for all users.
     Only anonymized word-pair statistics are
-    shared — never your actual text.
+    shared; never your actual text.
     [View what would be shared]
 ```
 

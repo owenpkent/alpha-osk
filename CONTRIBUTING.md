@@ -19,9 +19,9 @@ welcome, especially from users of adaptive technology.
 
 - **Report bugs** using the bug report template. Attach the diagnostic log if you have one: *Settings > Data & Privacy > Diagnostics > Open Log Folder*, or `alpha-osk.log` in the config directory. It carries crash tracebacks and never carries typed content.
 - **Request features** using the feature request template.
-- **Improve docs** — typos, clearer wording, missing context.
+- **Improve docs**: typos, clearer wording, missing context.
 - **Add tests**: the suite is large (`python -m pytest --collect-only -q` prints the count) but coverage gaps exist.
-- **Code changes** — see "Development setup" below.
+- **Code changes**: see "Development setup" below.
 
 If you are unsure whether a change is wanted, open an issue first to
 discuss. For larger features, please discuss before writing code so we can
@@ -57,7 +57,7 @@ and vocabulary-pack import paths, where the property is "nothing outside
 the destination directory is ever touched", and the prediction-engine
 invariants that the rest of the code is allowed to assume. They run under a
 fixed profile declared in `tests/conftest.py` with the example database
-disabled, so they are deterministic — a run cannot pass locally and fail on
+disabled, so they are deterministic, a run cannot pass locally and fail on
 CI because of a cached corpus. To iterate faster while developing:
 
 ```bash
@@ -68,7 +68,7 @@ python -m pytest tests/test_property_import_hardening.py \
 If one fails, the report prints the exact generated input that broke it.
 Reproduce it by pasting the `@reproduce_failure(...)` decorator Hypothesis
 suggests onto the test, or just add the shrunk case as a plain example
-test — a minimal counterexample usually deserves to be pinned permanently.
+test: a minimal counterexample usually deserves to be pinned permanently.
 
 Some QML tests (`tests/test_qml_*.py`) need Qt's GL/xkb system libraries.
 They skip themselves with a message naming the missing library if it is not
@@ -155,11 +155,11 @@ PR.
 
 Other useful docs in `docs/`:
 
-- `docs/architecture/HYBRID_MERGING.md` — prediction merging strategies
-- `docs/architecture/FUZZY_RECOGNITION.md` — spatial error correction
-- `docs/architecture/PPM.md` — character-level prediction (trained, but out of the prediction merge since 2026-09-03)
+- `docs/architecture/HYBRID_MERGING.md`: prediction merging strategies
+- `docs/architecture/FUZZY_RECOGNITION.md`: spatial error correction
+- `docs/architecture/PPM.md`: character-level prediction (trained, but out of the prediction merge since 2026-09-03)
 - `docs/architecture/DICTATION.md` (voice input, Deepgram-backed)
-- `docs/build/WINDOWS.md`, `docs/build/LINUX.md`, `docs/build/MACOS.md` — per-platform build
+- `docs/build/WINDOWS.md`, `docs/build/LINUX.md`, `docs/build/MACOS.md`: per-platform build
   and packaging notes
 
 The dictation tests need neither a Deepgram API key nor a microphone. They

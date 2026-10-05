@@ -8,7 +8,7 @@ Quick reference for AI assistants working on Alpha-OSK.
 
 **Name:** Alpha-OSK  
 **Purpose:** AI-powered on-screen keyboard for **Linux & Windows** accessibility  
-**Status:** 🚀 Active Development — Core keyboard working, AI prediction integrated, Windows port complete
+**Status:** 🚀 Active Development, Core keyboard working, AI prediction integrated, Windows port complete
 
 ---
 
@@ -33,12 +33,12 @@ descends from that one constraint.
 
 ## About the Owner
 
-I'm Owen — a wheelchair user with muscular dystrophy.
+I'm Owen, a wheelchair user with muscular dystrophy.
 
-- **Typing is hard** — Be proactive. Make decisions. Don't ask for confirmation on small things.
-- **Offer A/B/C choices** — I can type one letter instead of explaining.
-- **Cross-platform** — Linux and Windows. Use platform-appropriate syntax.
-- **Accessibility matters** — This is a tool I actually need.
+- **Typing is hard**: Be proactive. Make decisions. Don't ask for confirmation on small things.
+- **Offer A/B/C choices**: I can type one letter instead of explaining.
+- **Cross-platform**: Linux and Windows. Use platform-appropriate syntax.
+- **Accessibility matters**: This is a tool I actually need.
 
 ---
 
@@ -91,7 +91,7 @@ alpha-osk/
   - **Linux:** xdotool (X11) / ydotool (Wayland) via subprocess
   - **Windows:** Win32 SendInput API via ctypes (zero external deps)
 - **Prediction:** Hybrid engine (n-gram + fuzzy recognition)
-- **No AI/LLM required** — Transformer disabled by default (can re-enable if desired)
+- **No AI/LLM required**: Transformer disabled by default (can re-enable if desired)
 - **Windows Build:** PyInstaller + UIAccess manifest + EV code signing
 
 ### Prediction Architecture
@@ -127,8 +127,8 @@ See "Fuzzy dictionary refresh, and PPM out of the merge" in CLAUDE.md.
 
 | File | Purpose |
 |------|---------|
-| `run.py` | Cross-platform launcher — creates venv, installs deps, runs keyboard |
-| `src/keyboard_bridge.py` | Python↔QML bridge — modifiers, key synthesis, predictions |
+| `run.py` | Cross-platform launcher, creates venv, installs deps, runs keyboard |
+| `src/keyboard_bridge.py` | Python↔QML bridge, modifiers, key synthesis, predictions |
 | `src/platform/__init__.py` | Platform detection, factory, config/model dir paths |
 | `src/platform/base.py` | Abstract `KeySynthesizerBase` interface |
 | `src/platform/linux.py` | Linux backend: xdotool / ydotool |
@@ -137,7 +137,7 @@ See "Fuzzy dictionary refresh, and PPM out of the merge" in CLAUDE.md.
 | `src/prediction/hybrid_predictor.py` | Orchestrates all predictors, Qt signals |
 | `src/prediction/ppm_predictor.py` | Character-level PPM (Dasher algorithm) |
 | `src/prediction/fuzzy_recognizer.py` | Spatial error correction + accessibility profiles |
-| `qml/Main.qml` | Main UI — modular with toggleable panels |
+| `qml/Main.qml` | Main UI, modular with toggleable panels |
 | `build/windows/alpha-osk.exe.manifest` | Windows UIAccess manifest for EV signing |
 | `build/windows/alpha-osk.spec` | PyInstaller build specification |
 | `build/windows/build.py` | Full build pipeline: PyInstaller → Sign → NSIS → Verify |
@@ -152,31 +152,31 @@ See "Fuzzy dictionary refresh, and PPM out of the merge" in CLAUDE.md.
 
 ### UI & Window
 - ✅ **Title bar** with drag handle, minimize, close buttons
-- ✅ **Resizable window** — Keys scale dynamically with window width
-- ✅ **Unified settings panel** — All settings in one scrollable menu (⚙ button)
-- ✅ **5 Color Themes** — Dark, Light, Blue, Green, Purple
+- ✅ **Resizable window**: Keys scale dynamically with window width
+- ✅ **Unified settings panel**: All settings in one scrollable menu (⚙ button)
+- ✅ **5 Color Themes**: Dark, Light, Blue, Green, Purple
 - ✅ Draggable window, stays on top, doesn't steal focus
 - ✅ Modern prediction bar with improved readability
 
 ### Keyboard Layout
 - ✅ Full QWERTY layout with all symbols
 - ✅ Modifiers: Shift, Caps, Ctrl, Alt, Win/Super (sticky)
-- ✅ **Keyboard shortcuts** — Ctrl+C, Ctrl+V, Ctrl+Z, etc. work correctly
+- ✅ **Keyboard shortcuts**: Ctrl+C, Ctrl+V, Ctrl+Z, etc. work correctly
 - ✅ Toggleable panels: Function row, Navigation (arrows), Numpad
-- ✅ **Side panels auto-expand** — Window grows when Nav/Numpad toggled on
+- ✅ **Side panels auto-expand**: Window grows when Nav/Numpad toggled on
 - ✅ Compact mode option
 - ✅ Key hold/repeat for continuous typing (including backspace)
 
 ### Prediction
 - ✅ **Hybrid prediction** (n-gram + fuzzy recognition)
-- ✅ **PPM Language Model** — Character-level prediction (Dasher algorithm)
-- ✅ **Fuzzy/Spatial Recognition** — Corrects mistypes based on key proximity
-- ✅ **Next-word prediction** — After selecting a word, suggests likely follow-ups
-- ✅ **Training corpus** — Pre-loaded common phrases for better predictions
-- ✅ **Smart punctuation** — Removes space before ? ! . , ; :
+- ✅ **PPM Language Model**: Character-level prediction (Dasher algorithm)
+- ✅ **Fuzzy/Spatial Recognition**: Corrects mistypes based on key proximity
+- ✅ **Next-word prediction**: After selecting a word, suggests likely follow-ups
+- ✅ **Training corpus**: Pre-loaded common phrases for better predictions
+- ✅ **Smart punctuation**: Removes space before ? ! . , ; :
 
 ### Accessibility
-- ✅ **6 Accessibility Profiles** — Precise, Normal, Mild/Moderate/Severe Tremor, Limited Mobility
+- ✅ **6 Accessibility Profiles**: Precise, Normal, Mild/Moderate/Severe Tremor, Limited Mobility
 - ✅ All settings accessible from single unified panel
 
 ---
@@ -209,7 +209,7 @@ python3 run.py              # Auto-creates venv, installs PySide6
 
 ### Windows
 ```powershell
-python run.py               # No system deps needed — SendInput is built-in
+python run.py               # No system deps needed, SendInput is built-in
 ```
 
 That's it! No AI/LLM download required. Predictions work out of the box with n-gram + fuzzy recognition.
@@ -218,7 +218,7 @@ That's it! No AI/LLM download required. Predictions work out of the box with n-g
 ```powershell
 pip install pyinstaller
 pyinstaller build/windows/alpha-osk.spec
-# Then EV code-sign and install to Program Files — see ../build/WINDOWS.md
+# Then EV code-sign and install to Program Files: see ../build/WINDOWS.md
 ```
 
 ---

@@ -30,9 +30,9 @@ class Layout(BaseModel):
     base_octave: int
 ```
 
-Each `KeyDef` specifies position, size, label, and action. Layouts are defined as data, not code — easy to serialize to JSON.
+Each `KeyDef` specifies position, size, label, and action. Layouts are defined as data, not code, easy to serialize to JSON.
 
-**Multi-window launcher**: Octavium opens each layout type (piano, pads, faders) as its own window with shared MIDI output. Alpha-OSK could do the same — a launcher that opens different layout windows, all sharing the same `SendInput` synthesizer.
+**Multi-window launcher**: Octavium opens each layout type (piano, pads, faders) as its own window with shared MIDI output. Alpha-OSK could do the same, a launcher that opens different layout windows, all sharing the same `SendInput` synthesizer.
 
 **Modular panels**: Chord Pad, Faders, XY Pad are independent widgets. Alpha-OSK could treat prediction bar, key rows, numpad, macro grid as independent panels that snap together.
 
@@ -121,7 +121,7 @@ A layout is a JSON file that defines rows of keys with actions:
 
 ## Levels of Modularity
 
-### Level 1 — Built-in Layout Packs (low effort)
+### Level 1: Built-in Layout Packs (low effort)
 
 `data/layouts/` already ships `qwerty.json`, `qwerty-compact.json`, `dvorak.json` and `colemak.json`. The task-specific packs below are proposals:
 
@@ -141,7 +141,7 @@ Users switch layouts via a dropdown in the title bar or settings.
 
 **Implementation**: Extend `keyboard_bridge.getLayoutRows()` to read from JSON files instead of hardcoded Python dicts. The QML already renders whatever `getLayoutRows()` returns.
 
-### Level 2 — User-Created Layouts (medium effort)
+### Level 2: User-Created Layouts (medium effort)
 
 A layout editor in settings where users can:
 
@@ -153,7 +153,7 @@ A layout editor in settings where users can:
 
 **Implementation**: A QML-based grid editor. Each key is a draggable, resizable rectangle. Right-click to edit properties. Save as JSON.
 
-### Level 3 — Panel Composition (higher effort, Octavium-inspired)
+### Level 3: Panel Composition (higher effort, Octavium-inspired)
 
 Instead of one monolithic layout, the keyboard is composed of snappable panels:
 
@@ -181,7 +181,7 @@ Users drag panels into a grid. Each panel is an independent widget:
 
 **Implementation**: A QML `Grid` (**not** `GridLayout`) where each cell can hold a panel. `QtQuick.Layouts` rounds every child up to a whole pixel, and key widths are floats derived from the window width, so a layout-managed panel cannot sit flush with the keys beside it; see the panel rule in CLAUDE.md. Panels are registered as plugins. Drag-and-drop to rearrange. Save arrangement to user profile.
 
-### Level 4 — App-Aware Profiles (future)
+### Level 4: App-Aware Profiles (future)
 
 The keyboard detects which application is in the foreground (via `GetForegroundWindow` + `GetWindowText`) and automatically switches layouts:
 
@@ -226,19 +226,19 @@ For music use cases, Alpha-OSK could launch Octavium panels:
 3. Profile includes a MIDI panel that communicates with Octavium via shared MIDI port
 4. Or embeds Octavium's `KeyboardWidget` directly (both are PySide6/Qt)
 
-Since both apps use PySide6 and share the same signing cert, embedding is technically feasible — import Octavium's widget classes directly.
+Since both apps use PySide6 and share the same signing cert, embedding is technically feasible, import Octavium's widget classes directly.
 
 ## Implementation Roadmap
 
 | Phase | What | Effort |
 |-------|------|--------|
-| **1** | JSON layout format + 3-4 built-in packs | Low — extend `getLayoutRows()` |
-| **2** | Layout switcher in title bar / tray menu | Low — dropdown + reload |
+| **1** | JSON layout format + 3-4 built-in packs | Low, extend `getLayoutRows()` |
+| **2** | Layout switcher in title bar / tray menu | Low, dropdown + reload |
 | **3** | `hotkey` and `text` action types in bridge | **Done** for the function keys (`src/key_actions.py`); widening `FUNCTION_KEYS` is what extends it to other keys |
 | **4** | User layout editor (QML grid editor) | Medium-High |
 | **5** | Panel composition system | High |
-| **6** | App-aware auto-switching | Medium — extend foreground monitor |
-| **7** | Octavium bridge for MIDI panels | Medium — IPC or direct import |
+| **6** | App-aware auto-switching | Medium, extend foreground monitor |
+| **7** | Octavium bridge for MIDI panels | Medium, IPC or direct import |
 
 ## File Structure (after Phase 1-2)
 

@@ -28,7 +28,7 @@ event, macOS shows:
 
 Open **System Settings → Privacy & Security → Accessibility** and
 enable the listed app. When running from source via `python run.py`,
-the entry will be your terminal app (Terminal, iTerm, Cursor, etc.) —
+the entry will be your terminal app (Terminal, iTerm, Cursor, etc.),
 not "Alpha-OSK". After a signed `.app` build (phase 3), the entry
 becomes "Alpha-OSK" directly.
 
@@ -45,19 +45,19 @@ What's already running on macOS vs the other backends:
 | Feature | macOS | Mechanism |
 |---------|-------|-----------|
 | Key synthesis (chars, chords, specials) | ✅ | `Quartz.CGEventCreateKeyboardEvent` + `CGEventKeyboardSetUnicodeString` |
-| **Pid-targeted delivery** (the OSK works at all) | ✅ | `CGEventPostToPid(target_pid, ev)`, target tracked via `NSWorkspaceDidActivateApplicationNotification` observer in the synthesizer — focus-independent. See *Design decisions* for why naive `CGEventPost` failed. |
+| **Pid-targeted delivery** (the OSK works at all) | ✅ | `CGEventPostToPid(target_pid, ev)`, target tracked via `NSWorkspaceDidActivateApplicationNotification` observer in the synthesizer, focus-independent. See *Design decisions* for why naive `CGEventPost` failed. |
 | Sticky-modifier hold / release | ✅ | Post a keycode-only modifier event with no matching key-up; mirror state in `_held_mods` so per-event `CGEventSetFlags` stays consistent |
-| Defensive modifier release on startup | ✅ | `MacOSKeySynthesizer.reset_modifier_state()` posts key-up for ⇧⌃⌥⌘ — safe no-op when the user isn't physically holding any |
-| Atomic prediction replacement (`replace_text`) | ✅ | `Shift+Left × N` chord sequence then `send_text` — same model as Linux/Windows so empty-field bugs (Slack composer) don't re-emerge |
-| App-switch context reset | ✅ | 250 ms poll on `NSWorkspace.frontmostApplication().processIdentifier()` — the pid stands in for HWND/X11 window id |
-| App stays out of the user's way (no Dock / no Cmd+Tab) | ✅ | `NSApp.setActivationPolicy_(NSApplicationActivationPolicyAccessory)` in `keyboard_app.py`. NOTE: Accessory does *not* block click-activation — pid-routed delivery handles that; Accessory just removes Dock/switcher presence. |
+| Defensive modifier release on startup | ✅ | `MacOSKeySynthesizer.reset_modifier_state()` posts key-up for ⇧⌃⌥⌘, safe no-op when the user isn't physically holding any |
+| Atomic prediction replacement (`replace_text`) | ✅ | `Shift+Left × N` chord sequence then `send_text`, same model as Linux/Windows so empty-field bugs (Slack composer) don't re-emerge |
+| App-switch context reset | ✅ | 250 ms poll on `NSWorkspace.frontmostApplication().processIdentifier()`, the pid stands in for HWND/X11 window id |
+| App stays out of the user's way (no Dock / no Cmd+Tab) | ✅ | `NSApp.setActivationPolicy_(NSApplicationActivationPolicyAccessory)` in `keyboard_app.py`. NOTE: Accessory does *not* block click-activation, pid-routed delivery handles that; Accessory just removes Dock/switcher presence. |
 | Floating across Spaces and over fullscreen apps | ✅ | NSWindow `setLevel:NSFloatingWindowLevel` + `collectionBehavior: CanJoinAllSpaces \| Transient \| FullScreenAuxiliary` + `hidesOnDeactivate: NO` |
 | `"win"` modifier maps to ⌘ Command | ✅ | `_MOD_INFO["win"]` → `kVK_Command` + `kCGEventFlagMaskCommand`. Mirrors how `"win"` → Super on Linux: each platform's primary shortcut modifier |
 | Compatibility Mode auto-detection | ⛔ | Stays off on macOS. The Windows-only IDE / RDP whitelist lives behind `sys.platform != "win32"` in `_window_needs_compat_mode` |
 | Password-field auto-detection | ✅ | `_MacOSAXDetector` in `password_detect.py`. Frontmost-app pid → `AXUIElementCreateApplication` → `kAXFocusedUIElementAttribute` → `AXSecureTextField` subrole. Works in Cocoa, WebKit, and Chromium. Needs the Accessibility TCC grant. |
 | **Typing INTO** a password field | 🟡 partial | Depends where the field lives. System sheets (System Settings, Keychain, login window, sudo) trigger macOS *Secure Event Input* and block synthesized keystrokes; web `<input type=password>` and many app-level password fields usually work. See *Phase 4 § Known constraint*. |
 | Auto-update | ⛔ | Windows-only path, unchanged. Mac users update via re-running the installer / `brew upgrade alpha-osk` once a Homebrew tap exists |
-| Code signing / notarization | ⛔ | `.app` is unsigned today — open via right-click → Open. See *Phase 3* |
+| Code signing / notarization | ⛔ | `.app` is unsigned today, open via right-click → Open. See *Phase 3* |
 
 ---
 
@@ -67,7 +67,7 @@ What's already running on macOS vs the other backends:
 Quartz's C API works through ctypes in principle, but the boilerplate
 for `CGEventRef` lifetime, `CFString` bridging, and NSWindow / NSView
 traversal is large and brittle. pyobjc wraps the same calls with a
-real ObjC runtime bridge — `objc.objc_object(c_void_p=int(view))`
+real ObjC runtime bridge: `objc.objc_object(c_void_p=int(view))`
 gives us a real `NSView`, `.window()` gives us a real `NSWindow`, and
 the rest reads like Cocoa. The dependency is ~25 MB across Quartz +
 Cocoa subpackages and they're conditionally installed via PEP 508
@@ -79,8 +79,8 @@ Plain text via Unicode injection is the macOS equivalent of Windows
 chat composers, browsers, and editors. The same caveat applies as on
 Windows: a small set of apps that read raw scancodes (DirectInput
 games, some VirtualBox setups) won't see the events. None of those
-are accessibility-critical and the alternative — kVK lookups for
-every printable character under the user's active keyboard layout —
+are accessibility-critical and the alternative (kVK lookups for
+every printable character under the user's active keyboard layout)
 is layout-specific work we'd have to redo per locale.
 
 Chord keys and special keys go through the keycode path (`kVK_*` +
@@ -97,7 +97,7 @@ its Windows / Linux origin. On macOS:
 - ⇧ Shift is the same everywhere.
 
 Mapping the "Win" button to ⌘ gives the user the muscle-memory
-equivalent of "the big modifier" on each platform — same pattern as
+equivalent of "the big modifier" on each platform, same pattern as
 mapping "win" → Super on Linux. The native name `"cmd"` is also
 accepted in `_MOD_INFO` so future Mac-aware callsites can be
 explicit. Ctrl, Alt, Shift route to their literal macOS equivalents
@@ -105,7 +105,7 @@ unchanged.
 
 ### Why NSWindow tuning is in addition to Qt flags, not instead
 `Qt.WindowDoesNotAcceptFocus` maps to `-canBecomeKeyWindow: NO` on
-macOS — the window can't become the keyboard-input target. But Qt
+macOS: the window can't become the keyboard-input target. But Qt
 doesn't surface window level / collection behavior / `hidesOnDeactivate`
 as flags, and we need all three: float over normal windows
 (FloatingWindowLevel), follow the user across Spaces and fullscreen
@@ -114,7 +114,7 @@ when focus moves elsewhere (`hidesOnDeactivate: NO`).
 
 These three settings are applied in `src/platform/macos_window.py::apply_window_flags()` via
 pyobjc, runs once at startup after the QML root is shown. The
-function silently no-ops if pyobjc is missing — the OSK still works,
+function silently no-ops if pyobjc is missing, the OSK still works,
 it just won't follow Spaces / fullscreen.
 
 ### Focus theft and why pid-targeted delivery was the only fix
@@ -125,7 +125,7 @@ the wrong answers look plausible.
 The bug: keystrokes from the OSK weren't reaching TextEdit, even
 though `AXIsProcessTrusted()` returned True and `CGEventPost` did not
 error. A standalone diagnostic (`scripts/mac_keysend_diag.py`)
-confirmed bare-Quartz delivery worked — `CGEventPost` posted to
+confirmed bare-Quartz delivery worked: `CGEventPost` posted to
 whichever app was frontmost at that moment. So the OSK-specific
 failure mode was: clicking on the OSK *makes the OSK frontmost*, and
 then `CGEventPost` delivers to the OSK itself.
@@ -136,12 +136,12 @@ Things that didn't fix it (so we don't waste time again):
    on macOS. Blocks the window from receiving keyboard input
    directly. Does NOT block click-activation of the owning app.
 2. **`NSApplicationActivationPolicyAccessory`.** Removes the Dock icon
-   and Cmd+Tab entry — feels like it should be the answer, but the
+   and Cmd+Tab entry: feels like it should be the answer, but the
    Apple docs explicitly say accessory apps are "activated by clicking
    on one of its windows." It does not block click-activation either.
 3. **`Qt.Tool` flag.** In Qt 5 this mapped to `NSPanel`, which honors
    `NSWindowStyleMaskNonactivatingPanel`. **Qt 6 dropped that
-   mapping** for `QQuickWindow` — the QML root still comes up as
+   mapping** for `QQuickWindow`: the QML root still comes up as
    `QNSWindow` (Qt's NSWindow subclass), and the NonactivatingPanel
    style bit is a no-op on non-panels.
 4. **`[NSApp deactivate]` before each post.** Deactivation is
@@ -161,7 +161,7 @@ regardless of who's frontmost at that instant.
 Implementation details:
 - The observer is set up on `NSWorkspace.sharedWorkspace().notificationCenter()`
   via `addObserverForName_object_queue_usingBlock_`. We hold a strong
-  reference to the block in `self._activation_observer` — without that
+  reference to the block in `self._activation_observer`, without that
   the notification center stores it weakly and the observer goes silent
   after one fire.
 - The cold-start edge case (user launches OSK and clicks a key without
@@ -170,13 +170,13 @@ Implementation details:
   before clicking the OSK; if they don't, the first few keystrokes
   go to Alpha-OSK and they'll figure it out.
 - `_post_event` is the single funnel for all CGEvent posts in this
-  module — both `send_text` and `_post_keycode` route through it.
+  module: both `send_text` and `_post_keycode` route through it.
   Future modifications should preserve that funnel.
 
 A future Qt version that restores the `Qt.Tool → NSPanel` mapping
 would let us drop this whole dance and use NonactivatingPanel
 directly. `apply_window_flags` already opportunistically sets
-the style bit if the window happens to be a panel — that branch is
+the style bit if the window happens to be a panel, that branch is
 dead code today (`is_panel` is always False on Qt 6.10.x) but ready
 for that scenario.
 
@@ -184,32 +184,32 @@ for that scenario.
 Matches Apple's HIG for per-user app state. The directory is
 `chmod 0700` because the model files contain typed-word history.
 Settings (managed by `QSettings`) go through `~/Library/Preferences/`
-automatically — no code change needed since Qt picks the right
+automatically: no code change needed since Qt picks the right
 backend per platform.
 
 ---
 
 ## Phase plan
 
-### Phase 1 — Run from source ✅
-- `src/platform/__init__.py` — `darwin` → `macos` branch, factory routing, config-dir resolution
-- `src/platform/macos.py` — `MacOSKeySynthesizer` via Quartz
-- `src/platform/password_detect.py` — macOS stub returning `_NullDetector`
+### Phase 1: Run from source ✅
+- `src/platform/__init__.py`: `darwin` → `macos` branch, factory routing, config-dir resolution
+- `src/platform/macos.py`: `MacOSKeySynthesizer` via Quartz
+- `src/platform/password_detect.py`: macOS stub returning `_NullDetector`
 - `src/platform/macos_window.py`: `apply_window_flags()` for NSWindow tuning
-- `src/keyboard_bridge.py` — `NSWorkspace`-based foreground tracking
-- `run.py` — `IS_MACOS` branch, first-run accessibility hint
-- `requirements.txt` — pyobjc deps gated by `sys_platform == "darwin"`
-- `tests/test_platform.py` — assertions extended for macos branch
+- `src/keyboard_bridge.py`: `NSWorkspace`-based foreground tracking
+- `run.py`: `IS_MACOS` branch, first-run accessibility hint
+- `requirements.txt`: pyobjc deps gated by `sys_platform == "darwin"`
+- `tests/test_platform.py`: assertions extended for macos branch
 
-### Phase 2 — Build a `.app` 🟡 scaffolded, not yet exercised
-- `build/macos/alpha-osk.spec` — PyInstaller spec with `BUNDLE()` producing `Alpha-OSK.app`, Info.plist (bundle id `com.okstudio1.alpha-osk`, `LSMinimumSystemVersion: 11.0`, `LSUIElement: False`, `NSHighResolutionCapable: True`)
-- `build/macos/build.py` — driver mirroring `build/linux/build.py` shape; emits lockfile + CycloneDX SBOM and optional `.dmg` via `hdiutil`
-- `build/macos/alpha-osk.icns` — multi-resolution app icon (~546 KB, 10 size variants from 16×16 to 1024×1024). Regenerate from `assets/logo-2048.png` when the logo changes — recipe below.
+### Phase 2: Build a `.app` 🟡 scaffolded, not yet exercised
+- `build/macos/alpha-osk.spec`: PyInstaller spec with `BUNDLE()` producing `Alpha-OSK.app`, Info.plist (bundle id `com.okstudio1.alpha-osk`, `LSMinimumSystemVersion: 11.0`, `LSUIElement: False`, `NSHighResolutionCapable: True`)
+- `build/macos/build.py`: driver mirroring `build/linux/build.py` shape; emits lockfile + CycloneDX SBOM and optional `.dmg` via `hdiutil`
+- `build/macos/alpha-osk.icns`: multi-resolution app icon (~546 KB, 10 size variants from 16×16 to 1024×1024). Regenerate from `assets/logo-2048.png` when the logo changes; recipe below.
 - **TODO:** actually run `python build/macos/build.py --dmg` and verify the bundle launches from `/Applications`. The spec and driver compile cleanly but a frozen `.app` hasn't been smoke-tested.
 
 #### Regenerating `alpha-osk.icns`
 
-`sips` and `iconutil` are both built-in on macOS — no Homebrew /
+`sips` and `iconutil` are both built-in on macOS, no Homebrew /
 ImageMagick / Inkscape needed. Run from the repo root:
 
 ```bash
@@ -236,25 +236,25 @@ rm -rf "$ICONSET"
 The iconset directory is intentionally transient: the `.icns` is the
 committed artefact, the iconset is rebuildable in seconds. Sourcing
 from `logo-2048.png` (not `logo-1024.png`) gives sips room to
-downsample cleanly at every size — sharper small icons.
+downsample cleanly at every size, sharper small icons.
 
-### Phase 3 — Code signing & notarization
+### Phase 3: Code signing & notarization
 - Apply for an **Apple Developer Program** membership (~$99/yr).
 - Generate a Developer ID Application certificate via Xcode → Settings → Accounts → Manage Certificates.
 - Add `codesign_identity="Developer ID Application: …"` to `BUNDLE()` in `build/macos/alpha-osk.spec` (or codesign the bundle post-hoc with `codesign --deep --sign … --options runtime --entitlements …`).
 - Notarize: `xcrun notarytool submit … --apple-id … --team-id … --wait`, then `xcrun stapler staple Alpha-OSK.app` and `xcrun stapler staple Alpha-OSK-X.Y.Z.dmg`.
 - **Hardened Runtime entitlements file** (`build/macos/entitlements.plist`):
-  - `com.apple.security.cs.allow-jit` — PySide6/QML uses Qt's V4 JIT.
+  - `com.apple.security.cs.allow-jit`: PySide6/QML uses Qt's V4 JIT.
   - `com.apple.security.device.audio-input`: **required**. Voice features have shipped (see [DICTATION.md](../architecture/DICTATION.md)). `Info.plist` needs an `NSMicrophoneUsageDescription` string alongside it, or the microphone silently fails to open under the hardened runtime.
-  - `com.apple.security.automation.apple-events` — false unless we script other apps directly.
+  - `com.apple.security.automation.apple-events`: false unless we script other apps directly.
   - Accessibility itself is a TCC user grant, not an entitlement.
 - Update `MACOS.md` § *Release checklist* with the codesign + notarize commands once they're verified end-to-end.
 
-### Phase 4 — AXUIElement password detection ✅
+### Phase 4: AXUIElement password detection ✅
 Implemented in `src/platform/password_detect.py::_MacOSAXDetector`.
 Same dual-trigger pattern as Windows/Linux: 200 ms background poll
 plus a per-keystroke synchronous check rate-limited to 50 ms (driven
-from the bridge, not the detector — see
+from the bridge, not the detector, see
 `KeyboardBridge._check_password_field` / `_check_password_field_sync`).
 
 Path through AX:
@@ -281,7 +281,7 @@ Coverage observed in casual testing:
 - ✅ Chrome / Edge / Brave (Chromium) password inputs
 - ✅ Cocoa `NSSecureTextField` (Keychain Access, System Settings login)
 - ⚠️ Firefox: works *if* Firefox's accessibility integration is on
-  (default since FF 90+). Some users disable it for perf — they'll
+  (default since FF 90+). Some users disable it for perf, they'll
   need the manual toggle.
 - ⚠️ Electron apps: depends on whether the app enables accessibility
   metadata. VS Code / Slack / Discord do; some smaller apps don't.
@@ -306,7 +306,7 @@ has a feature called *Secure Event Input* (SEI): when an app's
 to enable SEI, which blocks every event tap and `CGEventPost{,ToPid}`
 call from reaching the secure field. The OS check is
 `IsSecureEventInputEnabled()`. The block applies to all event-tap-
-based input synthesis equally — there's no third-party-accessible
+based input synthesis equally: there's no third-party-accessible
 entitlement that bypasses it.
 
 But not every password field triggers SEI. The breakdown observed
@@ -315,13 +315,13 @@ in testing:
 | Where the field lives | OSK typing? | Why |
 |-----------------------|------------|-----|
 | System password sheets (System Settings, Keychain Access, FileVault, login window, `sudo` in Terminal) | ⛔ | These apps explicitly enable SEI when the secure field gains focus. Hardened, locked down. |
-| Web `<input type="password">` (Safari, Chrome, Firefox, Edge) | 🟡 Usually works | Browsers generally don't enable SEI for HTML password inputs — they're rendered by the browser, not by Cocoa's `NSSecureTextField`. Confirmed for Safari + Chrome login forms in dev testing. |
+| Web `<input type="password">` (Safari, Chrome, Firefox, Edge) | 🟡 Usually works | Browsers generally don't enable SEI for HTML password inputs, they're rendered by the browser, not by Cocoa's `NSSecureTextField`. Confirmed for Safari + Chrome login forms in dev testing. |
 | App login fields outside the system shell (Slack, Spotify, Mail account add) | 🟡 Depends per-app | Apps that use Cocoa `NSSecureTextField` *and* call `EnableSecureEventInput` are blocked; apps using a custom obscured text field, or not enabling SEI, accept synthesized keystrokes. |
 | 1Password / Bitwarden / Apple Password autofill | ✅ Bypassed | These tools paste filled values through their own browser/app integrations, not through keystroke synthesis. Use the manager's autofill UI rather than the OSK. |
 
 **Apple's built-in Accessibility Keyboard** can type into the
 ⛔ rows above because it uses a privileged system path inside the
-accessibility subsystem — same trust level as the OS's own input
+accessibility subsystem: same trust level as the OS's own input
 methods. That path is not exposed to third-party apps. For the
 ⛔ cases, the user's options are:
 
@@ -330,7 +330,7 @@ methods. That path is not exposed to third-party apps. For the
   Keyboard → Accessibility Keyboard) for that specific input, then
   switch back to Alpha-OSK
 - A password manager that supports macOS autofill (1Password,
-  Bitwarden, Apple Passwords, Dashlane) — autofill bypasses both
+  Bitwarden, Apple Passwords, Dashlane), autofill bypasses both
   SEI and any typing path entirely
 
 This is **macOS-only**. The same Alpha-OSK code path works freely
@@ -344,7 +344,7 @@ equivalent block).
 writes the field's value through the accessibility tree rather than
 synthesizing keystrokes. It goes through the AX trust gate
 (`AXIsProcessTrusted`) that we already hold, not through the event
-tap layer that SEI guards. Untested in this codebase — may work for
+tap layer that SEI guards. Untested in this codebase, may work for
 some of the 🟡 apps above and might extend coverage to a subset of
 the ⛔ rows; may also be blocked by hardened apps (System Settings is
 likely to refuse). Worth a separate spike if password typing matters
@@ -366,14 +366,14 @@ ever opens up for third-party OSKs, that's the right answer for the
 ⛔ rows. For now: detect, suppress learning, surface the limitation
 to the user.
 
-### Phase 5 — Auto-update
+### Phase 5: Auto-update
 Skip on Mac for now. The Windows `updater.py` flow is EV-cert
 specific (`Get-AuthenticodeSignature`, NSIS silent install,
 SafeNet-eToken-bound signing). Mac update paths to consider:
 
-- **Sparkle framework** — the de-facto Mac auto-update library. Requires bundling `Sparkle.framework`, embedding an Ed25519 public key, hosting an `appcast.xml`. Mature, well-supported.
-- **Homebrew tap** — `brew tap owenpkent/alpha-osk && brew install --cask alpha-osk`. Users `brew upgrade` on their own cadence. Zero in-app code.
-- **Manual** — link to GitHub releases (the same `owenpkent/alpha-osk-releases` repo the Windows updater targets) from the title bar.
+- **Sparkle framework**: the de-facto Mac auto-update library. Requires bundling `Sparkle.framework`, embedding an Ed25519 public key, hosting an `appcast.xml`. Mature, well-supported.
+- **Homebrew tap**: `brew tap owenpkent/alpha-osk && brew install --cask alpha-osk`. Users `brew upgrade` on their own cadence. Zero in-app code.
+- **Manual**: link to GitHub releases (the same `owenpkent/alpha-osk-releases` repo the Windows updater targets) from the title bar.
 
 Recommendation: **Homebrew tap** first (lowest implementation cost,
 fits the platform's expectations) → **Sparkle** if telemetry shows
@@ -407,16 +407,16 @@ identical from the user side:
    source) or Alpha-OSK (from a built `.app`). A
    `Quartz CGEvent allocation/post failed` line in the log confirms
    this is the issue. Run `python scripts/mac_keysend_diag.py` from
-   the repo root — it prints `AXIsProcessTrusted` directly.
+   the repo root: it prints `AXIsProcessTrusted` directly.
 2. **`_target_pid` never set.** Look for the
    `Installed NSWorkspace activation observer` line at startup
    (should be there), then check that a `Target app updated → X (pid=N)`
    line appears whenever you click into a different app. If the
    target-update line doesn't fire, the activation observer
-   regressed — pyobjc-framework-Cocoa is the load-bearing dep here.
+   regressed: pyobjc-framework-Cocoa is the load-bearing dep here.
    Without a target pid, posts fall back to `CGEventPost` which
-   delivers to whichever app is frontmost when you click the OSK
-   — which is the OSK itself, so keystrokes look like they're being
+   delivers to whichever app is frontmost when you click the OSK,
+   which is the OSK itself, so keystrokes look like they're being
    dropped.
 
 **Keyboard vanishes when I click into another app.** `hidesOnDeactivate`
@@ -425,7 +425,7 @@ not applied: `apply_window_flags()` failed. Check the log for
 reinstall `pyobjc-framework-Cocoa`.
 
 **Keyboard doesn't follow me across Spaces.** Collection behavior not
-applied — same root cause as above. Without pyobjc the window stays
+applied: same root cause as above. Without pyobjc the window stays
 pinned to the Space it was opened in.
 
 **`python build/macos/build.py` fails with "must run on macOS".** The

@@ -27,7 +27,7 @@ Complete guide to running, building, and deploying Alpha-OSK on Windows.
 ### Prerequisites
 
 - **Python 3.10+** (download from [python.org](https://www.python.org/downloads/))
-- **No additional system dependencies** — unlike Linux, Windows key synthesis
+- **No additional system dependencies**: unlike Linux, Windows key synthesis
   uses the built-in `SendInput` API via Python's `ctypes`.
 
 ### Run from Source
@@ -59,7 +59,7 @@ Dashboard opens at `http://localhost:8080`.
 ## How It Works
 
 Alpha-OSK uses the same Python + PySide6 + QML architecture on Windows as it
-does on Linux.  The only difference is the **key synthesis backend** — the
+does on Linux.  The only difference is the **key synthesis backend**, the
 component that injects keystrokes into other applications.
 
 ```
@@ -97,8 +97,8 @@ function from `user32.dll`, accessed via Python's built-in `ctypes` module.
 
 | Mode | Used For | How It Works |
 |------|----------|--------------|
-| **Scancode** | ASCII text characters **and** modifier combos / chords (Ctrl+C, Ctrl+V, Alt+Tab) and held modifiers | Sends `KEYBDINPUT` with `wVk = 0`, the layout scancode in `wScan`, and the `KEYEVENTF_SCANCODE` flag set — indistinguishable from a physical keypress |
-| **Virtual-Key** | Fallback only — keys with no scancode on the active layout (some media / browser keys) | Sends `KEYBDINPUT` with the virtual-key code in `wVk` and the layout scancode (if any) in `wScan`, **without** `KEYEVENTF_SCANCODE` |
+| **Scancode** | ASCII text characters **and** modifier combos / chords (Ctrl+C, Ctrl+V, Alt+Tab) and held modifiers | Sends `KEYBDINPUT` with `wVk = 0`, the layout scancode in `wScan`, and the `KEYEVENTF_SCANCODE` flag set, indistinguishable from a physical keypress |
+| **Virtual-Key** | Fallback only, keys with no scancode on the active layout (some media / browser keys) | Sends `KEYBDINPUT` with the virtual-key code in `wVk` and the layout scancode (if any) in `wScan`, **without** `KEYEVENTF_SCANCODE` |
 | **Unicode** | Per-character fallback when scancode is unsafe | Sends `KEYBDINPUT` with `wVk = 0`, the UTF-16 code point in `wScan`, and the `KEYEVENTF_UNICODE` flag set |
 
 > **Chords use scancode mode for remote-desktop relay.** Modifier combos (`send_key`) and held modifiers (`hold_modifier` / `release_modifier`) route through `_make_vk_scancode_event`, which sets `KEYEVENTF_SCANCODE` just like the character path. Remote-desktop tools (TeamViewer / RDP / VNC / AnyDesk) forward keystrokes **by scancode over the wire** and reliably relay scancode-mode events but drop the modifier half of a `wVk`-mode chord. The earlier Virtual-Key chord path made plain typing work over TeamViewer while **Ctrl+V / Ctrl+C silently failed** (the remote saw a bare `v`). Virtual-Key mode is now only a fallback for keys with no scancode. See `tests/test_platform.py::TestWindowsChordScancodeMode`.
@@ -131,20 +131,20 @@ Per-character fallback to `KEYEVENTF_UNICODE` (the call still completes; only th
 
 The Windows synthesizer lives in `src/platform/windows.py`. Key features:
 
-- **Zero external dependencies** — uses only `ctypes` (Python stdlib).
-- **Atomic injection** — all events for a keystroke (modifier press → key
+- **Zero external dependencies**: uses only `ctypes` (Python stdlib).
+- **Atomic injection**: all events for a keystroke (modifier press → key
   press → key release → modifier release) are sent in a single `SendInput`
   call, preventing race conditions with other input.
-- **Per-character mode dispatch** — `send_text` and the typed portion of `replace_text` try the scancode path first per character, falling back to the Unicode path on a per-character basis. Mixed strings (e.g. `"Hi 👋"`) interleave the modes naturally; the target app sees the events in order.
-- **Select-and-replace for predictions** — when a prediction is selected,
+- **Per-character mode dispatch**: `send_text` and the typed portion of `replace_text` try the scancode path first per character, falling back to the Unicode path on a per-character basis. Mixed strings (e.g. `"Hi 👋"`) interleave the modes naturally; the target app sees the events in order.
+- **Select-and-replace for predictions**: when a prediction is selected,
   the typed prefix is selected via Shift+Left (not deleted via Backspace),
   then the replacement text overwrites the selection. This prevents Electron
   apps (Slack, Teams, Discord) from closing the compose area when Backspace
   would empty the input field.
-- **Extended key handling** — correctly sets `KEYEVENTF_EXTENDEDKEY` for
+- **Extended key handling**: correctly sets `KEYEVENTF_EXTENDEDKEY` for
   navigation keys (arrows, Home, End, Insert, Delete, Page Up/Down) which
   require it on Windows.
-- **Surrogate pair support** — characters outside the Basic Multilingual
+- **Surrogate pair support**: characters outside the Basic Multilingual
   Plane (code point > 0xFFFF) take the Unicode path automatically and are sent as UTF-16 surrogate pairs.
 
 ---
@@ -175,7 +175,7 @@ Alpha-OSK must behave differently from a normal application window:
 The Win32 extended styles are applied in `src/keyboard_app.py` via
 `SetWindowLongW()` after the Qt window is created.  This is necessary
 because Qt's flag system doesn't expose `WS_EX_NOACTIVATE`, which is
-**critical** — without it, clicking a key on the OSK would steal focus
+**critical**: without it, clicking a key on the OSK would steal focus
 from the user's text editor.
 
 `WS_EX_TOPMOST` is deliberately **not** part of this write. Always-on-top
@@ -288,7 +288,7 @@ The Secure Desktop is a separate, isolated session that only allows
 specific Microsoft-signed processes (`winlogon`, the built-in `osk.exe`,
 Magnifier, Narrator).  This is intentional: it prevents malware from
 spoofing the prompt or simulating clicks to approve elevation.  No
-EV-signed third-party app can join — there is no public API.
+EV-signed third-party app can join, there is no public API.
 
 #### Workaround for UAC consent prompts only
 
@@ -302,7 +302,7 @@ prompt.  This weakens UAC's spoofing protection.  Users with
 accessibility needs often accept this trade-off; document it clearly in
 release notes if you ship guidance on enabling it.
 
-**Via `secpol.msc`** (preferred — survives Windows Update):
+**Via `secpol.msc`** (preferred, survives Windows Update):
 
 1. Run `secpol.msc` as administrator.
 2. Navigate to **Local Policies → Security Options**.
@@ -310,7 +310,7 @@ release notes if you ship guidance on enabling it.
    prompting for elevation"** to **Disabled**.
 4. Reboot.
 
-**Via the registry** (equivalent — useful for automation or Home edition,
+**Via the registry** (equivalent: useful for automation or Home edition,
 which lacks `secpol.msc`):
 
 ```
@@ -343,7 +343,7 @@ winget install NSIS.NSIS
 
 ### One-Command Build
 
-The build script handles everything — PyInstaller, signing, and NSIS packaging:
+The build script handles everything, PyInstaller, signing, and NSIS packaging:
 
 ```powershell
 # Full signed release (eToken must be plugged in)
@@ -381,35 +381,35 @@ python build/windows/sign.py dist/alpha-osk/alpha-osk.exe --verify
 |------|-------------|
 | `dist/alpha-osk/alpha-osk.exe` | Portable executable + dependencies |
 | `release/Alpha-OSK-Setup-{version}.exe` | NSIS installer (if NSIS is installed) |
-| `release/Alpha-OSK-Setup-{version}-requirements.lock.txt` | `pip freeze --all` of the build venv — human/pip-friendly, reproducible install via `pip install -r`. See *Dependency Lockfile & SBOM* below. |
-| `release/Alpha-OSK-Setup-{version}-sbom.cyclonedx.json` | CycloneDX 1.6 SBOM of the build venv — machine/scanner-friendly, ingested directly by Trivy / Grype / OSV-Scanner / Dependency-Track. Includes per-component purl, license expression, and integrity hashes. See *Dependency Lockfile & SBOM* below. |
+| `release/Alpha-OSK-Setup-{version}-requirements.lock.txt` | `pip freeze --all` of the build venv, human/pip-friendly, reproducible install via `pip install -r`. See *Dependency Lockfile & SBOM* below. |
+| `release/Alpha-OSK-Setup-{version}-sbom.cyclonedx.json` | CycloneDX 1.6 SBOM of the build venv, machine/scanner-friendly, ingested directly by Trivy / Grype / OSV-Scanner / Dependency-Track. Includes per-component purl, license expression, and integrity hashes. See *Dependency Lockfile & SBOM* below. |
 
 ### What the Build Includes
 
 - Python runtime (bundled).
 - PySide6 and Qt6 libraries.
 - QML UI files (`qml/`).
-- Data files (`data/` — dictionaries, training corpus).
+- Data files (`data/`: dictionaries, training corpus).
 - Dashboard templates (`templates/`).
 - Windows UIAccess manifest (embedded in `.exe`).
 - NSIS installer license page (rendered from `build/windows/LICENSE.rtf`).
 
 ### Installer pages and the EULA
 
-The generated NSIS installer ships these pages (interactive install only — silent install via `/S` bypasses pages entirely, which is what the auto-updater path uses):
+The generated NSIS installer ships these pages (interactive install only, silent install via `/S` bypasses pages entirely, which is what the auto-updater path uses):
 
 | Order | Page | Notes |
 |-------|------|-------|
 | 1 | Welcome | "The smartest keyboard you'll never touch." Friendly tagline + Next button. |
 | 2 | **License (EULA)** | Renders `build/windows/LICENSE.rtf` in a scrollable control. **Clickwrap**: Next is greyed out until the user ticks "I have read and accept the terms of the license agreement." `MUI_LICENSEPAGE_TEXT_TOP` carries a one-line hint so the action is obvious without reading the body. RTF (not TXT) because the NSIS license control renders RTF with bold headers and the recent NSIS high-contrast-mode fix targets it. |
-| 3 | Directory | Default `C:\Program Files\Alpha-OSK` (required for UIAccess — see *UIAccess and EV Code Signing*). |
+| 3 | Directory | Default `C:\Program Files\Alpha-OSK` (required for UIAccess, see *UIAccess and EV Code Signing*). |
 | 4 | Shortcut options | Custom page: checkboxes for Desktop + Start Menu shortcuts (both default on). |
 | 5 | Install | Progress bar driven by NSIS during file extraction. |
 | 6 | Finish | "Launch Alpha-OSK" checkbox (defaults on) launches via `explorer.exe` for medium-IL semantics. |
 
 If you ever need to rewrite the EULA:
 
-1. Edit `build/windows/LICENSE.rtf` in an RTF-aware editor (WordPad, LibreOffice Writer, the VS Code RTF extension). Avoid pasting Unicode characters that need RTF unicode escapes — `→`, `—`, smart quotes all need `\uXXXX?` entities or they render as mojibake on the installer's old-style license control. The current copy uses ASCII (`>`, `-`, `"`) for that reason.
+1. Edit `build/windows/LICENSE.rtf` in an RTF-aware editor (WordPad, LibreOffice Writer, the VS Code RTF extension). Avoid pasting Unicode characters that need RTF unicode escapes: `→`, the em dash, smart quotes all need `\uXXXX?` entities or they render as mojibake on the installer's old-style license control. The current copy uses ASCII (`>`, `-`, `"`) for that reason.
 2. Keep the top-level `LICENSE` file at repo root in sync. That plaintext copy is what GitHub's repository UI and pip metadata read. The two files don't have to be byte-identical (the RTF carries the accessibility / privacy / auto-update preamble, the plaintext is the bare MIT body) but the MIT body itself must match.
 3. Rebuild + visually confirm the page renders correctly. The "I accept" checkbox should appear at the bottom of the page and Next should grey out until it's ticked.
 
@@ -430,7 +430,7 @@ The `.spec` file (`build/windows/alpha-osk.spec`) can be customized:
 
 ---
 
-## Code Signing — EV Certificate (Current Setup)
+## Code Signing: EV Certificate (Current Setup)
 
 Uses the **same EV certificate and signing workflow** as
 [gitconnect's windows-desktop](../../../gitconnect/windows-desktop/docs/PACKAGING.md).
@@ -502,7 +502,7 @@ python build/windows/sign.py release/Alpha-OSK-Setup-{version}.exe --verify
 (Get-AuthenticodeSignature "dist\alpha-osk\alpha-osk.exe").Status
 ```
 
-### `build/windows/sign.py` — Retry Script
+### `build/windows/sign.py`: Retry Script
 
 The signing script handles Windows Defender temporarily locking `.exe` files
 during scanning (same problem gitconnect's `sign.js` solves).  Key behaviour:
@@ -516,11 +516,11 @@ during scanning (same problem gitconnect's `sign.js` solves).  Key behaviour:
 
 | Symptom | Cause | Fix |
 |---------|-------|-----|
-| `Cannot find certificate` | Running from elevated PowerShell | **Use normal shell** — eToken not visible to admin context |
+| `Cannot find certificate` | Running from elevated PowerShell | **Use normal shell**, eToken not visible to admin context |
 | `SignTool Error: file being used by another process` | Windows Defender scanning | `sign.py` retry logic handles this automatically |
-| `Cannot find certificate` by subject | Multiple certs | `sign.py` pins the `CERTIFICATE_SHA1` thumbprint — verify with `certutil -store -user My` |
+| `Cannot find certificate` by subject | Multiple certs | `sign.py` pins the `CERTIFICATE_SHA1` thumbprint, verify with `certutil -store -user My` |
 | Every `signtool` attempt times out at 60 s (and `certutil` enumeration times out too) | The eToken is not answering its private-key step; the cert is not missing | Re-seat the token or log in to it in SafeNet Authentication Client, confirm with one manual `signtool` call (run it from PowerShell or cmd: Git Bash rewrites `/fd` into a file path), then `python build/windows/build.py --skip-build` re-signs the existing build without rebuilding |
-| Timestamp server timeout | DigiCert slow | Alternative: `http://timestamp.sectigo.com` — edit `TIMESTAMP_SERVER` in `sign.py` |
+| Timestamp server timeout | DigiCert slow | Alternative: `http://timestamp.sectigo.com`, edit `TIMESTAMP_SERVER` in `sign.py` |
 
 ### SmartScreen warnings are NOT a signing failure
 
@@ -546,7 +546,7 @@ The only guaranteed zero-warning path is the Microsoft Store (re-signs with Micr
 
 The build script generates a proper NSIS installer that:
 
-- **Defaults to `C:\Program Files\Alpha-OSK`** — required for UIAccess.
+- **Defaults to `C:\Program Files\Alpha-OSK`**: required for UIAccess.
 - **Lets the user choose** a different install directory.
 - **Closes the running keyboard** before upgrading, allowing it to save first.
 - **Detects previous installs** at different paths and offers to uninstall.
@@ -609,7 +609,7 @@ the same hazard that puts the study-invite seed in HKLM.
 
 ## Release Checklist
 
-End-to-end process for shipping a new Windows version. **Do not skip steps** — unsigned builds won't get UIAccess, and forgetting to bump the version means the installer overwrites without proper upgrade logic.
+End-to-end process for shipping a new Windows version. **Do not skip steps**, unsigned builds won't get UIAccess, and forgetting to bump the version means the installer overwrites without proper upgrade logic.
 
 ### 1. Bump the version
 
@@ -653,7 +653,7 @@ The script: checks prereqs → runs PyInstaller → checks the exe's embedded ma
 ### 5. Test the installer
 
 1. Run `release/Alpha-OSK-Setup-x.y.z.exe`.
-2. **Confirm the License page appears between Welcome and Directory.** The "I have read and accept…" checkbox should be unchecked by default and Next should be greyed out until it's ticked. If the page is missing, `build/windows/LICENSE.rtf` is absent or unreadable — see *Installer pages and the EULA*.
+2. **Confirm the License page appears between Welcome and Directory.** The "I have read and accept…" checkbox should be unchecked by default and Next should be greyed out until it's ticked. If the page is missing, `build/windows/LICENSE.rtf` is absent or unreadable, see *Installer pages and the EULA*.
 3. Verify it detects and removes the previous version (same directory: silent uninstall; different: prompts).
 4. Verify install to `C:\Program Files\Alpha-OSK` and Desktop + Start Menu shortcuts.
 5. Launch via the installer's "Launch Alpha-OSK" checkbox.
@@ -670,7 +670,7 @@ git push origin main
 git push origin vX.Y.Z
 ```
 
-### 7. Create the GitHub release — on the PUBLIC releases repo
+### 7. Create the GitHub release: on the PUBLIC releases repo
 
 Upload the installer, the lockfile, **and** the CycloneDX SBOM so the release page carries the full build record:
 
@@ -728,11 +728,11 @@ python scripts/downloads.py
 
 The script just wraps `gh api repos/owenpkent/alpha-osk-releases/releases --paginate` and sums each release's asset counts. Requires `gh` to be authenticated against an account with read access to the releases repo.
 
-Caveat: the count includes auto-updater fetches as well as manual clicks from the release page — GitHub doesn't distinguish. Treat it as a directional number (downloads, not unique installs). If you ever need true install / DAU numbers, that requires a separate telemetry endpoint (off by default, opt-in setting) — see the auto-update doc for the model.
+Caveat: the count includes auto-updater fetches as well as manual clicks from the release page; GitHub doesn't distinguish. Treat it as a directional number (downloads, not unique installs). If you ever need true install / DAU numbers, that requires a separate telemetry endpoint (off by default, opt-in setting); see the auto-update doc for the model.
 
 ### Bundle size
 
-PyInstaller spec at `build/windows/alpha-osk.spec` excludes `Qt6WebEngineCore.dll` (193 MB by itself) and the WebEngine / WebView / WebChannel families. Installer is ~85 MB instead of ~165 MB. If you ever add an in-app browser, re-include them in `excludes` and re-measure — losing 100 MB of installer in one careless re-include is easy.
+PyInstaller spec at `build/windows/alpha-osk.spec` excludes `Qt6WebEngineCore.dll` (193 MB by itself) and the WebEngine / WebView / WebChannel families. Installer is ~85 MB instead of ~165 MB. If you ever add an in-app browser, re-include them in `excludes` and re-measure, losing 100 MB of installer in one careless re-include is easy.
 
 To inspect the bundle:
 
@@ -753,11 +753,11 @@ Both emit unconditionally on every build (including `--skip-build`, since bumpin
 
 **Lockfile** (`build/windows/build.py::freeze_lockfile`). `pip freeze --all` with a short header naming the version and explaining how to reproduce the env. ~5-10 KB depending on dep count.
 
-**SBOM** (`build/windows/build.py::emit_sbom`). `python -m cyclonedx_py environment --of JSON --sv 1.6 --output-reproducible -o ...`. CycloneDX 1.6 JSON with per-component name, version, PURL (`pkg:pypi/<name>@<version>`), license expression where the package metadata declares one, and integrity hashes. `--output-reproducible` strips time/random fields so two builds of the same env produce byte-identical SBOMs (diffs stay noise-free). About 100 KB / 80 components at the current dep set. Soft-fails (warning, no abort) if `cyclonedx-bom` isn't installed in the venv — dev builds without it still produce a working installer, they just skip the SBOM. Production release builds pull it in via `requirements-dev.txt`.
+**SBOM** (`build/windows/build.py::emit_sbom`). `python -m cyclonedx_py environment --of JSON --sv 1.6 --output-reproducible -o ...`. CycloneDX 1.6 JSON with per-component name, version, PURL (`pkg:pypi/<name>@<version>`), license expression where the package metadata declares one, and integrity hashes. `--output-reproducible` strips time/random fields so two builds of the same env produce byte-identical SBOMs (diffs stay noise-free). About 100 KB / 80 components at the current dep set. Soft-fails (warning, no abort) if `cyclonedx-bom` isn't installed in the venv, dev builds without it still produce a working installer, they just skip the SBOM. Production release builds pull it in via `requirements-dev.txt`.
 
 **Worker side.** `backend/cf-worker/` ships a second SBOM via `npm run sbom` (npm's built-in `npm sbom --sbom-format cyclonedx`, which writes CycloneDX 1.5). The `predeploy` npm script chains it before `wrangler deploy`, so every deploy has a fresh SBOM next to it (file is in `.gitignore`: regenerate any time from the committed `package-lock.json`). The lockfile *is* checked in, and the SBOM is read from it (`--package-lock-only`), so it is the same on every machine. It describes the build toolchain (Wrangler, TypeScript, esbuild): the worker has no runtime `dependencies`.
 
-**CI-time CVE scanning.** `.github/workflows/ci.yml` runs `google/osv-scanner-action`, pinned by SHA (not quoted here, since a bump would leave this page stale) in two jobs: `osv-scan`, which runs on pull requests through the reusable PR workflow and fails only on vulnerabilities the PR introduces, and `osv-scan-main`, the full scan on every push to `main`. `.github/workflows/osv-nightly.yml` pins the same action for the daily full scan, and a bump changes all three occurrences together. It reads both lockfiles (`requirements-dev.txt` + `backend/cf-worker/package-lock.json`) and queries the OSV database. **Merges are gated** (`fail-on-vuln: true`): any CVE in either lockfile fails CI. The earlier known noise (six Wrangler-3.x findings: one moderate esbuild, five medium-to-high undici) was resolved by upgrading the worker to Wrangler 4.x, which ships clean esbuild and miniflare 4. The Python side had one transitive lxml advisory (GHSA-vfmq-68hx-4jfw, fixed in 6.1.0) flowing through `cyclonedx-bom`; it's pinned away via `lxml>=6.1.0` in `requirements-dev.txt`. SARIF upload to the Security tab is **disabled** (`upload-sarif: false`) by default; findings surface in the job's annotations / summary. Originally disabled because the source repo was private and GitHub Advanced Security was off; the repo went public on 2026-05-16, so SARIF upload could be re-enabled — left off for now because the job summary already carries the same findings and publishing to the Security tab is a separate disclosure decision. If a new advisory lands that we cannot fix before the next push, quarantine it with an `osv-scanner.toml` ignore entry rather than flipping `fail-on-vuln` back to false.
+**CI-time CVE scanning.** `.github/workflows/ci.yml` runs `google/osv-scanner-action`, pinned by SHA (not quoted here, since a bump would leave this page stale) in two jobs: `osv-scan`, which runs on pull requests through the reusable PR workflow and fails only on vulnerabilities the PR introduces, and `osv-scan-main`, the full scan on every push to `main`. `.github/workflows/osv-nightly.yml` pins the same action for the daily full scan, and a bump changes all three occurrences together. It reads both lockfiles (`requirements-dev.txt` + `backend/cf-worker/package-lock.json`) and queries the OSV database. **Merges are gated** (`fail-on-vuln: true`): any CVE in either lockfile fails CI. The earlier known noise (six Wrangler-3.x findings: one moderate esbuild, five medium-to-high undici) was resolved by upgrading the worker to Wrangler 4.x, which ships clean esbuild and miniflare 4. The Python side had one transitive lxml advisory (GHSA-vfmq-68hx-4jfw, fixed in 6.1.0) flowing through `cyclonedx-bom`; it's pinned away via `lxml>=6.1.0` in `requirements-dev.txt`. SARIF upload to the Security tab is **disabled** (`upload-sarif: false`) by default; findings surface in the job's annotations / summary. Originally disabled because the source repo was private and GitHub Advanced Security was off; the repo went public on 2026-05-16, so SARIF upload could be re-enabled, left off for now because the job summary already carries the same findings and publishing to the Security tab is a separate disclosure decision. If a new advisory lands that we cannot fix before the next push, quarantine it with an `osv-scanner.toml` ignore entry rather than flipping `fail-on-vuln` back to false.
 
 **Maintenance.** Bump `cyclonedx-bom` in `requirements-dev.txt` when CVE advisories appear (it's a build-only tool, so bumps are low-risk). Bump `wrangler` in `backend/cf-worker/package.json` when transitive CVEs flow through it (run `osv-scanner --lockfile=backend/cf-worker/package-lock.json` locally to confirm the fix before pushing; the worker is a minimal ESM-module / D1-binding worker, so major bumps are typically drop-in). Bump the `google/osv-scanner-action` pinned SHA (all three occurrences, in `ci.yml` and `osv-nightly.yml`) quarterly or when a feature is needed (Dependabot does not yet reliably bump reusable-workflow refs):
 
@@ -795,7 +795,7 @@ resized[0].save("build/windows/alpha-osk.ico", format="ICO", sizes=sizes, append
 
 ## Installation for UIAccess
 
-The NSIS installer handles this automatically — it defaults to
+The NSIS installer handles this automatically, it defaults to
 `C:\Program Files\Alpha-OSK\`, creates shortcuts, and registers the
 uninstaller.
 
@@ -844,7 +844,7 @@ remove_from_startup()              # Remove from Startup
 Alpha-OSK requests administrator privileges on Windows so that `SendInput` can
 reach windows running at a higher integrity level (e.g. an elevated Command
 Prompt).  If the UAC prompt is declined, the keyboard falls back to standard
-privileges and logs a warning — it will still work for most applications.
+privileges and logs a warning, it will still work for most applications.
 
 The privilege re-launch in `run.py` passes only the same command-line arguments
 the user already supplied; no new arguments are constructed or injected.
@@ -862,7 +862,7 @@ contains embedded quotes.
 `importTextFile` and `importFolder` in `src/keyboard_bridge.py` accept
 user-supplied paths to read text files for training the prediction model.
 These functions are intended to be driven by the user via the file picker UI
-and operate entirely within the user's own filesystem permissions — no
+and operate entirely within the user's own filesystem permissions, no
 server-side or cross-user data access is possible.
 
 ### UIAccess vs. Always-Admin
@@ -942,10 +942,10 @@ Or check the startup log output:
 
 ### What's Identical
 
-- QML UI (all `.qml` files) — completely shared.
-- Prediction engine (n-gram, PPM, fuzzy, transformer) — completely shared.
-- Keyboard bridge logic (modifier state, predictions, context) — shared.
-- Data files (dictionaries, training corpus) — shared.
+- QML UI (all `.qml` files), completely shared.
+- Prediction engine (n-gram, PPM, fuzzy, transformer), completely shared.
+- Keyboard bridge logic (modifier state, predictions, context), shared.
+- Data files (dictionaries, training corpus), shared.
 
 ---
 
@@ -955,23 +955,23 @@ Or check the startup log output:
 
 | File | Change |
 |------|--------|
-| `src/platform/__init__.py` | NEW — Platform detection, factory, config paths |
-| `src/platform/base.py` | NEW — Abstract key synthesizer interface |
-| `src/platform/linux.py` | NEW — Linux backend (extracted from old bridge) |
-| `src/platform/windows.py` | NEW — Windows SendInput backend |
-| `src/keyboard_bridge.py` | MODIFIED — Uses platform layer instead of direct xdotool |
-| `src/keyboard_app.py` | MODIFIED — Cross-platform env setup, Win32 window styles |
-| `src/prediction/hybrid_predictor.py` | MODIFIED — Cross-platform model dir |
-| `run.py` | MODIFIED — Cross-platform venv paths and dep checks |
-| `build/windows/alpha-osk.exe.manifest` | NEW — UIAccess manifest for EV signing |
-| `build/windows/alpha-osk.spec` | NEW — PyInstaller build specification |
-| `build/windows/version_resource.py` | NEW — the exe's version resource, generated from `src/__version__.py` |
+| `src/platform/__init__.py` | NEW: Platform detection, factory, config paths |
+| `src/platform/base.py` | NEW: Abstract key synthesizer interface |
+| `src/platform/linux.py` | NEW: Linux backend (extracted from old bridge) |
+| `src/platform/windows.py` | NEW: Windows SendInput backend |
+| `src/keyboard_bridge.py` | MODIFIED: Uses platform layer instead of direct xdotool |
+| `src/keyboard_app.py` | MODIFIED: Cross-platform env setup, Win32 window styles |
+| `src/prediction/hybrid_predictor.py` | MODIFIED: Cross-platform model dir |
+| `run.py` | MODIFIED: Cross-platform venv paths and dep checks |
+| `build/windows/alpha-osk.exe.manifest` | NEW: UIAccess manifest for EV signing |
+| `build/windows/alpha-osk.spec` | NEW: PyInstaller build specification |
+| `build/windows/version_resource.py` | NEW: the exe's version resource, generated from `src/__version__.py` |
 
 ### Key Design Decisions
 
 1. **ctypes, not pywin32**: We use `ctypes` to call `SendInput` directly
    rather than depending on `pywin32`.  This means **zero additional
-   dependencies** on Windows — `ctypes` is part of the Python stdlib.
+   dependencies** on Windows: `ctypes` is part of the Python stdlib.
 
 2. **Scancode mode for ASCII text, Unicode mode as fallback**: Originally we used `KEYEVENTF_UNICODE` for every printable character because it is layout-independent and supports the full Unicode range. That choice broke any application that filters on real virtual-key codes or reads raw scancodes (Blender, VirtualBox, DirectInput games, raw-input 3D / CAD / audio software) because Unicode injection synthesises a `WM_KEYDOWN(VK_PACKET)` that those apps ignore. The current default is `KEYEVENTF_SCANCODE`, which produces a normal `WM_KEYDOWN(VK_X)` derived from the scancode under the active layout. Per-character fallback to `KEYEVENTF_UNICODE` covers non-ASCII chars, dead-key triggers, AltGr-required chars, and the unsafe corner case where the user is physically holding Shift but the char does not need shift. See "Three Injection Modes" above for the full resolution path.
 

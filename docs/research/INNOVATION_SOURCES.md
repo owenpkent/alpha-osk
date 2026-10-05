@@ -220,7 +220,7 @@ Alpha-OSK draws technical inspiration from multiple sources. This document provi
 ## 🎓 Research References
 
 ### Dasher
-- Ward, D. J., Blackwell, A. F., & MacKay, D. J. (2002). *Dasher—a data entry interface using continuous gestures and language models.* UIST '00.
+- Ward, D. J., Blackwell, A. F., & MacKay, D. J. (2002). *Dasher, a data entry interface using continuous gestures and language models.* UIST '00.
 - [Dasher Official Website](https://dasher.at)
 - [Dasher Research Publications](https://dasher.at/docs/research/publications/)
 

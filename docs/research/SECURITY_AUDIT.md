@@ -117,7 +117,7 @@ This document summarizes the security posture of Alpha-OSK based on a comprehens
 **Status: Pass**
 
 - No hardcoded API keys, tokens, passwords, or credentials in source code
-- No `.env` files exist or are needed — the application has no remote services
+- No `.env` files exist or are needed, the application has no remote services
 - `.gitignore` properly excludes virtual environments, IDE configs, and build artifacts
 
 ### 2. Network Exposure
@@ -128,7 +128,7 @@ This document summarizes the security posture of Alpha-OSK based on a comprehens
 
 - The application makes **zero network calls** in normal operation
 - All prediction runs entirely on-device (privacy-by-design)
-- The optional dashboard (`run.py`) binds to `localhost:8080` only — not exposed to the network
+- The optional dashboard (`run.py`) binds to `localhost:8080` only, not exposed to the network
 - Optional `transformers` dependency may download models from Hugging Face on first use, but this is a standard ML library behavior
 
 ### 3. Subprocess and Shell Injection
@@ -153,7 +153,7 @@ subprocess.Popen(
 
 **Status: Pass**
 
-- Uses `pathlib.Path` throughout — no raw string path concatenation
+- Uses `pathlib.Path` throughout, no raw string path concatenation
 - Existence checks (`path.exists()`, `path.is_dir()`) before all reads
 - Config/model directories use platform-appropriate locations:
   - Windows: `%APPDATA%/alpha-osk/`
@@ -164,7 +164,7 @@ subprocess.Popen(
 
 **Status: Pass**
 
-- **JSON only** — no `pickle`, `yaml.load()`, `eval()`, or `exec()` anywhere in the codebase
+- **JSON only**: no `pickle`, `yaml.load()`, `eval()`, or `exec()` anywhere in the codebase
 - All model persistence uses `json.load()` / `json.dump()` with safe defaults
 - JSON parsing wrapped in `try/except` with graceful fallback
 
@@ -198,7 +198,7 @@ Only 3 runtime dependencies:
 
 **Status: Pass**
 
-- **Windows:** Admin elevation via `ShellExecuteW` with `"runas"` — triggers UAC dialog requiring user consent. Justified because `SendInput` needs appropriate privilege to inject keystrokes into elevated windows.
+- **Windows:** Admin elevation via `ShellExecuteW` with `"runas"`, triggers UAC dialog requiring user consent. Justified because `SendInput` needs appropriate privilege to inject keystrokes into elevated windows.
 - **Linux:** No privilege escalation. `xdotool`/`ydotool` run as the current user.
 - Model/config files stored in user-owned directories with standard permissions.
 
@@ -208,7 +208,7 @@ Only 3 runtime dependencies:
 
 - QML-to-Python bridge accepts key names from a fixed set of mappings
 - Modifier state tracked internally, not derived from untrusted input
-- Text import reads file content as raw text — no code execution paths
+- Text import reads file content as raw text, no code execution paths
 
 ### 10. Code Quality and CI
 
