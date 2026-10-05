@@ -8,6 +8,7 @@ exists for.
 
 from __future__ import annotations
 
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -211,3 +212,131 @@ class TestHookTipNeeded:
         monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
         monkeypatch.setattr(check, "_git_hooks_dir", lambda: None)
         assert check._hook_tip_needed() is True
+
+
+def _git_env() -> dict[str, str]:
+    """The environment minus git's own variables.
+
+    This suite runs from the pre-push hook, where git may have exported
+    GIT_DIR and friends; inherited, they would point the scratch repos
+    below at the real one.
+    """
+    import os
+
+    return {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+
+
+def _git(cwd: Path, *args: str) -> None:
+    subprocess.run(
+        ["git", "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", *args],
+        cwd=cwd,
+        env=_git_env(),
+        check=True,
+        capture_output=True,
+    )
+
+
+def _fake_venv(base: Path) -> Path:
+    """An interpreter the hook will pick.  Never executed, only tested with -x."""
+    if sys.platform == "win32":
+        py = base / "venv" / "Scripts" / "python.exe"
+    else:
+        py = base / "venv" / "bin" / "python"
+    py.parent.mkdir(parents=True)
+    py.write_text("")
+    py.chmod(0o755)
+    return py
+
+
+@pytest.mark.skipif(shutil.which("sh") is None, reason="needs a POSIX sh to run the hook")
+class TestTheHookFindsAVenvFromAWorktree:
+    """The hook must find the main checkout's venv from a linked worktree.
+
+    It used to look only in the directory being pushed from.  A worktree
+    has no venv of its own, so every push from one fell through to the
+    bare `python` on PATH, which cannot import ruff; the gate failed and
+    the push went out with --no-verify.  Most work happens in worktrees,
+    so this was most pushes.
+
+    The hook is run for real, by sh, against a scratch repo with a real
+    worktree, with its final `exec` swapped for an `echo` so the test sees
+    which interpreter it chose without needing one that works.
+    """
+
+    @pytest.fixture
+    def repos(self, tmp_path: Path) -> tuple[Path, Path]:
+        main = tmp_path / "main"
+        main.mkdir()
+        _git(main, "init", "-q")
+        (main / "f").write_text("x")
+        _git(main, "add", "f")
+        _git(main, "commit", "-q", "-m", "init")
+        worktree = main / ".worktrees" / "feature"
+        _git(main, "worktree", "add", "-q", str(worktree), "-b", "feature")
+        return main, worktree
+
+    def _chosen(self, cwd: Path) -> str:
+        """The interpreter the hook picks, as an absolute path where it gave a path."""
+        script = check._PRE_PUSH_HOOK.replace('exec "$PY" check.py', 'echo "$PY"')
+        assert script != check._PRE_PUSH_HOOK, "the hook no longer ends in the exec this swaps"
+        out = subprocess.run(
+            ["sh", "-c", script],
+            cwd=cwd,
+            env=_git_env(),
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        chosen = out.stdout.strip()
+        # Relative paths resolve against the hook's cwd, as exec would.
+        return chosen if chosen == "python" else str((cwd / chosen).resolve())
+
+    def test_a_worktree_borrows_the_main_checkouts_venv(self, repos: tuple[Path, Path]) -> None:
+        main, worktree = repos
+        expected = _fake_venv(main)
+        assert Path(self._chosen(worktree)).resolve() == expected.resolve()
+
+    def test_a_worktree_with_its_own_venv_uses_that_one(self, repos: tuple[Path, Path]) -> None:
+        main, worktree = repos
+        _fake_venv(main)
+        own = _fake_venv(worktree)
+        assert Path(self._chosen(worktree)).resolve() == own.resolve()
+
+    def test_the_main_checkout_still_uses_its_own_venv(self, repos: tuple[Path, Path]) -> None:
+        main, _ = repos
+        expected = _fake_venv(main)
+        assert Path(self._chosen(main)).resolve() == expected.resolve()
+
+    def test_no_venv_anywhere_falls_back_to_python_on_path(self, repos: tuple[Path, Path]) -> None:
+        _, worktree = repos
+        assert self._chosen(worktree) == "python"
+
+
+class TestAStaleHookIsReported:
+    """A fix to the hook reaches nobody until they reinstall it, so the
+    end-of-run tip also fires for an older copy of ours.  Someone else's
+    hook is theirs, and `install_hook()` will not overwrite it, so it
+    must not trigger a tip that can never be acted on."""
+
+    def _tip(self, monkeypatch: pytest.MonkeyPatch, hooks_dir: Path, text: str) -> bool:
+        hooks_dir.mkdir(exist_ok=True)
+        (hooks_dir / "pre-push").write_text(text, encoding="utf-8", newline="\n")
+        monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+        monkeypatch.setattr(check, "_git_hooks_dir", lambda: hooks_dir)
+        return check._hook_tip_needed()
+
+    def test_an_older_copy_of_ours_tips(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        old = "#!/bin/sh\n# Alpha-OSK pre-push gate.\nexec python check.py\n"
+        assert self._tip(monkeypatch, tmp_path / "hooks", old) is True
+
+    def test_the_current_hook_does_not(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        assert self._tip(monkeypatch, tmp_path / "hooks", check._PRE_PUSH_HOOK) is False
+
+    def test_someone_elses_hook_does_not(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        assert self._tip(monkeypatch, tmp_path / "hooks", "#!/bin/sh\nexec lint\n") is False

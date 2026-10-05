@@ -74,16 +74,33 @@ REPO_ROOT = Path(__file__).resolve().parent
 # mypy / pytest live -- a system interpreter would either fail to import
 # them or, worse, run a different version and disagree with CI.
 # `git push --no-verify` remains the escape hatch.
+#
+# The venv is looked for in the checkout being pushed from, then in the
+# main checkout.  A linked worktree (`.worktrees/<name>`) has no venv of
+# its own, and the hook only looked in the current directory, so every
+# push from a worktree fell through to the bare `python` on PATH, failed
+# to import ruff, and was pushed with --no-verify instead.  Most work
+# happens in worktrees, so the gate was skipped far more often than it
+# ran.  `--git-common-dir` is the main checkout's `.git` from inside any
+# worktree (and plain `.git` outside one), so its parent is the main
+# checkout.  check.py itself still runs from the worktree, so it checks
+# the code being pushed; only the interpreter is borrowed.
 _PRE_PUSH_HOOK = """#!/bin/sh
 # Alpha-OSK pre-push gate.  Installed by `python check.py --install-hook`.
 # Skip once with: git push --no-verify
-if [ -x "venv/Scripts/python.exe" ]; then
-    PY="venv/Scripts/python.exe"
-elif [ -x "venv/bin/python" ]; then
-    PY="venv/bin/python"
-else
-    PY=python
-fi
+HERE=$(git rev-parse --show-toplevel 2>/dev/null)
+COMMON=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)
+MAIN=${COMMON:+$(dirname "$COMMON")}
+PY=python
+for base in "${HERE:-.}" "${MAIN:-${HERE:-.}}"; do
+    if [ -x "$base/venv/Scripts/python.exe" ]; then
+        PY="$base/venv/Scripts/python.exe"
+        break
+    elif [ -x "$base/venv/bin/python" ]; then
+        PY="$base/venv/bin/python"
+        break
+    fi
+done
 exec "$PY" check.py
 """
 
@@ -259,7 +276,22 @@ def _hook_tip_needed() -> bool:
     if os.environ.get("GITHUB_ACTIONS") is not None:
         return False
     hooks_dir = _git_hooks_dir()
-    return hooks_dir is None or not (hooks_dir / "pre-push").exists()
+    return hooks_dir is None or not (hooks_dir / "pre-push").exists() or _hook_is_stale(hooks_dir)
+
+
+def _hook_is_stale(hooks_dir: Path) -> bool:
+    """Is the installed hook an older copy of ours?
+
+    The hook is written once and then never looked at again, so a fix to
+    `_PRE_PUSH_HOOK` reaches nobody until they reinstall.  Someone else's
+    hook is not stale, it is theirs: `install_hook()` refuses to touch it,
+    so nagging about it would be a tip that can never be acted on.
+    """
+    try:
+        text = (hooks_dir / "pre-push").read_text(encoding="utf-8")
+    except OSError:
+        return False
+    return "Alpha-OSK pre-push gate" in text and text != _PRE_PUSH_HOOK
 
 
 def install_hook() -> int:
@@ -371,7 +403,7 @@ def main() -> int:
             print(
                 _safe(
                     f"{C.DIM}Tip: `python check.py --install-hook` runs this "
-                    f"automatically on git push.{C.END}"
+                    f"automatically on git push (or updates an older hook).{C.END}"
                 )
             )
         return 0

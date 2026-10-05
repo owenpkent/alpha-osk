@@ -608,7 +608,13 @@ platforms, pytest) in ~60 s; `--full` adds the `--cov-fail-under=60` coverage
 gate (~110 s, full CI parity). `python check.py --install-hook` wires it to
 `git push` so it happens instead of being remembered; `git push --no-verify`
 is the escape hatch. Hooks are not version controlled, so a fresh clone runs
-that once.
+that once. The hook is shared by every worktree and borrows the main
+checkout's `venv/` from one (it used to look only in the worktree, fail to
+import ruff, and get bypassed); `check.py` tips when the installed hook is an
+older copy, so rerun `--install-hook` then. A gate on Windows cannot see a
+Linux-only failure, so `tests/test_windows_only_patches.py` catches the one
+that has bitten: patching `ctypes.windll` (and the rest of ctypes' Windows
+half) without `create=True` / `raising=False`.
 
 The suite is sharded on two different axes: `pytest-xdist` (`-n auto`) across
 one machine's cores, and `--shard-id` / `--shard-count` across CI machines
