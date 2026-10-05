@@ -496,7 +496,7 @@ Load-bearing rules:
   at the OS level and a Shift carried in from the letters page makes `1` emit `!`
   with the keycap still reading `1`. Guarded by
   `tests/test_layouts.py::TestNoDuplicateGlyphsWithinALayer` and
-  `tests/test_qml_compact_view.py::TestSecondSymbolPage`.
+  `tests/test_qml_compact_view.py::TestTheSymbolPage`.
 - **Digits come back via a panel, not a fifth row, and not via a toggle.**
   `qml/components/NumberRow.qml` (13 x 1u, flush with the compact grid) renders
   above the keyboard whenever `Main.qml::showNumberRow` is true, which is

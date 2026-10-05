@@ -93,7 +93,7 @@ Ten fields, sent once a week:
 |-------|---------|------------|
 | `anon_id` | `8f2a-4c1b-...` | A random ID generated when you first turn the toggle on. Not your username, email, or any system identifier. |
 | `app_version` | `1.0.16` | Which version you're running. |
-| `os` | `windows` | Your operating system (Windows or Linux). |
+| `os` | `windows` | Your operating system (Windows, Linux or macOS). |
 | `keystrokes` | `18523` | How many keys you've pressed total. |
 | `words` | `3421` | How many words you've typed total. |
 | `predictions` | `2671` | How many times you've clicked a suggestion. |

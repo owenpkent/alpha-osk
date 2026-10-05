@@ -131,7 +131,7 @@ is gone.
 `HybridPredictor.predict` pulls fuzzy predictions for the current
 partial word via `get_fuzzy_predictions`, which returns
 `List[Tuple[str, float]]` with raw spatial scores.  Those candidates
-are merged with n-gram and PPM suggestions using
+are merged with n-gram suggestions (PPM is out of the merge by default) using
 `FuzzyRecognizer.prediction_weight` as the per-source weight; the
 formula that combines them depends on the active merge strategy
 (Default / Consensus boost / Confidence-weighted / Multiplicative).

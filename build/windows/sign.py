@@ -15,7 +15,8 @@ The script:
 
 1. Locates ``signtool.exe`` across common Windows SDK paths.
 2. Signs the file with SHA-256 + RFC 3161 timestamp.
-3. Retries up to 5 times with exponential backoff (handles Defender locks).
+3. Retries up to 5 times with linear backoff (2, 4, 6, 8 s; handles Defender locks),
+   each signtool attempt capped at 60 s.
 4. Exits non-zero on failure so the build pipeline fails loudly.
 
 Certificate Details
@@ -141,8 +142,9 @@ def sign_file(file_path: str, signtool: str | None = None) -> None:
     """
     Sign a single file with the EV certificate.
 
-    Retries up to ``MAX_RETRIES`` times with exponential backoff to handle
-    Windows Defender temporarily locking the file during scanning.
+    Retries up to ``MAX_RETRIES`` times with linear backoff
+    (``RETRY_BASE_DELAY * attempt``) to handle Windows Defender temporarily
+    locking the file during scanning.
 
     Args:
         file_path: Absolute path to the ``.exe`` or ``.dll`` to sign.

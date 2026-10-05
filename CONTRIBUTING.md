@@ -107,8 +107,11 @@ of red Xs in CI. Formatting is checked separately from linting because
 `ruff check` does not look at layout; fix a format failure by running
 `ruff format src/ tests/`, not by hand.
 
-`--install-hook` writes `.git/hooks/pre-push`. Hooks are not version
-controlled, so run it once per clone; `git push --no-verify` skips it.
+`--install-hook` writes `pre-push` into the repository's shared git hooks
+directory (resolved with `git rev-parse --git-path hooks`), so one install
+covers every worktree, and the hook works from a linked worktree by borrowing
+the main checkout's venv. Hooks are not version controlled, so run it once
+per clone; `git push --no-verify` skips it.
 
 The suite runs sharded via `pytest-xdist` (`-n auto`), which is what
 keeps it under a minute. The cost is per-process setup repeated per
@@ -154,7 +157,7 @@ Other useful docs in `docs/`:
 
 - `docs/architecture/HYBRID_MERGING.md` — prediction merging strategies
 - `docs/architecture/FUZZY_RECOGNITION.md` — spatial error correction
-- `docs/architecture/PPM.md` — character-level prediction
+- `docs/architecture/PPM.md` — character-level prediction (trained, but out of the prediction merge since 2026-09-03)
 - `docs/architecture/DICTATION.md` (voice input, Deepgram-backed)
 - `docs/build/WINDOWS.md`, `docs/build/LINUX.md`, `docs/build/MACOS.md` — per-platform build
   and packaging notes

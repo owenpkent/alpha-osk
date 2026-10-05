@@ -103,7 +103,7 @@ A phased plan to harden Alpha-OSK's codebase, starting with the highest-impact, 
 **Goal:** Reduce unnecessary work and make the prediction pipeline snappier.
 
 - [ ] **Debounce predictions** — 100–150 ms delay in `_update_predictions` so rapid keystrokes don't each trigger a full predict cycle
-- [ ] **LRU cache eviction** — Replace PPMWordPredictor's dict cache with `functools.lru_cache` or explicit LRU
+- [ ] **LRU cache eviction** — Replace PPMWordPredictor's dict cache with `functools.lru_cache` or explicit LRU. Dormant: PPM word candidates are out of the prediction merge since 2026-09-03 (`HybridPredictor._ppm_in_merge = False`), so this is not worth doing unless PPM returns to the merge
 - [ ] **Cancel stale LLM loads** — Thread cancellation token for `_load_llm_async`
 - [ ] **Profile neighbor cache** — Only rebuild `SpatialKeyModel._neighbors` when radius actually changes
 
@@ -128,7 +128,7 @@ A phased plan to harden Alpha-OSK's codebase, starting with the highest-impact, 
 - [ ] Model versioning field in saved JSON (`"version": 1`)
 - [ ] Schema validation on load with migration path
 - [ ] Automatic backup before overwrite (keep last 3)
-- [ ] Export/import user vocabulary as portable format
+- [x] Export/import user vocabulary as portable format (Data Backup, `src/data_export.py`)
 
 ---
 
@@ -137,9 +137,9 @@ A phased plan to harden Alpha-OSK's codebase, starting with the highest-impact, 
 **Goal:** Streamline the release pipeline.
 
 - [ ] Lock dependencies (`pip-compile` or `uv lock`)
-- [ ] Separate `requirements-dev.txt` and `requirements-build.txt`
+- [x] Separate `requirements-dev.txt` and `requirements-build.txt` (`requirements-dev.txt` exists; no separate `requirements-build.txt`)
 - [ ] Automated Windows build in CI (PyInstaller + signing)
-- [ ] Linux packaging (AppImage or Flatpak)
+- [x] Linux packaging (AppImage or Flatpak): AppImage via `build/linux/build.py --appimage`; Flatpak not done
 
 ---
 

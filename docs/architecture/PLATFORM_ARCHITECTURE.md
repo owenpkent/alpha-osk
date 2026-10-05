@@ -300,7 +300,7 @@ doesn't always work on Windows; `WS_EX_NOACTIVATE` is the OS-level
 enforcement.
 
 `WS_EX_TOPMOST` is deliberately **not** written into the style word here.
-Always-on-top is applied separately with `SetWindowPos(HWND_TOPMOST)`:
+When the *Always on Top* setting is on (the default), it is applied separately through `window_band.set_keyboard_topmost` (`src/platform/window_band.py`), which uses `SetWindowPos(HWND_TOPMOST)`:
 the style bit and the topmost Z-order band are separate pieces of state,
 and writing the bit directly leaves the band untouched, producing a
 window that reports itself as topmost while sitting behind ordinary

@@ -143,7 +143,7 @@ Edit `src/telemetry.py`:
 DEFAULT_ENDPOINT = "https://alpha-osk-telemetry.<your-cf-subdomain>.workers.dev"
 ```
 
-This is the kill switch. While it's the empty string, the client treats the endpoint as "not configured" and silently no-ops every submit (the consent toggle in Settings still works, just no data leaves the machine). Setting it activates the pipeline for any user who has the toggle on.
+This is the kill switch. Before 1.4.0 it shipped as the empty string, which the client treats as "not configured": every submit silently no-ops (the consent toggle in Settings still works, just no data leaves the machine). It has pointed at the production worker since 1.4.0, and an empty value is still how submits would be disabled. A non-empty value activates the pipeline for any user who has the toggle on.
 
 Commit this change. Treat it like a configuration constant, not a secret — it's the public-facing endpoint and will be visible in any decompiled binary anyway.
 

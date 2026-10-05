@@ -46,5 +46,5 @@ Out of scope:
 
 Only the latest released version receives security fixes. Older
 versions can be upgraded via the in-app auto-updater
-(*Settings -> Updates*) or by downloading the current installer from
+(*Settings -> Data & Privacy -> Updates*) or by downloading the current installer from
 the releases repository.

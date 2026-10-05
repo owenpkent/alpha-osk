@@ -112,7 +112,7 @@ A small row whose buttons change based on what the foreground app is, what's sel
 
 - **Corner snap.** Move the OSK to TL / TR / BL / BR with one click.
 - **Follow active window.** Keyboard automatically repositions next to whichever app is foreground.
-- **Always-on-top temporary toggle.** Already always on top, but a one-shot "hide when I'm not typing" mode.
+- **Quick Always on Top toggle.** The persistent setting already exists (Settings -> Appearance -> Window, default on); this idea is a one-tap title-bar switch for it, e.g. a "hide when I'm not typing" mode.
 - **Lock keyboard.** Disable all click handling so a cat walking on the screen doesn't fire keys. Re-enable with a long-hold or a global hotkey.
 
 **Effort:** low for snap and lock. Follow-active-window reuses the same hwnd polling already used for compat-mode detection; add a position-tracker on top.
