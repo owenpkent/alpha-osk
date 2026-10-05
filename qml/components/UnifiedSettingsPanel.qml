@@ -50,6 +50,7 @@ Item {
     ]
     property real windowOpacity: 1.0
     property bool snapToEdges: true
+    property bool alwaysOnTop: true
     property string currentLayout: "qwerty"
     property bool compactView: false
 
@@ -971,6 +972,17 @@ Item {
                                                + "middle, once it gets close."
                                     checked: unifiedSettings.snapToEdges
                                     onToggled: function(c) { unifiedSettings.settingChanged("snapToEdges", c) }
+                                }
+
+                                SettingsToggle {
+                                    Layout.fillWidth: true
+                                    text: "Always on Top"
+                                    description: "Keep the keyboard above other "
+                                               + "windows. When off, it can go "
+                                               + "behind other apps; click it "
+                                               + "to bring it back."
+                                    checked: unifiedSettings.alwaysOnTop
+                                    onToggled: function(c) { unifiedSettings.settingChanged("alwaysOnTop", c) }
                                 }
                             }
                         }

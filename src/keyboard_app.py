@@ -53,7 +53,7 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 from types import TracebackType
-from typing import Optional, cast
+from typing import Any, Optional, cast
 
 from PySide6.QtCore import QEvent, QObject, QSettings, QSharedMemory, Qt, QTimer, QUrl
 from PySide6.QtGui import QIcon, QWindow
@@ -68,6 +68,7 @@ from .platform import (
     get_config_dir,
     get_platform_info,
     macos_window,
+    window_band,
     windows_window,
 )
 from .study_bridge import StudyBridge
@@ -200,7 +201,7 @@ def _setup_platform_env() -> None:
     os.environ.setdefault("QT_QUICK_CONTROLS_STYLE", "Basic")
 
 
-def _apply_window_flags(root: QWindow) -> None:
+def _apply_window_flags(root: QWindow, always_on_top: bool = True) -> None:
     """
     Apply OS-specific window flags to make the keyboard behave as a
     proper on-screen keyboard:
@@ -216,6 +217,11 @@ def _apply_window_flags(root: QWindow) -> None:
       tray icon — easy to miss.  Trade-off: the OSK now appears in
       Alt+Tab.  Acceptable since ``WS_EX_NOACTIVATE`` still prevents
       focus theft on every click.)
+
+    ``always_on_top`` is the saved *Always on Top* setting.  The Qt flags
+    keep ``WindowStaysOnTopHint`` either way (changing flags on a shown
+    window rebuilds it); only the native Z-order band follows the setting,
+    and it is chosen here so a user who turned it off never starts topmost.
     """
     # Qt flags — work on all platforms.  WindowDoesNotAcceptFocus
     # is the Linux/Wayland equivalent of WS_EX_NOACTIVATE; on
@@ -259,17 +265,27 @@ def _apply_window_flags(root: QWindow) -> None:
 
     # Windows-specific: apply WS_EX_NOACTIVATE via Win32 API
     if CURRENT_PLATFORM == "windows":
-        windows_window.apply_extended_styles(root, taskbar_button=True)
+        windows_window.apply_extended_styles(root, taskbar_button=True, topmost=always_on_top)
     elif CURRENT_PLATFORM == "macos":
         macos_window.apply_window_flags(root)
+        if not always_on_top:
+            window_band.set_keyboard_topmost(root, False)
+    elif not always_on_top:
+        window_band.set_keyboard_topmost(root, False)
 
 
-def _always_on_top_windows(root: QWindow) -> list[QWindow]:
+def _always_on_top_windows(
+    root: QWindow, keyboard_on_top: Callable[[], bool] = lambda: True
+) -> list[QWindow]:
     """Our visible always-on-top windows, the keyboard first.
 
     The order is the order they are stepped aside and restored in, so the
     floating pickers, raised after the keyboard, stay above it.  See
     ``windows_window.ShellPopupYielder``.
+
+    The keyboard keeps ``WindowStaysOnTopHint`` when *Always on Top* is off,
+    so the flag alone cannot select it: ``keyboard_on_top`` is the setting,
+    asked on every call because the yielder evaluates this set live.
     """
     on_top = Qt.WindowType.WindowStaysOnTopHint
     others = [
@@ -277,7 +293,72 @@ def _always_on_top_windows(root: QWindow) -> list[QWindow]:
         for w in QApplication.topLevelWindows()
         if w is not root and w.isVisible() and w.flags() & on_top
     ]
-    return ([root] if root.isVisible() else []) + others
+    keyboard = [root] if root.isVisible() and keyboard_on_top() else []
+    return keyboard + others
+
+
+def _floating_on_top_windows(root: QWindow) -> list[QWindow]:
+    """The visible always-on-top windows other than the keyboard (pickers, Settings)."""
+    return _always_on_top_windows(root, lambda: False)
+
+
+def _restore_floating_bands(root: QWindow, yielder: Optional[Any]) -> None:
+    """Put the floating windows back in the topmost band after the keyboard left it.
+
+    The Snippets, Symbols and study pickers and the Settings, Help and
+    Dashboard windows are declared inside the keyboard's QML tree, so they
+    are its transient children and, on Windows, its *owned* windows.  Win32
+    moves owned windows with their owner: ``SetWindowPos(HWND_NOTOPMOST)``
+    on the keyboard makes every owned window non-topmost too, and
+    ``HWND_TOPMOST`` makes them topmost.  Turning *Always on Top* off, and
+    every press-to-front (which passes through the topmost band and out
+    again), therefore dragged an open picker out of the band the setting
+    says it keeps, and another application could cover it.  A non-topmost
+    owner may own a topmost window, so each one is simply put back.
+
+    Not while the shell-popup yielder has them stepped aside: the ordinary
+    band is where they belong for the life of the notification, and an
+    owned window already sits above its owner there.  The yielder's own
+    restore puts them back when the popup goes.
+    """
+    if yielder is not None and yielder.stepped_aside:
+        return
+    for window in _floating_on_top_windows(root):
+        window_band.set_keyboard_topmost(window, True)
+
+
+def _raise_keyboard_keeping_pickers(root: QWindow, yielder: Optional[Any]) -> None:
+    """Raise the (non-topmost) keyboard, then undo what that did to its owned windows."""
+    window_band.raise_keyboard(root)
+    _restore_floating_bands(root, yielder)
+
+
+def _apply_always_on_top(root: QWindow, on: bool, yielder: Optional[Any]) -> None:
+    """Apply a runtime change of the *Always on Top* setting to the keyboard.
+
+    Turning it **on** while the shell-popup yielder has the windows stepped
+    aside must not put the keyboard back over the popup: the yielder's own
+    restore (which now sees the keyboard in its window set) does that when
+    the popup goes.  Turning it **off** is always applied; it is the same
+    band the yielder had already moved the keyboard to.  Only the keyboard
+    is meant to leave the band, so the floating windows the owner change
+    took with it are put back (:func:`_restore_floating_bands`).
+    """
+    if on and yielder is not None and yielder.stepped_aside:
+        return
+    window_band.set_keyboard_topmost(root, on)
+    if not on:
+        _raise_keyboard_keeping_pickers(root, yielder)
+
+
+def _reapply_band(root: QWindow, bridge: Any, yielder: Optional[Any]) -> None:
+    """Re-assert the saved band after a quiet restore (Qt may have re-topmosted)."""
+    on = bridge.alwaysOnTop
+    if on and yielder is not None and yielder.stepped_aside:
+        return
+    window_band.set_keyboard_topmost(root, on)
+    if not on:
+        _raise_keyboard_keeping_pickers(root, yielder)
 
 
 def _picker_shown_handler(
@@ -291,6 +372,55 @@ def _picker_shown_handler(
         yielder.window_shown(int(window.winId()))
 
     return shown
+
+
+def _floating_window_styles(
+    on_shown: Optional[Callable[[QWindow], None]] = None,
+) -> dict[str, Callable[[QWindow], None]]:
+    """What each floating window needs every time it is shown, by objectName.
+
+    Every one of them ends back in the topmost band, then tells ``on_shown``.
+    The pickers get there through ``apply_extended_styles``, which writes
+    ``HWND_TOPMOST`` as part of their styling.  Settings, Help and the
+    Dashboard have no styling of their own, but they need the band put back
+    all the same: they are the keyboard's owned windows, and with *Always on
+    Top* off every press-to-front takes the keyboard through the topmost
+    band and out again, which drags its owned windows out with it, hidden
+    ones included.  :func:`_restore_floating_bands` repairs only the
+    visible ones (a hidden window has no band worth having until it is
+    shown), so without this a Settings window closed and reopened after a
+    keyboard click came back where any application could cover it.  Found
+    in review on a real owned Qt window: demoted while hidden, still
+    demoted after ``show()``.
+
+    ``on_shown`` comes after the band, so the shell-popup yielder can demote
+    the window again at once while a notification is up.
+    """
+
+    def _report(target: QWindow) -> None:
+        if on_shown is not None:
+            on_shown(target)
+
+    def _style_picker(target: QWindow) -> None:
+        windows_window.apply_extended_styles(target)
+        _report(target)
+
+    def _back_on_top(target: QWindow) -> None:
+        window_band.set_keyboard_topmost(target, True)
+        _report(target)
+
+    def _style_dashboard(target: QWindow) -> None:
+        windows_window.prefer_dwm_rounded_corners(target)
+        _back_on_top(target)
+
+    return {
+        "snippetsWindow": _style_picker,
+        "symbolsWindow": _style_picker,
+        "studyWindow": _style_picker,
+        "settingsWindow": _back_on_top,
+        "helpWindow": _back_on_top,
+        "vizWindow": _style_dashboard,
+    }
 
 
 def _wire_floating_windows(
@@ -315,12 +445,14 @@ def _wire_floating_windows(
     missing window is skipped rather than aborting the rest: one unstyled
     window is a smaller problem than all of them going unwired.
 
-    ``on_shown`` is called with each of the three pickers after it has been
-    styled on becoming visible. The styling puts the picker in the topmost
-    band, which is wrong while the shell-popup yielder has our windows
-    stepped aside for a notification, so ``main()`` passes the yielder's
-    ``window_shown`` and the picker is demoted again in the same breath.
-    The Dashboard is not reported: it is not an always-on-top window.
+    Settings and Help are wired too, for their band alone: see
+    :func:`_floating_window_styles`, which holds the per-window table.
+
+    ``on_shown`` is called with each window after it is back in the
+    topmost band on becoming visible.  That band is wrong while the
+    shell-popup yielder has our windows stepped aside for a notification,
+    so ``main()`` passes the yielder's ``window_shown`` and the window is
+    demoted again in the same breath.
 
     No-op on non-Windows (the Qt flag is sufficient on X11/Wayland, and
     macOS uses the Accessory activation policy applied app-wide). Silent
@@ -332,18 +464,7 @@ def _wire_floating_windows(
     try:
         from PySide6.QtCore import QObject
 
-        def _style_picker(target: QWindow) -> None:
-            windows_window.apply_extended_styles(target)
-            if on_shown is not None:
-                on_shown(target)
-
-        wiring: dict[str, Callable[[QWindow], None]] = {
-            "snippetsWindow": _style_picker,
-            "symbolsWindow": _style_picker,
-            "studyWindow": _style_picker,
-            "vizWindow": windows_window.prefer_dwm_rounded_corners,
-        }
-        for name, style in wiring.items():
+        for name, style in _floating_window_styles(on_shown).items():
             win = root.findChild(QObject, name)
             if win is None:
                 _logger.warning("%s not found; skipping its window styling", name)
@@ -961,16 +1082,47 @@ def main() -> int:
     root = cast(QWindow, engine.rootObjects()[0])
     quiet_restore = None
     shell_popup_yield = None
+    raise_on_press = None
     if root:
-        _apply_window_flags(root)
+        # QML's Component.onCompleted has already pushed the saved Always on
+        # Top value into the bridge by now, so the very first band is the
+        # saved one.
+        _apply_window_flags(root, bridge.alwaysOnTop)
         # Held for the life of the event loop: Qt does not own a filter
         # installed from Python.  See QuietRestoreFilter for the why.
-        quiet_restore = windows_window.install_quiet_restore(root)
+        quiet_restore = windows_window.install_quiet_restore(
+            root, after_restore=lambda: _reapply_band(root, bridge, shell_popup_yield)
+        )
         # Held for the same reason: it owns the WinEvent callback.
         shell_popup_yield = windows_window.install_shell_popup_yield(
-            lambda: _always_on_top_windows(root)
+            lambda: _always_on_top_windows(root, lambda: bridge.alwaysOnTop)
         )
         _wire_floating_windows(root, on_shown=_picker_shown_handler(shell_popup_yield))
+        # Click-to-front for a keyboard that can be buried (setting off).
+        # Parented to root, so it lives as long as the window.
+        # The raise passes the keyboard through the topmost band, which
+        # takes its owned pickers out of it; the app-layer raise puts them
+        # back (see _restore_floating_bands).
+        raise_on_press = window_band.RaiseOnPressFilter(
+            root,
+            always_on_top=lambda: bridge.alwaysOnTop,
+            raise_fn=lambda w: _raise_keyboard_keeping_pickers(w, shell_popup_yield),
+        )
+        root.installEventFilter(raise_on_press)
+        if CURRENT_PLATFORM == "linux":
+            # X11 writes _NET_WM_STATE_ABOVE back from the retained flag on
+            # every show, so a hide and re-show (the tray on a tucked
+            # keyboard) undid the setting.  The X11 half of quiet_restore's
+            # after_restore; see ReassertOnExposeFilter.
+            reassert_on_expose = window_band.ReassertOnExposeFilter(
+                root, after_map=lambda: _reapply_band(root, bridge, shell_popup_yield)
+            )
+            root.installEventFilter(reassert_on_expose)
+
+        def _on_always_on_top(on: bool) -> None:
+            _apply_always_on_top(root, on, shell_popup_yield)
+
+        bridge.alwaysOnTopChanged.connect(_on_always_on_top)
         app.keyboard_window = root
 
     # --- System tray icon ---
@@ -1017,7 +1169,7 @@ def main() -> int:
 
     app.aboutToQuit.connect(_on_about_to_quit)
     QTimer.singleShot(0, bridge.startPredictionLoading)
-    _ = (quiet_restore, shell_popup_yield)
+    _ = (quiet_restore, shell_popup_yield, raise_on_press)
 
     return app.exec()
 

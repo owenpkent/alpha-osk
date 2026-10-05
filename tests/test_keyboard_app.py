@@ -527,4 +527,4 @@ class TestAQuitStillClosesTheKeyboard:
     def test_main_installs_the_quiet_restore(self) -> None:
         source = Path(keyboard_app.__file__).read_text(encoding="utf-8")
         body = source.split("def main(", 1)[1]
-        assert "windows_window.install_quiet_restore(root)" in body
+        assert "windows_window.install_quiet_restore(" in body
