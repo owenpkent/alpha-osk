@@ -497,6 +497,390 @@ def install_quiet_restore(window: QWindow) -> Optional[QuietRestoreFilter]:
         return None
 
 
+# WinEvent ids (winuser.h).  Plain integers so the yielder below can be
+# driven by tests on any platform.
+EVENT_SYSTEM_FOREGROUND = 0x0003
+EVENT_OBJECT_DESTROY = 0x8001
+EVENT_OBJECT_SHOW = 0x8002
+EVENT_OBJECT_HIDE = 0x8003
+EVENT_OBJECT_CLOAKED = 0x8017
+EVENT_OBJECT_UNCLOAKED = 0x8018
+_APPEAR_EVENTS = frozenset({EVENT_OBJECT_SHOW, EVENT_OBJECT_UNCLOAKED})
+_VANISH_EVENTS = frozenset({EVENT_OBJECT_HIDE, EVENT_OBJECT_CLOAKED, EVENT_OBJECT_DESTROY})
+
+# Z-order band ids, from the undocumented GetWindowBand.
+ZBID_IMMERSIVE_NOTIFICATION = 4
+
+# The windows the keyboard steps aside for, matched on class and band rather
+# than on title (localised) or owning process (an OpenProcess per event).
+# Measured on Windows 11 24H2, 2026-10-04:
+#   - a toast is ShellExperienceHost's ``Windows.UI.Core.CoreWindow`` in the
+#     notification band; it is uncloaked to show and cloaked to dismiss, and
+#     the same window is reused for the next toast.
+#   - taskbar window previews are hosted in Explorer's full-screen
+#     ``XamlExplorerHostIslandWindow``, shown when the pointer reaches a
+#     taskbar button and hidden when it leaves the taskbar.  The per-button
+#     ``Xaml_WindowedPopupClass`` popups live inside that session, so the
+#     host alone covers them.
+#   - ``TaskListThumbnailWnd`` is the Windows 10 preview window.
+_TOAST_CLASS = "Windows.UI.Core.CoreWindow"
+_PREVIEW_CLASSES = frozenset({"XamlExplorerHostIslandWindow", "TaskListThumbnailWnd"})
+
+
+def is_shell_popup(class_name: str, band: Optional[int]) -> bool:
+    """Whether a newly shown window is one the keyboard should not cover."""
+    if class_name in _PREVIEW_CLASSES:
+        return True
+    return class_name == _TOAST_CLASS and band == ZBID_IMMERSIVE_NOTIFICATION
+
+
+class ShellPopupYielder:
+    """Drop the keyboard out of always-on-top while a notification or preview is up.
+
+    **Why.** A UIAccess process's always-on-top window is placed in the
+    ``ZBID_UIACCESS`` Z-order band, which sits above the notification band
+    and above Explorer's own topmost windows.  So once 1.6.0 started running
+    with UIAccess for real, toasts (Slack's included, which go through the
+    Windows notification system) and taskbar previews opened *behind* the
+    keyboard.  Windows' own ``osk.exe`` sits in the same band and has the
+    same problem.
+
+    **Why not just stay in the ordinary band.**  A signed probe measured
+    how the band is assigned (2026-10-04): it follows topmost-ness, both
+    ways.  ``SetWindowPos(HWND_TOPMOST)`` from a UIAccess process moves the
+    window into ``ZBID_UIACCESS``, whether it was created topmost or not and
+    even when it was created with ``CreateWindowInBand(ZBID_DESKTOP)``;
+    ``HWND_NOTOPMOST`` moves it back to ``ZBID_DESKTOP``.  There is no
+    topmost-but-ordinary-band state to settle into, and giving UIAccess up
+    would cost typing into elevated windows.
+
+    **How.** While at least one popup :func:`is_shell_popup` recognises is
+    on screen, every one of our always-on-top windows is made
+    ``HWND_NOTOPMOST``, which leaves it above every ordinary application
+    window but below the shell's topmost ones, so the popup draws over it.
+    When the last one goes, they are made topmost again.  Both passes walk
+    the windows in the same order (the keyboard first), so the floating
+    pickers still end up above the keyboard rather than under it.
+
+    **The demotion is not a one-shot.**  ``HWND_NOTOPMOST`` places a window
+    above the ordinary ones only at the moment of the call; the next
+    application the user activates (or that raises a window of its own)
+    goes above it, and the keyboard, which never takes focus, has no way of
+    coming back on its own.  A maximised application would then cover the
+    keys for as long as the toast stayed up.  So while stepped aside, every
+    foreground change and every poll tick raises our windows to the top of
+    the ordinary group again (``HWND_TOP``, without activating), keyboard
+    first, which keeps the popup above them and the applications below.
+
+    **A window of ours that appears mid-yield is demoted too.**  A picker
+    opened while a toast is up is restyled topmost by its own show path
+    (``apply_extended_styles``), its show event is not a shell popup's, and
+    ``HWND_TOP`` is a raise within a band rather than a band change, so
+    without this the picker would sit over the notification for the rest of
+    its life.  The yielder remembers which windows it has demoted; a window
+    in the set that it has not demoted is demoted before it is raised, and
+    :meth:`window_shown` lets the show path do it at once rather than at the
+    next poll.
+
+    A short ``restore_delay_ms`` stops a toast being replaced by the next
+    one, or the pointer sliding between taskbar buttons, from flickering
+    the Z-order.  A slow ``poll_ms`` re-check covers a lost hide event: a
+    window that is gone, hidden or cloaked no longer counts.
+
+    Every Win32 call is injected, so the logic is testable anywhere.
+    """
+
+    def __init__(
+        self,
+        *,
+        windows: Callable[[], list[int]],
+        set_topmost: Callable[[int, bool], object],
+        raise_window: Callable[[int], object],
+        describe: Callable[[int], Optional[tuple[str, Optional[int]]]],
+        still_showing: Callable[[int], bool],
+        schedule: Optional[Callable[[int, Callable[[], None]], None]] = None,
+        restore_delay_ms: int = 150,
+        poll_ms: int = 1000,
+    ) -> None:
+        self._windows = windows
+        self._set_topmost = set_topmost
+        self._raise_window = raise_window
+        self._describe = describe
+        self._still_showing = still_showing
+        self._schedule = schedule or (lambda ms, fn: QTimer.singleShot(ms, fn))
+        self._restore_delay_ms = restore_delay_ms
+        self._poll_ms = poll_ms
+        self._popups: set[int] = set()
+        self._aside = False
+        # The windows made HWND_NOTOPMOST in this yield.  One of ours that is
+        # not in here while stepped aside has come up topmost since.
+        self._demoted: set[int] = set()
+        # Bumped on every change, so a stale scheduled restore or poll can
+        # tell it has been overtaken and do nothing.
+        self._generation = 0
+
+    @property
+    def stepped_aside(self) -> bool:
+        return self._aside
+
+    def window_shown(self, hwnd: int) -> None:
+        """One of our always-on-top windows has just been shown (and styled topmost).
+
+        While stepped aside it is demoted at once, so a picker opened during
+        a notification does not cover it until the next poll.  Nothing to do
+        otherwise: on top is where it belongs.
+        """
+        if self._aside:
+            self._demote(hwnd)
+
+    def on_event(self, event: int, hwnd: int) -> None:
+        """Feed one WinEvent (already filtered to whole windows)."""
+        if event == EVENT_SYSTEM_FOREGROUND:
+            # The newly active application is now above everything
+            # non-topmost, our stepped-aside windows included.
+            if self._aside:
+                self._reassert()
+            return
+        if event in _VANISH_EVENTS:
+            if hwnd in self._popups:
+                self._popups.discard(hwnd)
+                self._generation += 1
+                if not self._popups:
+                    self._schedule_restore()
+            return
+        if event not in _APPEAR_EVENTS or hwnd in self._popups:
+            return
+        info = self._describe(hwnd)
+        if info is None or not is_shell_popup(*info):
+            return
+        self._popups.add(hwnd)
+        self._generation += 1
+        if not self._aside:
+            self._step_aside()
+
+    def _step_aside(self) -> None:
+        self._aside = True
+        for hwnd in self._windows():
+            self._demote(hwnd)
+        self._schedule_poll()
+
+    def _demote(self, hwnd: int) -> None:
+        self._set_topmost(hwnd, False)
+        self._demoted.add(hwnd)
+
+    def _restore(self) -> None:
+        self._aside = False
+        self._demoted.clear()
+        for hwnd in self._windows():
+            self._set_topmost(hwnd, True)
+
+    def _reassert(self) -> None:
+        """Put our windows back at the top of the ordinary group, keyboard first.
+
+        A window that has come up since the yield began is still topmost,
+        and a raise would leave it there, over the popup: it is demoted first.
+        """
+        for hwnd in self._windows():
+            if hwnd not in self._demoted:
+                self._demote(hwnd)
+            self._raise_window(hwnd)
+
+    def _schedule_restore(self) -> None:
+        generation = self._generation
+
+        def fire() -> None:
+            if generation == self._generation and self._aside and not self._popups:
+                self._restore()
+
+        self._schedule(self._restore_delay_ms, fire)
+
+    def _schedule_poll(self) -> None:
+        def poll() -> None:
+            if not self._aside:
+                return
+            gone = {h for h in self._popups if not self._still_showing(h)}
+            if gone:
+                self._popups -= gone
+                self._generation += 1
+            if not self._popups:
+                self._restore()
+                return
+            # A window raised over us without a foreground change (an app
+            # calling SetWindowPos itself) sends no event we hook.
+            self._reassert()
+            self._schedule_poll()
+
+        self._schedule(self._poll_ms, poll)
+
+
+def install_shell_popup_yield(
+    windows: Callable[[], list[QWindow]],
+) -> Optional[ShellPopupYielder]:
+    """Let notifications and taskbar previews draw over the keyboard.
+
+    ``windows`` returns our visible always-on-top windows, keyboard first.
+    Returns the yielder, which the caller must keep a reference to: it
+    owns the ctypes callback the WinEvent hook calls into, and a collected
+    callback is a crash on the next window shown anywhere on the desktop.
+    ``None`` off Windows or if the hook could not be installed, which is
+    never a reason to fail startup (the keyboard just covers popups, as
+    1.6.0 did).  See :class:`ShellPopupYielder` for the why.
+    """
+    if sys.platform != "win32":
+        return None
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        user32 = ctypes.windll.user32
+        dwmapi = ctypes.windll.dwmapi
+        OBJID_WINDOW = 0
+        WINEVENT_OUTOFCONTEXT = 0x0000
+        HWND_TOP = 0
+        HWND_TOPMOST = -1
+        HWND_NOTOPMOST = -2
+        SWP_FLAGS = 0x0001 | 0x0002 | 0x0010  # NOSIZE | NOMOVE | NOACTIVATE
+        DWMWA_CLOAKED = 14
+
+        user32.SetWindowPos.argtypes = [
+            wintypes.HWND,
+            wintypes.HWND,
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_int,
+            wintypes.UINT,
+        ]
+        user32.SetWindowPos.restype = wintypes.BOOL
+        user32.GetClassNameW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
+        user32.IsWindow.argtypes = [wintypes.HWND]
+        user32.IsWindowVisible.argtypes = [wintypes.HWND]
+        dwmapi.DwmGetWindowAttribute.argtypes = [
+            wintypes.HWND,
+            wintypes.DWORD,
+            ctypes.c_void_p,
+            wintypes.DWORD,
+        ]
+        get_band = getattr(user32, "GetWindowBand", None)
+        if get_band is not None:
+            get_band.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
+            get_band.restype = wintypes.BOOL
+
+        def describe(hwnd: int) -> Optional[tuple[str, Optional[int]]]:
+            buf = ctypes.create_unicode_buffer(256)
+            if not user32.GetClassNameW(hwnd, buf, 256):
+                return None
+            band: Optional[int] = None
+            if buf.value == _TOAST_CLASS and get_band is not None:
+                out = wintypes.DWORD()
+                if get_band(hwnd, ctypes.byref(out)):
+                    band = out.value
+            return buf.value, band
+
+        def still_showing(hwnd: int) -> bool:
+            if not user32.IsWindow(hwnd) or not user32.IsWindowVisible(hwnd):
+                return False
+            cloaked = wintypes.DWORD()
+            hr = dwmapi.DwmGetWindowAttribute(
+                hwnd, DWMWA_CLOAKED, ctypes.byref(cloaked), ctypes.sizeof(cloaked)
+            )
+            return hr != 0 or cloaked.value == 0
+
+        def set_topmost(hwnd: int, topmost: bool) -> object:
+            after = HWND_TOPMOST if topmost else HWND_NOTOPMOST
+            return user32.SetWindowPos(hwnd, after, 0, 0, 0, 0, SWP_FLAGS)
+
+        def raise_window(hwnd: int) -> object:
+            # Top of the window's own group: for a non-topmost window that
+            # is above every application and still below the shell's popups.
+            return user32.SetWindowPos(hwnd, HWND_TOP, 0, 0, 0, 0, SWP_FLAGS)
+
+        def window_ids() -> list[int]:
+            ids = []
+            for win in windows():
+                try:
+                    ids.append(int(win.winId()))
+                except Exception:
+                    continue
+            return ids
+
+        yielder = ShellPopupYielder(
+            windows=window_ids,
+            set_topmost=set_topmost,
+            raise_window=raise_window,
+            describe=describe,
+            still_showing=still_showing,
+        )
+
+        WinEventProc = ctypes.WINFUNCTYPE(
+            None,
+            wintypes.HANDLE,
+            wintypes.DWORD,
+            wintypes.HWND,
+            wintypes.LONG,
+            wintypes.LONG,
+            wintypes.DWORD,
+            wintypes.DWORD,
+        )
+
+        def on_event(_hook, event, hwnd, id_object, id_child, _thread, _time):  # type: ignore[no-untyped-def]
+            # Every window shown or hidden anywhere on the desktop lands
+            # here, so the filter is the first thing and an exception must
+            # never escape into ctypes.
+            if not hwnd or id_object != OBJID_WINDOW or id_child != 0:
+                return
+            try:
+                yielder.on_event(int(event), int(hwnd))
+            except Exception as e:
+                _logger.debug("Shell-popup yield could not handle an event: %s", e)
+
+        callback = WinEventProc(on_event)
+        user32.SetWinEventHook.argtypes = [
+            wintypes.DWORD,
+            wintypes.DWORD,
+            wintypes.HMODULE,
+            WinEventProc,
+            wintypes.DWORD,
+            wintypes.DWORD,
+            wintypes.DWORD,
+        ]
+        user32.SetWinEventHook.restype = wintypes.HANDLE
+        user32.UnhookWinEvent.argtypes = [wintypes.HANDLE]
+        # Out of context: the callback runs on this (the GUI) thread, which
+        # Qt's event loop pumps, and nothing is injected into other processes.
+        ranges = (
+            (EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND),
+            (EVENT_OBJECT_DESTROY, EVENT_OBJECT_HIDE),
+            (EVENT_OBJECT_CLOAKED, EVENT_OBJECT_UNCLOAKED),
+        )
+        # Every hook that took is unhooked again if a later one does not, or
+        # anything below raises.  A hook left behind outlives the callback
+        # object it points at (Windows only drops it with the thread), and
+        # the next window shown anywhere would call freed memory.
+        hooks: list[int] = []
+        try:
+            for low, high in ranges:
+                hook = user32.SetWinEventHook(
+                    low, high, None, callback, 0, 0, WINEVENT_OUTOFCONTEXT
+                )
+                if not hook:
+                    raise OSError("SetWinEventHook returned no hook")
+                hooks.append(int(hook))
+        except Exception:
+            for hook in hooks:
+                user32.UnhookWinEvent(hook)
+            _logger.warning("Could not hook window events; popups may open behind the keyboard")
+            return None
+        # Pinned to the yielder so the callback lives exactly as long as it.
+        yielder._callback = callback  # type: ignore[attr-defined]
+        yielder._hooks = hooks  # type: ignore[attr-defined]
+        _logger.info("Notifications and taskbar previews will draw over the keyboard")
+        return yielder
+    except Exception as e:
+        _logger.warning("Could not install the shell-popup yield: %s", e)
+        return None
+
+
 def prefer_dwm_rounded_corners(window: QWindow) -> None:
     """Hand a shown window's corners to DWM, and nothing else.
 

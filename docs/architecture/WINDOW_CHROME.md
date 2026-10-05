@@ -268,3 +268,114 @@ parked at a negative x is reported 4 px adrift of where it was put (hence
 `PARKED_X`/`PARKED_Y`), and a closed `Popup`'s rows all report
 `visible: false`, so any assertion about which rows are showing has to open the
 menu first or it passes against anything at all.
+
+## Notifications and taskbar previews draw over the keyboard
+
+Reported on 1.6.0 as "Slack notifications go under the keyboard, and window
+previews". The cause is UIAccess itself, which 1.6.0 was the first build to
+actually run with. A UIAccess process's always-on-top window lives in the
+`ZBID_UIACCESS` Z-order band, above the notification band (toasts, which is
+how Slack notifies) and above Explorer's own topmost windows (taskbar
+previews). Windows' `osk.exe` sits in the same band and covers them the same
+way.
+
+**There is no "topmost but in the ordinary band" state to settle into.** A
+signed UIAccess probe installed under Program Files measured it on
+2026-10-04 (`GetWindowBand`, 1 = `ZBID_DESKTOP`, 2 = `ZBID_UIACCESS`):
+
+| Window | Band |
+|--------|------|
+| `CreateWindowEx` with `WS_EX_TOPMOST` | 2 |
+| `CreateWindowEx` plain | 1 |
+| ... then `SetWindowPos(HWND_TOPMOST)` | 2 |
+| a topmost one after `SetWindowPos(HWND_NOTOPMOST)` | 1 |
+| ... and `HWND_TOPMOST` again | 2 |
+| `CreateWindowInBand(ZBID_DESKTOP)` with `WS_EX_TOPMOST` | 1 |
+| ... then `SetWindowPos(HWND_TOPMOST)` | 2 |
+
+The band follows topmost-ness both ways. The one exception (created in
+`ZBID_DESKTOP` with the style already set) is undone by the next
+`HWND_TOPMOST`, which Qt issues on its own, and Qt creates its windows with
+`CreateWindowEx` anyway. Giving UIAccess up would cost typing into elevated
+windows, which is what 1.6.0 shipped to fix.
+
+**So the keyboard steps aside.** `windows_window.ShellPopupYielder` listens to
+out-of-context WinEvents (show / hide / destroy / cloak / uncloak, filtered to
+whole windows) and, while one recognised popup is on screen, makes every
+visible always-on-top window of ours `HWND_NOTOPMOST`. That leaves the keyboard
+above every ordinary application but below the shell's topmost windows. When
+the last popup goes it makes them topmost again. Both passes walk the windows
+in one order, keyboard first (`keyboard_app._always_on_top_windows`), so an
+open picker stays above the keyboard rather than being buried under it.
+
+What counts (`is_shell_popup`), measured on Windows 11 24H2 with a WinEvent
+recorder:
+
+- **A toast** is ShellExperienceHost's `Windows.UI.Core.CoreWindow` in
+  `ZBID_IMMERSIVE_NOTIFICATION` (4). It is *uncloaked* to show and *cloaked* to
+  dismiss, and the same window is reused for the next toast, which is why the
+  cloak events are hooked and why a snapshot of "new visible windows" never
+  saw it. The class alone is not enough: every store app's window is a
+  `CoreWindow`, so the band is what marks a toast. The title ("New
+  notification") is localised and is not used.
+- **Taskbar previews** are hosted in Explorer's full-screen
+  `XamlExplorerHostIslandWindow`, shown when the pointer reaches a taskbar
+  button and hidden when it leaves the taskbar. The per-button
+  `Xaml_WindowedPopupClass` popups (owned by `Shell_TrayWnd`) live inside
+  that session, so the host alone covers them. `TaskListThumbnailWnd` is the
+  Windows 10 preview window.
+
+**The demotion has to be held, not fired once.** `HWND_NOTOPMOST` places a
+window above the ordinary ones at the moment of the call and nothing more: the
+next application the user activates, or that raises a window of its own, goes
+above it, and the keyboard never takes focus so it cannot climb back by being
+clicked. Review reproduced it with the real yielder and two hidden windows: the
+keyboard was above the application right after yielding, and below it, for as
+long as the toast stayed up, after the application was raised with
+`SetWindowPos(HWND_TOP, SWP_NOACTIVATE)`. A maximised application would hide
+every key for the life of a notification. So `EVENT_SYSTEM_FOREGROUND` is hooked
+too, and while stepped aside every foreground change (and every poll tick, for
+a window raised without activation, which fires nothing we hook) raises our
+windows to `HWND_TOP` without activating them, keyboard first. Within the
+ordinary group that is above every application and still below the shell's
+popups. On top, the event is ignored: topmost already beats everything.
+
+A 150 ms restore delay keeps a toast replaced by the next one, or the pointer
+sliding between taskbar buttons, from flickering the Z-order, and a 1 s poll
+while stepped aside drops a popup that is gone, hidden or cloaked without its
+event having arrived.
+
+**A picker opened during the yield is demoted too.** The first held version
+only ever re-raised with `HWND_TOP`, which moves a window within its band and
+never out of one. A picker (Snippets, Symbols, the study window) opened while
+a toast was up came up topmost, because `_wire_floating_windows` runs
+`apply_extended_styles` on every show and that call asks for `HWND_TOPMOST`;
+its show event is not a shell popup's, so the yielder ignored it, and the next
+re-raise left it where it was: over the notification, for the rest of the
+notification's life. Review reproduced it by adding a topmost picker during an
+active toast and watching `WS_EX_TOPMOST` survive the poll. The yielder now
+keeps the set of windows it has demoted in this yield; on every re-raise
+(foreground change or poll) a window of ours that is not in the set is
+demoted before it is raised, and the floating-window wiring reports each
+picker's show to `ShellPopupYielder.window_shown` right after styling it, so
+the demotion lands in the same breath rather than up to a second later. The
+set is cleared on restore, so a later yield starts from scratch. The yielder
+is installed before the floating windows are wired, which is what lets the
+wiring be handed its hook.
+
+**Partial hook registration is rolled back.** The three `SetWinEventHook`
+calls share one ctypes callback, and that callback is a local of the installer
+until it is pinned to the yielder on success. The first version returned `None`
+when any hook failed and left the ones that had taken registered, so the
+callback was collected while Windows still held its function pointer (a hook
+is only dropped with its thread, never by returning from the function), and
+the next window shown anywhere on the desktop would have called freed memory.
+Every hook that takes is now unhooked if a later one fails or anything in the
+installer raises, before the callback can go out of scope.
+`tests/test_shell_popup_yield.py::TestInstallingTheHooks` drives the real
+registration path against a fake `user32` for each partial-success order.
+
+The live check that does not need a signed build: a throwaway always-on-top
+`QWindow` with the yield installed, a real toast fired from PowerShell, and
+`WS_EX_TOPMOST` sampled every 50 ms. It went `False` 0.3 s after the toast and
+`True` again when the toast was dismissed. Tests: `tests/test_shell_popup_yield.py`.
