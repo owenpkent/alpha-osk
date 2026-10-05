@@ -1304,29 +1304,25 @@ class TestAccentKeysStayReadable:
         assert _real_warnings(warnings) == []
 
 
-class TestTheKeysThatDestroyTextTakeNoRing:
-    """Backspace and Del wear the accent wash but never the accent border.
+class TestNoKeyTakesAnAccentRing:
+    """Every key on the grid wears the theme's plain border, on both views.
 
-    The border used to key off the layout JSON's `style` alone, so all five
-    accent keys (Esc / Tab / Shift / Backspace / Del) took a full-strength
-    theme-accent ring and Enter, which is `style: "enter"`, took none. A
-    saturated ring outranks a lightness step at a glance, so the compact
-    grid emphasised the destructive key over the committing one: four rings
-    against nought, reported as Backspace being "more emphasized than
-    enter".
+    Compact's accent keys used to ring in the full theme accent. The ring
+    keyed off the layout JSON's `style` rather than the key's role, so it was
+    the one colour on a key that Key Colours never reached: on Monochrome,
+    the shipped default, Tab and Shift were the only ringed keys on the
+    compact grid while the same keys on full size wore none. Backspace and
+    Del had already lost theirs for outshouting Enter; the rest went on
+    2026-10-05.
 
-    The fills are not what changed and are not what was wrong: measured on
-    Dark they sit 13.8 and 11.8 OKLab dE from a plain key, which is level.
-    Only the ring moved, and only for the `kill` role.
-
-    Every case below is paired with the inverse it must still reject,
-    because each half alone is satisfied by a rule that has stopped doing
-    anything: "no key has the accent border" passes the first test, and
-    "every key has it" passes the second.
+    Read off the rendered KeyButtons rather than recomputed, so a delegate
+    that grew a border rule of its own still fails here. Every case is paired
+    with what keeps it from passing vacuously: the theme must be able to tell
+    the two borders apart, the keys must actually be on screen, and the
+    accent wash must still mark the editing keys under `off`.
     """
 
-    _RINGED = ("tab", "shift")
-    _BARE = ("backspace", "delete")
+    _EDITING = ("tab", "shift", "backspace", "delete", "return")
 
     @staticmethod
     def _key_items(root) -> list:
@@ -1343,109 +1339,81 @@ class TestTheKeysThatDestroyTextTakeNoRing:
 
     @classmethod
     def _borders(cls, root) -> dict:
-        """Live `borderColor` per action name, visible keys only.
-
-        Read off the rendered KeyButtons rather than recomputed from
-        `keyBorderFor`, so a delegate that stopped calling it at all still
-        fails here.
-        """
+        """Live `borderColor` per action name, visible keys only."""
         out: dict = {}
         for item in cls._key_items(root):
             if not item.isVisible():
                 continue
             kd = item.property("kd") or {}
-            action = kd.get("action")
+            action = kd.get("action") or kd.get("key")
             if action:
                 out[action] = item.property("borderColor").name()
         return out
 
-    @pytest.fixture
-    def compact_borders(self, qml_root):
-        root, warnings, _ = qml_root
-        root.setProperty("compactView", True)
+    @staticmethod
+    def _show(root, compact: bool) -> None:
+        root.setProperty("compactView", compact)
         root.show()
-        _pump_until(lambda: len(self._key_items(root)))
+        _pump_until(lambda: len(TestNoKeyTakesAnAccentRing._key_items(root)))
         QCoreApplication.processEvents()
-        return root, warnings
 
-    def test_backspace_and_delete_carry_the_plain_border(self, compact_borders) -> None:
-        root, warnings = compact_borders
+    @pytest.mark.parametrize("compact", [True, False], ids=["compact", "full"])
+    @pytest.mark.parametrize("scheme", ["mono", "off"])
+    def test_every_key_wears_the_plain_border(self, qml_root, compact, scheme) -> None:
+        root, warnings, _ = qml_root
+        root.setProperty("keyColorScheme", scheme)
+        self._show(root, compact)
         plain = root.property("themeBorder").name()
-        borders = self._borders(root)
-        for action in self._BARE:
-            assert action in borders, f"no visible {action} key on the compact grid"
-            assert borders[action] == plain, (
-                f"{action} rings in {borders[action]} rather than the plain "
-                f"border {plain}: the key that destroys text is back to being "
-                "the loudest thing on the grid"
-            )
-        assert _real_warnings(warnings) == []
-
-    def test_the_other_accent_keys_still_ring(self, compact_borders) -> None:
-        """The inverse: dropping the ring from every key is not the fix.
-
-        Esc / Tab / Shift are why the accent style exists at all -- the
-        compact grid is uniform and has no size cues to tell them from the
-        letters. Only the `kill` role gives its ring up.
-        """
-        root, warnings = compact_borders
-        accent = root.property("accentKeyBorder").name()
-        plain = root.property("themeBorder").name()
-        assert accent != plain, "the fixture theme cannot tell the two borders apart"
-        borders = self._borders(root)
-        for action in self._RINGED:
-            assert action in borders, f"no visible {action} key on the compact grid"
-            assert borders[action] == accent, (
-                f"{action} lost its accent border ({borders[action]}), so the "
-                "style no longer marks the editing keys it exists for"
-            )
-        assert _real_warnings(warnings) == []
-
-    def test_backspace_no_longer_outranks_enter(self, compact_borders) -> None:
-        """The user-facing claim, stated directly rather than inferred.
-
-        Both tests above can pass while Enter has somehow gained a ring of
-        its own, which would be option A rather than the one that was
-        chosen. What was asked for is that the two agree.
-        """
-        root, warnings = compact_borders
-        borders = self._borders(root)
-        assert "return" in borders, "no visible Enter key on the compact grid"
-        assert borders["backspace"] == borders["return"], (
-            f"Backspace ({borders['backspace']}) and Enter ({borders['return']}) "
-            "no longer share a border, so one of them is still shouting over "
-            "the other"
+        assert plain != root.property("themeAccent").name(), (
+            "the fixture theme cannot tell a ring from a plain border"
         )
+        borders = self._borders(root)
+        for action in ("tab", "shift", "backspace", "return"):
+            assert action in borders, f"no visible {action} key on this grid"
+        ringed = {a: c for a, c in borders.items() if c != plain}
+        assert ringed == {}, f"keys ringed rather than plain {plain}: {ringed}"
         assert _real_warnings(warnings) == []
 
-    def test_it_holds_on_every_theme(self, compact_borders) -> None:
-        """The border is theme-derived on both sides, so it has to be swept.
-
-        `accentKeyBorder` is the raw theme accent and `themeBorder` is the
-        theme's own border; nine themes ship and they are not uniformly far
-        apart, so a rule that happened to resolve correctly on the fixture's
-        default theme alone would prove very little.
-        """
-        root, warnings = compact_borders
+    def test_it_holds_on_every_theme(self, qml_root) -> None:
+        """Both colours are theme-derived, so a single theme proves little."""
+        root, warnings, _ = qml_root
+        self._show(root, True)
         for theme in _theme_names(root):
             root.setProperty("currentTheme", theme)
             QCoreApplication.processEvents()
             plain = root.property("themeBorder").name()
-            accent = root.property("accentKeyBorder").name()
             borders = self._borders(root)
-            for action in self._BARE:
-                assert borders[action] == plain, (
-                    f"theme {theme!r}: {action} rings in {borders[action]} rather than {plain}"
+            for action in self._EDITING:
+                assert borders.get(action) == plain, (
+                    f"theme {theme!r}: {action} has border {borders.get(action)} "
+                    f"rather than {plain}"
                 )
-            if accent == plain:
-                # Typewriter-style themes could in principle pick a border
-                # equal to their accent; there is then nothing to assert.
+        assert _real_warnings(warnings) == []
+
+    def test_the_wash_still_marks_the_editing_keys(self, qml_root) -> None:
+        """The inverse: losing the ring must not lose the cue under `off`.
+
+        "Stop styling accent keys at all" would satisfy every test above.
+        Under the `off` scheme Tab and Shift still take `accentKeyColor`,
+        which `TestAccentKeysStayReadable` keeps visibly off a plain key.
+        """
+        root, warnings, _ = qml_root
+        root.setProperty("keyColorScheme", "off")
+        self._show(root, True)
+        accent_fill = root.property("accentKeyColor").name()
+        assert accent_fill != root.property("themeKeyColor").name()
+        fills = {}
+        for item in self._key_items(root):
+            if not item.isVisible():
                 continue
-            for action in self._RINGED:
-                assert borders[action] == accent, (
-                    f"theme {theme!r}: {action} lost its ring "
-                    f"({borders[action]} rather than {accent})"
-                )
+            action = (item.property("kd") or {}).get("action")
+            if action:
+                fills[action] = item.property("keyColor").name()
+        for action in ("tab", "shift"):
+            assert fills.get(action) == accent_fill, (
+                f"{action} is painted {fills.get(action)} rather than the "
+                f"accent wash {accent_fill}, so nothing marks it any more"
+            )
         assert _real_warnings(warnings) == []
 
 
@@ -1540,10 +1508,10 @@ class TestEnterSharesTheEditingKeysWash:
     def test_enter_did_not_become_an_accent_key(self, compact) -> None:
         """The inverse: sharing a fill must not hand Enter a ring as well.
 
-        `keyBorderFor` gives `style: "accent"` keys the accent border, so
-        "just mark Enter as an accent key in the layout JSON" would satisfy
-        the fill test above and quietly put a ring back on the commit key --
-        which is a different option than the one that was chosen.
+        No key takes an accent ring today (`TestNoKeyTakesAnAccentRing`),
+        so this cannot fail on its own; it stays as the guard that Enter in
+        particular never picks one up if a ring is ever reintroduced for
+        `style: "accent"`.
         """
         root, warnings = compact
         root.setProperty("keyColorScheme", "off")

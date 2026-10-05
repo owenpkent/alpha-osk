@@ -1378,11 +1378,6 @@ Window {
     // five compliant themes untouched and backs the other four off to
     // 0.12-0.33. Guarded by tests/test_qml_compact_view.py::TestAccentKeysStayReadable.
     //
-    // Where the wash has to back off it stops carrying the cue on its own,
-    // so accent keys also take an accent-coloured border (accentKeyBorder).
-    // A border sits beside the label rather than behind it, so it can be the
-    // full-strength accent on every theme without costing any contrast.
-    //
     // ENTER TAKES THAT SAME WASH AND NO HUE OF ITS OWN, so the board under
     // this scheme carries one colour rather than two.  It used to be a flat
     // "#2a5a2a": the only fill in this file that skipped the walk above, and
@@ -1392,30 +1387,20 @@ Window {
     // every scheme but `off` resolves Enter through `_roleFill` and never
     // reaches this line.  Sharing `accentKeyColor` fixes the ratio for free
     // (it is already walked per theme) and spends no new colour to do it.
-    // The keys stay told apart by the border and by the role schemes, which
-    // is where that job belongs.
+    // The keys stay told apart by the role schemes, which is where that job
+    // belongs.
     //
-    // THE KEYS THAT DESTROY TEXT ARE EXEMPT FROM THAT BORDER, and the
-    // exception is the rule working rather than a carve-off from it.  A
-    // saturated ring outranks a lightness step at a glance, so Backspace
-    // and Del wearing one while Enter wears none made the destructive key
-    // the loudest thing on the compact grid: reported as "more emphasized
-    // than enter", and it was, four rings (Backspace, Tab, Del, Shift)
-    // against nought.  The FILLS were never the problem and are untouched
-    // here: measured on Dark they sit 13.8 and 11.8 OKLab dE from a plain
-    // key, which is level.  It was only ever the ring.
+    // NO KEY TAKES AN ACCENT-COLOURED BORDER.  Accent keys used to ring in
+    // the full theme accent, to carry the cue where the wash backs off.  The
+    // ring keyed off the layout JSON's `style`, so it was the one colour on
+    // a key that Key Colours never reached: on Monochrome, the default, Tab
+    // and Shift were the only ringed keys on the compact grid while the same
+    // keys on full size wore none, and the ring outranked the commit step
+    // that is meant to make Enter the brightest key.  Backspace and Del had
+    // already lost theirs for that reason.  Removed outright (2026-10-05) so
+    // compact and full size read alike under every scheme; the wash is what
+    // marks these keys under `off`.
     //
-    // It also has to be read off the ROLE rather than a list of actions
-    // spelled out here.  `Palette.roleForKey` is already this project's one
-    // answer to "does this key destroy text" (it is what paints the `kill`
-    // band), and a second list in this file is exactly the pair of parallel
-    // blocks that drift.  Note this border is the one colour on a key that
-    // Key Colours does NOT reach, since it keys off the layout JSON's
-    // `style` and every fill keys off `role`: that is why the ring won even
-    // on Monochrome, whose whole intent is to make Enter the brightest key
-    // on the board.  Widening this to follow the scheme properly was the
-    // other option on the table and is the bigger change; this one is the
-    // smallest thing that puts Enter back on top.
     // The wash delegates to palette.js, which is the single copy of the
     // WCAG maths in the project: two copies of a contrast rule is exactly
     // how the two drift apart (see the `luminance` note above, which this
@@ -1426,14 +1411,6 @@ Window {
     }
     readonly property color accentKeyColor: root.accentWashFor(
         root.themeKeyColor, root.themeAccent, root.themeTextColor)
-    readonly property color accentKeyBorder: root.themeAccent
-    function keyBorderFor(kd) {
-        if ((kd.style || "default") !== "accent")
-            return root.themeBorder
-        // Backspace and Del: the wash still marks them, the ring does not.
-        return root.keyRoleFor(kd) === "kill" ? root.themeBorder
-                                              : root.accentKeyBorder
-    }
     property color themeBorder: activeTheme.border
 
     // ===== Key colouring by role =====
@@ -3529,10 +3506,7 @@ Window {
                                         // Enter shares the editing keys'
                                         // wash rather than carrying a hue of
                                         // its own: one colour on the board,
-                                        // not two.  The two styles still part
-                                        // company on the border, where
-                                        // `accent` takes a ring and `enter`
-                                        // does not (see keyBorderFor).
+                                        // not two.
                                         case "accent":
                                         case "enter": return root.accentKeyColor
                                         default: return root.themeKeyColor
@@ -3541,14 +3515,9 @@ Window {
                                 keyPressedColor: root.themeKeyPressed
                                 keyTextColor: root.themeTextColor
                                 accentColor: root.themeAccent
-                                // Accent keys carry the cue on their border as
-                                // well as their fill: the fill has to stay weak
-                                // enough to keep the label readable (see
-                                // accentWashFor), the border does not.  The
-                                // keys that destroy text are the exception and
-                                // take no ring at all; `keyBorderFor` carries
-                                // the reasoning.
-                                borderColor: root.keyBorderFor(kd)
+                                // Every key takes the plain border; see
+                                // the accent-ring note by accentWashFor.
+                                borderColor: root.themeBorder
 
                                 // Repeat-worthy specials always; character
                                 // keys only when the user asked for it (see
