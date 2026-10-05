@@ -87,8 +87,13 @@ _SNIPPETS = [
 _FAILABLE = ["send_key", "send_text", "replace_text", "hold_modifier", "release_modifier"]
 _OWNERS = ["prediction", "snippets", "keyaction"]
 
+# Every example builds a real bridge (about 0.57 s with its 25 steps), so the
+# machines take a tenth of the active profile's budget instead of all of it:
+# 15 on the default profile, 300 under the nightly ``alpha-osk-deep`` (about
+# 3 minutes rather than half an hour), never fewer than 5. Built at import,
+# after pytest has loaded the profile, so derandomize follows it too.
 _SETTINGS = settings(
-    max_examples=15,
+    max_examples=max(5, settings.default.max_examples // 10),
     stateful_step_count=25,
     deadline=None,
     suppress_health_check=list(HealthCheck),
