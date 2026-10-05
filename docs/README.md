@@ -47,6 +47,8 @@ Per-platform build pipelines and the auto-update path. Edit when the release pro
 
 Forward-looking design docs and active launch planning. Convert entries into `architecture/` or `build/` once they ship.
 
+- [`roadmap/ROADMAP.md`](roadmap/ROADMAP.md): the feature roadmap (moved from the repo root).
+- [`roadmap/IDEAS.md`](roadmap/IDEAS.md): unscheduled ideas (moved from the repo root).
 - [`roadmap/LAUNCH_PLAN.md`](roadmap/LAUNCH_PLAN.md): release prep checklist.
 - [`roadmap/launch_tasks.csv`](roadmap/launch_tasks.csv): structured task tracking.
 - [`roadmap/FEDERATED_LEARNING.md`](roadmap/FEDERATED_LEARNING.md): federated-learning roadmap (separate from §5.6 telemetry; not yet implemented).
