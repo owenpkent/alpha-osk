@@ -544,8 +544,8 @@ counter breaks on the sequence nobody thought to write down).
   JSON and deep nesting into every on-disk loader, plus `text_patterns` under
   a time bound. A new store's loader belongs in it.
 
-Loader fuzzing, import hardening and the engine invariants also run nightly
-under the `alpha-osk-deep` profile
+Every `tests/test_property_*.py` module also runs nightly under the
+`alpha-osk-deep` profile
 (`.github/workflows/fuzz-nightly.yml`, not derandomized, so each night tries
 new inputs); see `docs/build/CI.md` for reproducing a failure.
 
