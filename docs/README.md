@@ -10,6 +10,7 @@ For the codebase orientation that pairs with these docs, read [`CLAUDE.md`](../C
 
 - [`WHITEPAPER.md`](WHITEPAPER.md): the canonical reference paper. Architecture, prediction stack, privacy and security model, and the open work. Read this if you want one document that explains the whole system.
 - [`PRIVACY.md`](PRIVACY.md): user-facing data policy. What's stored locally, what (optionally) leaves your machine, and how to delete contributed data.
+- [`SECURITY-EXCEPTIONS.md`](SECURITY-EXCEPTIONS.md): automated security findings that were reviewed and knowingly skipped, with the trigger for revisiting each one (moved from the repo root).
 
 ## `architecture/`: how the running system works
 
@@ -47,6 +48,8 @@ Per-platform build pipelines and the auto-update path. Edit when the release pro
 
 Forward-looking design docs and active launch planning. Convert entries into `architecture/` or `build/` once they ship.
 
+- [`roadmap/ROADMAP.md`](roadmap/ROADMAP.md): the feature roadmap (moved from the repo root).
+- [`roadmap/IDEAS.md`](roadmap/IDEAS.md): unscheduled ideas (moved from the repo root).
 - [`roadmap/LAUNCH_PLAN.md`](roadmap/LAUNCH_PLAN.md): release prep checklist.
 - [`roadmap/launch_tasks.csv`](roadmap/launch_tasks.csv): structured task tracking.
 - [`roadmap/FEDERATED_LEARNING.md`](roadmap/FEDERATED_LEARNING.md): federated-learning roadmap (separate from §5.6 telemetry; not yet implemented).
