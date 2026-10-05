@@ -269,13 +269,20 @@ to be rotated.
 
 ## Nightly fuzzing
 
-`.github/workflows/fuzz-nightly.yml` runs the three `tests/test_property_*`
-modules once a day (and on demand) under the `alpha-osk-deep` Hypothesis
+`.github/workflows/fuzz-nightly.yml` runs every `tests/test_property_*.py`
+module (a glob, so a new property module joins without editing the
+workflow) once a day (and on demand) under the `alpha-osk-deep` Hypothesis
 profile, registered beside the default in `tests/conftest.py`. The default
 profile is `derandomize=True` with 150 examples, so a pull request is judged
 on a fixed set of inputs. The deep profile has 3000 examples and
 `derandomize=False`: each night explores new space, and a failure is
 allowed to be news. The job is not a required check and never gates a merge.
+A module whose examples are expensive scales its own budget off the active
+profile rather than taking all 3000 (the keystroke state machines build a
+real bridge per example, about 0.57 s, and run a tenth of the profile's
+count: 15 normally, 300 at night), so the job stays well inside its
+45-minute timeout. The repository is public, so the runner minutes cost
+nothing.
 
 `tests/test_property_loader_fuzz.py` is the main customer. It feeds every
 on-disk loader (n-gram and PPM models, snippets, key actions, analytics,

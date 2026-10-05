@@ -54,9 +54,7 @@ jobs:
           QT_QPA_PLATFORM: offscreen
         run: >-
           python -m pytest
-          tests/test_property_loader_fuzz.py
-          tests/test_property_import_hardening.py
-          tests/test_property_prediction_invariants.py
+          tests/test_property_*.py
           --hypothesis-profile=alpha-osk-deep
           -n auto
           -p no:cacheprovider
