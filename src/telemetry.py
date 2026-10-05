@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import sys
 import time
 import urllib.error
@@ -114,8 +115,11 @@ class TelemetryClient:
             return
         try:
             data = json.loads(self._state_path.read_text())
-        except (json.JSONDecodeError, OSError) as e:
+        except (json.JSONDecodeError, OSError, ValueError, RecursionError) as e:
             _logger.warning("telemetry state unreadable, starting fresh: %s", e)
+            return
+        if not isinstance(data, dict):
+            _logger.warning("telemetry state is not an object, starting fresh")
             return
         self._enabled = bool(data.get("enabled", False))
         anon = data.get("anon_id")
@@ -123,7 +127,11 @@ class TelemetryClient:
             self._anon_id = anon
         try:
             self._last_submit_ts = float(data.get("last_submit_ts", 0.0))
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
+            self._last_submit_ts = 0.0
+        # An infinite timestamp would read as "submitted in the future" and
+        # silence the weekly submit for ever; NaN poisons every comparison.
+        if not math.isfinite(self._last_submit_ts):
             self._last_submit_ts = 0.0
         self._invite_applied = bool(data.get("invite_applied", False))
 

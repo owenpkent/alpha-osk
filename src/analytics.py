@@ -221,7 +221,14 @@ class TypingAnalytics(QObject):
             if isinstance(kf, dict):
                 counted = Counter({k: int(v) for k, v in kf.items() if isinstance(v, (int, float))})
                 key_freq = Counter(dict(counted.most_common(self._KEY_FREQ_CAP)))
-        except (json.JSONDecodeError, OSError, ValueError, TypeError, OverflowError) as e:
+        except (
+            json.JSONDecodeError,
+            OSError,
+            ValueError,
+            TypeError,
+            OverflowError,
+            RecursionError,
+        ) as e:
             _logger.warning("Failed to load analytics: %s", e)
             return
 
