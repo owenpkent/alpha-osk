@@ -31,7 +31,10 @@ def set_keyboard_topmost(window: QWindow, on: bool) -> None:
     """Put ``window`` in the always-on-top band (``on``) or the ordinary one.
 
     Never activates the window.  Safe to call at any time; an unsupported
-    session (Wayland, no pyobjc) is a logged no-op.
+    session (Wayland, no pyobjc) is a logged no-op.  ``window`` is usually
+    the keyboard; the floating pickers go through it too when the
+    keyboard's own band change has taken them along
+    (``keyboard_app._restore_floating_bands``).
     """
     try:
         if CURRENT_PLATFORM == "windows":
@@ -60,17 +63,6 @@ def raise_keyboard(window: QWindow) -> None:
             macos_window.order_front(window)
     except Exception as exc:
         _logger.warning("Could not raise the keyboard: %s", exc)
-
-
-def reapply_keyboard_band(window: QWindow, on: bool) -> None:
-    """Re-assert the desired band after the window was shown again.
-
-    With the setting off the restored keyboard is also raised above the
-    applications it was hiding behind.
-    """
-    set_keyboard_topmost(window, on)
-    if not on:
-        raise_keyboard(window)
 
 
 class RaiseOnPressFilter(QObject):

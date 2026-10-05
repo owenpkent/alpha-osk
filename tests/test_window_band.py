@@ -159,19 +159,22 @@ class TestBandCalls:
         mod.bring_to_front_noactivate.assert_called_once_with(0x1234)
         mod.raise_window_noactivate.assert_not_called()
 
-    def test_reapply_raises_only_when_off(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        topmost = MagicMock()
-        raised = MagicMock()
-        monkeypatch.setattr(wb, "set_keyboard_topmost", topmost)
-        monkeypatch.setattr(wb, "raise_keyboard", raised)
+    def test_reapply_after_a_restore_raises_only_when_off(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        band = MagicMock()
+        monkeypatch.setattr(keyboard_app, "window_band", band)
+        monkeypatch.setattr(keyboard_app, "_floating_on_top_windows", lambda root: [])
+        root = MagicMock()
 
-        wb.reapply_keyboard_band(_root(), True)
-        topmost.assert_called_with(topmost.call_args[0][0], True)
-        raised.assert_not_called()
+        keyboard_app._reapply_band(root, types.SimpleNamespace(alwaysOnTop=True), None)
+        band.set_keyboard_topmost.assert_called_once_with(root, True)
+        band.raise_keyboard.assert_not_called()
 
-        wb.reapply_keyboard_band(_root(), False)
-        assert topmost.call_args[0][1] is False
-        raised.assert_called_once()
+        band.reset_mock()
+        keyboard_app._reapply_band(root, types.SimpleNamespace(alwaysOnTop=False), None)
+        band.set_keyboard_topmost.assert_called_once_with(root, False)
+        band.raise_keyboard.assert_called_once_with(root)
 
 
 class TestPressToRaise:
@@ -305,12 +308,136 @@ class TestYielderInterplay:
     ) -> None:
         band = MagicMock()
         monkeypatch.setattr(keyboard_app, "window_band", band)
+        monkeypatch.setattr(keyboard_app, "_floating_on_top_windows", lambda root: [])
         root = MagicMock()
 
         keyboard_app._apply_always_on_top(root, False, types.SimpleNamespace(stepped_aside=True))
 
         band.set_keyboard_topmost.assert_called_once_with(root, False)
         band.raise_keyboard.assert_called_once_with(root)
+
+
+class TestThePickersKeepTheirBand:
+    """The pickers and the Settings window are the keyboard's owned windows,
+    and Win32 moves owned windows with their owner: HWND_NOTOPMOST on the
+    keyboard took them out of the topmost band too, and so did every
+    press-to-front (topmost, then not).  Found in review with two nested
+    QML windows: after the setting went off both had lost WS_EX_TOPMOST,
+    and a re-topmosted picker lost it again on the next keyboard press.
+    The fake here models that propagation, which the plain mocks cannot."""
+
+    @staticmethod
+    def _desktop(monkeypatch: pytest.MonkeyPatch, *, picker_visible: bool = True):
+        """A keyboard owning one picker, with a band table that propagates."""
+        keyboard = MagicMock(name="keyboard")
+        keyboard.isVisible.return_value = True
+        picker = MagicMock(name="picker")
+        picker.isVisible.return_value = picker_visible
+        picker.flags.return_value = Qt.WindowType.WindowStaysOnTopHint
+        monkeypatch.setattr(
+            keyboard_app.QApplication, "topLevelWindows", staticmethod(lambda: [keyboard, picker])
+        )
+        topmost = {keyboard: True, picker: True}
+        owned = {keyboard: [picker]}
+        log: list[tuple[str, object, bool]] = []
+
+        def set_topmost(window, on: bool) -> None:
+            topmost[window] = on
+            for child in owned.get(window, []):
+                topmost[child] = on  # what SetWindowPos does to owned windows
+            log.append(("band", window, on))
+
+        def raise_keyboard(window) -> None:
+            # bring_to_front_noactivate: through the topmost band and out.
+            set_topmost(window, True)
+            set_topmost(window, False)
+
+        band = types.SimpleNamespace(
+            set_keyboard_topmost=set_topmost,
+            raise_keyboard=raise_keyboard,
+            RaiseOnPressFilter=wb.RaiseOnPressFilter,
+        )
+        monkeypatch.setattr(keyboard_app, "window_band", band)
+        return keyboard, picker, topmost, log
+
+    def test_turning_the_setting_off_leaves_an_open_picker_topmost(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        keyboard, picker, topmost, _ = self._desktop(monkeypatch)
+
+        keyboard_app._apply_always_on_top(keyboard, False, None)
+
+        assert topmost[keyboard] is False
+        assert topmost[picker] is True
+
+    def test_a_press_to_front_leaves_an_open_picker_topmost(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        keyboard, picker, topmost, _ = self._desktop(monkeypatch)
+        topmost[keyboard] = False
+
+        keyboard_app._raise_keyboard_keeping_pickers(keyboard, None)
+
+        assert topmost[keyboard] is False, "the raise must not undo the setting"
+        assert topmost[picker] is True
+
+    def test_a_quiet_restore_with_the_setting_off_does_too(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        keyboard, picker, topmost, _ = self._desktop(monkeypatch)
+
+        keyboard_app._reapply_band(keyboard, types.SimpleNamespace(alwaysOnTop=False), None)
+
+        assert topmost[keyboard] is False
+        assert topmost[picker] is True
+
+    def test_the_picker_is_put_back_after_the_keyboard_moves_not_before(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Owner first: a picker re-topmosted before the owner's demotion
+        # would be taken along again.
+        keyboard, picker, _, log = self._desktop(monkeypatch)
+
+        keyboard_app._apply_always_on_top(keyboard, False, None)
+
+        assert log[-1] == ("band", picker, True)
+        assert all(window is keyboard for _, window, _ in log[:-1])
+
+    def test_a_hidden_picker_is_left_alone(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        keyboard, picker, _, log = self._desktop(monkeypatch, picker_visible=False)
+
+        keyboard_app._apply_always_on_top(keyboard, False, None)
+
+        assert all(window is keyboard for _, window, _ in log)
+
+    def test_not_while_the_yielder_has_them_aside(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # The inverse: during a notification the ordinary band is where the
+        # picker belongs, and re-topmosting it would put it over the toast.
+        keyboard, picker, topmost, _ = self._desktop(monkeypatch)
+        topmost[keyboard] = False
+        topmost[picker] = False
+        aside = types.SimpleNamespace(stepped_aside=True)
+
+        keyboard_app._raise_keyboard_keeping_pickers(keyboard, aside)
+
+        assert topmost[picker] is False
+
+    def test_turning_the_setting_on_needs_no_repair(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # HWND_TOPMOST on the owner makes the owned windows topmost with it.
+        keyboard, picker, topmost, log = self._desktop(monkeypatch)
+        topmost[keyboard] = False
+
+        keyboard_app._apply_always_on_top(keyboard, True, None)
+
+        assert topmost[keyboard] is True and topmost[picker] is True
+        assert log == [("band", keyboard, True)]
+
+    def test_the_press_filter_in_main_uses_the_picker_keeping_raise(self) -> None:
+        from pathlib import Path
+
+        source = Path(keyboard_app.__file__).read_text(encoding="utf-8")
+        body = source.split("def main(", 1)[1]
+        assert "raise_fn=lambda w: _raise_keyboard_keeping_pickers(w, shell_popup_yield)" in body
 
 
 class TestX11:

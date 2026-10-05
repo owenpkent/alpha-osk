@@ -297,6 +297,42 @@ def _always_on_top_windows(
     return keyboard + others
 
 
+def _floating_on_top_windows(root: QWindow) -> list[QWindow]:
+    """The visible always-on-top windows other than the keyboard (pickers, Settings)."""
+    return _always_on_top_windows(root, lambda: False)
+
+
+def _restore_floating_bands(root: QWindow, yielder: Optional[Any]) -> None:
+    """Put the floating windows back in the topmost band after the keyboard left it.
+
+    The Snippets, Symbols and study pickers and the Settings, Help and
+    Dashboard windows are declared inside the keyboard's QML tree, so they
+    are its transient children and, on Windows, its *owned* windows.  Win32
+    moves owned windows with their owner: ``SetWindowPos(HWND_NOTOPMOST)``
+    on the keyboard makes every owned window non-topmost too, and
+    ``HWND_TOPMOST`` makes them topmost.  Turning *Always on Top* off, and
+    every press-to-front (which passes through the topmost band and out
+    again), therefore dragged an open picker out of the band the setting
+    says it keeps, and another application could cover it.  A non-topmost
+    owner may own a topmost window, so each one is simply put back.
+
+    Not while the shell-popup yielder has them stepped aside: the ordinary
+    band is where they belong for the life of the notification, and an
+    owned window already sits above its owner there.  The yielder's own
+    restore puts them back when the popup goes.
+    """
+    if yielder is not None and yielder.stepped_aside:
+        return
+    for window in _floating_on_top_windows(root):
+        window_band.set_keyboard_topmost(window, True)
+
+
+def _raise_keyboard_keeping_pickers(root: QWindow, yielder: Optional[Any]) -> None:
+    """Raise the (non-topmost) keyboard, then undo what that did to its owned windows."""
+    window_band.raise_keyboard(root)
+    _restore_floating_bands(root, yielder)
+
+
 def _apply_always_on_top(root: QWindow, on: bool, yielder: Optional[Any]) -> None:
     """Apply a runtime change of the *Always on Top* setting to the keyboard.
 
@@ -304,13 +340,15 @@ def _apply_always_on_top(root: QWindow, on: bool, yielder: Optional[Any]) -> Non
     aside must not put the keyboard back over the popup: the yielder's own
     restore (which now sees the keyboard in its window set) does that when
     the popup goes.  Turning it **off** is always applied; it is the same
-    band the yielder had already moved the keyboard to.
+    band the yielder had already moved the keyboard to.  Only the keyboard
+    is meant to leave the band, so the floating windows the owner change
+    took with it are put back (:func:`_restore_floating_bands`).
     """
     if on and yielder is not None and yielder.stepped_aside:
         return
     window_band.set_keyboard_topmost(root, on)
     if not on:
-        window_band.raise_keyboard(root)
+        _raise_keyboard_keeping_pickers(root, yielder)
 
 
 def _reapply_band(root: QWindow, bridge: Any, yielder: Optional[Any]) -> None:
@@ -318,7 +356,9 @@ def _reapply_band(root: QWindow, bridge: Any, yielder: Optional[Any]) -> None:
     on = bridge.alwaysOnTop
     if on and yielder is not None and yielder.stepped_aside:
         return
-    window_band.reapply_keyboard_band(root, on)
+    window_band.set_keyboard_topmost(root, on)
+    if not on:
+        _raise_keyboard_keeping_pickers(root, yielder)
 
 
 def _picker_shown_handler(
@@ -1020,8 +1060,13 @@ def main() -> int:
         _wire_floating_windows(root, on_shown=_picker_shown_handler(shell_popup_yield))
         # Click-to-front for a keyboard that can be buried (setting off).
         # Parented to root, so it lives as long as the window.
+        # The raise passes the keyboard through the topmost band, which
+        # takes its owned pickers out of it; the app-layer raise puts them
+        # back (see _restore_floating_bands).
         raise_on_press = window_band.RaiseOnPressFilter(
-            root, always_on_top=lambda: bridge.alwaysOnTop
+            root,
+            always_on_top=lambda: bridge.alwaysOnTop,
+            raise_fn=lambda w: _raise_keyboard_keeping_pickers(w, shell_popup_yield),
         )
         root.installEventFilter(raise_on_press)
 
