@@ -11,7 +11,6 @@ A weekly POST to the aggregation backend, carrying one row per user:
   "anon_id":            "8f2a...",   // UUID4, generated on first opt-in
   "app_version":        "1.0.16",
   "os":                 "windows",   // "windows" | "linux"
-  "ts":                 1234567890,  // unix seconds, set server-side on receipt
   "keystrokes":         18523,       // alltimeKeystrokes
   "words":              3421,        // alltimeWords
   "predictions":        2671,        // alltimePredictionHits

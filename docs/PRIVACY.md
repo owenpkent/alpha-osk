@@ -87,7 +87,7 @@ There is one reason beyond curiosity to consider it. Alpha-OSK's word prediction
 
 ### What's in the report
 
-Nine numbers, sent once a week:
+Ten fields, sent once a week:
 
 | Field | Example | What it is |
 |-------|---------|------------|
