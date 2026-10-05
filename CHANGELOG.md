@@ -4,11 +4,16 @@ All notable changes to Alpha-OSK are documented in this file.
 
 ## [Unreleased]
 
+## [1.7.0] (2026-10-05)
+
 ### Added
-- **Always on Top setting.** *Settings -> Appearance -> Window -> "Always on Top"*, on by default (nothing changes). Turn it off and other apps can cover the keyboard; clicking it brings it back to the front without taking focus from the app you are typing into.
+- **Always on Top setting.** *Settings -> Appearance -> Window -> "Always on Top"*, on by default (nothing changes). Turn it off and other apps can cover the keyboard; clicking it brings it back to the front without taking focus from the app you are typing into. Only the keyboard itself becomes coverable: Settings, Help, the Dashboard and the Snippets and Symbols windows stay on top.
 
 ### Fixed
 - **Notifications and taskbar window previews show over the keyboard again.** Since 1.6.0 the keyboard runs with UIAccess, which lets it type into programs running as administrator, and Windows puts an always-on-top UIAccess window in a layer above notifications (Slack's included) and above the taskbar's previews, so they opened behind it. Windows' own On-Screen Keyboard has the same problem. A UIAccess window cannot be always-on-top without being in that layer, so the keyboard now steps aside instead: while a notification or a preview is showing, it stays above your applications but below the popup, and goes back on top when the popup closes.
+- **Compact View: Tab and Shift no longer look switched on all the time.** They wore an accent-coloured border that the full-size keyboard never had, so at a glance they read as latched even when they were not, and it showed under every Key Colours scheme, Monochrome included. Every key now takes the theme's plain border. A Shift that really is on still lights up as before.
+- **A modifier can no longer stay held without its key showing it.** If Windows refused to release Shift, Ctrl, Alt or Win, the key went dark while the system still held it down, so the next keys typed as capitals or shortcuts with nothing on screen to explain why, and quitting did not let go of it either. The key now stays lit until the release actually succeeds, so it can be tapped off. Separately, resetting the modifiers at startup now clears right-click locks too, so a lock that no longer existed could not turn your next right-click into an unlock.
+- **A damaged settings or model file now falls back to defaults instead of raising an error.** A corrupt or hand-edited snippets, key actions, analytics, dictation or telemetry file, or one nested too deeply, could raise an error on load instead of falling back to defaults, and a damaged character-model file could load half its values and fail on the next prediction. Each loader now checks the whole file before using any of it.
 
 ## [1.6.0] (2026-10-04)
 

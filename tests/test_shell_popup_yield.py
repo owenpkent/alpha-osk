@@ -426,6 +426,7 @@ class TestInstallingTheHooks:
             ctypes,
             "windll",
             types.SimpleNamespace(user32=user32, dwmapi=MagicMock()),
+            raising=False,
         )
         return user32
 
