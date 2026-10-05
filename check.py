@@ -104,6 +104,10 @@ done
 exec "$PY" check.py
 """
 
+# How a hook is recognised as ours, in bytes so a foreign hook in any
+# encoding can be checked without decoding it.
+_HOOK_MARKER = b"Alpha-OSK pre-push gate"
+
 
 def _safe(s: str) -> str:
     try:
@@ -286,12 +290,16 @@ def _hook_is_stale(hooks_dir: Path) -> bool:
     `_PRE_PUSH_HOOK` reaches nobody until they reinstall.  Someone else's
     hook is not stale, it is theirs: `install_hook()` refuses to touch it,
     so nagging about it would be a tip that can never be acted on.
+
+    Compared as bytes: someone else's hook need not be UTF-8, and this runs
+    after every check has passed, so a decode error here would turn a green
+    run red over a file we do not own.
     """
     try:
-        text = (hooks_dir / "pre-push").read_text(encoding="utf-8")
+        data = (hooks_dir / "pre-push").read_bytes()
     except OSError:
         return False
-    return "Alpha-OSK pre-push gate" in text and text != _PRE_PUSH_HOOK
+    return _HOOK_MARKER in data and data != _PRE_PUSH_HOOK.encode("utf-8")
 
 
 def install_hook() -> int:
@@ -302,7 +310,7 @@ def install_hook() -> int:
         return 1
     hooks_dir.mkdir(parents=True, exist_ok=True)
     hook = hooks_dir / "pre-push"
-    if hook.exists() and "Alpha-OSK pre-push gate" not in hook.read_text(encoding="utf-8"):
+    if hook.exists() and _HOOK_MARKER not in hook.read_bytes():
         print(
             _safe(
                 f"{C.WARN}A pre-push hook already exists and isn't ours; "

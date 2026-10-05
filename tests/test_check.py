@@ -340,3 +340,27 @@ class TestAStaleHookIsReported:
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
         assert self._tip(monkeypatch, tmp_path / "hooks", "#!/bin/sh\nexec lint\n") is False
+
+    # A foreign hook need not be UTF-8.  The tip runs after every check has
+    # passed, so a decode error there turned a green run into a traceback.
+    _CP1252_HOOK = b"#!/bin/sh\n# caf\xe9\nexit 0\n"
+
+    def test_a_non_utf8_foreign_hook_neither_tips_nor_crashes(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        hooks_dir = tmp_path / "hooks"
+        hooks_dir.mkdir()
+        (hooks_dir / "pre-push").write_bytes(self._CP1252_HOOK)
+        monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+        monkeypatch.setattr(check, "_git_hooks_dir", lambda: hooks_dir)
+        assert check._hook_tip_needed() is False
+
+    def test_install_leaves_a_non_utf8_foreign_hook_alone(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        hooks_dir = tmp_path / "hooks"
+        hooks_dir.mkdir()
+        (hooks_dir / "pre-push").write_bytes(self._CP1252_HOOK)
+        monkeypatch.setattr(check, "_git_hooks_dir", lambda: hooks_dir)
+        assert check.install_hook() == 1
+        assert (hooks_dir / "pre-push").read_bytes() == self._CP1252_HOOK
