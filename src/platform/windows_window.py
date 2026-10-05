@@ -427,6 +427,26 @@ def raise_window_noactivate(hwnd: int) -> bool:
     return _place(hwnd, _HWND_TOP)
 
 
+def bring_to_front_noactivate(hwnd: int) -> bool:
+    """Bring a non-topmost ``hwnd`` above every application window, unactivated.
+
+    ``HWND_TOP`` alone is not enough for the keyboard: Windows ignores a
+    background process's request to stack a window above the foreground
+    app, and a click on a ``WS_EX_NOACTIVATE`` window does not make our
+    process the foreground one (measured live: the click left the keyboard
+    behind, while the tray icon, whose click does grant the foreground,
+    raised it). Entering the topmost band and leaving it again is not
+    subject to that rule, and leaves the window at the top of the ordinary
+    band. Both calls carry ``SWP_NOACTIVATE``, so focus never moves.
+
+    Not for the shell-popup yielder: there the momentary topmost step would
+    flash the keyboard over the notification it is stepping aside for.
+    """
+    raised = _place(hwnd, _HWND_TOPMOST)
+    lowered = _place(hwnd, _HWND_NOTOPMOST)
+    return raised and lowered
+
+
 WM_QUERYOPEN = 0x0013
 SW_HIDE = 0
 SW_SHOWNOACTIVATE = 4

@@ -23,6 +23,7 @@ from src.platform.windows_window import (
     QuietRestoreFilter,
     ShellPopupYielder,
     apply_extended_styles,
+    bring_to_front_noactivate,
     raise_window_noactivate,
     set_window_band,
 )
@@ -131,6 +132,19 @@ class TestBandCalls:
             assert not c[6] & SWP_NOZORDER
         user32.SetForegroundWindow.assert_not_called()
 
+    def test_bring_to_front_passes_through_the_topmost_band(self, user32) -> None:
+        """A plain HWND_TOP from a background process is ignored above the
+        foreground app (seen live), so the keyboard's raise enters the topmost
+        band and leaves it, ending at the top of the ordinary band. The inverse:
+        it must end NOT topmost, or the setting would be silently undone."""
+        bring_to_front_noactivate(7)
+
+        calls = _pos_calls(user32)
+        assert [c[1] for c in calls] == [HWND_TOPMOST, HWND_NOTOPMOST]
+        for c in calls:
+            assert c[6] & SWP_NOACTIVATE
+        user32.SetForegroundWindow.assert_not_called()
+
     def test_dispatch_on_windows_uses_the_window_handle(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -142,7 +156,8 @@ class TestBandCalls:
         mod.set_window_band.assert_called_once_with(0x1234, False)
 
         wb.raise_keyboard(_root())
-        mod.raise_window_noactivate.assert_called_once_with(0x1234)
+        mod.bring_to_front_noactivate.assert_called_once_with(0x1234)
+        mod.raise_window_noactivate.assert_not_called()
 
     def test_reapply_raises_only_when_off(self, monkeypatch: pytest.MonkeyPatch) -> None:
         topmost = MagicMock()

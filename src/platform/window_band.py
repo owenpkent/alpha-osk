@@ -53,7 +53,7 @@ def raise_keyboard(window: QWindow) -> None:
     """
     try:
         if CURRENT_PLATFORM == "windows":
-            windows_window.raise_window_noactivate(int(window.winId()))
+            windows_window.bring_to_front_noactivate(int(window.winId()))
         elif CURRENT_PLATFORM == "linux":
             x11_window.raise_window(int(window.winId()))
         elif CURRENT_PLATFORM == "macos":
