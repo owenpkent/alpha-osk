@@ -1,4 +1,4 @@
-# Accessibility Ecosystem — Alpha-OSK + MacroVox + Octavium + Nimbus
+# Accessibility Ecosystem: Alpha-OSK + MacroVox + Octavium + Nimbus
 
 ## Overview
 
@@ -66,17 +66,17 @@ Today these run as separate apps. The vision: a unified platform where they shar
 
 ## Integration Phases
 
-### Phase 1 — Coexistence (current state)
+### Phase 1: Coexistence (current state)
 
 All four apps run independently. The user manually switches between them.
 
 **What works today:**
 - All four can run simultaneously without conflict
-- Alpha-OSK uses `WS_EX_NOACTIVATE` — doesn't steal focus from games
-- Nimbus has Game Focus Mode — receives input without stealing game focus
-- Octavium opens as separate windows — doesn't interfere with other apps
+- Alpha-OSK uses `WS_EX_NOACTIVATE`, doesn't steal focus from games
+- Nimbus has Game Focus Mode, receives input without stealing game focus
+- Octavium opens as separate windows, doesn't interfere with other apps
 
-### Phase 2 — Launch & Trigger
+### Phase 2: Launch & Trigger
 
 Each app can launch and trigger the others.
 
@@ -98,7 +98,7 @@ Each app can launch and trigger the others.
 > agentic writing on top of raw dictation), but that hook needs a control of
 > its own rather than an icon a real feature is using.
 
-### Phase 3 — Profile Auto-Switch
+### Phase 3: Profile Auto-Switch
 
 Detect the foreground application and coordinate all tools:
 
@@ -132,9 +132,9 @@ Detect the foreground application and coordinate all tools:
 }
 ```
 
-**Implementation**: Shared config file or named pipe coordinator. Alpha-OSK already monitors the foreground window — extend it to broadcast to the other apps.
+**Implementation**: Shared config file or named pipe coordinator. Alpha-OSK already monitors the foreground window, extend it to broadcast to the other apps.
 
-### Phase 4 — Shared Input Layer
+### Phase 4: Shared Input Layer
 
 A unified input pipeline where any physical device can route to any output:
 
@@ -151,9 +151,9 @@ Switch      → Alpha-OSK (scanning) → keystrokes
             → Octavium (note trigger) → MIDI note
 ```
 
-Nimbus becomes the **input hardware abstraction layer** — it reads any physical device, applies accessibility transforms (sensitivity curves, tremor filtering, dwell), and routes the processed input to whichever output tool is appropriate.
+Nimbus becomes the **input hardware abstraction layer**; it reads any physical device, applies accessibility transforms (sensitivity curves, tremor filtering, dwell), and routes the processed input to whichever output tool is appropriate.
 
-### Phase 5 — Unified UI
+### Phase 5: Unified UI
 
 A single window that hosts panels from all four tools:
 
@@ -190,7 +190,7 @@ Since Alpha-OSK, Octavium, and Nimbus are all PySide6/Qt, their widgets can be e
 |---------------|----------------------|
 | **Drag-and-drop widget canvas** | Layout editor for custom keyboard panels |
 | **Sensitivity curves** | Could apply to key repeat rate or prediction confidence |
-| **Toggle mode buttons** | Already have sticky modifiers — same concept |
+| **Toggle mode buttons** | Already have sticky modifiers, same concept |
 | **Tremor filtering** | Could filter rapid unintended key presses |
 | **Profile JSON format** | Reference for Alpha-OSK's layout JSON format |
 | **Game Focus Mode** | Alpha-OSK already has WS_EX_NOACTIVATE |

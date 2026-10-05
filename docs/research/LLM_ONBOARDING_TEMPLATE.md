@@ -9,17 +9,17 @@ Quick reference for AI assistants working on this repository.
 ## Project Overview
 
 **Name:** [Project Name]  
-**Purpose:** [One sentence — what does this do?]  
+**Purpose:** [One sentence, what does this do?]  
 **Status:** [Active | In Development | Functional | Planning]
 
 ## About the Owner
 
-I'm Owen — a wheelchair user with muscular dystrophy.
+I'm Owen, a wheelchair user with muscular dystrophy.
 
-- **Typing is hard** — Be proactive. Make decisions. Don't ask for confirmation on small things.
-- **Offer A/B/C choices** — I can type one letter instead of explaining.
-- **PowerShell on Windows** — Use PowerShell syntax. Prefer single-line commands.
-- **Accessibility matters** — Many of my projects are tools I actually need.
+- **Typing is hard**: Be proactive. Make decisions. Don't ask for confirmation on small things.
+- **Offer A/B/C choices**: I can type one letter instead of explaining.
+- **PowerShell on Windows**: Use PowerShell syntax. Prefer single-line commands.
+- **Accessibility matters**: Many of my projects are tools I actually need.
 
 ---
 

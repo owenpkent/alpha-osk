@@ -1,8 +1,8 @@
-# Long-Press Alternates (design doc — not implemented)
+# Long-Press Alternates (design doc: not implemented)
 
-Gboard-style "press and hold a key to pick an accented variant" affordance. Lets users type `é`, `ñ`, `ü`, `—`, `…`, currency symbols, etc. without leaving the OSK or changing layout.
+Gboard-style "press and hold a key to pick an accented variant" affordance. Lets users type `é`, `ñ`, `ü`, `U+2014`, `…`, currency symbols, etc. without leaving the OSK or changing layout.
 
-**Status:** designed, deferred. The companion right-click feature (right-click → shifted variant) ships in v1.0.14. Long-press is paused because it requires changing char-key timing semantics across the whole keyboard (press-on-release instead of press-on-press), which is non-trivial and has UX risk for slow-motor users — the exact audience this OSK serves.
+**Status:** designed, deferred. The companion right-click feature (right-click → shifted variant) ships in v1.0.14. Long-press is paused because it requires changing char-key timing semantics across the whole keyboard (press-on-release instead of press-on-press), which is non-trivial and has UX risk for slow-motor users, the exact audience this OSK serves.
 
 When picking this back up, the plan below is the starting point.
 
@@ -18,7 +18,7 @@ This is **not** Gboard's drag-to-select model. On a phone, you press-and-hold, t
 
 ## Settings
 
-- **Toggle:** *Settings → Smart Typing → Input → "Long-press for accented characters"* (default **OFF** — the timing change is opt-in).
+- **Toggle:** *Settings → Smart Typing → Input → "Long-press for accented characters"* (default **OFF**, the timing change is opt-in).
 - **Delay slider:** 250–800 ms, default 400 ms.
 - Both persist as `appSettings.savedLongPressAlternates` / `savedLongPressDelay`.
 
@@ -38,7 +38,7 @@ New file: `data/key_alternates.json`. Lookup is case-insensitive (the same table
   "s": ["ß", "ś", "š"],
   "y": ["ÿ", "ý"],
   "z": ["ž", "ź", "ż"],
-  "-": ["–", "—", "·"],
+  "-": ["\u2013", "\u2014", "·"],
   "'": ["‘", "’"],
   "\"": ["“", "”"],
   ".": ["…"],
@@ -54,7 +54,7 @@ New file: `data/key_alternates.json`. Lookup is case-insensitive (the same table
 - Add `signal keyLongPressed()`, `property bool enableLongPress: false`, `property int longPressDelay: 400`.
 - Add a `Timer { id: longPressTimer; interval: longPressDelay; ... }` started on press, stopped on release / cancel / drag-off.
 - A `longPressFired` flag set true when the timer fires.
-- **Behaviour change:** when `enableLongPress` is true, char keys must fire on **release**, not press, and only if `longPressFired` is false. Otherwise the user would type the original character immediately and *then* see the picker appear — confusing.
+- **Behaviour change:** when `enableLongPress` is true, char keys must fire on **release**, not press, and only if `longPressFired` is false. Otherwise the user would type the original character immediately and *then* see the picker appear, confusing.
 - Special / modifier keys: `enableLongPress` is always false for them (no alternates make sense for Tab, Shift, Enter).
 
 ### New: `qml/components/AlternatesPopup.qml`
@@ -76,9 +76,9 @@ New file: `data/key_alternates.json`. Lookup is case-insensitive (the same table
 
 ## Open questions for when this resumes
 
-1. **Press-on-release timing:** acceptable for slow-motor users when long-press is on? Possibly add a *second* sub-toggle "Long-press alternates: hold-to-preview" that keeps press-on-press but shows the picker over the typed character — user backspaces and picks from the popup if they wanted a variant. Less elegant, no timing change.
+1. **Press-on-release timing:** acceptable for slow-motor users when long-press is on? Possibly add a *second* sub-toggle "Long-press alternates: hold-to-preview" that keeps press-on-press but shows the picker over the typed character, user backspaces and picks from the popup if they wanted a variant. Less elegant, no timing change.
 2. **Auto-repeat interaction:** Backspace / arrow keys auto-repeat on hold; they have no alternates and `enableLongPress` will be false for them, so this is fine. But if a future alternate set covers e.g. `,` with `;`, watch out for repeat-eligible char keys. Currently no char key opts into repeat.
-3. **What does long-press do when `enableLongPress` is on but the key has no alternates?** Plain typing — fall through to the normal release path. The `longPressFired` flag still gates against, so an empty popup never appears.
+3. **What does long-press do when `enableLongPress` is on but the key has no alternates?** Plain typing, fall through to the normal release path. The `longPressFired` flag still gates against, so an empty popup never appears.
 4. **Localization of alternates:** future i18n work probably wants per-language alternate maps. Keep `key_alternates.json` as the English default; a future "language pack" can ship its own.
 
 ## Why this is paused

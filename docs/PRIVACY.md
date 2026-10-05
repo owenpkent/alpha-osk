@@ -116,11 +116,11 @@ These are exactly the lifetime numbers shown on your Analytics dashboard. Nothin
 
 ### Where the data goes
 
-To a Cloudflare Worker that we control. The worker stores one row per `anon_id` (the latest report, replaced each week — no history kept) and exposes a public aggregate endpoint that returns the total across everyone. Individual rows are never exposed publicly.
+To a Cloudflare Worker that we control. The worker stores one row per `anon_id` (the latest report, replaced each week, no history kept) and exposes a public aggregate endpoint that returns the total across everyone. Individual rows are never exposed publicly.
 
 ### Opting out
 
-Turn the toggle off in Settings → Data & Privacy → Privacy. Future weekly reports stop. Already-submitted data is **not** automatically deleted — your row in the database stays until either (a) you click "Delete my contributed data" in the same Settings section, or (b) you don't open Alpha-OSK for 365 days, after which the row is automatically removed.
+Turn the toggle off in Settings → Data & Privacy → Privacy. Future weekly reports stop. Already-submitted data is **not** automatically deleted, your row in the database stays until either (a) you click "Delete my contributed data" in the same Settings section, or (b) you don't open Alpha-OSK for 365 days, after which the row is automatically removed.
 
 If you opt back in later, you get a **new** `anon_id`. Your prior contribution and your new contribution cannot be linked. This is intentional.
 
@@ -135,7 +135,7 @@ Settings → Data & Privacy → Data Backup lets you export your prediction mode
 What the export contains:
 
 - Your prediction model (`ngram_model.json`, `ppm_model.json`). As well as your vocabulary, `ngram_model.json` holds the structured tokens described above, so an email address or a phone number you have typed is in this file, and therefore in the export. The same "treat the `.zip` with care" advice below applies to it, not only to your snippets.
-- Lifetime analytics (`analytics.json` — the counters shown on the dashboard).
+- Lifetime analytics (`analytics.json`, the counters shown on the dashboard).
 - Your snippets (`snippets.json`), including anything you saved from a detection offer. These are quick-insert text you wrote or approved, so they are personal by nature: a name, an email address, a phone number, a mailing address. The export is a plain, unencrypted `.zip`, so treat the file you produce with the same care you would treat that information anywhere else, and think twice before putting it somewhere shared.
 - Imported vocabulary packs (the folders under `packs/`).
 - A manifest with the schema version, the Alpha-OSK version that wrote the file, an ISO-8601 UTC timestamp, and the list of files.

@@ -1,6 +1,6 @@
 # Compact View
 
-A denser keyboard for small screens, shipped as a **view preference** —
+A denser keyboard for small screens, shipped as a **view preference**,
 *Settings → Appearance → Panels → Compact View*. Off by default; the full-size
 layout is untouched.
 
@@ -8,7 +8,7 @@ layout is untouched.
 
 `qwerty.json` is a faithful replica of a 104-key physical keyboard. Most of what
 makes it wide exists to serve *ten fingers resting on a home row*, which is not
-how Alpha-OSK is ever used — the user clicks one key at a time with a pointer.
+how Alpha-OSK is ever used, the user clicks one key at a time with a pointer.
 
 `Main.qml` derives `keyW` from the **widest** row, and every narrower row is
 centred (`Layout.alignment: Qt.AlignHCenter`), so the slack becomes symmetric
@@ -16,14 +16,14 @@ side gutters. Measured at the default 940 px window:
 
 | Row | Units | Dead space | Per side |
 |---|--:|--:|--:|
-| number | 15.50 | 0 px | — |
+| number | 15.50 | 0 px | - |
 | top (qwerty) | 14.30 | 71 px | 36 px |
 | home (asdf) | 14.40 | 68 px | 34 px |
 | bottom (zxcv) | 14.30 | 75 px | 38 px |
 | **space** | **11.60** | **243 px** | **122 px** |
 
 The space row alone wastes 26% of the keyboard's width, and it scales
-proportionally — it is just as bad at every window size.
+proportionally; it is just as bad at every window size.
 
 ## The measurement that shaped the design
 
@@ -41,7 +41,7 @@ boundaries counted so Space transitions are realistic):
 
 **Rearranging the letters buys nothing.** Everything lands within 8%, because
 QWERTY adjacency dominates the distribution and every variant preserves it. Even
-the radical square wrap saves only 8% while destroying the visual scan — and
+the radical square wrap saves only 8% while destroying the visual scan, and
 QWERTY *is* the visual index for a user who reads the keyboard rather than
 touch-types it.
 
@@ -61,7 +61,7 @@ travel improves 5%. At a 940 px window, keys grow **58 → 69 px (+20%)**.
 ## The layout
 
 Thirteen columns, four rows. **Every row totals exactly 13.0 units**, so there
-is nothing left to centre and the gutters vanish *by construction* — no
+is nothing left to centre and the gutters vanish *by construction*, no
 stretching or justification logic exists anywhere in the QML.
 
 ```
@@ -230,7 +230,7 @@ quitting in compact would bring the panels back on next launch. Guarded by
 
 ## How layers work
 
-Layers are a **QML-side view concept** — the Python and C++ backends know
+Layers are a **QML-side view concept**, the Python and C++ backends know
 nothing about them, which is why the compact view needed no backend change on
 either.
 
@@ -239,7 +239,7 @@ either.
   `root.activeLayer`. **Rows with no `layer` field always render**, so the
   full-size layouts are unaffected.
 - A key of `"type": "layer"` with a `"target"` sets `root.activeLayer`. It
-  deliberately does **not** call `keyboard.setLayout()` — that would persist as
+  deliberately does **not** call `keyboard.setLayout()`; that would persist as
   the user's layout preference and make `getCurrentLayout()` report the symbol
   layer.
 - `activeLayer` resets to `"base"` on any layout change (`onLayoutDataChanged`
@@ -259,13 +259,13 @@ numbers, so the default 940 px window is unchanged; the compact view resolves to
 `currentLayout` remains the letter arrangement (`qwerty` / `dvorak` / `colemak`)
 and `compactView` is a separate boolean. `resolveLayoutId()` combines them:
 `qwerty` + compact → `qwerty-compact`. **A layout with no `-compact` variant
-falls back to full size**, so the toggle is always safe — today only QWERTY has
+falls back to full size**, so the toggle is always safe, today only QWERTY has
 one. Compact variants are filtered out of the Settings layout picker
 (`pickableLayouts`) so the user cannot pick a letter arrangement and a density
 from the same control and get a contradiction.
 
 To add a compact Dvorak, drop `data/layouts/dvorak-compact.json` in place. No
-code change — `_load_layouts` globs the directory.
+code change, `_load_layouts` globs the directory.
 
 ## Window resizing on toggle
 

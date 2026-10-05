@@ -18,7 +18,7 @@
 
 - Voice-to-text via Deepgram nova-3 (WebSocket streaming or batch)
 - AI transcript cleanup via Claude Haiku (Pro subscribers)
-- Agentic writing — speak a request, get polished output via Claude Sonnet
+- Agentic writing, speak a request, get polished output via Claude Sonnet
 - Global hotkey (`Ctrl+Space`) triggers dictation from any app
 - Auto-paste into the focused window via native `SendInput` (enigo crate)
 - Tauri 2 app (Rust backend + React/Vite frontend)
@@ -31,11 +31,11 @@
 | User wants to type a quick word | Use Alpha-OSK keyboard | Same |
 | User wants to dictate a sentence | Alt-tab to MacroVox, Ctrl+Space, speak, wait, paste | Click mic icon on Alpha-OSK, speak, text appears |
 | Dictated text needs correction | Retype with Alpha-OSK | Alpha-OSK predictions learn from dictated text, corrections are faster |
-| User switches between typing and voice | Two separate apps, no shared context | Unified context — dictation feeds into prediction model |
+| User switches between typing and voice | Two separate apps, no shared context | Unified context, dictation feeds into prediction model |
 
 ## Integration Phases
 
-### Phase 1 — Launch & Trigger (low effort)
+### Phase 1: Launch & Trigger (low effort)
 
 Alpha-OSK gets a microphone button in the title bar or prediction bar. Clicking it:
 
@@ -45,15 +45,15 @@ Alpha-OSK gets a microphone button in the title bar or prediction bar. Clicking 
 
 **Implementation:**
 - Alpha-OSK side: new title bar icon (mic), `Slot` in `keyboard_bridge.py` that launches MacroVox
-- Communication: use the existing `Ctrl+Space` global hotkey — Alpha-OSK can synthesize it via `SendInput` to toggle MacroVox recording
+- Communication: use the existing `Ctrl+Space` global hotkey, Alpha-OSK can synthesize it via `SendInput` to toggle MacroVox recording
 - No changes to MacroVox needed
 
 **Files to modify:**
-- `qml/Main.qml` — add mic icon to title bar
-- `src/keyboard_bridge.py` — add `toggleDictation()` slot
-- `src/platform/windows.py` — send `Ctrl+Space` combo
+- `qml/Main.qml`, add mic icon to title bar
+- `src/keyboard_bridge.py`, add `toggleDictation()` slot
+- `src/platform/windows.py`, send `Ctrl+Space` combo
 
-### Phase 2 — Clipboard Bridge (medium effort)
+### Phase 2: Clipboard Bridge (medium effort)
 
 After MacroVox pastes dictated text, Alpha-OSK picks it up and updates its prediction context.
 
@@ -69,10 +69,10 @@ After MacroVox pastes dictated text, Alpha-OSK picks it up and updates its predi
 - Feed clipboard text into `_predictor.learn()` and `_context_buffer`
 
 **Files to modify:**
-- `src/keyboard_app.py` — clipboard monitoring
-- `src/keyboard_bridge.py` — `updateContextFromDictation(text)` slot
+- `src/keyboard_app.py`, clipboard monitoring
+- `src/keyboard_bridge.py`, `updateContextFromDictation(text)` slot
 
-### Phase 3 — IPC Channel (higher effort, richer integration)
+### Phase 3: IPC Channel (higher effort, richer integration)
 
 Direct communication between the two apps via named pipe or localhost WebSocket.
 
@@ -99,7 +99,7 @@ Direct communication between the two apps via named pipe or localhost WebSocket.
 - MacroVox side: Rust named pipe client in `commands.rs`
 - Fallback: if pipe not available, fall back to clipboard bridge (Phase 2)
 
-### Phase 4 — Unified Suite (future)
+### Phase 4: Unified Suite (future)
 
 - Single installer that installs both Alpha-OSK and MacroVox
 - Shared auth (MacroVox Pro subscription unlocks dictation in Alpha-OSK)

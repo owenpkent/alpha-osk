@@ -8,12 +8,12 @@ How to structure your repository for Constellation tracking.
 
 ## About the Owner
 
-I'm Owen — a wheelchair user with muscular dystrophy.
+I'm Owen: a wheelchair user with muscular dystrophy.
 
-- **Typing is hard** — Be proactive. Make decisions. Don't ask for confirmation on small things.
-- **Offer A/B/C choices** — I can type one letter instead of explaining.
-- **PowerShell on Windows** — Use PowerShell syntax. Prefer single-line commands.
-- **Accessibility matters** — Many projects are tools I actually need.
+- **Typing is hard**: Be proactive. Make decisions. Don't ask for confirmation on small things.
+- **Offer A/B/C choices**: I can type one letter instead of explaining.
+- **PowerShell on Windows**: Use PowerShell syntax. Prefer single-line commands.
+- **Accessibility matters**: Many projects are tools I actually need.
 
 ---
 
@@ -25,7 +25,7 @@ I'm Owen — a wheelchair user with muscular dystrophy.
 - AI-assisted project management (Cursor, Windsurf, etc.)
 - Automated status dashboards
 
-Your repo remains fully autonomous — Constellation just reads from it.
+Your repo remains fully autonomous, Constellation just reads from it.
 
 ---
 
@@ -33,9 +33,9 @@ Your repo remains fully autonomous — Constellation just reads from it.
 
 To integrate with Constellation, your repo should have:
 
-- [ ] **README.md** — Project overview, purpose, current state
-- [ ] **TODO.md** (or equivalent) — Pending tasks in checkbox format
-- [ ] **Consistent structure** — See recommendations below
+- [ ] **README.md**: Project overview, purpose, current state
+- [ ] **TODO.md** (or equivalent), Pending tasks in checkbox format
+- [ ] **Consistent structure**: See recommendations below
 
 ---
 
@@ -66,9 +66,9 @@ How to run/use the project.
 
 ### Helpful Additions
 
-- **Screenshots** — Visual context for AI tools and humans
-- **Tech Stack** — Languages, frameworks, dependencies
-- **Project Structure** — Directory overview
+- **Screenshots**: Visual context for AI tools and humans
+- **Tech Stack**: Languages, frameworks, dependencies
+- **Project Structure**: Directory overview
 
 ---
 
@@ -101,10 +101,10 @@ Use GitHub-flavored markdown checkboxes:
 
 ### Best Practices
 
-- **Group by category or phase** — Easier to scan
-- **Keep items actionable** — "Add user auth" not "Think about auth"
-- **Mark completed items** — `[x]` helps track progress
-- **Bold key items** — `- [ ] **High priority task**`
+- **Group by category or phase**: Easier to scan
+- **Keep items actionable**: "Add user auth" not "Think about auth"
+- **Mark completed items**: `[x]` helps track progress
+- **Bold key items**: `- [ ] **High priority task**`
 
 ---
 
@@ -182,8 +182,8 @@ your-project/
 
 Constellation's `sync_status.py` script reads:
 
-1. **TODO.md** (or NEXT_STEPS.md, ROADMAP.md) — Extracts unchecked items
-2. **README.md** — Used for project context
+1. **TODO.md** (or NEXT_STEPS.md, ROADMAP.md), Extracts unchecked items
+2. **README.md**: Used for project context
 
 ### What Gets Aggregated
 
@@ -260,7 +260,7 @@ A tool that does something useful.
 
 ## Status
 
-**In Development** — Core features working, UI in progress.
+**In Development**: Core features working, UI in progress.
 
 ## Quick Start
 
@@ -298,12 +298,12 @@ When committing code (especially via AI assistants), follow these conventions:
 ```
 
 **Types:**
-- `feat:` — New feature
-- `fix:` — Bug fix
-- `docs:` — Documentation only
-- `refactor:` — Code change that neither fixes a bug nor adds a feature
-- `style:` — Formatting, whitespace, etc.
-- `chore:` — Maintenance tasks, dependencies, build changes
+- `feat:`: New feature
+- `fix:`: Bug fix
+- `docs:`: Documentation only
+- `refactor:`: Code change that neither fixes a bug nor adds a feature
+- `style:`: Formatting, whitespace, etc.
+- `chore:`: Maintenance tasks, dependencies, build changes
 
 **Examples:**
 ```
@@ -331,9 +331,9 @@ git add -A; git commit -m "feat: add new feature"; git push
 
 ### When AI Commits
 
-- **Be specific** — "Update files" is bad; "fix: correct axis mapping for rudder" is good
-- **One logical change per commit** — Don't bundle unrelated changes
-- **Use present tense** — "add feature" not "added feature"
+- **Be specific**: "Update files" is bad; "fix: correct axis mapping for rudder" is good
+- **One logical change per commit**: Don't bundle unrelated changes
+- **Use present tense**: "add feature" not "added feature"
 
 ---
 
@@ -364,10 +364,10 @@ _draft_*
 
 ### When to Use Temp Files
 
-- **Exploring options** — Write multiple versions before choosing
-- **Complex refactors** — Stage changes before applying
-- **Documentation drafts** — Iterate before finalizing
-- **Test data** — Generate sample data for testing
+- **Exploring options**: Write multiple versions before choosing
+- **Complex refactors**: Stage changes before applying
+- **Documentation drafts**: Iterate before finalizing
+- **Test data**: Generate sample data for testing
 
 ### Cleanup
 

@@ -14,7 +14,7 @@ platforms**. These are perpendicular axes, and the repo is organised around that
   isolated to one synthesizer + one password-detector file per OS.
 - **Shared by every cell below**: `qml/`, `data/`, the `ngram_model.json` /
   `ppm_model.json` file formats, and this doc. The rewrite reuses the QML and data
-  **unchanged** — that shared contract is what keeps the two backends cheap to
+  **unchanged**; that shared contract is what keeps the two backends cheap to
   keep in sync. The [`tests/conformance/`](../../tests/conformance/README.md) harness
   can verify that mechanically, but its cross-backend diff runs only when
   `ALPHA_OSK_CPP_BIN` points at a built C++ binary, which neither CI nor `check.py`
@@ -32,7 +32,7 @@ slice through both backends and fork the 8,500-line QML three ways.
 | ✅ | Done / at parity |
 | 🚧 | Partial or in progress |
 | ❌ | Not started |
-| — | Not applicable on this platform |
+| - | Not applicable on this platform |
 | ⓝ | Footnote below |
 
 Python status columns reflect `main`; C++ columns reflect the `cpp-rewrite` branch.
@@ -68,8 +68,8 @@ Python status columns reflect `main`; C++ columns reflect the `cpp-rewrite` bran
 | Auto-update | ✅ | 🚧 ³ | ❌ | 🚧 ² | ❌ | ❌ |
 | **Platform integration** | | | | | | |
 | Password detection + privacy auto-pause | ✅ | ✅ | ❌ ⁴ | ✅ | ❌ | ❌ |
-| Compat auto-detect (IDE / RDP) | ✅ | — ⁶ | — ⁶ | ✅ | ❌ | ❌ |
-| Game key-hold compat | ✅ ¹ | — ⁶ | — ⁶ | ✅ | ❌ | ❌ |
+| Compat auto-detect (IDE / RDP) | ✅ | n/a ⁶ | n/a ⁶ | ✅ | ❌ | ❌ |
+| Game key-hold compat | ✅ ¹ | n/a ⁶ | n/a ⁶ | ✅ | ❌ | ❌ |
 | Context reset on focus change | ✅ ¹ | 🚧 ⁸ | 🚧 ⁸ | ✅ | ❌ | ❌ |
 
 ## Footnotes
@@ -86,7 +86,7 @@ Python status columns reflect `main`; C++ columns reflect the `cpp-rewrite` bran
    C++ PPM / fuzzy / hybrid pillars "done", but the `cpp/prediction/HybridPredictor.h`
    header comment states only the n-gram pillar is live. The conformance harness
    ([`tests/conformance/`](../../tests/conformance/README.md)) is what settles this
-   empirically — update this row to ✅ once the harness shows parity. Auto-update
+   empirically, update this row to ✅ once the harness shows parity. Auto-update
    install is deferred until a signed C++ installer pipeline exists (version check works).
 3. Linux auto-update: the AppImage is unsigned by design; the update *path* differs
    from Windows (no in-place signed installer). Version check applies; install is manual.
@@ -105,7 +105,7 @@ Python status columns reflect `main`; C++ columns reflect the `cpp-rewrite` bran
    in one batch lands between two of the game's input polls) is a `SendInput`
    property, so there is nothing to port to `xdotool` as-is.
 7. **Free on every backend.** The compact view is a layout JSON plus QML row
-   filtering — keyboard *layers* are a QML-side view concept the backends never
+   filtering, keyboard *layers* are a QML-side view concept the backends never
    see, and `_load_layouts` already globs `data/layouts/*.json`. So there was no
    port: both backends gained it from the shared `qml/` + `data/` contract, and
    the C++ columns track the C++ backend's general state rather than this

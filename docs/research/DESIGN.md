@@ -12,15 +12,15 @@ This document defines the UX principles and layout specifications for Alpha-OSK.
 
 ### 1. Accessibility First
 Every feature must work for users with limited motor control. This means:
-- **Large touch targets** — Minimum 48x48px, configurable up to 120px
-- **Generous spacing** — Reduce accidental key presses
-- **Dwell activation** — No click required
-- **Scanning support** — Navigate with 1-2 switches
+- **Large touch targets**: Minimum 48x48px, configurable up to 120px
+- **Generous spacing**: Reduce accidental key presses
+- **Dwell activation**: No click required
+- **Scanning support**: Navigate with 1-2 switches
 
 ### 2. AI That Helps, Not Hinders
 - Predictions should **reduce keystrokes**, not add cognitive load
 - Voice input should be **seamless**, not a separate mode
-- Learning should be **invisible** — it just gets better over time
+- Learning should be **invisible**; it just gets better over time
 
 ### 3. Privacy by Design
 - All learning happens **on-device** by default
@@ -162,21 +162,21 @@ For limited screen space or one-handed use:
 ## Accessibility Features
 
 ### Visual
-- **High contrast mode** — Black/white/yellow themes
-- **Large text** — Scalable key labels
-- **Focus indicators** — Clear current key highlight
-- **Reduced motion** — Disable animations
+- **High contrast mode**: Black/white/yellow themes
+- **Large text**: Scalable key labels
+- **Focus indicators**: Clear current key highlight
+- **Reduced motion**: Disable animations
 
 ### Motor
-- **Adjustable key size** — 48px to 120px
-- **Key spacing** — 0px to 24px gaps
-- **Sticky keys** — Modifiers stay active
-- **Tremor filtering** — Ignore rapid repeated presses
+- **Adjustable key size**: 48px to 120px
+- **Key spacing**: 0px to 24px gaps
+- **Sticky keys**: Modifiers stay active
+- **Tremor filtering**: Ignore rapid repeated presses
 
 ### Cognitive
-- **Simple mode** — Fewer keys, larger targets
-- **Consistent layout** — No dynamic key rearrangement
-- **Clear icons** — Text labels optional
+- **Simple mode**: Fewer keys, larger targets
+- **Consistent layout**: No dynamic key rearrangement
+- **Clear icons**: Text labels optional
 
 ---
 
@@ -282,22 +282,22 @@ For limited screen space or one-handed use:
 - ✅ Number layer (1-0 with symbols on shift)
 - ✅ Symbol layer (#+= toggle)
 - ✅ Sticky modifiers: Shift, Caps Lock, Ctrl, Alt, Win (all auto-release after keypress)
-- ✅ Multi-modifier shortcuts (Win+Shift+S, Ctrl+Shift+T, etc.) — Shift sent as modifier when combined with Ctrl/Alt/Win
-- ✅ Key hover effect — keys lighten on mouse hover
+- ✅ Multi-modifier shortcuts (Win+Shift+S, Ctrl+Shift+T, etc.), Shift sent as modifier when combined with Ctrl/Alt/Win
+- ✅ Key hover effect, keys lighten on mouse hover
 - ✅ Prediction bar UI (up to 8 suggestions, fixed height to prevent window resizing)
 - ✅ Suggestions toggle (Settings → Smart Typing → Suggestions, persisted across sessions)
 - ✅ Dark theme with gradients and press animations
 - ✅ Draggable via top handle
 - ✅ Special keys: Backspace, Enter, Tab, Arrows, Space
 - ✅ Escape key always visible (start of number row)
-- ✅ Responsive key scaling — keys resize dynamically when window is dragged
-- ✅ Side panels (Navigation + system keys, Numpad) — window auto-expands when toggled on
+- ✅ Responsive key scaling, keys resize dynamically when window is dragged
+- ✅ Side panels (Navigation + system keys, Numpad), window auto-expands when toggled on
 - ✅ Navigation panel includes PrtSc/ScrLk/Pause alongside Ins/Home/PgUp/arrows
 - ✅ Function row (F1-F12)
-- ✅ Persistent preferences — layout panels, theme, and suggestions toggle saved via Qt Settings
+- ✅ Persistent preferences, layout panels, theme, and suggestions toggle saved via Qt Settings
 - ✅ Navigation keys open by default
 - ✅ Compact mode toggle
-- ✅ Comprehensive settings panel — layout toggles, suggestions (toggle + count), accessibility profiles, vocabulary packs, theme swatches, data management (save model, clear learned data)
+- ✅ Comprehensive settings panel, layout toggles, suggestions (toggle + count), accessibility profiles, vocabulary packs, theme swatches, data management (save model, clear learned data)
 - ✅ Configurable suggestion count (3–10, adjustable in settings)
 - ✅ Accessibility profiles selectable from settings (precise, normal, tremor levels, limited mobility)
 - ✅ Custom vocabulary import in settings (drop a folder with dictionary.txt; no built-in packs ship)

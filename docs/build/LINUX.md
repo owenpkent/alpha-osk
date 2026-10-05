@@ -12,14 +12,14 @@ The Windows counterpart lives in [WINDOWS.md](WINDOWS.md).
 sudo apt install xdotool    # X11 (most desktops)
 sudo apt install ydotool    # Wayland (requires user-space daemon setup)
 
-# Qt 6.5+ xcb platform plugin dependency (X11 sessions) — without it the
+# Qt 6.5+ xcb platform plugin dependency (X11 sessions): without it the
 # keyboard exits with "Could not load the Qt platform plugin xcb"
 sudo apt install libxcb-cursor0
 
 # Optional: enable password-field auto-detection (see Privacy Mode below)
 sudo apt install python3-gi gir1.2-atspi-2.0
 
-# Launch — run.py auto-creates a venv and installs PySide6
+# Launch: run.py auto-creates a venv and installs PySide6
 python run.py
 ```
 
@@ -48,12 +48,12 @@ they behave under X11 versus Wayland is not obvious:
 |---------|-----|---------|-----------|
 | Atomic prediction replacement (`replace_text`) | ✅ | ✅ | `xdotool key shift+Left…` chord chain; `ydotool --key-down shift` + Left×N + `--key-up shift` |
 | App-switch context reset | ✅ | ❌ | `xdotool getactivewindow` polled every 250 ms; Wayland compositors don't expose focused window to unprivileged clients |
-| Password-field auto privacy mode | ✅ | ✅ (if toolkit speaks AT-SPI) | `gi.repository.Atspi` focus listener — needs `python3-gi` + `gir1.2-atspi-2.0` |
-| Sticky-modifier hold / release | ✅ | ✅ | `xdotool keydown/keyup` or `ydotool key --key-down/--key-up`. **Super/Meta (Win) is never held** — see note below |
+| Password-field auto privacy mode | ✅ | ✅ (if toolkit speaks AT-SPI) | `gi.repository.Atspi` focus listener, needs `python3-gi` + `gir1.2-atspi-2.0` |
+| Sticky-modifier hold / release | ✅ | ✅ | `xdotool keydown/keyup` or `ydotool key --key-down/--key-up`. **Super/Meta (Win) is never held**: see note below |
 | Defensive modifier release on startup | ✅ | ✅ | `LinuxKeySynthesizer.reset_modifier_state()` (see Troubleshooting) |
 | Dictation microphone capture | ✅ | ✅ | `QAudioSource` (QtMultimedia) talking to the host's PipeWire or PulseAudio server; no X11 / Wayland involvement either way |
 
-> **Super/Meta (the Win key) is sent only as a chord, never held.** Holding Super down makes the window manager (Mutter/KWin) grab the pointer for window move/resize gestures, so every click — including on the OSK's own keys — is swallowed as a WM gesture and the keyboard becomes unusable until the hold is released. `LinuxKeySynthesizer.hold_modifier()` therefore skips `win`/`super`; Super+`<key>` combos (Win+D, Win+L, Win+arrow) still work because they go out as an atomic `xdotool key super+<key>` chord. Other modifiers (Shift/Ctrl/Alt) are still held so Shift+drag selection etc. work in the target app.
+> **Super/Meta (the Win key) is sent only as a chord, never held.** Holding Super down makes the window manager (Mutter/KWin) grab the pointer for window move/resize gestures, so every click (including on the OSK's own keys) is swallowed as a WM gesture and the keyboard becomes unusable until the hold is released. `LinuxKeySynthesizer.hold_modifier()` therefore skips `win`/`super`; Super+`<key>` combos (Win+D, Win+L, Win+arrow) still work because they go out as an atomic `xdotool key super+<key>` chord. Other modifiers (Shift/Ctrl/Alt) are still held so Shift+drag selection etc. work in the target app.
 
 ### Privacy Mode (password auto-detection)
 
@@ -76,7 +76,7 @@ How it works on Linux:
    event for older toolkits). Each arrival event reads the source
    accessible's state set; if it contains
    `Atspi.StateType.PASSWORD_TEXT`, the shared `_is_password` flag
-   flips on. Defocus events (detail1=0) are ignored — they describe
+   flips on. Defocus events (detail1=0) are ignored, they describe
    focus *leaving* the source, not arriving anywhere specific.
 3. The bridge polls `is_password_field()` on a 200 ms timer *and* on
    every keystroke (rate-limited to 50 ms) to close the race window
@@ -96,14 +96,14 @@ wipes `_current_word`, `_context_buffer`, `_sentence_buffer`, and
 current predictions so suggestions from the previous app's context
 don't leak into the new one. Cost: one `xdotool getactivewindow`
 subprocess every 250 ms (~5 ms wall time each). On Wayland the helper
-returns 0 and the clearing path is simply skipped — there's no
+returns 0 and the clearing path is simply skipped, there's no
 unprivileged API to ask the compositor which window has focus.
 
 ---
 
 ## Building a standalone bundle
 
-The Linux build pipeline mirrors the Windows one — PyInstaller produces
+The Linux build pipeline mirrors the Windows one, PyInstaller produces
 a single-directory bundle under `dist/alpha-osk/` that can be run
 directly or wrapped into an AppImage for distribution.
 
@@ -127,10 +127,10 @@ Outputs:
 |------|-------------|
 | `dist/alpha-osk/alpha-osk` | PyInstaller single-directory bundle |
 | `release/Alpha-OSK-<version>-x86_64.AppImage` | `--appimage` wrapper |
-| `release/Alpha-OSK-<version>-linux-requirements.lock.txt` | `pip freeze --all` of the build venv — human/pip-friendly. Always emitted. |
-| `release/Alpha-OSK-<version>-linux-sbom.cyclonedx.json` | CycloneDX 1.6 SBOM of the build venv — machine/scanner-friendly (purl, license, hashes). Always emitted. |
+| `release/Alpha-OSK-<version>-linux-requirements.lock.txt` | `pip freeze --all` of the build venv, human/pip-friendly. Always emitted. |
+| `release/Alpha-OSK-<version>-linux-sbom.cyclonedx.json` | CycloneDX 1.6 SBOM of the build venv, machine/scanner-friendly (purl, license, hashes). Always emitted. |
 
-Run the bundle directly with `./dist/alpha-osk/alpha-osk` — no install
+Run the bundle directly with `./dist/alpha-osk/alpha-osk`, no install
 needed. Runtime still requires `xdotool` or `ydotool` on the host,
 because those are OS-level tools (not Python libraries) and are not
 bundled.
@@ -150,7 +150,7 @@ since it goes through the same backend. Same check as `WINDOWS.md` §
 `build/linux/build.py` emits both a plaintext lockfile
 (`freeze_lockfile`) and a CycloneDX 1.6 SBOM (`emit_sbom`) alongside
 the AppImage / .deb / tarball. Same shape and rationale as the Windows
-build — see `WINDOWS.md` § *Dependency Lockfile & SBOM* for what
+build, see `WINDOWS.md` § *Dependency Lockfile & SBOM* for what
 each artefact is for, the CI-time `osv-scan` job that reads both
 lockfiles for transitive CVEs, and how to bump the toolchain.
 
@@ -172,11 +172,11 @@ build/
 
 To keep the bundle small, `build/linux/alpha-osk.spec` drops:
 
-- **QtWebEngine** (`libQt6WebEngineCore.so` is ≈100 MB — we never embed a
+- **QtWebEngine** (`libQt6WebEngineCore.so` is ≈100 MB, we never embed a
   browser). If you add an in-app browser later, re-include the WebEngine
   / WebView / WebChannel modules in both `excludes` and
   `_DROP_BINARY_PREFIXES`, then re-measure the bundle size.
-- **Heavy ML libraries** (torch, transformers, numpy, etc.) — the
+- **Heavy ML libraries** (torch, transformers, numpy, etc.), the
   LLM-based predictor is optional and not shipped in the default bundle.
 - **Windows-only modules** (`src.platform.windows`).
 
@@ -229,17 +229,17 @@ trust a hash pasted from anywhere other than a file you fetched yourself.
 | `Could not load the Qt platform plugin "xcb"` at launch | Qt 6.5+ needs `libxcb-cursor`, missing on the host | `sudo apt install libxcb-cursor0` (`run.py` now preflight-warns for this on X11) |
 | Window flashes and exits under Wayland | Qt picked Wayland plugin; `xdotool` is X11-only | `QT_QPA_PLATFORM=xcb ./alpha-osk` (or use `ydotool` for native Wayland) |
 | AppImage won't run | Missing `libfuse2` on the host | `sudo apt install libfuse2` (required to mount AppImages) |
-| `libtiff.so.5` warning at build time | Qt imageformats plugin looks for it | Benign — we don't use TIFF; warning doesn't affect the bundle |
+| `libtiff.so.5` warning at build time | Qt imageformats plugin looks for it | Benign, we don't use TIFF; warning doesn't affect the bundle |
 | Real keyboard feels like Ctrl/Shift is held | Another OSK (e.g. GNOME On-Board) is still running and has its own `keydown` pinned | `killall onboard`; check with `pgrep -a onboard`. Press-and-release Ctrl/Shift on the physical keyboard to clear, or `xdotool keyup ctrl shift alt super` |
-| Alpha-OSK sticky modifier stays held after quit | Old builds fired `xdotool keydown` without a matching `keyup` on shutdown | Fixed — `KeyboardBridge.shutdown()` now releases Ctrl/Alt/Win on `aboutToQuit`. Rebuild if you're on an older bundle |
-| Fresh Alpha-OSK launch inherits a stuck modifier from a prior crash | Previous instance was killed before it could release | Fixed — `KeyboardBridge.__init__` issues a defensive `keyup` on Ctrl/Alt/Shift/Super at startup (see `LinuxKeySynthesizer.reset_modifier_state()`). Launching Alpha-OSK alone clears the stuck state |
+| Alpha-OSK sticky modifier stays held after quit | Old builds fired `xdotool keydown` without a matching `keyup` on shutdown | Fixed, `KeyboardBridge.shutdown()` now releases Ctrl/Alt/Win on `aboutToQuit`. Rebuild if you're on an older bundle |
+| Fresh Alpha-OSK launch inherits a stuck modifier from a prior crash | Previous instance was killed before it could release | Fixed, `KeyboardBridge.__init__` issues a defensive `keyup` on Ctrl/Alt/Shift/Super at startup (see `LinuxKeySynthesizer.reset_modifier_state()`). Launching Alpha-OSK alone clears the stuck state |
 
 ---
 
 ## See also
 
-- [WINDOWS.md](WINDOWS.md) — Windows build / EV signing / NSIS installer.
-- [PLATFORM_ARCHITECTURE.md](../architecture/PLATFORM_ARCHITECTURE.md) — cross-platform
+- [WINDOWS.md](WINDOWS.md): Windows build / EV signing / NSIS installer.
+- [PLATFORM_ARCHITECTURE.md](../architecture/PLATFORM_ARCHITECTURE.md): cross-platform
   design rationale for the key-synthesizer abstraction.
-- [AUTO_UPDATE.md](AUTO_UPDATE.md) — the auto-updater (currently
+- [AUTO_UPDATE.md](AUTO_UPDATE.md): the auto-updater (currently
   Windows-only, Linux story TBD).

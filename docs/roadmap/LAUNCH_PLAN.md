@@ -1,4 +1,4 @@
-# Launch Plan — target 2026-05-26 (launch window May 26 – Jun 1)
+# Launch Plan: target 2026-05-26 (launch window May 26 – Jun 1)
 
 > **Note (2026-10-05):** this plan is historical. The telemetry worker has been live since 1.4.0 (`DEFAULT_ENDPOINT` in `src/telemetry.py` is the production worker URL) and the current release is 1.7.0. The checklist below was not maintained, so its pending items are not a record of what is still open.
 
@@ -47,7 +47,7 @@ This is a meaningful enough scope to warrant a **minor version bump (1.1.0)** ra
 ### Week 2 (2026-05-15 → 2026-05-21): release prep
 
 - [ ] Bump `src/__version__.py` to `1.1.0`.
-- [ ] In `CHANGELOG.md`, replace `## [Unreleased]` heading with `## [1.1.0] — 2026-05-26` (move existing entries under it). Add a fresh empty `## [Unreleased]` above.
+- [ ] In `CHANGELOG.md`, replace `## [Unreleased]` heading with `## [1.1.0], 2026-05-26` (move existing entries under it). Add a fresh empty `## [Unreleased]` above.
 - [ ] Run `python check.py --full` (the `--full` flag enables the coverage gate; matches CI exactly, ~110 s).
 - [ ] `python build/windows/build.py` from a non-elevated shell with the eToken plugged in. (See `../build/WINDOWS.md` for the signing requirement.)
 - [ ] Test the installer in `release/` on a clean account or VM. Specifically: install, launch OSK, open Settings → Data & Privacy → Privacy, toggle on, restart, confirm toggle persisted.
@@ -56,7 +56,7 @@ This is a meaningful enough scope to warrant a **minor version bump (1.1.0)** ra
 ### Week 3 (2026-05-22 → 2026-05-26): ship + launch posts
 
 - [ ] `git tag v1.1.0 && git push origin main && git push origin v1.1.0`.
-- [ ] `gh release create v1.1.0 release/Alpha-OSK-Setup-1.1.0.exe --repo owenpkent/alpha-osk-releases --title "v1.1.0 — Community impact + cleaner analytics" --notes-file release-notes-1.1.0.md`. Asset filename **must** match `Alpha-OSK-Setup-1.1.0.exe` exactly (the auto-updater rejects anything else).
+- [ ] `gh release create v1.1.0 release/Alpha-OSK-Setup-1.1.0.exe --repo owenpkent/alpha-osk-releases --title "v1.1.0, Community impact + cleaner analytics" --notes-file release-notes-1.1.0.md`. Asset filename **must** match `Alpha-OSK-Setup-1.1.0.exe` exactly (the auto-updater rejects anything else).
 - [ ] Verify auto-update path: install 1.0.16 on a test machine, wait for or force the update check, confirm 1.1.0 lands, confirm Settings → Data & Privacy → Privacy section is present.
 - [ ] Watch `npx wrangler tail` for the first 24 hours to catch malformed payloads or unexpected spikes.
 - [ ] (Optional) Announcement / blog post / social.
@@ -78,7 +78,7 @@ This is a meaningful enough scope to warrant a **minor version bump (1.1.0)** ra
 - **Public stats page surface.** Wait until the aggregate has meaningful numbers (4-8 weeks of real data). Then design the static page that reads `/v1/aggregate`.
 - **Endpoint domain.** Plan is the workers.dev subdomain for v1; could move to `alpha-osk.com/telemetry` later if the project gets a domain. Migration is a Cloudflare custom-route addition, not a code change (the client just hits whatever `DEFAULT_ENDPOINT` says).
 - **Backfilling telemetry to old releases.** Recommendation: **don't**. Telemetry ships with 1.1.0 onward; 1.0.x stays unchanged. Reason: shipping a "1.0.16-with-telemetry" point release through the auto-updater could feel like a privacy bait-and-switch even with the toggle off, since the user installed a version that didn't have the feature. Clean line at 1.1.0.
-- **Whether to prompt users about telemetry on first launch of 1.1.0.** Currently no prompt — toggle just sits in Settings → Data & Privacy → Privacy. Pro: not pushy on an accessibility tool. Con: lower opt-in rate. Hold this decision for after launch unless adoption is much lower than expected.
+- **Whether to prompt users about telemetry on first launch of 1.1.0.** Currently no prompt, toggle just sits in Settings → Data & Privacy → Privacy. Pro: not pushy on an accessibility tool. Con: lower opt-in rate. Hold this decision for after launch unless adoption is much lower than expected.
 
 ## Out of scope for this launch
 
@@ -108,7 +108,7 @@ This is a meaningful enough scope to warrant a **minor version bump (1.1.0)** ra
 | **Setup** | 2026-05-08 → 05-09 | Cloudflare Worker deploy + endpoint config |
 | **Dev-validate** | 2026-05-10 → 05-12 | Privacy UI smoke checks against the live worker |
 | **Hype-foundation** | 2026-05-08 → 05-11 | OKStudio audience scaffolding (newsletter, YouTube branding, Slack workspace, Episode 1) |
-| **Pre-launch** | 2026-05-12 → 05-25 | Alpha-OSK hype window — Episode 2, demo Short, outreach batches, press kit, final smoke test |
+| **Pre-launch** | 2026-05-12 → 05-25 | Alpha-OSK hype window, Episode 2, demo Short, outreach batches, press kit, final smoke test |
 | **Build** | 2026-05-15 → 05-21 | Version bump, signed Windows build, installer test, optional Linux AppImage |
 | **Launch-day** | 2026-05-26 | Tag, gh release, newsletter send, Reddit / HN / LinkedIn / YouTube launch posts |
 | **Ship** | 2026-05-26 → 05-28 | Auto-update verify, day-1 monitoring |
@@ -120,7 +120,7 @@ The marketing critical path runs **parallel** to the engineering one through the
 
 - Landing page (A01) needs the newsletter signup embed (M02) before it's worth shipping.
 - Press kit (A04) needs screenshots (A03) which need a clean build (T29).
-- Show HN body (A05) is the slowest-to-write asset — start it 2-3 days before posting, not the night of.
+- Show HN body (A05) is the slowest-to-write asset, start it 2-3 days before posting, not the night of.
 - Email outreach lists are split into four tier-specific rows (A06a-d), each with its own opener template, due staggered May 15-19. Each outreach task (M08, M10, M11, M13) depends on its matching list row, not a single mega-list. Compiling Tier 1 accessibility press (A06d) is the slowest because Verge / Wired bylines rotate and need spotting from recent articles.
 
 ## Next action (today)
