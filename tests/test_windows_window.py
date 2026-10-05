@@ -643,7 +643,7 @@ class TestASecondLaunchLeavesTheForegroundAlone:
             {0x1111: "Untitled - Notepad", self.HWND: "Alpha-OSK"},
             {self.HWND} if minimized else set(),
         )
-        monkeypatch.setattr(ctypes, "windll", types.SimpleNamespace(user32=fake))
+        monkeypatch.setattr(ctypes, "windll", types.SimpleNamespace(user32=fake), raising=False)
         surface_existing_instance("Alpha-OSK")
         return fake.calls
 
