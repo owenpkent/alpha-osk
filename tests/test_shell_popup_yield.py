@@ -263,6 +263,150 @@ class TestTheKeyboardStaysAboveApplicationsWhileAside:
         assert h.raised == []
 
 
+class TestAPickerOpenedDuringATaostIsDemotedToo:
+    """A picker opened mid-yield is styled topmost by its own show path, and
+    its show event is not a shell popup's, so the first version never
+    demoted it: HWND_TOP raises within a band and does not leave one.
+    Found in review by adding a topmost picker during an active toast and
+    watching it keep WS_EX_TOPMOST through the poll."""
+
+    def test_the_show_path_demotes_it_at_once(self) -> None:
+        h = Harness()
+        h.appear(TOAST, EVENT_OBJECT_UNCLOAKED)
+        h.windows.append(PICKER)
+        h.yielder.window_shown(PICKER)
+        assert h.calls == [(KEYBOARD, False), (PICKER, False)]
+
+    def test_the_poll_catches_one_the_show_path_missed(self) -> None:
+        h = Harness()
+        h.appear(TOAST, EVENT_OBJECT_UNCLOAKED)
+        h.windows.append(PICKER)
+        h.run_timers(1000)
+        assert h.calls == [(KEYBOARD, False), (PICKER, False)]
+        assert h.raised == [KEYBOARD, PICKER], "demoted before it is raised"
+
+    def test_a_foreground_change_catches_it_too(self) -> None:
+        h = Harness()
+        h.appear(PREVIEW)
+        h.windows.append(PICKER)
+        h.activate(APP)
+        assert h.calls == [(KEYBOARD, False), (PICKER, False)]
+
+    def test_the_poll_and_foreground_paths_demote_a_window_once(self) -> None:
+        h = Harness(windows=[KEYBOARD, PICKER])
+        h.appear(TOAST, EVENT_OBJECT_UNCLOAKED)
+        h.run_timers(1000)
+        h.activate(APP)
+        assert h.calls == [(KEYBOARD, False), (PICKER, False)]
+
+    def test_a_picker_hidden_and_shown_again_is_demoted_again(self) -> None:
+        # Showing it re-runs the style write, which makes it topmost again,
+        # so the show path demotes unconditionally while aside.
+        h = Harness(windows=[KEYBOARD, PICKER])
+        h.appear(TOAST, EVENT_OBJECT_UNCLOAKED)
+        h.yielder.window_shown(PICKER)
+        assert h.calls == [(KEYBOARD, False), (PICKER, False), (PICKER, False)]
+
+    def test_the_restore_puts_it_back_on_top_with_the_rest(self) -> None:
+        h = Harness()
+        h.appear(TOAST, EVENT_OBJECT_UNCLOAKED)
+        h.windows.append(PICKER)
+        h.yielder.window_shown(PICKER)
+        h.vanish(TOAST, EVENT_OBJECT_CLOAKED)
+        h.run_timers(150)
+        assert h.calls[-2:] == [(KEYBOARD, True), (PICKER, True)]
+
+    def test_a_picker_shown_while_on_top_is_left_alone(self) -> None:
+        # The inverse: with no popup up, topmost is where it belongs.
+        h = Harness()
+        h.windows.append(PICKER)
+        h.yielder.window_shown(PICKER)
+        assert h.calls == []
+        assert h.raised == []
+
+    def test_the_next_yield_starts_from_scratch(self) -> None:
+        # Demotions are forgotten on restore, or a picker closed and reopened
+        # topmost in a later yield would be taken for already demoted.
+        h = Harness(windows=[KEYBOARD, PICKER])
+        h.appear(TOAST, EVENT_OBJECT_UNCLOAKED)
+        h.vanish(TOAST, EVENT_OBJECT_CLOAKED)
+        h.run_timers(150)
+        h.appear(TOAST, EVENT_OBJECT_UNCLOAKED)
+        assert h.calls[-2:] == [(KEYBOARD, False), (PICKER, False)]
+
+
+class TestThePickerShowPathReachesTheYielder:
+    def test_the_handler_feeds_the_window_handle_in(self) -> None:
+        from src import keyboard_app
+
+        h = Harness()
+        h.appear(PREVIEW)
+        handler = keyboard_app._picker_shown_handler(h.yielder)
+        assert handler is not None
+        window = MagicMock()
+        window.winId.return_value = PICKER
+        handler(window)
+        assert h.calls[-1] == (PICKER, False)
+
+    def test_no_yielder_means_no_handler(self) -> None:
+        from src import keyboard_app
+
+        assert keyboard_app._picker_shown_handler(None) is None
+
+    def test_wiring_styles_then_reports_each_picker(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from src import keyboard_app
+
+        order: list[tuple[str, int]] = []
+        monkeypatch.setattr(keyboard_app, "CURRENT_PLATFORM", "windows")
+        monkeypatch.setattr(
+            keyboard_app.windows_window,
+            "apply_extended_styles",
+            lambda w: order.append(("styled", w.winId())),
+        )
+        monkeypatch.setattr(
+            keyboard_app.windows_window, "prefer_dwm_rounded_corners", lambda w: None
+        )
+
+        class FakeWindow:
+            """Just the surface _wire_floating_windows touches."""
+
+            def __init__(self, hwnd: int) -> None:
+                self._hwnd = hwnd
+                self.handlers: list[Callable[[], None]] = []
+                self.visibleChanged = types.SimpleNamespace(connect=self.handlers.append)
+
+            def winId(self) -> int:  # noqa: N802
+                return self._hwnd
+
+            def property(self, name: str) -> bool:
+                return name == "visible"
+
+        windows = {
+            "snippetsWindow": FakeWindow(201),
+            "symbolsWindow": FakeWindow(202),
+            "studyWindow": FakeWindow(203),
+            "vizWindow": FakeWindow(300),
+        }
+        root = MagicMock()
+        root.findChild.side_effect = lambda _cls, name: windows[name]
+
+        keyboard_app._wire_floating_windows(
+            root, on_shown=lambda w: order.append(("shown", w.winId()))
+        )
+        for win in windows.values():
+            for fn in win.handlers:
+                fn()
+
+        assert order == [
+            ("styled", 201),
+            ("shown", 201),
+            ("styled", 202),
+            ("shown", 202),
+            ("styled", 203),
+            ("shown", 203),
+        ], "every picker is styled first and then reported; the Dashboard is neither"
+
+
 @pytest.mark.skipif(sys.platform != "win32", reason="builds the real ctypes callback")
 class TestInstallingTheHooks:
     """The installer registers three WinEvent hooks against one ctypes

@@ -53,7 +53,7 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 from types import TracebackType
-from typing import cast
+from typing import Optional, cast
 
 from PySide6.QtCore import QEvent, QObject, QSettings, QSharedMemory, Qt, QTimer, QUrl
 from PySide6.QtGui import QIcon, QWindow
@@ -280,7 +280,22 @@ def _always_on_top_windows(root: QWindow) -> list[QWindow]:
     return ([root] if root.isVisible() else []) + others
 
 
-def _wire_floating_windows(root: QWindow) -> None:
+def _picker_shown_handler(
+    yielder: Optional[windows_window.ShellPopupYielder],
+) -> Optional[Callable[[QWindow], None]]:
+    """The ``on_shown`` hook for :func:`_wire_floating_windows`, or None without a yielder."""
+    if yielder is None:
+        return None
+
+    def shown(window: QWindow) -> None:
+        yielder.window_shown(int(window.winId()))
+
+    return shown
+
+
+def _wire_floating_windows(
+    root: QWindow, *, on_shown: Optional[Callable[[QWindow], None]] = None
+) -> None:
     """Apply the Win32 styling the floating windows need once they are shown.
 
     Four separate top-level ``Window``s are declared in Main.qml so they
@@ -300,6 +315,13 @@ def _wire_floating_windows(root: QWindow) -> None:
     missing window is skipped rather than aborting the rest: one unstyled
     window is a smaller problem than all of them going unwired.
 
+    ``on_shown`` is called with each of the three pickers after it has been
+    styled on becoming visible. The styling puts the picker in the topmost
+    band, which is wrong while the shell-popup yielder has our windows
+    stepped aside for a notification, so ``main()`` passes the yielder's
+    ``window_shown`` and the picker is demoted again in the same breath.
+    The Dashboard is not reported: it is not an always-on-top window.
+
     No-op on non-Windows (the Qt flag is sufficient on X11/Wayland, and
     macOS uses the Accessory activation policy applied app-wide). Silent
     on any failure — the feature still works, it just might briefly take
@@ -310,10 +332,15 @@ def _wire_floating_windows(root: QWindow) -> None:
     try:
         from PySide6.QtCore import QObject
 
+        def _style_picker(target: QWindow) -> None:
+            windows_window.apply_extended_styles(target)
+            if on_shown is not None:
+                on_shown(target)
+
         wiring: dict[str, Callable[[QWindow], None]] = {
-            "snippetsWindow": windows_window.apply_extended_styles,
-            "symbolsWindow": windows_window.apply_extended_styles,
-            "studyWindow": windows_window.apply_extended_styles,
+            "snippetsWindow": _style_picker,
+            "symbolsWindow": _style_picker,
+            "studyWindow": _style_picker,
             "vizWindow": windows_window.prefer_dwm_rounded_corners,
         }
         for name, style in wiring.items():
@@ -936,7 +963,6 @@ def main() -> int:
     shell_popup_yield = None
     if root:
         _apply_window_flags(root)
-        _wire_floating_windows(root)
         # Held for the life of the event loop: Qt does not own a filter
         # installed from Python.  See QuietRestoreFilter for the why.
         quiet_restore = windows_window.install_quiet_restore(root)
@@ -944,6 +970,7 @@ def main() -> int:
         shell_popup_yield = windows_window.install_shell_popup_yield(
             lambda: _always_on_top_windows(root)
         )
+        _wire_floating_windows(root, on_shown=_picker_shown_handler(shell_popup_yield))
         app.keyboard_window = root
 
     # --- System tray icon ---

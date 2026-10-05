@@ -345,6 +345,24 @@ sliding between taskbar buttons, from flickering the Z-order, and a 1 s poll
 while stepped aside drops a popup that is gone, hidden or cloaked without its
 event having arrived.
 
+**A picker opened during the yield is demoted too.** The first held version
+only ever re-raised with `HWND_TOP`, which moves a window within its band and
+never out of one. A picker (Snippets, Symbols, the study window) opened while
+a toast was up came up topmost, because `_wire_floating_windows` runs
+`apply_extended_styles` on every show and that call asks for `HWND_TOPMOST`;
+its show event is not a shell popup's, so the yielder ignored it, and the next
+re-raise left it where it was: over the notification, for the rest of the
+notification's life. Review reproduced it by adding a topmost picker during an
+active toast and watching `WS_EX_TOPMOST` survive the poll. The yielder now
+keeps the set of windows it has demoted in this yield; on every re-raise
+(foreground change or poll) a window of ours that is not in the set is
+demoted before it is raised, and the floating-window wiring reports each
+picker's show to `ShellPopupYielder.window_shown` right after styling it, so
+the demotion lands in the same breath rather than up to a second later. The
+set is cleared on restore, so a later yield starts from scratch. The yielder
+is installed before the floating windows are wired, which is what lets the
+wiring be handed its hook.
+
 **Partial hook registration is rolled back.** The three `SetWinEventHook`
 calls share one ctypes callback, and that callback is a local of the installer
 until it is pinned to the yielder on success. The first version returned `None`

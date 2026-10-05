@@ -572,6 +572,16 @@ class ShellPopupYielder:
     the ordinary group again (``HWND_TOP``, without activating), keyboard
     first, which keeps the popup above them and the applications below.
 
+    **A window of ours that appears mid-yield is demoted too.**  A picker
+    opened while a toast is up is restyled topmost by its own show path
+    (``apply_extended_styles``), its show event is not a shell popup's, and
+    ``HWND_TOP`` is a raise within a band rather than a band change, so
+    without this the picker would sit over the notification for the rest of
+    its life.  The yielder remembers which windows it has demoted; a window
+    in the set that it has not demoted is demoted before it is raised, and
+    :meth:`window_shown` lets the show path do it at once rather than at the
+    next poll.
+
     A short ``restore_delay_ms`` stops a toast being replaced by the next
     one, or the pointer sliding between taskbar buttons, from flickering
     the Z-order.  A slow ``poll_ms`` re-check covers a lost hide event: a
@@ -602,6 +612,9 @@ class ShellPopupYielder:
         self._poll_ms = poll_ms
         self._popups: set[int] = set()
         self._aside = False
+        # The windows made HWND_NOTOPMOST in this yield.  One of ours that is
+        # not in here while stepped aside has come up topmost since.
+        self._demoted: set[int] = set()
         # Bumped on every change, so a stale scheduled restore or poll can
         # tell it has been overtaken and do nothing.
         self._generation = 0
@@ -609,6 +622,16 @@ class ShellPopupYielder:
     @property
     def stepped_aside(self) -> bool:
         return self._aside
+
+    def window_shown(self, hwnd: int) -> None:
+        """One of our always-on-top windows has just been shown (and styled topmost).
+
+        While stepped aside it is demoted at once, so a picker opened during
+        a notification does not cover it until the next poll.  Nothing to do
+        otherwise: on top is where it belongs.
+        """
+        if self._aside:
+            self._demote(hwnd)
 
     def on_event(self, event: int, hwnd: int) -> None:
         """Feed one WinEvent (already filtered to whole windows)."""
@@ -638,17 +661,28 @@ class ShellPopupYielder:
     def _step_aside(self) -> None:
         self._aside = True
         for hwnd in self._windows():
-            self._set_topmost(hwnd, False)
+            self._demote(hwnd)
         self._schedule_poll()
+
+    def _demote(self, hwnd: int) -> None:
+        self._set_topmost(hwnd, False)
+        self._demoted.add(hwnd)
 
     def _restore(self) -> None:
         self._aside = False
+        self._demoted.clear()
         for hwnd in self._windows():
             self._set_topmost(hwnd, True)
 
     def _reassert(self) -> None:
-        """Put our windows back at the top of the ordinary group, keyboard first."""
+        """Put our windows back at the top of the ordinary group, keyboard first.
+
+        A window that has come up since the yield began is still topmost,
+        and a raise would leave it there, over the popup: it is demoted first.
+        """
         for hwnd in self._windows():
+            if hwnd not in self._demoted:
+                self._demote(hwnd)
             self._raise_window(hwnd)
 
     def _schedule_restore(self) -> None:
