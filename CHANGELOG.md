@@ -4,6 +4,9 @@ All notable changes to Alpha-OSK are documented in this file.
 
 ## [Unreleased]
 
+### Added
+- **Always on Top setting.** *Settings -> Appearance -> Window -> "Always on Top"*, on by default (nothing changes). Turn it off and other apps can cover the keyboard; clicking it brings it back to the front without taking focus from the app you are typing into.
+
 ### Fixed
 - **Notifications and taskbar window previews show over the keyboard again.** Since 1.6.0 the keyboard runs with UIAccess, which lets it type into programs running as administrator, and Windows puts an always-on-top UIAccess window in a layer above notifications (Slack's included) and above the taskbar's previews, so they opened behind it. Windows' own On-Screen Keyboard has the same problem. A UIAccess window cannot be always-on-top without being in that layer, so the keyboard now steps aside instead: while a notification or a preview is showing, it stays above your applications but below the popup, and goes back on top when the popup closes.
 

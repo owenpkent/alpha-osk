@@ -228,3 +228,46 @@ def apply_window_flags(root: QWindow) -> None:
         )
     except Exception as exc:
         _logger.warning("Failed to apply macOS NSWindow flags: %s", exc)
+
+
+def _ns_window_for(root: QWindow):  # type: ignore[no-untyped-def]
+    import objc  # type: ignore[import-not-found]
+
+    ns_view = objc.objc_object(c_void_p=int(root.winId()))
+    return ns_view.window()
+
+
+def set_window_level(root: QWindow, floating: bool) -> bool:
+    """Float the keyboard above other apps, or put it at the normal level.
+
+    NSFloatingWindowLevel for Always on Top, NSNormalWindowLevel otherwise.
+    Not verified on a real Mac.  Returns False when pyobjc is missing or the
+    NSWindow cannot be found.
+    """
+    try:
+        from AppKit import (  # type: ignore[import-not-found]
+            NSFloatingWindowLevel,
+            NSNormalWindowLevel,
+        )
+
+        ns_window = _ns_window_for(root)
+        if ns_window is None:
+            return False
+        ns_window.setLevel_(NSFloatingWindowLevel if floating else NSNormalWindowLevel)
+        return True
+    except Exception as exc:
+        _logger.warning("Could not set the window level: %s", exc)
+        return False
+
+
+def order_front(root: QWindow) -> bool:
+    """``orderFront:`` (never makeKey), so a raise does not activate the app."""
+    try:
+        ns_window = _ns_window_for(root)
+        if ns_window is None:
+            return False
+        ns_window.orderFront_(None)
+        return True
+    except Exception as exc:
+        _logger.warning("Could not order the window front: %s", exc)
+        return False

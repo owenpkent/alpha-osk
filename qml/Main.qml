@@ -160,6 +160,9 @@ Window {
         // Magnetic edges while the window is being moved. See
         // `snapWindowPos` for why it is on by default.
         property bool savedSnapToEdges: true
+        // Keep the keyboard above other windows. Off puts it in the
+        // ordinary band; see keyboard_app._apply_always_on_top.
+        property bool savedAlwaysOnTop: true
 
         // Snippets window position, same sentinel and same reasoning. It
         // used to reset to "centred above the keyboard" on every launch,
@@ -393,6 +396,7 @@ Window {
             keyboard.setAutoCapitalizeAfterPunctuation(appSettings.savedAutoCapitalizeAfterPunctuation)
             keyboard.setFilterExplicit(root.filterExplicit)
             keyboard.setAutoSaveOnExit(appSettings.savedAutoSaveOnExit)
+            keyboard.setAlwaysOnTop(appSettings.savedAlwaysOnTop)
             keyboard.setCompatMode(appSettings.savedCompatMode)
             keyboard.setCompatAutoDetect(appSettings.savedCompatAutoDetect)
             keyboard.setMergeStrategy(appSettings.savedMergeStrategy)
@@ -525,6 +529,9 @@ Window {
 
     // Magnetic edges while the window is being moved (see `snapWindowPos`).
     property bool snapToEdges: appSettings.savedSnapToEdges
+
+    // Keep the keyboard above other windows (native Z-band, never a flag change).
+    property bool alwaysOnTop: appSettings.savedAlwaysOnTop
 
     // Audio feedback
     property bool audioEnabled: appSettings.savedAudioEnabled
@@ -5466,6 +5473,7 @@ Window {
             keyColorScheme: root.keyColorScheme
             windowOpacity: root.windowOpacity
             snapToEdges: root.snapToEdges
+            alwaysOnTop: root.alwaysOnTop
             currentLayout: root.currentLayout
             compactView: root.compactView
             characterRepeat: root.characterRepeat
@@ -5530,6 +5538,10 @@ Window {
                 } else if (setting === "snapToEdges") {
                     root.snapToEdges = value
                     appSettings.savedSnapToEdges = value
+                } else if (setting === "alwaysOnTop") {
+                    root.alwaysOnTop = value
+                    appSettings.savedAlwaysOnTop = value
+                    if (keyboard) keyboard.setAlwaysOnTop(value)
                 } else if (setting === "audio") {
                     if (keyboard) keyboard.setAudioEnabled(value)
                     root.audioEnabled = value

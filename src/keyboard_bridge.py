@@ -579,6 +579,8 @@ class KeyboardBridge(QObject):
     predictionsRefined = Signal(list)  # LLM-refined predictions
     predictionLoading = Signal(bool)  # LLM loading state
     predictionStatusChanged = Signal()
+    # The Always on Top setting changed; keyboard_app owns the window and listens.
+    alwaysOnTopChanged = Signal(bool)
     predictionEngineReady = Signal(object)
     llmEnabledChanged = Signal(bool)  # LLM enabled state
     llmAvailableChanged = Signal(bool)  # LLM available state
@@ -710,6 +712,9 @@ class KeyboardBridge(QObject):
         # Which surface currently owns edit mode ("prediction" / "snippets" /
         # "keyaction" / "legacy" / ""). See beginEditSession / endEditSession.
         self._edit_owner = ""
+        # The Always on Top setting.  The bridge does not own the window: it
+        # holds the value (so startup can read it) and announces changes.
+        self._always_on_top = True
 
         # Set while a research trial is capturing keystrokes instead of
         # sending them to the desktop.  See begin_study_capture.
@@ -4914,6 +4919,25 @@ class KeyboardBridge(QObject):
         if strategy in HybridPredictor._VALID_MERGE_STRATEGIES:
             self._merge_strategy = strategy
         self._predictor.set_merge_strategy(strategy)
+
+    @property
+    def alwaysOnTop(self) -> bool:
+        """The saved Always on Top setting (default on), for window code."""
+        return self._always_on_top
+
+    @Slot(bool)
+    def setAlwaysOnTop(self, enabled: bool) -> None:
+        """Record the Always on Top setting and tell the app layer.
+
+        Window code lives in ``keyboard_app`` / ``src/platform``; this only
+        forwards.  Emitted only on a change, so the startup push of the saved
+        value (already read by the window setup) does nothing twice.
+        """
+        enabled = bool(enabled)
+        if enabled == self._always_on_top:
+            return
+        self._always_on_top = enabled
+        self.alwaysOnTopChanged.emit(enabled)
 
     @Slot(bool)
     def setCompatMode(self, enabled: bool) -> None:

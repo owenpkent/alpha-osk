@@ -121,7 +121,9 @@ def restore_without_activating(
         show_window(hwnd, SW_SHOWNOACTIVATE)
 
 
-def apply_extended_styles(root: QWindow, *, taskbar_button: bool = False) -> None:
+def apply_extended_styles(
+    root: QWindow, *, taskbar_button: bool = False, topmost: bool = True
+) -> None:
     """
     Use Win32 ``SetWindowLongW`` to add extended window styles that Qt
     cannot express through its own flag system.
@@ -168,6 +170,10 @@ def apply_extended_styles(root: QWindow, *, taskbar_button: bool = False) -> Non
     word alone.  The trade-off is that the OSK appears in Alt+Tab, which
     is acceptable.
 
+    ``topmost`` is the *Always on Top* setting.  It decides which band
+    that one call asks for, so a user who turned it off never gets a
+    topmost keyboard between the style write and a later correction.
+
     Requires the window to have a valid ``winId()`` (i.e. the native
     window handle has been created).
     """
@@ -211,7 +217,7 @@ def apply_extended_styles(root: QWindow, *, taskbar_button: bool = False) -> Non
         if reshow:
             user32.ShowWindow(hwnd, SW_HIDE)
         try:
-            _write_styles(hwnd, taskbar_button=taskbar_button)
+            _write_styles(hwnd, taskbar_button=taskbar_button, topmost=topmost)
         finally:
             if reshow:
                 user32.ShowWindow(hwnd, SW_SHOWNOACTIVATE)
@@ -219,7 +225,7 @@ def apply_extended_styles(root: QWindow, *, taskbar_button: bool = False) -> Non
         _logger.warning("Failed to apply Windows extended styles: %s", e)
 
 
-def _write_styles(hwnd: int, *, taskbar_button: bool) -> None:
+def _write_styles(hwnd: int, *, taskbar_button: bool, topmost: bool = True) -> None:
     """The style writes and the frame flush behind :func:`apply_extended_styles`.
 
     Split out so the hide / re-show around it can wrap every early return
@@ -334,6 +340,7 @@ def _write_styles(hwnd: int, *, taskbar_button: bool) -> None:
     # SWP_NOACTIVATE keeps us off the foreground while doing it, which
     # matters more here than usual: this window must never activate.
     HWND_TOPMOST = -1
+    HWND_NOTOPMOST = -2
     SWP_NOSIZE = 0x0001
     SWP_NOMOVE = 0x0002
     SWP_NOACTIVATE = 0x0010
@@ -351,7 +358,7 @@ def _write_styles(hwnd: int, *, taskbar_button: bool) -> None:
     kernel32.SetLastError(0)
     ok = user32.SetWindowPos(
         hwnd,
-        HWND_TOPMOST,
+        HWND_TOPMOST if topmost else HWND_NOTOPMOST,
         0,
         0,
         0,
@@ -365,6 +372,56 @@ def _write_styles(hwnd: int, *, taskbar_button: bool) -> None:
         )
 
     _logger.info("Applied WS_EX_NOACTIVATE and placed the window in the topmost band")
+
+
+_HWND_TOP = 0
+_HWND_TOPMOST = -1
+_HWND_NOTOPMOST = -2
+# SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE.  The NOACTIVATE is the point:
+# no Z-order change here may ever make the keyboard the foreground window.
+_BAND_SWP_FLAGS = 0x0001 | 0x0002 | 0x0010
+
+
+def _place(hwnd: int, insert_after: int) -> bool:
+    """One non-activating ``SetWindowPos`` that changes only the Z-order."""
+    if sys.platform != "win32":
+        return False
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        user32 = ctypes.windll.user32
+        user32.SetWindowPos.argtypes = [
+            wintypes.HWND,
+            wintypes.HWND,
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_int,
+            wintypes.UINT,
+        ]
+        user32.SetWindowPos.restype = wintypes.BOOL
+        return bool(user32.SetWindowPos(hwnd, insert_after, 0, 0, 0, 0, _BAND_SWP_FLAGS))
+    except Exception as e:
+        _logger.warning("SetWindowPos failed: %s", e)
+        return False
+
+
+def set_window_band(hwnd: int, topmost: bool) -> bool:
+    """Move ``hwnd`` into the topmost band, or back to the ordinary one.
+
+    Used for the *Always on Top* setting and by :class:`ShellPopupYielder`.
+    Never activates the window.
+    """
+    return _place(hwnd, _HWND_TOPMOST if topmost else _HWND_NOTOPMOST)
+
+
+def raise_window_noactivate(hwnd: int) -> bool:
+    """Raise ``hwnd`` to the top of its own band without activating it.
+
+    For a non-topmost window that is above every ordinary application window.
+    """
+    return _place(hwnd, _HWND_TOP)
 
 
 WM_QUERYOPEN = 0x0013
@@ -416,9 +473,11 @@ class QuietRestoreFilter(QAbstractNativeEventFilter):
         *,
         show_window: Optional[Callable[[int, int], object]] = None,
         defer: Optional[Callable[[Callable[[], None]], None]] = None,
+        after_restore: Optional[Callable[[], None]] = None,
     ) -> None:
         super().__init__()
         self._window = window
+        self._after_restore = after_restore
         self._show_window = show_window
         self._defer = defer or (lambda fn: QTimer.singleShot(0, fn))
         self._restoring = False
@@ -445,6 +504,14 @@ class QuietRestoreFilter(QAbstractNativeEventFilter):
             _logger.warning("Quiet restore failed: %s", e)
         finally:
             self._restoring = False
+        # Qt may re-assert its own band when the window is shown again, and
+        # with Always on Top off a restored keyboard must come back above
+        # the apps it was hiding behind.  The caller decides what to apply.
+        if self._after_restore is not None:
+            try:
+                self._after_restore()
+            except Exception as e:
+                _logger.warning("Post-restore band fix failed: %s", e)
 
     def nativeEventFilter(self, eventType, message):  # type: ignore[no-untyped-def]
         try:
@@ -462,7 +529,9 @@ class QuietRestoreFilter(QAbstractNativeEventFilter):
         return False, 0
 
 
-def install_quiet_restore(window: QWindow) -> Optional[QuietRestoreFilter]:
+def install_quiet_restore(
+    window: QWindow, *, after_restore: Optional[Callable[[], None]] = None
+) -> Optional[QuietRestoreFilter]:
     """Make restoring the minimized keyboard leave the foreground alone.
 
     Returns the filter, which the caller must keep a reference to: Qt does
@@ -485,7 +554,7 @@ def install_quiet_restore(window: QWindow) -> Optional[QuietRestoreFilter]:
         def show_window(hwnd: int, cmd: int) -> object:
             return user32.ShowWindow(wintypes.HWND(hwnd), cmd)
 
-        flt = QuietRestoreFilter(window, show_window=show_window)
+        flt = QuietRestoreFilter(window, show_window=show_window, after_restore=after_restore)
         app = QCoreApplication.instance()
         if app is None:
             return None
@@ -736,22 +805,8 @@ def install_shell_popup_yield(
         dwmapi = ctypes.windll.dwmapi
         OBJID_WINDOW = 0
         WINEVENT_OUTOFCONTEXT = 0x0000
-        HWND_TOP = 0
-        HWND_TOPMOST = -1
-        HWND_NOTOPMOST = -2
-        SWP_FLAGS = 0x0001 | 0x0002 | 0x0010  # NOSIZE | NOMOVE | NOACTIVATE
         DWMWA_CLOAKED = 14
 
-        user32.SetWindowPos.argtypes = [
-            wintypes.HWND,
-            wintypes.HWND,
-            ctypes.c_int,
-            ctypes.c_int,
-            ctypes.c_int,
-            ctypes.c_int,
-            wintypes.UINT,
-        ]
-        user32.SetWindowPos.restype = wintypes.BOOL
         user32.GetClassNameW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
         user32.IsWindow.argtypes = [wintypes.HWND]
         user32.IsWindowVisible.argtypes = [wintypes.HWND]
@@ -786,14 +841,12 @@ def install_shell_popup_yield(
             )
             return hr != 0 or cloaked.value == 0
 
-        def set_topmost(hwnd: int, topmost: bool) -> object:
-            after = HWND_TOPMOST if topmost else HWND_NOTOPMOST
-            return user32.SetWindowPos(hwnd, after, 0, 0, 0, 0, SWP_FLAGS)
-
-        def raise_window(hwnd: int) -> object:
-            # Top of the window's own group: for a non-topmost window that
-            # is above every application and still below the shell's popups.
-            return user32.SetWindowPos(hwnd, HWND_TOP, 0, 0, 0, 0, SWP_FLAGS)
+        # The same non-activating calls the Always on Top setting uses.
+        # Raising goes to the top of the window's own group: for a
+        # non-topmost window that is above every application and still below
+        # the shell's popups.
+        set_topmost = set_window_band
+        raise_window = raise_window_noactivate
 
         def window_ids() -> list[int]:
             ids = []

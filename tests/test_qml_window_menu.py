@@ -667,6 +667,41 @@ class TestSnappingToScreenEdges:
         QGuiApplication.processEvents()
         assert _eval(root, "root.snapToEdges") is True
 
+    def test_always_on_top_defaults_on_and_round_trips_to_the_bridge(self, qml_root):
+        """The eight-step wiring for the Always on Top toggle: settings
+        store, root property, and the bridge slot the app layer listens to."""
+        root, _ = qml_root
+        bridge = _eval(root, "keyboard")
+        seen: list[bool] = []
+        bridge.alwaysOnTopChanged.connect(seen.append)
+
+        assert _eval(root, "root.alwaysOnTop") is True
+        assert _eval(root, "appSettings.savedAlwaysOnTop") is True
+        assert bridge.alwaysOnTop is True
+
+        _eval(root, 'settingsPanel.settingChanged("alwaysOnTop", false)')
+        QGuiApplication.processEvents()
+        assert _eval(root, "root.alwaysOnTop") is False
+        assert _eval(root, "appSettings.savedAlwaysOnTop") is False
+        assert bridge.alwaysOnTop is False
+        assert seen == [False]
+
+        _eval(root, 'settingsPanel.settingChanged("alwaysOnTop", true)')
+        QGuiApplication.processEvents()
+        assert _eval(root, "root.alwaysOnTop") is True
+        assert bridge.alwaysOnTop is True
+        assert seen == [False, True]
+
+    def test_the_toggle_is_in_the_window_section_of_appearance(self):
+        """The panel carries the row next to Snap to Screen Edges."""
+        src = (QML_MAIN.parent / "components" / "UnifiedSettingsPanel.qml").read_text(
+            encoding="utf-8"
+        )
+        window = src.split('title: "Window"', 1)[1].split("SMART TYPING", 1)[0]
+        assert 'text: "Snap to Screen Edges"' in window
+        assert 'text: "Always on Top"' in window
+        assert 'settingChanged("alwaysOnTop", c)' in window
+
     def test_a_title_bar_drag_lands_flush_on_an_edge(self, qml_root):
         """The wiring on the drag path, driven as a real press and travel.
 

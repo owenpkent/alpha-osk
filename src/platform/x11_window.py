@@ -141,3 +141,109 @@ def set_window_dock(win_id: int, dock: bool) -> bool:
     except Exception:  # pragma: no cover - depends on host libX11
         _logger.debug("XChangeProperty failed for win_id=%s", win_id, exc_info=True)
         return False
+
+
+# --- Always on Top (EWMH _NET_WM_STATE_ABOVE) and click-to-raise -----------
+
+_NET_WM_STATE = b"_NET_WM_STATE"
+_NET_WM_STATE_ABOVE = b"_NET_WM_STATE_ABOVE"
+_STATE_REMOVE = 0
+_STATE_ADD = 1
+_CLIENT_MESSAGE = 33
+_SOURCE_APPLICATION = 1
+_SUBSTRUCTURE_REDIRECT_MASK = 1 << 20
+_SUBSTRUCTURE_NOTIFY_MASK = 1 << 19
+
+
+class _ClientMessageEvent(ctypes.Structure):
+    _fields_ = [
+        ("type", ctypes.c_int),
+        ("serial", ctypes.c_ulong),
+        ("send_event", ctypes.c_int),
+        ("display", ctypes.c_void_p),
+        ("window", ctypes.c_ulong),
+        ("message_type", ctypes.c_ulong),
+        ("format", ctypes.c_int),
+        ("data", ctypes.c_long * 5),
+    ]
+
+
+class _XEvent(ctypes.Union):
+    """XEvent is a union padded to 24 longs; XSendEvent reads by type."""
+
+    _fields_ = [("client", _ClientMessageEvent), ("pad", ctypes.c_long * 24)]
+
+
+def _pin_event_calls(xlib: "ctypes.CDLL") -> None:
+    xlib.XDefaultRootWindow.restype = ctypes.c_ulong
+    xlib.XDefaultRootWindow.argtypes = [ctypes.c_void_p]
+    xlib.XSendEvent.restype = ctypes.c_int
+    xlib.XSendEvent.argtypes = [
+        ctypes.c_void_p,
+        ctypes.c_ulong,
+        ctypes.c_int,
+        ctypes.c_long,
+        ctypes.c_void_p,
+    ]
+    xlib.XRaiseWindow.restype = ctypes.c_int
+    xlib.XRaiseWindow.argtypes = [ctypes.c_void_p, ctypes.c_ulong]
+
+
+def set_window_above(win_id: int, above: bool) -> bool:
+    """Add or remove ``_NET_WM_STATE_ABOVE`` on a mapped window.
+
+    The EWMH way to change the state of a *mapped* window is a client message
+    to the root window, not a property write.  ``above=False`` returns the
+    window to the ordinary stacking layer.  Returns False (a logged no-op) on
+    Wayland, with no X display, or on any libX11 failure.
+    """
+    if not is_x11() or not win_id:
+        _logger.debug("Always on Top: not an X11 session, nothing to do")
+        return False
+    dpy = _ensure_display()
+    state = _atom(_NET_WM_STATE)
+    layer = _atom(_NET_WM_STATE_ABOVE)
+    if dpy is None or _xlib is None or state is None or layer is None:
+        return False
+    try:
+        _pin_event_calls(_xlib)
+        event = _XEvent()
+        msg = event.client
+        msg.type = _CLIENT_MESSAGE
+        msg.window = win_id
+        msg.message_type = state
+        msg.format = 32
+        msg.data[0] = _STATE_ADD if above else _STATE_REMOVE
+        msg.data[1] = layer
+        msg.data[2] = 0
+        msg.data[3] = _SOURCE_APPLICATION
+        root = _xlib.XDefaultRootWindow(dpy)
+        _xlib.XSendEvent(
+            dpy,
+            root,
+            0,
+            _SUBSTRUCTURE_REDIRECT_MASK | _SUBSTRUCTURE_NOTIFY_MASK,
+            ctypes.byref(event),
+        )
+        _xlib.XFlush(dpy)
+        return True
+    except Exception:  # pragma: no cover - depends on host libX11
+        _logger.debug("_NET_WM_STATE change failed for win_id=%s", win_id, exc_info=True)
+        return False
+
+
+def raise_window(win_id: int) -> bool:
+    """``XRaiseWindow`` without focusing: clicked-to-front for a buried window."""
+    if not is_x11() or not win_id:
+        return False
+    dpy = _ensure_display()
+    if dpy is None or _xlib is None:
+        return False
+    try:
+        _pin_event_calls(_xlib)
+        _xlib.XRaiseWindow(dpy, ctypes.c_ulong(win_id))
+        _xlib.XFlush(dpy)
+        return True
+    except Exception:  # pragma: no cover - depends on host libX11
+        _logger.debug("XRaiseWindow failed for win_id=%s", win_id, exc_info=True)
+        return False

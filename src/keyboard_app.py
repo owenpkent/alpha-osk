@@ -53,7 +53,7 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 from types import TracebackType
-from typing import Optional, cast
+from typing import Any, Optional, cast
 
 from PySide6.QtCore import QEvent, QObject, QSettings, QSharedMemory, Qt, QTimer, QUrl
 from PySide6.QtGui import QIcon, QWindow
@@ -68,6 +68,7 @@ from .platform import (
     get_config_dir,
     get_platform_info,
     macos_window,
+    window_band,
     windows_window,
 )
 from .study_bridge import StudyBridge
@@ -200,7 +201,7 @@ def _setup_platform_env() -> None:
     os.environ.setdefault("QT_QUICK_CONTROLS_STYLE", "Basic")
 
 
-def _apply_window_flags(root: QWindow) -> None:
+def _apply_window_flags(root: QWindow, always_on_top: bool = True) -> None:
     """
     Apply OS-specific window flags to make the keyboard behave as a
     proper on-screen keyboard:
@@ -216,6 +217,11 @@ def _apply_window_flags(root: QWindow) -> None:
       tray icon — easy to miss.  Trade-off: the OSK now appears in
       Alt+Tab.  Acceptable since ``WS_EX_NOACTIVATE`` still prevents
       focus theft on every click.)
+
+    ``always_on_top`` is the saved *Always on Top* setting.  The Qt flags
+    keep ``WindowStaysOnTopHint`` either way (changing flags on a shown
+    window rebuilds it); only the native Z-order band follows the setting,
+    and it is chosen here so a user who turned it off never starts topmost.
     """
     # Qt flags — work on all platforms.  WindowDoesNotAcceptFocus
     # is the Linux/Wayland equivalent of WS_EX_NOACTIVATE; on
@@ -259,17 +265,27 @@ def _apply_window_flags(root: QWindow) -> None:
 
     # Windows-specific: apply WS_EX_NOACTIVATE via Win32 API
     if CURRENT_PLATFORM == "windows":
-        windows_window.apply_extended_styles(root, taskbar_button=True)
+        windows_window.apply_extended_styles(root, taskbar_button=True, topmost=always_on_top)
     elif CURRENT_PLATFORM == "macos":
         macos_window.apply_window_flags(root)
+        if not always_on_top:
+            window_band.set_keyboard_topmost(root, False)
+    elif not always_on_top:
+        window_band.set_keyboard_topmost(root, False)
 
 
-def _always_on_top_windows(root: QWindow) -> list[QWindow]:
+def _always_on_top_windows(
+    root: QWindow, keyboard_on_top: Callable[[], bool] = lambda: True
+) -> list[QWindow]:
     """Our visible always-on-top windows, the keyboard first.
 
     The order is the order they are stepped aside and restored in, so the
     floating pickers, raised after the keyboard, stay above it.  See
     ``windows_window.ShellPopupYielder``.
+
+    The keyboard keeps ``WindowStaysOnTopHint`` when *Always on Top* is off,
+    so the flag alone cannot select it: ``keyboard_on_top`` is the setting,
+    asked on every call because the yielder evaluates this set live.
     """
     on_top = Qt.WindowType.WindowStaysOnTopHint
     others = [
@@ -277,7 +293,32 @@ def _always_on_top_windows(root: QWindow) -> list[QWindow]:
         for w in QApplication.topLevelWindows()
         if w is not root and w.isVisible() and w.flags() & on_top
     ]
-    return ([root] if root.isVisible() else []) + others
+    keyboard = [root] if root.isVisible() and keyboard_on_top() else []
+    return keyboard + others
+
+
+def _apply_always_on_top(root: QWindow, on: bool, yielder: Optional[Any]) -> None:
+    """Apply a runtime change of the *Always on Top* setting to the keyboard.
+
+    Turning it **on** while the shell-popup yielder has the windows stepped
+    aside must not put the keyboard back over the popup: the yielder's own
+    restore (which now sees the keyboard in its window set) does that when
+    the popup goes.  Turning it **off** is always applied; it is the same
+    band the yielder had already moved the keyboard to.
+    """
+    if on and yielder is not None and yielder.stepped_aside:
+        return
+    window_band.set_keyboard_topmost(root, on)
+    if not on:
+        window_band.raise_keyboard(root)
+
+
+def _reapply_band(root: QWindow, bridge: Any, yielder: Optional[Any]) -> None:
+    """Re-assert the saved band after a quiet restore (Qt may have re-topmosted)."""
+    on = bridge.alwaysOnTop
+    if on and yielder is not None and yielder.stepped_aside:
+        return
+    window_band.reapply_keyboard_band(root, on)
 
 
 def _picker_shown_handler(
@@ -961,16 +1002,33 @@ def main() -> int:
     root = cast(QWindow, engine.rootObjects()[0])
     quiet_restore = None
     shell_popup_yield = None
+    raise_on_press = None
     if root:
-        _apply_window_flags(root)
+        # QML's Component.onCompleted has already pushed the saved Always on
+        # Top value into the bridge by now, so the very first band is the
+        # saved one.
+        _apply_window_flags(root, bridge.alwaysOnTop)
         # Held for the life of the event loop: Qt does not own a filter
         # installed from Python.  See QuietRestoreFilter for the why.
-        quiet_restore = windows_window.install_quiet_restore(root)
+        quiet_restore = windows_window.install_quiet_restore(
+            root, after_restore=lambda: _reapply_band(root, bridge, shell_popup_yield)
+        )
         # Held for the same reason: it owns the WinEvent callback.
         shell_popup_yield = windows_window.install_shell_popup_yield(
-            lambda: _always_on_top_windows(root)
+            lambda: _always_on_top_windows(root, lambda: bridge.alwaysOnTop)
         )
         _wire_floating_windows(root, on_shown=_picker_shown_handler(shell_popup_yield))
+        # Click-to-front for a keyboard that can be buried (setting off).
+        # Parented to root, so it lives as long as the window.
+        raise_on_press = window_band.RaiseOnPressFilter(
+            root, always_on_top=lambda: bridge.alwaysOnTop
+        )
+        root.installEventFilter(raise_on_press)
+
+        def _on_always_on_top(on: bool) -> None:
+            _apply_always_on_top(root, on, shell_popup_yield)
+
+        bridge.alwaysOnTopChanged.connect(_on_always_on_top)
         app.keyboard_window = root
 
     # --- System tray icon ---
@@ -1017,7 +1075,7 @@ def main() -> int:
 
     app.aboutToQuit.connect(_on_about_to_quit)
     QTimer.singleShot(0, bridge.startPredictionLoading)
-    _ = (quiet_restore, shell_popup_yield)
+    _ = (quiet_restore, shell_popup_yield, raise_on_press)
 
     return app.exec()
 

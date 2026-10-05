@@ -437,7 +437,7 @@ The parent (`Main.qml`'s settings popup window) calls `settingsPanel.resetToHome
 | | Theme | 9-theme color picker |
 | | Key Colours | Six-scheme picker, **Monochrome by default** (Default / Monochrome / Two-Tone / Function / Ink / Signal). Directly under Theme because every colour it offers is derived from the theme |
 | | Sound & Opacity | Key click sound, opacity slider |
-| | Window | Snap to Screen Edges (magnetic edges while the window is being moved, default ON). Its own section because placement is neither a panel, a layout, a theme nor a sound, and the alternative was hiding a window-behaviour toggle under "Sound & Opacity" |
+| | Window | Snap to Screen Edges (magnetic edges while the window is being moved, default ON) and Always on Top (default ON; off lets other apps cover the keyboard, see *Title-bar window menu*). Its own section because placement is neither a panel, a layout, a theme nor a sound, and the alternative was hiding a window-behaviour toggle under "Sound & Opacity" |
 | **Smart Typing** | Suggestions | Show suggestions, auto-space, intelligent spacing, auto-cap, max count, filter explicit words |
 | | Suggestion Engine | Merge strategy 4-card picker (rank / rrf / linear / loglinear) |
 | | Input | Right-click shift, key preview popup, Compatibility Mode picker, repeat delay & interval |
@@ -1339,6 +1339,7 @@ Right-clicking the title bar opens Move / Minimize / Tuck away (X11 only) / Clos
 - **`dragArea` reserves the button row's measured width (`titleButtons.width`), never a constant**, so the whole strip drags on every window width. Guard: `TestTheWholeStripDrags`.
 - Rows come from `windowMenu.actions`, word-only. Close carries a rule and a gap above it.
 - **Move mode** is two taps with a free hand between: the window follows by `(current - anchor)` in the overlay's coordinates (self-correcting), the anchor is dropped on `onExited`, `windowMoveOverlay` is `enabled: root.moveMode` and swallows the ending click, left puts it down and right puts it back (`_moveReturnX/Y`); there is no Escape.
+- **Always on Top** (*Appearance -> Window*, default ON) changes the native Z-band only (`window_band.set_keyboard_topmost`), **never the Qt flags** (`setFlags` on a shown window rebuilds it); startup honours the saved value through `_apply_window_flags(root, bridge.alwaysOnTop)`; with it off `RaiseOnPressFilter` raises the window on a press without activating it and always returns False; `_always_on_top_windows` consults the setting live so `ShellPopupYielder` never re-topmosts the keyboard. Full write-up in `WINDOW_CHROME.md`.
 - **Magnetic edges** (*Appearance -> Window -> Snap to Screen Edges*, default ON): both move paths go through `Main.qml::snapWindowPos`, `snapThreshold` 24 px, against `screenBoundsAt` (the window's own screen), axes independent, horizontal centre is a target and vertical centre is not. **The snapped value is never written back into what the caller accumulates** (Move mode keeps `freeX` / `freeY`) and Move mode re-anchors by how far the window actually went, or an edge becomes a trap.
 - Tests drive the pointer in desktop coordinates; `_park` turns snapping off; a closed `Popup`'s rows all report `visible: false`.
 
