@@ -289,7 +289,7 @@ class PPMPredictor:
                         new_beam.append((new_word, new_prob, new_ctx))
 
             # Keep top candidates
-            new_beam.sort(key=lambda x: -x[1])
+            new_beam.sort(key=lambda x: (-x[1], x[0]))
             beam = new_beam[:beam_width]
 
             if not beam:
@@ -301,7 +301,7 @@ class PPMPredictor:
                 completed.append((word, prob))
 
         # Sort by probability
-        completed.sort(key=lambda x: -x[1])
+        completed.sort(key=lambda x: (-x[1], x[0]))
 
         # Remove duplicates while preserving order
         seen = set()
@@ -325,7 +325,7 @@ class PPMPredictor:
             List of (char, probability) tuples
         """
         probs = self.get_probabilities(context)
-        sorted_probs = sorted(probs.items(), key=lambda x: -x[1])
+        sorted_probs = sorted(probs.items(), key=lambda x: (-x[1], x[0]))
         return sorted_probs[:n]
 
     def learn_text(self, text: str) -> None:
@@ -587,7 +587,7 @@ class PPMWordPredictor:
                 scored.append((word, prob))
 
             # Sort by probability
-            scored.sort(key=lambda x: -x[1])
+            scored.sort(key=lambda x: (-x[1], x[0]))
             for word, prob in scored:
                 if word not in seen:
                     seen.add(word)
