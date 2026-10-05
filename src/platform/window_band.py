@@ -96,3 +96,54 @@ class RaiseOnPressFilter(QObject):
         except Exception as exc:
             _logger.debug("Raise-on-press failed: %s", exc)
         return False
+
+
+def _next_turn(fn: Callable[[], object]) -> None:
+    from PySide6.QtCore import QTimer
+
+    QTimer.singleShot(0, fn)
+
+
+class ReassertOnExposeFilter(QObject):
+    """Re-assert the saved band every time the window is mapped again (X11).
+
+    Keeping ``WindowStaysOnTopHint`` while the setting is off is what lets
+    the band flip at runtime, but on X11 Qt reads that flag back on every
+    ``show()`` of a top-level window and writes ``_NET_WM_STATE_ABOVE``
+    onto it while it is still unmapped.  So any hide and re-show (the tray
+    hides a tucked keyboard and ``showNormal()`` brings it back) put the
+    keyboard on top again while the setting still said off.  Windows has
+    the quiet-restore hook for the same job; X11 had nothing.
+
+    The trigger is the window becoming *exposed*, not ``show()``: an EWMH
+    state change is a client message that only a window manager already
+    managing the window acts on, and Qt reports exposure only once the
+    window is mapped.  ``isExposed()`` is already updated when the event
+    arrives, so each unexposed-to-exposed transition fires once.  The
+    re-assert runs on the next event-loop turn so the expose itself is
+    handled first.  Always returns False.
+    """
+
+    def __init__(
+        self,
+        window: QWindow,
+        *,
+        after_map: Callable[[], object],
+        defer: Callable[[Callable[[], object]], None] = _next_turn,
+    ) -> None:
+        super().__init__(window)
+        self._window = window
+        self._after_map = after_map
+        self._defer = defer
+        self._exposed = False
+
+    def eventFilter(self, watched: QObject, event: QEvent) -> bool:  # noqa: N802
+        try:
+            if watched is self._window and event.type() == QEvent.Type.Expose:
+                exposed = bool(self._window.isExposed())
+                if exposed and not self._exposed:
+                    self._defer(self._after_map)
+                self._exposed = exposed
+        except Exception as exc:
+            _logger.debug("Band re-assert on expose failed: %s", exc)
+        return False

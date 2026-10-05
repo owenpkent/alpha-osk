@@ -480,3 +480,158 @@ class TestX11:
     def test_raise_uses_xraisewindow(self, xlib: MagicMock) -> None:
         assert x11w.raise_window(42) is True
         xlib.XRaiseWindow.assert_called_once()
+
+
+class TestAHiddenWindowGetsItsBandBackWhenShown:
+    """Settings, Help and the Dashboard are owned windows too, and with the
+    setting off a press-to-front drags them out of the topmost band even
+    while hidden.  `_restore_floating_bands` repairs only visible windows,
+    and these three had no show-time styling, so one closed and reopened
+    after a keyboard click came back coverable.  Found in review: an owned
+    Qt window demoted while hidden stayed demoted after show().  The fix
+    is the show-time table in `_floating_window_styles`."""
+
+    @pytest.fixture
+    def desktop(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setattr(keyboard_app.windows_window, "prefer_dwm_rounded_corners", MagicMock())
+        return TestThePickersKeepTheirBand._desktop(monkeypatch, picker_visible=False)
+
+    @pytest.mark.parametrize("name", ["settingsWindow", "helpWindow", "vizWindow"])
+    def test_reopened_after_a_keyboard_press_it_is_topmost_again(self, desktop, name: str) -> None:
+        keyboard, window, topmost, _ = desktop
+        topmost[keyboard] = False
+
+        # The reviewer's sequence: closed, a keyboard key pressed, reopened.
+        keyboard_app._raise_keyboard_keeping_pickers(keyboard, None)
+        assert topmost[window] is False, "the hidden window should have been taken along"
+        window.isVisible.return_value = True
+        keyboard_app._floating_window_styles()[name](window)
+
+        assert topmost[window] is True
+        assert topmost[keyboard] is False, "only the shown window goes back on top"
+
+    @pytest.mark.parametrize("name", ["settingsWindow", "helpWindow", "vizWindow"])
+    def test_the_yielder_hears_after_the_band_so_it_can_demote_again(
+        self, desktop, name: str
+    ) -> None:
+        # The inverse: during a notification the window must end demoted,
+        # so the yielder's hook has to run last.
+        _, window, topmost, _ = desktop
+
+        def yielder_window_shown(w) -> None:
+            topmost[w] = False
+
+        keyboard_app._floating_window_styles(yielder_window_shown)[name](window)
+
+        assert topmost[window] is False
+
+    def test_every_wired_window_reports_to_the_yielder(
+        self, desktop, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _, window, _, _ = desktop
+        monkeypatch.setattr(keyboard_app.windows_window, "apply_extended_styles", MagicMock())
+        heard: list[object] = []
+        styles = keyboard_app._floating_window_styles(heard.append)
+        for style in styles.values():
+            style(window)
+        assert set(styles) == {
+            "snippetsWindow",
+            "symbolsWindow",
+            "studyWindow",
+            "settingsWindow",
+            "helpWindow",
+            "vizWindow",
+        }
+        assert heard == [window] * len(styles)
+
+
+class _ExposableWindow(QObject):
+    def __init__(self) -> None:
+        super().__init__()
+        self.exposed = False
+
+    def isExposed(self) -> bool:  # noqa: N802
+        return self.exposed
+
+
+class TestTheBandSurvivesAnX11Remap:
+    """On X11 Qt writes _NET_WM_STATE_ABOVE back from the retained
+    WindowStaysOnTopHint on every show() of a top-level window, so hiding a
+    tucked keyboard from the tray and restoring it put it back on top while
+    the setting said off.  The band is now re-asserted each time the window
+    is exposed again, which Qt reports only once the window manager has
+    mapped it, the point from which a _NET_WM_STATE client message counts."""
+
+    @staticmethod
+    def _filter(window: _ExposableWindow, after_map) -> wb.ReassertOnExposeFilter:
+        return wb.ReassertOnExposeFilter(window, after_map=after_map, defer=lambda fn: fn())
+
+    @staticmethod
+    def _expose(flt: wb.ReassertOnExposeFilter, window: _ExposableWindow, exposed: bool) -> bool:
+        window.exposed = exposed
+        return flt.eventFilter(window, QEvent(QEvent.Type.Expose))
+
+    def test_fires_once_per_mapping(self) -> None:
+        window = _ExposableWindow()
+        fired = MagicMock()
+        flt = self._filter(window, fired)
+
+        assert self._expose(flt, window, True) is False
+        self._expose(flt, window, True)  # a repaint, not a remap
+        assert fired.call_count == 1
+
+        self._expose(flt, window, False)  # hidden
+        assert fired.call_count == 1
+        self._expose(flt, window, True)  # shown again
+        assert fired.call_count == 2
+
+    def test_ignores_other_events_and_other_objects(self) -> None:
+        window = _ExposableWindow()
+        window.exposed = True
+        fired = MagicMock()
+        flt = self._filter(window, fired)
+
+        assert flt.eventFilter(window, QEvent(QEvent.Type.Show)) is False
+        assert flt.eventFilter(QObject(), QEvent(QEvent.Type.Expose)) is False
+        fired.assert_not_called()
+
+    def test_a_failure_never_blocks_the_event(self) -> None:
+        window = _ExposableWindow()
+        flt = self._filter(window, MagicMock(side_effect=OSError))
+        assert self._expose(flt, window, True) is False
+
+    @pytest.mark.parametrize("setting", [False, True])
+    def test_hide_and_restore_ends_in_the_saved_band(
+        self, monkeypatch: pytest.MonkeyPatch, setting: bool
+    ) -> None:
+        window = _ExposableWindow()
+        above = {window: setting}
+        band = types.SimpleNamespace(
+            set_keyboard_topmost=lambda w, on: above.__setitem__(w, on),
+            raise_keyboard=lambda w: None,
+        )
+        monkeypatch.setattr(keyboard_app, "window_band", band)
+        monkeypatch.setattr(keyboard_app.QApplication, "topLevelWindows", staticmethod(list))
+        bridge = types.SimpleNamespace(alwaysOnTop=setting)
+        flt = self._filter(window, lambda: keyboard_app._reapply_band(window, bridge, None))
+        self._expose(flt, window, True)
+
+        # The tray hides the tucked keyboard, then showNormal() remaps it,
+        # and Qt's show() puts ABOVE back from the retained flag.
+        self._expose(flt, window, False)
+        above[window] = True
+        self._expose(flt, window, True)
+
+        assert above[window] is setting
+
+    def test_main_installs_it_on_linux(self) -> None:
+        from pathlib import Path
+
+        source = Path(keyboard_app.__file__).read_text(encoding="utf-8")
+        body = source.split("def main(", 1)[1]
+        linux = body.split('if CURRENT_PLATFORM == "linux":', 1)[1].split(
+            "def _on_always_on_top", 1
+        )[0]
+        assert "ReassertOnExposeFilter(" in linux
+        assert "_reapply_band(root, bridge, shell_popup_yield)" in linux
+        assert "root.installEventFilter(reassert_on_expose)" in linux
