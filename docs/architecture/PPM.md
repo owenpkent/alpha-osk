@@ -1,5 +1,12 @@
 # PPM — Character-Level Prediction
 
+> **Status (2026-09-03).** PPM's word candidates are out of the prediction
+> merge (`HybridPredictor._ppm_in_merge` defaults to False). The model still
+> trains, loads and saves; it just contributes nothing to the pills. Read the
+> merge-related sections below as describing the engine with `_ppm_in_merge`
+> on, and see *Status (2026-09-03)* at the end of this file for the
+> measurements.
+
 PPM (**Prediction by Partial Matching**) is Alpha-OSK's character-level
 language model.  It complements the word-level n-gram predictor by
 handling the case where the user is *mid-word* with a partial prefix
@@ -137,6 +144,11 @@ this:
 4. If fewer than `n` candidates survive, top up with free-form beam
    search (unconstrained), still deduped.
 
+Note: the shipped engine constructs `PPMWordPredictor` without a
+dictionary (`HybridPredictor`, `PPMWordPredictor(ppm=self._ppm)`), so this
+dictionary-constrained path was never exercised in production; see the
+status note at the end of this file.
+
 There's a 1000-entry LRU-style cache keyed on
 `(last-20-chars-of-context)|partial` to avoid re-scoring after every
 keystroke.
@@ -162,6 +174,9 @@ keystroke.
 | Beam width | `n · 3` | Word search breadth.  Larger = catches more alternatives, slower. |
 
 ## Role in the Hybrid Engine
+
+The weights below apply only when `HybridPredictor._ppm_in_merge` is True,
+which it is not by default (PPM is out of the merge since 2026-09-03).
 
 `HybridPredictor._source_weights` weights PPM suggestions **lower**
 than n-gram for next-word prediction (0.3 vs 3.0) and **near equal**

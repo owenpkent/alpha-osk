@@ -509,7 +509,7 @@ during scanning (same problem gitconnect's `sign.js` solves).  Key behaviour:
 
 - Finds `signtool.exe` across common Windows SDK paths.
 - Signs with SHA-256 + RFC 3161 timestamp.
-- Retries up to 5× with exponential backoff.
+- Retries up to 5× with linear backoff (2, 4, 6, 8 s), each `signtool` attempt capped at 60 s.
 - Throws on permanent failure so the build pipeline fails loudly.
 
 ### Troubleshooting Signing
@@ -518,7 +518,8 @@ during scanning (same problem gitconnect's `sign.js` solves).  Key behaviour:
 |---------|-------|-----|
 | `Cannot find certificate` | Running from elevated PowerShell | **Use normal shell** — eToken not visible to admin context |
 | `SignTool Error: file being used by another process` | Windows Defender scanning | `sign.py` retry logic handles this automatically |
-| `Cannot find certificate` by subject | Multiple certs | Config uses `certificateSha1` thumbprint — verify with `certutil -store -user My` |
+| `Cannot find certificate` by subject | Multiple certs | `sign.py` pins the `CERTIFICATE_SHA1` thumbprint — verify with `certutil -store -user My` |
+| Every `signtool` attempt times out at 60 s (and `certutil` enumeration times out too) | The eToken is not answering its private-key step; the cert is not missing | Re-seat the token or log in to it in SafeNet Authentication Client, confirm with one manual `signtool` call (run it from PowerShell or cmd: Git Bash rewrites `/fd` into a file path), then `python build/windows/build.py --skip-build` re-signs the existing build without rebuilding |
 | Timestamp server timeout | DigiCert slow | Alternative: `http://timestamp.sectigo.com` — edit `TIMESTAMP_SERVER` in `sign.py` |
 
 ### SmartScreen warnings are NOT a signing failure
@@ -615,14 +616,14 @@ End-to-end process for shipping a new Windows version. **Do not skip steps** —
 Single source of truth: `src/__version__.py`. `build/windows/build.py` reads from it; the auto-updater compares against it.
 
 ```python
-__version__ = "1.3.1"  # was 1.3.0
+__version__ = "x.y.z"
 ```
 
-This flows into the installer filename (`Alpha-OSK-Setup-1.0.8.exe`), NSIS `APP_VERSION` (Add/Remove Programs), and the registry `DisplayVersion`.
+This flows into the installer filename (`Alpha-OSK-Setup-x.y.z.exe`), NSIS `APP_VERSION` (Add/Remove Programs), and the registry `DisplayVersion`.
 
 ### 2. Update `CHANGELOG.md`
 
-Add a new `## [x.y.z] — YYYY-MM-DD` section at the top under `[Unreleased]`. Categorize under `### Added` / `### Fixed` / `### Changed` / `### Chores`.
+Add a new `## [x.y.z] (YYYY-MM-DD)` section at the top under `[Unreleased]`. Categorize under `### Added` / `### Fixed` / `### Changed` / `### Chores`.
 
 ### 2a. Verify telemetry endpoint (if telemetry is in scope for this release)
 
@@ -647,7 +648,7 @@ git commit -m "chore: bump version to x.y.z"
 python build/windows/build.py
 ```
 
-The script: checks prereqs → runs PyInstaller → signs all `.exe` in `dist/alpha-osk/` → builds NSIS installer → signs installer → verifies signatures.
+The script: checks prereqs → runs PyInstaller → checks the exe's embedded manifest requests UIAccess (`verify_exe_requests_uiaccess`) → signs all `.exe` in `dist/alpha-osk/` → builds NSIS installer → checks the installer's version (`verify_installer_version`) → signs installer → verifies signatures.
 
 ### 5. Test the installer
 
@@ -697,8 +698,6 @@ The lockfile (~5-10 KB) is the human/pip-friendly answer; the SBOM (~100 KB) is 
 ```
 
 To add it to an already-published release: `gh release view vX.Y.Z --repo owenpkent/alpha-osk-releases --json body --jq .body > body.md`, prepend the block, then `gh release edit vX.Y.Z --repo owenpkent/alpha-osk-releases --notes-file body.md`. See *SmartScreen warnings are NOT a signing failure* under Code Signing for why this is reputation, not a signing bug.
-
-**First release after 1.5.0: tell users to start the keyboard once from the Start menu after updating.** That one upgrade is relaunched by 1.5.0's own post-update helper (the helper is copied from the version being replaced), which starts the keyboard without UIAccess, so until its next start from the Start menu it cannot type into windows running as administrator. Upgrades started from that release onward relaunch through Explorer and need nothing; drop this line once it has shipped. See `AUTO_UPDATE.md`.
 
 ### 8. Confirm alphaosk.com picked it up
 
@@ -758,16 +757,16 @@ Both emit unconditionally on every build (including `--skip-build`, since bumpin
 
 **Worker side.** `backend/cf-worker/` ships a second SBOM via `npm run sbom` (npm's built-in `npm sbom --sbom-format cyclonedx`, which writes CycloneDX 1.5). The `predeploy` npm script chains it before `wrangler deploy`, so every deploy has a fresh SBOM next to it (file is in `.gitignore`: regenerate any time from the committed `package-lock.json`). The lockfile *is* checked in, and the SBOM is read from it (`--package-lock-only`), so it is the same on every machine. It describes the build toolchain (Wrangler, TypeScript, esbuild): the worker has no runtime `dependencies`.
 
-**CI-time CVE scanning.** `.github/workflows/ci.yml` has an `osv-scan` job pinned to `google/osv-scanner-action@9a498708959aeaef5ef730655706c5a1df1edbc2` (v2.3.8) that reads both lockfiles (`requirements-dev.txt` + `backend/cf-worker/package-lock.json`) and queries the OSV database on every push and PR. **Merges are gated** (`fail-on-vuln: true`): any CVE in either lockfile fails CI. The earlier known noise (six Wrangler-3.x findings: one moderate esbuild, five medium-to-high undici) was resolved by upgrading the worker to Wrangler 4.x, which ships clean esbuild and miniflare 4. The Python side had one transitive lxml advisory (GHSA-vfmq-68hx-4jfw, fixed in 6.1.0) flowing through `cyclonedx-bom`; it's pinned away via `lxml>=6.1.0` in `requirements-dev.txt`. SARIF upload to the Security tab is **disabled** (`upload-sarif: false`) by default; findings surface in the job's annotations / summary. Originally disabled because the source repo was private and GitHub Advanced Security was off; the repo went public on 2026-05-16, so SARIF upload could be re-enabled — left off for now because the job summary already carries the same findings and publishing to the Security tab is a separate disclosure decision. If a new advisory lands that we cannot fix before the next push, quarantine it with an `osv-scanner.toml` ignore entry rather than flipping `fail-on-vuln` back to false.
+**CI-time CVE scanning.** `.github/workflows/ci.yml` runs `google/osv-scanner-action`, pinned by SHA (not quoted here, since a bump would leave this page stale) in two jobs: `osv-scan`, which runs on pull requests through the reusable PR workflow and fails only on vulnerabilities the PR introduces, and `osv-scan-main`, the full scan on every push to `main`. `.github/workflows/osv-nightly.yml` pins the same action for the daily full scan, and a bump changes all three occurrences together. It reads both lockfiles (`requirements-dev.txt` + `backend/cf-worker/package-lock.json`) and queries the OSV database. **Merges are gated** (`fail-on-vuln: true`): any CVE in either lockfile fails CI. The earlier known noise (six Wrangler-3.x findings: one moderate esbuild, five medium-to-high undici) was resolved by upgrading the worker to Wrangler 4.x, which ships clean esbuild and miniflare 4. The Python side had one transitive lxml advisory (GHSA-vfmq-68hx-4jfw, fixed in 6.1.0) flowing through `cyclonedx-bom`; it's pinned away via `lxml>=6.1.0` in `requirements-dev.txt`. SARIF upload to the Security tab is **disabled** (`upload-sarif: false`) by default; findings surface in the job's annotations / summary. Originally disabled because the source repo was private and GitHub Advanced Security was off; the repo went public on 2026-05-16, so SARIF upload could be re-enabled — left off for now because the job summary already carries the same findings and publishing to the Security tab is a separate disclosure decision. If a new advisory lands that we cannot fix before the next push, quarantine it with an `osv-scanner.toml` ignore entry rather than flipping `fail-on-vuln` back to false.
 
-**Maintenance.** Bump `cyclonedx-bom` in `requirements-dev.txt` when CVE advisories appear (it's a build-only tool, so bumps are low-risk). Bump `wrangler` in `backend/cf-worker/package.json` when transitive CVEs flow through it (run `osv-scanner --lockfile=backend/cf-worker/package-lock.json` locally to confirm the fix before pushing; the worker is a minimal ESM-module / D1-binding worker, so major bumps are typically drop-in). Bump the `google/osv-scanner-action` pinned SHA in `ci.yml` quarterly or when a feature is needed (Dependabot does not yet reliably bump reusable-workflow refs):
+**Maintenance.** Bump `cyclonedx-bom` in `requirements-dev.txt` when CVE advisories appear (it's a build-only tool, so bumps are low-risk). Bump `wrangler` in `backend/cf-worker/package.json` when transitive CVEs flow through it (run `osv-scanner --lockfile=backend/cf-worker/package-lock.json` locally to confirm the fix before pushing; the worker is a minimal ESM-module / D1-binding worker, so major bumps are typically drop-in). Bump the `google/osv-scanner-action` pinned SHA (all three occurrences, in `ci.yml` and `osv-nightly.yml`) quarterly or when a feature is needed (Dependabot does not yet reliably bump reusable-workflow refs):
 
 ```bash
 gh api repos/google/osv-scanner-action/releases/latest --jq '.tag_name'
 gh api repos/google/osv-scanner-action/git/refs/tags/<tag> --jq '.object.sha'
 ```
 
-Update the `@<sha> # <tag>` line in `ci.yml` and commit.
+Update the `@<sha> # <tag>` line in each place and commit.
 
 **Quarantining an unfixable advisory.** With `fail-on-vuln: true`, an unpatched CVE against a dependency already on `main` fails the full scan on every push to `main` and the daily `osv-nightly.yml` run until it's addressed (pull requests fail only on advisories they introduce). The normal path is to upgrade the affected package (bump the direct dep, or pin a transitive constraint as we did for `lxml`). If a fix genuinely is not yet available upstream, add an `osv-scanner.toml` **beside the lockfile it applies to** (the repo root for `requirements-dev.txt`, `backend/cf-worker/` for the worker; the scanner does not look anywhere else, so a worker entry at the root is silently ignored) listing the specific advisory IDs to ignore, with a reason and a review date:
 
@@ -886,7 +885,7 @@ higher-integrity windows) without granting broad admin access.  See the
 |---------|-------|-----|
 | Keys don't appear in any app | SendInput failing | Check logs for errors; restart Alpha-OSK |
 | Keys don't appear in **elevated** apps | No UIAccess | Sign with EV cert and install to Program Files |
-| Keys don't appear in **Blender / VirtualBox / a DirectInput game** | Pre-1.x.y versions used Unicode-only injection (`VK_PACKET`) which raw-input apps filter out | Update to a build that includes scancode-mode dispatch (see "Three Injection Modes" above). If still broken, file a bug with the app name and the foreground-window class. |
+| Keys don't appear in **Blender / VirtualBox / a DirectInput game** | Older builds used Unicode-only injection (`VK_PACKET`) which raw-input apps filter out | Update to a build that includes scancode-mode dispatch (see "Three Injection Modes" above). If still broken, file a bug with the app name and the foreground-window class. |
 | **Plain typing works over TeamViewer/RDP/VNC but Ctrl+V / Ctrl+C / other shortcuts do nothing** | Earlier builds sent chords in Virtual-Key mode; remote-desktop clients forward by scancode and dropped the modifier, so Ctrl+V arrived as a bare `v` | Update to a build where chords use scancode mode (see the chord note under "Three Injection Modes"). Letters always worked because text already used scancode mode. |
 | Keys appear but **wrong case** in a specific app | OS Caps Lock LED out of sync with the OSK's Caps button | Toggle the OSK Caps button to resync, or press the physical Caps Lock once. The scancode path queries the OS Caps Lock LED, so the OSK side reflects whatever the OS thinks. |
 | Keys appear but wrong characters on a non-US layout | Most chars take the scancode path which is layout-aware via `VkKeyScanW`; a few exotic chars fall back to Unicode mode (also layout-independent). File a bug with the layout name and the failing chars. |
@@ -938,7 +937,7 @@ Or check the startup log output:
 | **Config directory** | `~/.config/alpha-osk/` | `%APPDATA%\alpha-osk\` |
 | **Model storage** | `~/.config/alpha-osk/models/` | `%APPDATA%\alpha-osk\models\` |
 | **Venv Python path** | `venv/bin/python` | `venv\Scripts\python.exe` |
-| **Build/packaging** | Not yet defined | PyInstaller (`.spec` file in `build/`) |
+| **Build/packaging** | PyInstaller via `build/linux/build.py` (optional AppImage) | PyInstaller (`build/windows/alpha-osk.spec`) plus NSIS, driven by `build/windows/build.py` |
 | **Display server** | X11 or Wayland | Windows Desktop Window Manager |
 
 ### What's Identical
@@ -976,14 +975,11 @@ Or check the startup log output:
 
 2. **Scancode mode for ASCII text, Unicode mode as fallback**: Originally we used `KEYEVENTF_UNICODE` for every printable character because it is layout-independent and supports the full Unicode range. That choice broke any application that filters on real virtual-key codes or reads raw scancodes (Blender, VirtualBox, DirectInput games, raw-input 3D / CAD / audio software) because Unicode injection synthesises a `WM_KEYDOWN(VK_PACKET)` that those apps ignore. The current default is `KEYEVENTF_SCANCODE`, which produces a normal `WM_KEYDOWN(VK_X)` derived from the scancode under the active layout. Per-character fallback to `KEYEVENTF_UNICODE` covers non-ASCII chars, dead-key triggers, AltGr-required chars, and the unsafe corner case where the user is physically holding Shift but the char does not need shift. See "Three Injection Modes" above for the full resolution path.
 
-3. **Virtual-key mode for specials**: Special keys (Backspace, Enter,
-   F-keys, arrows) and modifier combinations (Ctrl+C) use virtual-key
-   codes, which is the correct approach for non-character keys. The scancode is also populated in `wScan` so remote-desktop forwarding works.
+3. **Scancode events for specials and chords**: Special keys (Backspace, Enter,
+   F-keys, arrows) and modifier combinations (Ctrl+C) are named by virtual-key
+   code but sent through `_make_vk_scancode_event`, which translates the VK to the layout scancode and sets `KEYEVENTF_SCANCODE` so remote-desktop forwarding works. A `wVk`-mode event is only the fallback for a key with no scancode on the active layout.
 
 4. **UIAccess via manifest**: Rather than requiring the user to run as
    Administrator (which has security implications), we use the UIAccess
    mechanism designed specifically for assistive technology.
 
----
-
-*Last updated: April 2026*

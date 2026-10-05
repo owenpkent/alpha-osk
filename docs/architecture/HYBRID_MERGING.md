@@ -79,8 +79,8 @@ still contributes roughly 10% of rank-1.
 
 `_short_word_allowed` gates one- and two-letter words out of
 **next-word** predictions.  Anything three characters or longer passes
-untouched; shorter words must be in
-`NgramPredictor._SHORT_WORD_WHITELIST`.  Mid-word completions bypass the
+untouched; shorter words must pass
+`profile.is_short_word`, backed by `LanguageProfile.short_words`.  Mid-word completions bypass the
 filter entirely, since users should still be able to complete short words.
 
 It used to be a blanket exclusion of everything `<= 2` characters, with
@@ -97,7 +97,7 @@ the engine learns whatever the user types: two-character fragments
 the model too, and relaxing the length would let all of them compete for
 a pill.  Words, not lengths.
 
-The list is `NgramPredictor._SHORT_WORD_WHITELIST` rather than a second
+The list is `LanguageProfile.short_words` (`src/prediction/language.py`) rather than a second
 set in `hybrid_predictor`, because it is already the project's answer to
 "real word or keyboard slip" (it gates the dictionary-load fragment filter in
 `_is_plausible_word`), and a private copy would be one more thing to

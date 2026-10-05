@@ -14,7 +14,7 @@ GitHub Actions runs). Default mode skips coverage tracking (~60 s); add
 exactly). `python check.py --install-hook` writes `.git/hooks/pre-push` so
 it runs on `git push` instead of from memory; `git push --no-verify` is the
 escape hatch. Hooks are not version controlled, so a fresh clone has to run
-that once.
+that once. The hook also works from linked git worktrees: it looks for `venv/` in the worktree, then in the main checkout via `git rev-parse --git-common-dir` (see `check.py`'s `_PRE_PUSH_HOOK`), so `--no-verify` is not needed there, and `check.py`'s end-of-run tip says when the installed hook is an older copy to reinstall.
 
 ## The suite is sharded with `pytest-xdist`, and there is no fast subset
 

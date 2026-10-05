@@ -1,5 +1,7 @@
 # Launch Plan — target 2026-05-26 (launch window May 26 – Jun 1)
 
+> **Note (2026-10-05):** this plan is historical. The telemetry worker has been live since 1.4.0 (`DEFAULT_ENDPOINT` in `src/telemetry.py` is the production worker URL) and the current release is 1.7.0. The checklist below was not maintained, so its pending items are not a record of what is still open.
+
 Living checklist for the next Alpha-OSK release. **Three-week window**, today is 2026-05-07. Update status fields as you go; nothing here is fixed until shipped. Aligned with the OKStudio cross-product launch sequence in `C:\Users\Owen\dev\OKStudio-Company-Info\strategy\LAUNCH_AND_HYPE_PLAYBOOK.md` (Alpha-OSK is the audience-builder for MacroVox / Octavium / Nimbus later in 2026).
 
 ## What's launching

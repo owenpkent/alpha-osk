@@ -11,7 +11,7 @@ Type into any Windows or Linux app by clicking on-screen keys. Built for people 
 [![Website](https://img.shields.io/badge/website-alphaosk.com-4a9eff.svg)](https://alphaosk.com)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![CI](https://github.com/owenpkent/alpha-osk/actions/workflows/ci.yml/badge.svg)](https://github.com/owenpkent/alpha-osk/actions/workflows/ci.yml)
-[![Tests](https://img.shields.io/badge/tests-2045-brightgreen.svg)](tests/)
+[![Tests](https://img.shields.io/badge/tests-3400%2B-brightgreen.svg)](tests/)
 [![Releases](https://img.shields.io/badge/releases-alpha--osk--releases-orange.svg)](https://github.com/owenpkent/alpha-osk-releases/releases)
 
 <img src="assets/screenshots/dark-theme-keyboard.png" alt="Alpha-OSK on-screen keyboard with function row, QWERTY block, navigation cluster, and numpad" width="900" />
@@ -58,7 +58,7 @@ You're a hiring manager, reviewer, or accessibility researcher checking the rigo
 
 ## What it is
 
-Alpha-OSK is an on-screen keyboard for Windows and Linux. You click keys in the keyboard window to type into whatever other application has focus: editor, browser, terminal, chat client, even a game or a remote-desktop session. The keyboard never steals focus from the app you're typing into, stays above other windows, and remembers its size and position between sessions.
+Alpha-OSK is an on-screen keyboard for Windows and Linux. You click keys in the keyboard window to type into whatever other application has focus: editor, browser, terminal, chat client, even a game or a remote-desktop session. The keyboard never steals focus from the app you're typing into, stays above other windows (unless you turn *Always on Top* off), and remembers its size and position between sessions.
 
 As you click, the keyboard learns your vocabulary and surfaces predictions as clickable pills above the keys. Accept a pill to skip the rest of the word. Right-click a pill to teach the keyboard your preferences. Prediction and learning run entirely on your machine: no model upload, no cloud round-trip, no LLM. Optional voice dictation is the single feature that sends anything out, it is off by default, and it needs a recogniser API key of your own before it does anything at all. The project exists because the author is a wheelchair user with muscular dystrophy and the keyboards shipped with Windows and Linux are inadequate for daily use. Every design decision in here is grounded in that constraint.
 
@@ -95,7 +95,7 @@ python run.py
 
 After the keyboard window appears:
 
-1. **Click into the app you want to type into.** The on-screen keyboard floats above other windows but never takes focus. Whatever app you click last is where your keystrokes go. Open a Notepad or browser tab to try it.
+1. **Click into the app you want to type into.** The on-screen keyboard floats above other windows by default but never takes focus. Whatever app you click last is where your keystrokes go. Open a Notepad or browser tab to try it.
 2. **Click letters on the keyboard.** They appear in the focused app exactly as a physical keypress would. Try typing a sentence.
 3. **Watch the pills above the keys.** After a few characters, prediction pills appear. Click any pill to insert the rest of that word plus a space. The longer you use the keyboard, the better the predictions get.
 4. **Move the window.** Drag the dark title bar at the top to reposition. Drag either left or right edge to resize the width; height auto-fits content.
@@ -176,7 +176,7 @@ Windows: `%APPDATA%\alpha-osk\`. Linux: `~/.config/alpha-osk/`. The model files 
 **Does any of this send my typing to a server?**
 Your typing, no. Your voice, only if you switch on Dictation and supply your own Deepgram API key: while the microphone is open that audio goes to Deepgram to be transcribed, and at no other time. Dictation is off by default and inert without a key. See [`docs/PRIVACY.md`](docs/PRIVACY.md).
 
-Nothing else leaves the machine on its own. The opt-in anonymous-stats client is wired into the app but `DEFAULT_ENDPOINT` is currently the empty string, so the client silently no-ops every submission attempt regardless of the toggle. When the endpoint is deployed in a future release, opting in would send nine integer counters per week (lifetime keystroke count, words typed, predictions used, etc.) plus a random UUID. Never content, word frequencies, key frequencies, IP, or hostname. See [`docs/PRIVACY.md`](docs/PRIVACY.md).
+The other thing that can leave the machine is anonymous usage stats, and only if you agree to them. They are off in the app by default (*Settings > Data & Privacy > Privacy*, "Share anonymous usage stats"). The Windows installer asks the same question on its own page, showing the whole message, and its box is ticked, so clicking straight past it agrees; untick it to decline. With it on, the keyboard sends a weekly report of ten fields: your lifetime counters (keystrokes, words, predictions used, keystrokes saved, minutes, sessions, suggestions offered), the app version, your OS, and a random ID that is replaced if you turn the setting off and on again. Never content, word frequencies, key frequencies, IP, or hostname. See [`docs/PRIVACY.md`](docs/PRIVACY.md).
 
 **Something went wrong. What should I send with the bug report?**
 The diagnostic log. **Settings > Data & Privacy > Diagnostics** has **Open Log Folder** and **Copy Path**; the file is `alpha-osk.log` in your config directory. It records errors and crashes, including the full traceback if the app falls over, and never records what you type.
@@ -195,7 +195,7 @@ Yes on Windows (Unicode keystroke injection covers anything in BMP and supplemen
 | Hybrid prediction engine | Shipping |
 | Custom vocabulary import | Shipping |
 | Auto-update (Windows) | Shipping |
-| Anonymous telemetry (opt-in) | Client + UI shipped, endpoint not yet deployed |
+| Anonymous telemetry (opt-in) | Shipping |
 | Analytics dashboard | Shipping |
 | Data backup (export / import) | Shipping |
 | Test suite | Passing; `python -m pytest --collect-only -q` prints the live count |
@@ -275,7 +275,7 @@ src/
   keyboard_app.py      QML engine, window flags, OS focus handling
   keyboard_bridge.py   Python <-> QML bridge: keys, modifiers, predictions, context
   platform/            OS abstraction (Linux xdotool/ydotool, Windows SendInput, macOS Quartz)
-  prediction/          Hybrid engine: n-gram, PPM, fuzzy, hybrid orchestrator
+  prediction/          Hybrid engine: n-gram, fuzzy, hybrid orchestrator (PPM trains but is out of the merge)
   dictation/           Voice input: settings + key storage, mic capture, provider, state machine
   analytics.py         Session + lifetime stats
   telemetry.py         Opt-in anonymous metrics client
@@ -327,7 +327,7 @@ For security issues, follow [`SECURITY.md`](SECURITY.md). Do not file public iss
 - Dictation is the one feature that sends content rather than counters, and it is off until you enable it and add your own Deepgram API key. Audio goes to Deepgram only while the microphone is open, is never written to disk, and what you dictate is not added to your learned vocabulary. A focused password field cancels a run outright rather than letting it finish. Your key is stored on this machine (encrypted with DPAPI on Windows) and is **excluded** from Data Backup exports.
 - Password fields are auto-detected (Windows UI Automation, Linux AT-SPI) and pause learning automatically. There's also a manual **Learning** switch in the title bar.
 - To know when its suggestions have gone stale, the keyboard watches which app is in front, which control has focus, where the caret is, and whether you clicked outside the keyboard. All of it is read locally, used once, and discarded: nothing is logged, stored, or sent. See [`docs/PRIVACY.md`](docs/PRIVACY.md).
-- Telemetry is opt-in and off by default. The client and the consent toggle are in the build, but the submission endpoint isn't deployed yet, so opting in is currently a no-op. When the endpoint goes live, opting in would send nine integer counters per week and never any content. See [`docs/PRIVACY.md`](docs/PRIVACY.md) and [`docs/architecture/TELEMETRY.md`](docs/architecture/TELEMETRY.md).
+- Telemetry is opt-in: off in the app by default, and asked once on its own page by the Windows installer, where the box is ticked and unticking it declines. Opting in sends ten fields a week (lifetime counters, app version, OS and a random ID) and never any content. Turning it off clears the ID, and *Delete my contributed data* removes what was sent. See [`docs/PRIVACY.md`](docs/PRIVACY.md) and [`docs/architecture/TELEMETRY.md`](docs/architecture/TELEMETRY.md).
 - Data export bundles your model, lifetime stats, and imported vocabulary packs into a single `.zip` you control. The telemetry contributor ID is **excluded** from exports so contributions stay unlinkable across machines.
 - Auto-update fetches release metadata from GitHub. Installers are verified against an EV-signed certificate before launching.
 

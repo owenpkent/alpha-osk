@@ -2,11 +2,11 @@
 
 ## Vision
 
-Alpha-OSK currently has one layout: a standard QWERTY keyboard with prediction bar. But different tasks need different input surfaces:
+Alpha-OSK ships general typing layouts (QWERTY, compact QWERTY, Dvorak, Colemak) with a prediction bar. But different tasks need different input surfaces:
 
 | Use Case | What's Needed |
 |----------|--------------|
-| **General typing** | QWERTY + prediction bar (current) |
+| **General typing** | QWERTY / Dvorak / Colemak + prediction bar (shipped) |
 | **Video editing** | Transport controls (JKL), timeline shortcuts (Ctrl+Z, Ctrl+S), marker keys |
 | **Gaming** | WASD cluster, number bar, function keys, macro buttons |
 | **Streaming** | Scene switches (OBS hotkeys), chat macros, media controls |
@@ -123,11 +123,11 @@ A layout is a JSON file that defines rows of keys with actions:
 
 ### Level 1 — Built-in Layout Packs (low effort)
 
-Ship pre-made layouts as JSON files in `data/layouts/`:
+`data/layouts/` already ships `qwerty.json`, `qwerty-compact.json`, `dvorak.json` and `colemak.json`. The task-specific packs below are proposals:
 
 ```
 data/layouts/
-├── qwerty.json          (default — current keyboard)
+├── qwerty.json          (shipped; also qwerty-compact, dvorak, colemak)
 ├── video-editing.json   (DaVinci/Premiere shortcuts)
 ├── gaming-fps.json      (WASD + number bar + function keys)
 ├── gaming-moba.json     (QWER abilities + item slots)

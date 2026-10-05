@@ -71,10 +71,12 @@ the window is empty.
 Same flags, same manual drag (never `startSystemMove()`), same
 desktop-wide `clampedWindowPos` restore, same write-position-on-release. It
 is found by `objectName` from `keyboard_app.py::_wire_floating_windows`,
-which now loops over both windows and re-applies `WS_EX_NOACTIVATE` on every
-`visibleChanged`; the per-window handler binds its target as a **default
-argument** rather than closing over the loop variable, which would otherwise
-leave both handlers styling whichever window was found last.
+which wires all six floating windows (snippets, symbols, study, settings, help
+and viz) from the per-window table in `_floating_window_styles`, re-applying
+the right styling on every `visibleChanged`; the per-window handler binds its
+target as a **default argument** rather than closing over the loop variable,
+which would otherwise leave every handler styling whichever window was found
+last.
 
 The grid pages 8 x 4 and the Repeater's model is the **page size, not the
 glyphs remaining**, so a short last page keeps its empty cells and the pager

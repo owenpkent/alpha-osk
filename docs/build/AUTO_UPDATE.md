@@ -12,7 +12,7 @@ Source code lives at `owenpkent/alpha-osk`; release binaries live in a separate 
 
 ### The 2026-08-17 owner move, and the redirect it now depends on
 
-The releases repo moved from the `okstudio1` organisation to `owenpkent`. Because the endpoint is pinned per build, **every install through v1.2.2 still requests the `okstudio1` path and always will**. They keep working on GitHub's transfer redirect: a transferred repo's old REST path answers `301 Moved Permanently` with `Location: https://api.github.com/repositories/<id>/releases/latest`, and `urllib.request.urlopen` (what `_fetch_latest_release` uses) follows it transparently on a GET. Verified before the move against `facebook/jest`, which was transferred to `jestjs/jest`: the old path returns the new owner's release JSON, status 200.
+The releases repo moved from the `okstudio1` organisation to `owenpkent`. Because the endpoint is pinned per build, **every install through v1.2.2 still requests the `okstudio1` path and always will**. They keep working on GitHub's transfer redirect: a transferred repo's old REST path answers `301 Moved Permanently` with `Location: https://api.github.com/repositories/<id>/releases/latest`, and `urllib.request.urlopen` (what `check_for_update` uses) follows it transparently on a GET. Verified before the move against `facebook/jest`, which was transferred to `jestjs/jest`: the old path returns the new owner's release JSON, status 200.
 
 Three things follow, and each is a way to break it:
 
@@ -69,65 +69,16 @@ The simplest path that leverages existing infrastructure.
    ```
    This is the **public release-binaries** repo. The source repo (`owenpkent/alpha-osk`) is also public as of 2026-05-16, but the split is preserved because every shipped client is hard-pinned to the releases-repo URL.
 2. Compare the release tag (e.g., `v1.0.2`) against the running version.
-3. If newer, show a notification in the system tray: "Alpha-OSK v1.0.2 available — click to update."
+3. If newer, show an in-app banner in the keyboard window offering Install or Later.
 4. User clicks → app downloads the installer `.exe` from the release assets to `%TEMP%`.
-5. App launches the installer silently: `Alpha-OSK-Setup-1.0.2.exe /S`
+5. App launches the installer silently: `Alpha-OSK-Setup-1.0.2.exe /S /D=<install dir>` (the directory comes from `_install_target_dir()`)
 6. The NSIS installer kills the running instance (`taskkill /F /IM alpha-osk.exe` in `customInit`), uninstalls the old version, installs the new one, and **relaunches the new app** via `explorer.exe` (drops admin IL → user IL — see `build/windows/installer.nsh`'s `customInstall`). The `IfSilent` gate scopes auto-relaunch to the auto-update path only; an interactive install does not auto-launch the app on completion.
 
-**The helper launches the new keyboard through `explorer.exe`, never with `CreateProcess` directly** (`_update_relauncher._launch_command`). A UIAccess application started by a process that has no UIAccess itself, whether by `CreateProcess` or `ShellExecuteEx`, comes up with `TokenUIAccess=0`; started by Explorer it comes up with 1 (measured 2026-10-04 against `osk.exe`). The helper runs from `%TEMP%`, outside every secure location, so it has none to pass on. This is the same relay `installer.nsh` uses for its own launch, and it is safe here because the helper and Explorer both run at the user's integrity level; the relay only failed when the elevated installer tried it, which is what the helper was created to replace. With Explorer in between, a successful `Popen` only proves Explorer started, so both paths then wait up to `_NEW_OSK_APPEAR_TIMEOUT_S` (15 s) for an `alpha-osk.exe` process, matched on the exact image name so the helper's own `alpha-osk-relauncher.exe` never counts, and report a failed launch (exit 4, the splash's Start-menu message, no handoff) when none appears. The helper is a copy taken from the version that *started* the update, so this only governs upgrades started by a build that carries it: the first upgrade from 1.5.0 (or earlier) into such a build is relaunched by 1.5.0's helper, which still calls `Popen([exe])` directly, and that keyboard has no UIAccess until its next start from the Start menu (a one-time instruction for that release's notes, see the release checklist in `WINDOWS.md`).
+**The helper launches the new keyboard through `explorer.exe`, never with `CreateProcess` directly** (`_update_relauncher._launch_command`). A UIAccess application started by a process that has no UIAccess itself, whether by `CreateProcess` or `ShellExecuteEx`, comes up with `TokenUIAccess=0`; started by Explorer it comes up with 1 (measured 2026-10-04 against `osk.exe`). The helper runs from `%TEMP%`, outside every secure location, so it has none to pass on. This is the same relay `installer.nsh` uses for its own launch, and it is safe here because the helper and Explorer both run at the user's integrity level; the relay only failed when the elevated installer tried it, which is what the helper was created to replace. With Explorer in between, a successful `Popen` only proves Explorer started, so both paths then wait up to `_NEW_OSK_APPEAR_TIMEOUT_S` (15 s) for an `alpha-osk.exe` process, matched on the exact image name so the helper's own `alpha-osk-relauncher.exe` never counts, and report a failed launch (exit 4, the splash's Start-menu message, no handoff) when none appears. The helper is a copy taken from the version that *started* the update, so this only governs upgrades started by a build that carries it: the first upgrade from 1.5.0 (or earlier) into such a build is relaunched by 1.5.0's helper, which still calls `Popen([exe])` directly, and that keyboard has no UIAccess until its next start from the Start menu (a one-time instruction, carried in the 1.6.0 release notes).
 
 ### Implementation Plan
 
-**New file: `src/updater.py`**
-```python
-import json
-import urllib.request
-import subprocess
-import tempfile
-import logging
-from pathlib import Path
-
-GITHUB_API = "https://api.github.com/repos/owenpkent/alpha-osk-releases/releases/latest"
-CURRENT_VERSION = "1.0.1"  # or read from a version file
-
-def check_for_update() -> dict | None:
-    """Check GitHub for a newer release. Returns release info or None."""
-    try:
-        req = urllib.request.Request(GITHUB_API, headers={"Accept": "application/vnd.github.v3+json"})
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            data = json.loads(resp.read())
-        tag = data.get("tag_name", "").lstrip("v")
-        if tag > CURRENT_VERSION:
-            # Find the installer asset
-            for asset in data.get("assets", []):
-                if asset["name"].endswith(".exe") and "Setup" in asset["name"]:
-                    return {
-                        "version": tag,
-                        "url": asset["browser_download_url"],
-                        "name": asset["name"],
-                        "notes": data.get("body", ""),
-                    }
-    except Exception:
-        pass
-    return None
-
-def download_and_install(url: str, filename: str) -> None:
-    """Download installer to temp dir and run it silently."""
-    dest = Path(tempfile.gettempdir()) / filename
-    urllib.request.urlretrieve(url, dest)
-    # /S = silent, installer handles kill + uninstall + install + relaunch
-    subprocess.Popen([str(dest), "/S"])
-```
-
-**Integration points:**
-- `keyboard_app.py`: call `check_for_update()` on startup (in a background thread)
-- System tray menu: add "Update Available (v1.0.2)" action when update found
-- Settings panel: "Check for Updates" button + "Auto-check on startup" toggle
-
-**Version tracking:**
-- Add `VERSION = "1.0.1"` to a `src/__version__.py` file
-- Read it in the updater and in `build/windows/build.py` (single source of truth)
-- The NSIS installer already writes `DisplayVersion` to the registry
+This section used to hold the original pre-implementation design sketch (a bare `urlretrieve` plus `/S`, a system-tray entry). It was superseded by the shipped implementation in `src/updater.py` (`check_for_update`, `is_newer`, `_download_with_cap`, `_HTTP_TIMEOUT_SECONDS`), which is the reference.
 
 ### Pros
 - Zero new infrastructure — uses GitHub Releases you already have
@@ -328,7 +279,7 @@ test spawns a real OS process", which has to hold for tests nobody has
 written yet; it is the same shape, and the same reasoning, as the
 `_unplug_the_live_desktop` fixture beside it. A test that wants the real
 function patches the same name and wins, since its own monkeypatch applies
-afterwards. `TestRelauncherSpawnHasNoConsole` does exactly that, via a
+afterwards. `TestRelauncherSpawn` does exactly that, via a
 module-level `_REAL_SPAWN_RELAUNCHER` captured at import time.
 
 **Worth knowing for the next one of these.** These windows were misread for
