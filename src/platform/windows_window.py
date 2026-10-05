@@ -371,7 +371,10 @@ def _write_styles(hwnd: int, *, taskbar_button: bool, topmost: bool = True) -> N
             kernel32.GetLastError(),
         )
 
-    _logger.info("Applied WS_EX_NOACTIVATE and placed the window in the topmost band")
+    _logger.info(
+        "Applied WS_EX_NOACTIVATE and placed the window in the %s band",
+        "topmost" if topmost else "ordinary",
+    )
 
 
 _HWND_TOP = 0
