@@ -15,15 +15,17 @@ finding.
 - **Decided:** 2026-05-16. Skip. **Revisited:** 2026-09-02, and the skip no
   longer applies: the repository is public and the rule now exists.
 - **What is configured now:** `main` requires the Lint, Type Check, Tests
-  and OSV Scanner checks to pass and refuses force-pushes and branch
-  deletion. It does not require a review (there is still one maintainer),
-  does not apply to administrators, and does not require a branch to be
-  up to date before merging. Those three gaps are deliberate, for the
-  motor-cost reason the original skip gave, and they are the residual
-  this entry now records: Scorecard will keep scoring the rule below
-  10/10 on the review requirement.
-- **Revisit when:** A second maintainer is added (then require a review),
-  or a bad merge lands that an up-to-date requirement would have caught.
+  and OSV Scanner checks to pass, requires one approving review (since
+  2026-09-15), and refuses force-pushes and branch deletion. It does not
+  apply to administrators and does not require a branch to be up to date
+  before merging. Those two gaps are deliberate: GitHub will not let an
+  author approve their own PR, so the sole maintainer merges with
+  `gh pr merge --admin`, and the up-to-date requirement carries the
+  motor-cost the original skip described. They are the residual this
+  entry now records, and Scorecard will keep scoring the rule below 10/10
+  on them.
+- **Revisit when:** A second maintainer is added (then stop exempting
+  administrators), or a bad merge lands that an up-to-date requirement would have caught.
 - **Original reason (2026-05-16):** Solo-dev private repo. The protection adds a forced PR
   workflow on every change. Concrete cost (extra steps per fix) is
   high for an accessibility tool maintained by a user with motor
