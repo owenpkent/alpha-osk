@@ -531,6 +531,36 @@ counter breaks on the sequence nobody thought to write down).
   so a failure names the operation rather than the sequence. Plus the
   spatial model's normalisation and the `_context_buffer` / `_current_word`
   accounting.
+- **Keystroke state** (`tests/test_property_keystroke_state.py`, after
+  PowerToys Keyboard Manager's `MockedInput`): two state machines drive a
+  real bridge over `tests/fake_os_keyboard.py`, a synthesizer that models the
+  OS truthfully (a held Shift uppercases `send_text`, a held Ctrl turns it
+  into chords, `fail_after(n)` makes a call raise). After every step the
+  modifiers the OS holds must equal the ones the bridge reports active, and
+  every verbatim insert must arrive intact. **A new keystroke path or
+  modifier slot gets a rule here**; this is what found the release-before-flag
+  bug `_release_held` fixes. Do not weaken the fake to make a failure go away.
+- **Loader fuzzing** (`tests/test_property_loader_fuzz.py`): bytes, mutated
+  JSON and deep nesting into every on-disk loader, plus `text_patterns` under
+  a time bound. A new store's loader belongs in it.
+
+Loader fuzzing, import hardening and the engine invariants also run nightly
+under the `alpha-osk-deep` profile
+(`.github/workflows/fuzz-nightly.yml`, not derandomized, so each night tries
+new inputs); see `docs/build/CI.md` for reproducing a failure.
+
+### Model fingerprints and the prediction snapshot
+
+`tests/test_model_fingerprint.py` (after DasherCore's model tests) asserts
+that training is deterministic, save is byte-idempotent, text with nothing
+to learn changes nothing, and `clear_user_data()` returns to the fresh
+fingerprint. It also holds `tests/data/prediction_snapshot.json`, the top-5
+predictions for 30 probes. **An intended engine change fails it by design**:
+regenerate with `ALPHA_OSK_UPDATE_SNAPSHOT=1` and let the diff show the
+behaviour change in the PR. The n-gram and PPM break ranking ties by string,
+which is what keeps the snapshot stable across processes (string hashing is
+salted per process); a new sort over scores needs the same tie-break. `scripts/bench/bpc.py` is the matching intrinsic benchmark
+(PPM bits per character on the KSR corpora; numbers in `docs/architecture/PPM.md`).
 
 ### Autouse guards in `tests/conftest.py`
 
