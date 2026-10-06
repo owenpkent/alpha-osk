@@ -81,10 +81,13 @@ def _exit_build_settings() -> None:
         if _active_builds:
             return
         sys.setswitchinterval(_saved_interval)
-        resume = _saved_gc_enabled
-    if resume:
-        gc.freeze()
-        gc.enable()
+        # The collector comes back under the same lock that counted this
+        # build out.  Released first, a build entering in the gap would find
+        # no active builds and a disabled collector, save that as the
+        # baseline, and switch the collector off for good on its own way out.
+        if _saved_gc_enabled:
+            gc.freeze()
+            gc.enable()
 
 
 class _Notifier(QObject):

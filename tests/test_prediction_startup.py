@@ -575,6 +575,45 @@ def test_overlapping_builds_restore_the_settings_the_first_one_found(qapp):
     assert gc.isenabled()
 
 
+def test_a_build_entering_during_the_last_ones_restoration_waits_for_it(qapp, monkeypatch):
+    """The last build out restores the collector under the settings lock.
+
+    Restored after releasing it, a build arriving in that gap saw no active
+    builds and a still-disabled collector, saved "disabled" as the baseline,
+    and left the collector off for the rest of the process when it finished.
+    So the new build must not get in until the collector is back.
+    """
+    assert gc.isenabled()
+    real_enable = gc.enable
+    restoring, release = threading.Event(), threading.Event()
+
+    def gated_enable():
+        restoring.set()
+        assert release.wait(5)
+        real_enable()
+
+    monkeypatch.setattr(gc, "enable", gated_enable)
+    entered, go = threading.Event(), threading.Event()
+
+    def late_build(abort):
+        entered.set()
+        assert go.wait(5)
+        return PredictorDouble()
+
+    parents = [QObject(), QObject()]
+    first = PredictionLoader(lambda abort: PredictorDouble(), parents[0])
+    first.start()
+    assert restoring.wait(5)
+    second = PredictionLoader(late_build, parents[1])
+    second.start()
+    assert not entered.wait(0.3), "the new build got in before the collector was back"
+    release.set()
+    assert entered.wait(5)
+    go.set()
+    wait_for(lambda: first._job.done and second._job.done)
+    assert gc.isenabled()
+
+
 def test_publication_does_not_poll(qapp):
     """The worker wakes the UI thread once; nothing ticks meanwhile."""
     parent = QObject()
