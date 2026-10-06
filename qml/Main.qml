@@ -38,18 +38,21 @@ Window {
     objectName: "alphaOskKeyboard"
 
     // Closing the keyboard window means minimizing it, unless the app is
-    // quitting.  A close reaches this window from the taskbar's Close and
-    // from any UI Automation client's WindowPattern.Close, and Qt's default
-    // left the process running with the keyboard hidden: not on the taskbar,
-    // not in the accessibility tree, reachable only from the tray.  A switch
-    // user's scanner could therefore make the keyboard vanish beyond its own
-    // reach, and a user who closed it from the taskbar lost it the same way.
-    // Minimized, it stays on the taskbar and in the tree, and any client can
-    // bring it back.  The title bar's close and the tray's Quit end the app
-    // as before: they quit, and keyboard_app.py sets `quitting` when a quit
-    // begins, which is what lets this close through (Qt 6 cancels a quit if
-    // a window refuses to close).  Windows only: the scanning contract is
-    // Windows, and a minimize is inert on a tucked X11 window.
+    // quitting.  The close this is for is a UI Automation client's
+    // WindowPattern.Close, and Qt's default left the process running with
+    // the keyboard hidden: not on the taskbar, not in the accessibility tree,
+    // reachable only from the tray.  A switch user's scanner could therefore
+    // make the keyboard vanish beyond its own reach.  Minimized, it stays on
+    // the taskbar and in the tree, and any client can bring it back.
+    // A close from the shell (the taskbar's "Close window", Alt+F4, the
+    // system menu) is the user's and quits instead: it arrives as WM_CLOSE,
+    // which a UIA Close never sends, and windows_window.ShellCloseFilter
+    // consumes it and quits before it gets here.  The title bar's close and
+    // the tray's Quit end the app as before.  Every quit makes
+    // keyboard_app.py set `quitting`, which is what lets this close through
+    // (Qt 6 cancels a quit if a window refuses to close).  Windows only: the
+    // scanning contract is Windows, and a minimize is inert on a tucked X11
+    // window.
     property bool quitting: false
     onClosing: function (close) {
         if (Qt.platform.os !== "windows" || root.quitting)

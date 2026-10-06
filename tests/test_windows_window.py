@@ -17,9 +17,12 @@ import pytest
 from src.platform.windows_window import (
     SW_HIDE,
     SW_SHOWNOACTIVATE,
+    WM_CLOSE,
     WM_QUERYOPEN,
     QuietRestoreFilter,
+    ShellCloseFilter,
     apply_extended_styles,
+    install_shell_close_quits,
     restore_without_activating,
     set_app_user_model_id,
     surface_existing_instance,
@@ -662,3 +665,108 @@ class TestASecondLaunchLeavesTheForegroundAlone:
         calls = self._surface(monkeypatch, minimized=False)
         assert not [c for c in calls if c[0] == "ShowWindow"]
         assert {name for name, _ in calls} <= self.ALLOWED
+
+
+class TestATaskbarCloseQuits:
+    """The taskbar's "Close window" used to minimize the keyboard, because
+    ``Main.qml`` turns every close that is not part of a quit into a
+    minimize (so a scanner's UI Automation ``WindowPattern.Close`` cannot
+    strand it).  Measured on Qt 6.11.1 from a separate process: the taskbar
+    sends ``WM_CLOSE``, ``WM_SYSCOMMAND(SC_CLOSE)`` becomes ``WM_CLOSE`` in
+    ``DefWindowProc``, and ``WindowPattern.Close`` sends no window message.
+    ``ShellCloseFilter`` quits on the first and so never sees the last;
+    what is held here is its decision, message by message, each case paired
+    with one it must leave alone."""
+
+    HWND = 0x1234
+    SC_CLOSE = 0xF060
+    WM_SYSCOMMAND = 0x0112
+
+    def _filter(self):
+        window = MagicMock()
+        window.winId.return_value = self.HWND
+        quits: list = []
+        deferred: list = []
+        flt = ShellCloseFilter(window, lambda: quits.append(True), defer=deferred.append)
+        return flt, quits, deferred
+
+    def test_a_close_of_the_keyboard_quits(self) -> None:
+        flt, quits, deferred = self._filter()
+        assert flt.quits(self.HWND, WM_CLOSE) is True
+        assert quits == [], "the quit must wait until the message handler has returned"
+        for fn in deferred:
+            fn()
+        assert quits == [True]
+
+    def test_a_close_of_another_window_is_left_alone(self) -> None:
+        """The pickers and the dashboard keep their own close handling."""
+        flt, _, deferred = self._filter()
+        assert flt.quits(0x9999, WM_CLOSE) is False
+        assert deferred == []
+
+    def test_no_syscommand_is_acted_on_directly(self) -> None:
+        """``SC_CLOSE`` comes back as ``WM_CLOSE`` from ``DefWindowProc``,
+        so acting on it too would quit twice; and minimize, restore, move
+        and the rest are not closes at all.  The filter never reads wParam."""
+        flt, _, deferred = self._filter()
+        assert flt.quits(self.HWND, self.WM_SYSCOMMAND) is False
+        assert deferred == []
+
+    def test_every_other_message_is_left_alone(self) -> None:
+        flt, _, deferred = self._filter()
+        for message in (0x0000, 0x0002, 0x0013, 0x0011, 0x003D, 0x0016):
+            assert flt.quits(self.HWND, message) is False
+        assert deferred == []
+
+    def test_a_window_that_cannot_answer_for_its_id_is_left_alone(self) -> None:
+        flt, _, deferred = self._filter()
+        flt._window.winId.side_effect = RuntimeError("deleted")
+        assert flt.quits(self.HWND, WM_CLOSE) is False
+        assert deferred == []
+
+    def test_a_failing_quit_does_not_raise_into_the_event_loop(self) -> None:
+        window = MagicMock()
+        window.winId.return_value = self.HWND
+        deferred: list = []
+
+        def boom() -> None:
+            raise RuntimeError("no")
+
+        flt = ShellCloseFilter(window, boom, defer=deferred.append)
+        flt.quits(self.HWND, WM_CLOSE)
+        for fn in deferred:
+            fn()
+
+    @pytest.mark.skipif(sys.maxsize <= 2**32, reason="the MSG offsets are the 64-bit layout")
+    def test_the_native_filter_reads_a_real_msg(self) -> None:
+        """Consumed (so Qt never reaches onClosing's minimize) for the
+        keyboard's close, and passed through for anything else."""
+        import ctypes
+
+        class MSG(ctypes.Structure):
+            _fields_ = [
+                ("hwnd", ctypes.c_void_p),
+                ("message", ctypes.c_uint),
+                ("wParam", ctypes.c_size_t),
+                ("lParam", ctypes.c_ssize_t),
+            ]
+
+        flt, _, deferred = self._filter()
+        close = MSG(self.HWND, WM_CLOSE, 0, 0)
+        assert flt.nativeEventFilter(b"windows_generic_MSG", ctypes.addressof(close)) == (True, 0)
+        assert len(deferred) == 1
+        other = MSG(0x9999, WM_CLOSE, 0, 0)
+        assert flt.nativeEventFilter(b"windows_generic_MSG", ctypes.addressof(other)) == (
+            False,
+            0,
+        )
+        syscommand = MSG(self.HWND, self.WM_SYSCOMMAND, self.SC_CLOSE, 0)
+        assert flt.nativeEventFilter(b"windows_generic_MSG", ctypes.addressof(syscommand)) == (
+            False,
+            0,
+        )
+        assert len(deferred) == 1
+
+    def test_nothing_is_installed_off_windows(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(sys, "platform", "linux")
+        assert install_shell_close_quits(MagicMock(), lambda: None) is None
