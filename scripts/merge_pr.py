@@ -27,7 +27,16 @@ then merges, pinned to that exact commit with ``--match-head-commit``.
 A required check that was cancelled or timed out (a runner problem, not
 code) gets one automatic rerun per invocation.  A real failure never does.
 
-Exit codes: 0 merged (or dry run finished), 1 refused or failed, 2 timed out.
+What it cannot close: ``gh pr merge`` pins the head, never main, so another
+actor (Dependabot's auto-merge, a second invocation) can land between the
+last comparison and the merge call, and the head then lands on a main its
+checks never saw.  The comparison runs last, right before the merge, so
+that window is one API round trip wide, and the merge commit's parent is
+read back afterwards: a landing in the window is reported with exit code 3
+rather than hidden.  Closing it needs a server-side merge queue.
+
+Exit codes: 0 merged (or dry run finished), 1 refused or failed, 2 timed
+out, 3 merged but main moved in the window, so watch main's own CI run.
 """
 
 from __future__ import annotations
@@ -68,9 +77,26 @@ def _view(number: int) -> Dict:
     return json.loads(_gh_ok("pr", "view", str(number), "--json", fields))
 
 
+def _compare(repo: str, sha: str) -> Tuple[int, str]:
+    """Return (commits of main the head lacks, main's tip as of this call)."""
+    out = _gh_ok(
+        "api", f"repos/{repo}/compare/{BASE}...{sha}", "--jq", "[.behind_by, .base_commit.sha]"
+    )
+    behind, tip = json.loads(out)
+    return int(behind or 0), str(tip or "")
+
+
 def _behind_by(repo: str, sha: str) -> int:
-    out = _gh_ok("api", f"repos/{repo}/compare/{BASE}...{sha}", "--jq", ".behind_by")
-    return int(out.strip() or "0")
+    return _compare(repo, sha)[0]
+
+
+def _landed_on(repo: str, number: int) -> str:
+    """The commit a merged PR's squash commit sits on: its only parent."""
+    view = json.loads(_gh_ok("pr", "view", str(number), "--json", "mergeCommit"))
+    oid = (view.get("mergeCommit") or {}).get("oid", "")
+    if not oid:
+        return ""
+    return _gh_ok("api", f"repos/{repo}/commits/{oid}", "--jq", ".parents[0].sha").strip()
 
 
 def _required_contexts(repo: str) -> List[str]:
@@ -240,6 +266,13 @@ def main(argv: Optional[List[str]] = None) -> int:
                 else:
                     print(f"retargeting stacked PR #{child['number']} to {BASE}")
                     _gh_ok(*cmd)
+            # The last look at main, after the retargets have widened the gap
+            # since the previous one.  The merge pins the head only, so what
+            # is left open is the round trip between here and the merge.
+            behind, tip = _compare(repo, sha)
+            if behind > 0:
+                say(f"{BASE} moved while the children were retargeted, starting over")
+                continue
             merge = [
                 "pr", "merge", str(n), "--squash", "--admin", "--delete-branch",
                 "--match-head-commit", sha,
@@ -248,6 +281,14 @@ def main(argv: Optional[List[str]] = None) -> int:
                 print("would run: gh " + " ".join(merge))
                 return 0
             _gh_ok(*merge)
+            landed = _landed_on(repo, n)
+            if landed and tip and landed != tip:
+                print(
+                    f"merged #{n}, but {BASE} moved from {tip[:9]} to {landed[:9]} between"
+                    " the last check and the merge: the checks never ran on this"
+                    f" combination. Watch the CI run on {BASE} for this merge."
+                )
+                return 3
             print(f"merged #{n}; `git pull` on {BASE} will delete the local branch")
             return 0
     except RuntimeError as exc:

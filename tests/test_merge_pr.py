@@ -45,6 +45,7 @@ class _FakeGh:
         draft: bool = False,
         base: str = "main",
         mergeable: str = "MERGEABLE",
+        main_moves_at: str = "",
     ) -> None:
         self.checks = checks if checks is not None else [_green()]
         self.behind = behind if behind is not None else [0]
@@ -53,8 +54,19 @@ class _FakeGh:
         self.state, self.draft, self.base, self.mergeable = state, draft, base, mergeable
         self.heads = [f"sha{i}" for i in range(10)]
         self.head_index = 0
+        # Another actor merges once, during this gh call ("list" or "merge").
+        self.main_moves_at = main_moves_at
+        self.main_tip = "main0"
+        self.landed_on = ""
         self.calls: list[list[str]] = []
         self.clock = 0.0
+
+    def _main_moves(self) -> None:
+        self.main_moves_at = ""
+        self.main_tip = "main1"
+        # Behind until the branch is updated: the final check, the next lap's
+        # first check, then current.
+        self.behind = [1, 1, 0]
 
     @staticmethod
     def _next(seq: list):
@@ -67,6 +79,8 @@ class _FakeGh:
         out, code = "", 0
         if args[:2] == ["repo", "view"]:
             out = json.dumps({"nameWithOwner": "o/r"})
+        elif args[:2] == ["pr", "view"] and "mergeCommit" in args:
+            out = json.dumps({"mergeCommit": {"oid": "m1"}})
         elif args[:2] == ["pr", "view"]:
             out = json.dumps(
                 {
@@ -81,7 +95,9 @@ class _FakeGh:
             )
         elif args[0] == "api" and "compare" in args[1]:
             assert args[1].endswith(f"...{self.heads[self.head_index]}"), args
-            out = str(self._next(self.behind))
+            out = json.dumps([self._next(self.behind), self.main_tip])
+        elif args[0] == "api" and "/commits/m1" in args[1]:
+            out = self.landed_on
         elif args[0] == "api":
             out = json.dumps(REQUIRED)
         elif args[:2] == ["pr", "checks"]:
@@ -91,10 +107,16 @@ class _FakeGh:
         elif args[:2] == ["run", "view"]:
             out = json.dumps({"jobs": self._next(self.jobs)})
         elif args[:2] == ["pr", "list"]:
+            if self.main_moves_at == "list":
+                self._main_moves()
             out = json.dumps([{"number": c} for c in self.children])
         elif args[:2] == ["pr", "update-branch"]:
             self.head_index += 1
-        elif args[:2] in (["pr", "edit"], ["pr", "merge"], ["run", "rerun"]):
+        elif args[:2] == ["pr", "merge"]:
+            if self.main_moves_at == "merge":
+                self._main_moves()
+            self.landed_on = self.main_tip
+        elif args[:2] in (["pr", "edit"], ["run", "rerun"]):
             pass
         else:
             raise AssertionError(f"unexpected gh call: {args}")
@@ -252,6 +274,41 @@ def test_no_children_means_no_edit(monkeypatch):
     fake = _FakeGh()
     _run(monkeypatch, fake)
     assert [c for c in fake.calls if c[:2] == ["pr", "edit"]] == []
+
+
+def test_main_moving_while_the_children_are_retargeted_restarts_without_merging(monkeypatch):
+    """Another merge lands after the post-check comparison, during the child
+    listing.  The old head must not merge: its checks never saw that main."""
+    fake = _FakeGh(children=[8], main_moves_at="list")
+    assert _run(monkeypatch, fake) == 0
+    assert fake.calls.count(["pr", "update-branch", "5"]) == 1
+    assert [m[-1] for m in fake.merges()] == ["sha1"]
+    assert fake.calls.index(["pr", "update-branch", "5"]) < fake.calls.index(fake.merges()[0])
+
+
+def test_the_last_comparison_is_the_call_right_before_the_merge(monkeypatch):
+    fake = _FakeGh(children=[8])
+    assert _run(monkeypatch, fake) == 0
+    merge_at = fake.calls.index(fake.merges()[0])
+    before = fake.calls[merge_at - 1]
+    assert before[0] == "api" and "compare" in before[1], before
+
+
+def test_main_moving_inside_the_merge_window_is_reported_with_exit_3(monkeypatch, capsys):
+    """The one gap the script cannot check: between its last comparison and
+    the merge call.  It cannot be prevented from here, so it must be said."""
+    fake = _FakeGh(main_moves_at="merge")
+    assert _run(monkeypatch, fake) == 3
+    assert len(fake.merges()) == 1
+    out = capsys.readouterr().out
+    assert "main0" in out and "main1" in out and "Watch the CI run on main" in out
+
+
+def test_a_merge_that_landed_on_the_checked_tip_is_quiet(monkeypatch, capsys):
+    fake = _FakeGh()
+    assert _run(monkeypatch, fake) == 0
+    assert fake.landed_on == "main0"
+    assert "moved" not in capsys.readouterr().out
 
 
 def test_dry_run_makes_no_mutating_call(monkeypatch, capsys):

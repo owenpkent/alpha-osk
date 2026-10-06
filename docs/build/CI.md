@@ -187,6 +187,18 @@ Turning on `strict` would not have done the same job: an administrator's
 merge bypasses it along with everything else, so it constrains only the
 actors who were already gated.
 
+One gap stays open, and the script says so rather than papering over it.
+`gh pr merge --match-head-commit` pins the PR's head, never main's tip, so
+another merge actor (Dependabot's auto-merge is one, a second copy of the
+script is another) can land between the script's last comparison and its
+merge call, and the head then lands on a main its checks never contained.
+The script runs that comparison as the very last call before the merge,
+which makes the window one API round trip wide, and afterwards reads the
+squash commit's parent back: if it is not the tip the comparison saw, the
+script exits 3 and names both commits, and main's own CI run for that
+merge is the verdict to watch. Closing the window outright needs a
+server-side merge queue, which this repository does not use.
+
 ## Dependabot auto-merge
 
 `.github/workflows/dependabot-auto-merge.yml` queues Dependabot's patch and
