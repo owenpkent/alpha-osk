@@ -158,6 +158,48 @@ class TestAFreshInstallIsSeenThroughItsBuildTimestamp:
         os.utime(exe, (stale, stale))
         assert relauncher._new_exe_looks_fresh(exe, 0.0, time.time()) is False
 
+
+class TestAnExeStillBeingWrittenIsNotReady:
+    """While the installer writes the exe, its mtime has already changed and its
+    size is already non-zero, so the mtime rule alone says "ready" for the
+    whole write; launching then hands Explorer a half-written image."""
+
+    def _changed_exe(self, tmp_path):
+        exe = tmp_path / "alpha-osk.exe"
+        exe.write_bytes(b"new build")
+        return exe, exe.stat().st_mtime - 86400  # the snapshot differs
+
+    def test_a_file_open_for_writing_is_not_ready(self, tmp_path, monkeypatch):
+        exe, snapshot = self._changed_exe(tmp_path)
+        monkeypatch.setattr(relauncher, "_file_is_open_for_writing", lambda path: True)
+        assert relauncher._new_exe_looks_fresh(exe, snapshot, None) is False
+
+    def test_the_same_file_once_closed_is_ready(self, tmp_path, monkeypatch):
+        exe, snapshot = self._changed_exe(tmp_path)
+        monkeypatch.setattr(relauncher, "_file_is_open_for_writing", lambda path: False)
+        assert relauncher._new_exe_looks_fresh(exe, snapshot, None) is True
+
+    @pytest.mark.skipif(sys.platform != "win32", reason="Win32 share modes")
+    def test_a_real_writer_is_seen_and_its_close_is_too(self, tmp_path):
+        exe, snapshot = self._changed_exe(tmp_path)
+        with open(exe, "ab") as writer:
+            writer.write(b"more")
+            writer.flush()
+            assert relauncher._file_is_open_for_writing(exe) is True
+            assert relauncher._new_exe_looks_fresh(exe, snapshot, None) is False
+        assert relauncher._file_is_open_for_writing(exe) is False
+        assert relauncher._new_exe_looks_fresh(exe, snapshot, None) is True
+
+    @pytest.mark.skipif(sys.platform != "win32", reason="Win32 share modes")
+    def test_a_reader_is_not_mistaken_for_a_writer(self, tmp_path):
+        """An antivirus scan or Explorer reading the icon must not hold it up."""
+        exe, _ = self._changed_exe(tmp_path)
+        with open(exe, "rb"):
+            assert relauncher._file_is_open_for_writing(exe) is False
+
+    def test_a_probe_that_cannot_run_does_not_block_the_relaunch(self, tmp_path):
+        assert relauncher._file_is_open_for_writing(tmp_path / "missing.exe") is False
+
     def test_the_wait_loop_and_the_splash_check_share_the_rule(self, tmp_path):
         # Both entry points must see the production case; a fix applied
         # to only one of them leaves the other burning its timeout.
@@ -1291,6 +1333,42 @@ class TestAFailureStaysUntilTheUserActs:
         world.advance(flow, relauncher._MAX_TOTAL_RUNTIME_S)
         assert flow.phase is relauncher.Phase.FAILED
         assert world.now - launched_at <= relauncher._MAX_TOTAL_RUNTIME_S + 50 + 1
+
+    def test_a_keyboard_that_turns_up_after_the_failure_clears_it(self, world):
+        """The installer's own explorer fallback, or a slow first start: the
+        screen must not sit topmost over a working keyboard saying it failed."""
+        flow = world.flow(wait_for_approval=False)
+        world.parent_alive = False
+        world.exe_ready = True
+        world.advance(flow, relauncher._KEYBOARD_SHOWN_TIMEOUT_S + 5)
+        assert flow.phase is relauncher.Phase.FAILED
+        world.shown = True
+        world.advance(flow, 1)
+        assert flow.phase is relauncher.Phase.DONE
+        assert flow.exit_code == 0
+        assert world.handoffs == 1
+
+    def test_the_old_keyboard_still_running_never_clears_a_failure(self, world):
+        """Before the old keyboard is gone its own announcement is still set."""
+        flow = world.flow()
+        world.launched = True
+        world.shown = True  # the old keyboard's event, alive with it
+        world.advance(flow, relauncher._PARENT_EXIT_TIMEOUT_S + 5)
+        assert flow.phase is relauncher.Phase.FAILED
+        assert flow.exit_code == relauncher.EXIT_PARENT_STUCK
+        world.advance(flow, 30)
+        assert flow.phase is relauncher.Phase.FAILED
+        assert world.handoffs == 0
+
+    def test_a_probe_that_raised_is_not_asked_again(self, world):
+        flow = world.flow(wait_for_approval=False)
+        world.parent_alive = False
+        world.exe_ready = True
+        world.advance(flow, 2)
+        flow.fail_unexpectedly()
+        world.shown = True
+        world.advance(flow, 5)
+        assert flow.phase is relauncher.Phase.FAILED
 
     def test_an_unexpected_error_is_shown_not_swallowed(self, world):
         flow = world.flow()

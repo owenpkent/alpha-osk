@@ -276,6 +276,16 @@ def _new_exe_looks_fresh(
 
     Transient ``OSError`` reads as "not yet": the installer may be
     mid-write, and the caller polls.
+
+    **A changed mtime is not a finished file.** While NSIS is still writing
+    the exe its mtime is the write time (the build stamp is set only once
+    the data is in) and its size is already non-zero, so every rule above
+    says "ready" for the whole of the write. The exe is several megabytes of
+    LZMA output and the poll is 4 Hz, so a poll landing inside that window
+    is likely rather than rare, and launching it then hands Explorer a
+    half-written image, which it answers with a modal error box. So a file
+    some other handle still holds open for writing is never ready
+    (:func:`_file_is_open_for_writing`).
     """
     try:
         if not target.is_file():
@@ -284,11 +294,62 @@ def _new_exe_looks_fresh(
         if stat.st_size <= 0:
             return False
         if old_mtime > 0:
-            return abs(stat.st_mtime - old_mtime) > 1e-6
-        if after_mtime is None:
-            return True
-        return stat.st_mtime > after_mtime
+            changed = abs(stat.st_mtime - old_mtime) > 1e-6
+        elif after_mtime is None:
+            changed = True
+        else:
+            changed = stat.st_mtime > after_mtime
+        return changed and not _file_is_open_for_writing(target)
     except OSError:
+        return False
+
+
+_ERROR_SHARING_VIOLATION = 32
+
+
+def _file_is_open_for_writing(path: Path) -> bool:
+    """Does another handle hold ``path`` open for writing right now?  Windows only.
+
+    Asked by opening the file for reading while sharing *only* reading: the
+    open is refused with a sharing violation exactly when some existing
+    handle has write (or delete) access, which is what the installer holds
+    while it extracts the file. Python's own ``open`` cannot ask this, since
+    it shares everything. Any other failure reads as "not being written",
+    which is the behaviour the readiness rule had before this check, so a
+    probe that cannot run never blocks a relaunch outright.
+    """
+    if sys.platform != "win32":
+        return False
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        generic_read = 0x80000000
+        file_share_read = 0x00000001
+        open_existing = 3
+        invalid_handle = ctypes.c_void_p(-1).value
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.CreateFileW.restype = wintypes.HANDLE
+        kernel32.CreateFileW.argtypes = [
+            wintypes.LPCWSTR,
+            wintypes.DWORD,
+            wintypes.DWORD,
+            ctypes.c_void_p,
+            wintypes.DWORD,
+            wintypes.DWORD,
+            wintypes.HANDLE,
+        ]
+        kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+        kernel32.CloseHandle.restype = wintypes.BOOL
+        handle = kernel32.CreateFileW(
+            str(path), generic_read, file_share_read, None, open_existing, 0, None
+        )
+        if handle is None or handle == invalid_handle:
+            return bool(ctypes.get_last_error() == _ERROR_SHARING_VIOLATION)
+        kernel32.CloseHandle(handle)
+        return False
+    except Exception as exc:  # noqa: BLE001
+        _logger.debug("Could not check whether %s is being written: %s", path.name, exc)
         return False
 
 
@@ -872,6 +933,9 @@ class UpdateFlow:
         self._new_exe_budget = 0.0
         self._shown_budget = 0.0
         self._grace_until: Optional[float] = None
+        # After a failure that came once the old keyboard was gone, keep
+        # looking for the new one's window (see step()).
+        self._watch_after_failure = True
         if not wait_for_approval:
             self._enter_closing()
 
@@ -933,10 +997,29 @@ class UpdateFlow:
 
     def fail_unexpectedly(self) -> None:
         """For the driver: a probe raised, so show a failure rather than freeze."""
+        # The probe that raised may be the very one the post-failure watch
+        # calls, and it would raise again on every tick.
+        self._watch_after_failure = False
         self._fail(EXIT_LAUNCH_FAILED, "Something went wrong while updating.")
 
     def step(self) -> None:
         """Advance as far as the current facts allow. Cheap, never blocks."""
+        if self.phase is Phase.FAILED:
+            # A failure screen stays until the user acts, except when the
+            # keyboard it is apologising for turns up after all: the
+            # installer's own explorer fallback, a slow install, a slow first
+            # start. Left up, the screen would sit topmost over a working
+            # keyboard saying it did not start. Only once the old keyboard is
+            # known to be gone (a death time), because until then its own
+            # announcement is still set and would read as the new one's.
+            if (
+                self._watch_after_failure
+                and self.parent_death_time is not None
+                and self._keyboard_shown()
+            ):
+                _logger.info("The keyboard window appeared after the failure; finishing")
+                self._succeed()
+            return
         if self.finished:
             return
 
@@ -1162,6 +1245,9 @@ def _run_with_splash(args: argparse.Namespace, overall_deadline: Optional[float]
         elif flow.phase is Phase.DONE:
             progress.setRange(0, 1)
             progress.setValue(1)
+            # A failure screen the keyboard's late arrival cleared: its
+            # buttons have nothing left to do.
+            buttons.setVisible(False)
 
     finishing = [False]
 
