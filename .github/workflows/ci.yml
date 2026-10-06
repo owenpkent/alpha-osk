@@ -23,11 +23,21 @@ permissions:
 # worse than slow because it trains you to ignore the red.
 #
 # Grouped by ref rather than by commit, so this cancels superseded runs of
-# the *same* branch and never one of another. A cancelled intermediate
-# commit is the intended outcome: what needs to be green is the tip.
+# the *same* branch and never one of another. On a PR branch a cancelled
+# intermediate commit is the intended outcome: what needs to be green is
+# the tip.
+#
+# Main is the exception, grouped by commit so no run there is ever
+# cancelled. A merged commit is not superseded the way a PR push is: the
+# next merge stacks on top of it rather than fixing it. Grouping main by
+# ref cancelled 37 runs in a month as merges landed back to back, so when
+# the tip went red (#166 and #176 on 2026-10-05, each green alone) there
+# was no verdict on the commits underneath to say which merge broke it.
+# Each group also holds at most one pending run, so a per-ref group with
+# cancellation off would still drop the middle of three quick merges.
 concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ github.ref == 'refs/heads/main' && github.sha || github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   lint:
