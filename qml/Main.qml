@@ -1279,19 +1279,29 @@ Window {
     // and less accurate than the one those defaults were chosen for.
     property int snapThreshold: 24
 
-    // Four things about this are load-bearing:
+    // Five things about this are load-bearing:
     //
     //  - It snaps against `screenBoundsAt`, i.e. the screen the window is
     //    actually on, never the primary one.  A monitor to the left has
     //    negative coordinates a primary-screen calculation cannot even
     //    express, which is the bug the snippets restore documents one
     //    window over.
+    //  - The screen's work area (the screen minus the taskbar and other
+    //    appbars, from `keyboard.availableBoundsAt`) adds four more edge
+    //    targets beside the full-screen ones, so a window can sit flush
+    //    against the taskbar as well as behind it.  Both sets stay: the
+    //    nearest target within the threshold wins, and with no taskbar the
+    //    two sets coincide.  An empty answer (unknown) means "no extra
+    //    targets", never an error.
     //  - The two axes are decided independently, so a keyboard sitting
     //    flush on the bottom edge still slides freely along it.
     //  - Horizontal centre is a target and vertical centre is not.
     //    Centring a wide, short keyboard across the screen is something
     //    people do; parking it halfway down is not, and a snap nobody
-    //    wanted reads as the window sticking for no reason.
+    //    wanted reads as the window sticking for no reason.  The centre is
+    //    the full screen's, not the work area's: a side taskbar would
+    //    otherwise shift it by half the taskbar's width and a "centred"
+    //    keyboard would stop being centred on the monitor.
     //  - It is applied to the proposed position and must never be written
     //    back into whatever the caller accumulates.  Feeding a snapped
     //    value back in turns an edge into a trap: every later delta is then
@@ -1299,10 +1309,15 @@ Window {
     //    can never build up the travel it needs to leave.  `dragArea`
     //    avoids that by recomputing from the press origin each time, and
     //    `windowMoveOverlay` by keeping an unsnapped shadow position.
-    function _snapAxis(v, size, lo, hi, centred) {
+    //
+    // `workLo` / `workHi` are the work area's edges on this axis, or
+    // undefined for none.
+    function _snapAxis(v, size, lo, hi, centred, workLo, workHi) {
         var targets = centred
                     ? [lo, hi - size, lo + (hi - lo - size) / 2]
                     : [lo, hi - size]
+        if (workLo !== undefined && workHi !== undefined)
+            targets.push(workLo, workHi - size)
         var best = v
         var bestGap = root.snapThreshold
         for (var i = 0; i < targets.length; ++i) {
@@ -1318,9 +1333,20 @@ Window {
     function snapWindowPos(px, py, w, h) {
         if (!root.snapToEdges)
             return { x: Math.round(px), y: Math.round(py) }
-        var b = root.screenBoundsAt(px + w / 2, py + h / 2)
-        return { x: root._snapAxis(px, w, b.left, b.right, true),
-                 y: root._snapAxis(py, h, b.top, b.bottom, false) }
+        var cx = px + w / 2
+        var cy = py + h / 2
+        var b = root.screenBoundsAt(cx, cy)
+        // Cheap enough for every pointer move: a screen lookup and a read
+        // of geometry Qt already holds.  Clamped to the full bounds so a
+        // stray answer cannot create a target off the screen.
+        var a = keyboard.availableBoundsAt(cx, cy)
+        var hasWork = a && a.left !== undefined
+        return { x: root._snapAxis(px, w, b.left, b.right, true,
+                                   hasWork ? Math.max(a.left, b.left) : undefined,
+                                   hasWork ? Math.min(a.right, b.right) : undefined),
+                 y: root._snapAxis(py, h, b.top, b.bottom, false,
+                                   hasWork ? Math.max(a.top, b.top) : undefined,
+                                   hasWork ? Math.min(a.bottom, b.bottom) : undefined) }
     }
 
     // Where a floating panel of (w, h) should open: on the keyboard's own

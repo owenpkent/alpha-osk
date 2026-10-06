@@ -5420,3 +5420,26 @@ class TestProgrammableFunctionKeys:
         bridge.setKeyAction("f13", {"type": "hotkey", "key": "s", "modifiers": ["ctrl", "shift"]})
         assert bridge.describeKeyAction("f13") == "Ctrl+Shift+S"
         assert bridge.describeKeyAction("f14") == ""
+
+
+class TestAvailableBoundsAt:
+    """The work area behind the magnetic edges' taskbar targets."""
+
+    def test_the_slot_reports_the_work_area_as_edges(self, bridge, monkeypatch):
+        monkeypatch.setattr(bridge, "_available_geometry_at", lambda x, y: (0, 0, 1920, 1032))
+        assert bridge.availableBoundsAt(10, 10) == {
+            "left": 0,
+            "top": 0,
+            "right": 1920,
+            "bottom": 1032,
+        }
+
+    def test_an_unknown_work_area_is_an_empty_map(self, bridge, monkeypatch):
+        """Empty, not zeros: zeros would read as a work area of no size and
+        pull every window to the corner."""
+        monkeypatch.setattr(bridge, "_available_geometry_at", lambda x, y: None)
+        assert bridge.availableBoundsAt(10, 10) == {}
+
+    def test_the_slot_is_registered_with_the_meta_object(self):
+        meta = KeyboardBridge.staticMetaObject
+        assert meta.indexOfMethod("availableBoundsAt(double,double)") >= 0
