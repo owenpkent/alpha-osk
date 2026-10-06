@@ -505,7 +505,23 @@ the keyboard* -> *Installing Alpha-OSK x.y.z* -> *Starting the keyboard* ->
   **Open log folder** (`CREATE_NO_WINDOW`; it holds `alpha-osk.log` and
   `relauncher.log`) and **Close**. The 300 s ceiling ends on this screen, never
   a silent exit. An exception inside a probe is shown the same way rather than
-  freezing the screen.
+  freezing the screen. **The one thing that clears it is the keyboard turning
+  up anyway**: once the old keyboard is known to be gone, a failure screen keeps
+  looking for the new keyboard's event and finishes with Done when it is set
+  (the installer's own explorer fallback, a slow first start), so it never sits
+  topmost over a working keyboard saying it did not start. Before the old
+  keyboard is gone its own announcement is still set, so a failure from the
+  approval or closing phase is never cleared this way.
+* **a changed mtime is not a finished exe.** While NSIS writes `alpha-osk.exe`
+  its mtime is already the write time and its size non-zero; the build stamp
+  lands only when the data is in. A 4 Hz poll inside that write would launch a
+  half-written image through Explorer, which answers with a modal error box. So
+  `_new_exe_looks_fresh` also refuses a file another handle still holds open for
+  writing (`_file_is_open_for_writing`: a `CreateFileW` that shares only reading
+  fails with a sharing violation exactly then). `alpha-osk.exe` is the last file
+  the generated script extracts (`sorted(rglob)` puts `_internal\` first, and
+  `alpha-osk-relauncher.exe` sorts before it), so a closed, changed exe means
+  the whole bundle is in place.
 
 Exit codes: 2 parent never closed, 3 new exe never appeared, 4 launch failed or
 no window within `_KEYBOARD_SHOWN_TIMEOUT_S` (60 s), 5 cancelled, 6 never
@@ -513,14 +529,32 @@ approved.
 
 ### Not verified without a real signed build
 
-None of the following can be exercised by the test suite and each needs one pass
-on a signed installer: that the two-`Analysis` `COLLECT` de-duplicates the shared
-binaries into one `_internal` and produces a working helper; that the staged
-helper actually starts from `%TEMP%`; the cross-process event (integrity labels
-between a UIAccess keyboard and the helper); placement on a mixed-DPI
-multi-monitor setup; and that the screen survives the installer's taskkill, its
-silent install and the old uninstaller. The spec's executable shape, the manifest
-guards, the marker and event protocol, the state machine and the window (offscreen,
+Checked on 2026-10-06 against a real **unsigned** PyInstaller build of this
+spec, with the helper staged and spawned by the real `_spawn_relauncher` from a
+throwaway parent process: both exes land beside one `_internal` (2,968 files,
+byte-for-byte the same file set as a single-exe build of the old spec; the
+bundle grows by the helper's 1.8 MB exe and nothing else); the embedded
+manifests read back `uiAccess="true"` for `alpha-osk.exe` and `"false"` for the
+helper; the version blocks read `Alpha-OSK` and `Alpha-OSK Updater`. The staged
+helper starts from `%TEMP%` (no WinError 740), its window is up about half a
+second after spawn with `WS_EX_NOACTIVATE`, `WS_EX_TOPMOST` and
+`WS_EX_TOOLWINDOW`, never takes the foreground, and lands exactly where
+`centred_position` puts it on a 150% display; the cancel marker ends it with
+code 5 in 0.2 s; installer-launched, parent killed, an exe held open for writing
+(stays on Installing), then the event set and the file closed ends in Done,
+code 0 and the handoff written; a parent left alive ends on the failure screen
+after 60 s; and a failure after the parent died is cleared by the event (code
+0). Copying the bundle into the stage took 6.8 s cold and 1.5 s warm, before the
+UAC prompt appears.
+
+Still open after that pass, each needing one run of a signed installer: the
+signed helper starting from `%TEMP%` (the signature is not expected to matter,
+since it requests no UIAccess); the cross-process event when the setter is the
+real UIAccess keyboard rather than a medium-integrity test process; placement
+on a mixed-DPI multi-monitor setup; the failure screen's buttons; and that the
+screen survives the installer's taskkill, its silent install and the old
+uninstaller. The spec's executable shape, the manifest guards, the marker and
+event protocol, the state machine and the window (offscreen,
 in a child process) are covered by tests.
 
 Pinned by `tests/test_update_relauncher.py` (`UpdateFlow`, placement, the
