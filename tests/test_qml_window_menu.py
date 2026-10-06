@@ -643,6 +643,115 @@ class TestSnappingToScreenEdges:
 
         assert _snap(root, mid_x + 7, mid_y + 7) == (mid_x, round(mid_y + 7))
 
+    @staticmethod
+    def _with_taskbar(root, thickness: int = 48) -> int:
+        """Stand in for a taskbar along the bottom of the screen and return
+        the y of the work area's bottom edge.
+
+        The offscreen platform's available geometry equals its full
+        geometry, so the work-area half of the feature cannot be seen
+        without stubbing the one answer that differs.
+        """
+        b = _bounds(root)
+        work = (b["left"], b["top"], b["right"], b["bottom"] - thickness)
+        _eval(root, "keyboard")._available_geometry_at = lambda x, y: work
+        return work[3]
+
+    def test_the_real_slot_reads_the_screens_available_geometry(self, qml_root):
+        """The unstubbed lookup, against whatever screen the platform has."""
+        root, _ = qml_root
+        screen = QGuiApplication.primaryScreen()
+        area = screen.availableGeometry()
+        centre = screen.geometry().center()
+
+        got = _eval(root, "keyboard").availableBoundsAt(centre.x(), centre.y())
+
+        assert got == {
+            "left": area.x(),
+            "top": area.y(),
+            "right": area.x() + area.width(),
+            "bottom": area.y() + area.height(),
+        }
+
+    def test_a_position_near_the_taskbar_edge_lands_flush_with_it(self, qml_root):
+        root, _ = qml_root
+        _park(root)
+        _eval(root, "root.snapToEdges = true")
+        work_bottom = self._with_taskbar(root)
+        height = root.property("height")
+        loose_x = _bounds(root)["left"] + 300
+
+        # The window's bottom edge is 10 px below the taskbar's top edge.
+        assert _snap(root, loose_x, work_bottom - height + 10) == (
+            loose_x,
+            work_bottom - height,
+        )
+
+    def test_the_true_screen_edge_is_still_a_target(self, qml_root):
+        """Both sets stay: a window pushed down behind the taskbar still
+        lands on the screen edge, where it always could."""
+        root, _ = qml_root
+        _park(root)
+        _eval(root, "root.snapToEdges = true")
+        self._with_taskbar(root)
+        b = _bounds(root)
+        height = root.property("height")
+        loose_x = b["left"] + 300
+
+        assert _snap(root, loose_x, b["bottom"] - height - 6) == (
+            loose_x,
+            b["bottom"] - height,
+        )
+
+    def test_a_position_between_the_two_edges_goes_to_the_nearer(self, qml_root):
+        root, _ = qml_root
+        _park(root)
+        _eval(root, "root.snapToEdges = true")
+        work_bottom = self._with_taskbar(root, thickness=30)
+        b = _bounds(root)
+        height = root.property("height")
+        loose_x = b["left"] + 300
+
+        # 30 px apart, threshold 24: 10 below the taskbar edge is 20 above
+        # the screen edge, so the taskbar edge is nearer; 20 below it is
+        # 10 above the screen edge.
+        assert _snap(root, loose_x, work_bottom - height + 10)[1] == work_bottom - height
+        assert _snap(root, loose_x, work_bottom - height + 20)[1] == b["bottom"] - height
+
+    def test_a_side_taskbar_snaps_the_horizontal_axis(self, qml_root):
+        root, _ = qml_root
+        _park(root)
+        _eval(root, "root.snapToEdges = true")
+        b = _bounds(root)
+        work = (b["left"] + 60, b["top"], b["right"], b["bottom"])
+        _eval(root, "keyboard")._available_geometry_at = lambda x, y: work
+        loose_y = b["top"] + 200
+
+        assert _snap(root, work[0] + 9, loose_y) == (work[0], loose_y)
+
+    def test_an_unknown_work_area_leaves_only_the_screen_edges(self, qml_root):
+        root, _ = qml_root
+        _park(root)
+        _eval(root, "root.snapToEdges = true")
+        _eval(root, "keyboard")._available_geometry_at = lambda x, y: None
+        b = _bounds(root)
+        bottom = b["bottom"] - root.property("height")
+
+        assert _snap(root, b["left"] + 6, bottom - 6) == (b["left"], bottom)
+
+    def test_the_taskbar_edge_is_not_a_target_when_snapping_is_off(self, qml_root):
+        root, _ = qml_root
+        _park(root)
+        _eval(root, "root.snapToEdges = false")
+        work_bottom = self._with_taskbar(root)
+        height = root.property("height")
+        loose_x = _bounds(root)["left"] + 300
+
+        assert _snap(root, loose_x, work_bottom - height + 10) == (
+            loose_x,
+            work_bottom - height + 10,
+        )
+
     def test_turning_it_off_leaves_every_position_exact(self, qml_root):
         root, _ = qml_root
         _park(root)

@@ -209,12 +209,30 @@ pixel or two, which is the gesture this keyboard exists to avoid needing.
 `hitMarginH` exists: the pointer this forgives is slower and less accurate
 than the one those defaults were chosen for.
 
-Four things are load-bearing:
+Five things are load-bearing:
 
 - **It snaps against `screenBoundsAt`, the screen the window is on**, never
   the primary one. A monitor to the left has negative coordinates a
   primary-screen calculation cannot express, which is the bug the snippets
   restore documents one window over.
+- **The screen's work area is a second set of targets, so the keyboard can
+  sit flush against the taskbar.** `Qt.application.screens` entries expose no
+  available geometry, so `snapWindowPos` asks the bridge
+  (`KeyboardBridge.availableBoundsAt(x, y)`, which is
+  `QGuiApplication.screenAt` plus `QScreen.availableGeometry()`, in the same
+  device-independent space as `virtualX`) and passes the work area's edges to
+  `_snapAxis` as four extra targets. The full-screen edges stay: the nearest
+  target within the threshold wins, a window pushed behind the taskbar still
+  lands on the true edge, and with no taskbar the two sets coincide. The
+  answer is clamped to the full bounds, and an empty answer (unknown) means no
+  extra targets. It runs on every pointer move and is cheap (a screen lookup
+  and a read of geometry Qt already holds), so it is not cached.
+  `screenBoundsAt` keeps its meaning, since `safePanelPos` and the clamps
+  depend on it. **The horizontal centre target stays the full screen's:** a
+  side taskbar would otherwise shift it by half the taskbar's width, and a
+  keyboard centred on the monitor would stop being centred. The offscreen
+  platform reports available geometry equal to the full geometry, so the tests
+  stub `KeyboardBridge._available_geometry_at` to stand in for a taskbar.
 - **The axes are decided independently**, so a keyboard flush on the bottom
   edge still slides freely along it.
 - **Horizontal centre is a target and vertical centre is not.** Centring a
