@@ -81,6 +81,11 @@ Window {
         // on their own, and yoking them to the standard row would cost
         // a user who only wants macros the vertical space of both.
         property bool savedShowExtraFunctionRow: false
+        // Which function row shows when both toggles are on: 1 is F1-F12,
+        // 2 is F13-F24.  Remembered state rather than a setting (nothing in
+        // Settings sets it, the swap key does), restored so a user who
+        // lives on the macro page is not sent back to F1-F12 every launch.
+        property int savedFunctionRowPage: 1
         property string savedTheme: "dark"
         // Which Key Colours scheme paints the keycaps.  "mono" ships as the
         // default: it is the only scheme that cannot clash on any theme
@@ -367,6 +372,8 @@ Window {
         root.showNumpad = appSettings.savedShowNumpad && !root.compactView
         root.showFunctionRow = appSettings.savedShowFunctionRow
         root.showExtraFunctionRow = appSettings.savedShowExtraFunctionRow
+        // Anything but 2 (a hand-edited or corrupt value) reads as page 1.
+        root.functionRowPage = appSettings.savedFunctionRowPage === 2 ? 2 : 1
         root.refreshKeyActions()
         root.currentTheme = appSettings.savedTheme
         root.suggestionsEnabled = appSettings.savedSuggestionsEnabled
@@ -744,7 +751,8 @@ Window {
         Math.round(root.width), Math.round(root.height),
         root.currentLayout, root.compactView ? 1 : 0, root.activeLayer,
         root.showNumberRow ? 1 : 0, root.showFunctionRow ? 1 : 0,
-        root.showExtraFunctionRow ? 1 : 0, root.showNavigation ? 1 : 0,
+        root.showExtraFunctionRow ? 1 : 0, root.functionRowPage,
+        root.showNavigation ? 1 : 0,
         root.showNumpad ? 1 : 0, root.suggestionsEnabled ? 1 : 0,
         // NumLock rewrites the whole numpad: the digits become navigation
         // actions and the centre key goes blank and disabled, with every
@@ -820,6 +828,14 @@ Window {
     }
     property bool showFunctionRow: false
     property bool showExtraFunctionRow: false
+    // With both toggles on, only one function row is on screen: this page
+    // picks it (1 = F1-F12, 2 = F13-F24).  With one toggle on it is unused.
+    property int functionRowPage: 1
+    readonly property bool functionRowsBoth: showFunctionRow && showExtraFunctionRow
+    function swapFunctionRowPage() {
+        root.functionRowPage = root.functionRowPage === 2 ? 1 : 2
+        appSettings.savedFunctionRowPage = root.functionRowPage
+    }
     property bool showNavigation: false
     property bool showNumpad: false
     property bool showSettings: false
@@ -3328,13 +3344,18 @@ Window {
 
                     // ===== Extra Function Row (F13-F24) =====
                     //
-                    // Above F1-F12 rather than below it, so it lands where
-                    // a physical keyboard's extra row would and never
-                    // pushes the standard row (the one with muscle memory
-                    // attached) to a different height when it is toggled.
+                    // Declared above F1-F12 so the stack order matches a
+                    // physical board's, but when both toggles are on only
+                    // one of the two is visible (see functionRowPage), so
+                    // they trade places rather than stack.
                     Comp.FunctionRow {
                         objectName: "extraFunctionRowPanel"
                         visible: root.showExtraFunctionRow
+                                 && (!root.functionRowsBoth || root.functionRowPage === 2)
+                        swapLabel: root.functionRowsBoth ? "F1-12" : ""
+                        swapScanName: "Show F1 to F12"
+                        swapRole: root.keyRoleFor({ type: "layer" })
+                        onSwapRequested: root.swapFunctionRowPage()
                         Layout.alignment: Qt.AlignHCenter
                         scanSection: "fn2"
                         scanIdFor: root.scanTargetId
@@ -3344,7 +3365,7 @@ Window {
                             ["F21", "F22", "F23", "F24"]
                         ]
                         keyW: root.keyW
-                        keyH: root.keyH * 0.7
+                        keyH: root.keyH
                         keySpacing: root.keySpacing
                         hitMarginH: root.keyHitMarginH
                         hitMarginV: root.keyHitMarginV
@@ -3365,11 +3386,16 @@ Window {
                     Comp.FunctionRow {
                         objectName: "functionRowPanel"
                         visible: root.showFunctionRow
+                                 && (!root.functionRowsBoth || root.functionRowPage === 1)
+                        swapLabel: root.functionRowsBoth ? "F13-24" : ""
+                        swapScanName: "Show F13 to F24"
+                        swapRole: root.keyRoleFor({ type: "layer" })
+                        onSwapRequested: root.swapFunctionRowPage()
                         Layout.alignment: Qt.AlignHCenter
                         scanSection: "fn1"
                         scanIdFor: root.scanTargetId
                         keyW: root.keyW
-                        keyH: root.keyH * 0.7
+                        keyH: root.keyH
                         keySpacing: root.keySpacing
                         hitMarginH: root.keyHitMarginH
                         hitMarginV: root.keyHitMarginV
@@ -3398,8 +3424,9 @@ Window {
                     // its own), and a full-size layout's own number row is
                     // the first of the data-driven rows below, so this is
                     // the position that makes the two views agree.
-                    // Full key height: unlike F-keys these are typed
-                    // constantly, so they get a full-size target.
+                    // Full key height, like the function rows above it:
+                    // every row of keys is a full-size target for an
+                    // imprecise pointer.
                     Comp.NumberRow {
                         // Lets the panel-width tests find this without
                         // property-sniffing; see TestPanelsSitFlushWithTheGrid.

@@ -79,13 +79,20 @@ def qapp():
 
 
 @pytest.fixture
-def qml_root(qapp, tmp_path: Path):
-    """Load Main.qml with a mocked synth and a temp key-action store."""
+def qml_root(qapp, tmp_path: Path, request):
+    """Load Main.qml with a mocked synth and a temp key-action store.
+
+    ``@pytest.mark.parametrize("qml_root", [{...}], indirect=True)`` seeds
+    ``ui/<key>`` values before the engine loads, which is the only way to
+    test the restore half of a saved setting.
+    """
     warnings: list[str] = []
 
     QSettings(TEST_ORG, TEST_APP).clear()
     settings = QSettings(TEST_ORG, TEST_APP)
     settings.setValue("ui/savedAutoCheckUpdates", False)
+    for key, value in getattr(request, "param", {}).items():
+        settings.setValue(f"ui/{key}", value)
     settings.sync()
 
     with patch("src.keyboard_bridge.create_key_synthesizer") as factory:
@@ -188,6 +195,146 @@ class TestTheExtraRowExists:
         keys = _keys(_panel(root, "functionRowPanel"))
         assert keys
         assert sorted(keys, key=lambda k: int(k[1:])) == [f"f{n}" for n in range(1, 13)]
+        assert _real_warnings(warnings) == []
+
+
+def _both_rows(root) -> None:
+    root.setProperty("showFunctionRow", True)
+    root.setProperty("showExtraFunctionRow", True)
+    _pump()
+
+
+def _swap_key(root, which: str):
+    """The swap key of the standard ('fn1') or extra ('fn2') panel."""
+    name = "functionRowPanel" if which == "fn1" else "extraFunctionRowPanel"
+    key = _panel(root, name).findChild(QQuickItem, "fnSwapKey")
+    assert key is not None
+    return key
+
+
+class TestOneFunctionRowAtATime:
+    """With both toggles on the rows trade places behind a swap key."""
+
+    def test_both_on_shows_one_row_and_a_swap_key(self, qml_root) -> None:
+        root, warnings, _, _ = qml_root
+        _both_rows(root)
+        assert _panel(root, "functionRowPanel").isVisible() is True
+        assert _panel(root, "extraFunctionRowPanel").isVisible() is False
+        assert _swap_key(root, "fn1").isVisible() is True
+        assert _swap_key(root, "fn1").property("displayText") == "F13-24"
+        assert _real_warnings(warnings) == []
+
+    def test_a_tap_flips_the_page_and_a_second_flips_back(self, qml_root) -> None:
+        root, warnings, _, _ = qml_root
+        _both_rows(root)
+        _swap_key(root, "fn1").keyPressed.emit()
+        _pump()
+        assert root.property("functionRowPage") == 2
+        assert _panel(root, "functionRowPanel").isVisible() is False
+        assert _panel(root, "extraFunctionRowPanel").isVisible() is True
+        assert _swap_key(root, "fn2").property("displayText") == "F1-12"
+        _swap_key(root, "fn2").keyPressed.emit()
+        _pump()
+        assert root.property("functionRowPage") == 1
+        assert _panel(root, "functionRowPanel").isVisible() is True
+        assert _panel(root, "extraFunctionRowPanel").isVisible() is False
+        assert _real_warnings(warnings) == []
+
+    @pytest.mark.parametrize("which", ["functionRowPanel", "extraFunctionRowPanel"])
+    def test_a_row_on_its_own_has_twelve_keys_and_no_swap(self, qml_root, which) -> None:
+        root, warnings, _, _ = qml_root
+        root.setProperty("showFunctionRow", which == "functionRowPanel")
+        root.setProperty("showExtraFunctionRow", which == "extraFunctionRowPanel")
+        _pump()
+        assert _panel(root, which).isVisible() is True
+        assert len(_keys(_panel(root, which))) == 12
+        key = _panel(root, which).findChild(QQuickItem, "fnSwapKey")
+        assert key is not None and key.isVisible() is False
+        assert key.property("_scanIgnored") is True
+        assert _real_warnings(warnings) == []
+
+    def test_the_swap_key_does_not_widen_the_row(self, qml_root) -> None:
+        """Thirteen keys share the grid width, so the row stays the same width."""
+        root, warnings, _, _ = qml_root
+        root.setProperty("showFunctionRow", True)
+        _pump()
+        alone = _panel(root, "functionRowPanel").width()
+        root.setProperty("showExtraFunctionRow", True)
+        _pump()
+        assert _panel(root, "functionRowPanel").width() == pytest.approx(alone, abs=1.0)
+        assert _real_warnings(warnings) == []
+
+    @pytest.mark.parametrize("qml_root", [{"savedFunctionRowPage": 2}], indirect=True)
+    def test_the_saved_page_is_restored(self, qml_root) -> None:
+        root, warnings, _, _ = qml_root
+        assert root.property("functionRowPage") == 2
+        _both_rows(root)
+        assert _panel(root, "extraFunctionRowPanel").isVisible() is True
+        assert _panel(root, "functionRowPanel").isVisible() is False
+        assert _real_warnings(warnings) == []
+
+    @pytest.mark.parametrize(
+        "qml_root",
+        [{"savedFunctionRowPage": v} for v in (7, 0, -1, "junk")],
+        indirect=True,
+    )
+    def test_a_bad_saved_page_reads_as_the_first(self, qml_root) -> None:
+        root, warnings, _, _ = qml_root
+        assert root.property("functionRowPage") == 1
+        assert _real_warnings(warnings) == []
+
+    def test_a_swap_is_remembered(self, qml_root) -> None:
+        root, _, _, _ = qml_root
+        _both_rows(root)
+        _swap_key(root, "fn1").keyPressed.emit()
+        _pump()
+        saved = root.findChild(QObject, "appSettings")
+        assert saved.property("savedFunctionRowPage") == 2
+
+    def test_a_held_ctrl_survives_a_swap(self, qml_root) -> None:
+        """Unlike compact's layer keys, a swap must not release modifiers."""
+        root, warnings, bridge, synth = qml_root
+        _both_rows(root)
+        bridge.toggleCtrl()
+        _pump()
+        assert bridge._ctrl_active
+        _swap_key(root, "fn1").keyPressed.emit()
+        _pump()
+        assert bridge._ctrl_active
+        # Ctrl is held at the OS level and the swap let go of nothing.
+        synth.release_modifier.assert_not_called()
+        synth.send_key.reset_mock()
+        _keys(_panel(root, "extraFunctionRowPanel"))["f17"].keyPressed.emit()
+        _pump()
+        assert synth.send_key.call_args[0][0] == "F17"
+        # The ordinary one-shot release still happens, after the F-key.
+        assert not bridge._ctrl_active
+        assert _real_warnings(warnings) == []
+
+    def test_the_swap_key_is_a_scan_target_and_the_beacon_moves(self, qml_root) -> None:
+        root, warnings, _, _ = qml_root
+        _both_rows(root)
+        key = _swap_key(root, "fn1")
+        assert key.property("targetId") == "aosk.v1.fn1.0.12"
+        assert key.property("_scanName") == "Show F13 to F24"
+        assert key.property("_scanIgnored") is False
+        before = root.property("scanRevision")
+        key.keyPressed.emit()
+        _pump()
+        assert root.property("scanRevision") != before
+        other = _swap_key(root, "fn2")
+        assert other.property("targetId") == "aosk.v1.fn2.0.12"
+        assert other.property("_scanName") == "Show F1 to F12"
+        # The row that went away takes its targets out of the scan set too.
+        assert _keys(_panel(root, "functionRowPanel"))["f1"].property("_scanIgnored") is True
+        assert _real_warnings(warnings) == []
+
+    def test_function_keys_are_as_tall_as_letter_keys(self, qml_root) -> None:
+        root, warnings, _, _ = qml_root
+        root.setProperty("showFunctionRow", True)
+        _pump()
+        fkey = _keys(_panel(root, "functionRowPanel"))["f1"]
+        assert fkey.height() == pytest.approx(root.property("keyH"), abs=0.5)
         assert _real_warnings(warnings) == []
 
 

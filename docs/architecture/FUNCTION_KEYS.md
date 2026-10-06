@@ -31,8 +31,34 @@ them refresh in every app; reassigning F17 costs nothing).
 *Settings -> Function Keys -> Show -> "Extra Function Keys (F13-F24)"*,
 independent of the F1-F12 toggle. Someone who wants only the twelve macro
 keys must not have to spend the height of the standard row to get them.
-The extra row renders **above** F1-F12 so toggling it never moves the row
-with muscle memory attached.
+
+### One row at a time, behind a swap key (2026-10-06)
+When both toggles are on, the rows do not stack: `Main.qml::functionRowPage`
+(1 = F1-F12, 2 = F13-F24) picks which one is on screen, and the visible row
+carries one extra key at its right end, in a group of its own (4-4-4-1, the
+group gap still `keySpacing * 4`, the thirteen keys sharing the grid width
+through `_fillKeyW`). With one toggle on that row shows alone, twelve keys,
+no swap key. The owner chose this from rendered options. It saves a row of
+height, and part of that saving is spent on **full-height keys** (the rows
+were 0.7x before): a bigger target for an imprecise pointer.
+
+- **The cap names the destination** (`F13-24` on page 1, `F1-12` on page 2),
+  the same convention as compact's `?123` / `ABC`. Its spoken name is
+  "Show F13 to F24" / "Show F1 to F12" (`KeyButton.scanLabel`, because the
+  cap is an abbreviation). Role is the layer-key role, `edit`.
+- **QML-only, and it must NOT release sticky modifiers.** Compact's layer
+  keys call `releaseShift()` because a held Shift would mismatch the glyphs
+  on the symbol page; nothing here has that problem, and a user who taps
+  Ctrl, swaps pages and taps F17 means Ctrl+F17. The swap never calls the
+  bridge, which is what guarantees it.
+- **Scan target**: `aosk.v1.fn1.0.12` / `aosk.v1.fn2.0.12`, one past the
+  twelve keys in the row's own section. `functionRowPage` feeds
+  `scanRevision`, so a scanner sees the page change.
+- **The page persists** (`savedFunctionRowPage`, restored on launch, anything
+  other than 2 reads as 1). It is remembered state, not a setting, so there
+  is no toggle. *Settings -> Function Keys* is unaffected: it still lists
+  all twenty-four and opens the editor, which does not depend on the key
+  being on screen, so the page is left alone.
 
 ### `src/key_actions.py` owns the whole action vocabulary
 The bridge switches on **nothing**. `KeyActionStore.execute` dispatches
@@ -261,7 +287,8 @@ rendering the result next to the number row", which is exactly what was
 done the second time, and stretching won: on a keyboard driven by an
 imprecise pointer, a quarter more target width outranks lining up with the
 column below. The accepted cost is that no F-key lines up with the key
-under it any more, and at 29% wider and 30% shorter the row reads a little
+under it any more, and at 29% wider (and, when this was decided, 30% shorter; the rows are full
+height now, see *One row at a time*) the row read a little
 bar-like. **The rule survives, pointing the other way: don't change this
 back without rendering it next to the number row.**
 
