@@ -30,6 +30,7 @@ a window.
 from __future__ import annotations
 
 import logging
+import os
 import sys
 from pathlib import Path
 from typing import Optional
@@ -43,6 +44,12 @@ KEYBOARD_SHOWN_EVENT = "Local\\AlphaOSK.KeyboardShown"
 # Files inside the helper's stage directory.
 INSTALLER_LAUNCHED_FILE = "installer-launched"
 CANCEL_FILE = "cancel"
+# helper -> updater: "my window has painted".  The updater waits for it, with
+# a ceiling, instead of sleeping a fixed time before it launches the installer.
+UI_SHOWN_FILE = "ui-shown"
+# Held open, exclusively, by the helper for as long as it runs.  A stage whose
+# lock cannot be opened belongs to a live helper and must not be swept.
+HELPER_LOCK_FILE = "helper.lock"
 
 _SYNCHRONIZE = 0x00100000
 _WAIT_OBJECT_0 = 0
@@ -50,6 +57,9 @@ _WAIT_OBJECT_0 = 0
 # Kept for the life of the process: the event exists only while a handle to
 # it is open, and the helper may open it long after the window appeared.
 _shown_event_handle: Optional[int] = None
+
+# Kept for the life of the process too: the lock is the open handle.
+_held_locks: list[object] = []
 
 
 def touch(path: Path) -> bool:
@@ -157,3 +167,112 @@ def close_event(handle: int) -> None:
         kernel32.CloseHandle(ctypes.c_void_p(handle))
     except Exception:  # noqa: BLE001
         pass
+
+
+def hold_lock(path: Path) -> bool:
+    """Take ``path`` exclusively and keep it for the life of this process.
+
+    The helper calls this on its stage's lock file.  The operating system
+    drops the lock when the process dies, however it dies, which is what a
+    pid written into a file cannot offer: a pid outlives its process and gets
+    handed to a stranger.  Returns False when the lock could not be taken
+    (logged and swallowed: a helper without a lock is merely sweepable).
+    """
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if sys.platform == "win32":
+            import ctypes
+            from ctypes import wintypes
+
+            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            kernel32.CreateFileW.restype = wintypes.HANDLE
+            kernel32.CreateFileW.argtypes = [
+                wintypes.LPCWSTR,
+                wintypes.DWORD,
+                wintypes.DWORD,
+                ctypes.c_void_p,
+                wintypes.DWORD,
+                wintypes.DWORD,
+                wintypes.HANDLE,
+            ]
+            generic_read = 0x80000000
+            generic_write = 0x40000000
+            open_always = 4
+            invalid = ctypes.c_void_p(-1).value
+            # Share mode 0: no other open of this file, for reading, writing
+            # or deleting, succeeds while this handle lives.
+            handle = kernel32.CreateFileW(
+                str(path), generic_read | generic_write, 0, None, open_always, 0, None
+            )
+            if handle is None or handle == invalid:
+                _logger.warning("Could not lock %s (error %d)", path.name, ctypes.get_last_error())
+                return False
+            _held_locks.append(handle)
+            return True
+        import fcntl
+
+        fd = os.open(str(path), os.O_RDWR | os.O_CREAT, 0o600)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            os.close(fd)
+            return False
+        _held_locks.append(fd)
+        return True
+    except Exception as exc:  # noqa: BLE001
+        _logger.warning("Could not lock %s: %s", path.name, exc)
+        return False
+
+
+def lock_is_held(path: Path) -> bool:
+    """Is ``path`` locked by a live process right now?
+
+    False for a file that does not exist: nothing holds a lock nobody took.
+    Anything else that stops us asking (permissions, odd errors) reads as
+    "not held" too, which is the sweep's pre-lock behaviour, and the sweep's
+    age guard still stands between it and a fresh stage.
+    """
+    if not path.exists():
+        return False
+    if sys.platform == "win32":
+        try:
+            with open(path, "rb"):
+                return False
+        except PermissionError:
+            return True
+        except OSError:
+            return False
+    try:
+        import fcntl
+
+        fd = os.open(str(path), os.O_RDONLY)
+    except OSError:
+        return False
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
+        except OSError:
+            return True
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        return False
+    finally:
+        os.close(fd)
+
+
+def release_held_locks() -> None:
+    """Drop every lock this process holds.  For tests; the helper holds its lock until it exits."""
+    while _held_locks:
+        held = _held_locks.pop()
+        try:
+            if sys.platform == "win32":
+                import ctypes
+                from ctypes import wintypes
+
+                kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+                kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+                kernel32.CloseHandle.restype = wintypes.BOOL
+                kernel32.CloseHandle(held)
+            else:
+                os.close(int(held))  # type: ignore[call-overload]
+        except Exception:  # noqa: BLE001
+            pass

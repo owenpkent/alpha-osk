@@ -116,3 +116,39 @@ class TestOffWindows:
         assert update_signals.open_keyboard_shown_event() is None
         assert update_signals.event_is_set(1) is False
         update_signals.close_event(1)  # must not raise
+
+
+class TestTheHelperLock:
+    """A stage is in use while its helper holds the lock, and not a moment longer.
+
+    The sweep reads this, so a lock that outlived its process (a pid written
+    to a file does) would pin a stage for ever, and one that vanished while
+    the helper ran would let the sweep delete a live helper's files.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _drop_locks(self):
+        yield
+        update_signals.release_held_locks()
+
+    def test_a_held_lock_reads_as_held(self, tmp_path: Path) -> None:
+        lock = tmp_path / update_signals.HELPER_LOCK_FILE
+        assert update_signals.lock_is_held(lock) is False, "no file, no lock"
+        assert update_signals.hold_lock(lock) is True
+        assert update_signals.lock_is_held(lock) is True
+
+    def test_a_released_lock_reads_as_free(self, tmp_path: Path) -> None:
+        lock = tmp_path / update_signals.HELPER_LOCK_FILE
+        update_signals.hold_lock(lock)
+        update_signals.release_held_locks()
+        assert update_signals.lock_is_held(lock) is False
+        assert lock.exists(), "the file stays; only the hold is released"
+
+    def test_a_lock_already_held_cannot_be_taken_twice(self, tmp_path: Path) -> None:
+        lock = tmp_path / update_signals.HELPER_LOCK_FILE
+        assert update_signals.hold_lock(lock) is True
+        assert update_signals.hold_lock(lock) is False
+
+    def test_the_marker_names_are_the_ones_both_sides_use(self) -> None:
+        assert update_signals.UI_SHOWN_FILE == "ui-shown"
+        assert update_signals.HELPER_LOCK_FILE == "helper.lock"

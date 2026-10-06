@@ -35,10 +35,13 @@ walks four phases (``UpdateFlow``):
    A declined prompt or a failed launch writes a cancel marker instead and
    the helper leaves without a word (the keyboard's own toast reports it).
 2. **Closing**: the parent keyboard exits (the installer's taskkill).
-3. **Installing**: wait a grace period, then for the installed exe to be
-   different from the pre-install snapshot (``_new_exe_looks_fresh``).
+3. **Installing**: wait for the installed exe to be different from the
+   pre-install snapshot and not open for writing (``_new_exe_looks_fresh``).
    Newer-than-parent-death was tried and can never fire: NSIS restores each
-   extracted file's build-time timestamp (``SetDateSave``).
+   extracted file's build-time timestamp (``SetDateSave``).  The installer
+   writes ``alpha-osk.exe`` last of all its files, so a changed, closed exe
+   is a finished extraction and no grace period is needed; only a helper
+   with no snapshot (an updater too old to pass one) still waits one.
 4. **Starting**: launch the new exe through ``explorer.exe``
    (``_launch_command``: a UIAccess exe started by anything other than
    Explorer comes up without UIAccess), then wait for the new keyboard to
@@ -47,6 +50,12 @@ walks four phases (``UpdateFlow``):
 
 Then "Done", briefly, and ``update_handoff.json`` is written so the new
 keyboard can flash its "Updated" toast.
+
+The window is never topmost while it waits for the UAC prompt (it must not be
+able to cover a consent dialog that is not on the secure desktop) and becomes
+topmost once the installer has launched.  It can be moved: press and drag the
+body, or click Move, move the pointer with no button held, and click to put
+it down (right click puts it back); see ``update_window_move``.
 
 A failure never closes the window on a timer. It stays up with a message
 and large buttons (Start Alpha-OSK, Open log folder, Close) until the user
@@ -72,10 +81,11 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from . import update_signals
+from .update_window_move import MoveState, WindowMover
 
 _logger = logging.getLogger("UpdateRelauncher")
 
-# Polling cadence — fast enough to feel snappy, slow enough not to peg
+# Polling cadence - fast enough to feel snappy, slow enough not to peg
 # a CPU core. Total budget for the whole flow is ~3 minutes; in practice
 # the install finishes inside 30 s.
 _POLL_INTERVAL_S = 0.5
@@ -125,12 +135,17 @@ _APPROVAL_TIMEOUT_S = 600
 _KEYBOARD_SHOWN_TIMEOUT_S = 60
 
 # The splash's state machine and its topmost re-assertion tick on these.
+# A carried window follows the pointer on its own, faster timer.
 _TICK_MS = 250
+_CARRY_TICK_MS = 16
 _REASSERT_TOP_MS = 1000
 
 # The "Done" pause is display time after the outcome is decided, so it is
-# outside the ceiling like every other dwell.
-_DONE_DWELL_MS = 800
+# outside the ceiling like every other dwell.  The new keyboard's window has
+# already painted when this starts (its event is set after the first frame)
+# and this screen sits topmost over part of it, so a long "Done" only delays
+# the user's first click.
+_DONE_DWELL_MS = 400
 
 # Exit codes. 0 is success.
 EXIT_PARENT_STUCK = 2
@@ -145,7 +160,7 @@ def _configure_log(log_dir: Path) -> None:
 
     Stdout/stderr aren't visible (the helper runs hidden), so log
     aggressively to a known path. Failures during log setup are
-    swallowed — there's no fallback surface.
+    swallowed - there's no fallback surface.
     """
     try:
         log_dir.mkdir(parents=True, exist_ok=True)
@@ -169,7 +184,7 @@ def _process_alive(pid: int) -> bool:
     """Cross-platform "is this PID still around" check.
 
     Uses ``OpenProcess`` on Windows (the cheapest signal) and
-    ``os.kill(pid, 0)`` on POSIX. Returns False on any error — a dead
+    ``os.kill(pid, 0)`` on POSIX. Returns False on any error - a dead
     process is the safer assumption since we want the relauncher to
     proceed once the OSK is gone.
     """
@@ -580,7 +595,7 @@ def _write_handoff(
 ) -> None:
     """Drop the breadcrumb the new OSK reads to surface its toast.
 
-    Format is forward-compatible — adding fields is fine, but the new
+    Format is forward-compatible - adding fields is fine, but the new
     OSK must tolerate missing fields since users can update across
     multiple versions.
     """
@@ -614,6 +629,12 @@ def run_relauncher(argv: list[str]) -> int:
     display server), we log and fall back to headless rather than
     aborting the relaunch.
     """
+    if "--self-test" in argv:
+        # The build runs the staged helper this way (build.py), and it must
+        # never need a display: see run_self_test.
+        at = argv.index("--self-test") + 1
+        return run_self_test(argv[at] if at < len(argv) else "")
+
     parser = argparse.ArgumentParser(prog="alpha-osk --update-relauncher")
     parser.add_argument("--update-relauncher", action="store_true")
     parser.add_argument("--parent-pid", type=int, required=True)
@@ -633,17 +654,24 @@ def run_relauncher(argv: list[str]) -> int:
     # "x,y,w,h" of the keyboard window being replaced, in physical pixels,
     # so the splash opens on top of where the keyboard was.
     parser.add_argument("--anchor-rect", type=str, default="")
+    # The installer's image name, so "is it still running" can be asked.
+    parser.add_argument("--installer-image", type=str, default="")
     args = parser.parse_args(argv[1:])
 
     config_dir = Path(args.config_dir)
     _configure_log(config_dir)
     _logger.info(
-        "Relauncher starting — parent_pid=%d new_version=%s target=%s splash=%s",
+        "Relauncher starting: parent_pid=%d new_version=%s target=%s splash=%s",
         args.parent_pid,
         args.new_version,
         args.target_exe,
         args.show_splash,
     )
+
+    # Tell the updater's next sweep that this stage is in use for as long as
+    # we run (the OS drops the lock however we die).
+    if args.signal_dir:
+        update_signals.hold_lock(Path(args.signal_dir) / update_signals.HELPER_LOCK_FILE)
 
     # The whole-run ceiling is taken once, here, and handed to whichever
     # path runs. Derived inside each path instead, a splash that raised
@@ -783,18 +811,18 @@ def _run_headless(args: argparse.Namespace, overall_deadline: Optional[float] = 
 
     parent_death_time = time.time()
 
-    grace_s = _installer_grace_s(overall_deadline)
+    old_mtime = getattr(args, "old_exe_mtime", 0.0)
+    grace_s = 0.0 if old_mtime > 0 else _installer_grace_s(overall_deadline)
     _logger.info("Parent OSK exited; waiting %.0fs for installer file copy", grace_s)
     time.sleep(grace_s)
 
     target_exe = Path(args.target_exe)
     new_exe_budget = _remaining(overall_deadline, _NEW_EXE_TIMEOUT_S)
-    old_mtime = getattr(args, "old_exe_mtime", 0.0)
     if not _wait_for_new_exe(target_exe, parent_death_time, new_exe_budget, old_mtime):
         _logger.error("New exe never appeared at %s within %.0fs", target_exe, new_exe_budget)
         return 3
 
-    _logger.info("New exe ready at %s — launching", target_exe)
+    _logger.info("New exe ready at %s, launching", target_exe)
     if not _launch_new_osk(target_exe):
         return 4
 
@@ -809,6 +837,33 @@ def _run_headless(args: argparse.Namespace, overall_deadline: Optional[float] = 
     _write_handoff(config_dir, args.new_version, args.previous_version)
     _logger.info("Relauncher done")
     return 0
+
+
+def _installer_is_running(image_name: str) -> bool:
+    """Is a process with the installer's image name running right now?
+
+    Unlike :func:`_process_image_running` an unreadable process list means
+    "no": this is asked to *hold something back* (Start Alpha-OSK while an
+    install is still going), and a probe that cannot see anything must never
+    block the user for good.
+    """
+    if not image_name:
+        return False
+    names = _running_image_names()
+    if names is None:
+        return False
+    wanted = image_name.casefold()
+    return any(name.casefold() == wanted for name in names)
+
+
+def installer_busy(image_name: str, target: Path) -> bool:
+    """Is an install plausibly still in progress?
+
+    True while the installer's process is alive or the target exe is still
+    open for writing.  Either way, starting the target now would run a
+    half-extracted (or the old) keyboard in the middle of the install.
+    """
+    return _installer_is_running(image_name) or _file_is_open_for_writing(target)
 
 
 def _new_exe_ready(target: Path, after_mtime: Optional[float], old_mtime: float = 0.0) -> bool:
@@ -906,8 +961,18 @@ class UpdateFlow:
         wall_clock: Callable[[], float] = time.time,
         wait_for_approval: bool = True,
         ceiling_deadline: Optional[float] = None,
+        installer_busy: Callable[[], bool] = lambda: False,
+        has_exe_snapshot: bool = False,
     ) -> None:
         self._version = version
+        self._installer_busy = installer_busy
+        # With a snapshot of the installed exe's mtime the readiness rule is
+        # exact and no grace period is needed (see _enter_installing).
+        self._has_exe_snapshot = has_exe_snapshot
+        self._start_pending = False
+        # Set by step() when a Start the user asked for while the installer
+        # was still running can now go ahead; the driver acts on it and clears it.
+        self.launch_requested = False
         self._parent_alive = parent_alive
         self._installer_launched = installer_launched
         self._cancelled = cancelled
@@ -943,6 +1008,35 @@ class UpdateFlow:
     def finished(self) -> bool:
         return self.phase in _TERMINAL_PHASES
 
+    @property
+    def wants_topmost(self) -> bool:
+        """Should the window be in the topmost band right now?
+
+        Not while it waits for the UAC prompt: with the consent UI on the
+        secure desktop nothing of ours is visible anyway, and without it a
+        topmost window could sit over the very dialog the user has to answer.
+        From the installer's launch on it must be, or the installer and
+        whatever the user opens next would bury the one thing telling them
+        the keyboard is coming back.
+        """
+        return self.phase is not Phase.APPROVE
+
+    def request_start(self) -> bool:
+        """The user pressed Start Alpha-OSK.  True: launch it now.
+
+        False while an install is plausibly still running: launching then
+        would start the old keyboard (or a half-written new one) in the
+        middle of it.  The press is remembered and :meth:`step` raises
+        ``launch_requested`` once the installer is done, so the user is told
+        to wait rather than made to press again.
+        """
+        if not self._installer_busy():
+            self._start_pending = False
+            return True
+        self._start_pending = True
+        self.detail = "The installer is still running. The keyboard starts when it finishes."
+        return False
+
     def _remaining(self, phase_timeout: float) -> float:
         """A phase's budget, clipped to what is left of the whole run (never negative)."""
         return max(0.0, min(phase_timeout, self._ceiling - self._clock()))
@@ -971,7 +1065,12 @@ class UpdateFlow:
         self.phase = Phase.INSTALLING
         self.message = f"Installing Alpha-OSK {self._version}".rstrip()
         self.detail = "The keyboard will come back by itself."
-        self._grace_until = self._clock() + _installer_grace_s(self._ceiling)
+        # The installer writes alpha-osk.exe after every other file, so with
+        # a snapshot a changed, closed exe is a finished extraction and the
+        # fixed pause bought nothing.  Without one the legacy comparison is
+        # weaker, and the pause stays.
+        grace = 0.0 if self._has_exe_snapshot else _installer_grace_s(self._ceiling)
+        self._grace_until = self._clock() + grace
 
     def _enter_starting(self) -> None:
         self.phase = Phase.STARTING
@@ -1005,6 +1104,10 @@ class UpdateFlow:
     def step(self) -> None:
         """Advance as far as the current facts allow. Cheap, never blocks."""
         if self.phase is Phase.FAILED:
+            if self._start_pending and not self._installer_busy():
+                self._start_pending = False
+                self.launch_requested = True
+                return
             # A failure screen stays until the user acts, except when the
             # keyboard it is apologising for turns up after all: the
             # installer's own explorer fallback, a slow install, a slow first
@@ -1128,11 +1231,15 @@ def _run_with_splash(args: argparse.Namespace, overall_deadline: Optional[float]
     # Lazy-import Qt so the headless path stays import-clean and
     # tests don't accidentally drag PySide6 into a fresh interpreter.
     from PySide6.QtCore import Qt, QTimer
+    from PySide6.QtGui import QCursor
     from PySide6.QtWidgets import QApplication, QLabel, QProgressBar, QPushButton, QWidget
+
+    from .platform import windows_window
 
     config_dir = Path(args.config_dir)
     target_exe = Path(args.target_exe)
     signal_dir = getattr(args, "signal_dir", "")
+    installer_image = getattr(args, "installer_image", "")
     anchor = parse_anchor_rect(getattr(args, "anchor_rect", ""))
 
     existing_app = QApplication.instance()
@@ -1156,6 +1263,8 @@ def _run_with_splash(args: argparse.Namespace, overall_deadline: Optional[float]
         write_handoff=lambda: _write_handoff(config_dir, args.new_version, args.previous_version),
         wait_for_approval=bool(signal_dir),
         ceiling_deadline=overall_deadline,
+        installer_busy=lambda: installer_busy(installer_image, target_exe),
+        has_exe_snapshot=old_mtime > 0,
     )
 
     splash: QWidget = _build_splash_widget(QWidget, QLabel, QProgressBar, QPushButton, Qt)
@@ -1182,20 +1291,70 @@ def _run_with_splash(args: argparse.Namespace, overall_deadline: Optional[float]
     assert progress is not None
     buttons = splash.findChild(QWidget, "buttons")
     assert buttons is not None
+    overlay = splash.findChild(QWidget, "moveOverlay")
+    assert overlay is not None
+
+    def _hwnd() -> int:
+        return int(splash.winId())
+
+    def _origin() -> tuple[int, int]:
+        if sys.platform == "win32":
+            found = windows_window.hwnd_origin(_hwnd())
+            if found is not None:
+                return found
+        return (splash.x(), splash.y())
+
+    def _size() -> tuple[int, int]:
+        if sys.platform == "win32":
+            found = windows_window.window_size(_hwnd())
+            if found is not None:
+                return found
+        return (splash.width(), splash.height())
+
+    def _cursor() -> tuple[int, int]:
+        if sys.platform == "win32":
+            found = windows_window.cursor_position()
+            if found is not None:
+                return found
+        at = QCursor.pos()
+        return (at.x(), at.y())
+
+    def _monitors() -> list[tuple[int, int, int, int]]:
+        if sys.platform == "win32":
+            return windows_window.monitor_rects()
+        found = []
+        for screen in app.screens():
+            geo = screen.geometry()
+            found.append((geo.x(), geo.y(), geo.x() + geo.width(), geo.y() + geo.height()))
+        return found
+
+    def _move_to(pos: tuple[int, int]) -> None:
+        if sys.platform == "win32" and windows_window.move_window_noactivate(
+            _hwnd(), pos[0], pos[1]
+        ):
+            return
+        splash.move(pos[0], pos[1])
+
+    mover = WindowMover(_monitors)
 
     def _place() -> None:
-        """Centre on the keyboard being replaced; the primary screen if unknown."""
-        if sys.platform == "win32" and anchor is not None:
-            from .platform import windows_window
+        """Centre on the keyboard being replaced; the primary screen if unknown.
 
-            hwnd = int(splash.winId())
-            size = windows_window.window_size(hwnd)
+        Once the user has moved the window it stays where they put it (only
+        kept on the desktop, since a failure screen is taller than the one it
+        replaces).
+        """
+        if mover.moved:
+            _move_to(mover.keep_in_view(_origin(), _size()))
+            return
+        if sys.platform == "win32" and anchor is not None:
+            size = windows_window.window_size(_hwnd())
             work = windows_window.monitor_work_area_at(
                 anchor[0] + anchor[2] // 2, anchor[1] + anchor[3] // 2
             )
             if size is not None and work is not None:
                 x, y = centred_position(anchor, size, work)
-                if windows_window.move_window_noactivate(hwnd, x, y):
+                if windows_window.move_window_noactivate(_hwnd(), x, y):
                     return
         screen = app.primaryScreen()
         if screen is not None:
@@ -1205,29 +1364,92 @@ def _run_with_splash(args: argparse.Namespace, overall_deadline: Optional[float]
                 geo.y() + (geo.height() - splash.height()) // 3,
             )
 
+    # The band the window is in now (None until styled).  Managed through
+    # Win32 only, never the Qt flags: it changes with the phase, and setFlags
+    # on a shown window rebuilds it.
+    band: list[Optional[bool]] = [None]
+
     def _style_native() -> None:
-        """Never take focus, and sit in the topmost band."""
+        """Never take focus; sit in the band the current phase wants."""
         if sys.platform != "win32":
             return
         try:
-            from .platform import windows_window
-
             handle = splash.windowHandle()
             if handle is not None:
-                windows_window.apply_extended_styles(handle, taskbar_button=False, topmost=True)
+                want = flow.wants_topmost
+                windows_window.apply_extended_styles(handle, taskbar_button=False, topmost=want)
+                band[0] = want
         except Exception as exc:  # noqa: BLE001
             _logger.warning("Could not style the update window: %s", exc)
 
-    def _reassert_topmost() -> None:
-        """The installer and other windows must not be able to bury us."""
-        if sys.platform != "win32":
+    def _sync_band() -> None:
+        """Follow the flow into (or out of) the topmost band."""
+        if sys.platform != "win32" or band[0] == flow.wants_topmost:
             return
         try:
-            from .platform import windows_window
+            if windows_window.set_window_band(_hwnd(), flow.wants_topmost):
+                band[0] = flow.wants_topmost
+        except Exception as exc:  # noqa: BLE001
+            _logger.debug("Could not change the window band: %s", exc)
 
-            windows_window.set_window_band(int(splash.winId()), True)
+    def _reassert_topmost() -> None:
+        """The installer and other windows must not be able to bury us."""
+        if sys.platform != "win32" or not flow.wants_topmost:
+            return
+        try:
+            windows_window.set_window_band(_hwnd(), True)
         except Exception as exc:  # noqa: BLE001
             _logger.debug("Could not re-assert topmost: %s", exc)
+
+    # -- moving the window ---------------------------------------------------
+
+    carry_timer = QTimer(splash)
+    carry_timer.setInterval(_CARRY_TICK_MS)
+
+    def _follow() -> None:
+        target = mover.follow(_cursor(), _size())
+        if target is not None:
+            _move_to(target)
+
+    def _carry_tick() -> None:
+        if mover.state is not MoveState.CARRYING:
+            carry_timer.stop()
+            return
+        _follow()
+
+    carry_timer.timeout.connect(_carry_tick)
+
+    def _pick_up() -> None:
+        if mover.pick_up(_cursor(), _origin()):
+            overlay.setGeometry(splash.rect())
+            overlay.raise_()
+            overlay.show()
+            carry_timer.start()
+
+    def _carry_clicked(button) -> None:
+        if mover.state is not MoveState.CARRYING:
+            return
+        if button == Qt.MouseButton.RightButton:
+            back = mover.put_back()
+            if back is not None:
+                _move_to(back)
+        else:
+            mover.put_down()
+        carry_timer.stop()
+        overlay.hide()
+
+    splash.on_press = lambda: mover.press(_cursor(), _origin())  # type: ignore[attr-defined]
+    splash.on_drag = _follow  # type: ignore[attr-defined]
+    splash.on_release = mover.release  # type: ignore[attr-defined]
+    overlay.on_click = _carry_clicked  # type: ignore[attr-defined]
+    _button("move").clicked.connect(_pick_up)
+
+    def _announce_visible() -> None:
+        """First paint done: tell the updater, which is waiting to launch the installer."""
+        if signal_dir:
+            update_signals.touch(Path(signal_dir) / update_signals.UI_SHOWN_FILE)
+
+    splash.on_first_paint = _announce_visible  # type: ignore[attr-defined]
 
     shown_failure = [False]
 
@@ -1275,15 +1497,28 @@ def _run_with_splash(args: argparse.Namespace, overall_deadline: Optional[float]
             _logger.exception("Update flow raised: %s", exc)
             flow.fail_unexpectedly()
         _render()
+        _sync_band()
+        if flow.launch_requested:
+            flow.launch_requested = False
+            _start_now()
+            return
         if flow.phase is Phase.CANCELLED:
             _quit()
         elif flow.phase is Phase.DONE:
             finishing[0] = True
             QTimer.singleShot(_DONE_DWELL_MS, _leave_event_loop)
 
-    def _start_keyboard() -> None:
+    def _start_now() -> None:
         _launch_new_osk(target_exe)
         _quit()
+
+    def _start_keyboard() -> None:
+        # Not while the installer is still running: that would start the old
+        # keyboard, or a half-written new one, in the middle of the install.
+        if flow.request_start():
+            _start_now()
+        else:
+            _render()
 
     _button("start").clicked.connect(_start_keyboard)
     _button("logs").clicked.connect(lambda: _open_log_folder(config_dir))
@@ -1323,12 +1558,59 @@ def _build_splash_widget(QWidget, QLabel, QProgressBar, QPushButton, Qt):
     """
     from PySide6.QtWidgets import QHBoxLayout, QLayout, QVBoxLayout
 
-    win = QWidget()
+    class _Splash(QWidget):
+        """The window, with its pointer and paint events handed to the driver.
+
+        The driver sets ``on_press`` / ``on_drag`` / ``on_release`` (a drag by
+        the body) and ``on_first_paint``.  The window stays out of the topmost
+        band until the driver says otherwise (see ``UpdateFlow.wants_topmost``),
+        so ``WindowStaysOnTopHint`` is deliberately not among its flags.
+        """
+
+        on_press = None
+        on_drag = None
+        on_release = None
+        on_first_paint = None
+        _painted = False
+
+        def mousePressEvent(self, ev):  # noqa: N802  # pragma: no cover - needs a window server
+            if ev.button() == Qt.LeftButton and self.on_press is not None:
+                self.on_press()
+
+        def mouseMoveEvent(self, ev):  # noqa: N802  # pragma: no cover - needs a window server
+            if ev.buttons() & Qt.LeftButton and self.on_drag is not None:
+                self.on_drag()
+
+        def mouseReleaseEvent(self, ev):  # noqa: N802  # pragma: no cover - needs a window server
+            if ev.button() == Qt.LeftButton and self.on_release is not None:
+                self.on_release()
+
+        def paintEvent(self, ev):  # noqa: N802
+            super().paintEvent(ev)
+            if not self._painted:
+                self._painted = True
+                if self.on_first_paint is not None:
+                    self.on_first_paint()
+
+        def resizeEvent(self, ev):  # noqa: N802
+            super().resizeEvent(ev)
+            overlay = self.findChild(QWidget, "moveOverlay")
+            if overlay is not None:
+                overlay.setGeometry(self.rect())
+
+    class _Overlay(QWidget):
+        """Covers the window while it is carried, so no button can take the click."""
+
+        on_click = None
+
+        def mousePressEvent(self, ev):  # noqa: N802  # pragma: no cover - needs a window server
+            if self.on_click is not None:
+                self.on_click(ev.button())
+
+    win = _Splash()
     win.setObjectName("splash")
     win.setWindowTitle("Updating Alpha-OSK")
-    win.setWindowFlags(
-        Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool | Qt.WindowDoesNotAcceptFocus
-    )
+    win.setWindowFlags(Qt.FramelessWindowHint | Qt.Tool | Qt.WindowDoesNotAcceptFocus)
     win.setAttribute(Qt.WA_ShowWithoutActivating, True)
     win.setAttribute(Qt.WA_StyledBackground, True)
     # Match the in-app toast colour so the window visibly belongs to
@@ -1351,6 +1633,10 @@ def _build_splash_widget(QWidget, QLabel, QProgressBar, QPushButton, Qt):
         "QPushButton:hover { background-color: #36588c; }"
         "QPushButton#start { background-color: #4a8eff; color: #0b1626; min-height: 64px; }"
         "QPushButton#start:hover { background-color: #6ba2ff; }"
+        "QPushButton#move { font-size: 12pt; min-height: 48px; }"
+        "QWidget#moveOverlay { background-color: rgba(11, 22, 38, 235);"
+        " border: 2px solid #4a8eff; }"
+        "QLabel#moveHint { color: #ffffff; font-size: 14pt; font-weight: bold; }"
     )
 
     layout = QVBoxLayout(win)
@@ -1381,6 +1667,12 @@ def _build_splash_widget(QWidget, QLabel, QProgressBar, QPushButton, Qt):
     progress.setFixedHeight(14)
     layout.addWidget(progress)
 
+    # Always on screen, working or failed: moving the window is never the
+    # wrong thing to offer, and it is a large target like the rest.
+    move = QPushButton("Move this window", win)
+    move.setObjectName("move")
+    layout.addWidget(move)
+
     buttons = QWidget(win)
     buttons.setObjectName("buttons")
     buttons_layout = QVBoxLayout(buttons)
@@ -1400,8 +1692,85 @@ def _build_splash_widget(QWidget, QLabel, QProgressBar, QPushButton, Qt):
     buttons_layout.addLayout(row)
     layout.addWidget(buttons)
 
+    # The carry's cover: a child that fills the window while it follows the
+    # pointer, so the click that puts it down cannot land on a button.
+    overlay = _Overlay(win)
+    overlay.setObjectName("moveOverlay")
+    overlay.setAttribute(Qt.WA_StyledBackground, True)
+    overlay_layout = QVBoxLayout(overlay)
+    hint = QLabel("Click to put the window down.\nRight click to put it back.", overlay)
+    hint.setObjectName("moveHint")
+    hint.setAlignment(Qt.AlignHCenter | Qt.AlignVCenter)
+    hint.setTextFormat(Qt.PlainText)
+    overlay_layout.addWidget(hint)
+    overlay.hide()
+
     return win
 
 
-if __name__ == "__main__":  # pragma: no cover — CLI entry
+def run_self_test(report_path: str) -> int:
+    """Prove this helper can start from where it is, without showing anything.
+
+    ``build.py`` stages the helper's file list into a scratch directory and
+    runs the staged exe with ``--self-test <report file>``; a build whose list
+    left something out fails there instead of shipping an update screen that
+    cannot start.  Windowed exes have no stdout, hence the report file.
+
+    It forces the ``offscreen`` Qt platform so it cannot put a window on
+    anyone's screen, builds the real update widget and paints it, loads the
+    two plugins the real run needs and the offscreen platform cannot reach
+    (``qwindows`` and the Windows style), and touches the ctypes helpers.
+    Returns 0 when all of it worked.
+    """
+    os.environ["QT_QPA_PLATFORM"] = "offscreen"
+    problems: list[str] = []
+    try:
+        from PySide6.QtCore import QCoreApplication, QPluginLoader, Qt
+        from PySide6.QtWidgets import (
+            QApplication,
+            QLabel,
+            QProgressBar,
+            QPushButton,
+            QWidget,
+        )
+
+        from .platform import windows_window
+
+        app = QApplication.instance() or QApplication([])
+        widget = _build_splash_widget(QWidget, QLabel, QProgressBar, QPushButton, Qt)
+        widget.show()
+        app.processEvents()
+        if widget.grab().isNull():
+            problems.append("the update widget painted nothing")
+        widget.close()
+
+        if sys.platform == "win32":
+            wanted = {
+                "platforms/qwindows.dll": "the Windows platform plugin",
+                "styles/qmodernwindowsstyle.dll": "the Windows style plugin",
+            }
+            roots = [Path(p) for p in QCoreApplication.libraryPaths()]
+            for rel, what in wanted.items():
+                path = next((r / rel for r in roots if (r / rel).is_file()), None)
+                if path is None:
+                    problems.append(f"{what} is missing ({rel})")
+                    continue
+                loader = QPluginLoader(str(path))
+                if not loader.load():
+                    problems.append(f"{what} did not load: {loader.errorString()}")
+            windows_window.monitor_rects()
+            windows_window.cursor_position()
+    except Exception as exc:  # noqa: BLE001
+        problems.append(f"{type(exc).__name__}: {exc}")
+
+    text = "ok" if not problems else "; ".join(problems)
+    if report_path:
+        try:
+            Path(report_path).write_text(text, encoding="utf-8")
+        except OSError:
+            pass
+    return 0 if not problems else 1
+
+
+if __name__ == "__main__":  # pragma: no cover - CLI entry
     sys.exit(run_relauncher(sys.argv))

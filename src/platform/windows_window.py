@@ -1167,3 +1167,84 @@ def set_app_user_model_id(app_id: str) -> None:
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(app_id)
     except Exception as exc:  # pragma: no cover - platform/runtime dependent
         _logger.debug("SetCurrentProcessExplicitAppUserModelID failed: %s", exc)
+
+
+def cursor_position() -> Optional[tuple[int, int]]:
+    """The pointer's position in physical screen pixels, or None if it cannot be read."""
+    if sys.platform != "win32":
+        return None
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        user32 = ctypes.windll.user32
+        user32.GetCursorPos.argtypes = [ctypes.POINTER(wintypes.POINT)]
+        user32.GetCursorPos.restype = wintypes.BOOL
+        point = wintypes.POINT()
+        if not user32.GetCursorPos(ctypes.byref(point)):
+            return None
+        return (point.x, point.y)
+    except Exception as e:
+        _logger.debug("GetCursorPos failed: %s", e)
+        return None
+
+
+def hwnd_origin(hwnd: int) -> Optional[tuple[int, int]]:
+    """The top-left of ``hwnd`` in physical screen pixels."""
+    if sys.platform != "win32":
+        return None
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        user32 = ctypes.windll.user32
+        user32.GetWindowRect.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.RECT)]
+        user32.GetWindowRect.restype = wintypes.BOOL
+        rect = wintypes.RECT()
+        if not user32.GetWindowRect(hwnd, ctypes.byref(rect)):
+            return None
+        return (rect.left, rect.top)
+    except Exception as e:
+        _logger.debug("GetWindowRect failed: %s", e)
+        return None
+
+
+def monitor_rects() -> list[tuple[int, int, int, int]]:
+    """``(left, top, right, bottom)`` of every monitor, in physical pixels.
+
+    Empty when they cannot be listed, which callers treat as "do not clamp".
+    """
+    if sys.platform != "win32":
+        return []
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        user32 = ctypes.windll.user32
+        found: list[tuple[int, int, int, int]] = []
+        callback_type = ctypes.WINFUNCTYPE(
+            wintypes.BOOL,
+            wintypes.HANDLE,
+            wintypes.HDC,
+            ctypes.POINTER(wintypes.RECT),
+            wintypes.LPARAM,
+        )
+
+        def _each(_monitor, _dc, rect, _data):  # type: ignore[no-untyped-def]
+            r = rect.contents
+            found.append((r.left, r.top, r.right, r.bottom))
+            return True
+
+        user32.EnumDisplayMonitors.argtypes = [
+            wintypes.HDC,
+            ctypes.POINTER(wintypes.RECT),
+            callback_type,
+            wintypes.LPARAM,
+        ]
+        user32.EnumDisplayMonitors.restype = wintypes.BOOL
+        callback = callback_type(_each)
+        user32.EnumDisplayMonitors(None, None, callback, 0)
+        return found
+    except Exception as e:
+        _logger.debug("EnumDisplayMonitors failed: %s", e)
+        return []
