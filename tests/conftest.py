@@ -201,7 +201,7 @@ def _no_real_update_relauncher(monkeypatch: pytest.MonkeyPatch) -> None:
     """Stop the suite spawning real, detached update-relauncher processes.
 
     ``download_and_install`` ends by calling ``_spawn_relauncher``, which
-    launches ``python -m src.keyboard_app --update-relauncher`` as a
+    launches the update helper (``alpha-osk-relauncher.exe``) as a
     *detached* process, deliberately, so it outlives the app it is
     replacing.  Several tests drive ``download_and_install`` far enough
     to reach it while stubbing only ``_launch_installer``, so every run
@@ -226,7 +226,7 @@ def _no_real_update_relauncher(monkeypatch: pytest.MonkeyPatch) -> None:
         from src import updater
     except ImportError:  # pragma: no cover - updater is always importable
         return
-    monkeypatch.setattr(updater, "_spawn_relauncher", lambda *a, **kw: True)
+    monkeypatch.setattr(updater, "_spawn_relauncher", lambda *a, **kw: None)
 
 
 @pytest.fixture(autouse=True)

@@ -528,3 +528,70 @@ class TestAQuitStillClosesTheKeyboard:
         source = Path(keyboard_app.__file__).read_text(encoding="utf-8")
         body = source.split("def main(", 1)[1]
         assert "windows_window.install_quiet_restore(" in body
+
+
+class _FakeSignal:
+    def __init__(self) -> None:
+        self.slots: list = []
+
+    def connect(self, fn) -> None:
+        self.slots.append(fn)
+
+    def emit(self) -> None:
+        for fn in list(self.slots):
+            fn()
+
+
+class _FakeRoot:
+    def __init__(self) -> None:
+        self.frameSwapped = _FakeSignal()
+
+
+class TestTheKeyboardAnnouncesItsWindow:
+    """After an auto-update the helper's screen stays up until this fires, so
+    it must mean "the window has been drawn", not "the process started"."""
+
+    @pytest.fixture
+    def announced(self, monkeypatch: pytest.MonkeyPatch):
+        calls: list[int] = []
+        timers: list[tuple[int, object]] = []
+        monkeypatch.setattr(
+            keyboard_app.update_signals,
+            "announce_keyboard_shown",
+            lambda: calls.append(1) or True,
+        )
+        monkeypatch.setattr(
+            keyboard_app.QTimer, "singleShot", staticmethod(lambda ms, fn: timers.append((ms, fn)))
+        )
+        return calls, timers
+
+    def test_nothing_is_announced_before_a_frame_is_drawn(self, announced) -> None:
+        calls, _ = announced
+        keyboard_app._announce_when_painted(_FakeRoot())
+        assert calls == []
+
+    def test_the_first_frame_announces_and_the_fallback_then_adds_nothing(self, announced) -> None:
+        calls, timers = announced
+        root = _FakeRoot()
+        keyboard_app._announce_when_painted(root)
+        root.frameSwapped.emit()
+        assert calls == [1]
+        root.frameSwapped.emit()
+        for _, fn in timers:
+            fn()
+        assert calls == [1], "only the first of the swap and the timer counts"
+
+    def test_a_window_that_never_swaps_is_announced_by_the_fallback(self, announced) -> None:
+        """A keyboard restored minimized renders no frame; the helper must not be
+        left on a failure screen in front of a keyboard that is running."""
+        calls, timers = announced
+        keyboard_app._announce_when_painted(_FakeRoot())
+        assert [ms for ms, _ in timers] == [keyboard_app._SHOWN_FALLBACK_MS]
+        timers[0][1]()
+        assert calls == [1]
+
+    def test_a_root_without_the_signal_still_gets_the_fallback(self, announced) -> None:
+        calls, timers = announced
+        keyboard_app._announce_when_painted(object())  # type: ignore[arg-type]
+        timers[0][1]()
+        assert calls == [1]

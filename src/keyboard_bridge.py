@@ -4376,6 +4376,27 @@ class KeyboardBridge(QObject):
 
         threading.Thread(target=_worker, name="alpha-osk-update-check", daemon=True).start()
 
+    def _keyboard_anchor_rect(self) -> Optional[Tuple[int, int, int, int]]:
+        """The keyboard window's physical-pixel rectangle, for the update screen.
+
+        Read here, on the Qt thread, because the install itself runs on a
+        worker thread and a window must not be touched from it. None when
+        there is no window to ask (tests, a minimized keyboard) or off
+        Windows; the update screen then centres on the primary screen.
+        """
+        try:
+            from PySide6.QtGui import QGuiApplication
+
+            from .platform import windows_window
+
+            window = getattr(QGuiApplication.instance(), "keyboard_window", None)
+            if window is None:
+                return None
+            return windows_window.native_window_rect(window)
+        except Exception as e:  # noqa: BLE001
+            _logger.debug("No keyboard rectangle for the update screen: %s", e)
+            return None
+
     @Slot()
     def installUpdate(self) -> None:
         """Download + verify + launch the most recently announced update.
@@ -4390,6 +4411,8 @@ class KeyboardBridge(QObject):
             return
 
         import threading
+
+        anchor = self._keyboard_anchor_rect()
 
         def _worker(info: UpdateInfo) -> None:
             self.updateInstallStarted.emit()
@@ -4427,6 +4450,7 @@ class KeyboardBridge(QObject):
                     info,
                     progress=_on_progress,
                     on_installer_launching=_on_installer_launching,
+                    anchor_rect=anchor,
                 )
             except Exception as e:  # noqa: BLE001
                 _logger.error("Install raised: %s", e)

@@ -419,6 +419,117 @@ def set_window_band(hwnd: int, topmost: bool) -> bool:
     return _place(hwnd, _HWND_TOPMOST if topmost else _HWND_NOTOPMOST)
 
 
+def native_window_rect(window: QWindow) -> Optional[tuple[int, int, int, int]]:
+    """``(x, y, width, height)`` of ``window`` in physical screen pixels.
+
+    Read from Win32 rather than Qt's geometry because the update helper is a
+    separate process that places its own window with Win32 too, and Qt's
+    logical (device-independent) coordinates do not agree across monitors of
+    different scale.  None when the window has no handle, is minimized
+    (Windows parks those at -32000), or the call fails.
+    """
+    if sys.platform != "win32":
+        return None
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        user32 = ctypes.windll.user32
+        user32.GetWindowRect.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.RECT)]
+        user32.GetWindowRect.restype = wintypes.BOOL
+        rect = wintypes.RECT()
+        if not user32.GetWindowRect(int(window.winId()), ctypes.byref(rect)):
+            return None
+        if rect.left <= -30000 or rect.top <= -30000:
+            return None
+        return (rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top)
+    except Exception as e:
+        _logger.debug("GetWindowRect failed: %s", e)
+        return None
+
+
+def monitor_work_area_at(x: int, y: int) -> Optional[tuple[int, int, int, int]]:
+    """``(left, top, right, bottom)`` work area of the monitor nearest ``(x, y)``."""
+    if sys.platform != "win32":
+        return None
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        class _MonitorInfo(ctypes.Structure):
+            _fields_ = [
+                ("cbSize", wintypes.DWORD),
+                ("rcMonitor", wintypes.RECT),
+                ("rcWork", wintypes.RECT),
+                ("dwFlags", wintypes.DWORD),
+            ]
+
+        user32 = ctypes.windll.user32
+        user32.MonitorFromPoint.argtypes = [wintypes.POINT, wintypes.DWORD]
+        user32.MonitorFromPoint.restype = wintypes.HANDLE
+        user32.GetMonitorInfoW.argtypes = [wintypes.HANDLE, ctypes.POINTER(_MonitorInfo)]
+        user32.GetMonitorInfoW.restype = wintypes.BOOL
+        monitor_defaulttonearest = 2
+        monitor = user32.MonitorFromPoint(wintypes.POINT(x, y), monitor_defaulttonearest)
+        info = _MonitorInfo()
+        info.cbSize = ctypes.sizeof(_MonitorInfo)
+        if not monitor or not user32.GetMonitorInfoW(monitor, ctypes.byref(info)):
+            return None
+        work = info.rcWork
+        return (work.left, work.top, work.right, work.bottom)
+    except Exception as e:
+        _logger.debug("GetMonitorInfoW failed: %s", e)
+        return None
+
+
+def window_size(hwnd: int) -> Optional[tuple[int, int]]:
+    """``(width, height)`` of ``hwnd`` in physical pixels."""
+    if sys.platform != "win32":
+        return None
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        user32 = ctypes.windll.user32
+        user32.GetWindowRect.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.RECT)]
+        user32.GetWindowRect.restype = wintypes.BOOL
+        rect = wintypes.RECT()
+        if not user32.GetWindowRect(hwnd, ctypes.byref(rect)):
+            return None
+        return (rect.right - rect.left, rect.bottom - rect.top)
+    except Exception as e:
+        _logger.debug("GetWindowRect failed: %s", e)
+        return None
+
+
+def move_window_noactivate(hwnd: int, x: int, y: int) -> bool:
+    """Move ``hwnd`` to physical ``(x, y)`` without resizing, restacking or activating it."""
+    if sys.platform != "win32":
+        return False
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        user32 = ctypes.windll.user32
+        user32.SetWindowPos.argtypes = [
+            wintypes.HWND,
+            wintypes.HWND,
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_int,
+            wintypes.UINT,
+        ]
+        user32.SetWindowPos.restype = wintypes.BOOL
+        swp_nosize, swp_nozorder, swp_noactivate = 0x0001, 0x0004, 0x0010
+        return bool(
+            user32.SetWindowPos(hwnd, 0, x, y, 0, 0, swp_nosize | swp_nozorder | swp_noactivate)
+        )
+    except Exception as e:
+        _logger.debug("SetWindowPos (move) failed: %s", e)
+        return False
+
+
 def raise_window_noactivate(hwnd: int) -> bool:
     """Raise ``hwnd`` to the top of its own band without activating it.
 

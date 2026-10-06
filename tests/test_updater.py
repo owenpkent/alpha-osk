@@ -679,7 +679,7 @@ class TestInstallerLaunchingCallback:
     def _stub_happy_path(self, monkeypatch):
         monkeypatch.setattr(updater, "_download_with_cap", _fake_download)
         monkeypatch.setattr(updater, "_verify_signature", lambda p, v: True)
-        monkeypatch.setattr(updater, "_spawn_relauncher", lambda v: True)
+        monkeypatch.setattr(updater, "_spawn_relauncher", lambda *a, **k: None)
         monkeypatch.setattr(updater, "_launch_installer", lambda dest: (True, ""))
 
     def test_callback_fires_with_version_before_installer_launch(
@@ -715,7 +715,7 @@ class TestInstallerLaunchingCallback:
         monkeypatch.setattr(updater, "_download_with_cap", _fake_download)
         monkeypatch.setattr(updater, "_verify_signature", lambda p, v: False)
         called: list[str] = []
-        monkeypatch.setattr(updater, "_spawn_relauncher", lambda v: True)
+        monkeypatch.setattr(updater, "_spawn_relauncher", lambda *a, **k: None)
         monkeypatch.setattr(updater, "_launch_installer", lambda dest: (True, ""))
 
         ok, err = updater.download_and_install(
@@ -858,22 +858,25 @@ class TestLaunchInstaller:
 
 
 class TestRelauncherSpawn:
-    """_spawn_relauncher stages a renamed copy of the bundle in %TEMP%.
+    """_spawn_relauncher stages the update helper's bundle in %TEMP%.
 
-    Both halves of the staging are load-bearing, and each is pinned
-    below.  The helper must NOT be named alpha-osk.exe: the installer
-    closes the app with `taskkill /IM "alpha-osk.exe"`, polls tasklist
-    for that image name to disappear, and force-kills whatever still
-    matches, so a helper sharing the name cost every update the full
-    wait budget and then its own life (relauncher.log never carried a
-    production entry).  And it must NOT run from the install dir: a
-    running process holds its exe and DLLs mapped, Windows will neither
-    delete nor overwrite a mapped image, and a silent NSIS install that
-    cannot write a file aborts; the accidental kill was the only
-    reason updates succeeded.
+    The helper is its own exe, ``alpha-osk-relauncher.exe``, built without
+    UIAccess.  That is the first half of what is pinned here: the main exe
+    requests UIAccess and Windows refuses to start such an image from
+    %TEMP% (WinError 740), so the previous design, the main exe renamed and
+    run from the stage, failed every spawn since 1.6.0 and no update screen
+    ever appeared.
+
+    The other halves are unchanged and still load-bearing.  The helper must
+    NOT be named alpha-osk.exe: the installer closes the app with
+    `taskkill /IM "alpha-osk.exe"`, polls tasklist for that image name to
+    disappear, and force-kills whatever still matches.  And it must NOT run
+    from the install dir: a running process holds its exe and DLLs mapped,
+    Windows will neither delete nor overwrite a mapped image, and a silent
+    NSIS install that cannot write a file aborts.
     """
 
-    def _frozen_world(self, monkeypatch, tmp_path):
+    def _frozen_world(self, monkeypatch, tmp_path, *, with_helper=True):
         """Fake a frozen install plus an isolated temp root.
 
         Returns (installed_exe, temp_root, popen_calls).
@@ -884,6 +887,8 @@ class TestRelauncherSpawn:
         (install_dir / "_internal").mkdir(parents=True)
         exe = install_dir / "alpha-osk.exe"
         exe.write_bytes(b"old build")
+        if with_helper:
+            (install_dir / "alpha-osk-relauncher.exe").write_bytes(b"helper")
         (install_dir / "_internal" / "python3.dll").write_bytes(b"dll")
 
         temp_root = tmp_path / "temp"
@@ -924,23 +929,34 @@ class TestRelauncherSpawn:
         monkeypatch.delattr(sys, "frozen", raising=False)
         popened = []
         monkeypatch.setattr(updater.subprocess, "Popen", lambda *a, **k: popened.append(a))
-        assert updater._spawn_relauncher("1.0.3") is False
+        assert updater._spawn_relauncher("1.0.3") is None
         assert popened == []
 
-    def test_the_helper_is_not_named_alpha_osk_exe(self, monkeypatch, tmp_path):
+    def test_the_helper_is_its_own_exe_not_a_renamed_alpha_osk_exe(self, monkeypatch, tmp_path):
         exe, temp_root, calls = self._frozen_world(monkeypatch, tmp_path)
-        assert updater._spawn_relauncher("1.0.3") is True
+        assert updater._spawn_relauncher("1.0.3") is not None
         helper = Path(self._spawned_cmd(calls)[0])
         assert helper.name == "alpha-osk-relauncher.exe"
-        assert helper.is_file()
-        # The rename is a rename, not a second copy: the original name
-        # must be gone from the stage, or the wait loop would still see
-        # an alpha-osk.exe... only by path, but keep the stage honest.
-        assert not (helper.parent / "alpha-osk.exe").exists()
+        # It is the bundle's own helper bytes, not the main exe renamed:
+        # the renamed main exe requests UIAccess and cannot start from %TEMP%.
+        assert helper.read_bytes() == b"helper"
+        assert not (helper.parent / "alpha-osk.exe").exists(), (
+            "the staged bundle must not carry alpha-osk.exe: nothing runs it, and "
+            "an image of that name in a stage is one more thing the installer's "
+            "image-name matching could meet"
+        )
+
+    def test_an_install_without_the_helper_spawns_nothing(self, monkeypatch, tmp_path):
+        # An older install layout: no helper to run, so say so and let the
+        # installer's explorer fallback carry the relaunch.
+        exe, temp_root, calls = self._frozen_world(monkeypatch, tmp_path, with_helper=False)
+        assert updater._spawn_relauncher("1.0.3") is None
+        assert calls == []
+        assert list(temp_root.iterdir()) == [], "no stage may be left behind"
 
     def test_the_helper_runs_from_outside_the_install_dir(self, monkeypatch, tmp_path):
         exe, temp_root, calls = self._frozen_world(monkeypatch, tmp_path)
-        assert updater._spawn_relauncher("1.0.3") is True
+        assert updater._spawn_relauncher("1.0.3") is not None
         helper = Path(self._spawned_cmd(calls)[0])
         assert exe.parent not in helper.parents, (
             "a helper running from the install dir holds its own image and "
@@ -953,7 +969,7 @@ class TestRelauncherSpawn:
 
     def test_the_cmd_names_the_real_target_and_the_mtime_snapshot(self, monkeypatch, tmp_path):
         exe, temp_root, calls = self._frozen_world(monkeypatch, tmp_path)
-        assert updater._spawn_relauncher("1.0.3") is True
+        assert updater._spawn_relauncher("1.0.3") is not None
         cmd = self._spawned_cmd(calls)
         # The helper polls and relaunches the INSTALLED exe, never its
         # own staged copy.
@@ -965,6 +981,21 @@ class TestRelauncherSpawn:
         assert cmd[cmd.index("--parent-pid") + 1] == str(os.getpid())
         assert "--show-splash" in cmd
 
+    def test_the_cmd_carries_the_signal_dir_and_the_anchor(self, monkeypatch, tmp_path):
+        exe, temp_root, calls = self._frozen_world(monkeypatch, tmp_path)
+        handle = updater._spawn_relauncher("1.0.3", (10, 20, 900, 300))
+        assert handle is not None
+        cmd = self._spawned_cmd(calls)
+        assert cmd[cmd.index("--anchor-rect") + 1] == "10,20,900,300"
+        signal_dir = Path(cmd[cmd.index("--signal-dir") + 1])
+        assert signal_dir == handle.signal_dir
+        assert temp_root in signal_dir.parents
+
+    def test_no_anchor_means_no_anchor_flag(self, monkeypatch, tmp_path):
+        exe, temp_root, calls = self._frozen_world(monkeypatch, tmp_path)
+        updater._spawn_relauncher("1.0.3")
+        assert "--anchor-rect" not in self._spawned_cmd(calls)
+
     def test_stale_stages_are_swept_at_the_next_spawn(self, monkeypatch, tmp_path):
         exe, temp_root, calls = self._frozen_world(monkeypatch, tmp_path)
         stale = temp_root / "alpha-osk-relauncher-old"
@@ -972,7 +1003,7 @@ class TestRelauncherSpawn:
         (stale / "leftover.bin").write_bytes(b"x")
         unrelated = temp_root / "something-else"
         unrelated.mkdir()
-        assert updater._spawn_relauncher("1.0.3") is True
+        assert updater._spawn_relauncher("1.0.3") is not None
         assert not stale.exists(), (
             "a helper cannot delete its own image, so each update leaves one "
             "stage behind; the next spawn owns the sweep"
@@ -980,7 +1011,7 @@ class TestRelauncherSpawn:
         assert unrelated.exists(), "the sweep must match only our own prefix"
 
     def test_a_staging_failure_is_not_fatal(self, monkeypatch, tmp_path):
-        # False, not an exception: the install proceeds and the
+        # None, not an exception: the install proceeds and the
         # installer's explorer fallback carries the relaunch, which
         # beats aborting an update over a full temp disk.
         self._frozen_world(monkeypatch, tmp_path)
@@ -989,7 +1020,7 @@ class TestRelauncherSpawn:
             raise OSError("disk full")
 
         monkeypatch.setattr(updater.shutil, "copytree", boom)
-        assert updater._spawn_relauncher("1.0.3") is False
+        assert updater._spawn_relauncher("1.0.3") is None
 
     def test_create_no_window_is_set_on_windows(self, monkeypatch, tmp_path):
         import subprocess as sp
@@ -999,7 +1030,7 @@ class TestRelauncherSpawn:
 
         _, _, calls = self._frozen_world(monkeypatch, tmp_path)
         monkeypatch.setattr(sys, "platform", "win32")
-        assert updater._spawn_relauncher("1.0.3") is True
+        assert updater._spawn_relauncher("1.0.3") is not None
         flags = calls[0][1]["creationflags"]
         assert flags & sp.CREATE_NO_WINDOW
         # Windows documents CREATE_NO_WINDOW as *ignored* when combined
@@ -1011,6 +1042,92 @@ class TestRelauncherSpawn:
             "console suppression above would be inert"
         )
         assert flags & sp.CREATE_NEW_PROCESS_GROUP
+
+
+class TestTheHelperIsToldWhatHappened:
+    """The helper's window is up before the UAC prompt, so it has to be told.
+
+    ``installer_launched`` starts its timeouts (the prompt can take as long as
+    the user does); ``cancel`` sends it away when there is no installer
+    coming.  A cancel that did not happen would leave "waiting for you to
+    approve" on screen for a prompt that was declined.
+    """
+
+    class _Handle:
+        def __init__(self):
+            self.events = []
+
+        def installer_launched(self):
+            self.events.append("launched")
+
+        def cancel(self):
+            self.events.append("cancel")
+
+    @pytest.fixture
+    def world(self, monkeypatch, tmp_path):
+        handle = self._Handle()
+        seen = {}
+
+        def fake_spawn(version, anchor_rect=None):
+            seen["anchor"] = anchor_rect
+            return handle
+
+        monkeypatch.setattr(updater, "_spawn_relauncher", fake_spawn)
+        monkeypatch.setattr(updater, "_download_with_cap", _fake_download)
+        monkeypatch.setattr(updater, "_verify_signature", lambda p, v: True)
+        return handle, seen
+
+    def _info(self):
+        return updater.UpdateInfo(
+            version="9.9.9",
+            asset_name="Alpha-OSK-Setup-9.9.9.exe",
+            download_url="https://github.com/x/y",
+            notes="",
+        )
+
+    def test_a_launched_installer_is_announced_and_not_cancelled(self, monkeypatch, world):
+        handle, seen = world
+        monkeypatch.setattr(updater, "_launch_installer", lambda dest: (True, ""))
+        ok, _ = updater.download_and_install(self._info(), anchor_rect=(1, 2, 3, 4))
+        assert ok is True
+        assert handle.events == ["launched"]
+        assert seen["anchor"] == (1, 2, 3, 4)
+
+    def test_a_declined_prompt_cancels_the_helper(self, monkeypatch, world):
+        handle, _ = world
+        monkeypatch.setattr(
+            updater, "_launch_installer", lambda dest: (False, "Update cancelled at UAC prompt")
+        )
+        ok, err = updater.download_and_install(self._info())
+        assert ok is False
+        assert err == "Update cancelled at UAC prompt"
+        assert handle.events == ["cancel"]
+
+    def test_a_launch_that_raises_cancels_the_helper(self, monkeypatch, world):
+        handle, _ = world
+
+        def boom(dest):
+            raise RuntimeError("shell exploded")
+
+        monkeypatch.setattr(updater, "_launch_installer", boom)
+        ok, _ = updater.download_and_install(self._info())
+        assert ok is False
+        assert handle.events == ["cancel"]
+
+    def test_no_helper_is_not_an_error(self, monkeypatch, world):
+        # A dev run or an old layout spawns nothing: the install proceeds.
+        monkeypatch.setattr(updater, "_spawn_relauncher", lambda v, a=None: None)
+        monkeypatch.setattr(updater, "_launch_installer", lambda dest: (True, ""))
+        ok, _ = updater.download_and_install(self._info())
+        assert ok is True
+
+    def test_the_markers_are_files_in_the_stage(self, tmp_path):
+        handle = updater._RelauncherHandle(object(), tmp_path)  # type: ignore[arg-type]
+        handle.installer_launched()
+        assert (tmp_path / "installer-launched").is_file()
+        assert not (tmp_path / "cancel").exists()
+        handle.cancel()
+        assert (tmp_path / "cancel").is_file()
 
 
 def _swap_succeeds(target: Path) -> bool:
@@ -1077,7 +1194,7 @@ class TestTheInstallerCannotBeSwappedBetweenCheckAndUse:
         """Pinned across the whole sequence, not merely around one call."""
         monkeypatch.setattr(updater, "_make_private_tempdir", lambda: tmp_path)
         monkeypatch.setattr(updater, "_download_with_cap", _fake_download)
-        monkeypatch.setattr(updater, "_spawn_relauncher", lambda v: True)
+        monkeypatch.setattr(updater, "_spawn_relauncher", lambda *a, **k: None)
 
         dest = tmp_path / "Alpha-OSK-Setup-1.0.3.exe"
         swapped_at = {}
@@ -1182,7 +1299,7 @@ class TestTheDownloadedBytesAreTheBytesThatRun:
         monkeypatch.setattr(updater, "_make_private_tempdir", lambda: tmp_path)
         monkeypatch.setattr(updater, "_download_with_cap", _fake_download)
         monkeypatch.setattr(updater, "_verify_signature", lambda p, v: True)
-        monkeypatch.setattr(updater, "_spawn_relauncher", lambda v: True)
+        monkeypatch.setattr(updater, "_spawn_relauncher", lambda *a, **k: None)
 
         def fake_launch(dest):
             launched.append(dest)

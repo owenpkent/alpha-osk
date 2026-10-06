@@ -1,4 +1,4 @@
-"""Detached helper that relaunches Alpha-OSK after an auto-update.
+"""Detached helper that shows the update screen and relaunches Alpha-OSK.
 
 Background
 ==========
@@ -6,55 +6,62 @@ Background
 The auto-updater downloads + verifies + launches the signed NSIS
 installer with elevation (UAC). The installer's ``customInit`` taskkills
 the running ``alpha-osk.exe`` so the new exe can be written. Without a
-relaunch, the user is left with no keyboard until they manually find
-the Start Menu — a hard problem for the accessibility audience this
-keyboard serves.
+relaunch, and without anything on screen, the user is left with no
+keyboard and no sign that one is coming back, until they manually find
+the Start Menu: a hard problem for the accessibility audience this
+keyboard serves. The requirement this module exists to meet is an update
+screen that is on screen **from the moment the keyboard goes away until the
+new keyboard window is actually visible**, so it never looks like the
+keyboard is not coming back.
 
-The previous mechanism was a one-line ``Exec '"$WINDIR\\explorer.exe"
-"$INSTDIR\\alpha-osk.exe"'`` inside ``installer.nsh``. That trick
-works in theory (explorer running at the user's medium IL spawns the
-new exe at medium IL too) but in practice fails silently: the elevated
-installer's ``Exec`` ends up handing off across the IL boundary, and
-Windows can refuse the relay without surfacing any error. Result:
-"the new keyboard never opens" — reported by users.
-
-This module is the replacement. It runs as a detached process owned by
-the user session (spawned by the updater BEFORE elevation kicks in),
-polls for the install to finish, then launches the new exe directly.
-Because the helper was already running at user IL when the elevated
-installer started, there is no IL handoff to fail.
+This helper is its own executable, ``alpha-osk-relauncher.exe``, built
+without UIAccess (see ``build/windows/alpha-osk.spec``). The main exe
+requests ``uiAccess="true"``, and Windows refuses to start such an image
+from outside a secure location (WinError 740), so the original design, a
+renamed copy of the main exe run from ``%TEMP%``, never started once 1.6.0
+began requesting UIAccess. A plain exe has no such restriction.
 
 Flow
 ====
 
-1. Wait for the parent ``alpha-osk.exe`` to exit (the installer's
-   taskkill in ``customInit``).
-2. Wait an extra grace period for the installer to finish writing
-   files. Polling ``$INSTDIR\\alpha-osk.exe`` for an mtime *different
-   from the pre-install snapshot* the updater took is the strongest
-   signal we have without parsing PE headers; "exists + readable +
-   non-zero size" is the floor. Newer-than-parent-death was tried and
-   can never fire: NSIS restores each extracted file's build-time
-   timestamp (``SetDateSave`` is on by default), so the fresh exe's
-   mtime *predates* the install by however old the build is.
-3. Launch the new exe through ``explorer.exe`` from the user session
-   (``_launch_command``: a UIAccess exe started by anything other than
-   Explorer comes up without UIAccess), then confirm an
-   ``alpha-osk.exe`` process actually appeared
-   (``_wait_for_new_osk_process``): with Explorer in between, a
-   successful ``Popen`` only proves Explorer started.
-4. Write ``update_handoff.json`` next to ``$APPDATA/alpha-osk/`` so the
-   newly launched OSK can flash a "✓ Updated to vX.Y.Z" toast.
+The splash window opens at once, centred on the keyboard it replaces, and
+walks four phases (``UpdateFlow``):
 
-Failure modes are deliberately silent — there is no UI surface to
-report into and the user already lacks a keyboard. Everything goes to
-the relauncher log file at ``$APPDATA/alpha-osk/relauncher.log`` for
-post-mortem.
+1. **Approve**: "Waiting for you to approve the update". The updater
+   spawns this helper *before* the UAC prompt, so the prompt can take as
+   long as the user needs. The parent marks the moment the installer
+   actually launched (``update_signals.INSTALLER_LAUNCHED_FILE``), and
+   every timeout below starts counting from that mark, not from the spawn.
+   A declined prompt or a failed launch writes a cancel marker instead and
+   the helper leaves without a word (the keyboard's own toast reports it).
+2. **Closing**: the parent keyboard exits (the installer's taskkill).
+3. **Installing**: wait a grace period, then for the installed exe to be
+   different from the pre-install snapshot (``_new_exe_looks_fresh``).
+   Newer-than-parent-death was tried and can never fire: NSIS restores each
+   extracted file's build-time timestamp (``SetDateSave``).
+4. **Starting**: launch the new exe through ``explorer.exe``
+   (``_launch_command``: a UIAccess exe started by anything other than
+   Explorer comes up without UIAccess), then wait for the new keyboard to
+   announce that its window is on screen (the named event in
+   ``update_signals``), not merely that its process exists.
+
+Then "Done", briefly, and ``update_handoff.json`` is written so the new
+keyboard can flash its "Updated" toast.
+
+A failure never closes the window on a timer. It stays up with a message
+and large buttons (Start Alpha-OSK, Open log folder, Close) until the user
+acts, because a message that vanishes after six seconds is the same as no
+message for someone who reads and clicks slowly.
+
+``--show-splash`` absent (tests, and the fallback when Qt cannot start)
+runs the same waits headless, with no UI. Everything goes to
+``$APPDATA/alpha-osk/relauncher.log`` for post-mortem.
 """
 
 from __future__ import annotations
 
 import argparse
+import enum
 import json
 import logging
 import os
@@ -62,7 +69,9 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
+
+from . import update_signals
 
 _logger = logging.getLogger("UpdateRelauncher")
 
@@ -104,12 +113,31 @@ _NEW_OSK_POLL_INTERVAL_S = 0.25
 # message the user is meant to read rather than shorten any waiting.
 _MAX_TOTAL_RUNTIME_S = 300
 
-# Splash-window dwell times. The "Done!" pause hides the brief gap
-# between us closing the splash and the new OSK drawing its first
-# frame; without it the user still sees a flash of nothing. The
-# failure dwell keeps an error message visible long enough to read.
+# How long the user may take over the UAC prompt before the helper stops
+# waiting for the parent to say the installer launched. The updater's own
+# ShellExecuteW call blocks until the prompt is answered, so this only
+# bounds a parent that died without telling us.
+_APPROVAL_TIMEOUT_S = 600
+
+# How long the new keyboard's window has to appear once it is launched. The
+# window, not the process: a cold start of a freshly written exe can sit in
+# an antivirus scan first, and the keyboard builds its UI before showing it.
+_KEYBOARD_SHOWN_TIMEOUT_S = 60
+
+# The splash's state machine and its topmost re-assertion tick on these.
+_TICK_MS = 250
+_REASSERT_TOP_MS = 1000
+
+# The "Done" pause is display time after the outcome is decided, so it is
+# outside the ceiling like every other dwell.
 _DONE_DWELL_MS = 800
-_FAILURE_DWELL_MS = 6000
+
+# Exit codes. 0 is success.
+EXIT_PARENT_STUCK = 2
+EXIT_NEW_EXE_MISSING = 3
+EXIT_LAUNCH_FAILED = 4
+EXIT_CANCELLED = 5
+EXIT_NOT_APPROVED = 6
 
 
 def _configure_log(log_dir: Path) -> None:
@@ -297,9 +325,9 @@ def _launch_command(exe_path: Path) -> list[str]:
     a UIAccess application started with ``CreateProcess`` or even
     ``ShellExecuteEx`` from a process that has no UIAccess itself comes
     up with ``TokenUIAccess=0``, while the same exe started by
-    ``explorer.exe`` comes up with ``TokenUIAccess=1``. This helper runs
-    from a renamed copy of the bundle in %TEMP%, outside every secure
-    location, so it has no UIAccess to hand down, and a direct launch
+    ``explorer.exe`` comes up with ``TokenUIAccess=1``. This helper is
+    built without UIAccess and runs from a staged copy in %TEMP%, so it
+    has none to hand down, and a direct launch
     would bring the keyboard back unable to type into elevated windows
     until the user next started it from the Start menu. Explorer runs at
     the user's integrity level, exactly as this helper does, so the relay
@@ -513,13 +541,10 @@ def run_relauncher(argv: list[str]) -> int:
 
     Dispatches between two implementations:
 
-    * ``--show-splash`` (production): drives the same wait phases via
-      a QTimer state machine so a small "Updating Alpha-OSK…" window
-      can stay painted on screen during the gap, with a phase-aware
-      message ("Waiting for installer to finish…" → "Installing
-      files…" → "Launching new keyboard…"). Without this window, the
-      user has no UI between the installer's taskkill and the new OSK
-      drawing its first frame, which can be ~30 s of total silence.
+    * ``--show-splash`` (production): drives the wait phases through
+      ``UpdateFlow`` on a QTimer so the update screen stays painted from
+      the moment it starts until the new keyboard's window is visible,
+      and stays up on a failure until the user acts.
     * default (tests + fallback): the original blocking-poll
       implementation. Tests target this path so they don't have to
       stand up a QApplication.
@@ -540,6 +565,13 @@ def run_relauncher(argv: list[str]) -> int:
     parser.add_argument("--old-exe-mtime", type=float, default=0.0)
     parser.add_argument("--config-dir", type=str, required=True)
     parser.add_argument("--show-splash", action="store_true")
+    # Where the updater leaves its markers (installer launched, cancel).
+    # Empty means "no updater is telling us anything": start counting from
+    # now, as a helper spawned by an updater too old to pass one would.
+    parser.add_argument("--signal-dir", type=str, default="")
+    # "x,y,w,h" of the keyboard window being replaced, in physical pixels,
+    # so the splash opens on top of where the keyboard was.
+    parser.add_argument("--anchor-rect", type=str, default="")
     args = parser.parse_args(argv[1:])
 
     config_dir = Path(args.config_dir)
@@ -618,6 +650,39 @@ def _is_dev_target(target_exe: str) -> bool:
     return name.startswith("python") or name.startswith("pythonw")
 
 
+def _marker(signal_dir: str, name: str) -> bool:
+    """Is the marker file ``name`` present in ``signal_dir``?  False with no dir."""
+    if not signal_dir:
+        return False
+    try:
+        return (Path(signal_dir) / name).exists()
+    except OSError:
+        return False
+
+
+def _wait_for_installer_launch(signal_dir: str, parent_pid: int, timeout_s: float) -> str:
+    """Block until the parent says the installer launched, or cancels.
+
+    Returns ``"launched"``, ``"cancelled"`` or ``"timeout"``. A parent that
+    is gone without having said either counts as launched: the installer's
+    taskkill is the only thing that normally ends it, and it can land in the
+    microseconds between the installer starting and the marker being
+    written. A parent that really crashed costs one pass through the later
+    waits, which end in a failure message.
+    """
+    deadline = time.monotonic() + timeout_s
+    while True:
+        if _marker(signal_dir, update_signals.CANCEL_FILE):
+            return "cancelled"
+        if _marker(signal_dir, update_signals.INSTALLER_LAUNCHED_FILE):
+            return "launched"
+        if not _process_alive(parent_pid):
+            return "launched"
+        if time.monotonic() >= deadline:
+            return "timeout"
+        time.sleep(_POLL_INTERVAL_S)
+
+
 def _run_headless(args: argparse.Namespace, overall_deadline: Optional[float] = None) -> int:
     """Original blocking-poll relauncher. Used by tests and as the
     splash-path fallback. See ``run_relauncher`` for the contract.
@@ -626,7 +691,21 @@ def _run_headless(args: argparse.Namespace, overall_deadline: Optional[float] = 
     splash which raised part way through does not hand this path a
     fresh one. Defaulted only for direct callers (the tests); the real
     dispatch always supplies it.
+
+    With a ``--signal-dir`` it first waits for the parent to say the
+    installer launched, and the ceiling restarts there: time the user spent
+    on the UAC prompt is not time the install has used.
     """
+    signal_dir = getattr(args, "signal_dir", "")
+    if signal_dir:
+        outcome = _wait_for_installer_launch(signal_dir, args.parent_pid, _APPROVAL_TIMEOUT_S)
+        if outcome == "cancelled":
+            _logger.info("The updater cancelled the relaunch")
+            return EXIT_CANCELLED
+        if outcome == "timeout":
+            _logger.error("The installer was never launched, giving up")
+            return EXIT_NOT_APPROVED
+        overall_deadline = time.monotonic() + _MAX_TOTAL_RUNTIME_S
     config_dir = Path(args.config_dir)
     if overall_deadline is None:
         overall_deadline = time.monotonic() + _MAX_TOTAL_RUNTIME_S
@@ -678,308 +757,562 @@ def _new_exe_ready(target: Path, after_mtime: Optional[float], old_mtime: float 
     return _new_exe_looks_fresh(target, old_mtime, after_mtime)
 
 
-def _run_with_splash(args: argparse.Namespace, overall_deadline: Optional[float] = None) -> int:
-    """Splash-window implementation. Drives the same waits as the
-    headless path but via QTimer ticks so the window can repaint and
-    show phase-aware progress text.
+def parse_anchor_rect(text: str) -> Optional[tuple[int, int, int, int]]:
+    """``"x,y,w,h"`` -> a rect, or None for anything that is not four integers.
 
-    ``overall_deadline`` is the whole-run ceiling; see ``_run_headless``
-    for why it is passed in rather than derived here. Bound to a local
-    because the QTimer closures below read it, and narrowing an
-    ``Optional`` does not reach into a nested function.
+    The text came from our own updater but crosses a process boundary, so a
+    malformed one means "no anchor", never an exception: the splash then
+    centres on the primary screen instead.
     """
-    ceiling = (
-        time.monotonic() + _MAX_TOTAL_RUNTIME_S if overall_deadline is None else overall_deadline
-    )
+    parts = text.split(",")
+    if len(parts) != 4:
+        return None
+    try:
+        x, y, w, h = (int(part) for part in parts)
+    except ValueError:
+        return None
+    if w <= 0 or h <= 0:
+        return None
+    return (x, y, w, h)
+
+
+def centred_position(
+    anchor: tuple[int, int, int, int],
+    size: tuple[int, int],
+    work: tuple[int, int, int, int],
+) -> tuple[int, int]:
+    """Top-left that centres a window of ``size`` on ``anchor``, kept inside ``work``.
+
+    ``work`` is ``(left, top, right, bottom)`` of the anchor's own monitor.
+    A window larger than the work area is pinned to its top-left corner,
+    which keeps the message readable rather than centred off both edges.
+    """
+    ax, ay, aw, ah = anchor
+    width, height = size
+    left, top, right, bottom = work
+    x = ax + (aw - width) // 2
+    y = ay + (ah - height) // 2
+    x = max(left, min(x, right - width))
+    y = max(top, min(y, bottom - height))
+    return (x, y)
+
+
+class Phase(enum.Enum):
+    APPROVE = "approve"
+    CLOSING = "closing"
+    INSTALLING = "installing"
+    STARTING = "starting"
+    DONE = "done"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+_TERMINAL_PHASES = frozenset({Phase.DONE, Phase.FAILED, Phase.CANCELLED})
+
+
+class UpdateFlow:
+    """The update screen's state machine, with every outside fact injected.
+
+    Pure logic and no Qt: the splash calls :meth:`step` on a timer and draws
+    ``phase`` / ``message`` / ``detail``, and the tests call it with a fake
+    clock and fake probes. Holding the transitions here, rather than in
+    closures inside the window code, is what makes "it never goes quiet"
+    something a test can say.
+
+    ``installer_launched`` / ``cancelled`` are the parent's markers.
+    ``keyboard_shown`` is the new keyboard's "my window is on screen"
+    event. ``new_exe_ready`` receives the parent's death time (the legacy
+    mtime fallback). With ``wait_for_approval=False`` the flow starts at
+    *Closing*, for a helper nobody is signalling.
+
+    The whole-run ceiling (``_MAX_TOTAL_RUNTIME_S``) starts when the
+    installer launched, not when the helper did: the UAC prompt can take
+    as long as the user does, and that time is not the install's.
+    """
+
+    def __init__(
+        self,
+        *,
+        version: str,
+        parent_alive: Callable[[], bool],
+        installer_launched: Callable[[], bool],
+        cancelled: Callable[[], bool],
+        new_exe_ready: Callable[[Optional[float]], bool],
+        launch_keyboard: Callable[[], bool],
+        keyboard_shown: Callable[[], bool],
+        write_handoff: Callable[[], None],
+        clock: Callable[[], float] = time.monotonic,
+        wall_clock: Callable[[], float] = time.time,
+        wait_for_approval: bool = True,
+        ceiling_deadline: Optional[float] = None,
+    ) -> None:
+        self._version = version
+        self._parent_alive = parent_alive
+        self._installer_launched = installer_launched
+        self._cancelled = cancelled
+        self._new_exe_ready = new_exe_ready
+        self._launch_keyboard = launch_keyboard
+        self._keyboard_shown = keyboard_shown
+        self._write_handoff = write_handoff
+        self._clock = clock
+        self._wall_clock = wall_clock
+
+        self.phase = Phase.APPROVE
+        self.message = "Waiting for you to approve the update"
+        self.detail = "Choose Yes when Windows asks."
+        self.exit_code = 0
+        self.failure = ""
+        self.parent_death_time: Optional[float] = None
+
+        self._ceiling_override = None if wait_for_approval else ceiling_deadline
+        self._ceiling = clock() + _MAX_TOTAL_RUNTIME_S
+        self._approval_deadline = clock() + _APPROVAL_TIMEOUT_S
+        self._deadline = 0.0
+        self._parent_budget = 0.0
+        self._new_exe_budget = 0.0
+        self._shown_budget = 0.0
+        self._grace_until: Optional[float] = None
+        if not wait_for_approval:
+            self._enter_closing()
+
+    @property
+    def finished(self) -> bool:
+        return self.phase in _TERMINAL_PHASES
+
+    def _remaining(self, phase_timeout: float) -> float:
+        """A phase's budget, clipped to what is left of the whole run (never negative)."""
+        return max(0.0, min(phase_timeout, self._ceiling - self._clock()))
+
+    def _fail(self, code: int, text: str) -> None:
+        self.phase = Phase.FAILED
+        self.exit_code = code
+        self.failure = text
+        self.message = text
+        self.detail = "Press Start Alpha-OSK to open the keyboard."
+        _logger.error("Update screen failed (code %d): %s", code, text)
+
+    def _enter_closing(self) -> None:
+        self.phase = Phase.CLOSING
+        self.message = "Closing the keyboard"
+        self.detail = "This takes a few seconds."
+        # The run's clock starts here: the installer is going.
+        if self._ceiling_override is not None:
+            self._ceiling = self._ceiling_override
+        else:
+            self._ceiling = self._clock() + _MAX_TOTAL_RUNTIME_S
+        self._parent_budget = self._remaining(_PARENT_EXIT_TIMEOUT_S)
+        self._deadline = self._clock() + self._parent_budget
+
+    def _enter_installing(self) -> None:
+        self.phase = Phase.INSTALLING
+        self.message = f"Installing Alpha-OSK {self._version}".rstrip()
+        self.detail = "The keyboard will come back by itself."
+        self._grace_until = self._clock() + _installer_grace_s(self._ceiling)
+
+    def _enter_starting(self) -> None:
+        self.phase = Phase.STARTING
+        self.message = "Starting the keyboard"
+        self.detail = "Almost there."
+        if self._keyboard_shown():
+            # Something (the installer's own fallback, the user) already
+            # brought it up; launching a second one would only be handed off.
+            self._succeed()
+            return
+        if not self._launch_keyboard():
+            self._fail(EXIT_LAUNCH_FAILED, "The update installed, but the keyboard did not start.")
+            return
+        self._shown_budget = self._remaining(_KEYBOARD_SHOWN_TIMEOUT_S)
+        self._deadline = self._clock() + self._shown_budget
+
+    def _succeed(self) -> None:
+        self._write_handoff()
+        self.phase = Phase.DONE
+        self.exit_code = 0
+        self.message = "Done"
+        self.detail = ""
+
+    def fail_unexpectedly(self) -> None:
+        """For the driver: a probe raised, so show a failure rather than freeze."""
+        self._fail(EXIT_LAUNCH_FAILED, "Something went wrong while updating.")
+
+    def step(self) -> None:
+        """Advance as far as the current facts allow. Cheap, never blocks."""
+        if self.finished:
+            return
+
+        if self.phase is Phase.APPROVE:
+            if self._cancelled():
+                self.phase = Phase.CANCELLED
+                self.exit_code = EXIT_CANCELLED
+                return
+            # A parent that has vanished without a word counts as launched
+            # (see _wait_for_installer_launch).
+            if self._installer_launched() or not self._parent_alive():
+                self._enter_closing()
+            elif self._clock() >= self._approval_deadline:
+                self._fail(EXIT_NOT_APPROVED, "The update was not approved, so nothing changed.")
+                return
+            else:
+                return
+
+        if self.phase is Phase.CLOSING:
+            if not self._parent_alive():
+                self.parent_death_time = self._wall_clock()
+                self._enter_installing()
+            elif self._clock() >= self._deadline:
+                _logger.error("Parent OSK still alive after %.0fs", self._parent_budget)
+                self._fail(
+                    EXIT_PARENT_STUCK,
+                    "Alpha-OSK did not close in time, so the update could not finish.",
+                )
+            return
+
+        if self.phase is Phase.INSTALLING:
+            now = self._clock()
+            if self._grace_until is not None:
+                if now < self._grace_until:
+                    return
+                self._grace_until = None
+                self._new_exe_budget = self._remaining(_NEW_EXE_TIMEOUT_S)
+                self._deadline = now + self._new_exe_budget
+            # Looks before the clock, so a budget clamped to zero still
+            # gets one look at the file.
+            if self._new_exe_ready(self.parent_death_time):
+                self._enter_starting()
+            elif now >= self._deadline:
+                _logger.error("New exe not in place within %.0fs", self._new_exe_budget)
+                self._fail(EXIT_NEW_EXE_MISSING, "The update did not finish installing.")
+            return
+
+        if self.phase is Phase.STARTING:
+            if self._keyboard_shown():
+                self._succeed()
+            elif self._clock() >= self._deadline:
+                _logger.error("No keyboard window within %.0fs of the launch", self._shown_budget)
+                self._fail(
+                    EXIT_LAUNCH_FAILED,
+                    "The update installed, but the keyboard window did not appear.",
+                )
+
+
+class _KeyboardShownProbe:
+    """Has the new keyboard said its window is on screen?
+
+    The event does not exist until the new keyboard creates it, so the
+    handle is opened lazily on each look until it is.
+    """
+
+    def __init__(self) -> None:
+        self._handle: Optional[int] = None
+
+    def __call__(self) -> bool:
+        if self._handle is None:
+            self._handle = update_signals.open_keyboard_shown_event()
+            if self._handle is None:
+                return False
+        return update_signals.event_is_set(self._handle)
+
+    def close(self) -> None:
+        if self._handle is not None:
+            update_signals.close_event(self._handle)
+            self._handle = None
+
+
+def _open_log_folder(config_dir: Path) -> None:
+    """Show the folder holding ``alpha-osk.log`` and ``relauncher.log``."""
+    try:
+        if sys.platform == "win32":
+            explorer = Path(os.environ.get("WINDIR", r"C:\Windows")) / "explorer.exe"
+            subprocess.Popen(
+                [str(explorer), str(config_dir)],
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                close_fds=True,
+            )
+        else:
+            subprocess.Popen(["xdg-open", str(config_dir)], close_fds=True)
+    except Exception as exc:  # noqa: BLE001
+        _logger.warning("Could not open the log folder: %s", exc)
+
+
+def _run_with_splash(args: argparse.Namespace, overall_deadline: Optional[float] = None) -> int:
+    """The update screen. See the module docstring for the flow.
+
+    The window is built and shown before anything is waited on, so it is on
+    screen while the UAC prompt is up, and only :class:`UpdateFlow` decides
+    when it may go. ``overall_deadline`` is only used when nothing signals
+    the helper (no ``--signal-dir``).
+    """
     # Lazy-import Qt so the headless path stays import-clean and
     # tests don't accidentally drag PySide6 into a fresh interpreter.
     from PySide6.QtCore import Qt, QTimer
-    from PySide6.QtGui import QFont
-    from PySide6.QtWidgets import (
-        QApplication,
-        QFrame,
-        QLabel,
-        QProgressBar,
-        QVBoxLayout,
-        QWidget,
-    )
+    from PySide6.QtWidgets import QApplication, QLabel, QProgressBar, QPushButton, QWidget
 
     config_dir = Path(args.config_dir)
     target_exe = Path(args.target_exe)
+    signal_dir = getattr(args, "signal_dir", "")
+    anchor = parse_anchor_rect(getattr(args, "anchor_rect", ""))
 
     existing_app = QApplication.instance()
     app = existing_app if isinstance(existing_app, QApplication) else QApplication([])
-    # Only _finish may end this process. Without this, closing the last
-    # (only) window quits the event loop mid-poll and the relaunch is
-    # silently abandoned; with it, a WM_CLOSE from outside (a stray
-    # `taskkill` without /F posts one to every window of the image) or
-    # any future second window cannot end the run early.
+    # Only the flow may end this process. A WM_CLOSE from outside (a stray
+    # `taskkill` without /F posts one to every window of the image) must
+    # not end the run early.
     app.setQuitOnLastWindowClosed(False)
 
-    splash = _build_splash_widget(
-        QWidget,
-        QFrame,
-        QLabel,
-        QProgressBar,
-        QVBoxLayout,
-        QFont,
-        Qt,
+    shown = _KeyboardShownProbe()
+    old_mtime = getattr(args, "old_exe_mtime", 0.0)
+
+    flow = UpdateFlow(
+        version=args.new_version,
+        parent_alive=lambda: _process_alive(args.parent_pid),
+        installer_launched=lambda: _marker(signal_dir, update_signals.INSTALLER_LAUNCHED_FILE),
+        cancelled=lambda: _marker(signal_dir, update_signals.CANCEL_FILE),
+        new_exe_ready=lambda death_time: _new_exe_ready(target_exe, death_time, old_mtime),
+        launch_keyboard=lambda: _launch_new_osk(target_exe),
+        keyboard_shown=shown,
+        write_handoff=lambda: _write_handoff(config_dir, args.new_version, args.previous_version),
+        wait_for_approval=bool(signal_dir),
+        ceiling_deadline=overall_deadline,
     )
-    # The close button hides the splash but lets the polling continue —
-    # the user is dismissing the visual, not aborting the relaunch.
-    # The new OSK still gets launched when the install completes; the
-    # app.quit() in _finish ends the process cleanly. If the user
-    # closes during a terminal phase (Done / failure dwell) the timer
-    # already scheduled will quit the app shortly after.
-    close_btn = splash.findChild(QWidget, "close")
-    if close_btn is not None:
-        close_btn.mousePressEvent = lambda ev: splash.hide()  # type: ignore[assignment]
 
-    # A close request is a "stop showing me this", never an abort: hide
-    # and keep polling, exactly like the ✕ label. An accepted close on
-    # the only window would otherwise be indistinguishable from Done.
-    def _close_means_hide(ev):  # pragma: no cover - needs a live window server
+    splash: QWidget = _build_splash_widget(QWidget, QLabel, QProgressBar, QPushButton, Qt)
+
+    # A close request is never an abort: there is no close button while
+    # working, and an Alt+F4 or WM_CLOSE from elsewhere must not hide the
+    # one thing telling the user the keyboard is coming back.
+    def _ignore_close(ev):  # pragma: no cover - needs a live window server
         ev.ignore()
-        splash.hide()
 
-    splash.closeEvent = _close_means_hide  # type: ignore[method-assign]
+    splash.closeEvent = _ignore_close  # type: ignore[method-assign]
 
+    def _label(name: str) -> QLabel:
+        found = splash.findChild(QLabel, name)
+        assert found is not None
+        return found
+
+    def _button(name: str) -> QPushButton:
+        found = splash.findChild(QPushButton, name)
+        assert found is not None
+        return found
+
+    progress = splash.findChild(QProgressBar, "progress")
+    assert progress is not None
+    buttons = splash.findChild(QWidget, "buttons")
+    assert buttons is not None
+
+    def _place() -> None:
+        """Centre on the keyboard being replaced; the primary screen if unknown."""
+        if sys.platform == "win32" and anchor is not None:
+            from .platform import windows_window
+
+            hwnd = int(splash.winId())
+            size = windows_window.window_size(hwnd)
+            work = windows_window.monitor_work_area_at(
+                anchor[0] + anchor[2] // 2, anchor[1] + anchor[3] // 2
+            )
+            if size is not None and work is not None:
+                x, y = centred_position(anchor, size, work)
+                if windows_window.move_window_noactivate(hwnd, x, y):
+                    return
+        screen = app.primaryScreen()
+        if screen is not None:
+            geo = screen.availableGeometry()
+            splash.move(
+                geo.x() + (geo.width() - splash.width()) // 2,
+                geo.y() + (geo.height() - splash.height()) // 3,
+            )
+
+    def _style_native() -> None:
+        """Never take focus, and sit in the topmost band."""
+        if sys.platform != "win32":
+            return
+        try:
+            from .platform import windows_window
+
+            handle = splash.windowHandle()
+            if handle is not None:
+                windows_window.apply_extended_styles(handle, taskbar_button=False, topmost=True)
+        except Exception as exc:  # noqa: BLE001
+            _logger.warning("Could not style the update window: %s", exc)
+
+    def _reassert_topmost() -> None:
+        """The installer and other windows must not be able to bury us."""
+        if sys.platform != "win32":
+            return
+        try:
+            from .platform import windows_window
+
+            windows_window.set_window_band(int(splash.winId()), True)
+        except Exception as exc:  # noqa: BLE001
+            _logger.debug("Could not re-assert topmost: %s", exc)
+
+    shown_failure = [False]
+
+    def _render() -> None:
+        _label("msg").setText(flow.message)
+        _label("detail").setText(flow.detail)
+        _label("detail").setVisible(bool(flow.detail))
+        if flow.phase is Phase.FAILED and not shown_failure[0]:
+            shown_failure[0] = True
+            progress.setRange(0, 1)
+            progress.setValue(0)
+            buttons.setVisible(True)
+            splash.adjustSize()
+            _place()
+        elif flow.phase is Phase.DONE:
+            progress.setRange(0, 1)
+            progress.setValue(1)
+
+    finishing = [False]
+
+    def _leave_event_loop() -> None:
+        # exit(), not quit(): Qt 6's quit() first sends a close event to every
+        # window and is abandoned if one refuses it, and this window refuses
+        # every close on purpose (see _ignore_close). The run ends here, by
+        # the flow's say-so, and by nothing else.
+        app.exit(0)
+
+    def _quit() -> None:
+        if finishing[0]:
+            return
+        finishing[0] = True
+        QTimer.singleShot(0, _leave_event_loop)
+
+    def _tick() -> None:
+        if finishing[0]:
+            return
+        try:
+            flow.step()
+        except Exception as exc:  # noqa: BLE001
+            # A bug in a probe must not leave an update screen that never
+            # changes. Show it as a failure the user can act on.
+            _logger.exception("Update flow raised: %s", exc)
+            flow.fail_unexpectedly()
+        _render()
+        if flow.phase is Phase.CANCELLED:
+            _quit()
+        elif flow.phase is Phase.DONE:
+            finishing[0] = True
+            QTimer.singleShot(_DONE_DWELL_MS, _leave_event_loop)
+
+    def _start_keyboard() -> None:
+        _launch_new_osk(target_exe)
+        _quit()
+
+    _button("start").clicked.connect(_start_keyboard)
+    _button("logs").clicked.connect(lambda: _open_log_folder(config_dir))
+    _button("close").clicked.connect(_quit)
+
+    buttons.setVisible(False)
+    _render()
     splash.show()
-    # Centre on the primary screen — frameless windows don't get a
-    # default position, so we'd otherwise land at (0, 0).
-    screen = app.primaryScreen()
-    if screen is not None:
-        geo = screen.availableGeometry()
-        splash.move(
-            geo.x() + (geo.width() - splash.width()) // 2,
-            geo.y() + (geo.height() - splash.height()) // 3,
-        )
+    _style_native()
+    _place()
 
-    # Mutable state held by the QTimer-driven state machine. A small
-    # class beats a dict here: typed fields keep mypy happy and the
-    # closure reads (`state.exit_code`) are clearer than dict lookups.
-    class _SplashState:
-        exit_code: int = 0
-        parent_death_time: Optional[float] = None
-        deadline: float = 0.0
-        # What each phase was actually given, which is the nominal
-        # timeout only while the ceiling has room. The give-up logs
-        # report these rather than the constants: this process has no
-        # console, so the log is the only post-mortem there is.
-        parent_budget: float = 0.0
-        new_exe_budget: float = 0.0
-        appear_budget: float = 0.0
-
-    state = _SplashState()
-
-    def _set_message(text: str) -> None:
-        label = splash.findChild(QLabel, "msg")
-        if label is not None:
-            label.setText(text)
-        # Force a repaint immediately — QTimer ticks are short enough
-        # that the natural paint cycle is fine, but during the
-        # transitions between phases we want the message to swap
-        # before any further processing happens.
-        splash.repaint()
-
-    def _settle_progress(full: bool) -> None:
-        """Stop the marquee and pin the bar full or empty.
-
-        Called on terminal phases (Done / failure) so the bar visibly
-        stops moving. Without this, a successful update would close the
-        splash with the marquee still sliding, which reads as "still
-        working" the instant before the window vanishes.
-        """
-        bar = splash.findChild(QProgressBar, "progress")
-        if bar is not None:
-            bar.setRange(0, 1)
-            bar.setValue(1 if full else 0)
-            splash.repaint()
-
-    def _finish(code: int) -> None:
-        state.exit_code = code
-        QTimer.singleShot(0, app.quit)
-
-    def _poll_parent() -> None:
-        if not _process_alive(args.parent_pid):
-            state.parent_death_time = time.time()
-            _set_message("Installing files…")
-            QTimer.singleShot(int(_installer_grace_s(ceiling) * 1000), _start_new_exe_phase)
-            return
-        if time.monotonic() >= state.deadline:
-            _logger.error("Parent OSK still alive after %.0fs, giving up", state.parent_budget)
-            _finish(2)
-            return
-        QTimer.singleShot(int(_POLL_INTERVAL_S * 1000), _poll_parent)
-
-    def _start_new_exe_phase() -> None:
-        state.new_exe_budget = _remaining(ceiling, _NEW_EXE_TIMEOUT_S)
-        state.deadline = time.monotonic() + state.new_exe_budget
-        QTimer.singleShot(0, _poll_new_exe)
-
-    def _poll_new_exe() -> None:
-        if _new_exe_ready(
-            target_exe,
-            state.parent_death_time,
-            getattr(args, "old_exe_mtime", 0.0),
-        ):
-            _launch()
-            return
-        if time.monotonic() >= state.deadline:
-            _logger.error(
-                "New exe never appeared at %s within %.0fs", target_exe, state.new_exe_budget
-            )
-            _set_message(
-                "Update finished, but the keyboard didn't appear.\n"
-                "Find Alpha-OSK in your Start Menu."
-            )
-            _settle_progress(full=False)
-            QTimer.singleShot(_FAILURE_DWELL_MS, lambda: _finish(3))
-            return
-        QTimer.singleShot(int(_POLL_INTERVAL_S * 1000), _poll_new_exe)
-
-    def _launch_failed() -> None:
-        _set_message("Couldn't launch the new keyboard.\nFind Alpha-OSK in your Start Menu.")
-        _settle_progress(full=False)
-        QTimer.singleShot(_FAILURE_DWELL_MS, lambda: _finish(4))
-
-    def _launch() -> None:
-        _set_message("Launching the new keyboard…")
-        if not _launch_new_osk(target_exe):
-            _logger.error("Launch failed")
-            _launch_failed()
-            return
-        # Popen succeeding only proves Explorer started, so "Done!" waits
-        # for the keyboard's own process. Polled per tick rather than via
-        # the blocking _wait_for_new_osk_process, which would freeze the
-        # marquee for up to the whole budget, and a window that pumps no
-        # messages for five seconds is one Windows counts as not
-        # responding, at the moment the user is reading it.
-        state.appear_budget = _remaining(ceiling, _NEW_OSK_APPEAR_TIMEOUT_S)
-        state.deadline = time.monotonic() + state.appear_budget
-        QTimer.singleShot(0, _poll_new_osk)
-
-    def _poll_new_osk() -> None:
-        if _process_image_running(target_exe.name):
-            _launched()
-            return
-        if time.monotonic() >= state.deadline:
-            _log_new_osk_missing(target_exe.name, state.appear_budget)
-            _launch_failed()
-            return
-        QTimer.singleShot(int(_NEW_OSK_POLL_INTERVAL_S * 1000), _poll_new_osk)
-
-    def _launched() -> None:
-        _write_handoff(config_dir, args.new_version, args.previous_version)
-        # Brief "Done" pause so the splash doesn't vanish a frame
-        # before the new OSK draws its first window — otherwise
-        # there's still a visible blank moment.
-        _set_message("Done!")
-        _settle_progress(full=True)
-        QTimer.singleShot(_DONE_DWELL_MS, lambda: _finish(0))
-
-    state.parent_budget = _remaining(ceiling, _PARENT_EXIT_TIMEOUT_S)
-    state.deadline = time.monotonic() + state.parent_budget
-    _set_message("Waiting for the installer to finish…")
-    QTimer.singleShot(0, _poll_parent)
+    tick_timer = QTimer(splash)
+    tick_timer.setInterval(_TICK_MS)
+    tick_timer.timeout.connect(_tick)
+    tick_timer.start()
+    top_timer = QTimer(splash)
+    top_timer.setInterval(_REASSERT_TOP_MS)
+    top_timer.timeout.connect(_reassert_topmost)
+    top_timer.start()
 
     app.exec()
-    _logger.info("Relauncher splash finished with code %d", state.exit_code)
-    return state.exit_code
+    tick_timer.stop()
+    top_timer.stop()
+    shown.close()
+    _logger.info("Update screen finished with code %d", flow.exit_code)
+    return flow.exit_code
 
 
-def _build_splash_widget(QWidget, QFrame, QLabel, QProgressBar, QVBoxLayout, QFont, Qt):
-    """Construct the splash window. Pulled out to keep ``_run_with_splash``
-    short — and to make the styling tweakable in one place."""
+def _build_splash_widget(QWidget, QLabel, QProgressBar, QPushButton, Qt):
+    """Construct the update window, buttons hidden. Pulled out of
+    ``_run_with_splash`` to keep the styling tweakable in one place.
+
+    Deliberately no close or hide control while the update is working: it
+    is the only thing telling the user the keyboard is coming back. The
+    buttons appear only on a failure, and every one is a large target for
+    an imprecise pointer.
+    """
+    from PySide6.QtWidgets import QHBoxLayout, QLayout, QVBoxLayout
+
     win = QWidget()
+    win.setObjectName("splash")
     win.setWindowTitle("Updating Alpha-OSK")
     win.setWindowFlags(
         Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool | Qt.WindowDoesNotAcceptFocus
     )
     win.setAttribute(Qt.WA_ShowWithoutActivating, True)
-    # Slightly taller than the original 140 px to accommodate the
-    # indeterminate progress bar below the message. Without the extra
-    # row the bar overlaps the message text.
-    win.setFixedSize(420, 170)
-    # Match the in-app toast colour (#1e3354 on #4a8eff border) so the
-    # splash visually belongs to Alpha-OSK rather than looking like a
-    # stray system dialog.
+    win.setAttribute(Qt.WA_StyledBackground, True)
+    # Match the in-app toast colour so the window visibly belongs to
+    # Alpha-OSK rather than looking like a stray system dialog. A square
+    # border: a rounded one would need the layered-window corner handling
+    # the keyboard's own windows carry.
     win.setStyleSheet(
-        "QWidget { background-color: #1e3354; }"
-        "QLabel#title { color: #7ec8ff; font-weight: bold; }"
-        "QLabel#msg { color: #cfe0ff; }"
-        "QLabel#close { color: #7ec8ff; }"
-        "QLabel#close:hover { color: #ffffff; background-color: #2a4570; border-radius: 4px; }"
-        # Indeterminate marquee bar. NSIS silent (/S) install gives us
-        # no real percentage to report, but a moving bar is the
-        # difference between "is it stuck?" and "still working" — every
-        # commercial installer ships some motion during the silent phase.
-        "QProgressBar { background-color: #14233a; border: 1px solid #2a4570;"
-        " border-radius: 4px; height: 10px; }"
-        "QProgressBar::chunk { background-color: #4a8eff; border-radius: 3px; }"
+        "QWidget#splash { background-color: #1e3354; border: 2px solid #4a8eff; }"
+        "QLabel { background: transparent; }"
+        "QLabel#title { color: #7ec8ff; font-size: 17pt; font-weight: bold; }"
+        "QLabel#msg { color: #ffffff; font-size: 14pt; font-weight: bold; }"
+        "QLabel#detail { color: #cfe0ff; font-size: 11pt; }"
+        # Indeterminate marquee bar. NSIS silent (/S) install gives us no
+        # real percentage, but constant motion is the difference between
+        # "is it stuck?" and "still working".
+        "QProgressBar { background-color: #14233a; border: 1px solid #2a4570; height: 14px; }"
+        "QProgressBar::chunk { background-color: #4a8eff; }"
+        "QPushButton { background-color: #2a4570; color: #ffffff; border: 2px solid #4a8eff;"
+        " font-size: 13pt; font-weight: bold; min-height: 56px; padding: 0 18px; }"
+        "QPushButton:hover { background-color: #36588c; }"
+        "QPushButton#start { background-color: #4a8eff; color: #0b1626; min-height: 64px; }"
+        "QPushButton#start:hover { background-color: #6ba2ff; }"
     )
 
-    frame = QFrame(win)
-    frame.setStyleSheet("QFrame { border: 1px solid #4a8eff; border-radius: 8px; }")
-    frame.setGeometry(0, 0, 420, 170)
-
-    # Close button — top-right corner. The user can dismiss the splash
-    # if it ever gets stuck (network glitch during install, AV scanning
-    # the new exe forever, dev-mode test). Clicking only HIDES the
-    # window — the relauncher keeps polling and still launches the new
-    # OSK when ready, since "I don't need to look at this" is different
-    # from "abort the relaunch". See _run_with_splash.
-    close = QLabel("✕", win)
-    close.setObjectName("close")
-    close_font = QFont()
-    close_font.setPointSize(11)
-    close_font.setBold(True)
-    close.setFont(close_font)
-    close.setAlignment(Qt.AlignCenter)
-    close.setFixedSize(22, 22)
-    close.move(420 - 22 - 10, 8)
-    close.setCursor(Qt.PointingHandCursor)
-    close.setToolTip("Hide this window (the keyboard will still come back)")
-
     layout = QVBoxLayout(win)
-    layout.setContentsMargins(20, 18, 20, 18)
-    layout.setSpacing(8)
+    layout.setContentsMargins(28, 24, 28, 24)
+    layout.setSpacing(12)
+    # The window follows its content, so showing the buttons on a failure
+    # grows it instead of clipping them.
+    layout.setSizeConstraint(QLayout.SetFixedSize)
 
-    title = QLabel("Updating Alpha-OSK", win)
-    title.setObjectName("title")
-    title_font = QFont()
-    title_font.setPointSize(13)
-    title_font.setBold(True)
-    title.setFont(title_font)
-    title.setAlignment(Qt.AlignHCenter | Qt.AlignVCenter)
-    layout.addWidget(title)
+    def _centred_label(name: str, text: str) -> None:
+        label = QLabel(text, win)
+        label.setObjectName(name)
+        label.setAlignment(Qt.AlignHCenter | Qt.AlignVCenter)
+        label.setWordWrap(True)
+        label.setMinimumWidth(440)
+        label.setTextFormat(Qt.PlainText)
+        layout.addWidget(label)
 
-    msg = QLabel("", win)
-    msg.setObjectName("msg")
-    msg_font = QFont()
-    msg_font.setPointSize(10)
-    msg.setFont(msg_font)
-    msg.setAlignment(Qt.AlignHCenter | Qt.AlignVCenter)
-    msg.setWordWrap(True)
-    layout.addWidget(msg)
+    _centred_label("title", "Updating Alpha-OSK")
+    _centred_label("msg", "")
+    _centred_label("detail", "")
 
-    # Indeterminate (marquee) progress bar. setRange(0, 0) puts Qt's
-    # built-in progress bar into a busy/marquee state where the chunk
-    # slides back and forth without representing real percentage. We
-    # cannot get a real % out of the silent NSIS installer (it suppresses
-    # its own UI under /S), but constant motion still tells the user
-    # the relauncher is alive and the install hasn't hung.
+    # Indeterminate (marquee) bar: setRange(0, 0) is Qt's busy state.
     progress = QProgressBar(win)
     progress.setObjectName("progress")
     progress.setRange(0, 0)
     progress.setTextVisible(False)
-    progress.setFixedHeight(10)
+    progress.setFixedHeight(14)
     layout.addWidget(progress)
 
-    # Raise the close label above the layout-managed children so it
-    # always sits on top. The QLabel is a sibling of the layout host,
-    # not part of the layout.
-    close.raise_()
+    buttons = QWidget(win)
+    buttons.setObjectName("buttons")
+    buttons_layout = QVBoxLayout(buttons)
+    buttons_layout.setContentsMargins(0, 8, 0, 0)
+    buttons_layout.setSpacing(10)
+    start = QPushButton("Start Alpha-OSK", buttons)
+    start.setObjectName("start")
+    buttons_layout.addWidget(start)
+    row = QHBoxLayout()
+    row.setSpacing(10)
+    logs = QPushButton("Open log folder", buttons)
+    logs.setObjectName("logs")
+    close = QPushButton("Close", buttons)
+    close.setObjectName("close")
+    row.addWidget(logs)
+    row.addWidget(close)
+    buttons_layout.addLayout(row)
+    layout.addWidget(buttons)
 
     return win
 

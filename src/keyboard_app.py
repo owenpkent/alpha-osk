@@ -60,6 +60,7 @@ from PySide6.QtGui import QIcon, QWindow
 from PySide6.QtQml import QQmlApplicationEngine
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
+from . import update_signals
 from .__version__ import __version__
 from .keyboard_bridge import KeyboardBridge
 from .platform import (
@@ -908,22 +909,37 @@ class _KeyboardApplication(QApplication):
         return super().event(e)
 
 
+# If the first frame never swaps (a window restored minimized renders none),
+# the update helper must still be told, or it would sit on its failure screen
+# in front of a keyboard that is in fact running.
+_SHOWN_FALLBACK_MS = 3000
+
+
+def _announce_when_painted(root: QWindow) -> None:
+    """Tell the update helper the keyboard window is on screen.
+
+    After an auto-update the helper's screen stays up until this fires, so
+    it is sent when the window has actually been drawn (the first frame
+    swap), not when the process started or the window object exists. Both
+    the swap and the fallback timer can arrive; only the first counts. A
+    no-op off Windows and when no update is in progress (nothing is waiting
+    on the event, and creating it costs nothing).
+    """
+    fired = threading.Event()
+
+    def _fire(*_args: object) -> None:
+        if not fired.is_set():
+            fired.set()
+            update_signals.announce_keyboard_shown()
+
+    frame_swapped = getattr(root, "frameSwapped", None)
+    if frame_swapped is not None:
+        frame_swapped.connect(_fire)
+    QTimer.singleShot(_SHOWN_FALLBACK_MS, _fire)
+
+
 def main() -> int:
     """Launch the Alpha-OSK on-screen keyboard."""
-    # CLI dispatch — the post-update relauncher is this same binary,
-    # staged as a renamed copy in %TEMP% (see updater._spawn_relauncher
-    # for why it must be neither named alpha-osk.exe nor run from the
-    # install dir) and invoked with ``--update-relauncher``. It runs as
-    # a detached process owned by the user session, so it can launch
-    # the freshly-installed OSK at user IL after the elevated installer
-    # has exited. Skipping the singleton lock and the QApplication
-    # setup here keeps the helper cheap and side-effect-free; see
-    # ``src/_update_relauncher.py`` for the polling logic and rationale.
-    if "--update-relauncher" in sys.argv:
-        from src._update_relauncher import run_relauncher
-
-        return run_relauncher(sys.argv)
-
     log_path = _configure_logging()
     # Must follow _configure_logging: the hook is only worth anything
     # once there is a file handler for it to write into.
@@ -1088,6 +1104,9 @@ def main() -> int:
         # Top value into the bridge by now, so the very first band is the
         # saved one.
         _apply_window_flags(root, bridge.alwaysOnTop)
+        # The window is styled and shown: let a waiting update screen know
+        # once it is painted (see _announce_when_painted).
+        _announce_when_painted(root)
         # Held for the life of the event loop: Qt does not own a filter
         # installed from Python.  See QuietRestoreFilter for the why.
         quiet_restore = windows_window.install_quiet_restore(
