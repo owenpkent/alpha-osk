@@ -177,9 +177,9 @@ Item {
     // floating above it.
     //
     // **The cost was accepted with the picture in front of us**: at full
-    // size an F-key is 18% wider than the key directly below it while
-    // (then also 30% shorter; the rows are full height now), so the row no longer lines up with the grid
-    // column by column.  Do not "fix" that back without rendering it next
+    // size an F-key is 18% wider than the key directly below it (it was
+    // also 30% shorter then; the row is full height since 2026-10-06), so
+    // the row no longer lines up with the grid column by column.  Do not "fix" that back without rendering it next
     // to the number row, which is the same rule as before, pointing the
     // other way.
     //

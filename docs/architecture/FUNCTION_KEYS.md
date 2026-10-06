@@ -287,8 +287,9 @@ rendering the result next to the number row", which is exactly what was
 done the second time, and stretching won: on a keyboard driven by an
 imprecise pointer, a quarter more target width outranks lining up with the
 column below. The accepted cost is that no F-key lines up with the key
-under it any more, and at 29% wider (and, when this was decided, 30% shorter; the rows are full
-height now, see *One row at a time*) the row read a little
+under it any more, and at 29% wider (and, when this was decided, 30%
+shorter; the rows are full height now, see *One row at a time*) the row
+read a little
 bar-like. **The rule survives, pointing the other way: don't change this
 back without rendering it next to the number row.**
 
