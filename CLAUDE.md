@@ -660,8 +660,17 @@ each one fixed: `docs/build/CI.md`. The rules that outlive the reasoning:
   stale entry blocks every PR for ever on a check that can never report.
 - **One approving review is required to merge, and administrators are
   exempt.** GitHub will not let an author approve their own PR, so the
-  maintainer merges with `gh pr merge --admin`; the rule gates any future
-  collaborator or token instead. The Dependabot workflow approves the patch
+  maintainer merges with an admin bypass; the rule gates any future
+  collaborator or token instead. **Merge with `python scripts/merge_pr.py
+  <n>`, never a bare `gh pr merge --admin`**: `--admin` skips the required
+  checks too, and protection does not require an up-to-date branch, which
+  is how two PRs each green alone broke main together on 2026-10-05. The
+  script updates the branch onto main, waits for the required checks on that
+  head, re-runs a runner-fault failure once, and merges with
+  `--match-head-commit`. Exit code 3 means another merge landed in the
+  round trip between its last comparison and the merge (a gap only a merge
+  queue could close): watch main's run for that commit. Main's CI groups by
+  commit and never cancels, so every merge gets its own verdict. The Dependabot workflow approves the patch
   and minor updates it queues, which needs the repository's "Allow GitHub
   Actions to create and approve pull requests" setting on. Decided
   2026-09-15 from the security audit; see `docs/build/CI.md`.
