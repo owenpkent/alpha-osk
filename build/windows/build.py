@@ -1291,6 +1291,96 @@ def verify_helper_does_not_request_uiaccess() -> bool:
     return True
 
 
+def verify_helper_stage_runs(dist_dir: Path = DIST_DIR) -> bool:
+    """Stage the update helper the way the updater does, and run the staged copy.
+
+    The updater copies only the files listed in ``_internal/relauncher-files.txt``
+    (written by ``alpha-osk.spec`` from the helper's own analysis) into
+    ``%TEMP%`` and runs the helper from there.  A list that left something out
+    would build fine and fail on a user's machine in the middle of an update,
+    with no update screen, which is the failure the helper exists to prevent.
+    So the same staging code runs here against ``dist_dir`` and the staged exe
+    is started with ``--self-test`` on a hidden desktop: it forces Qt's ``offscreen`` platform (no
+    window can appear), paints the real widget, loads the two plugins a real
+    run needs and reports through a file.  The environment is scrubbed down to
+    the system directory so a DLL found on this machine's PATH cannot make an
+    incomplete stage pass.
+
+    The build fails when there is no usable list too: shipping without one
+    would quietly put every update back on the slow whole-bundle copy.
+    """
+    step("Staging the update helper and running the staged copy...")
+    import tempfile
+
+    helper_exe = dist_dir / HELPER_EXE_NAME
+    if not helper_exe.exists():
+        error(f"Update helper not found, cannot stage it: {helper_exe}")
+        return False
+
+    if str(PROJECT_ROOT) not in sys.path:
+        sys.path.insert(0, str(PROJECT_ROOT))
+    from src import update_stage
+
+    with tempfile.TemporaryDirectory(prefix="alpha-osk-helper-selftest-") as tmp:
+        bundle = Path(tmp) / "bundle"
+        try:
+            mode = update_stage.stage_bundle(
+                dist_dir, bundle, helper_exe=HELPER_EXE_NAME, main_exe="alpha-osk.exe"
+            )
+        except OSError as exc:
+            error(f"Could not stage the update helper: {exc}")
+            return False
+        if mode != update_stage.SUBSET:
+            error(
+                f"No usable {update_stage.MANIFEST_RELPATH} in {dist_dir}: every update would "
+                "stage the whole bundle.  Check alpha-osk.spec writes the helper's file list."
+            )
+            return False
+        staged_mb = sum(f.stat().st_size for f in bundle.rglob("*") if f.is_file()) / 1e6
+        report = Path(tmp) / "report.txt"
+        system_root = os.environ.get("SystemRoot", r"C:\Windows")
+        env = {
+            "SystemRoot": system_root,
+            "windir": system_root,
+            "PATH": str(Path(system_root) / "System32"),
+            "TEMP": tmp,
+            "TMP": tmp,
+            "QT_QPA_PLATFORM": "offscreen",
+        }
+        if str(SCRIPT_DIR) not in sys.path:
+            sys.path.insert(0, str(SCRIPT_DIR))
+        from hidden_desktop import run_on_hidden_desktop
+
+        # On a desktop of its own, never the user's: a stage that cannot start
+        # makes PyInstaller's bootloader raise a modal MessageBox, which
+        # offscreen Qt does nothing about.  See hidden_desktop.py.
+        try:
+            code = run_on_hidden_desktop(
+                [str(bundle / HELPER_EXE_NAME), "--self-test", str(report)],
+                env=env,
+                cwd=tmp,
+                timeout_s=120,
+            )
+        except OSError as exc:
+            error(f"The staged update helper could not be run: {exc}")
+            return False
+        said = report.read_text(encoding="utf-8") if report.exists() else "(no report written)"
+        if code is None:
+            error(
+                "The staged update helper did not finish within 120 s and was stopped "
+                f"({said}).  The file list in alpha-osk.spec left out something it needs."
+            )
+            return False
+        if code != 0 or said != "ok":
+            error(
+                f"The staged update helper failed its self-test (exit {code}): "
+                f"{said}.  The file list in alpha-osk.spec left out something it needs."
+            )
+            return False
+    success(f"The update helper starts from its {staged_mb:.0f} MB stage")
+    return True
+
+
 def verify_build(signtool_path: str) -> bool:
     """Verify signatures on the main exe and installer, the installer's
     embedded version, and that the exe's manifest requests UIAccess."""
@@ -1413,6 +1503,9 @@ def main() -> int:
         return 1
     # The helper is the opposite case and fails the build the same way.
     if not verify_helper_does_not_request_uiaccess():
+        return 1
+    # And the staged copy of it has to start, or an update has no screen.
+    if not verify_helper_stage_runs():
         return 1
 
     # --- Capture dependency lockfile + SBOM ---

@@ -82,11 +82,14 @@ from .text_patterns import (
 )
 from .updater import UpdateInfo, check_for_update, download_and_install
 
-# How long to keep the "installing v… keyboard back in a moment" toast
-# on screen before letting the install proceed (and the installer's
-# taskkill arrive). Long enough to read, short enough not to feel like
-# the click did nothing.
-_PRE_INSTALL_TOAST_DWELL_S = 1.8
+# How long the "installing v... keyboard back in a moment" toast gets to paint
+# before the install proceeds. It used to be 1.8 s so the toast could be read
+# before the installer's taskkill, but the UAC prompt now sits between the
+# two (on the secure desktop the toast is not even visible), and the update
+# screen the helper shows covers the gap. What is left to protect is one
+# frame, and the wait for the helper's window to paint (updater.py) runs
+# right after, so the two overlap instead of adding up.
+_PRE_INSTALL_TOAST_DWELL_S = 0.3
 
 # Window classes / process exes used to auto-detect a foreground app
 # whose keystroke handling breaks the suffix-only insertion path.

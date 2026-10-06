@@ -14,6 +14,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 from unittest import mock
 
@@ -1001,6 +1002,8 @@ class TestRelauncherSpawn:
         stale = temp_root / "alpha-osk-relauncher-old"
         stale.mkdir()
         (stale / "leftover.bin").write_bytes(b"x")
+        long_ago = time.time() - 3600
+        os.utime(stale, (long_ago, long_ago))
         unrelated = temp_root / "something-else"
         unrelated.mkdir()
         assert updater._spawn_relauncher("1.0.3") is not None
@@ -1060,6 +1063,10 @@ class TestTheHelperIsToldWhatHappened:
         def installer_launched(self):
             self.events.append("launched")
 
+        def wait_until_visible(self, timeout_s):
+            self.events.append("waited")
+            return True
+
         def cancel(self):
             self.events.append("cancel")
 
@@ -1068,8 +1075,9 @@ class TestTheHelperIsToldWhatHappened:
         handle = self._Handle()
         seen = {}
 
-        def fake_spawn(version, anchor_rect=None):
+        def fake_spawn(version, anchor_rect=None, **kwargs):
             seen["anchor"] = anchor_rect
+            seen.update(kwargs)
             return handle
 
         monkeypatch.setattr(updater, "_spawn_relauncher", fake_spawn)
@@ -1090,8 +1098,10 @@ class TestTheHelperIsToldWhatHappened:
         monkeypatch.setattr(updater, "_launch_installer", lambda dest: (True, ""))
         ok, _ = updater.download_and_install(self._info(), anchor_rect=(1, 2, 3, 4))
         assert ok is True
-        assert handle.events == ["launched"]
+        # The helper is waited for before the installer is launched, then told it was.
+        assert handle.events == ["waited", "launched"]
         assert seen["anchor"] == (1, 2, 3, 4)
+        assert seen["installer_name"] == "Alpha-OSK-Setup-9.9.9.exe"
 
     def test_a_declined_prompt_cancels_the_helper(self, monkeypatch, world):
         handle, _ = world
@@ -1101,7 +1111,7 @@ class TestTheHelperIsToldWhatHappened:
         ok, err = updater.download_and_install(self._info())
         assert ok is False
         assert err == "Update cancelled at UAC prompt"
-        assert handle.events == ["cancel"]
+        assert handle.events == ["waited", "cancel"]
 
     def test_a_launch_that_raises_cancels_the_helper(self, monkeypatch, world):
         handle, _ = world
@@ -1112,11 +1122,11 @@ class TestTheHelperIsToldWhatHappened:
         monkeypatch.setattr(updater, "_launch_installer", boom)
         ok, _ = updater.download_and_install(self._info())
         assert ok is False
-        assert handle.events == ["cancel"]
+        assert handle.events == ["waited", "cancel"]
 
     def test_no_helper_is_not_an_error(self, monkeypatch, world):
         # A dev run or an old layout spawns nothing: the install proceeds.
-        monkeypatch.setattr(updater, "_spawn_relauncher", lambda v, a=None: None)
+        monkeypatch.setattr(updater, "_spawn_relauncher", lambda v, a=None, **k: None)
         monkeypatch.setattr(updater, "_launch_installer", lambda dest: (True, ""))
         ok, _ = updater.download_and_install(self._info())
         assert ok is True
@@ -1398,3 +1408,165 @@ class TestTheDownloadedBytesAreTheBytesThatRun:
             progress=None,
         )
         assert returned is None
+
+
+def _frozen(monkeypatch, tmp_path, **kwargs):
+    return TestRelauncherSpawn._frozen_world(None, monkeypatch, tmp_path, **kwargs)
+
+
+class TestTheStageIsOnlyWhatTheHelperNeeds:
+    """The copy used to be the whole 250 MB bundle, on the critical path."""
+
+    def _list(self, exe: Path, entries: list[str]) -> None:
+        manifest = exe.parent / "_internal" / "relauncher-files.txt"
+        manifest.write_text("\n".join(entries) + "\n", encoding="utf-8")
+
+    def test_a_listed_install_stages_only_the_list(self, monkeypatch, tmp_path):
+        exe, temp_root, calls = _frozen(monkeypatch, tmp_path)
+        (exe.parent / "_internal" / "qml-runtime.dll").write_bytes(b"big")
+        self._list(exe, ["alpha-osk-relauncher.exe", "_internal/python3.dll"])
+        assert updater._spawn_relauncher("1.0.3") is not None
+        helper = Path(calls[0][0][0])
+        assert (helper.parent / "_internal" / "python3.dll").is_file()
+        assert not (helper.parent / "_internal" / "qml-runtime.dll").exists()
+
+    def test_an_install_with_no_list_still_stages_everything(self, monkeypatch, tmp_path):
+        exe, temp_root, calls = _frozen(monkeypatch, tmp_path)
+        (exe.parent / "_internal" / "qml-runtime.dll").write_bytes(b"big")
+        assert updater._spawn_relauncher("1.0.3") is not None
+        helper = Path(calls[0][0][0])
+        assert (helper.parent / "_internal" / "qml-runtime.dll").is_file()
+
+    def test_the_installer_name_reaches_the_helper(self, monkeypatch, tmp_path):
+        _, _, calls = _frozen(monkeypatch, tmp_path)
+        updater._spawn_relauncher("1.0.3", installer_name="Alpha-OSK-Setup-1.0.3.exe")
+        cmd = calls[0][0]
+        assert cmd[cmd.index("--installer-image") + 1] == "Alpha-OSK-Setup-1.0.3.exe"
+
+    def test_no_installer_name_means_no_flag(self, monkeypatch, tmp_path):
+        _, _, calls = _frozen(monkeypatch, tmp_path)
+        updater._spawn_relauncher("1.0.3")
+        assert "--installer-image" not in calls[0][0]
+
+
+class TestTheSweepSparesALiveHelper:
+    """Found by the verifier: the sweep could delete a running helper's files."""
+
+    def test_a_stage_whose_helper_holds_its_lock_survives_the_next_spawn(
+        self, monkeypatch, tmp_path
+    ):
+        from src import update_signals
+
+        exe, temp_root, calls = _frozen(monkeypatch, tmp_path)
+        live = temp_root / "alpha-osk-relauncher-live"
+        live.mkdir()
+        (live / "installer-launched").write_bytes(b"")
+        lock = live / update_signals.HELPER_LOCK_FILE
+        assert update_signals.hold_lock(lock)
+        try:
+            long_ago = time.time() - 86400
+            os.utime(live, (long_ago, long_ago))
+            assert updater._spawn_relauncher("1.0.3") is not None
+            assert (live / "installer-launched").exists(), (
+                "the sweep deleted the marker a still-running helper is waiting on"
+            )
+        finally:
+            update_signals.release_held_locks()
+
+    def test_a_stage_from_a_moment_ago_survives_too(self, monkeypatch, tmp_path):
+        exe, temp_root, calls = _frozen(monkeypatch, tmp_path)
+        recent = temp_root / "alpha-osk-relauncher-recent"
+        recent.mkdir()
+        updater._spawn_relauncher("1.0.3")
+        assert recent.exists()
+
+
+class TestTheHelperIsWaitedFor:
+    def test_a_marker_that_is_there_ends_the_wait_at_once(self, tmp_path):
+        (tmp_path / "ui-shown").write_bytes(b"")
+        handle = updater._RelauncherHandle(object(), tmp_path)  # type: ignore[arg-type]
+        started = time.monotonic()
+        assert handle.wait_until_visible(5.0) is True
+        assert time.monotonic() - started < 1.0
+
+    def test_a_marker_that_arrives_late_is_seen(self, tmp_path):
+        import threading
+
+        handle = updater._RelauncherHandle(object(), tmp_path)  # type: ignore[arg-type]
+        timer = threading.Timer(0.2, lambda: (tmp_path / "ui-shown").write_bytes(b""))
+        timer.start()
+        try:
+            assert handle.wait_until_visible(5.0) is True
+        finally:
+            timer.join()
+
+    def test_a_helper_that_never_reports_costs_only_the_ceiling(self, tmp_path):
+        handle = updater._RelauncherHandle(object(), tmp_path)  # type: ignore[arg-type]
+        started = time.monotonic()
+        assert handle.wait_until_visible(0.3) is False
+        assert time.monotonic() - started < 3.0
+
+    def test_a_helper_that_has_already_exited_is_not_waited_for(self, tmp_path):
+        class Dead:
+            def poll(self):
+                return 1
+
+        handle = updater._RelauncherHandle(Dead(), tmp_path)  # type: ignore[arg-type]
+        started = time.monotonic()
+        assert handle.wait_until_visible(30.0) is False
+        assert time.monotonic() - started < 2.0, "nothing is coming, so do not wait for it"
+
+    def test_the_fixed_toast_dwell_is_gone(self):
+        # 1.8 s of sleeping before the UAC prompt bought nothing: the prompt
+        # sits between the toast and the installer's taskkill, and the
+        # helper's own first paint is waited for instead.
+        from src import keyboard_bridge
+
+        assert keyboard_bridge._PRE_INSTALL_TOAST_DWELL_S <= 0.5
+
+
+class TestAStagingJobThatIsNotUsedCleansUp:
+    def test_take_hands_over_the_stage_once(self, monkeypatch, tmp_path):
+        stage = tmp_path / "alpha-osk-relauncher-x"
+        stage.mkdir()
+        monkeypatch.setattr(updater, "_stage_helper", lambda exe: stage)
+        job = updater._StagingJob(Path("whatever.exe"))
+        assert job.take() == stage
+        assert job.take() is None
+
+    def test_discard_removes_an_untaken_stage(self, monkeypatch, tmp_path):
+        stage = tmp_path / "alpha-osk-relauncher-x"
+        (stage / "bundle").mkdir(parents=True)
+        monkeypatch.setattr(updater, "_stage_helper", lambda exe: stage)
+        job = updater._StagingJob(Path("whatever.exe"))
+        job.discard()
+        assert not stage.exists()
+
+    def test_discard_after_take_leaves_the_taken_stage_alone(self, monkeypatch, tmp_path):
+        stage = tmp_path / "alpha-osk-relauncher-x"
+        stage.mkdir()
+        monkeypatch.setattr(updater, "_stage_helper", lambda exe: stage)
+        job = updater._StagingJob(Path("whatever.exe"))
+        job.take()
+        job.discard()
+        assert stage.exists(), "a stage the spawn took belongs to the helper"
+
+    def test_a_failed_download_discards_the_stage(self, monkeypatch, tmp_path):
+        stage = tmp_path / "alpha-osk-relauncher-x"
+        stage.mkdir()
+        monkeypatch.setattr(updater, "_stage_helper", lambda exe: stage)
+        monkeypatch.setattr(updater, "_begin_staging", lambda: updater._StagingJob(Path("x")))
+        monkeypatch.setattr(updater, "_download_with_cap", lambda *a, **k: None)
+        info = updater.UpdateInfo(
+            version="9.9.9",
+            asset_name="Alpha-OSK-Setup-9.9.9.exe",
+            download_url="https://github.com/x/y",
+            notes="",
+        )
+        ok, _ = updater.download_and_install(info)
+        assert ok is False
+        assert not stage.exists(), "a download that failed must not leave a stage behind"
+
+    def test_a_dev_run_starts_no_staging(self, monkeypatch):
+        monkeypatch.delattr(sys, "frozen", raising=False)
+        assert updater._begin_staging() is None
