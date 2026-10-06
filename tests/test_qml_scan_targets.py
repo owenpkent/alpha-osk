@@ -630,11 +630,15 @@ class TestAMinimizedKeyboardOffersNothing:
 
 
 class TestClosingTheKeyboardMinimizesIt:
-    """A close that is not a quit minimizes the keyboard. The taskbar's
-    Close and any UI Automation client's WindowPattern.Close both arrive
-    as one, and Qt's default hid the keyboard while leaving the process
-    running: off the taskbar, out of the tree, reachable only from the
-    tray. Measured against a live client before this change."""
+    """A close that is not a quit minimizes the keyboard. A UI Automation
+    client's WindowPattern.Close arrives as one (Qt's provider closes the
+    window directly, with no WM_CLOSE), and Qt's default hid the keyboard
+    while leaving the process running: off the taskbar, out of the tree,
+    reachable only from the tray. Measured against a live client before
+    this change. The taskbar's "Close window" is a WM_CLOSE, which
+    ``windows_window.ShellCloseFilter`` turns into a quit before Qt sees it
+    (tests/test_windows_window.py::TestATaskbarCloseQuits); the close here
+    carries no such message, so it still minimizes."""
 
     @pytest.fixture(autouse=True)
     def _windows_only(self):
