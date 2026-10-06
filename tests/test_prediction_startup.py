@@ -506,8 +506,19 @@ def test_the_gil_switch_interval_is_lowered_for_the_build_and_restored_after(qap
 
 @pytest.fixture
 def manage_gc(monkeypatch):
-    """Opt in as keyboard_app.main() does; the suite runs without it."""
+    """Opt in as keyboard_app.main() does; the suite runs without it.
+
+    ``gc.freeze`` is recorded rather than run: a real freeze here would pin
+    every object in this worker, which is the leak the opt-in exists to keep
+    out of the suite.  Yields the list of recorded freezes.
+    """
+    freezes = []
     monkeypatch.setattr(loader_module, "_manage_gc", True)
+    monkeypatch.setattr(gc, "freeze", lambda: freezes.append("freeze"))
+    yield freezes
+    # A failure mid-test must not leave the collector off for the worker.
+    if not gc.isenabled():
+        gc.enable()
 
 
 def test_the_collector_is_paused_for_the_build_and_resumed_after(qapp, manage_gc):
@@ -597,10 +608,12 @@ def test_overlapping_builds_restore_the_settings_the_first_one_found(qapp, manag
     wait_for(lambda: loaders[0]._job.done)
     assert sys.getswitchinterval() == pytest.approx(_BUILD_SWITCH_INTERVAL_S)
     assert not gc.isenabled()
+    assert manage_gc == [], "froze while a build was still running"
     gates[1].set()
     wait_for(lambda: loaders[1]._job.done)
     assert sys.getswitchinterval() == before_interval
     assert gc.isenabled()
+    assert manage_gc == ["freeze"], "the last build out freezes, exactly once"
 
 
 def test_a_build_entering_during_the_last_ones_restoration_waits_for_it(
@@ -710,3 +723,30 @@ def test_settings_buttons_say_why_they_are_inert_and_the_study_names_retry(pendi
     finally:
         bridge.shutdown()
         del engine
+
+
+def test_a_cancelled_build_restores_the_collector_too(qapp, manage_gc):
+    """The app's path, cancelled mid-build (closing the keyboard while it
+    loads): the collector must come back even though nothing is published."""
+    entered = threading.Event()
+    release = threading.Event()
+
+    def build(abort):
+        entered.set()
+        assert release.wait(5)
+        return PredictorDouble()
+
+    parent = QObject()
+    loader = PredictionLoader(build, parent)
+    job = loader._job
+    loader.start()
+    try:
+        assert entered.wait(2)
+        assert not gc.isenabled()
+        parent.deleteLater()
+        QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+    finally:
+        release.set()
+        wait_for(lambda: job.done)
+    assert gc.isenabled()
+    assert manage_gc == ["freeze"]
