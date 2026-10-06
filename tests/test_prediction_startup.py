@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gc
 import os
 import sys
 import threading
@@ -498,8 +499,80 @@ def test_the_gil_switch_interval_is_lowered_for_the_build_and_restored_after(qap
     loader = PredictionLoader(build, parent)
     loader.start()
     wait_for(lambda: loader._job.done)
-    assert seen == [_BUILD_SWITCH_INTERVAL_S]
+    assert seen == [pytest.approx(_BUILD_SWITCH_INTERVAL_S)]
     assert sys.getswitchinterval() == before
+
+
+def test_the_collector_is_paused_for_the_build_and_resumed_after(qapp):
+    """A collection holds the GIL for its whole run, which no switch interval
+    can interrupt; the build's full collections were the 50-90 ms key stalls.
+
+    Paired with its inverse: a build that fails still resumes the collector,
+    since leaving it off would grow the process for the rest of the session.
+    """
+    assert gc.isenabled()
+    seen = []
+
+    def build(abort):
+        seen.append(gc.isenabled())
+        return PredictorDouble()
+
+    def broken(abort):
+        seen.append(gc.isenabled())
+        raise RuntimeError("model file is corrupt")
+
+    for factory in (build, broken):
+        parent = QObject()
+        loader = PredictionLoader(factory, parent)
+        loader.start()
+        wait_for(lambda: loader._job.done)
+        assert gc.isenabled()
+    assert seen == [False, False]
+
+
+def test_the_build_ends_in_a_freeze_not_a_collection(qapp, monkeypatch):
+    """A collection at the end would be one more stall right before "ready";
+    freezing costs nothing and keeps the engine out of later collections."""
+    calls = []
+    monkeypatch.setattr(gc, "freeze", lambda: calls.append("freeze"))
+    monkeypatch.setattr(gc, "collect", lambda *a: calls.append("collect") or 0)
+
+    parent = QObject()
+    loader = PredictionLoader(lambda abort: PredictorDouble(), parent)
+    loader.start()
+    wait_for(lambda: loader._job.done)
+    assert calls == ["freeze"]
+
+
+def test_overlapping_builds_restore_the_settings_the_first_one_found(qapp):
+    """Only the last build out restores, so the order they end in is moot."""
+    before_interval = sys.getswitchinterval()
+    gates = [threading.Event(), threading.Event()]
+    entered = [threading.Event(), threading.Event()]
+
+    def factory_for(i):
+        def build(abort):
+            entered[i].set()
+            assert gates[i].wait(5)
+            return PredictorDouble()
+
+        return build
+
+    parents = [QObject(), QObject()]
+    loaders = [PredictionLoader(factory_for(i), parents[i]) for i in range(2)]
+    for i, loader in enumerate(loaders):
+        loader.start()
+        assert entered[i].wait(2)
+    # The first one in ends first, which is the order that used to strand
+    # the process on the second build's saved (build-time) settings.
+    gates[0].set()
+    wait_for(lambda: loaders[0]._job.done)
+    assert sys.getswitchinterval() == pytest.approx(_BUILD_SWITCH_INTERVAL_S)
+    assert not gc.isenabled()
+    gates[1].set()
+    wait_for(lambda: loaders[1]._job.done)
+    assert sys.getswitchinterval() == before_interval
+    assert gc.isenabled()
 
 
 def test_publication_does_not_poll(qapp):
