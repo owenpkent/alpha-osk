@@ -660,8 +660,17 @@ each one fixed: `docs/build/CI.md`. The rules that outlive the reasoning:
   stale entry blocks every PR for ever on a check that can never report.
 - **One approving review is required to merge, and administrators are
   exempt.** GitHub will not let an author approve their own PR, so the
-  maintainer merges with `gh pr merge --admin`; the rule gates any future
-  collaborator or token instead. The Dependabot workflow approves the patch
+  maintainer merges with an admin bypass; the rule gates any future
+  collaborator or token instead. **Merge with `python scripts/merge_pr.py
+  <n>`, never a bare `gh pr merge --admin`**: `--admin` skips the required
+  checks too, and protection does not require an up-to-date branch, which
+  is how two PRs each green alone broke main together on 2026-10-05. The
+  script updates the branch onto main, waits for the required checks on that
+  head, re-runs a runner-fault failure once, and merges with
+  `--match-head-commit`. Exit code 3 means another merge landed in the
+  round trip between its last comparison and the merge (a gap only a merge
+  queue could close): watch main's run for that commit. Main's CI groups by
+  commit and never cancels, so every merge gets its own verdict. The Dependabot workflow approves the patch
   and minor updates it queues, which needs the repository's "Allow GitHub
   Actions to create and approve pull requests" setting on. Decided
   2026-09-15 from the security audit; see `docs/build/CI.md`.
@@ -996,7 +1005,7 @@ Every visible key and pill is published as a UI Automation `Button` so an extern
 - `Accessible.name` is a speakable label (`_scanName`), not the keycap; the numpad names both NumLock states. Only real toggles report a toggle state (a programmed F-key is not one). The lock rides in `Accessible.description`, which is UIA `FullDescription`, not HelpText.
 - Everything that can change the target set feeds `Main.qml::scanRevision` (including NumLock and `root.predictionsArePresent`), exposed as the `aosk.v1.revision` beacon, a real 1x1 visible item. Compare, never parse.
 - **An Invoke carries no click position** (`pressFromPointer` false): it resolves to the key centre and teaches the pointer model nothing. Invoke is a one-shot (`activateFromAssistiveClient`), never `_activate()`, and flashes the key.
-- WindowPattern is safe because restoring never takes the foreground (`windows_window.QuietRestoreFilter`), a close that is not a quit minimizes (`_KeyboardApplication` sets `quitting`), and a minimized keyboard offers no targets. The second-launch hand-off (`windows_window.surface_existing_instance`) restores with `SW_SHOWNOACTIVATE` and never calls `SetForegroundWindow`.
+- WindowPattern is safe because restoring never takes the foreground (`windows_window.QuietRestoreFilter`), a close that is not a quit minimizes (`_KeyboardApplication` sets `quitting`) while a close from the shell quits (`windows_window.ShellCloseFilter`: the taskbar's "Close window" and `SC_CLOSE` arrive as `WM_CLOSE`, and a UIA `WindowPattern.Close` sends no window message at all, measured), and a minimized keyboard offers no targets. The second-launch hand-off (`windows_window.surface_existing_instance`) restores with `SW_SHOWNOACTIVATE` and never calls `SetForegroundWindow`.
 - **Stale pills**: every pill-model entry carries the generation, and `invokeScanPrediction(word, generation)` refuses a dead one. Keep both halves.
 - The window is found by AutomationId `alphaOsk.alphaOskKeyboard` (`_name_for_ui_automation`).
 - PySide cannot read attached `Accessible.*` properties: keep every value in a named property and **never inline an expression into the `Accessible` block**.

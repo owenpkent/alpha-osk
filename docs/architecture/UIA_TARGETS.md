@@ -303,10 +303,19 @@ and performs the restore itself with `SW_SHOWNOACTIVATE`.
 client should never offer it as a way to hide the keyboard, and never needs
 to. Qt's default for a close was to hide the window while leaving the process
 running, which took the keyboard off the taskbar and out of the tree, where
-no client could find it again, and the taskbar's own Close did the same
-(both measured). A
-close that is not part of a quit now minimizes instead. The keyboard's own
-close button and the tray's Quit still end it.
+no client could find it again (measured). A close that is not part of a
+quit now minimizes instead. The keyboard's own close button and the tray's
+Quit still end it, and so does a close from the shell: the taskbar's "Close
+window", Alt+F4 and the system menu's Close. Those are the user's, and they
+are told apart from a client's by the message that carries them, measured on
+Qt 6.11.1 from a separate process: the taskbar's "Close window" sends
+`WM_CLOSE` to the window, `WM_SYSCOMMAND(SC_CLOSE)` becomes `WM_CLOSE` in
+`DefWindowProc`, and `WindowPattern.Close` sends no window message at all
+(Qt's provider closes the `QWindow` directly). `ShellCloseFilter` in
+`src/platform/windows_window.py` consumes a `WM_CLOSE` addressed to the
+keyboard and starts the same quit as the tray's Quit. A client that posts
+`WM_CLOSE` itself ends the app, which it could already do by ending the
+process.
 
 ### What this does and does not protect
 
@@ -574,7 +583,11 @@ this to a socket without re-reading that argument.
   which asserts an allow-list of user32 calls rather than naming the bad one.
   (2) **A close that is not a quit minimizes** (`Main.qml` `onClosing`,
   Windows only), because Qt's default hid the keyboard with the process still
-  running, out of the tree and off the taskbar. Qt 6 cancels a quit if a
+  running, out of the tree and off the taskbar. A close from the shell is a
+  quit: `windows_window.ShellCloseFilter` turns a `WM_CLOSE` for the
+  keyboard's window (the taskbar's "Close window", Alt+F4, the system menu)
+  into `app.quit()`, and a UIA `WindowPattern.Close` never sends one, so it
+  still minimizes. Qt 6 cancels a quit if a
   window refuses to close, so `keyboard_app._KeyboardApplication` sets the
   window's `quitting` on `QEvent::Quit`; any new way to end the app must be a
   real quit or it will be refused. (3) **A minimized keyboard offers no
