@@ -51,31 +51,57 @@ _BUILD_SWITCH_INTERVAL_S = 0.0001
 # collection, which otherwise costs ~25 ms each time one lands mid-typing
 # (measured: 24 ms before the freeze, under 0.1 ms after).  The price is
 # that those few cyclic objects are never reclaimed.
+#
+# Both halves (the pause and the freeze) are opt-in, and only
+# keyboard_app.main() opts in.  The freeze pins everything alive at that
+# moment, and the pause holds back every other thread's garbage for the
+# length of the build.  In a process that runs many builds beside other work
+# (a pytest worker on a slow CI runner, where a real build outlives the test
+# that started it) that kept earlier tests' dead bridges alive with their
+# poll timers still firing, and froze them that way, until later tests
+# timed out waiting on the event loop.  Without the opt-in only the switch
+# interval changes.
 _settings_lock = threading.Lock()
+_manage_gc = False
 _active_builds = 0
 _saved_interval = 0.0
-_saved_gc_enabled = True
+_gc_paused = False
+
+
+def manage_gc_during_builds(enabled: bool = True) -> None:
+    """Opt this process into pausing the collector for each build and ending
+    the build with ``gc.freeze()``.
+
+    For the application only; see the note above ``_settings_lock``.
+    """
+    global _manage_gc
+    _manage_gc = enabled
 
 
 def _enter_build_settings() -> None:
-    """Lower the switch interval and pause the collector; nests safely.
+    """Lower the switch interval and, if opted in, pause the collector;
+    nests safely.
 
     Both are process-wide, so only the first build in saves them and only the
     last one out restores them: two overlapping builds restoring in the wrong
     order would otherwise leave the process on the build's settings for good.
+    The first build in also decides whether the collector is paused, so the
+    last one out restores exactly what was changed even if the opt-in moved
+    in between.
     """
-    global _active_builds, _saved_interval, _saved_gc_enabled
+    global _active_builds, _saved_interval, _gc_paused
     with _settings_lock:
         if _active_builds == 0:
             _saved_interval = sys.getswitchinterval()
-            _saved_gc_enabled = gc.isenabled()
+            _gc_paused = _manage_gc and gc.isenabled()
+            if _gc_paused:
+                gc.disable()
         _active_builds += 1
         sys.setswitchinterval(_BUILD_SWITCH_INTERVAL_S)
-        gc.disable()
 
 
 def _exit_build_settings() -> None:
-    global _active_builds
+    global _active_builds, _gc_paused
     with _settings_lock:
         _active_builds -= 1
         if _active_builds:
@@ -85,7 +111,8 @@ def _exit_build_settings() -> None:
         # build out.  Released first, a build entering in the gap would find
         # no active builds and a disabled collector, save that as the
         # baseline, and switch the collector off for good on its own way out.
-        if _saved_gc_enabled:
+        if _gc_paused:
+            _gc_paused = False
             gc.freeze()
             gc.enable()
 

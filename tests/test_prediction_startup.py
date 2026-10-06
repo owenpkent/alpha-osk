@@ -30,6 +30,7 @@ from PySide6.QtQml import QQmlApplicationEngine
 from PySide6.QtTest import QTest
 
 from src import keyboard_bridge as kb
+from src.prediction import loader as loader_module
 from src.prediction.hybrid_predictor import HybridPredictor, LoadAborted
 from src.prediction.loader import _BUILD_SWITCH_INTERVAL_S, PredictionLoader
 from src.prediction.null_predictor import NullPredictor
@@ -503,7 +504,13 @@ def test_the_gil_switch_interval_is_lowered_for_the_build_and_restored_after(qap
     assert sys.getswitchinterval() == before
 
 
-def test_the_collector_is_paused_for_the_build_and_resumed_after(qapp):
+@pytest.fixture
+def manage_gc(monkeypatch):
+    """Opt in as keyboard_app.main() does; the suite runs without it."""
+    monkeypatch.setattr(loader_module, "_manage_gc", True)
+
+
+def test_the_collector_is_paused_for_the_build_and_resumed_after(qapp, manage_gc):
     """A collection holds the GIL for its whole run, which no switch interval
     can interrupt; the build's full collections were the 50-90 ms key stalls.
 
@@ -530,21 +537,42 @@ def test_the_collector_is_paused_for_the_build_and_resumed_after(qapp):
     assert seen == [False, False]
 
 
-def test_the_build_ends_in_a_freeze_not_a_collection(qapp, monkeypatch):
-    """A collection at the end would be one more stall right before "ready";
-    freezing costs nothing and keeps the engine out of later collections."""
+@pytest.mark.parametrize(
+    "opted_in, collector_during_build, expected",
+    [(True, False, ["freeze"]), (False, True, [])],
+)
+def test_the_collector_is_managed_only_when_the_app_opts_in(
+    qapp, monkeypatch, opted_in, collector_during_build, expected
+):
+    """Opted in, the build pauses the collector and ends in a freeze: a
+    collection at the end would be one more stall right before "ready", and
+    freezing keeps the engine out of later collections.
+
+    The inverse is the half that matters for this suite: without the opt-in
+    the collector is never touched.  On a slow CI runner a real build
+    outlives its test, and pausing then freezing kept earlier tests' dead
+    bridges alive with their timers firing until later tests timed out.
+    """
     calls = []
+    seen = []
     monkeypatch.setattr(gc, "freeze", lambda: calls.append("freeze"))
     monkeypatch.setattr(gc, "collect", lambda *a: calls.append("collect") or 0)
+    monkeypatch.setattr(loader_module, "_manage_gc", opted_in)
+
+    def build(abort):
+        seen.append(gc.isenabled())
+        return PredictorDouble()
 
     parent = QObject()
-    loader = PredictionLoader(lambda abort: PredictorDouble(), parent)
+    loader = PredictionLoader(build, parent)
     loader.start()
     wait_for(lambda: loader._job.done)
-    assert calls == ["freeze"]
+    assert seen == [collector_during_build]
+    assert calls == expected
+    assert gc.isenabled()
 
 
-def test_overlapping_builds_restore_the_settings_the_first_one_found(qapp):
+def test_overlapping_builds_restore_the_settings_the_first_one_found(qapp, manage_gc):
     """Only the last build out restores, so the order they end in is moot."""
     before_interval = sys.getswitchinterval()
     gates = [threading.Event(), threading.Event()]
@@ -575,7 +603,9 @@ def test_overlapping_builds_restore_the_settings_the_first_one_found(qapp):
     assert gc.isenabled()
 
 
-def test_a_build_entering_during_the_last_ones_restoration_waits_for_it(qapp, monkeypatch):
+def test_a_build_entering_during_the_last_ones_restoration_waits_for_it(
+    qapp, monkeypatch, manage_gc
+):
     """The last build out restores the collector under the settings lock.
 
     Restored after releasing it, a build arriving in that gap saw no active

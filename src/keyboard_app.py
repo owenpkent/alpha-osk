@@ -71,6 +71,7 @@ from .platform import (
     window_band,
     windows_window,
 )
+from .prediction import loader as prediction_loader
 from .study_bridge import StudyBridge
 from .telemetry_bridge import TelemetryBridge
 
@@ -1168,6 +1169,9 @@ def main() -> int:
         bridge.shutdown()
 
     app.aboutToQuit.connect(_on_about_to_quit)
+    # Pause the collector while the engine builds, then freeze the engine's
+    # long-lived objects out of later collections (see prediction/loader.py).
+    prediction_loader.manage_gc_during_builds()
     QTimer.singleShot(0, bridge.startPredictionLoading)
     _ = (quiet_restore, shell_popup_yield, raise_on_press)
 
