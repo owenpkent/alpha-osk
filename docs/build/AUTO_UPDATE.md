@@ -174,13 +174,17 @@ So the floor is ~5 s and the ceiling is ~245 s. Real installs land at ~15-30 s o
 
 **Layer 1: pre-update expectation-setting in the live OSK.** Before `updater.download_and_install` spawns the installer (after download + signature verify succeed), it invokes a new optional `on_installer_launching` callback. The bridge wires this to emit `updateInstallHandoffPending(version)` and then sleep 1.8 s in the worker thread, so the toast paints and is legible before the installer's taskkill arrives. The QML side adds an `updateStartingToast` Popup ("Installing v1.0.X. The keyboard will disappear briefly and come back.") modeled on the existing `updateAppliedToast`. Worth noting: the toast deliberately has no auto-close timer, because the installer's taskkill closes the whole process within ~1-2 s anyway, and a timer that fires just before the taskkill would leave the user with the same silence we're trying to avoid.
 
-**Layer 2: visible relauncher splash during the gap.** `_update_relauncher` grew a `--show-splash` flag that the production caller (`updater._spawn_relauncher`) always passes. When the flag is set, `run_relauncher` dispatches to `_run_with_splash` instead of the original `_run_headless`. The splash is a frameless `WindowStaysOnTopHint` `QWidget` (not `QSplashScreen`, the latter's image-background model didn't fit the text-and-progress display we wanted). The polling logic was refactored into a `QTimer` state machine driven by `_poll_parent` → `_start_new_exe_phase` → `_poll_new_exe` → `_launch`, with a new `_new_exe_ready` single-shot helper replacing the blocking `_wait_for_new_exe` poll loop so the event loop can repaint between checks. Phase-aware messages: "Waiting for the installer to finish…" → "Installing files…" → "Launching the new keyboard…" → "Done!" (800 ms dwell so the splash doesn't vanish a frame before the new OSK draws its first window). Failure paths surface a "Find Alpha-OSK in your Start Menu" message for 6 s instead of vanishing silently. Splash colours match the in-app toast (`#1e3354` background, `#4a8eff` border, `#7ec8ff` title, `#cfe0ff` body) so it visually belongs to Alpha-OSK rather than looking like a stray system dialog.
+**Layer 2: visible relauncher splash during the gap.** *(The phases, the dwell, the close
+button and the failure message described in this layer and the next few paragraphs are
+superseded by *The helper is its own exe, and the update screen never goes away* at the
+end of this file; the splash is now a state machine that opens at the UAC prompt, ends
+when the new keyboard window is visible, and never auto-closes a failure.)* `_update_relauncher` grew a `--show-splash` flag that the production caller (`updater._spawn_relauncher`) always passes. When the flag is set, `run_relauncher` dispatches to `_run_with_splash` instead of the original `_run_headless`. The splash is a frameless `WindowStaysOnTopHint` `QWidget` (not `QSplashScreen`, the latter's image-background model didn't fit the text-and-progress display we wanted). The polling logic was refactored into a `QTimer` state machine driven by `_poll_parent` → `_start_new_exe_phase` → `_poll_new_exe` → `_launch`, with a new `_new_exe_ready` single-shot helper replacing the blocking `_wait_for_new_exe` poll loop so the event loop can repaint between checks. Phase-aware messages: "Waiting for the installer to finish…" → "Installing files…" → "Launching the new keyboard…" → "Done!" (800 ms dwell so the splash doesn't vanish a frame before the new OSK draws its first window). Failure paths surface a "Find Alpha-OSK in your Start Menu" message for 6 s instead of vanishing silently. Splash colours match the in-app toast (`#1e3354` background, `#4a8eff` border, `#7ec8ff` title, `#cfe0ff` body) so it visually belongs to Alpha-OSK rather than looking like a stray system dialog.
 
 If the splash path raises (PySide6 import error, no display server), `run_relauncher` logs and falls back to `_run_headless` rather than aborting the relaunch, better to silently relaunch than to leave the user with nothing.
 
 **Headless path preserved.** `_run_headless` is the original blocking-poll implementation, kept intact. Tests target it (so they don't have to stand up a `QApplication`), and it serves as the splash-failure fallback. Production never reaches it on a healthy machine because `--show-splash` is always passed.
 
-**Dismiss button.** The splash has a small ✕ in the top-right corner that *hides* the splash without aborting the relaunch, the user is dismissing the visual, not the work. Polling continues invisibly so the new OSK still launches when ready. A real-world test session left a splash stuck at "Installing files…" for the full `_NEW_EXE_TIMEOUT_S` window because dev mode (see below) had no escape; the dismiss button is the user-facing safety valve.
+**Dismiss button (removed).** The splash used to have a small ✕ in the top-right corner that *hides* the splash without aborting the relaunch, the user is dismissing the visual, not the work. Polling continues invisibly so the new OSK still launches when ready. A real-world test session left a splash stuck at "Installing files…" for the full `_NEW_EXE_TIMEOUT_S` window because dev mode (see below) had no escape; the dismiss button is the user-facing safety valve.
 
 **Dev-mode short-circuit.** `updater._spawn_relauncher` passes `--target-exe sys.executable` in dev mode (since there's no real install dir to poll). The splash's `_new_exe_ready` check then waits for `python.exe`'s mtime to advance past parent-death, which never happens, so the splash would sit at "Installing files…" until the 180 s timeout. New `_is_dev_target()` helper detects target paths whose basename starts with `python` / `pythonw` and routes those straight to headless. The check is gated only on the target-exe basename, so a real production install (which always points at `alpha-osk.exe`) is unaffected. This was the original cause of the stuck-splash incident, discovered immediately after the initial commit and patched the same session.
 
@@ -301,6 +305,11 @@ diagnosis.
 
 ## The helper is a renamed copy in %TEMP% (1.5.1)
 
+> **Superseded in part.** The *rename* stopped working in 1.6.0, when the main exe began
+> requesting UIAccess and `CreateProcess` started refusing to run it from `%TEMP%`
+> (WinError 740). The helper is now its own exe; see the last section. The image-name
+> and install-dir reasoning below still holds and still governs where it runs.
+
 Two production defects were found together on 2026-09-18, from one machine's
 evidence: `relauncher.log` had **no production entry ever** (only dev runs),
 and the installed `alpha-osk.exe` carried an mtime two days *older* than the
@@ -367,3 +376,158 @@ location, snapshot in the argv, sweep, non-fatal staging failure) and
 `tests/test_update_relauncher.py::TestAFreshInstallIsSeenThroughItsBuildTimestamp`
 (the build-stamped-mtime case end to end, plus the no-snapshot fallback in
 both directions).
+
+## The helper is its own exe, and the update screen never goes away (unreleased)
+
+**Owner's requirement: an update screen on screen from the moment the keyboard
+goes away until the new keyboard window is actually visible, so it never looks
+like it is not coming back.** Four defects stood between the 1.5.1 design and
+that, found from the production log of 2026-10-05 (13:18:53, "Failed to spawn
+update relauncher: [WinError 740] The requested operation requires
+elevation") and a read of the splash code.
+
+### 1. The helper could not start (WinError 740)
+
+Since 1.6.0 (#159) the main exe's manifest requests `uiAccess="true"`. The
+1.5.1 helper was that exe renamed and run from `%TEMP%`, and `CreateProcess`
+refuses a UIAccess image outside a secure location (Program Files, System32;
+`%TEMP%` is neither) with WinError 740. So from 1.6.0 **no update screen ever
+appeared**: the spawn failed, was logged and swallowed (the install is not
+worth aborting for it), and the keyboard returned only through
+`installer.nsh`'s `Exec explorer.exe` fallback after a 20-30 s blank gap.
+
+The helper is now a **second exe, `alpha-osk-relauncher.exe`, in the same
+PyInstaller bundle** (`build/windows/alpha-osk.spec`: a second `Analysis` /
+`EXE` with `uac_uiaccess=False`, both in the one `COLLECT`, so they share
+`_internal`). Entry script `build/relauncher_entry.py`, which calls
+`run_relauncher` and nothing else of the launcher's startup. PyInstaller 6
+writes `requestedExecutionLevel` from the flags, not from the manifest file,
+so `build.py::verify_helper_does_not_request_uiaccess` reads the built
+helper's manifest back (the same `manifest_check.py` reader the keyboard's
+guard uses) and fails the build unless it says `uiAccess="false"`; it runs
+beside `verify_exe_requests_uiaccess` before anything is signed, and again in
+`verify_build`. `sign_directory` signs every `.exe` under `dist/`, so the
+helper is signed with no list to forget; `verify_build` now verifies its
+signature too.
+
+What did **not** change, because each half is still load-bearing:
+
+* the helper's image name is not `alpha-osk.exe` (the installer's taskkill and
+  `tasklist` poll match that name exactly; the NSIS tests now pin that no
+  image name it matches carries a wildcard or prefix), and
+* it runs from the `%TEMP%` stage, never the install dir.
+
+The stage is now `copytree` of the install **minus `alpha-osk.exe`** (nothing
+runs it) with the helper exe already in place: no rename. An install made
+before the helper existed has no `alpha-osk-relauncher.exe`; the spawn logs
+that and returns None, and the installer's explorer fallback carries the
+relaunch as before. The installer's file list is generated from `dist/`, so
+the helper is installed beside the main exe and `Delete`d by the uninstaller
+with no special case.
+
+**The update *to* this version still runs the old broken helper**, as did
+every update before it since 1.6.0 (it is a copy taken from the version that
+*starts* the update). The fix is first visible on the update *from* the release that
+ships it to the one after.
+
+### 2. The timeouts started at spawn, before the UAC prompt
+
+The helper's 60 s parent-exit wait began when it was spawned, which is before
+the elevation prompt appears. A slow approval ran it out (exit 2), and a
+declined prompt left a splash that silently expired.
+
+The updater now keeps a handle on the helper (`updater._RelauncherHandle`) and
+talks to it through **marker files in the helper's stage directory**
+(`update_signals`), because a file outlives the keyboard, which the installer
+kills moments after launching:
+
+* `installer-launched`, written the instant `_launch_installer` returns
+  success. **Every timeout starts counting from this mark**, including the
+  300 s whole-run ceiling. Until it, the screen says "Waiting for you to
+  approve the update" for up to `_APPROVAL_TIMEOUT_S` (10 minutes, which only
+  bounds a parent that died; the updater's own `ShellExecuteW` blocks until
+  the prompt is answered).
+* `cancel`, written by `download_and_install`'s `finally` on any exit that is
+  not a launched installer (declined prompt, failed launch, a raise). The
+  helper leaves without a word; the keyboard's own toast reports the failure.
+
+A parent that vanished without a marker counts as launched: the installer's
+taskkill can land in the microseconds between the installer starting and the
+marker being written, and a real crash costs only a pass through the later
+waits, which end in a failure screen.
+
+### 3. "Done" fired when the process existed, not when the window did
+
+The helper called the launch done once an `alpha-osk.exe` process showed in the
+process list, before its window was drawn. It now waits for the new keyboard to
+say so: after `_apply_window_flags` has styled the window,
+`keyboard_app._announce_when_painted` sets the named event
+`Local\AlphaOSK.KeyboardShown` on the **first frame swap** (with a 3 s fallback
+timer for a window restored minimized, which renders none). The keyboard
+*creates* the event (manual-reset, handle kept for the process's life); the
+helper only *opens* it for `SYNCHRONIZE` each tick until it exists. Reversed,
+the helper would ask for write access to an object the keyboard may have
+created with a higher integrity label, and a lower-integrity opener is refused
+write. This also covers the installer's own explorer fallback: whichever
+keyboard comes up first, the event fires. If the event is already set when the
+helper reaches *Starting*, it launches nothing.
+
+The headless fallback (Qt unavailable) still confirms by process existence: it
+has no screen for "visible" to be about.
+
+### 4. The screen itself
+
+`UpdateFlow` is the state machine, pure and Qt-free (the clock and every probe
+are injected, so the tests drive it with a fake clock): *Approve* -> *Closing
+the keyboard* -> *Installing Alpha-OSK x.y.z* -> *Starting the keyboard* ->
+*Done* (800 ms), with an indeterminate bar. The window:
+
+* **opens at once**, centred on the keyboard it replaces: the parent passes
+  `--anchor-rect x,y,w,h` (physical pixels from `GetWindowRect`, read on the Qt
+  thread in `KeyboardBridge.installUpdate`), and the helper centres on that
+  rectangle's own monitor work area, clamped inside it
+  (`centred_position`, `windows_window.monitor_work_area_at`). It is in physical
+  pixels on both ends because both processes are per-monitor DPI aware and Qt's
+  logical coordinates disagree across mixed-scale monitors. No anchor (a
+  minimized keyboard) means the primary screen.
+* has **no close or hide control while working**, and ignores `WM_CLOSE`;
+* is a frameless tool window that **never takes focus** (`WS_EX_NOACTIVATE` via
+  `windows_window.apply_extended_styles`) and re-asserts the topmost band every
+  second (`set_window_band`), so the installer's windows cannot bury it;
+* ends the event loop with `app.exit(0)`, **not `quit()`**: Qt 6's `quit()`
+  first sends a close event to every window and is abandoned if one ignores it,
+  and this window ignores them all on purpose. (This is why the first offscreen
+  test hung: the old splash survived because its `closeEvent` hid the window
+  instead.)
+* **a failure stays up until the user acts.** The message names what went wrong
+  and the buttons are large (64 and 56 px tall): **Start Alpha-OSK** (launched
+  through `explorer.exe`, as `_launch_command` does, so UIAccess works),
+  **Open log folder** (`CREATE_NO_WINDOW`; it holds `alpha-osk.log` and
+  `relauncher.log`) and **Close**. The 300 s ceiling ends on this screen, never
+  a silent exit. An exception inside a probe is shown the same way rather than
+  freezing the screen.
+
+Exit codes: 2 parent never closed, 3 new exe never appeared, 4 launch failed or
+no window within `_KEYBOARD_SHOWN_TIMEOUT_S` (60 s), 5 cancelled, 6 never
+approved.
+
+### Not verified without a real signed build
+
+None of the following can be exercised by the test suite and each needs one pass
+on a signed installer: that the two-`Analysis` `COLLECT` de-duplicates the shared
+binaries into one `_internal` and produces a working helper; that the staged
+helper actually starts from `%TEMP%`; the cross-process event (integrity labels
+between a UIAccess keyboard and the helper); placement on a mixed-DPI
+multi-monitor setup; and that the screen survives the installer's taskkill, its
+silent install and the old uninstaller. The spec's executable shape, the manifest
+guards, the marker and event protocol, the state machine and the window (offscreen,
+in a child process) are covered by tests.
+
+Pinned by `tests/test_update_relauncher.py` (`UpdateFlow`, placement, the
+headless approval wait, the window offscreen), `tests/test_updater.py`
+(`TestRelauncherSpawn`, `TestTheHelperIsToldWhatHappened`),
+`tests/test_update_signals.py`, `tests/test_keyboard_app.py`
+(`TestTheKeyboardAnnouncesItsWindow`), `tests/test_windows_uiaccess_manifest.py`
+(the spec's two EXEs, both manifest guards, signing coverage) and
+`tests/test_windows_installer.py` (the helper is installed and removed, and no
+image name the installer matches can reach it).

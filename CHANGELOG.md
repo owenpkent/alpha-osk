@@ -4,6 +4,9 @@ All notable changes to Alpha-OSK are documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+- **The update screen is on screen from the moment the keyboard goes away until the new keyboard is visible.** Since 1.6.0 it never appeared at all: the helper that shows it was the main exe renamed and run from the temp folder, and Windows will not start an exe that requests UIAccess from there (error 740), so every update left a blank gap of 20 to 30 seconds. The helper is now its own plain exe (`alpha-osk-relauncher.exe`, built without UIAccess, and the build fails if its manifest ever asks for it). The screen opens centred on the keyboard it replaces, says "Waiting for you to approve the update" while the Windows prompt is up (its timeouts only start once you approve, and a declined prompt closes it quietly), then walks closing, installing and starting, and says Done only when the new keyboard window is actually drawn. It cannot be closed while it works, never takes focus, and keeps itself above the installer. A failure no longer vanishes after six seconds: it stays up with large Start Alpha-OSK, Open log folder and Close buttons. The update that delivers this still runs the old helper, so the improvement shows from the update after.
+
 ## [1.7.0] (2026-10-05)
 
 ### Added
