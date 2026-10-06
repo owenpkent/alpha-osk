@@ -537,6 +537,9 @@ class _FakeSignal:
     def connect(self, fn) -> None:
         self.slots.append(fn)
 
+    def disconnect(self, fn) -> None:
+        self.slots.remove(fn)
+
     def emit(self) -> None:
         for fn in list(self.slots):
             fn()
@@ -580,6 +583,21 @@ class TestTheKeyboardAnnouncesItsWindow:
         for _, fn in timers:
             fn()
         assert calls == [1], "only the first of the swap and the timer counts"
+
+    def test_the_first_frame_lets_go_of_every_later_one(self, announced) -> None:
+        """frameSwapped fires for the life of the window; once is all it takes."""
+        root = _FakeRoot()
+        keyboard_app._announce_when_painted(root)
+        assert len(root.frameSwapped.slots) == 1
+        root.frameSwapped.emit()
+        assert root.frameSwapped.slots == []
+
+    def test_the_fallback_also_lets_go_of_the_frame_signal(self, announced) -> None:
+        _, timers = announced
+        root = _FakeRoot()
+        keyboard_app._announce_when_painted(root)
+        timers[0][1]()
+        assert root.frameSwapped.slots == []
 
     def test_a_window_that_never_swaps_is_announced_by_the_fallback(self, announced) -> None:
         """A keyboard restored minimized renders no frame; the helper must not be

@@ -926,13 +926,21 @@ def _announce_when_painted(root: QWindow) -> None:
     on the event, and creating it costs nothing).
     """
     fired = threading.Event()
+    frame_swapped = getattr(root, "frameSwapped", None)
 
     def _fire(*_args: object) -> None:
-        if not fired.is_set():
-            fired.set()
-            update_signals.announce_keyboard_shown()
+        if fired.is_set():
+            return
+        fired.set()
+        # frameSwapped fires on every frame for the life of the window, and
+        # each one would otherwise cost a Python call for nothing.
+        if frame_swapped is not None:
+            try:
+                frame_swapped.disconnect(_fire)
+            except (RuntimeError, TypeError):
+                pass
+        update_signals.announce_keyboard_shown()
 
-    frame_swapped = getattr(root, "frameSwapped", None)
     if frame_swapped is not None:
         frame_swapped.connect(_fire)
     QTimer.singleShot(_SHOWN_FALLBACK_MS, _fire)
