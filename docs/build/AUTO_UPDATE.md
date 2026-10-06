@@ -492,8 +492,9 @@ the keyboard* -> *Installing Alpha-OSK x.y.z* -> *Starting the keyboard* ->
   minimized keyboard) means the primary screen.
 * has **no close or hide control while working**, and ignores `WM_CLOSE`;
 * is a frameless tool window that **never takes focus** (`WS_EX_NOACTIVATE` via
-  `windows_window.apply_extended_styles`) and re-asserts the topmost band every
-  second (`set_window_band`), so the installer's windows cannot bury it;
+  `windows_window.apply_extended_styles`) and, from the installer's launch on
+  (not while the UAC prompt is up, see section 6), re-asserts the topmost band
+  every second (`set_window_band`), so the installer's windows cannot bury it;
 * ends the event loop with `app.exit(0)`, **not `quit()`**: Qt 6's `quit()`
   first sends a close event to every window and is abandoned if one ignores it,
   and this window ignores them all on purpose. (This is why the first offscreen
@@ -527,6 +528,126 @@ Exit codes: 2 parent never closed, 3 new exe never appeared, 4 launch failed or
 no window within `_KEYBOARD_SHOWN_TIMEOUT_S` (60 s), 5 cancelled, 6 never
 approved.
 
+### 5. The window can be moved
+
+For a user who cannot hold a precise drag, the update window has the
+keyboard's two ways to move, both in physical pixels
+(`src/update_window_move.py` is the pure half: `WindowMover`, `clamp_to_desktop`).
+
+* **Drag**: press on the body, move, release.
+* **Carry**: the always-visible **Move this window** button (48 px tall) picks
+  the window up; it then follows the pointer with no button held (a 16 ms timer
+  reads `GetCursorPos`), a **left click puts it down**, a **right click puts it
+  back** where it was. A child overlay covers the window while it is carried, so
+  the putting-down click cannot land on a button. This is `qml/Main.qml`'s
+  `windowMoveOverlay` semantics, with one difference: the window goes to
+  `grab_window + (cursor - grab_cursor)` computed from the absolute cursor, so
+  there is nothing to drift, and the pointer always stays on the window (the
+  click that puts it down always lands on it). The clamp is applied to that
+  unclamped position for display only and never fed back, the same rule the
+  keyboard states for its snapped value.
+* The clamp is the **whole virtual desktop** (every monitor, so a monitor left
+  of the primary is reachable), and a window whose centre fell in a gap of an
+  L-shaped arrangement is pulled onto the nearest monitor.
+* Once moved, the failure screen (which is taller) grows in place and is only
+  kept on the desktop, rather than being re-centred over the user's choice.
+* It still never takes focus and still has no close control while working.
+
+### 6. Not topmost while the UAC prompt is up
+
+`UpdateFlow.wants_topmost` is false in *Approve* and true from *Closing* on (and
+on a failure). With the consent UI on the secure desktop nothing of ours is
+visible anyway; without it a topmost window could sit over the dialog the user
+has to answer. The band is managed through Win32 only (`apply_extended_styles`
+at start, `set_window_band` on the phase change); the window carries no
+`WindowStaysOnTopHint`, since the band changes with the phase. In *Approve* the
+window is therefore behind the keyboard (which is in the UIAccess band), so it
+is first seen when the installer launches. It is the price of not covering a
+consent prompt.
+
+### 7. Start Alpha-OSK waits for a running installer
+
+The failure timeout can be shorter than a slow install, and the screen then
+offers **Start Alpha-OSK**. Pressing it while the installer is still going would
+launch the old exe, or a half-written new one, mid-install. The helper is told
+the installer's image name (`--installer-image`, `Alpha-OSK-Setup-<ver>.exe`,
+the asset name) and `installer_busy` is true while that process is alive *or*
+the target exe is still open for writing. `UpdateFlow.request_start()` then
+refuses, says "The installer is still running. The keyboard starts when it
+finishes.", remembers the press, and `step()` raises `launch_requested` once the
+installer is gone. An unreadable process list counts as not busy: this probe
+only ever holds something back, and must never block the user for good.
+
+### 8. Staging, the sweep, and the cost of an update
+
+**Staging copies only what the helper needs.** The whole bundle (250 MB, 2,968
+files) used to be copied to `%TEMP%` before the UAC prompt: 1.5 s warm, 6.8 s
+cold (the verifier's figure). `alpha-osk.spec` now writes
+`_internal/relauncher-files.txt` from the **helper's own PyInstaller
+analysis** (its binaries and data, the complete answer to "what does this exe
+need to start"), minus the Qt families it provably does not use (QML and Quick,
+Pdf, the on-screen-keyboard module, Network and its plugins, software OpenGL,
+touch input): 191 files, 81 MB. `update_stage.stage_bundle` copies that list;
+no list, an entry that could leave the bundle, a listed file that is missing or
+a list without the helper exe all fall back to the whole bundle, so the worst a
+bad list costs is the old speed. The copy starts on a worker thread when the
+download starts (`updater._begin_staging` / `_StagingJob`, joined at the spawn,
+removed if the download or the signature fails), so it is off the critical path
+altogether.
+
+**The list is proved at build time, never trusted.**
+`build.py::verify_helper_stage_runs` stages the list into a scratch directory
+with the production code and runs the staged helper with `--self-test`
+(`run_self_test`: forces Qt's offscreen platform, builds and paints the real
+widget, loads the `qwindows` and Windows-style plugins the offscreen platform
+cannot reach, touches the ctypes helpers, reports through a file), with the
+environment scrubbed to the system directory so a DLL on the builder's PATH
+cannot make an incomplete stage pass. It fails the build on a missing list, a
+failing self-test or a timeout. Removing `Qt6Widgets.dll` or `qwindows.dll`
+from a stage makes it fail with a named reason.
+
+**Never launch a frozen bundle on the interactive desktop to test it.** A stage
+that cannot start does not fail quietly: PyInstaller's bootloader raises a modal
+"Failed to load Python DLL" `MessageBox`, offscreen Qt cannot prevent it (it is
+the bootloader's, before Python exists), and it waits for a click. The build
+check therefore runs the staged helper on a **desktop created for it**
+(`build/windows/hidden_desktop.py`: `CreateDesktopW`, `CreateProcessW` with
+`lpDesktop`, kill by the pid it started on timeout, `CloseDesktop`); it raises
+rather than falling back to the visible desktop. `tests/test_hidden_desktop.py`
+pins that the child really is on the private desktop, and that nothing in
+`verify_helper_stage_runs` uses `subprocess`.
+
+**The sweep never touches a live helper.** `update_stage.purge_stale_stages`
+skips a stage whose `helper.lock` is still held (the helper holds it open
+exclusively for as long as it runs, and the OS drops it however the process
+dies, which a pid in a file cannot offer) and any stage changed in the last 15
+minutes (the gap before the helper takes its lock, and a quick retry). Before,
+`rmtree(ignore_errors=True)` deleted every unmapped file of a still-running
+helper, including its `installer-launched` marker.
+
+**The fixed waits.** The pre-install toast no longer sleeps 1.8 s; it gets 0.3 s
+to paint and the launch then waits for the helper to write `ui-shown` after its
+first paint (ceiling 3 s, `_RelauncherHandle.wait_until_visible`), so the update
+screen is on screen before the keyboard goes away without a fixed delay. The
+helper's 5 s pause after the keyboard closes is gone whenever it has the exe
+mtime snapshot (the readiness rule is exact and `alpha-osk.exe` is extracted
+last), and the "Done" dwell is 400 ms (the new keyboard is already painted and
+this screen is topmost over part of it).
+
+| Phase, click Install to keyboard up | Before | After | Basis |
+|---|---|---|---|
+| Download (about 85 MB) | link speed | link speed | unchanged |
+| Stage copy | 1.5 s warm / 6.8 s cold, after the download | 0.13 s warm, overlapped with the download | measured warm (0.12-0.13 s subset vs 1.47-1.48 s full, 81 MB vs 249 MB); cold subset estimated at a third of 6.8 s; the cold figure before is the verifier's |
+| Signature check (PowerShell) | not measured | unchanged | not measured |
+| Toast dwell, then wait for the helper window | 1.8 s fixed | about 0.3-0.5 s (0.3 s toast, helper first paint 0.12 s warm / 0.41 s cold from spawn) | first paint measured on the offscreen platform, so a real window is estimated a little slower |
+| UAC | the user | the user | unchanged |
+| Installer closes the keyboard (`taskkill`, 200 ms polls) | under 1 s to a few seconds | unchanged | estimated; PR #180 makes the keyboard quit at once |
+| Helper pause after the keyboard closes | 5 s, overlapping the install | 0 | read from the code; it only cost time when the install ended inside 5 s of the kill |
+| Uninstall old, extract 250 MB, write exe last | dominates | unchanged | not measured (no installer was run) |
+| Readiness poll | 250 ms ticks | unchanged | read from the code |
+| Launch via Explorer, keyboard startup to `KeyboardShown` | seconds | unchanged | not measured |
+| "Done" dwell | 800 ms | 400 ms | read from the code |
+
 ### Not verified without a real signed build
 
 Checked on 2026-10-06 against a real **unsigned** PyInstaller build of this
@@ -553,14 +674,23 @@ since it requests no UIAccess); the cross-process event when the setter is the
 real UIAccess keyboard rather than a medium-integrity test process; placement
 on a mixed-DPI multi-monitor setup; the failure screen's buttons; and that the
 screen survives the installer's taskkill, its silent install and the old
-uninstaller. The spec's executable shape, the manifest guards, the marker and
+uninstaller. Also unverified for the 2026-10-06 changes (sections 5 to 8): the
+window's real (non-offscreen) first-paint time, the carry and drag on a real
+window server (the offscreen tests drive the pointer and the Win32 calls through
+fakes), the band change at the installer's launch, Start refusing during a real
+install, and the whole-update wall clock, since no installer was run. The
+staged helper itself was run only on the offscreen platform and on a hidden
+desktop. The spec's executable shape, the manifest guards, the marker and
 event protocol, the state machine and the window (offscreen,
 in a child process) are covered by tests.
 
 Pinned by `tests/test_update_relauncher.py` (`UpdateFlow`, placement, the
 headless approval wait, the window offscreen), `tests/test_updater.py`
 (`TestRelauncherSpawn`, `TestTheHelperIsToldWhatHappened`),
-`tests/test_update_signals.py`, `tests/test_keyboard_app.py`
+`tests/test_update_signals.py`, `tests/test_update_stage.py`,
+`tests/test_update_window_move.py`, `tests/test_update_relauncher_window.py`,
+`tests/test_hidden_desktop.py`, `tests/test_helper_stage_build.py`,
+`tests/test_keyboard_app.py`
 (`TestTheKeyboardAnnouncesItsWindow`), `tests/test_windows_uiaccess_manifest.py`
 (the spec's two EXEs, both manifest guards, signing coverage) and
 `tests/test_windows_installer.py` (the helper is installed and removed, and no
