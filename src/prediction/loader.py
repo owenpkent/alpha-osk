@@ -33,7 +33,16 @@ PredictorFactory = Callable[[Callable[[], bool]], HybridPredictor]
 # 1 ms a key still reached the synthesiser ~4.5 ms late (median) and the
 # next frame ~10 ms late.  At 0.1 ms both match an idle build, and the build
 # itself takes no measurably longer (2.7 s either way, real model).
-_BUILD_SWITCH_INTERVAL_S = 0.0001
+#
+# Windows gets 1 ms, never less: CPython's Windows condition variable takes
+# its timeout in whole milliseconds and truncates, so 0.1 ms becomes 0 and a
+# thread waiting for the GIL stops waiting at all, asks for it back on every
+# turn and spins.  On a core or two shared with other work that starved the
+# worker threads of this suite for whole seconds (reproduced pinned to one
+# core: nine tests in test_prediction_startup.py timed out at 0.1 ms and
+# passed at 1 ms or the default), and it would do the same to the build on a
+# small user machine.
+_BUILD_SWITCH_INTERVAL_S = 0.001 if sys.platform == "win32" else 0.0001
 
 # The switch interval cannot preempt the garbage collector: a collection is
 # one C call that holds the GIL from start to finish, and the build's few

@@ -521,6 +521,19 @@ def manage_gc(monkeypatch):
         gc.enable()
 
 
+def test_the_build_interval_survives_windows_whole_millisecond_waits():
+    """CPython on Windows waits for the GIL in whole milliseconds, truncated,
+    so an interval under 1 ms is 0 there and every waiting thread spins.  On
+    a one- or two-core CI runner that starved this file's worker threads
+    until their 5 s waits expired.  The inverse: elsewhere the shorter value
+    is kept, since it is what keeps a keystroke from being late.
+    """
+    if sys.platform == "win32":
+        assert _BUILD_SWITCH_INTERVAL_S >= 0.001
+    else:
+        assert _BUILD_SWITCH_INTERVAL_S == pytest.approx(0.0001)
+
+
 def test_the_collector_is_paused_for_the_build_and_resumed_after(qapp, manage_gc):
     """A collection holds the GIL for its whole run, which no switch interval
     can interrupt; the build's full collections were the 50-90 ms key stalls.
