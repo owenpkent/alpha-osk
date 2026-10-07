@@ -30,6 +30,8 @@ import re
 
 APP_NAME = "Alpha-OSK"
 EXE_NAME = "alpha-osk.exe"
+HELPER_EXE_NAME = "alpha-osk-relauncher.exe"
+HELPER_DESCRIPTION = "Alpha-OSK Updater"
 # Must match APP_PUBLISHER in build.py: the installer's version block and the
 # exe's are read side by side in the file properties dialog.
 PUBLISHER = "OK Studio Inc."
@@ -50,16 +52,23 @@ def version_tuple(version: str) -> tuple[int, int, int, int]:
     return (major, minor, patch, 0)
 
 
-def version_info_text(version: str) -> str:
-    """The ``VSVersionInfo`` source for ``EXE(version=...)``."""
+def version_info_text(
+    version: str, *, description: str = APP_NAME, exe_name: str = EXE_NAME
+) -> str:
+    """The ``VSVersionInfo`` source for ``EXE(version=...)``.
+
+    The update helper gets its own description and original filename, so
+    Task Manager and the file properties dialog do not show two things
+    called "Alpha-OSK".
+    """
     numeric = version_tuple(version)
     strings = [
         ("CompanyName", PUBLISHER),
-        ("FileDescription", APP_NAME),
+        ("FileDescription", description),
         ("FileVersion", version),
-        ("InternalName", APP_NAME.lower()),
+        ("InternalName", description.lower().replace(" ", "-")),
         ("LegalCopyright", COPYRIGHT),
-        ("OriginalFilename", EXE_NAME),
+        ("OriginalFilename", exe_name),
         ("ProductName", APP_NAME),
         ("ProductVersion", version),
     ]

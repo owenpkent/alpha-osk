@@ -1121,18 +1121,27 @@ class TestTheRowsStackLikeAPhysicalKeyboard:
         self._settled(root, compact)
 
         digits = self._top(self._digits(root, compact))
-        for name in ("extraFunctionRowPanel", "functionRowPanel"):
-            panel = self._panel(root, name)
-            assert panel.isVisible() and panel.width() > 0, f"{name} not rendered"
+        # Both toggles are on, so exactly one row shows and the swap key
+        # trades it for the other; whichever shows sits above the digits.
+        for page, shown, hidden in (
+            (1, "functionRowPanel", "extraFunctionRowPanel"),
+            (2, "extraFunctionRowPanel", "functionRowPanel"),
+        ):
+            root.setProperty("functionRowPage", page)
+            _pump_until(lambda: self._panel(root, shown).isVisible())
+            root.grabWindow()
+            QCoreApplication.processEvents()
+            panel = self._panel(root, shown)
+            assert panel.isVisible() and panel.width() > 0, f"{shown} not rendered"
+            assert not self._panel(root, hidden).isVisible(), (
+                f"{hidden} still on screen beside {shown}; one row at a time"
+            )
             assert self._top(panel) < digits, (
-                f"{name} renders at y={self._top(panel):.0f}, below the digits "
+                f"{shown} renders at y={self._top(panel):.0f}, below the digits "
                 f"at y={digits:.0f} (compact={compact}). The F-keys belong "
                 "above the number row, where a physical keyboard puts them."
             )
 
-        assert self._top(self._panel(root, "extraFunctionRowPanel")) < self._top(
-            self._panel(root, "functionRowPanel")
-        ), "F13-F24 must stay above F1-F12, so toggling it never moves F1-F12"
         assert _real_warnings(warnings) == []
 
     @pytest.mark.parametrize("compact", (True, False))
@@ -1141,7 +1150,7 @@ class TestTheRowsStackLikeAPhysicalKeyboard:
 
         The gap between two rows is one `rowSpacing` plus the positioner's
         sub-pixel rounding, so a whole row wedged in there is nowhere near
-        a near miss: an F-row alone is 0.7 of a key tall.
+        a near miss: an F-row alone is a whole key tall.
         """
         root, warnings, _ = qml_root
         self._settled(root, compact)

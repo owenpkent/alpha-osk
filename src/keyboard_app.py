@@ -60,6 +60,7 @@ from PySide6.QtGui import QIcon, QWindow
 from PySide6.QtQml import QQmlApplicationEngine
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
+from . import update_signals
 from .__version__ import __version__
 from .keyboard_bridge import KeyboardBridge
 from .platform import (
@@ -909,22 +910,45 @@ class _KeyboardApplication(QApplication):
         return super().event(e)
 
 
+# If the first frame never swaps (a window restored minimized renders none),
+# the update helper must still be told, or it would sit on its failure screen
+# in front of a keyboard that is in fact running.
+_SHOWN_FALLBACK_MS = 3000
+
+
+def _announce_when_painted(root: QWindow) -> None:
+    """Tell the update helper the keyboard window is on screen.
+
+    After an auto-update the helper's screen stays up until this fires, so
+    it is sent when the window has actually been drawn (the first frame
+    swap), not when the process started or the window object exists. Both
+    the swap and the fallback timer can arrive; only the first counts. A
+    no-op off Windows and when no update is in progress (nothing is waiting
+    on the event, and creating it costs nothing).
+    """
+    fired = threading.Event()
+    frame_swapped = getattr(root, "frameSwapped", None)
+
+    def _fire(*_args: object) -> None:
+        if fired.is_set():
+            return
+        fired.set()
+        # frameSwapped fires on every frame for the life of the window, and
+        # each one would otherwise cost a Python call for nothing.
+        if frame_swapped is not None:
+            try:
+                frame_swapped.disconnect(_fire)
+            except (RuntimeError, TypeError):
+                pass
+        update_signals.announce_keyboard_shown()
+
+    if frame_swapped is not None:
+        frame_swapped.connect(_fire)
+    QTimer.singleShot(_SHOWN_FALLBACK_MS, _fire)
+
+
 def main() -> int:
     """Launch the Alpha-OSK on-screen keyboard."""
-    # CLI dispatch — the post-update relauncher is this same binary,
-    # staged as a renamed copy in %TEMP% (see updater._spawn_relauncher
-    # for why it must be neither named alpha-osk.exe nor run from the
-    # install dir) and invoked with ``--update-relauncher``. It runs as
-    # a detached process owned by the user session, so it can launch
-    # the freshly-installed OSK at user IL after the elevated installer
-    # has exited. Skipping the singleton lock and the QApplication
-    # setup here keeps the helper cheap and side-effect-free; see
-    # ``src/_update_relauncher.py`` for the polling logic and rationale.
-    if "--update-relauncher" in sys.argv:
-        from src._update_relauncher import run_relauncher
-
-        return run_relauncher(sys.argv)
-
     log_path = _configure_logging()
     # Must follow _configure_logging: the hook is only worth anything
     # once there is a file handler for it to write into.
@@ -1082,6 +1106,7 @@ def main() -> int:
     # the top-level QML Window, i.e. a QWindow, at runtime.
     root = cast(QWindow, engine.rootObjects()[0])
     quiet_restore = None
+    shell_close = None
     shell_popup_yield = None
     raise_on_press = None
     if root:
@@ -1089,11 +1114,18 @@ def main() -> int:
         # Top value into the bridge by now, so the very first band is the
         # saved one.
         _apply_window_flags(root, bridge.alwaysOnTop)
+        # The window is styled and shown: let a waiting update screen know
+        # once it is painted (see _announce_when_painted).
+        _announce_when_painted(root)
         # Held for the life of the event loop: Qt does not own a filter
         # installed from Python.  See QuietRestoreFilter for the why.
         quiet_restore = windows_window.install_quiet_restore(
             root, after_restore=lambda: _reapply_band(root, bridge, shell_popup_yield)
         )
+        # Held for the life of the loop too.  The taskbar's Close window quits, as the
+        # tray's Quit does; a UI Automation Close still minimizes.  See
+        # ShellCloseFilter for how the two are told apart.
+        shell_close = windows_window.install_shell_close_quits(root, app.quit)
         # Held for the same reason: it owns the WinEvent callback.
         shell_popup_yield = windows_window.install_shell_popup_yield(
             lambda: _always_on_top_windows(root, lambda: bridge.alwaysOnTop)
@@ -1173,7 +1205,7 @@ def main() -> int:
     # long-lived objects out of later collections (see prediction/loader.py).
     prediction_loader.manage_gc_during_builds()
     QTimer.singleShot(0, bridge.startPredictionLoading)
-    _ = (quiet_restore, shell_popup_yield, raise_on_press)
+    _ = (quiet_restore, shell_close, shell_popup_yield, raise_on_press)
 
     return app.exec()
 

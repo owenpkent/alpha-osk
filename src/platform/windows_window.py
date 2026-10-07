@@ -419,6 +419,117 @@ def set_window_band(hwnd: int, topmost: bool) -> bool:
     return _place(hwnd, _HWND_TOPMOST if topmost else _HWND_NOTOPMOST)
 
 
+def native_window_rect(window: QWindow) -> Optional[tuple[int, int, int, int]]:
+    """``(x, y, width, height)`` of ``window`` in physical screen pixels.
+
+    Read from Win32 rather than Qt's geometry because the update helper is a
+    separate process that places its own window with Win32 too, and Qt's
+    logical (device-independent) coordinates do not agree across monitors of
+    different scale.  None when the window has no handle, is minimized
+    (Windows parks those at -32000), or the call fails.
+    """
+    if sys.platform != "win32":
+        return None
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        user32 = ctypes.windll.user32
+        user32.GetWindowRect.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.RECT)]
+        user32.GetWindowRect.restype = wintypes.BOOL
+        rect = wintypes.RECT()
+        if not user32.GetWindowRect(int(window.winId()), ctypes.byref(rect)):
+            return None
+        if rect.left <= -30000 or rect.top <= -30000:
+            return None
+        return (rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top)
+    except Exception as e:
+        _logger.debug("GetWindowRect failed: %s", e)
+        return None
+
+
+def monitor_work_area_at(x: int, y: int) -> Optional[tuple[int, int, int, int]]:
+    """``(left, top, right, bottom)`` work area of the monitor nearest ``(x, y)``."""
+    if sys.platform != "win32":
+        return None
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        class _MonitorInfo(ctypes.Structure):
+            _fields_ = [
+                ("cbSize", wintypes.DWORD),
+                ("rcMonitor", wintypes.RECT),
+                ("rcWork", wintypes.RECT),
+                ("dwFlags", wintypes.DWORD),
+            ]
+
+        user32 = ctypes.windll.user32
+        user32.MonitorFromPoint.argtypes = [wintypes.POINT, wintypes.DWORD]
+        user32.MonitorFromPoint.restype = wintypes.HANDLE
+        user32.GetMonitorInfoW.argtypes = [wintypes.HANDLE, ctypes.POINTER(_MonitorInfo)]
+        user32.GetMonitorInfoW.restype = wintypes.BOOL
+        monitor_defaulttonearest = 2
+        monitor = user32.MonitorFromPoint(wintypes.POINT(x, y), monitor_defaulttonearest)
+        info = _MonitorInfo()
+        info.cbSize = ctypes.sizeof(_MonitorInfo)
+        if not monitor or not user32.GetMonitorInfoW(monitor, ctypes.byref(info)):
+            return None
+        work = info.rcWork
+        return (work.left, work.top, work.right, work.bottom)
+    except Exception as e:
+        _logger.debug("GetMonitorInfoW failed: %s", e)
+        return None
+
+
+def window_size(hwnd: int) -> Optional[tuple[int, int]]:
+    """``(width, height)`` of ``hwnd`` in physical pixels."""
+    if sys.platform != "win32":
+        return None
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        user32 = ctypes.windll.user32
+        user32.GetWindowRect.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.RECT)]
+        user32.GetWindowRect.restype = wintypes.BOOL
+        rect = wintypes.RECT()
+        if not user32.GetWindowRect(hwnd, ctypes.byref(rect)):
+            return None
+        return (rect.right - rect.left, rect.bottom - rect.top)
+    except Exception as e:
+        _logger.debug("GetWindowRect failed: %s", e)
+        return None
+
+
+def move_window_noactivate(hwnd: int, x: int, y: int) -> bool:
+    """Move ``hwnd`` to physical ``(x, y)`` without resizing, restacking or activating it."""
+    if sys.platform != "win32":
+        return False
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        user32 = ctypes.windll.user32
+        user32.SetWindowPos.argtypes = [
+            wintypes.HWND,
+            wintypes.HWND,
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_int,
+            wintypes.UINT,
+        ]
+        user32.SetWindowPos.restype = wintypes.BOOL
+        swp_nosize, swp_nozorder, swp_noactivate = 0x0001, 0x0004, 0x0010
+        return bool(
+            user32.SetWindowPos(hwnd, 0, x, y, 0, 0, swp_nosize | swp_nozorder | swp_noactivate)
+        )
+    except Exception as e:
+        _logger.debug("SetWindowPos (move) failed: %s", e)
+        return False
+
+
 def raise_window_noactivate(hwnd: int) -> bool:
     """Raise ``hwnd`` to the top of its own band without activating it.
 
@@ -586,6 +697,112 @@ def install_quiet_restore(
         return flt
     except Exception as e:
         _logger.warning("Could not install the quiet-restore filter: %s", e)
+        return None
+
+
+WM_CLOSE = 0x0010
+
+
+class ShellCloseFilter(QAbstractNativeEventFilter):
+    """Make the taskbar's "Close window" quit the app, like the tray's Quit.
+
+    **Why this exists.** ``Main.qml``'s ``onClosing`` turns a close that is
+    not part of a quit into a minimize, so that a switch scanner's UI
+    Automation ``WindowPattern.Close`` cannot leave the keyboard running but
+    unreachable.  That rule also caught the user's own close from the
+    taskbar, which then only minimized the keyboard.
+
+    **How the two are told apart.** Measured on Qt 6.11.1 against a window
+    with the keyboard's flags and styles, driven from another process: the
+    taskbar's jump-list "Close window" sends ``WM_CLOSE`` to the window, and
+    ``WM_SYSCOMMAND(SC_CLOSE)`` (Alt+F4, the system menu) reaches
+    ``DefWindowProc``, which sends ``WM_CLOSE`` too.  ``WindowPattern.Close``
+    sends no window message at all: Qt's UIA provider closes the ``QWindow``
+    directly, and ``onClosing`` fires with no ``WM_CLOSE`` before it.  So a
+    ``WM_CLOSE`` for the keyboard's own window is a close from the shell or
+    the user, and this filter consumes it and starts the ordinary quit (one
+    event-loop turn later, never from inside the message handler).  Every
+    other close still reaches ``onClosing`` and minimizes.
+
+    **What it does not change.** Anything that can post ``WM_CLOSE`` to the
+    window (Task Manager's End task included) could already end the process;
+    this only makes that close a clean quit that saves the model, rather
+    than a minimize.  Other windows, the floating pickers among them, are
+    left alone.
+
+    Written against plain integers so the decision can be tested on any
+    platform, like ``QuietRestoreFilter``.
+    """
+
+    def __init__(
+        self,
+        window: QWindow,
+        quit_app: Callable[[], object],
+        *,
+        defer: Optional[Callable[[Callable[[], None]], None]] = None,
+    ) -> None:
+        super().__init__()
+        self._window = window
+        self._quit_app = quit_app
+        self._defer = defer or (lambda fn: QTimer.singleShot(0, fn))
+
+    def quits(self, hwnd: int, message: int) -> bool:
+        """Whether this message is a shell close of the keyboard to turn into a quit."""
+        if message != WM_CLOSE:
+            return False
+        try:
+            if hwnd != int(self._window.winId()):
+                return False
+        except Exception:
+            return False
+        self._defer(self._quit)
+        return True
+
+    def _quit(self) -> None:
+        _logger.info("Closed from the taskbar or the window's close command: quitting")
+        try:
+            self._quit_app()
+        except Exception as e:
+            _logger.warning("Quit after a shell close failed: %s", e)
+
+    def nativeEventFilter(self, eventType, message):  # type: ignore[no-untyped-def]
+        try:
+            import ctypes
+
+            address = int(message)
+            msg_id = ctypes.c_uint.from_address(address + _MSG_MESSAGE_OFFSET).value
+            if msg_id != WM_CLOSE:
+                return False, 0
+            hwnd = ctypes.c_void_p.from_address(address).value or 0
+            if self.quits(int(hwnd), msg_id):
+                return True, 0
+        except Exception as e:
+            _logger.debug("Shell-close filter could not read a message: %s", e)
+        return False, 0
+
+
+def install_shell_close_quits(
+    window: QWindow, quit_app: Callable[[], object]
+) -> Optional[ShellCloseFilter]:
+    """Make a close of the keyboard from the taskbar quit the app.
+
+    Returns the filter, which the caller must keep a reference to (Qt does
+    not own an event filter installed from Python).  ``None`` off Windows,
+    or if installation failed, which is never a reason to fail startup.
+    """
+    if sys.platform != "win32":
+        return None
+    try:
+        from PySide6.QtCore import QCoreApplication
+
+        app = QCoreApplication.instance()
+        if app is None:
+            return None
+        flt = ShellCloseFilter(window, quit_app)
+        app.installNativeEventFilter(flt)
+        return flt
+    except Exception as e:
+        _logger.warning("Could not install the shell-close filter: %s", e)
         return None
 
 
@@ -1056,3 +1273,84 @@ def set_app_user_model_id(app_id: str) -> None:
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(app_id)
     except Exception as exc:  # pragma: no cover - platform/runtime dependent
         _logger.debug("SetCurrentProcessExplicitAppUserModelID failed: %s", exc)
+
+
+def cursor_position() -> Optional[tuple[int, int]]:
+    """The pointer's position in physical screen pixels, or None if it cannot be read."""
+    if sys.platform != "win32":
+        return None
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        user32 = ctypes.windll.user32
+        user32.GetCursorPos.argtypes = [ctypes.POINTER(wintypes.POINT)]
+        user32.GetCursorPos.restype = wintypes.BOOL
+        point = wintypes.POINT()
+        if not user32.GetCursorPos(ctypes.byref(point)):
+            return None
+        return (point.x, point.y)
+    except Exception as e:
+        _logger.debug("GetCursorPos failed: %s", e)
+        return None
+
+
+def hwnd_origin(hwnd: int) -> Optional[tuple[int, int]]:
+    """The top-left of ``hwnd`` in physical screen pixels."""
+    if sys.platform != "win32":
+        return None
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        user32 = ctypes.windll.user32
+        user32.GetWindowRect.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.RECT)]
+        user32.GetWindowRect.restype = wintypes.BOOL
+        rect = wintypes.RECT()
+        if not user32.GetWindowRect(hwnd, ctypes.byref(rect)):
+            return None
+        return (rect.left, rect.top)
+    except Exception as e:
+        _logger.debug("GetWindowRect failed: %s", e)
+        return None
+
+
+def monitor_rects() -> list[tuple[int, int, int, int]]:
+    """``(left, top, right, bottom)`` of every monitor, in physical pixels.
+
+    Empty when they cannot be listed, which callers treat as "do not clamp".
+    """
+    if sys.platform != "win32":
+        return []
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        user32 = ctypes.windll.user32
+        found: list[tuple[int, int, int, int]] = []
+        callback_type = ctypes.WINFUNCTYPE(
+            wintypes.BOOL,
+            wintypes.HANDLE,
+            wintypes.HDC,
+            ctypes.POINTER(wintypes.RECT),
+            wintypes.LPARAM,
+        )
+
+        def _each(_monitor, _dc, rect, _data):  # type: ignore[no-untyped-def]
+            r = rect.contents
+            found.append((r.left, r.top, r.right, r.bottom))
+            return True
+
+        user32.EnumDisplayMonitors.argtypes = [
+            wintypes.HDC,
+            ctypes.POINTER(wintypes.RECT),
+            callback_type,
+            wintypes.LPARAM,
+        ]
+        user32.EnumDisplayMonitors.restype = wintypes.BOOL
+        callback = callback_type(_each)
+        user32.EnumDisplayMonitors(None, None, callback, 0)
+        return found
+    except Exception as e:
+        _logger.debug("EnumDisplayMonitors failed: %s", e)
+        return []

@@ -34,7 +34,7 @@ def _the_relaunched_keyboard_appears(monkeypatch):
 
 
 class TestProcessAlive:
-    """_process_alive — cross-platform PID check."""
+    """_process_alive â€” cross-platform PID check."""
 
     def test_zero_pid_returns_false(self):
         assert relauncher._process_alive(0) is False
@@ -55,7 +55,7 @@ class TestProcessAlive:
 
 
 class TestWaitForParentExit:
-    """_wait_for_parent_exit — polls until process is gone or timeout."""
+    """_wait_for_parent_exit â€” polls until process is gone or timeout."""
 
     def test_immediate_return_when_already_dead(self):
         with patch.object(relauncher, "_process_alive", return_value=False):
@@ -73,7 +73,7 @@ class TestWaitForParentExit:
 
 
 class TestWaitForNewExe:
-    """_wait_for_new_exe — confirms the install actually wrote a new exe."""
+    """_wait_for_new_exe â€” confirms the install actually wrote a new exe."""
 
     def test_returns_true_when_file_appears_with_fresh_mtime(self, tmp_path):
         target = tmp_path / "alpha-osk.exe"
@@ -86,7 +86,7 @@ class TestWaitForNewExe:
     def test_rejects_stale_mtime(self, tmp_path):
         target = tmp_path / "alpha-osk.exe"
         target.write_bytes(b"binary contents")
-        # Pretend the parent died well after the file was written —
+        # Pretend the parent died well after the file was written â€”
         # that means the file is the OLD exe.
         ref = time.time() + 60
         ok = relauncher._wait_for_new_exe(target, ref, timeout_s=0.6)
@@ -158,6 +158,48 @@ class TestAFreshInstallIsSeenThroughItsBuildTimestamp:
         os.utime(exe, (stale, stale))
         assert relauncher._new_exe_looks_fresh(exe, 0.0, time.time()) is False
 
+
+class TestAnExeStillBeingWrittenIsNotReady:
+    """While the installer writes the exe, its mtime has already changed and its
+    size is already non-zero, so the mtime rule alone says "ready" for the
+    whole write; launching then hands Explorer a half-written image."""
+
+    def _changed_exe(self, tmp_path):
+        exe = tmp_path / "alpha-osk.exe"
+        exe.write_bytes(b"new build")
+        return exe, exe.stat().st_mtime - 86400  # the snapshot differs
+
+    def test_a_file_open_for_writing_is_not_ready(self, tmp_path, monkeypatch):
+        exe, snapshot = self._changed_exe(tmp_path)
+        monkeypatch.setattr(relauncher, "_file_is_open_for_writing", lambda path: True)
+        assert relauncher._new_exe_looks_fresh(exe, snapshot, None) is False
+
+    def test_the_same_file_once_closed_is_ready(self, tmp_path, monkeypatch):
+        exe, snapshot = self._changed_exe(tmp_path)
+        monkeypatch.setattr(relauncher, "_file_is_open_for_writing", lambda path: False)
+        assert relauncher._new_exe_looks_fresh(exe, snapshot, None) is True
+
+    @pytest.mark.skipif(sys.platform != "win32", reason="Win32 share modes")
+    def test_a_real_writer_is_seen_and_its_close_is_too(self, tmp_path):
+        exe, snapshot = self._changed_exe(tmp_path)
+        with open(exe, "ab") as writer:
+            writer.write(b"more")
+            writer.flush()
+            assert relauncher._file_is_open_for_writing(exe) is True
+            assert relauncher._new_exe_looks_fresh(exe, snapshot, None) is False
+        assert relauncher._file_is_open_for_writing(exe) is False
+        assert relauncher._new_exe_looks_fresh(exe, snapshot, None) is True
+
+    @pytest.mark.skipif(sys.platform != "win32", reason="Win32 share modes")
+    def test_a_reader_is_not_mistaken_for_a_writer(self, tmp_path):
+        """An antivirus scan or Explorer reading the icon must not hold it up."""
+        exe, _ = self._changed_exe(tmp_path)
+        with open(exe, "rb"):
+            assert relauncher._file_is_open_for_writing(exe) is False
+
+    def test_a_probe_that_cannot_run_does_not_block_the_relaunch(self, tmp_path):
+        assert relauncher._file_is_open_for_writing(tmp_path / "missing.exe") is False
+
     def test_the_wait_loop_and_the_splash_check_share_the_rule(self, tmp_path):
         # Both entry points must see the production case; a fix applied
         # to only one of them leaves the other burning its timeout.
@@ -209,7 +251,7 @@ class TestAFreshInstallIsSeenThroughItsBuildTimestamp:
 
 
 class TestWriteHandoff:
-    """_write_handoff — drops a JSON breadcrumb for the new OSK to read."""
+    """_write_handoff â€” drops a JSON breadcrumb for the new OSK to read."""
 
     def test_writes_expected_fields(self, tmp_path):
         relauncher._write_handoff(tmp_path, "1.0.16", "1.0.15")
@@ -306,7 +348,7 @@ class TestRunRelauncherIntegration:
         assert rc == 2  # parent-exit timeout
 
     def test_returns_error_when_new_exe_never_appears(self, tmp_path):
-        # Path doesn't exist — install "fails" to write.
+        # Path doesn't exist â€” install "fails" to write.
         target_exe = tmp_path / "alpha-osk.exe"
         config_dir = tmp_path / "config"
 
@@ -365,7 +407,7 @@ class TestRunRelauncherIntegration:
             rc = relauncher.run_relauncher(argv)
 
         assert rc == 4  # launch failed
-        # Handoff should NOT be written if launch failed — would be
+        # Handoff should NOT be written if launch failed â€” would be
         # misleading on the next manual launch.
         assert not (config_dir / "update_handoff.json").is_file()
 
@@ -644,7 +686,7 @@ class TestRemaining:
 
 
 class TestIsDevTarget:
-    """_is_dev_target — distinguishes a real installed alpha-osk.exe
+    """_is_dev_target â€” distinguishes a real installed alpha-osk.exe
     target from a python interpreter target (dev-mode invocation)."""
 
     def test_python_exe_is_dev_target(self):
@@ -667,7 +709,7 @@ class TestIsDevTarget:
 
 
 class TestNewExeReady:
-    """_new_exe_ready — single-shot mirror of _wait_for_new_exe used by
+    """_new_exe_ready â€” single-shot mirror of _wait_for_new_exe used by
     the splash path so it can yield to the Qt event loop between
     checks instead of blocking inside a sleep loop."""
 
@@ -686,7 +728,7 @@ class TestNewExeReady:
         assert relauncher._new_exe_ready(target, after_mtime=None) is True
 
     def test_rejects_stale_exe_when_after_mtime_set(self, tmp_path):
-        # File predates parent death — this is the OLD exe, installer
+        # File predates parent death â€” this is the OLD exe, installer
         # hasn't finished writing yet. Returning True here would race.
         import os as _os
 
@@ -783,7 +825,7 @@ class TestShowSplashFlag:
 
     def test_dev_mode_target_skips_splash(self, tmp_path):
         # When the target_exe is a python interpreter (dev mode), the
-        # splash would sit at "Installing files…" until _NEW_EXE_TIMEOUT_S
+        # splash would sit at "Installing filesâ€¦" until _NEW_EXE_TIMEOUT_S
         # because python.exe never gets a fresh mtime, leaving a stuck
         # window. The dispatcher must short-circuit to headless instead.
         import os as _os
@@ -826,8 +868,8 @@ class TestShowSplashFlag:
 
         assert rc == 0
         assert splash_called == [], (
-            "dev-mode target must NOT spin up the splash — it would "
-            "hang at 'Installing files…' for 3 minutes"
+            "dev-mode target must NOT spin up the splash â€” it would "
+            "hang at 'Installing filesâ€¦' for 3 minutes"
         )
 
     def test_splash_failure_falls_back_to_headless(self, tmp_path):
@@ -961,6 +1003,26 @@ class TestTheLaunchIsConfirmedByTheKeyboardAppearing:
         assert not (config_dir / "update_handoff.json").is_file()
         assert any("alpha-osk.exe" in r.getMessage() for r in caplog.records), caplog.text
 
+    def test_the_handoff_is_written_before_the_launch_and_retracted_on_failure(self, tmp_path):
+        exe = self._fresh_exe(tmp_path)
+        config_dir = tmp_path / "config"
+        seen: list[bool] = []
+
+        def launch(target):
+            seen.append((config_dir / "update_handoff.json").is_file())
+            return False
+
+        with (
+            patch.object(relauncher, "_INSTALLER_GRACE_S", 0),
+            patch.object(relauncher, "_NEW_EXE_TIMEOUT_S", 2),
+            patch.object(relauncher, "_launch_new_osk", launch),
+        ):
+            rc = relauncher.run_relauncher(self._argv(exe, config_dir))
+
+        assert rc == 4
+        assert seen == [True], "the new keyboard reads it at startup, so it must already exist"
+        assert not (config_dir / "update_handoff.json").is_file()
+
     def test_a_relay_that_brings_the_keyboard_back_succeeds(self, tmp_path):
         """The inverse, so "always report failure" cannot pass as the fix.
 
@@ -1051,3 +1113,671 @@ class TestTheLaunchIsConfirmedByTheKeyboardAppearing:
         names = relauncher._running_image_names()
         assert names is not None
         assert own_name.casefold() in {n.casefold() for n in names}, own_name
+
+
+# ---------------------------------------------------------------------------
+#  The update screen: always visible until the new keyboard window is up
+# ---------------------------------------------------------------------------
+
+
+class _World:
+    """The facts an ``UpdateFlow`` reads, under test control, with a fake clock."""
+
+    def __init__(self) -> None:
+        self.now = 1000.0
+        self.parent_alive = True
+        self.launched = False
+        self.cancel = False
+        self.exe_ready = False
+        self.shown = False
+        self.launch_ok = True
+        self.launches = 0
+        self.handoffs = 0
+        self.handoff_present = False
+        self.handoff_present_at_launch: list[bool] = []
+
+    def _launch(self) -> bool:
+        self.launches += 1
+        self.handoff_present_at_launch.append(self.handoff_present)
+        return self.launch_ok
+
+    def _handoff(self) -> None:
+        self.handoffs += 1
+        self.handoff_present = True
+
+    def _clear(self) -> None:
+        self.handoff_present = False
+
+    def flow(self, **kwargs) -> relauncher.UpdateFlow:
+        return relauncher.UpdateFlow(
+            version="1.7.1",
+            parent_alive=lambda: self.parent_alive,
+            installer_launched=lambda: self.launched,
+            cancelled=lambda: self.cancel,
+            new_exe_ready=lambda death_time: self.exe_ready,
+            launch_keyboard=self._launch,
+            keyboard_shown=lambda: self.shown,
+            write_handoff=self._handoff,
+            clear_handoff=self._clear,
+            clock=lambda: self.now,
+            wall_clock=lambda: 5000.0,
+            **kwargs,
+        )
+
+    def advance(self, flow: relauncher.UpdateFlow, seconds: float, step: float = 0.25) -> None:
+        """Let ``seconds`` pass, stepping the flow every ``step`` like the QTimer does."""
+        end = self.now + seconds
+        while self.now < end:
+            self.now += step
+            flow.step()
+
+
+@pytest.fixture
+def world(monkeypatch) -> _World:
+    monkeypatch.setattr(relauncher, "_INSTALLER_GRACE_S", 0)
+    return _World()
+
+
+class TestTheScreenOpensAtOnceAndWaitsForApproval:
+    """The first bug: the helper's 60 s parent-exit wait started at spawn,
+    before the UAC prompt, so a slow approval gave up and a declined prompt
+    left a splash that silently expired."""
+
+    def test_it_starts_on_the_approval_message(self, world):
+        flow = world.flow()
+        assert flow.phase is relauncher.Phase.APPROVE
+        assert flow.message == "Waiting for you to approve the update"
+        assert not flow.finished
+
+    def test_a_slow_approval_does_not_use_up_the_parent_budget(self, world):
+        flow = world.flow()
+        world.advance(flow, 300)  # five minutes on the prompt
+        assert flow.phase is relauncher.Phase.APPROVE, "the prompt may take as long as it takes"
+
+        world.launched = True
+        world.advance(flow, 1)
+        assert flow.phase is relauncher.Phase.CLOSING
+
+        # The parent budget starts now, in full, not from the spawn.
+        world.advance(flow, relauncher._PARENT_EXIT_TIMEOUT_S - 5)
+        assert flow.phase is relauncher.Phase.CLOSING
+        world.advance(flow, 10)
+        assert flow.phase is relauncher.Phase.FAILED
+        assert flow.exit_code == relauncher.EXIT_PARENT_STUCK
+
+    def test_a_cancel_sends_the_screen_away_without_a_failure_message(self, world):
+        flow = world.flow()
+        world.advance(flow, 2)
+        world.cancel = True
+        world.advance(flow, 1)
+        assert flow.phase is relauncher.Phase.CANCELLED
+        assert flow.exit_code == relauncher.EXIT_CANCELLED
+        assert flow.failure == "", "the keyboard's own toast reports a declined prompt"
+
+    def test_a_cancel_beats_a_launch_marker_in_the_same_look(self, world):
+        flow = world.flow()
+        world.launched = True
+        world.cancel = True
+        world.advance(flow, 1)
+        assert flow.phase is relauncher.Phase.CANCELLED
+
+    def test_a_parent_that_vanished_without_a_marker_counts_as_launched(self, world):
+        """The installer's taskkill can land before the marker is written."""
+        flow = world.flow()
+        world.parent_alive = False
+        world.advance(flow, 1)
+        assert flow.phase in (relauncher.Phase.CLOSING, relauncher.Phase.INSTALLING)
+
+    def test_an_approval_that_never_comes_ends_on_a_screen_not_in_silence(self, world):
+        flow = world.flow()
+        world.advance(flow, relauncher._APPROVAL_TIMEOUT_S + 5)
+        assert flow.phase is relauncher.Phase.FAILED
+        assert flow.exit_code == relauncher.EXIT_NOT_APPROVED
+        assert flow.failure
+
+    def test_an_unsignalled_helper_starts_at_closing(self, world):
+        flow = world.flow(wait_for_approval=False)
+        assert flow.phase is relauncher.Phase.CLOSING
+        assert flow.message == "Closing the keyboard"
+
+
+class TestTheWholeRunNamesEveryPhase:
+    def test_the_messages_in_order(self, world):
+        flow = world.flow()
+        seen = [flow.message]
+
+        def note() -> None:
+            if flow.message != seen[-1]:
+                seen.append(flow.message)
+
+        world.launched = True
+        world.advance(flow, 1)
+        note()
+        world.parent_alive = False
+        world.advance(flow, 1)
+        note()
+        world.exe_ready = True
+        world.advance(flow, 1)
+        note()
+        world.shown = True
+        world.advance(flow, 1)
+        note()
+        assert seen == [
+            "Waiting for you to approve the update",
+            "Closing the keyboard",
+            "Installing Alpha-OSK 1.7.1",
+            "Starting the keyboard",
+            "Done",
+        ]
+        assert flow.phase is relauncher.Phase.DONE
+        assert flow.exit_code == 0
+
+
+class TestDoneMeansTheWindowIsOnScreen:
+    """The third gap: "Done!" fired when the new *process* existed, before
+    its window showed, which is exactly the blank gap the screen is for."""
+
+    def _to_starting(self, world):
+        flow = world.flow(wait_for_approval=False)
+        world.parent_alive = False
+        world.exe_ready = True
+        world.advance(flow, 2)
+        assert flow.phase is relauncher.Phase.STARTING
+        return flow
+
+    def test_a_launched_keyboard_whose_window_is_not_up_is_not_done(self, world):
+        flow = self._to_starting(world)
+        assert world.launches == 1
+        world.advance(flow, 30)
+        assert flow.phase is relauncher.Phase.STARTING, (
+            "the process existing is not the window showing; there is no "
+            "probe of the process list here at all"
+        )
+
+    def test_the_window_event_finishes_it_and_writes_the_handoff_once(self, world):
+        flow = self._to_starting(world)
+        world.shown = True
+        world.advance(flow, 2)
+        assert flow.phase is relauncher.Phase.DONE
+        assert world.handoffs == 1
+        world.advance(flow, 5)
+        assert world.handoffs == 1
+        assert world.handoff_present
+
+    def test_the_handoff_exists_when_the_new_keyboard_starts_and_reads_it(self, world):
+        """The keyboard reads it once, during startup, before any window.
+
+        Written only once the window showed, it was always too late.
+        """
+        flow = self._to_starting(world)
+        assert world.handoff_present_at_launch == [True]
+        assert world.handoff_present, "and it stays for the keyboard to consume"
+        world.shown = True
+        world.advance(flow, 2)
+        assert flow.phase is relauncher.Phase.DONE
+
+    def test_a_keyboard_already_up_is_not_launched_a_second_time(self, world):
+        """The installer's own explorer fallback, or the user, got there first."""
+        flow = world.flow(wait_for_approval=False)
+        world.parent_alive = False
+        world.exe_ready = True
+        world.shown = True
+        world.advance(flow, 2)
+        assert flow.phase is relauncher.Phase.DONE
+        assert world.launches == 0
+
+    def test_a_failed_launch_is_a_failure_screen(self, world):
+        world.launch_ok = False
+        flow = world.flow(wait_for_approval=False)
+        world.parent_alive = False
+        world.exe_ready = True
+        world.advance(flow, 2)
+        assert flow.phase is relauncher.Phase.FAILED
+        assert flow.exit_code == relauncher.EXIT_LAUNCH_FAILED
+        assert world.handoff_present_at_launch == [True]
+        assert not world.handoff_present, "a launch that failed leaves no handoff behind"
+
+    def test_a_window_that_never_appears_retracts_the_handoff(self, world):
+        flow = self._to_starting(world)
+        assert world.handoff_present
+        world.advance(flow, relauncher._KEYBOARD_SHOWN_TIMEOUT_S + 5)
+        assert flow.phase is relauncher.Phase.FAILED
+        assert not world.handoff_present
+
+
+class TestTheStartButtonKeepsTheScreenUntilTheKeyboardIsConfirmed:
+    """Start on the failure screen used to launch and quit whatever happened."""
+
+    def _failed_launch(self, world):
+        world.launch_ok = False
+        flow = world.flow(wait_for_approval=False)
+        world.parent_alive = False
+        world.exe_ready = True
+        world.advance(flow, 2)
+        assert flow.phase is relauncher.Phase.FAILED
+        return flow
+
+    def test_a_retry_that_fails_keeps_the_failure_screen_and_says_so(self, world):
+        flow = self._failed_launch(world)
+        assert flow.retry_launch() is False
+        assert flow.phase is relauncher.Phase.FAILED
+        assert "still did not start" in flow.detail
+        assert not world.handoff_present
+
+    def test_a_retry_that_launches_waits_for_the_window(self, world):
+        flow = self._failed_launch(world)
+        world.launch_ok = True
+        assert flow.retry_launch() is True
+        assert flow.phase is relauncher.Phase.STARTING
+        assert world.handoff_present_at_launch[-1] is True
+        world.advance(flow, 20)
+        assert flow.phase is relauncher.Phase.STARTING, (
+            "Explorer starting is not the window showing"
+        )
+        world.shown = True
+        world.advance(flow, 1)
+        assert flow.phase is relauncher.Phase.DONE
+        assert flow.exit_code == 0
+
+    def test_a_retry_whose_window_never_appears_returns_to_the_failure_screen(self, world):
+        flow = self._failed_launch(world)
+        world.launch_ok = True
+        flow.retry_launch()
+        world.advance(flow, relauncher._KEYBOARD_SHOWN_TIMEOUT_S + 5)
+        assert flow.phase is relauncher.Phase.FAILED
+        assert not world.handoff_present
+
+    def test_an_update_that_never_installed_is_not_announced(self, world):
+        flow = world.flow(wait_for_approval=False)
+        world.parent_alive = False
+        world.advance(flow, relauncher._NEW_EXE_TIMEOUT_S + 10)
+        assert flow.exit_code == relauncher.EXIT_NEW_EXE_MISSING
+        before = world.handoffs
+        assert flow.retry_launch() is True
+        assert world.handoffs == before
+
+    def test_a_probe_failure_before_install_is_not_announced_on_retry(self, world):
+        """fail_unexpectedly shares EXIT_LAUNCH_FAILED with a failed launch, so
+        the exit code cannot say whether the update installed."""
+        flow = world.flow()
+        flow.fail_unexpectedly()
+        assert flow.exit_code == relauncher.EXIT_LAUNCH_FAILED
+        world.launch_ok = True
+        assert flow.retry_launch() is True
+        assert world.handoffs == 0
+
+
+class TestAFailureStaysUntilTheUserActs:
+    """The last gap: failure messages auto-closed after six seconds."""
+
+    def test_a_window_that_never_appears_ends_on_a_screen_that_stays(self, world):
+        flow = world.flow(wait_for_approval=False)
+        world.parent_alive = False
+        world.exe_ready = True
+        world.advance(flow, relauncher._KEYBOARD_SHOWN_TIMEOUT_S + 5)
+        assert flow.phase is relauncher.Phase.FAILED
+        assert flow.exit_code == relauncher.EXIT_LAUNCH_FAILED
+        assert "did not appear" in flow.failure
+        assert flow.detail, "it says what to do next"
+
+        # Nothing in the flow dismisses it, however long it is left.
+        world.advance(flow, 10_000)
+        assert flow.phase is relauncher.Phase.FAILED
+        assert flow.finished
+
+    def test_the_new_exe_never_arriving_is_a_failure_screen_too(self, world):
+        flow = world.flow(wait_for_approval=False)
+        world.parent_alive = False
+        world.advance(flow, relauncher._NEW_EXE_TIMEOUT_S + 10)
+        assert flow.phase is relauncher.Phase.FAILED
+        assert flow.exit_code == relauncher.EXIT_NEW_EXE_MISSING
+
+    def test_the_ceiling_ends_in_the_failure_screen_never_a_silent_exit(self, world):
+        """Parent slow to die, then an install that never lands: the phases sum
+        past 300 s, and the clip must still end on a failure, not a hang."""
+        flow = world.flow()
+        world.launched = True
+        launched_at = world.now
+        world.advance(flow, 50)
+        world.parent_alive = False
+        world.advance(flow, relauncher._MAX_TOTAL_RUNTIME_S)
+        assert flow.phase is relauncher.Phase.FAILED
+        assert world.now - launched_at <= relauncher._MAX_TOTAL_RUNTIME_S + 50 + 1
+
+    def test_a_keyboard_that_turns_up_after_the_failure_clears_it(self, world):
+        """The installer's own explorer fallback, or a slow first start: the
+        screen must not sit topmost over a working keyboard saying it failed."""
+        flow = world.flow(wait_for_approval=False)
+        world.parent_alive = False
+        world.exe_ready = True
+        world.advance(flow, relauncher._KEYBOARD_SHOWN_TIMEOUT_S + 5)
+        assert flow.phase is relauncher.Phase.FAILED
+        world.shown = True
+        world.advance(flow, 1)
+        assert flow.phase is relauncher.Phase.DONE
+        assert flow.exit_code == 0
+
+    def test_the_old_keyboard_still_running_never_clears_a_failure(self, world):
+        """Before the old keyboard is gone its own announcement is still set."""
+        flow = world.flow()
+        world.launched = True
+        world.shown = True  # the old keyboard's event, alive with it
+        world.advance(flow, relauncher._PARENT_EXIT_TIMEOUT_S + 5)
+        assert flow.phase is relauncher.Phase.FAILED
+        assert flow.exit_code == relauncher.EXIT_PARENT_STUCK
+        world.advance(flow, 30)
+        assert flow.phase is relauncher.Phase.FAILED
+        assert world.handoffs == 0
+
+    def test_a_probe_that_raised_is_not_asked_again(self, world):
+        flow = world.flow(wait_for_approval=False)
+        world.parent_alive = False
+        world.exe_ready = True
+        world.advance(flow, 2)
+        flow.fail_unexpectedly()
+        world.shown = True
+        world.advance(flow, 5)
+        assert flow.phase is relauncher.Phase.FAILED
+
+    def test_an_unexpected_error_is_shown_not_swallowed(self, world):
+        flow = world.flow()
+        flow.fail_unexpectedly()
+        assert flow.phase is relauncher.Phase.FAILED
+        assert flow.failure
+
+    def test_a_budget_clamped_to_zero_still_looks_once_at_the_exe(self, world, monkeypatch):
+        """The same rule the headless waits have: zero left means "check once"."""
+        flow = world.flow(wait_for_approval=False, ceiling_deadline=world.now + 1)
+        world.now += 10  # the ceiling is long gone
+        world.parent_alive = False
+        world.exe_ready = True
+        flow.step()  # the parent is seen to be gone
+        flow.step()  # the exe is looked at once, with no budget left
+        assert flow.phase is relauncher.Phase.STARTING
+
+
+class TestThePlacement:
+    def test_it_is_centred_on_the_keyboard(self):
+        pos = relauncher.centred_position((100, 200, 800, 300), (400, 200), (0, 0, 1920, 1080))
+        assert pos == (300, 250)
+
+    def test_it_is_clamped_to_the_keyboards_own_monitor(self):
+        # A keyboard parked in the corner of a second monitor to the left.
+        work = (-1920, 0, 0, 1040)
+        pos = relauncher.centred_position((-1900, 1000, 100, 30), (400, 200), work)
+        assert work[0] <= pos[0] and pos[0] + 400 <= work[2]
+        assert work[1] <= pos[1] and pos[1] + 200 <= work[3]
+
+    def test_a_window_bigger_than_the_screen_is_pinned_top_left(self):
+        assert relauncher.centred_position((0, 0, 10, 10), (500, 500), (0, 0, 300, 300)) == (0, 0)
+
+    def test_the_anchor_text_round_trips(self):
+        assert relauncher.parse_anchor_rect("10,20,900,300") == (10, 20, 900, 300)
+        assert relauncher.parse_anchor_rect("-1920,5,100,40") == (-1920, 5, 100, 40)
+
+    @pytest.mark.parametrize("text", ["", "1,2,3", "1,2,3,4,5", "a,b,c,d", "1,2,0,4", "1,2,3,-4"])
+    def test_junk_means_no_anchor_not_an_exception(self, text):
+        assert relauncher.parse_anchor_rect(text) is None
+
+
+class TestTheHeadlessFallbackAlsoWaitsForApproval:
+    """If Qt cannot start, the fallback must not begin its 60 s parent wait
+    while the UAC prompt is still up, which was the bug on the splash path."""
+
+    def _args(self, tmp_path, signal_dir):
+        target_exe = tmp_path / "alpha-osk.exe"
+        target_exe.write_bytes(b"x")
+        future = time.time() + 3600
+        os.utime(target_exe, (future, future))
+        return argparse.Namespace(
+            parent_pid=999999999,
+            new_version="1.7.1",
+            previous_version="1.7.0",
+            target_exe=str(target_exe),
+            old_exe_mtime=0.0,
+            config_dir=str(tmp_path / "config"),
+            signal_dir=str(signal_dir),
+        )
+
+    def test_a_cancel_marker_ends_it_without_launching(self, tmp_path):
+        signals = tmp_path / "signals"
+        signals.mkdir()
+        (signals / "cancel").write_bytes(b"")
+        launched: list[object] = []
+        with patch.object(relauncher, "_launch_new_osk", lambda t: launched.append(t) or True):
+            rc = relauncher._run_headless(self._args(tmp_path, signals))
+        assert rc == relauncher.EXIT_CANCELLED
+        assert launched == []
+
+    def test_the_launch_marker_lets_the_normal_flow_run(self, tmp_path):
+        signals = tmp_path / "signals"
+        signals.mkdir()
+        (signals / "installer-launched").write_bytes(b"")
+        with (
+            patch.object(relauncher, "_INSTALLER_GRACE_S", 0),
+            patch.object(relauncher, "_NEW_EXE_TIMEOUT_S", 2),
+            patch.object(relauncher, "_launch_new_osk", return_value=True),
+        ):
+            rc = relauncher._run_headless(self._args(tmp_path, signals))
+        assert rc == 0
+
+    def test_a_live_parent_with_no_marker_waits_rather_than_starting_the_clock(
+        self, tmp_path, monkeypatch
+    ):
+        signals = tmp_path / "signals"
+        signals.mkdir()
+        monkeypatch.setattr(relauncher, "_process_alive", lambda pid: True)
+        monkeypatch.setattr(relauncher, "_APPROVAL_TIMEOUT_S", 0.3)
+        monkeypatch.setattr(relauncher, "_POLL_INTERVAL_S", 0.05)
+        rc = relauncher._run_headless(self._args(tmp_path, signals))
+        assert rc == relauncher.EXIT_NOT_APPROVED
+
+    def test_the_new_flags_parse(self, tmp_path):
+        """No ``--update-relauncher`` any more: the exe is the helper."""
+        argv = [
+            "alpha-osk-relauncher.exe",
+            "--parent-pid",
+            "1",
+            "--new-version",
+            "1.7.1",
+            "--target-exe",
+            str(tmp_path / "python.exe"),
+            "--config-dir",
+            str(tmp_path),
+            "--signal-dir",
+            str(tmp_path),
+            "--anchor-rect",
+            "1,2,3,4",
+            "--show-splash",
+        ]
+        # A dev target returns before any wait, which is all this needs.
+        assert relauncher.run_relauncher(argv) == 0
+
+
+# ---------------------------------------------------------------------------
+#  The window itself, driven offscreen in a child process
+# ---------------------------------------------------------------------------
+
+_SPLASH_SCRIPT = r"""
+import argparse, os, sys, time
+sys.path.insert(0, {repo!r})
+os.environ["QT_QPA_PLATFORM"] = "offscreen"
+from PySide6.QtCore import QTimer
+from PySide6.QtWidgets import QApplication, QLabel, QPushButton, QWidget
+from src import _update_relauncher as r
+
+scenario = scenario_name = {scenario!r}
+app = QApplication([])
+r._TICK_MS = 30
+r._INSTALLER_GRACE_S = 0
+r._DONE_DWELL_MS = 50
+tmp0 = {tmp!r}
+# The parent keyboard is alive until the installer is "launched".
+launched_marker = os.path.join(tmp0, "signals", "installer-launched")
+r._process_alive = lambda pid: not os.path.exists(launched_marker)
+launches = []
+
+class Shown:
+    # The window is not up until the keyboard has been launched.
+    value = False
+    def __call__(self): return Shown.value
+    def close(self): pass
+r._KeyboardShownProbe = Shown
+
+mode = {{"ok": scenario_name in ("happy", "cancel", "never_installs"), "shown": True}}
+
+def launch(target):
+    launches.append(str(target))
+    if mode["ok"] and mode["shown"]:
+        Shown.value = True
+    return mode["ok"]
+r._launch_new_osk = launch
+
+tmp = {tmp!r}
+args = argparse.Namespace(
+    parent_pid=1, new_version="9.9.9", previous_version="9.9.8",
+    target_exe=os.path.join(tmp, "alpha-osk.exe"), old_exe_mtime=0.0,
+    config_dir=tmp, signal_dir=os.path.join(tmp, "signals"), anchor_rect="",
+)
+os.makedirs(args.signal_dir, exist_ok=True)
+open(args.target_exe, "wb").write(b"x")
+r._new_exe_ready = lambda *a, **k: scenario != "never_installs"
+
+def splash():
+    return [w for w in app.topLevelWidgets() if w.objectName() == "splash"][0]
+
+report = {{}}
+
+def look_while_waiting():
+    w = splash()
+    report["approve_msg"] = w.findChild(QLabel, "msg").text()
+    report["buttons_visible_while_working"] = w.findChild(QWidget, "buttons").isVisibleTo(w)
+    report["has_close_x"] = w.findChild(QLabel, "close") is not None
+    if scenario == "cancel":
+        open(os.path.join(args.signal_dir, "cancel"), "wb").write(b"")
+    else:
+        open(os.path.join(args.signal_dir, "installer-launched"), "wb").write(b"")
+
+def look_at_failure():
+    w = splash()
+    report["failure_msg"] = w.findChild(QLabel, "msg").text()
+    start = w.findChild(QPushButton, "start")
+    report["start_visible"] = start.isVisibleTo(w)
+    report["start_height"] = start.height()
+    report["logs_visible"] = w.findChild(QPushButton, "logs").isVisibleTo(w)
+    if scenario == "never_installs":
+        start.click()
+    if scenario == "retry_fails_then_succeeds":
+        report["failure_msg_before_retry"] = w.findChild(QLabel, "msg").text()
+        start.click()  # the launch fails again
+        QTimer.singleShot(300, after_failed_retry)
+
+def after_failed_retry():
+    w = splash()
+    report["still_up_after_failed_retry"] = w.isVisible()
+    report["detail_after_failed_retry"] = w.findChild(QLabel, "detail").text()
+    report["start_visible_after_failed_retry"] = (
+        w.findChild(QPushButton, "start").isVisibleTo(w)
+    )
+    mode["ok"] = True
+    mode["shown"] = False  # Explorer started, but no window yet
+    w.findChild(QPushButton, "start").click()
+    QTimer.singleShot(300, while_waiting_for_the_window)
+
+def while_waiting_for_the_window():
+    w = splash()
+    report["still_up_while_waiting"] = w.isVisible()
+    report["msg_while_waiting"] = w.findChild(QLabel, "msg").text()
+    report["buttons_while_waiting"] = w.findChild(QWidget, "buttons").isVisibleTo(w)
+    Shown.value = True  # the new keyboard says its window is up
+
+QTimer.singleShot(300, look_while_waiting)
+if scenario == "never_installs":
+    r._NEW_EXE_TIMEOUT_S = 0.2
+    QTimer.singleShot(1500, look_at_failure)
+if scenario == "retry_fails_then_succeeds":
+    QTimer.singleShot(1500, look_at_failure)
+
+# Hard stop so a hung child cannot hang the suite.
+QTimer.singleShot(8000, lambda: (print("TIMEOUT"), os._exit(99)))
+rc = r._run_with_splash(args)
+report["rc"] = rc
+report["launches"] = launches
+report["handoff"] = os.path.exists(os.path.join(tmp, "update_handoff.json"))
+print("REPORT", report)
+"""
+
+
+def _run_splash(tmp_path, scenario: str) -> dict:
+    import ast
+    import subprocess
+
+    repo = str(__import__("pathlib").Path(__file__).resolve().parent.parent)
+    script = _SPLASH_SCRIPT.format(repo=repo, scenario=scenario, tmp=str(tmp_path))
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    lines = [ln for ln in result.stdout.splitlines() if ln.startswith("REPORT ")]
+    assert lines, f"rc={result.returncode}\nstdout={result.stdout}\nstderr={result.stderr[-3000:]}"
+    return ast.literal_eval(lines[-1][len("REPORT ") :])
+
+
+def _has_widgets() -> bool:
+    try:
+        import PySide6.QtWidgets  # noqa: F401
+    except ImportError:
+        return False
+    return True
+
+
+@pytest.mark.skipif(not _has_widgets(), reason="needs PySide6 widgets")
+class TestTheWindowOffscreen:
+    """Run in a child process: this suite's other Qt modules build a
+    QGuiApplication, which cannot host widgets, so a QApplication here would
+    be the wrong kind of application for whichever module ran second."""
+
+    def test_the_happy_path_ends_done_with_no_buttons_and_no_close(self, tmp_path):
+        report = _run_splash(tmp_path, "happy")
+        assert report["approve_msg"] == "Waiting for you to approve the update"
+        assert report["buttons_visible_while_working"] is False
+        assert report["has_close_x"] is False, "no way to dismiss the screen while it works"
+        assert report["rc"] == 0
+        assert report["handoff"] is True
+        assert report["launches"] == [str(tmp_path / "alpha-osk.exe")]
+
+    def test_a_cancel_closes_it_quietly(self, tmp_path):
+        report = _run_splash(tmp_path, "cancel")
+        assert report["rc"] == relauncher.EXIT_CANCELLED
+        assert report["launches"] == []
+
+    def test_a_failure_stays_up_with_big_buttons_until_one_is_pressed(self, tmp_path):
+        report = _run_splash(tmp_path, "never_installs")
+        assert report["failure_msg"] == "The update did not finish installing."
+        assert report["start_visible"] is True
+        assert report["logs_visible"] is True
+        assert report["start_height"] >= 56, "a large target for an imprecise pointer"
+        # Pressing Start launched the keyboard, and the helper left once its
+        # window was confirmed, not on the press.
+        assert report["launches"] == [str(tmp_path / "alpha-osk.exe")]
+        assert report["rc"] == 0
+        assert report["handoff"] is False, "an update that never installed is not announced"
+
+    def test_a_failed_retry_keeps_the_screen_and_a_good_one_waits_for_the_window(self, tmp_path):
+        report = _run_splash(tmp_path, "retry_fails_then_succeeds")
+        assert report["failure_msg_before_retry"] == (
+            "The update installed, but the keyboard did not start."
+        )
+        assert report["still_up_after_failed_retry"] is True
+        assert "still did not start" in report["detail_after_failed_retry"]
+        assert report["start_visible_after_failed_retry"] is True
+        # The second press launched, and the helper stayed for the window.
+        assert report["still_up_while_waiting"] is True
+        assert report["msg_while_waiting"] == "Starting the keyboard"
+        assert report["buttons_while_waiting"] is False
+        assert len(report["launches"]) >= 3
+        assert report["rc"] == 0
+        assert report["handoff"] is True

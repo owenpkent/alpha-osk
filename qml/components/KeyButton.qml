@@ -325,7 +325,12 @@ Item {
     // currency and maths signs, an accented letter) falls back to keyText,
     // which for those is the character itself, so it keeps its own name.
     // The strip is also what turns "⇧ Shift" into "Shift".
+    // A spoken name for a key whose cap is an abbreviation ("F13-24"); set
+    // only where the cap is not speakable as it stands.
+    property string scanLabel: ""
     readonly property string _scanName: {
+        if (keyRoot.scanLabel !== "")
+            return keyRoot.scanLabel
         var shown = (keyRoot.displayText || "").replace(/[^\x20-\x7E]/g, "").trim()
         return shown !== "" ? shown : (keyRoot.keyText || "")
     }

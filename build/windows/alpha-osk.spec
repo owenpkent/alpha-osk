@@ -61,8 +61,53 @@ _vr_spec.loader.exec_module(_vr)
 VERSION_FILE = Path(workpath) / 'alpha-osk-version-info.txt'
 VERSION_FILE.parent.mkdir(parents=True, exist_ok=True)
 VERSION_FILE.write_text(_vr.version_info_text(APP_VERSION), encoding='utf-8')
+# The update helper's own version block: same publisher and version, its own
+# description, so the two exes are told apart in Task Manager.
+HELPER_VERSION_FILE = Path(workpath) / 'alpha-osk-relauncher-version-info.txt'
+HELPER_VERSION_FILE.write_text(
+    _vr.version_info_text(
+        APP_VERSION, description=_vr.HELPER_DESCRIPTION, exe_name=_vr.HELPER_EXE_NAME
+    ),
+    encoding='utf-8',
+)
 
 block_cipher = None
+
+# Shared by both Analyses: the helper must not drag in what the keyboard drops.
+_EXCLUDES = [
+    # Exclude Linux-only modules on Windows builds
+    'ydotool',
+    'xdotool',
+    # Exclude heavy ML/science libraries (not needed: the LLM predictor is optional)
+    'torch', 'torchvision', 'torchaudio',
+    'transformers', 'huggingface_hub', 'tokenizers', 'safetensors',
+    'numpy', 'scipy', 'pandas', 'matplotlib',
+    'sklearn', 'scikit-learn',
+    'PIL', 'cv2', 'openai',
+    # Exclude dev/test tools
+    # hypothesis is MPL-2.0 while Alpha-OSK is MIT. It is test-only and
+    # nothing under src/ imports it, so PyInstaller would not follow it
+    # in anyway -- named here so that stays true by declaration rather
+    # than by accident, and so no MPL code can reach a shipped bundle.
+    'pytest', 'pytest_cov', 'coverage', 'mypy', 'ruff', 'hypothesis',
+    'IPython', 'notebook', 'jupyter',
+    'pygments', 'pyinstaller',
+    # Exclude other unneeded heavy packages
+    'pygame', 'pyvjoy',
+    # PySide6.QtWebEngineCore alone is ~193 MB (half the bundle)
+    # and Alpha-OSK never embeds a web view.  PyInstaller pulls it
+    # in transitively through PySide6's all-modules hook, so we
+    # have to name every WebEngine / WebView / WebChannel module
+    # explicitly to drop them.  If we ever add an in-app browser
+    # for release notes etc., re-include these and re-measure.
+    'PySide6.QtWebEngineCore',
+    'PySide6.QtWebEngineQuick',
+    'PySide6.QtWebEngineWidgets',
+    'PySide6.QtWebChannel',
+    'PySide6.QtWebChannelQuick',
+    'PySide6.QtWebView',
+    'PySide6.QtWebViewQuick',
+]
 
 a = Analysis(
     # Entry point — launcher handles frozen vs dev import paths
@@ -129,40 +174,7 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[
-        # Exclude Linux-only modules on Windows builds
-        'ydotool',
-        'xdotool',
-        # Exclude heavy ML/science libraries (not needed — LLM predictor is optional)
-        'torch', 'torchvision', 'torchaudio',
-        'transformers', 'huggingface_hub', 'tokenizers', 'safetensors',
-        'numpy', 'scipy', 'pandas', 'matplotlib',
-        'sklearn', 'scikit-learn',
-        'PIL', 'cv2', 'openai',
-        # Exclude dev/test tools
-        # hypothesis is MPL-2.0 while Alpha-OSK is MIT. It is test-only and
-        # nothing under src/ imports it, so PyInstaller would not follow it
-        # in anyway -- named here so that stays true by declaration rather
-        # than by accident, and so no MPL code can reach a shipped bundle.
-        'pytest', 'pytest_cov', 'coverage', 'mypy', 'ruff', 'hypothesis',
-        'IPython', 'notebook', 'jupyter',
-        'pygments', 'pyinstaller',
-        # Exclude other unneeded heavy packages
-        'pygame', 'pyvjoy',
-        # PySide6.QtWebEngineCore alone is ~193 MB — half the bundle —
-        # and Alpha-OSK never embeds a web view.  PyInstaller pulls it
-        # in transitively through PySide6's all-modules hook, so we
-        # have to name every WebEngine / WebView / WebChannel module
-        # explicitly to drop them.  If we ever add an in-app browser
-        # for release notes etc., re-include these and re-measure.
-        'PySide6.QtWebEngineCore',
-        'PySide6.QtWebEngineQuick',
-        'PySide6.QtWebEngineWidgets',
-        'PySide6.QtWebChannel',
-        'PySide6.QtWebChannelQuick',
-        'PySide6.QtWebView',
-        'PySide6.QtWebViewQuick',
-    ],
+    excludes=_EXCLUDES,
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
     cipher=block_cipher,
@@ -205,6 +217,115 @@ pyz = PYZ(
     cipher=block_cipher,
 )
 
+# ---------------------------------------------------------------------------
+# The update helper: alpha-osk-relauncher.exe
+#
+# A second, separate exe WITHOUT UIAccess. The keyboard requests
+# uiAccess="true", and Windows refuses to start such an image from outside a
+# secure location (WinError 740), which is why the helper that used to be a
+# renamed copy of alpha-osk.exe run from %TEMP% never started once 1.6.0
+# began requesting it. This one is a plain asInvoker exe, so it can be copied
+# anywhere and run. It lives in the same COLLECT, so it shares _internal.
+# See src/_update_relauncher.py and docs/build/AUTO_UPDATE.md.
+# ---------------------------------------------------------------------------
+helper_a = Analysis(
+    [str(PROJECT_ROOT / 'build' / 'relauncher_entry.py')],
+    pathex=[str(PROJECT_ROOT)],
+    binaries=[],
+    datas=[],
+    hiddenimports=[
+        'PySide6.QtCore',
+        'PySide6.QtGui',
+        'PySide6.QtWidgets',
+        'src',
+        'src._update_relauncher',
+        'src.update_signals',
+        'src.platform',
+        'src.platform.windows_window',
+    ],
+    hookspath=[],
+    hooksconfig={},
+    runtime_hooks=[],
+    excludes=_EXCLUDES,
+    win_no_prefer_redirects=False,
+    win_private_assemblies=False,
+    cipher=block_cipher,
+    noarchive=False,
+)
+helper_a.binaries = [b for b in helper_a.binaries if _keep(b)]
+helper_a.datas = [d for d in helper_a.datas if _keep(d)]
+
+# The files the helper needs, written next to its exe for the updater.
+#
+# The updater stages the helper in %TEMP% before it launches the installer
+# (the helper cannot run from the install dir: see src/updater.py), and used
+# to copy the whole 250 MB bundle to do it. The helper's own Analysis is the
+# complete answer to "what does this exe need to start", so that list, minus
+# the Qt families the helper provably does not touch, is all it stages.
+# Nothing here is hand-maintained: build.py stages exactly this list into a
+# scratch directory and RUNS the staged helper (--self-test, offscreen) and
+# fails the build if it cannot start, so a Qt change that makes the helper
+# need something skipped here stops the build instead of the update screen.
+# At run time a missing or stale list falls back to staging everything
+# (src/update_stage.py).
+_HELPER_SKIP_PREFIXES = (
+    # QML / Quick runtime and the software OpenGL fallback: widgets use none.
+    'qt6qml', 'qt6quick', 'qt6opengl', 'opengl32sw',
+    # PDF (the qpdf image plugin is its only user here), the on-screen
+    # keyboard's own Qt module, and networking with its plugins.
+    'qt6pdf', 'qpdf', 'qt6virtualkeyboard', 'qtvirtualkeyboardplugin',
+    'qt6network', 'qschannelbackend', 'qopensslbackend', 'qcertonlybackend',
+    'qnetworklistmanager',
+    # Touch input for X11/Linux.
+    'qtuiotouchplugin',
+)
+_helper_files = {'alpha-osk-relauncher.exe'}
+for _toc in (helper_a.binaries, helper_a.datas, getattr(helper_a, 'zipfiles', [])):
+    for _entry in _toc:
+        _dest = _entry[0].replace(chr(92), '/')
+        if os.path.basename(_dest).lower().startswith(_HELPER_SKIP_PREFIXES):
+            continue
+        _helper_files.add('_internal/' + _dest)
+HELPER_FILES = Path(workpath) / 'relauncher-files.txt'
+HELPER_FILES.write_text(
+    "# Generated by alpha-osk.spec from the helper's PyInstaller analysis. Do not edit.\n"
+    + "\n".join(sorted(_helper_files))
+    + "\n",
+    encoding='utf-8',
+)
+helper_a.datas = list(helper_a.datas) + [
+    ('relauncher-files.txt', str(HELPER_FILES), 'DATA'),
+]
+print(f"[spec] The update helper stages {len(_helper_files)} files")
+
+helper_pyz = PYZ(
+    helper_a.pure,
+    helper_a.zipped_data,
+    cipher=block_cipher,
+)
+
+updater_helper = EXE(
+    helper_pyz,
+    helper_a.scripts,
+    [],
+    exclude_binaries=True,
+    name='alpha-osk-relauncher',
+    debug=False,
+    bootloader_ignore_signals=False,
+    strip=False,
+    upx=True,
+    console=False,
+    upx_exclude=['PySide6'],
+    # The same manifest file (DPI awareness, Common Controls), but with
+    # UIAccess explicitly OFF: PyInstaller 6 writes requestedExecutionLevel
+    # from these flags, not from the file. build.py reads the built exe's
+    # manifest back and fails the build unless it says uiAccess="false".
+    manifest=str(SPEC_DIR / 'alpha-osk.exe.manifest'),
+    uac_uiaccess=False,
+    icon=str(SPEC_DIR / 'alpha-osk.ico'),
+    version=str(HELPER_VERSION_FILE),
+)
+
 exe = EXE(
     pyz,
     a.scripts,
@@ -233,11 +354,17 @@ exe = EXE(
     version=str(VERSION_FILE),
 )
 
+# Both exes share one _internal directory. COLLECT de-duplicates entries by
+# destination name, so the binaries and data both Analyses found land once.
 coll = COLLECT(
     exe,
+    updater_helper,
     a.binaries,
     a.zipfiles,
     a.datas,
+    helper_a.binaries,
+    helper_a.zipfiles,
+    helper_a.datas,
     strip=False,
     upx=True,
     upx_exclude=['PySide6'],
