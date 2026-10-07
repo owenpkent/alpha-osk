@@ -48,8 +48,10 @@ walks four phases (``UpdateFlow``):
    announce that its window is on screen (the named event in
    ``update_signals``), not merely that its process exists.
 
-Then "Done", briefly, and ``update_handoff.json`` is written so the new
-keyboard can flash its "Updated" toast.
+Then "Done", briefly.  ``update_handoff.json`` is written just before the
+launch, because the new keyboard reads it once at startup (before it has a
+window), and is removed again if the launch fails, so the new keyboard can
+flash its "Updated" toast and a later manual start never does.
 
 The window is never topmost while it waits for the UAC prompt (it must not be
 able to cover a consent dialog that is not on the secure desktop) and becomes
@@ -612,6 +614,19 @@ def _write_handoff(
         _logger.warning("Failed to write handoff file: %s", exc)
 
 
+def _clear_handoff(config_dir: Path) -> None:
+    """Take the breadcrumb back: a launch that did not pan out must leave none.
+
+    The handoff is written *before* the new keyboard starts (its one read is
+    at startup, before any window exists), so a failed launch has to retract
+    it or a later manual start would announce an update it did not just make.
+    """
+    try:
+        (config_dir / "update_handoff.json").unlink(missing_ok=True)
+    except OSError as exc:
+        _logger.warning("Failed to remove handoff file: %s", exc)
+
+
 def run_relauncher(argv: list[str]) -> int:
     """CLI entry point. Returns a process exit code (0 = success).
 
@@ -823,7 +838,10 @@ def _run_headless(args: argparse.Namespace, overall_deadline: Optional[float] = 
         return 3
 
     _logger.info("New exe ready at %s, launching", target_exe)
+    # Before the launch: the new keyboard reads it once, at startup.
+    _write_handoff(config_dir, args.new_version, args.previous_version)
     if not _launch_new_osk(target_exe):
+        _clear_handoff(config_dir)
         return 4
 
     # Popen succeeding only proves Explorer started. A keyboard that then
@@ -832,9 +850,9 @@ def _run_headless(args: argparse.Namespace, overall_deadline: Optional[float] = 
     appear_budget = _remaining(overall_deadline, _NEW_OSK_APPEAR_TIMEOUT_S)
     if not _wait_for_new_osk_process(target_exe.name, appear_budget):
         _log_new_osk_missing(target_exe.name, appear_budget)
+        _clear_handoff(config_dir)
         return 4
 
-    _write_handoff(config_dir, args.new_version, args.previous_version)
     _logger.info("Relauncher done")
     return 0
 
@@ -957,6 +975,7 @@ class UpdateFlow:
         launch_keyboard: Callable[[], bool],
         keyboard_shown: Callable[[], bool],
         write_handoff: Callable[[], None],
+        clear_handoff: Callable[[], None] = lambda: None,
         clock: Callable[[], float] = time.monotonic,
         wall_clock: Callable[[], float] = time.time,
         wait_for_approval: bool = True,
@@ -980,6 +999,7 @@ class UpdateFlow:
         self._launch_keyboard = launch_keyboard
         self._keyboard_shown = keyboard_shown
         self._write_handoff = write_handoff
+        self._clear_handoff = clear_handoff
         self._clock = clock
         self._wall_clock = wall_clock
 
@@ -1047,6 +1067,8 @@ class UpdateFlow:
         self.failure = text
         self.message = text
         self.detail = "Press Start Alpha-OSK to open the keyboard."
+        # Whatever was written for a launch that did not pan out is retracted.
+        self._clear_handoff()
         _logger.error("Update screen failed (code %d): %s", code, text)
 
     def _enter_closing(self) -> None:
@@ -1081,14 +1103,44 @@ class UpdateFlow:
             # brought it up; launching a second one would only be handed off.
             self._succeed()
             return
+        # Before the launch, not after the window shows: the new keyboard reads
+        # the handoff once, during startup, before it has a window to show.
+        self._write_handoff()
         if not self._launch_keyboard():
             self._fail(EXIT_LAUNCH_FAILED, "The update installed, but the keyboard did not start.")
             return
         self._shown_budget = self._remaining(_KEYBOARD_SHOWN_TIMEOUT_S)
         self._deadline = self._clock() + self._shown_budget
 
+    def retry_launch(self) -> bool:
+        """Start the keyboard from the failure screen. True: waiting for its window.
+
+        False keeps the failure screen, saying the retry failed too. True
+        returns to *Starting* and the screen stays until the window is
+        confirmed, with a fresh budget (the run's ceiling is long spent by
+        the time a person reads a failure screen).
+        """
+        if self._keyboard_shown():
+            self._succeed()
+            return True
+        # An update that never installed is not announced.
+        announce = self.exit_code == EXIT_LAUNCH_FAILED
+        if announce:
+            self._write_handoff()
+        if not self._launch_keyboard():
+            if announce:
+                self._clear_handoff()
+            self.detail = "The keyboard still did not start. Open the log folder for details."
+            return False
+        self.phase = Phase.STARTING
+        self.message = "Starting the keyboard"
+        self.detail = "Almost there."
+        self.failure = ""
+        self._shown_budget = _KEYBOARD_SHOWN_TIMEOUT_S
+        self._deadline = self._clock() + self._shown_budget
+        return True
+
     def _succeed(self) -> None:
-        self._write_handoff()
         self.phase = Phase.DONE
         self.exit_code = 0
         self.message = "Done"
@@ -1261,6 +1313,7 @@ def _run_with_splash(args: argparse.Namespace, overall_deadline: Optional[float]
         launch_keyboard=lambda: _launch_new_osk(target_exe),
         keyboard_shown=shown,
         write_handoff=lambda: _write_handoff(config_dir, args.new_version, args.previous_version),
+        clear_handoff=lambda: _clear_handoff(config_dir),
         wait_for_approval=bool(signal_dir),
         ceiling_deadline=overall_deadline,
         installer_busy=lambda: installer_busy(installer_image, target_exe),
@@ -1457,6 +1510,13 @@ def _run_with_splash(args: argparse.Namespace, overall_deadline: Optional[float]
         _label("msg").setText(flow.message)
         _label("detail").setText(flow.detail)
         _label("detail").setVisible(bool(flow.detail))
+        if flow.phase is Phase.STARTING and shown_failure[0]:
+            # A retry from the failure screen: back to a working screen.
+            shown_failure[0] = False
+            progress.setRange(0, 0)
+            buttons.setVisible(False)
+            splash.adjustSize()
+            _place()
         if flow.phase is Phase.FAILED and not shown_failure[0]:
             shown_failure[0] = True
             progress.setRange(0, 1)
@@ -1509,8 +1569,10 @@ def _run_with_splash(args: argparse.Namespace, overall_deadline: Optional[float]
             QTimer.singleShot(_DONE_DWELL_MS, _leave_event_loop)
 
     def _start_now() -> None:
-        _launch_new_osk(target_exe)
-        _quit()
+        # The helper leaves only once the keyboard's window is confirmed
+        # (the tick ends the run); a failed launch keeps the failure screen.
+        flow.retry_launch()
+        _render()
 
     def _start_keyboard() -> None:
         # Not while the installer is still running: that would start the old
