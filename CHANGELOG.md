@@ -4,11 +4,18 @@ All notable changes to Alpha-OSK are documented in this file.
 
 ## [Unreleased]
 
+## [1.8.0] (2026-10-07)
+
+### Added
+- **Magnetic edges also snap to the taskbar.** Moving the keyboard near the top of the taskbar (or the inside edge of one docked at the side) now lands it flush against the taskbar, so it can sit just above it without covering it. The screen's own edges still snap as before, and whichever of the two is nearer wins, so the keyboard can still be parked over the taskbar on purpose.
+
 ### Changed
 - **Function keys are full height, and F1-F12 and F13-F24 take turns.** When both rows are switched on, only one shows at a time, and a key at its right end (`F13-24` or `F1-12`) swaps to the other. The page you were on is remembered. Each row is now as tall as the letter keys instead of 30% shorter, which makes them easier targets. A row switched on by itself looks as before, minus the height change, with no swap key.
 
 ### Fixed
 - **The update screen is on screen from the moment the keyboard goes away until the new keyboard is visible.** Since 1.6.0 it never appeared at all: the helper that shows it was the main exe renamed and run from the temp folder, and Windows will not start an exe that requests UIAccess from there (error 740), so every update left a blank gap of 20 to 30 seconds. The helper is now its own plain exe (`alpha-osk-relauncher.exe`, built without UIAccess, and the build fails if its manifest ever asks for it). The screen opens centred on the keyboard it replaces, says "Waiting for you to approve the update" while the Windows prompt is up (its timeouts only start once you approve, and a declined prompt closes it quietly), then walks closing, installing and starting, and says Done only when the new keyboard window is actually drawn. It cannot be closed while it works, never takes focus, and keeps itself above the installer. A failure no longer vanishes after six seconds: it stays up with large Start Alpha-OSK, Open log folder and Close buttons. The update that delivers this still runs the old helper, so the improvement shows from the update after.
+- **"Close window" on the taskbar button closes Alpha-OSK.** It only minimized the keyboard, because every close that was not a quit had been turned into a minimize so that a switch scanner could not close the keyboard and leave it running out of reach. The taskbar's close now quits properly; a scanner's close still minimizes. As a side effect, an update now closes the old keyboard cleanly and saves what it has learned, instead of waiting and then forcing it shut.
+- **Keys no longer lag while suggestions are loading.** In the first few seconds after start, while the prediction engine loads in the background, an occasional key took up to 60 ms to reach the app, and a tap could be dropped if it came just after a delayed one on the same key. The loading work no longer stalls the keyboard, and typing after the engine is ready is a little smoother too.
 
 ## [1.7.0] (2026-10-05)
 
