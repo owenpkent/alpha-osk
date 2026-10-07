@@ -673,11 +673,18 @@ class TestKeysAreGivenTheRightJob:
         root, _ = qml_root
         root.setProperty("showExtraFunctionRow", True)
         _settle()
-        for name in ("functionRowPanel", "extraFunctionRowPanel"):
+        # Both toggles are on, so one row shows at a time; each carries its
+        # twelve keys plus the page-swap key, an editing-class key like ?123.
+        for page, name in ((1, "functionRowPanel"), (2, "extraFunctionRowPanel")):
+            root.setProperty("functionRowPage", page)
+            _settle()
             panel = root.findChild(QQuickItem, name)
-            keys = _keys(panel)
+            everything = _keys(panel)
+            keys = [k for k in everything if k.objectName() != "fnSwapKey"]
             assert len(keys) == 12
             assert all(k.property("role") == "fn" for k in keys)
+            swap = [k for k in everything if k.objectName() == "fnSwapKey"]
+            assert len(swap) == 1 and swap[0].property("role") == "edit"
 
     def test_the_numpad_role_follows_numlock(self, qml_root) -> None:
         # With NumLock off the digits *are* the navigation keys, so a

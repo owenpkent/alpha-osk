@@ -508,7 +508,7 @@ Load-bearing rules:
   with no compact variant silently falls back to full size. Its leading key
   is **Esc, not `` ` ``** (backtick lives on `?123` row 2).
 - **The panel is declared BELOW both function rows in `Main.qml`'s column**,
-  so the stack reads F13-F24, F1-F12, digits, letters. It was declared first
+  so the stack reads function row (one of F1-F12 / F13-F24 when both are on), digits, letters. It was declared first
   for one release, which on compact put F1-F12 between the digits and the
   letters: nothing on a desk stacks that way, and it read as the F-keys
   having been dropped into the middle of the keyboard. Full size never had

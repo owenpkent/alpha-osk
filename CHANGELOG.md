@@ -4,6 +4,9 @@ All notable changes to Alpha-OSK are documented in this file.
 
 ## [Unreleased]
 
+### Changed
+- **Function keys are full height, and F1-F12 and F13-F24 take turns.** When both rows are switched on, only one shows at a time, and a key at its right end (`F13-24` or `F1-12`) swaps to the other. The page you were on is remembered. Each row is now as tall as the letter keys instead of 30% shorter, which makes them easier targets. A row switched on by itself looks as before, minus the height change, with no swap key.
+
 ## [1.7.0] (2026-10-05)
 
 ### Added
