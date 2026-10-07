@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gc
 import os
 import sys
 import threading
@@ -29,6 +30,7 @@ from PySide6.QtQml import QQmlApplicationEngine
 from PySide6.QtTest import QTest
 
 from src import keyboard_bridge as kb
+from src.prediction import loader as loader_module
 from src.prediction.hybrid_predictor import HybridPredictor, LoadAborted
 from src.prediction.loader import _BUILD_SWITCH_INTERVAL_S, PredictionLoader
 from src.prediction.null_predictor import NullPredictor
@@ -85,6 +87,24 @@ def wait_for(condition, timeout=5):
     assert condition(), "startup did not reach the expected state"
 
 
+def wait_for_job(*jobs):
+    """Wait for each build to finish, then for its worker thread to exit.
+
+    ``done`` is set before the worker's last emit and its thread teardown, so
+    a test that returns on ``done`` alone hands the next test a worker still
+    unwinding (a Python-created QObject's adopted thread going away) while
+    the next test is already creating QObjects.  On a starved Windows runner
+    that overlap was a worker crash and a build that never finished; joining
+    keeps each test's threads inside the test.
+    """
+    for job in jobs:
+        wait_for(lambda: job.done)
+    for job in jobs:
+        if job.thread is not None:
+            job.thread.join(5)
+            assert not job.thread.is_alive(), "the build worker did not exit"
+
+
 @pytest.fixture
 def pending(qapp, monkeypatch):
     entered = threading.Event()
@@ -121,7 +141,7 @@ def pending(qapp, monkeypatch):
         bridge.shutdown()
         release.set()
         for job in jobs:
-            wait_for(lambda: job.done)
+            wait_for_job(job)
         bridge.deleteLater()
         QCoreApplication.sendPostedEvents(None, 0)
 
@@ -197,7 +217,7 @@ def test_closing_during_load_does_not_save_or_publish_a_partial_model(pending, t
     bridge.savePredictionModel()
     bridge.shutdown()
     release.set()
-    wait_for(lambda: job.done)
+    wait_for_job(job)
     assert ready == []
     assert isinstance(bridge._predictor, NullPredictor)
     assert saved.read_text(encoding="utf-8") == '{"sentinel": true}'
@@ -249,7 +269,7 @@ def test_destroying_loader_parent_during_construction_cancels_publication(qapp):
         QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
     finally:
         release.set()
-        wait_for(lambda: job.done)
+        wait_for_job(job)
     assert ready == []
 
 
@@ -420,7 +440,7 @@ def test_a_failed_hand_over_is_a_failed_load_not_a_hung_one(pending):
     assert entered.wait(2)
     job = loader._job
     release.set()
-    wait_for(lambda: job.done)
+    wait_for_job(job)
     wait_for(lambda: bridge.predictionStatus == "error")
     assert bridge._prediction_loader is None, "Retry must be possible again"
 
@@ -464,6 +484,38 @@ def test_shutdown_joins_a_cooperative_build(pending):
     assert not thread.is_alive()
 
 
+def test_the_notifier_is_not_deleted_while_the_worker_is_still_emitting(qapp):
+    """``done`` is set before the worker's emit returns, so the UI-side
+    publish can run while the worker is still inside ``finished.emit()``;
+    the notifier must not be released until the worker has left it."""
+    parent = QObject()
+    loader = PredictionLoader(lambda abort: PredictorDouble(), parent)
+    real = loader._job.notifier
+
+    class SlowEmit:
+        """The real emit, then a worker that lingers inside the call."""
+
+        def emit(self):
+            real.finished.emit()
+            time.sleep(0.3)
+
+    class Wrapper:
+        finished = SlowEmit()
+
+        @staticmethod
+        def deleteLater():
+            seen.append(loader._job.thread.is_alive())
+            real.deleteLater()
+
+    seen: list[bool] = []
+    loader._job.notifier = Wrapper()  # type: ignore[assignment]
+    loader.loaded.connect(lambda p: p.deleteLater())
+    loader.start()
+    wait_for(lambda: seen)
+    assert seen == [False], "the notifier was released while the worker was still emitting"
+    wait_for_job(loader._job)
+
+
 def test_the_real_constructor_honours_the_abort_at_its_first_checkpoint(tmp_path):
     """The abort is polled inside HybridPredictor, not only around it."""
     calls = []
@@ -497,9 +549,175 @@ def test_the_gil_switch_interval_is_lowered_for_the_build_and_restored_after(qap
     parent = QObject()
     loader = PredictionLoader(build, parent)
     loader.start()
-    wait_for(lambda: loader._job.done)
-    assert seen == [_BUILD_SWITCH_INTERVAL_S]
+    wait_for_job(loader._job)
+    assert seen == [pytest.approx(_BUILD_SWITCH_INTERVAL_S)]
     assert sys.getswitchinterval() == before
+
+
+@pytest.fixture
+def manage_gc(monkeypatch):
+    """Opt in as keyboard_app.main() does; the suite runs without it.
+
+    ``gc.freeze`` is recorded rather than run: a real freeze here would pin
+    every object in this worker, which is the leak the opt-in exists to keep
+    out of the suite.  Yields the list of recorded freezes.
+    """
+    freezes = []
+    monkeypatch.setattr(loader_module, "_manage_gc", True)
+    monkeypatch.setattr(gc, "freeze", lambda: freezes.append("freeze"))
+    yield freezes
+    # A failure mid-test must not leave the collector off for the worker.
+    if not gc.isenabled():
+        gc.enable()
+
+
+def test_the_build_interval_survives_windows_whole_millisecond_waits():
+    """CPython on Windows waits for the GIL in whole milliseconds, truncated,
+    so an interval under 1 ms is 0 there and every waiting thread spins.  On
+    a one- or two-core CI runner that starved this file's worker threads
+    until their 5 s waits expired.  The inverse: elsewhere the shorter value
+    is kept, since it is what keeps a keystroke from being late.
+    """
+    if sys.platform == "win32":
+        assert _BUILD_SWITCH_INTERVAL_S >= 0.001
+    else:
+        assert _BUILD_SWITCH_INTERVAL_S == pytest.approx(0.0001)
+
+
+def test_the_collector_is_paused_for_the_build_and_resumed_after(qapp, manage_gc):
+    """A collection holds the GIL for its whole run, which no switch interval
+    can interrupt; the build's full collections were the 50-90 ms key stalls.
+
+    Paired with its inverse: a build that fails still resumes the collector,
+    since leaving it off would grow the process for the rest of the session.
+    """
+    assert gc.isenabled()
+    seen = []
+
+    def build(abort):
+        seen.append(gc.isenabled())
+        return PredictorDouble()
+
+    def broken(abort):
+        seen.append(gc.isenabled())
+        raise RuntimeError("model file is corrupt")
+
+    for factory in (build, broken):
+        parent = QObject()
+        loader = PredictionLoader(factory, parent)
+        loader.start()
+        wait_for_job(loader._job)
+        assert gc.isenabled()
+    assert seen == [False, False]
+
+
+@pytest.mark.parametrize(
+    "opted_in, collector_during_build, expected",
+    [(True, False, ["freeze"]), (False, True, [])],
+)
+def test_the_collector_is_managed_only_when_the_app_opts_in(
+    qapp, monkeypatch, opted_in, collector_during_build, expected
+):
+    """Opted in, the build pauses the collector and ends in a freeze: a
+    collection at the end would be one more stall right before "ready", and
+    freezing keeps the engine out of later collections.
+
+    The inverse is the half that matters for this suite: without the opt-in
+    the collector is never touched.  On a slow CI runner a real build
+    outlives its test, and pausing then freezing kept earlier tests' dead
+    bridges alive with their timers firing until later tests timed out.
+    """
+    calls = []
+    seen = []
+    monkeypatch.setattr(gc, "freeze", lambda: calls.append("freeze"))
+    monkeypatch.setattr(gc, "collect", lambda *a: calls.append("collect") or 0)
+    monkeypatch.setattr(loader_module, "_manage_gc", opted_in)
+
+    def build(abort):
+        seen.append(gc.isenabled())
+        return PredictorDouble()
+
+    parent = QObject()
+    loader = PredictionLoader(build, parent)
+    loader.start()
+    wait_for_job(loader._job)
+    assert seen == [collector_during_build]
+    assert calls == expected
+    assert gc.isenabled()
+
+
+def test_overlapping_builds_restore_the_settings_the_first_one_found(qapp, manage_gc):
+    """Only the last build out restores, so the order they end in is moot."""
+    before_interval = sys.getswitchinterval()
+    gates = [threading.Event(), threading.Event()]
+    entered = [threading.Event(), threading.Event()]
+
+    def factory_for(i):
+        def build(abort):
+            entered[i].set()
+            assert gates[i].wait(5)
+            return PredictorDouble()
+
+        return build
+
+    parents = [QObject(), QObject()]
+    loaders = [PredictionLoader(factory_for(i), parents[i]) for i in range(2)]
+    for i, loader in enumerate(loaders):
+        loader.start()
+        assert entered[i].wait(2)
+    # The first one in ends first, which is the order that used to strand
+    # the process on the second build's saved (build-time) settings.
+    gates[0].set()
+    wait_for_job(loaders[0]._job)
+    assert sys.getswitchinterval() == pytest.approx(_BUILD_SWITCH_INTERVAL_S)
+    assert not gc.isenabled()
+    assert manage_gc == [], "froze while a build was still running"
+    gates[1].set()
+    wait_for_job(loaders[1]._job)
+    assert sys.getswitchinterval() == before_interval
+    assert gc.isenabled()
+    assert manage_gc == ["freeze"], "the last build out freezes, exactly once"
+
+
+def test_a_build_entering_during_the_last_ones_restoration_waits_for_it(
+    qapp, monkeypatch, manage_gc
+):
+    """The last build out restores the collector under the settings lock.
+
+    Restored after releasing it, a build arriving in that gap saw no active
+    builds and a still-disabled collector, saved "disabled" as the baseline,
+    and left the collector off for the rest of the process when it finished.
+    So the new build must not get in until the collector is back.
+    """
+    assert gc.isenabled()
+    real_enable = gc.enable
+    restoring, release = threading.Event(), threading.Event()
+
+    def gated_enable():
+        restoring.set()
+        assert release.wait(5)
+        real_enable()
+
+    monkeypatch.setattr(gc, "enable", gated_enable)
+    entered, go = threading.Event(), threading.Event()
+
+    def late_build(abort):
+        entered.set()
+        assert go.wait(5)
+        return PredictorDouble()
+
+    parents = [QObject(), QObject()]
+    first = PredictionLoader(lambda abort: PredictorDouble(), parents[0])
+    first.start()
+    assert restoring.wait(5)
+    second = PredictionLoader(late_build, parents[1])
+    second.start()
+    assert not entered.wait(0.3), "the new build got in before the collector was back"
+    release.set()
+    assert entered.wait(5)
+    go.set()
+    wait_for_job(first._job, second._job)
+    assert gc.isenabled()
 
 
 def test_publication_does_not_poll(qapp):
@@ -568,3 +786,30 @@ def test_settings_buttons_say_why_they_are_inert_and_the_study_names_retry(pendi
     finally:
         bridge.shutdown()
         del engine
+
+
+def test_a_cancelled_build_restores_the_collector_too(qapp, manage_gc):
+    """The app's path, cancelled mid-build (closing the keyboard while it
+    loads): the collector must come back even though nothing is published."""
+    entered = threading.Event()
+    release = threading.Event()
+
+    def build(abort):
+        entered.set()
+        assert release.wait(5)
+        return PredictorDouble()
+
+    parent = QObject()
+    loader = PredictionLoader(build, parent)
+    job = loader._job
+    loader.start()
+    try:
+        assert entered.wait(2)
+        assert not gc.isenabled()
+        parent.deleteLater()
+        QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+    finally:
+        release.set()
+        wait_for_job(job)
+    assert gc.isenabled()
+    assert manage_gc == ["freeze"]

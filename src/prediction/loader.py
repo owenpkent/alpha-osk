@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gc
 import logging
 import sys
 import threading
@@ -25,7 +26,106 @@ PredictorFactory = Callable[[Callable[[], bool]], HybridPredictor]
 # floor, the click-settle poll.  A shorter interval makes the worker give
 # the GIL back promptly.  Process-wide, so it is restored when the build
 # ends.
-_BUILD_SWITCH_INTERVAL_S = 0.001
+#
+# Off Windows this is 0.1 ms rather than 1 ms: every time the UI thread
+# re-enters Python (a slot, a property read, the return from a ctypes call) it
+# waits up to one interval for the worker to let go, and a keystroke does that
+# several times, so a shorter interval trims the median delay.
+#
+# Windows gets 1 ms, never less: CPython's Windows condition variable takes
+# its timeout in whole milliseconds and truncates, so 0.1 ms becomes 0 and a
+# thread waiting for the GIL stops waiting at all, asks for it back on every
+# turn and spins.  That did lower the median key delay in a measurement
+# (about 1 ms against 1.9 ms at 1 ms, offscreen Main.qml, real model), but
+# only by spinning, and on a core or two shared with other work it starved the
+# worker threads of this suite for whole seconds (reproduced pinned to one
+# core: nine tests in test_prediction_startup.py timed out at 0.1 ms and
+# passed at 1 ms or the default), and it would do the same to the build on a
+# small user machine.  So on Windows the interval is the same as before this
+# change, and what shortens the delays there is the collector handling below
+# (worst case 33-60 ms down to 3-19 ms; the median stays ~1.9 ms).
+_BUILD_SWITCH_INTERVAL_S = 0.001 if sys.platform == "win32" else 0.0001
+
+# The switch interval cannot preempt the garbage collector: a collection is
+# one C call that holds the GIL from start to finish, and the build's few
+# hundred thousand fresh objects trigger four full (generation 2)
+# collections of 30-60 ms each, two of them back to back.  Those were the
+# keystrokes that lagged by 50-90 ms, and a fast typist's second tap on the
+# same key could land inside KeyButton's 150 ms debounce and be dropped.
+# The build makes almost no cyclic garbage (3 unreachable objects with the
+# real model), so collection is paused for its duration, and at the end
+# everything alive is moved into the permanent generation with gc.freeze()
+# rather than collected.  A collect there would be one more ~30 ms stall
+# right before "ready", and re-enabling without either would hand the whole
+# backlog to the next allocation, wherever that happens.  Freezing also
+# takes the engine's ~200 000 long-lived objects out of every later full
+# collection, which otherwise costs ~25 ms each time one lands mid-typing
+# (measured: 24 ms before the freeze, under 0.1 ms after).  The price is
+# that those few cyclic objects are never reclaimed.
+#
+# Both halves (the pause and the freeze) are opt-in, and only
+# keyboard_app.main() opts in.  The freeze pins everything alive at that
+# moment, and the pause holds back every other thread's garbage for the
+# length of the build.  In a process that runs many builds beside other work
+# (a pytest worker on a slow CI runner, where a real build outlives the test
+# that started it) that kept earlier tests' dead bridges alive with their
+# poll timers still firing, and froze them that way, until later tests
+# timed out waiting on the event loop.  Without the opt-in only the switch
+# interval changes.
+_settings_lock = threading.Lock()
+_manage_gc = False
+_active_builds = 0
+_saved_interval = 0.0
+_gc_paused = False
+
+
+def manage_gc_during_builds(enabled: bool = True) -> None:
+    """Opt this process into pausing the collector for each build and ending
+    the build with ``gc.freeze()``.
+
+    For the application only; see the note above ``_settings_lock``.
+    """
+    global _manage_gc
+    _manage_gc = enabled
+
+
+def _enter_build_settings() -> None:
+    """Lower the switch interval and, if opted in, pause the collector;
+    nests safely.
+
+    Both are process-wide, so only the first build in saves them and only the
+    last one out restores them: two overlapping builds restoring in the wrong
+    order would otherwise leave the process on the build's settings for good.
+    The first build in also decides whether the collector is paused, so the
+    last one out restores exactly what was changed even if the opt-in moved
+    in between.
+    """
+    global _active_builds, _saved_interval, _gc_paused
+    with _settings_lock:
+        if _active_builds == 0:
+            _saved_interval = sys.getswitchinterval()
+            _gc_paused = _manage_gc and gc.isenabled()
+            if _gc_paused:
+                gc.disable()
+        _active_builds += 1
+        sys.setswitchinterval(_BUILD_SWITCH_INTERVAL_S)
+
+
+def _exit_build_settings() -> None:
+    global _active_builds, _gc_paused
+    with _settings_lock:
+        _active_builds -= 1
+        if _active_builds:
+            return
+        sys.setswitchinterval(_saved_interval)
+        # The collector comes back under the same lock that counted this
+        # build out.  Released first, a build entering in the gap would find
+        # no active builds and a disabled collector, save that as the
+        # baseline, and switch the collector off for good on its own way out.
+        if _gc_paused:
+            _gc_paused = False
+            gc.freeze()
+            gc.enable()
 
 
 class _Notifier(QObject):
@@ -61,10 +161,11 @@ class _LoadJob:
 
 
 def _build(factory: PredictorFactory, target_thread: QThread, job: _LoadJob) -> None:
-    previous_interval = sys.getswitchinterval()
-    sys.setswitchinterval(_BUILD_SWITCH_INTERVAL_S)
     predictor: HybridPredictor | None = None
+    entered = False
     try:
+        _enter_build_settings()
+        entered = True
         try:
             predictor = factory(job.is_cancelled)
         except LoadAborted:
@@ -92,7 +193,11 @@ def _build(factory: PredictorFactory, target_thread: QThread, job: _LoadJob) -> 
         # Every exit path, including one nobody anticipated, marks the job
         # done: a job that never finishes leaves the bar on "Loading
         # suggestions..." with no Retry and no way back short of a restart.
-        sys.setswitchinterval(previous_interval)
+        try:
+            if entered:
+                _exit_build_settings()
+        except Exception:
+            _logger.exception("Could not restore the interpreter settings after the build")
         with job.lock:
             job.done = True
             notifier = job.notifier
@@ -165,6 +270,16 @@ class PredictionLoader(QObject):
         self._published = True
         notifier = self._job.notifier
         if notifier is not None:
+            # ``done`` is set before the worker's own ``finished.emit()`` has
+            # returned, and this slot can run the moment that emit has queued
+            # it.  Deleting the notifier now would destroy a QObject while
+            # another thread is still inside its signal emission (and drop the
+            # last Python reference from the wrong thread), which is an access
+            # violation waiting for a descheduled worker.  The worker has
+            # nothing left to do after the emit, so the join is immediate.
+            thread = self._job.thread
+            if thread is not None and thread is not threading.current_thread():
+                thread.join(timeout=5.0)
             notifier.deleteLater()
             self._job.notifier = None
         if predictor is None:
