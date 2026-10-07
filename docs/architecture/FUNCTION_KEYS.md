@@ -35,9 +35,8 @@ keys must not have to spend the height of the standard row to get them.
 ### One row at a time, behind a swap key (2026-10-06)
 When both toggles are on, the rows do not stack: `Main.qml::functionRowPage`
 (1 = F1-F12, 2 = F13-F24) picks which one is on screen, and the visible row
-carries one extra key at its right end, in a group of its own (4-4-4-1, the
-group gap still `keySpacing * 4`, the thirteen keys sharing the grid width
-through `_fillKeyW`). With one toggle on that row shows alone, twelve keys,
+carries one extra key at its right end (one ordinary gap from F12 or F24,
+the thirteen keys sharing the grid width through `_fillKeyW`). With one toggle on that row shows alone, twelve keys,
 no swap key. The owner chose this from rendered options. It saves a row of
 height, and part of that saving is spent on **full-height keys** (the rows
 were 0.7x before): a bigger target for an imprecise pointer.
@@ -269,14 +268,15 @@ needs its own bindings from `Main.qml`. Guarded by
 which walks the tree with both function rows switched on and fails on any
 key holding a zero margin.
 
-### Geometry: the keys fill the grid, the group gap never gives
+### Geometry: the keys fill the grid, with no gap between the groups
 
 **The row spans the keyboard grid exactly, and it is the key width that
 absorbs the leftover.** `FunctionRow._fillKeyW` divides `maxWidth` (the
 grid width, passed by `Main.qml`) between the twelve keys after taking out
-9 internal gaps and 2 group gaps; `_groupGap` is a fixed `keySpacing * 4`.
-At a 940 px window that makes an F-key 75.6 px against the 58.7 px key
-directly below it, about 29% wider.
+11 ordinary gaps; `_groupGap` equals `keySpacing`, so the groups of four are
+not set apart on screen.
+At a 940 px window that makes an F-key roughly 76 px against the 58.7 px key
+directly below it, about 30% wider.
 
 **This reverses the earlier decision, on purpose and with the picture in
 front of us.** The row used to draw each F-key exactly one grid column wide
@@ -293,19 +293,18 @@ read a little
 bar-like. **The rule survives, pointing the other way: don't change this
 back without rendering it next to the number row.**
 
-**The group gap is fixed because a gap that gives is a gap that disappears
-exactly when the row is tightest.** It used to be the thing that gave, and
-while the Edit toggle made this row 13 keys against compact's 13-unit grid
-there were 3 px of slack, so it clamped to `keySpacing` and 4-4-4 rendered
-as one undifferentiated run, on the view where telling twelve identical
-keys apart matters most. The grouping now survives in both views.
+**There is no wider gap between the groups (2026-10-07, the owner's
+request).** The row used to be 4-4-4 like a physical keyboard, with
+`keySpacing * 4` between the groups, and that gap was held fixed so it could
+not collapse on compact. The owner did not want the gaps at all: they were
+two dead strips along the row and width the keys could use. The groups now
+exist only in `keyGroups` (which numbers the scan ids).
 
 `tests/test_qml_compact_view.py::TestPanelsSitFlushWithTheGrid::test_function_row_fills_the_widest_keyboard_row`
 pins three things, and the last two are what a width check alone cannot
 see: the panel is flush with the grid; the fill width accounts for 12 keys
-plus 9 internal gaps plus 2 group gaps (so a wrong key count or a changed
-gap moves it); and the group gap holds at the 4-4-4 width in **both**
-views. It used to assert that no key ever grew, which is the assertion this
+plus 11 gaps (so a wrong key count or a changed gap moves it); and the gap
+between the groups is an ordinary `keySpacing` in **both** views. It used to assert that no key ever grew, which is the assertion this
 change reverses.
 
 ### Testing notes
