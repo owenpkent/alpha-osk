@@ -96,3 +96,21 @@ class TestTheSpecAppliesIt:
             "EXE() is not being handed the version file, so the exe ships without "
             "a FileDescription and pins from the running button are named 'alpha-osk'"
         )
+
+
+class TestTheUpdateHelperHasItsOwnBlock:
+    def test_it_is_told_apart_from_the_keyboard(self, vr) -> None:
+        text = vr.version_info_text(
+            "1.7.1", description=vr.HELPER_DESCRIPTION, exe_name=vr.HELPER_EXE_NAME
+        )
+        assert "StringStruct('FileDescription', 'Alpha-OSK Updater')" in text
+        assert "StringStruct('OriginalFilename', 'alpha-osk-relauncher.exe')" in text
+        # Same publisher and version as the keyboard it belongs to.
+        assert "OK Studio Inc." in text
+        assert "StringStruct('FileVersion', '1.7.1')" in text
+
+    def test_the_keyboards_block_is_unchanged_by_the_new_parameters(self, vr) -> None:
+        text = vr.version_info_text("1.7.1")
+        assert "StringStruct('FileDescription', 'Alpha-OSK')" in text
+        assert "StringStruct('OriginalFilename', 'alpha-osk.exe')" in text
+        assert "StringStruct('InternalName', 'alpha-osk')" in text

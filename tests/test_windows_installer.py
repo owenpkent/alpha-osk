@@ -1223,3 +1223,73 @@ class TestTheShortcutsCarryTheTaskbarIdentity:
 def _nsis_literal(path: Path) -> str:
     """A path as an NSIS string literal: ``$`` is NSIS's only escape."""
     return str(path).replace("$", "$$")
+
+
+@pytest.fixture(scope="module")
+def nsi_for_a_bundle_with_the_helper(tmp_path_factory) -> str:
+    """The script generated against a stand-in bundle holding both exes."""
+    dist = tmp_path_factory.mktemp("dist")
+    (dist / "_internal").mkdir()
+    (dist / "_internal" / "python3.dll").write_bytes(b"dll")
+    (dist / "alpha-osk.exe").write_bytes(b"main")
+    (dist / "alpha-osk-relauncher.exe").write_bytes(b"helper")
+
+    spec = importlib.util.spec_from_file_location("_alpha_osk_build_bundle", BUILD_PY)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["_alpha_osk_build_bundle"] = module
+    try:
+        spec.loader.exec_module(module)
+        module.DIST_DIR = dist
+        return module._generate_nsi_script("9.9.9", "Alpha-OSK-Setup-9.9.9")
+    finally:
+        sys.modules.pop("_alpha_osk_build_bundle", None)
+
+
+class TestTheUpdateHelperIsInstalledAndRemovedButNeverKilled:
+    """The helper is a second exe in the bundle (``alpha-osk-relauncher.exe``).
+
+    The installer's file list is built from whatever is in ``dist/``, so it
+    arrives and leaves with no special case; what has to stay true is that
+    nothing the installer does by *image name* can reach it.  The installer
+    closes the keyboard with ``taskkill /IM "alpha-osk.exe"`` and force-kills
+    whatever still carries that name; a helper caught by it would die with the
+    keyboard it is waiting out, which is the failure the helper's own name
+    exists to avoid.
+    """
+
+    def test_it_is_installed_at_the_root_beside_the_main_exe(
+        self, nsi_for_a_bundle_with_the_helper: str
+    ) -> None:
+        install = _install_section(nsi_for_a_bundle_with_the_helper)
+        lines = [ln.strip() for ln in install.splitlines()]
+        helper = next(i for i, ln in enumerate(lines) if ln.endswith('alpha-osk-relauncher.exe"'))
+        assert lines[helper].startswith("File ")
+        # The File source path carries the host's separator, so accept either.
+        main = next(i for i, ln in enumerate(lines) if re.search(r'[\\/]alpha-osk\.exe"$', ln))
+        out_paths = [ln for ln in lines[: helper + 1] if ln.startswith("SetOutPath")]
+        assert out_paths[-1] == 'SetOutPath "$INSTDIR"', "it must land beside alpha-osk.exe"
+        assert abs(helper - main) <= 2
+
+    def test_the_uninstaller_removes_it(self, nsi_for_a_bundle_with_the_helper: str) -> None:
+        uninstall = _uninstall_section(nsi_for_a_bundle_with_the_helper)
+        assert 'Delete "$INSTDIR\\alpha-osk-relauncher.exe"' in uninstall
+        # And the whole directory goes, as it always did.
+        assert 'RMDir /r "$INSTDIR"' in uninstall
+
+    def test_every_image_name_the_installer_matches_is_exactly_the_main_exe(self, nsh: str) -> None:
+        """No wildcard and no prefix: ``alpha-osk*`` would match the helper."""
+        code = "\n".join(
+            _macro_code(nsh, name)
+            for name in (
+                "customAlphaOskIsRunning",
+                "customCloseAlphaOsk",
+                "customCloseRunningApp",
+                "customInit",
+            )
+        )
+        image_names = re.findall(r'/IM\s+"([^"]+)"', code)
+        image_names += re.findall(r'IMAGENAME eq ([^"\s]+)', code)
+        assert image_names, "the installer no longer matches the app by image name?"
+        assert set(image_names) == {"alpha-osk.exe"}, image_names
+        assert "*" not in "".join(image_names)

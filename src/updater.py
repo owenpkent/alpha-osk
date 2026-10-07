@@ -7,7 +7,7 @@ thumbprint**, and launches it silently.
 
 Threat model & defences
 -----------------------
-The updater is the highest-value MITM target in the app — a successful
+The updater is the highest-value MITM target in the app - a successful
 attacker gets to ship arbitrary signed code on the user's behalf.  The
 defences below are layered so any single layer can fail without
 unlocking code execution.
@@ -42,7 +42,7 @@ Disk-fill         Bounded download     ``_MAX_DOWNLOAD_BYTES`` aborts
 Downgrade attack  Strict semver        Older or equal versions are
                                        silently rejected.
 Tag confusion    ``releases/latest``   We never trust an arbitrary
-                  endpoint             tag — only the repository's own
+                  endpoint             tag - only the repository's own
                                        "latest" pointer.
 TOCTOU on        Private temp dir      Downloaded to a per-user temp
 download          + a held handle      dir, then held open denying
@@ -73,6 +73,8 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 import urllib.error
 import urllib.request
 from collections.abc import Iterator
@@ -81,6 +83,7 @@ from pathlib import Path
 from typing import Callable, Optional, Tuple
 from urllib.parse import urlparse
 
+from . import update_signals, update_stage
 from .__version__ import __version__ as CURRENT_VERSION
 from .platform import powershell_path
 
@@ -121,7 +124,7 @@ EXPECTED_SIGNER_CN = "OK Studio Inc."
 # canonical CDN hostnames it redirects release-asset downloads to.
 # Any other host is treated as an attacker-controlled redirect.
 #
-# GitHub's release-asset CDN has migrated over the years —
+# GitHub's release-asset CDN has migrated over the years -
 # ``objects.githubusercontent.com`` was the historical name and still
 # appears in older URLs; ``release-assets.githubusercontent.com`` is
 # the current production hostname (signed Azure-blob proxy).  We pin
@@ -165,7 +168,7 @@ def _parse_version(tag: str) -> Optional[Tuple[int, int, int]]:
     """Parse a ``v1.2.3`` / ``1.2.3`` tag into a comparable tuple.
 
     Returns ``None`` for anything that isn't a clean MAJOR.MINOR.PATCH
-    triple — we deliberately refuse pre-release or git-describe style
+    triple - we deliberately refuse pre-release or git-describe style
     tags so an attacker can't ship ``1.0.2-evil`` and have it compare
     as "newer" by string ordering.
     """
@@ -239,9 +242,9 @@ def check_for_update(
     timeout: float = _HTTP_TIMEOUT_SECONDS,
 ) -> Optional[UpdateInfo]:
     """Hit the Releases API and return an UpdateInfo iff a newer
-    properly-shaped release exists.  Returns None on any error — the
+    properly-shaped release exists.  Returns None on any error - the
     updater path is best-effort and must never crash the app."""
-    # Defensive — at runtime ``api_url`` is the constant above.  Tests
+    # Defensive - at runtime ``api_url`` is the constant above.  Tests
     # pass the constant explicitly; refusing anything else stops a
     # future careless override from pointing the updater at any other
     # endpoint, even within the same repo.  Exact equality is tighter
@@ -354,7 +357,7 @@ def _download_with_cap(
             total = int(length_hdr) if length_hdr and length_hdr.isdigit() else None
             if total is not None and total > _MAX_DOWNLOAD_BYTES:
                 _logger.error(
-                    "Refusing download — Content-Length %d > cap %d",
+                    "Refusing download - Content-Length %d > cap %d",
                     total,
                     _MAX_DOWNLOAD_BYTES,
                 )
@@ -374,7 +377,7 @@ def _download_with_cap(
                     written += len(chunk)
                     if written > _MAX_DOWNLOAD_BYTES:
                         _logger.error(
-                            "Aborting download — exceeded cap %d",
+                            "Aborting download - exceeded cap %d",
                             _MAX_DOWNLOAD_BYTES,
                         )
                         return None
@@ -454,7 +457,7 @@ def _verify_signature(exe_path: Path, expected_version: str) -> bool:
     silently roll every user back onto a build with known-fixed bugs.
     """
     if sys.platform != "win32":
-        # No Authenticode outside Windows — refuse.  Linux/macOS aren't
+        # No Authenticode outside Windows - refuse.  Linux/macOS aren't
         # the auto-update target anyway; release builds are Windows.
         _logger.error("Signature verification only supported on Windows")
         return False
@@ -463,7 +466,7 @@ def _verify_signature(exe_path: Path, expected_version: str) -> bool:
         _logger.error("Cannot verify missing file: %s", exe_path)
         return False
 
-    # PowerShell expression — emit a single line:
+    # PowerShell expression - emit a single line:
     #     Status|Thumbprint|SubjectCN|FileVersion
     # Using ``|`` as separator since Windows Authenticode subjects
     # can contain commas but never pipes in our cert. The path is
@@ -757,7 +760,7 @@ def _launch_installer(dest: Path) -> Tuple[bool, str]:
         # unquoted. See the docstring above; do not change this shape.
         params = f"/S /D={install_dir}"
         ret = shell32.ShellExecuteW(
-            None,  # parent hwnd — not tied to a window
+            None,  # parent hwnd - not tied to a window
             "runas",  # verb: trigger UAC elevation
             str(dest),  # installer path
             params,  # silent flag + install dir (NSIS)
@@ -773,7 +776,7 @@ def _launch_installer(dest: Path) -> Tuple[bool, str]:
             return False, "Install launch failed (see log)"
         return True, ""
 
-    # Non-Windows path — kept for tests/dev shells; production
+    # Non-Windows path - kept for tests/dev shells; production
     # release pipeline is Windows-only since Authenticode is.
     subprocess.Popen(
         [str(dest), "/S", f"/D={install_dir}"],
@@ -785,90 +788,222 @@ def _launch_installer(dest: Path) -> Tuple[bool, str]:
 
 _RELAUNCHER_EXE_NAME = "alpha-osk-relauncher.exe"
 _RELAUNCHER_STAGE_PREFIX = "alpha-osk-relauncher-"
+_MAIN_EXE_NAME = "alpha-osk.exe"
+
+# How long the installer's launch may wait for the helper's window to paint,
+# and how often to look.  A cold start of the helper from a fresh stage is
+# well under this; the ceiling only matters when something is wrong, and then
+# the update goes ahead without the screen rather than not at all.
+_HELPER_VISIBLE_WAIT_S = 3.0
+_HELPER_VISIBLE_POLL_S = 0.05
 
 
 def _purge_stale_relauncher_stages() -> None:
     """Best-effort removal of staging copies left by previous updates.
 
-    Each spawn stages a full copy of the app bundle under ``%TEMP%``
-    (see ``_spawn_relauncher`` for why), and a running helper cannot
-    delete its own image, so every update leaves one stage behind.
-    Sweeping the previous ones at the next spawn bounds the litter at
-    a single stage between updates.  ``ignore_errors`` covers the one
-    stage that could still be live (a helper from an update minutes
-    ago): its locked files simply survive the sweep.
+    Each spawn stages the helper's files under ``%TEMP%`` (see
+    ``_spawn_relauncher`` for why), and a running helper cannot delete its
+    own image, so every update leaves one stage behind.  Sweeping the
+    previous ones at the next spawn bounds the litter at a single stage
+    between updates.  The sweep leaves alone any stage whose helper may still
+    be running (it holds a lock, and a young stage is never touched): see
+    ``update_stage.purge_stale_stages``.
     """
     try:
-        temp_root = Path(tempfile.gettempdir())
-        for stale in temp_root.glob(_RELAUNCHER_STAGE_PREFIX + "*"):
-            shutil.rmtree(stale, ignore_errors=True)
+        update_stage.purge_stale_stages(Path(tempfile.gettempdir()))
     except OSError:
         pass
 
 
-def _spawn_relauncher(new_version: str) -> bool:
-    """Spawn the user-IL relauncher helper before kicking off the installer.
+def _stage_helper(target_exe: Path) -> Optional[Path]:
+    """Stage the helper's files under %TEMP% and return the stage directory.
+
+    None (logged, nothing left behind) when this install has no helper or the
+    copy failed: the update goes ahead without an update screen and the
+    installer's explorer fallback carries the relaunch.
+    """
+    if not (target_exe.parent / _RELAUNCHER_EXE_NAME).is_file():
+        _logger.warning("This install has no %s; skipping the update screen", _RELAUNCHER_EXE_NAME)
+        return None
+    _purge_stale_relauncher_stages()
+    stage = Path(tempfile.mkdtemp(prefix=_RELAUNCHER_STAGE_PREFIX))
+    try:
+        started = time.monotonic()
+        mode = update_stage.stage_bundle(
+            target_exe.parent,
+            stage / "bundle",
+            helper_exe=_RELAUNCHER_EXE_NAME,
+            main_exe=_MAIN_EXE_NAME,
+        )
+        _logger.info("Staged the update helper (%s) in %.2fs", mode, time.monotonic() - started)
+    except Exception as exc:  # noqa: BLE001
+        _logger.warning("Failed to stage the update helper: %s", exc)
+        shutil.rmtree(stage, ignore_errors=True)
+        return None
+    return stage
+
+
+class _StagingJob:
+    """The helper's stage, built on a worker thread while the installer downloads.
+
+    The copy is on the critical path (it has to finish before the UAC prompt),
+    and the download in front of it is minutes of waiting on the network, so
+    it is started first and joined at the spawn.  A job nobody takes (the
+    download failed, the signature did not verify) removes its stage.
+    """
+
+    def __init__(self, target_exe: Path) -> None:
+        self._stage: Optional[Path] = None
+        self._thread = threading.Thread(
+            target=self._run, args=(target_exe,), name="alpha-osk-stage-helper", daemon=True
+        )
+        self._thread.start()
+
+    def _run(self, target_exe: Path) -> None:
+        try:
+            self._stage = _stage_helper(target_exe)
+        except Exception as exc:  # noqa: BLE001
+            _logger.warning("Staging the update helper raised: %s", exc)
+
+    def take(self) -> Optional[Path]:
+        """Wait for the stage and hand it over (None if there is none)."""
+        self._thread.join()
+        stage, self._stage = self._stage, None
+        return stage
+
+    def discard(self) -> None:
+        stage = self.take()
+        if stage is not None:
+            shutil.rmtree(stage, ignore_errors=True)
+
+
+def _begin_staging() -> Optional[_StagingJob]:
+    """Start staging now if this is a frozen install; None for a dev run."""
+    if not getattr(sys, "frozen", False):
+        return None
+    try:
+        return _StagingJob(Path(sys.executable))
+    except Exception as exc:  # noqa: BLE001
+        _logger.warning("Could not start staging the update helper: %s", exc)
+        return None
+
+
+class _RelauncherHandle:
+    """The updater's line to the helper it spawned.
+
+    The helper's window is up from the moment it starts, but the UAC prompt
+    comes after that, and the helper cannot tell "waiting on the prompt"
+    from "the parent died". These two markers are how the updater says which:
+    :meth:`installer_launched` starts the helper's timeouts, :meth:`cancel`
+    tells it to leave (a declined prompt, a failed launch).  Both are files
+    in the helper's stage directory, which survive this process being killed
+    by the installer a moment later (see ``update_signals``).
+    """
+
+    def __init__(self, process: "subprocess.Popen[bytes]", signal_dir: Path) -> None:
+        self.process = process
+        self.signal_dir = signal_dir
+
+    def installer_launched(self) -> None:
+        update_signals.touch(self.signal_dir / update_signals.INSTALLER_LAUNCHED_FILE)
+
+    def cancel(self) -> None:
+        update_signals.touch(self.signal_dir / update_signals.CANCEL_FILE)
+
+    def wait_until_visible(self, timeout_s: float) -> bool:
+        """Block until the helper says its window has painted, or ``timeout_s`` passes.
+
+        This replaces a fixed sleep before the installer launches: the point
+        of the wait is that the update screen is on screen before the
+        keyboard goes away, which on a machine that does not prompt for
+        elevation can be a second after the launch.  Returns early (False)
+        if the helper has already exited, since nothing is coming.
+        """
+        marker = self.signal_dir / update_signals.UI_SHOWN_FILE
+        deadline = time.monotonic() + timeout_s
+        while True:
+            if marker.exists():
+                return True
+            poll = getattr(self.process, "poll", None)
+            if callable(poll) and poll() is not None:
+                return False
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(_HELPER_VISIBLE_POLL_S)
+
+
+def _spawn_relauncher(
+    new_version: str,
+    anchor_rect: Optional[Tuple[int, int, int, int]] = None,
+    *,
+    installer_name: str = "",
+    staged: Optional[_StagingJob] = None,
+) -> Optional[_RelauncherHandle]:
+    """Spawn the update screen / relauncher helper before kicking off the installer.
 
     The installer's ``customInit`` will taskkill us, so anything that
     needs to outlive the install must be detached *before* we hand off
-    to the elevated installer process. Spawning here — while the OSK
-    is still running at the user's medium IL — guarantees the helper
-    inherits a user-mode token. The helper polls for our exit, waits
-    for the install to finish, and launches the freshly-installed
+    to the elevated installer process. Spawning here, while the OSK
+    is still running at the user's medium IL, guarantees the helper
+    inherits a user-mode token. The helper shows the update screen at once,
+    waits for the install to finish, and launches the freshly-installed
     ``alpha-osk.exe``. See ``src/_update_relauncher.py`` for the full
     flow + rationale.
 
-    **The helper runs from a renamed copy of the bundle in %TEMP%, and
-    both halves of that are load-bearing.** It first shipped as the
-    installed exe re-invoked in place (``alpha-osk.exe
-    --update-relauncher``), which is doubly incompatible with the
-    install it is meant to outlive:
+    **The helper is its own exe, ``alpha-osk-relauncher.exe``, built without
+    UIAccess, and it runs from a copy of the bundle in %TEMP%.** Each half
+    is load-bearing:
 
-    * *The name*: the installer closes the app with ``taskkill /IM
-      "alpha-osk.exe"``, polls ``tasklist`` for that image name to
-      disappear, and force-kills whatever still matches.  A helper
-      sharing the name first cost every update the full ~6 s wait
-      budget (the loop was staring at the helper) and then its own
-      life, which is why ``relauncher.log`` never carried a production
-      entry: the splash and the relaunch were dead before the install
-      began, and the keyboard only ever came back via the installer's
-      ``Exec explorer.exe`` fallback.
-    * *The location*: a process running from the install dir holds its
-      own exe and every loaded DLL mapped, and Windows will neither
-      delete nor overwrite a mapped image.  A helper that survived the
-      taskkill would therefore make the old uninstaller's ``Delete``
-      and NSIS's ``File`` extraction fail, and a silent install that
-      cannot write a file aborts, leaving the user with no keyboard at
-      all.  The accidental kill was the only reason updates succeeded.
+    * *Not the main exe.* The main exe requests ``uiAccess="true"`` (since
+      1.6.0) and Windows refuses to start such an image outside a secure
+      location (``%TEMP%`` is not one) with WinError 740, so the helper
+      this replaced, the main exe renamed and run from the stage, failed
+      every spawn: no update screen, and the keyboard only came back
+      through the installer's explorer fallback after a blank gap.
+    * *Not named ``alpha-osk.exe``.* The installer closes the app with
+      ``taskkill /IM "alpha-osk.exe"``, polls ``tasklist`` for that image
+      name and force-kills whatever still matches, so a helper sharing the
+      name was killed with it.
+    * *Not run from the install dir.* A running process holds its exe and
+      every loaded DLL mapped, Windows will neither delete nor overwrite a
+      mapped image, and a silent NSIS install that cannot write a file
+      aborts. So the whole bundle (the exe cannot start without its
+      ``_internal`` directory) is staged, and swept at the next spawn
+      (``_purge_stale_relauncher_stages``). Only the files the helper uses are
+      staged (``update_stage``), a list the build derives from the helper's own
+      analysis and proves by running the staged copy, so the stage is a third
+      of the bundle; ``alpha-osk.exe`` is never in it.
 
-    Copying the whole bundle costs a few seconds of disk once per
-    update and is swept on the next spawn
-    (``_purge_stale_relauncher_stages``); the copied exe keeps its
-    Authenticode signature, since the bytes are unchanged.
+    ``staged`` is a stage already being built (``_begin_staging``, started when
+    the download began); without one the copy is made here.  ``installer_name``
+    is the installer's image name, which lets the helper tell whether the
+    installer is still running.
+
+    An install made before the helper existed has no
+    ``alpha-osk-relauncher.exe``; that is logged and nothing is spawned.
 
     The spawn also snapshots the installed exe's mtime and hands it to
     the helper (``--old-exe-mtime``): NSIS restores build-time
     timestamps on extracted files, so "the mtime changed" is the signal
     that the install finished, where "the mtime is newer than the kill"
-    never fires.  See ``_new_exe_looks_fresh``.
+    never fires.  See ``_new_exe_looks_fresh``.  ``anchor_rect`` is the
+    keyboard window's physical-pixel rectangle, so the update screen opens
+    where the keyboard was.
 
-    Dev runs (not frozen) spawn nothing and return False: there is no
-    installed bundle to copy, no installer will replace the target, and
-    the old dev spawn's only observable behaviour was a detached
-    process waiting out its timeout.
+    Dev runs (not frozen) spawn nothing and return None: there is no
+    installed bundle to copy and no installer will replace the target.
 
-    Returns True on successful spawn (not "relaunch succeeded" — we'll
-    be dead before we could observe that). False is logged but the
-    install proceeds anyway: the in-installer ``Exec explorer.exe``
-    fallback in ``installer.nsh::customInstall`` is still wired and
-    sometimes works, so we'd rather try-and-maybe-fail than abort the
-    update.
+    Returns a handle on a successful spawn (not "relaunch succeeded": we'll
+    be dead before we could observe that), None otherwise. None is logged
+    but the install proceeds anyway: the in-installer ``Exec explorer.exe``
+    fallback in ``installer.nsh::customInstall`` is still wired, so we'd
+    rather try-and-maybe-fail than abort the update.
     """
     if not getattr(sys, "frozen", False):
         _logger.info("Not a frozen install; skipping the relauncher spawn")
-        return False
+        return None
     try:
-        # Lazy import — keeps the module load cost off normal startup.
+        # Lazy import: keeps the module load cost off normal startup.
         try:
             from src.platform import get_config_dir
         except ImportError:
@@ -879,13 +1014,11 @@ def _spawn_relauncher(new_version: str) -> bool:
             from .__version__ import __version__ as current_version  # type: ignore
 
         target_exe = Path(sys.executable)
-
-        _purge_stale_relauncher_stages()
-        stage = Path(tempfile.mkdtemp(prefix=_RELAUNCHER_STAGE_PREFIX))
+        stage = staged.take() if staged is not None else _stage_helper(target_exe)
+        if stage is None:
+            return None
         helper_dir = stage / "bundle"
-        shutil.copytree(target_exe.parent, helper_dir)
         helper_exe = helper_dir / _RELAUNCHER_EXE_NAME
-        os.replace(helper_dir / target_exe.name, helper_exe)
 
         try:
             old_exe_mtime = target_exe.stat().st_mtime
@@ -896,7 +1029,6 @@ def _spawn_relauncher(new_version: str) -> bool:
 
         cmd = [
             str(helper_exe),
-            "--update-relauncher",
             "--parent-pid",
             str(os.getpid()),
             "--new-version",
@@ -909,8 +1041,14 @@ def _spawn_relauncher(new_version: str) -> bool:
             str(old_exe_mtime),
             "--config-dir",
             str(get_config_dir()),
+            "--signal-dir",
+            str(stage),
             "--show-splash",
         ]
+        if anchor_rect is not None:
+            cmd += ["--anchor-rect", ",".join(str(int(v)) for v in anchor_rect)]
+        if installer_name:
+            cmd += ["--installer-image", installer_name]
 
         flags = 0
         if sys.platform == "win32":
@@ -933,7 +1071,7 @@ def _spawn_relauncher(new_version: str) -> bool:
             flags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) | getattr(
                 subprocess, "CREATE_NO_WINDOW", 0
             )
-        subprocess.Popen(
+        process = subprocess.Popen(
             cmd,
             creationflags=flags,
             close_fds=True,
@@ -942,10 +1080,10 @@ def _spawn_relauncher(new_version: str) -> bool:
             stderr=subprocess.DEVNULL,
         )
         _logger.info("Spawned update relauncher (parent pid=%d)", os.getpid())
-        return True
+        return _RelauncherHandle(process, stage)
     except Exception as exc:  # noqa: BLE001
         _logger.warning("Failed to spawn update relauncher: %s", exc)
-        return False
+        return None
 
 
 def download_and_install(
@@ -953,12 +1091,13 @@ def download_and_install(
     *,
     progress: Optional[ProgressCb] = None,
     on_installer_launching: Optional[HandoffCb] = None,
+    anchor_rect: Optional[Tuple[int, int, int, int]] = None,
     timeout: float = _HTTP_TIMEOUT_SECONDS * 4,  # downloads are slower than API
 ) -> Tuple[bool, str]:
     """Download the installer, verify its signature, and exec it silently.
 
     Returns a ``(ok, error)`` pair.  ``ok`` is True iff the installer
-    was successfully launched (not whether it succeeded — the installer
+    was successfully launched (not whether it succeeded - the installer
     kills us mid-run, so we never observe its exit code).  On failure,
     ``error`` is a short user-facing string identifying which step blew
     up; the full details land in the log at ERROR level.  On success,
@@ -969,6 +1108,14 @@ def download_and_install(
 
     work_dir = _make_private_tempdir()
     dest = work_dir / info.asset_name
+    # Set once the helper is up. Any way out of here other than a launched
+    # installer must tell it to leave (the `finally` below), or its window
+    # would sit there saying "waiting for you to approve" for a prompt that
+    # was declined, or never shown.
+    relauncher: Optional[_RelauncherHandle] = None
+    installer_launched = False
+    # The helper's stage is copied while the download runs (see _StagingJob).
+    staging = _begin_staging()
 
     try:
         downloaded_digest = _download_with_cap(
@@ -1013,7 +1160,7 @@ def download_and_install(
                 return False, "Installer changed after download (see log)"
 
             if not _verify_signature(dest, info.version):
-                _logger.error("Aborting install — signature verification failed")
+                _logger.error("Aborting install - signature verification failed")
                 return False, "Signature check failed (see log)"
 
             # Spawn the detached user-IL relauncher BEFORE elevation. This
@@ -1022,13 +1169,18 @@ def download_and_install(
             # is now a fallback (it silently fails on some Windows configs
             # because of integrity-level rules around elevated parents
             # spawning user-mode children). See _spawn_relauncher.
-            _spawn_relauncher(info.version)
+            relauncher = _spawn_relauncher(
+                info.version,
+                anchor_rect,
+                installer_name=info.asset_name,
+                staged=staging,
+            )
 
             # Notify the live OSK that the installer is about to launch so
             # it can flash a toast warning the user. The callback is
             # expected to block briefly (~1.5 s) so the toast actually
             # paints before the installer's taskkill arrives. A callback
-            # raise is never fatal — falling through to the install is
+            # raise is never fatal - falling through to the install is
             # better than aborting because a UI signal misfired.
             if on_installer_launching is not None:
                 try:
@@ -1039,6 +1191,17 @@ def download_and_install(
                         exc,
                     )
 
+            # The update screen has to be on screen before the keyboard goes
+            # away, and the keyboard goes away a moment after the installer
+            # starts (at once, on a machine that does not prompt for
+            # elevation).  Wait for the helper's own "I have painted" rather
+            # than for a fixed time: usually shorter, and it holds as long
+            # as the helper actually needs, up to a ceiling.
+            if relauncher is not None and not relauncher.wait_until_visible(_HELPER_VISIBLE_WAIT_S):
+                _logger.warning(
+                    "The update screen did not report in %.1fs; continuing", _HELPER_VISIBLE_WAIT_S
+                )
+
             # /S = NSIS silent install; the installer kills the running
             # alpha-osk.exe, runs the old uninstaller, and installs the
             # new build. The relauncher we just spawned will pick up the
@@ -1047,10 +1210,23 @@ def download_and_install(
             ok, err = _launch_installer(dest)
             if not ok:
                 return False, err
+            installer_launched = True
+            # From here the helper's timeouts run. Written the instant the
+            # launch returns because the installer's taskkill follows within
+            # moments and ends this process; the helper also treats a parent
+            # that vanished without a marker as launched.
+            if relauncher is not None:
+                relauncher.installer_launched()
             return True, ""
     except Exception as e:  # noqa: BLE001
         _logger.error("Install failed: %s", e)
         return False, f"Install failed: {e}"
-    # NB: we deliberately don't rmtree work_dir — the installer process
+    finally:
+        if relauncher is not None and not installer_launched:
+            relauncher.cancel()
+        # A stage nobody took (the download or the signature failed).
+        if staging is not None:
+            staging.discard()
+    # NB: we deliberately don't rmtree work_dir - the installer process
     # is still reading from it.  Windows cleans %TEMP% on its own
     # cadence; leaving the file is fine.
