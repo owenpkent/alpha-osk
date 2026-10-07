@@ -38,18 +38,21 @@ Window {
     objectName: "alphaOskKeyboard"
 
     // Closing the keyboard window means minimizing it, unless the app is
-    // quitting.  A close reaches this window from the taskbar's Close and
-    // from any UI Automation client's WindowPattern.Close, and Qt's default
-    // left the process running with the keyboard hidden: not on the taskbar,
-    // not in the accessibility tree, reachable only from the tray.  A switch
-    // user's scanner could therefore make the keyboard vanish beyond its own
-    // reach, and a user who closed it from the taskbar lost it the same way.
-    // Minimized, it stays on the taskbar and in the tree, and any client can
-    // bring it back.  The title bar's close and the tray's Quit end the app
-    // as before: they quit, and keyboard_app.py sets `quitting` when a quit
-    // begins, which is what lets this close through (Qt 6 cancels a quit if
-    // a window refuses to close).  Windows only: the scanning contract is
-    // Windows, and a minimize is inert on a tucked X11 window.
+    // quitting.  The close this is for is a UI Automation client's
+    // WindowPattern.Close, and Qt's default left the process running with
+    // the keyboard hidden: not on the taskbar, not in the accessibility tree,
+    // reachable only from the tray.  A switch user's scanner could therefore
+    // make the keyboard vanish beyond its own reach.  Minimized, it stays on
+    // the taskbar and in the tree, and any client can bring it back.
+    // A close from the shell (the taskbar's "Close window", Alt+F4, the
+    // system menu) is the user's and quits instead: it arrives as WM_CLOSE,
+    // which a UIA Close never sends, and windows_window.ShellCloseFilter
+    // consumes it and quits before it gets here.  The title bar's close and
+    // the tray's Quit end the app as before.  Every quit makes
+    // keyboard_app.py set `quitting`, which is what lets this close through
+    // (Qt 6 cancels a quit if a window refuses to close).  Windows only: the
+    // scanning contract is Windows, and a minimize is inert on a tucked X11
+    // window.
     property bool quitting: false
     onClosing: function (close) {
         if (Qt.platform.os !== "windows" || root.quitting)
@@ -78,6 +81,11 @@ Window {
         // on their own, and yoking them to the standard row would cost
         // a user who only wants macros the vertical space of both.
         property bool savedShowExtraFunctionRow: false
+        // Which function row shows when both toggles are on: 1 is F1-F12,
+        // 2 is F13-F24.  Remembered state rather than a setting (nothing in
+        // Settings sets it, the swap key does), restored so a user who
+        // lives on the macro page is not sent back to F1-F12 every launch.
+        property int savedFunctionRowPage: 1
         property string savedTheme: "dark"
         // Which Key Colours scheme paints the keycaps.  "mono" ships as the
         // default: it is the only scheme that cannot clash on any theme
@@ -364,6 +372,8 @@ Window {
         root.showNumpad = appSettings.savedShowNumpad && !root.compactView
         root.showFunctionRow = appSettings.savedShowFunctionRow
         root.showExtraFunctionRow = appSettings.savedShowExtraFunctionRow
+        // Anything but 2 (a hand-edited or corrupt value) reads as page 1.
+        root.functionRowPage = appSettings.savedFunctionRowPage === 2 ? 2 : 1
         root.refreshKeyActions()
         root.currentTheme = appSettings.savedTheme
         root.suggestionsEnabled = appSettings.savedSuggestionsEnabled
@@ -741,7 +751,8 @@ Window {
         Math.round(root.width), Math.round(root.height),
         root.currentLayout, root.compactView ? 1 : 0, root.activeLayer,
         root.showNumberRow ? 1 : 0, root.showFunctionRow ? 1 : 0,
-        root.showExtraFunctionRow ? 1 : 0, root.showNavigation ? 1 : 0,
+        root.showExtraFunctionRow ? 1 : 0, root.functionRowPage,
+        root.showNavigation ? 1 : 0,
         root.showNumpad ? 1 : 0, root.suggestionsEnabled ? 1 : 0,
         // NumLock rewrites the whole numpad: the digits become navigation
         // actions and the centre key goes blank and disabled, with every
@@ -817,6 +828,14 @@ Window {
     }
     property bool showFunctionRow: false
     property bool showExtraFunctionRow: false
+    // With both toggles on, only one function row is on screen: this page
+    // picks it (1 = F1-F12, 2 = F13-F24).  With one toggle on it is unused.
+    property int functionRowPage: 1
+    readonly property bool functionRowsBoth: showFunctionRow && showExtraFunctionRow
+    function swapFunctionRowPage() {
+        root.functionRowPage = root.functionRowPage === 2 ? 1 : 2
+        appSettings.savedFunctionRowPage = root.functionRowPage
+    }
     property bool showNavigation: false
     property bool showNumpad: false
     property bool showSettings: false
@@ -1279,19 +1298,29 @@ Window {
     // and less accurate than the one those defaults were chosen for.
     property int snapThreshold: 24
 
-    // Four things about this are load-bearing:
+    // Five things about this are load-bearing:
     //
     //  - It snaps against `screenBoundsAt`, i.e. the screen the window is
     //    actually on, never the primary one.  A monitor to the left has
     //    negative coordinates a primary-screen calculation cannot even
     //    express, which is the bug the snippets restore documents one
     //    window over.
+    //  - The screen's work area (the screen minus the taskbar and other
+    //    appbars, from `keyboard.availableBoundsAt`) adds four more edge
+    //    targets beside the full-screen ones, so a window can sit flush
+    //    against the taskbar as well as behind it.  Both sets stay: the
+    //    nearest target within the threshold wins, and with no taskbar the
+    //    two sets coincide.  An empty answer (unknown) means "no extra
+    //    targets", never an error.
     //  - The two axes are decided independently, so a keyboard sitting
     //    flush on the bottom edge still slides freely along it.
     //  - Horizontal centre is a target and vertical centre is not.
     //    Centring a wide, short keyboard across the screen is something
     //    people do; parking it halfway down is not, and a snap nobody
-    //    wanted reads as the window sticking for no reason.
+    //    wanted reads as the window sticking for no reason.  The centre is
+    //    the full screen's, not the work area's: a side taskbar would
+    //    otherwise shift it by half the taskbar's width and a "centred"
+    //    keyboard would stop being centred on the monitor.
     //  - It is applied to the proposed position and must never be written
     //    back into whatever the caller accumulates.  Feeding a snapped
     //    value back in turns an edge into a trap: every later delta is then
@@ -1299,10 +1328,15 @@ Window {
     //    can never build up the travel it needs to leave.  `dragArea`
     //    avoids that by recomputing from the press origin each time, and
     //    `windowMoveOverlay` by keeping an unsnapped shadow position.
-    function _snapAxis(v, size, lo, hi, centred) {
+    //
+    // `workLo` / `workHi` are the work area's edges on this axis, or
+    // undefined for none.
+    function _snapAxis(v, size, lo, hi, centred, workLo, workHi) {
         var targets = centred
                     ? [lo, hi - size, lo + (hi - lo - size) / 2]
                     : [lo, hi - size]
+        if (workLo !== undefined && workHi !== undefined)
+            targets.push(workLo, workHi - size)
         var best = v
         var bestGap = root.snapThreshold
         for (var i = 0; i < targets.length; ++i) {
@@ -1318,9 +1352,20 @@ Window {
     function snapWindowPos(px, py, w, h) {
         if (!root.snapToEdges)
             return { x: Math.round(px), y: Math.round(py) }
-        var b = root.screenBoundsAt(px + w / 2, py + h / 2)
-        return { x: root._snapAxis(px, w, b.left, b.right, true),
-                 y: root._snapAxis(py, h, b.top, b.bottom, false) }
+        var cx = px + w / 2
+        var cy = py + h / 2
+        var b = root.screenBoundsAt(cx, cy)
+        // Cheap enough for every pointer move: a screen lookup and a read
+        // of geometry Qt already holds.  Clamped to the full bounds so a
+        // stray answer cannot create a target off the screen.
+        var a = keyboard.availableBoundsAt(cx, cy)
+        var hasWork = a && a.left !== undefined
+        return { x: root._snapAxis(px, w, b.left, b.right, true,
+                                   hasWork ? Math.max(a.left, b.left) : undefined,
+                                   hasWork ? Math.min(a.right, b.right) : undefined),
+                 y: root._snapAxis(py, h, b.top, b.bottom, false,
+                                   hasWork ? Math.max(a.top, b.top) : undefined,
+                                   hasWork ? Math.min(a.bottom, b.bottom) : undefined) }
     }
 
     // Where a floating panel of (w, h) should open: on the keyboard's own
@@ -3299,13 +3344,18 @@ Window {
 
                     // ===== Extra Function Row (F13-F24) =====
                     //
-                    // Above F1-F12 rather than below it, so it lands where
-                    // a physical keyboard's extra row would and never
-                    // pushes the standard row (the one with muscle memory
-                    // attached) to a different height when it is toggled.
+                    // Declared above F1-F12 so the stack order matches a
+                    // physical board's, but when both toggles are on only
+                    // one of the two is visible (see functionRowPage), so
+                    // they trade places rather than stack.
                     Comp.FunctionRow {
                         objectName: "extraFunctionRowPanel"
                         visible: root.showExtraFunctionRow
+                                 && (!root.functionRowsBoth || root.functionRowPage === 2)
+                        swapLabel: root.functionRowsBoth ? "F1-12" : ""
+                        swapScanName: "Show F1 to F12"
+                        swapRole: root.keyRoleFor({ type: "layer" })
+                        onSwapRequested: root.swapFunctionRowPage()
                         Layout.alignment: Qt.AlignHCenter
                         scanSection: "fn2"
                         scanIdFor: root.scanTargetId
@@ -3315,7 +3365,7 @@ Window {
                             ["F21", "F22", "F23", "F24"]
                         ]
                         keyW: root.keyW
-                        keyH: root.keyH * 0.7
+                        keyH: root.keyH
                         keySpacing: root.keySpacing
                         hitMarginH: root.keyHitMarginH
                         hitMarginV: root.keyHitMarginV
@@ -3336,11 +3386,16 @@ Window {
                     Comp.FunctionRow {
                         objectName: "functionRowPanel"
                         visible: root.showFunctionRow
+                                 && (!root.functionRowsBoth || root.functionRowPage === 1)
+                        swapLabel: root.functionRowsBoth ? "F13-24" : ""
+                        swapScanName: "Show F13 to F24"
+                        swapRole: root.keyRoleFor({ type: "layer" })
+                        onSwapRequested: root.swapFunctionRowPage()
                         Layout.alignment: Qt.AlignHCenter
                         scanSection: "fn1"
                         scanIdFor: root.scanTargetId
                         keyW: root.keyW
-                        keyH: root.keyH * 0.7
+                        keyH: root.keyH
                         keySpacing: root.keySpacing
                         hitMarginH: root.keyHitMarginH
                         hitMarginV: root.keyHitMarginV
@@ -3369,8 +3424,9 @@ Window {
                     // its own), and a full-size layout's own number row is
                     // the first of the data-driven rows below, so this is
                     // the position that makes the two views agree.
-                    // Full key height: unlike F-keys these are typed
-                    // constantly, so they get a full-size target.
+                    // Full key height, like the function rows above it:
+                    // every row of keys is a full-size target for an
+                    // imprecise pointer.
                     Comp.NumberRow {
                         // Lets the panel-width tests find this without
                         // property-sniffing; see TestPanelsSitFlushWithTheGrid.

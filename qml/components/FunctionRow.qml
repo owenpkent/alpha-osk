@@ -56,6 +56,18 @@ Item {
     // the same thing, which is state that can go stale.
     property var actions: ({})
 
+    // The page-swap key at the right end of the row, in a group of its own
+    // (4-4-4-1).  Empty (the default) means no swap key and the row is
+    // twelve keys, which is every case but "both rows are enabled".  The
+    // label names the DESTINATION, the way compact's ?123 / ABC does, so
+    // the key says where a tap goes rather than where you already are.
+    // Purely a view change: this row only asks, Main.qml owns the page.
+    property string swapLabel: ""
+    property string swapScanName: ""
+    property string swapRole: "edit"
+    signal swapRequested()
+    readonly property bool _hasSwap: swapLabel !== ""
+
     // **This row has no route into the editor at all, on purpose.**
     //
     // Right-click used to open it, and was removed at the owner's request:
@@ -99,17 +111,21 @@ Item {
     // from; see the geometry note below.
     property real maxWidth: 0
 
-    readonly property int _keyCount: {
+    readonly property int _groupedKeyCount: {
         var n = 0
         for (var i = 0; i < keyGroups.length; ++i)
             n += keyGroups[i].length
         return n
     }
+    // The swap key is a key like any other for the fill: it takes one
+    // share of the width and one more group gap, and the others give way.
+    readonly property int _keyCount: _groupedKeyCount + (_hasSwap ? 1 : 0)
     // Gaps *inside* the groups (three per group of four), and the gaps
     // *between* them, which are the outer Row's own spacing: one fewer
-    // than there are groups.
-    readonly property int _withinGaps: _keyCount - keyGroups.length
-    readonly property int _groupGaps: Math.max(0, keyGroups.length - 1)
+    // than there are groups (the swap key counts as a group).
+    readonly property int _withinGaps: _groupedKeyCount - keyGroups.length
+    readonly property int _groupGaps:
+        Math.max(0, keyGroups.length + (_hasSwap ? 1 : 0) - 1)
 
     // **The group gap never gives.  The keys do.**
     //
@@ -161,9 +177,9 @@ Item {
     // floating above it.
     //
     // **The cost was accepted with the picture in front of us**: at full
-    // size an F-key is 18% wider than the key directly below it while
-    // staying 30% shorter, so the row no longer lines up with the grid
-    // column by column.  Do not "fix" that back without rendering it next
+    // size an F-key is 18% wider than the key directly below it (it was
+    // also 30% shorter then; the row is full height since 2026-10-06), so
+    // the row no longer lines up with the grid column by column.  Do not "fix" that back without rendering it next
     // to the number row, which is the same rule as before, pointing the
     // other way.
     //
@@ -263,6 +279,38 @@ Item {
                     }
                 }
             }
+        }
+
+        // The swap key.  Its own group, so the 4-4-4 shape survives and the
+        // outer Row's spacing supplies the same wide gap as between the
+        // groups.  An invisible child takes no space and no spacing in a
+        // Row, so a row without a swap label lays out exactly as before.
+        KeyButton {
+            objectName: "fnSwapKey"
+            visible: fnRow._hasSwap
+            keyText: "fnswap"
+            displayText: fnRow.swapLabel
+            scanLabel: fnRow.swapScanName
+            keyWidth: fnRow._fillKeyW
+            keyHeight: fnRow.keyH
+            hitMarginH: fnRow.hitMarginH
+            hitMarginV: fnRow.hitMarginV
+            fontSize: 9
+            isSpecial: true
+            enableRepeat: false
+            // Index 12: one past the twelve F-keys, same section, so the
+            // id is stable and collides with no key of either row.
+            targetId: fnRow._scanId(0, 12)
+            role: fnRow.swapRole
+            roleColors: fnRow.roleColors
+            keyColor: fnRow.keyColor
+            keyPressedColor: fnRow.keyPressedColor
+            keyTextColor: fnRow.keyTextColor
+            accentColor: fnRow.accentColor
+            borderColor: fnRow.borderColor
+            // Never touches the backend, so it releases no sticky
+            // modifier: Ctrl, swap, F17 must still send Ctrl+F17.
+            onKeyPressed: fnRow.swapRequested()
         }
     }
 }

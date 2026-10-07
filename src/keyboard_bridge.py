@@ -4966,6 +4966,47 @@ class KeyboardBridge(QObject):
         self._always_on_top = enabled
         self.alwaysOnTopChanged.emit(enabled)
 
+    def _available_geometry_at(self, x: float, y: float) -> tuple[int, int, int, int] | None:
+        """(left, top, right, bottom) of the work area of the screen holding
+        the point, or None when it is not knowable.
+
+        Separate from the slot so a test can stand in for a taskbar: the
+        offscreen platform reports an available geometry equal to the full
+        one, which is the one answer that cannot tell the two apart.
+        """
+        from PySide6.QtCore import QPoint
+        from PySide6.QtGui import QGuiApplication
+
+        # Without a QGuiApplication, QGuiApplication.screenAt warns and
+        # returns nothing (same guard as the clipboard slot).
+        if not isinstance(QGuiApplication.instance(), QGuiApplication):
+            return None
+        screen = QGuiApplication.screenAt(QPoint(round(x), round(y)))
+        if screen is None:
+            return None
+        area = screen.availableGeometry()
+        # QRect.right()/bottom() are inclusive; build the exclusive edge the
+        # QML side uses (virtualX + width).
+        return (area.x(), area.y(), area.x() + area.width(), area.y() + area.height())
+
+    @Slot(float, float, result="QVariantMap")
+    def availableBoundsAt(self, x: float, y: float) -> dict[str, int]:
+        """The work area (the screen minus the taskbar and other appbars) of
+        the screen a point sits on, as ``{left, top, right, bottom}``, or an
+        empty map when unknown.
+
+        The magnetic window edges use it as a second set of snap targets next
+        to the full-screen ones.  Same device-independent coordinate space as
+        ``Qt.application.screens`` ``virtualX`` / ``virtualY``.  Called on
+        every pointer move during a drag, so it does a screen lookup and a
+        read of geometry Qt already holds, and nothing else.
+        """
+        area = self._available_geometry_at(x, y)
+        if area is None:
+            return {}
+        left, top, right, bottom = area
+        return {"left": left, "top": top, "right": right, "bottom": bottom}
+
     @Slot(bool)
     def setCompatMode(self, enabled: bool) -> None:
         """Toggle the *manual* compatibility-mode flag.

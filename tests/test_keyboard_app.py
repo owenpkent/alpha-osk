@@ -529,6 +529,16 @@ class TestAQuitStillClosesTheKeyboard:
         body = source.split("def main(", 1)[1]
         assert "windows_window.install_quiet_restore(" in body
 
+    def test_main_makes_a_taskbar_close_quit_like_the_tray(self) -> None:
+        """The shell-close filter must start the tray's own quit, not a
+        path of its own, so the model is saved the same way, and its
+        handle must be held for the life of the loop."""
+        source = Path(keyboard_app.__file__).read_text(encoding="utf-8")
+        body = source.split("def main(", 1)[1]
+        assert "windows_window.install_shell_close_quits(root, app.quit)" in body
+        assert "quit_action.triggered.connect(app.quit)" in body
+        assert "_ = (quiet_restore, shell_close," in body
+
 
 class _FakeSignal:
     def __init__(self) -> None:

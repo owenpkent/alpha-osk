@@ -700,6 +700,112 @@ def install_quiet_restore(
         return None
 
 
+WM_CLOSE = 0x0010
+
+
+class ShellCloseFilter(QAbstractNativeEventFilter):
+    """Make the taskbar's "Close window" quit the app, like the tray's Quit.
+
+    **Why this exists.** ``Main.qml``'s ``onClosing`` turns a close that is
+    not part of a quit into a minimize, so that a switch scanner's UI
+    Automation ``WindowPattern.Close`` cannot leave the keyboard running but
+    unreachable.  That rule also caught the user's own close from the
+    taskbar, which then only minimized the keyboard.
+
+    **How the two are told apart.** Measured on Qt 6.11.1 against a window
+    with the keyboard's flags and styles, driven from another process: the
+    taskbar's jump-list "Close window" sends ``WM_CLOSE`` to the window, and
+    ``WM_SYSCOMMAND(SC_CLOSE)`` (Alt+F4, the system menu) reaches
+    ``DefWindowProc``, which sends ``WM_CLOSE`` too.  ``WindowPattern.Close``
+    sends no window message at all: Qt's UIA provider closes the ``QWindow``
+    directly, and ``onClosing`` fires with no ``WM_CLOSE`` before it.  So a
+    ``WM_CLOSE`` for the keyboard's own window is a close from the shell or
+    the user, and this filter consumes it and starts the ordinary quit (one
+    event-loop turn later, never from inside the message handler).  Every
+    other close still reaches ``onClosing`` and minimizes.
+
+    **What it does not change.** Anything that can post ``WM_CLOSE`` to the
+    window (Task Manager's End task included) could already end the process;
+    this only makes that close a clean quit that saves the model, rather
+    than a minimize.  Other windows, the floating pickers among them, are
+    left alone.
+
+    Written against plain integers so the decision can be tested on any
+    platform, like ``QuietRestoreFilter``.
+    """
+
+    def __init__(
+        self,
+        window: QWindow,
+        quit_app: Callable[[], object],
+        *,
+        defer: Optional[Callable[[Callable[[], None]], None]] = None,
+    ) -> None:
+        super().__init__()
+        self._window = window
+        self._quit_app = quit_app
+        self._defer = defer or (lambda fn: QTimer.singleShot(0, fn))
+
+    def quits(self, hwnd: int, message: int) -> bool:
+        """Whether this message is a shell close of the keyboard to turn into a quit."""
+        if message != WM_CLOSE:
+            return False
+        try:
+            if hwnd != int(self._window.winId()):
+                return False
+        except Exception:
+            return False
+        self._defer(self._quit)
+        return True
+
+    def _quit(self) -> None:
+        _logger.info("Closed from the taskbar or the window's close command: quitting")
+        try:
+            self._quit_app()
+        except Exception as e:
+            _logger.warning("Quit after a shell close failed: %s", e)
+
+    def nativeEventFilter(self, eventType, message):  # type: ignore[no-untyped-def]
+        try:
+            import ctypes
+
+            address = int(message)
+            msg_id = ctypes.c_uint.from_address(address + _MSG_MESSAGE_OFFSET).value
+            if msg_id != WM_CLOSE:
+                return False, 0
+            hwnd = ctypes.c_void_p.from_address(address).value or 0
+            if self.quits(int(hwnd), msg_id):
+                return True, 0
+        except Exception as e:
+            _logger.debug("Shell-close filter could not read a message: %s", e)
+        return False, 0
+
+
+def install_shell_close_quits(
+    window: QWindow, quit_app: Callable[[], object]
+) -> Optional[ShellCloseFilter]:
+    """Make a close of the keyboard from the taskbar quit the app.
+
+    Returns the filter, which the caller must keep a reference to (Qt does
+    not own an event filter installed from Python).  ``None`` off Windows,
+    or if installation failed, which is never a reason to fail startup.
+    """
+    if sys.platform != "win32":
+        return None
+    try:
+        from PySide6.QtCore import QCoreApplication
+
+        app = QCoreApplication.instance()
+        if app is None:
+            return None
+        flt = ShellCloseFilter(window, quit_app)
+        app.installNativeEventFilter(flt)
+        return flt
+    except Exception as e:
+        _logger.warning("Could not install the shell-close filter: %s", e)
+        return None
+
+
 # WinEvent ids (winuser.h).  Plain integers so the yielder below can be
 # driven by tests on any platform.
 EVENT_SYSTEM_FOREGROUND = 0x0003

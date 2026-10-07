@@ -158,6 +158,47 @@ request from anyone else sits at "Review required" until someone with
 write access approves it, which is the point. Decided out of the September
 2026 security audit (`docs/research/SECURITY_AUDIT.md`).
 
+## Merging: `scripts/merge_pr.py`, never a bare `--admin`
+
+`gh pr merge --admin` bypasses the required checks as well as the review,
+and protection does not require a branch to be up to date with main
+(`strict: false`). Between them, those two let a pull request land on a
+result that was never computed: the checks ran on a head that did not
+contain main, or had not finished at all. Every main-branch failure in the
+month to 2026-10-06 that was not a runner fault came from that gap:
+
+* #166 and #176 were each green alone and broke main together: #176 added a
+  guard that #166's new test violated, and neither branch contained the other.
+* #144's OSV scan failed only because its branch predated the lockfile fix in
+  #155, so the per-PR scan saw main's already-fixed advisories as introduced.
+* One PR was merged while two of its shards were still running.
+
+`python scripts/merge_pr.py <number>` is the merge command instead. It
+updates the branch onto main when it is behind, waits for every required
+check on that updated head, re-runs failed jobs once when every failure is
+a cancellation or a timeout (a runner fault, never a test failure),
+retargets stacked children to main, and merges with
+`--squash --admin --delete-branch --match-head-commit <sha>`, so a push that
+lands while it waits cannot ride along unchecked. The admin bypass then
+skips the review and nothing else. `--dry-run` reads everything and runs
+nothing.
+
+Turning on `strict` would not have done the same job: an administrator's
+merge bypasses it along with everything else, so it constrains only the
+actors who were already gated.
+
+One gap stays open, and the script says so rather than papering over it.
+`gh pr merge --match-head-commit` pins the PR's head, never main's tip, so
+another merge actor (Dependabot's auto-merge is one, a second copy of the
+script is another) can land between the script's last comparison and its
+merge call, and the head then lands on a main its checks never contained.
+The script runs that comparison as the very last call before the merge,
+which makes the window one API round trip wide, and afterwards reads the
+squash commit's parent back: if it is not the tip the comparison saw, the
+script exits 3 and names both commits, and main's own CI run for that
+merge is the verdict to watch. Closing the window outright needs a
+server-side merge queue, which this repository does not use.
+
 ## Dependabot auto-merge
 
 `.github/workflows/dependabot-auto-merge.yml` queues Dependabot's patch and
@@ -308,10 +349,19 @@ workflows stop after 60 days without repository activity.
 
 ## Concurrency
 
-The workflow sets `concurrency: group: ci-${{ github.ref }}` with
+On a pull request the workflow groups runs by ref with
 `cancel-in-progress: true`, so a new push supersedes the run it replaces
 rather than both finishing. A cancelled intermediate commit is the intended
-outcome: what has to be green is the tip.
+outcome there: what has to be green is the tip.
+
+Main is grouped by commit instead, and never cancels. A merged commit is
+not superseded the way a PR push is, because the next merge stacks on top of
+it rather than fixing it. Grouped by ref, main cancelled 37 runs in a month
+as merges landed back to back, so when the tip went red on 2026-10-05 there
+was no verdict on the commits underneath to say which merge broke it. A
+concurrency group also holds at most one pending run, so a per-ref group
+with cancellation merely switched off would still drop the middle of three
+quick merges; the per-commit group is what gives every merge its own run.
 
 ## `mypy` runs twice
 

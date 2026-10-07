@@ -4,6 +4,9 @@ All notable changes to Alpha-OSK are documented in this file.
 
 ## [Unreleased]
 
+### Changed
+- **Function keys are full height, and F1-F12 and F13-F24 take turns.** When both rows are switched on, only one shows at a time, and a key at its right end (`F13-24` or `F1-12`) swaps to the other. The page you were on is remembered. Each row is now as tall as the letter keys instead of 30% shorter, which makes them easier targets. A row switched on by itself looks as before, minus the height change, with no swap key.
+
 ### Fixed
 - **The update screen is on screen from the moment the keyboard goes away until the new keyboard is visible.** Since 1.6.0 it never appeared at all: the helper that shows it was the main exe renamed and run from the temp folder, and Windows will not start an exe that requests UIAccess from there (error 740), so every update left a blank gap of 20 to 30 seconds. The helper is now its own plain exe (`alpha-osk-relauncher.exe`, built without UIAccess, and the build fails if its manifest ever asks for it). The screen opens centred on the keyboard it replaces, says "Waiting for you to approve the update" while the Windows prompt is up (its timeouts only start once you approve, and a declined prompt closes it quietly), then walks closing, installing and starting, and says Done only when the new keyboard window is actually drawn. It cannot be closed while it works, never takes focus, and keeps itself above the installer. A failure no longer vanishes after six seconds: it stays up with large Start Alpha-OSK, Open log folder and Close buttons. The update that delivers this still runs the old helper, so the improvement shows from the update after.
 

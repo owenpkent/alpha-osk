@@ -1105,6 +1105,7 @@ def main() -> int:
     # the top-level QML Window, i.e. a QWindow, at runtime.
     root = cast(QWindow, engine.rootObjects()[0])
     quiet_restore = None
+    shell_close = None
     shell_popup_yield = None
     raise_on_press = None
     if root:
@@ -1120,6 +1121,10 @@ def main() -> int:
         quiet_restore = windows_window.install_quiet_restore(
             root, after_restore=lambda: _reapply_band(root, bridge, shell_popup_yield)
         )
+        # Held for the life of the loop too.  The taskbar's Close window quits, as the
+        # tray's Quit does; a UI Automation Close still minimizes.  See
+        # ShellCloseFilter for how the two are told apart.
+        shell_close = windows_window.install_shell_close_quits(root, app.quit)
         # Held for the same reason: it owns the WinEvent callback.
         shell_popup_yield = windows_window.install_shell_popup_yield(
             lambda: _always_on_top_windows(root, lambda: bridge.alwaysOnTop)
@@ -1196,7 +1201,7 @@ def main() -> int:
 
     app.aboutToQuit.connect(_on_about_to_quit)
     QTimer.singleShot(0, bridge.startPredictionLoading)
-    _ = (quiet_restore, shell_popup_yield, raise_on_press)
+    _ = (quiet_restore, shell_close, shell_popup_yield, raise_on_press)
 
     return app.exec()
 
