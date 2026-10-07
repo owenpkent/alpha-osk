@@ -87,6 +87,24 @@ def wait_for(condition, timeout=5):
     assert condition(), "startup did not reach the expected state"
 
 
+def wait_for_job(*jobs):
+    """Wait for each build to finish, then for its worker thread to exit.
+
+    ``done`` is set before the worker's last emit and its thread teardown, so
+    a test that returns on ``done`` alone hands the next test a worker still
+    unwinding (a Python-created QObject's adopted thread going away) while
+    the next test is already creating QObjects.  On a starved Windows runner
+    that overlap was a worker crash and a build that never finished; joining
+    keeps each test's threads inside the test.
+    """
+    for job in jobs:
+        wait_for(lambda: job.done)
+    for job in jobs:
+        if job.thread is not None:
+            job.thread.join(5)
+            assert not job.thread.is_alive(), "the build worker did not exit"
+
+
 @pytest.fixture
 def pending(qapp, monkeypatch):
     entered = threading.Event()
@@ -123,7 +141,7 @@ def pending(qapp, monkeypatch):
         bridge.shutdown()
         release.set()
         for job in jobs:
-            wait_for(lambda: job.done)
+            wait_for_job(job)
         bridge.deleteLater()
         QCoreApplication.sendPostedEvents(None, 0)
 
@@ -199,7 +217,7 @@ def test_closing_during_load_does_not_save_or_publish_a_partial_model(pending, t
     bridge.savePredictionModel()
     bridge.shutdown()
     release.set()
-    wait_for(lambda: job.done)
+    wait_for_job(job)
     assert ready == []
     assert isinstance(bridge._predictor, NullPredictor)
     assert saved.read_text(encoding="utf-8") == '{"sentinel": true}'
@@ -251,7 +269,7 @@ def test_destroying_loader_parent_during_construction_cancels_publication(qapp):
         QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
     finally:
         release.set()
-        wait_for(lambda: job.done)
+        wait_for_job(job)
     assert ready == []
 
 
@@ -422,7 +440,7 @@ def test_a_failed_hand_over_is_a_failed_load_not_a_hung_one(pending):
     assert entered.wait(2)
     job = loader._job
     release.set()
-    wait_for(lambda: job.done)
+    wait_for_job(job)
     wait_for(lambda: bridge.predictionStatus == "error")
     assert bridge._prediction_loader is None, "Retry must be possible again"
 
@@ -499,7 +517,7 @@ def test_the_gil_switch_interval_is_lowered_for_the_build_and_restored_after(qap
     parent = QObject()
     loader = PredictionLoader(build, parent)
     loader.start()
-    wait_for(lambda: loader._job.done)
+    wait_for_job(loader._job)
     assert seen == [pytest.approx(_BUILD_SWITCH_INTERVAL_S)]
     assert sys.getswitchinterval() == before
 
@@ -556,7 +574,7 @@ def test_the_collector_is_paused_for_the_build_and_resumed_after(qapp, manage_gc
         parent = QObject()
         loader = PredictionLoader(factory, parent)
         loader.start()
-        wait_for(lambda: loader._job.done)
+        wait_for_job(loader._job)
         assert gc.isenabled()
     assert seen == [False, False]
 
@@ -590,7 +608,7 @@ def test_the_collector_is_managed_only_when_the_app_opts_in(
     parent = QObject()
     loader = PredictionLoader(build, parent)
     loader.start()
-    wait_for(lambda: loader._job.done)
+    wait_for_job(loader._job)
     assert seen == [collector_during_build]
     assert calls == expected
     assert gc.isenabled()
@@ -618,12 +636,12 @@ def test_overlapping_builds_restore_the_settings_the_first_one_found(qapp, manag
     # The first one in ends first, which is the order that used to strand
     # the process on the second build's saved (build-time) settings.
     gates[0].set()
-    wait_for(lambda: loaders[0]._job.done)
+    wait_for_job(loaders[0]._job)
     assert sys.getswitchinterval() == pytest.approx(_BUILD_SWITCH_INTERVAL_S)
     assert not gc.isenabled()
     assert manage_gc == [], "froze while a build was still running"
     gates[1].set()
-    wait_for(lambda: loaders[1]._job.done)
+    wait_for_job(loaders[1]._job)
     assert sys.getswitchinterval() == before_interval
     assert gc.isenabled()
     assert manage_gc == ["freeze"], "the last build out freezes, exactly once"
@@ -666,7 +684,7 @@ def test_a_build_entering_during_the_last_ones_restoration_waits_for_it(
     release.set()
     assert entered.wait(5)
     go.set()
-    wait_for(lambda: first._job.done and second._job.done)
+    wait_for_job(first._job, second._job)
     assert gc.isenabled()
 
 
@@ -760,6 +778,6 @@ def test_a_cancelled_build_restores_the_collector_too(qapp, manage_gc):
         QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
     finally:
         release.set()
-        wait_for(lambda: job.done)
+        wait_for_job(job)
     assert gc.isenabled()
     assert manage_gc == ["freeze"]
