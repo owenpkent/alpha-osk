@@ -1007,6 +1007,10 @@ class UpdateFlow:
         self.message = "Waiting for you to approve the update"
         self.detail = "Choose Yes when Windows asks."
         self.exit_code = 0
+        # True once the new exe is confirmed installed (the move to Starting).
+        # A retry announces the update only on this fact, never by inferring
+        # it from the exit code, which a probe failure before install shares.
+        self._install_confirmed = False
         self.failure = ""
         self.parent_death_time: Optional[float] = None
 
@@ -1095,6 +1099,7 @@ class UpdateFlow:
         self._grace_until = self._clock() + grace
 
     def _enter_starting(self) -> None:
+        self._install_confirmed = True
         self.phase = Phase.STARTING
         self.message = "Starting the keyboard"
         self.detail = "Almost there."
@@ -1124,7 +1129,7 @@ class UpdateFlow:
             self._succeed()
             return True
         # An update that never installed is not announced.
-        announce = self.exit_code == EXIT_LAUNCH_FAILED
+        announce = self._install_confirmed
         if announce:
             self._write_handoff()
         if not self._launch_keyboard():

@@ -1396,6 +1396,16 @@ class TestTheStartButtonKeepsTheScreenUntilTheKeyboardIsConfirmed:
         assert flow.retry_launch() is True
         assert world.handoffs == before
 
+    def test_a_probe_failure_before_install_is_not_announced_on_retry(self, world):
+        """fail_unexpectedly shares EXIT_LAUNCH_FAILED with a failed launch, so
+        the exit code cannot say whether the update installed."""
+        flow = world.flow()
+        flow.fail_unexpectedly()
+        assert flow.exit_code == relauncher.EXIT_LAUNCH_FAILED
+        world.launch_ok = True
+        assert flow.retry_launch() is True
+        assert world.handoffs == 0
+
 
 class TestAFailureStaysUntilTheUserActs:
     """The last gap: failure messages auto-closed after six seconds."""
