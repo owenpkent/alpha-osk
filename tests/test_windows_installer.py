@@ -1265,7 +1265,8 @@ class TestTheUpdateHelperIsInstalledAndRemovedButNeverKilled:
         lines = [ln.strip() for ln in install.splitlines()]
         helper = next(i for i, ln in enumerate(lines) if ln.endswith('alpha-osk-relauncher.exe"'))
         assert lines[helper].startswith("File ")
-        main = next(i for i, ln in enumerate(lines) if ln.endswith('\\alpha-osk.exe"'))
+        # The File source path carries the host's separator, so accept either.
+        main = next(i for i, ln in enumerate(lines) if re.search(r'[\\/]alpha-osk\.exe"$', ln))
         out_paths = [ln for ln in lines[: helper + 1] if ln.startswith("SetOutPath")]
         assert out_paths[-1] == 'SetOutPath "$INSTDIR"', "it must land beside alpha-osk.exe"
         assert abs(helper - main) <= 2
