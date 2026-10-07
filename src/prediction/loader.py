@@ -27,21 +27,23 @@ PredictorFactory = Callable[[Callable[[], bool]], HybridPredictor]
 # the GIL back promptly.  Process-wide, so it is restored when the build
 # ends.
 #
-# 0.1 ms rather than 1 ms: every time the UI thread re-enters Python (a slot,
-# a property read, the return from a ctypes call) it waits up to one interval
-# for the worker to let go, and a keystroke does that several times, so at
-# 1 ms a key still reached the synthesiser ~4.5 ms late (median) and the
-# next frame ~10 ms late.  At 0.1 ms both match an idle build, and the build
-# itself takes no measurably longer (2.7 s either way, real model).
+# Off Windows this is 0.1 ms rather than 1 ms: every time the UI thread
+# re-enters Python (a slot, a property read, the return from a ctypes call) it
+# waits up to one interval for the worker to let go, and a keystroke does that
+# several times, so a shorter interval trims the median delay.
 #
 # Windows gets 1 ms, never less: CPython's Windows condition variable takes
 # its timeout in whole milliseconds and truncates, so 0.1 ms becomes 0 and a
 # thread waiting for the GIL stops waiting at all, asks for it back on every
-# turn and spins.  On a core or two shared with other work that starved the
+# turn and spins.  That did lower the median key delay in a measurement
+# (about 1 ms against 1.9 ms at 1 ms, offscreen Main.qml, real model), but
+# only by spinning, and on a core or two shared with other work it starved the
 # worker threads of this suite for whole seconds (reproduced pinned to one
 # core: nine tests in test_prediction_startup.py timed out at 0.1 ms and
 # passed at 1 ms or the default), and it would do the same to the build on a
-# small user machine.
+# small user machine.  So on Windows the interval is the same as before this
+# change, and what shortens the delays there is the collector handling below
+# (worst case 33-60 ms down to 3-19 ms; the median stays ~1.9 ms).
 _BUILD_SWITCH_INTERVAL_S = 0.001 if sys.platform == "win32" else 0.0001
 
 # The switch interval cannot preempt the garbage collector: a collection is
@@ -268,6 +270,16 @@ class PredictionLoader(QObject):
         self._published = True
         notifier = self._job.notifier
         if notifier is not None:
+            # ``done`` is set before the worker's own ``finished.emit()`` has
+            # returned, and this slot can run the moment that emit has queued
+            # it.  Deleting the notifier now would destroy a QObject while
+            # another thread is still inside its signal emission (and drop the
+            # last Python reference from the wrong thread), which is an access
+            # violation waiting for a descheduled worker.  The worker has
+            # nothing left to do after the emit, so the join is immediate.
+            thread = self._job.thread
+            if thread is not None and thread is not threading.current_thread():
+                thread.join(timeout=5.0)
             notifier.deleteLater()
             self._job.notifier = None
         if predictor is None:

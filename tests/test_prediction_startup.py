@@ -484,6 +484,38 @@ def test_shutdown_joins_a_cooperative_build(pending):
     assert not thread.is_alive()
 
 
+def test_the_notifier_is_not_deleted_while_the_worker_is_still_emitting(qapp):
+    """``done`` is set before the worker's emit returns, so the UI-side
+    publish can run while the worker is still inside ``finished.emit()``;
+    the notifier must not be released until the worker has left it."""
+    parent = QObject()
+    loader = PredictionLoader(lambda abort: PredictorDouble(), parent)
+    real = loader._job.notifier
+
+    class SlowEmit:
+        """The real emit, then a worker that lingers inside the call."""
+
+        def emit(self):
+            real.finished.emit()
+            time.sleep(0.3)
+
+    class Wrapper:
+        finished = SlowEmit()
+
+        @staticmethod
+        def deleteLater():
+            seen.append(loader._job.thread.is_alive())
+            real.deleteLater()
+
+    seen: list[bool] = []
+    loader._job.notifier = Wrapper()  # type: ignore[assignment]
+    loader.loaded.connect(lambda p: p.deleteLater())
+    loader.start()
+    wait_for(lambda: seen)
+    assert seen == [False], "the notifier was released while the worker was still emitting"
+    wait_for_job(loader._job)
+
+
 def test_the_real_constructor_honours_the_abort_at_its_first_checkpoint(tmp_path):
     """The abort is polled inside HybridPredictor, not only around it."""
     calls = []
