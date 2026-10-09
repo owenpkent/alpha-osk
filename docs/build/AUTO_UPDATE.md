@@ -695,3 +695,13 @@ headless approval wait, the window offscreen), `tests/test_updater.py`
 (the spec's two EXEs, both manifest guards, signing coverage) and
 `tests/test_windows_installer.py` (the helper is installed and removed, and no
 image name the installer matches can reach it).
+
+## Auto-Update (moved from CLAUDE.md)
+
+Items moved from the CLAUDE.md *Auto-Update* section that the sections above did not already carry.
+
+- The source repo `owenpkent/alpha-osk` was private until 2026-05-16. The releases-repo split was originally a private/public boundary, and is now preserved because the pinned updater URL relies on the releases repo being its own canonical source of truth.
+- Version source of truth is `src/__version__.py`. The release-asset filename must match `Alpha-OSK-Setup-{version}.exe` exactly; the updater rejects anything else.
+- User-facing toggle: *Settings -> Data & Privacy -> Updates -> "Check for updates on startup"*, persisted as `appSettings.savedAutoCheckUpdates`.
+- `_ps_single_quote_escape` fixed a real bug: a Windows username containing an apostrophe (`%TEMP%` paths embed it) broke the single-quoted PowerShell literal built from the exe path. It failed closed, so it was not exploitable, but it silently and permanently disabled auto-update for that user.
+- The install directory is the currently-running frozen exe's own parent directory, or the `%ProgramFiles%\Alpha-OSK` default when not frozen. NSIS requires `/D=` last on the command line and unquoted even when the path has spaces; do not reorder or requote.
