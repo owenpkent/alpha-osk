@@ -439,3 +439,10 @@ exists. If a recent logo change made the icon look stale, re-run the
 `sips`/`iconutil` recipe in *Phase 2 § Regenerating `alpha-osk.icns`*.
 The spec falls back to `assets/logo-1024.png` if the `.icns` is
 missing, which works but renders slightly fuzzier in the Dock.
+
+## macOS build status (moved from CLAUDE.md)
+
+- Phase-1 support: `src/platform/macos.py` (`MacOSKeySynthesizer` via `Quartz.CGEventCreateKeyboardEvent`) and NSWindow tuning in `src/platform/macos_window.py::apply_window_flags` (float level, all-Spaces collection behavior, `hidesOnDeactivate=NO`). The `"win"` modifier maps to Command. Config dir is `~/Library/Application Support/alpha-osk/`.
+- Build pipeline is scaffolded at `build/macos/` (PyInstaller `BUNDLE()` -> `Alpha-OSK.app`, optional `hdiutil` `.dmg`) but not yet exercised end to end. Code signing, notarization and auto-update are explicit follow-up phases.
+- **Password-field auto-detection is done**, not pending: `_MacOSAXDetector` in `password_detect.py` resolves the frontmost app's pid -> `AXUIElementCreateApplication` -> `kAXFocusedUIElementAttribute` and matches the `AXSecureTextField` subrole (Cocoa, WebKit and Chromium all report it). It deliberately goes through the frontmost application rather than `AXUIElementCreateSystemWide()`, which returns `kAXErrorCannotComplete` in practice; don't "simplify" it back.
+- **First-run gotcha:** macOS requires an Accessibility TCC grant (System Settings -> Privacy & Security -> Accessibility) before `CGEventPost` reaches other apps; without it the UI works but keystrokes silently no-op. The same grant gates the AX detector, so a missing grant also costs password detection, and it fails open (see CLAUDE.md *Privacy Mode & Password Detection*).

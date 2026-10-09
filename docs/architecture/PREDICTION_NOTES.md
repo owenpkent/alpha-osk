@@ -513,3 +513,30 @@ paired with the near-misses (`spiced`, `japes`, `chinking`, `retardant`,
 `sauerkraut`, `tycoon`, `gypsum`) that must still ship and must not be
 flagged, and the load strip is paired with an ordinary word written the same
 way (which must survive) and with a word the user taught (which must too).
+
+## Short words in next-word predictions
+
+`HybridPredictor._short_word_allowed` gates one- and two-letter words out of *next-word* predictions (the filter does not apply once the user has started typing a word, where the prefix already constrains things). It used to be a blanket `len(word) <= 2` with `"i"` as the single exception, which discarded exactly the words next-word prediction is best at: after "I want", the useful pills are "to", "it", "my", "us"; after "one", they are "of" and "or". Those are also the highest-frequency words in English, so the bar was withholding its strongest guesses and offering the fourth-best instead.
+
+It is now an **allow-list of real short words**, not a relaxed length rule, and that distinction is load-bearing: the engine learns whatever the user types, so stray two-character fragments ("th", "ap", "sm") from a typo or an interrupted word accumulate in the model, and a bare length change would let every one of them compete for a pill. Words, not lengths. (The one thing besides that list which can satisfy the gate is a taught acronym, so `pr` can be offered after `opened a`; see *Taught acronyms*. Both merge sites go through `HybridPredictor._next_word_allowed` rather than calling `_short_word_allowed` directly.) The list is the active language profile's `short_words` (`language.ENGLISH.short_words`), reused rather than restated: it is already the project's answer to "real word or keyboard slip" (it gates the dictionary-load fragment filter), and a private copy in `hybrid_predictor` would be one more thing to keep in sync. Extend that set to extend this filter. Guarded by `tests/test_hybrid_predictor.py::TestShortWordsAreOfferedAsNextWords`, whose negative half is what stops a future "just drop the filter" from passing.
+
+## Auto-Capitalization & Proper Nouns
+
+The pill-facing capitalization rule is intentionally minimal: **only the "I" family auto-capitalizes** (`"I"`, `"I'm"`, `"I'll"`, `"I'd"`, `"I've"` - the whole of `language.ENGLISH.always_capitalize`). Anything else stays in the casing the user typed. The mental model is "shift / caps lock is the cap signal, full stop" - pills do not second-guess intent.
+
+This used to be a three-tier Gboard-style system (Tier 1 "I" family, Tier 2 sentence-start for ambiguous names like `will` / `jack` / `may`, Tier 3 ~8 000 unambiguous proper nouns from `data/proper_nouns.txt` plus user-taught forms). Tiers 2 and 3 fired on too many common English words ("the hope is that", "a rose by", "will you", "may i", and the post-period word in any sentence), so pills came back capitalised when the user had typed lowercase. The user's stance is that those auto-caps were noise, not help.
+
+### How it works now
+- `NgramPredictor.get_capitalized(word, sentence_start)` returns the `_always_capitalize` form for the "I" family, the taught form for an acronym-shaped non-word the user taught with per-letter capitals (see *Taught acronyms*, which carries the two guards that keep this from being Tier 3), otherwise returns `word` unchanged. The `sentence_start` argument is kept for API compatibility but ignored.
+- `HybridPredictor._merge_predictions()` still calls `get_capitalized` on each pill (so the "I" family flows through the engine like any other word), and still computes `sentence_start = bool(ctx) and ctx[-1] in ".!?"` - the value just doesn't affect the result.
+- **Pill-facing casing comes from `KeyboardBridge._display_cased`** - it mirrors *every* uppercase position from the typed prefix onto the pill. Type lowercase `monday` -> pill shows `monday`. Type `Monday` (one-shot shift on the M) -> pill shows `Monday`. Type `MON` (right-click each letter) -> pill shows `MONday`. This is the only path that produces capitals in pills, and it's driven entirely by what the user typed.
+
+### Data still being collected (currently inert in pills)
+Two paths populate `NgramPredictor.capitalization` even though `get_capitalized` no longer reads from it:
+- `_load_proper_nouns()` reads `data/proper_nouns.txt` at startup.
+- `learn_capitalization(word, *, allow_uppercase=False)` is called from the bridge in three situations: (a) the user types a word with non-trivial casing and completes it with space; (b) the user has any uppercase letter in their typed prefix and accepts a pill (`pressPrediction` calls `learn_capitalization(word)` on the chosen pill); (c) the user right-click -> Edits a prediction. The `allow_uppercase` guard is still meaningful: `_word_typed_under_caps_lock` flips to True whenever a char is appended while Caps Lock is on, and the bridge passes `allow_uppercase = not _word_typed_under_caps_lock` so all-caps under Caps Lock doesn't poison the table. Acronyms typed deliberately (right-clicking each letter, Caps Lock off) still land in the table.
+
+The accumulated dict is persisted in `ngram_model.json`. Keeping the data lets a future opt-in switch (e.g. a "capitalize proper nouns" toggle) re-enable Tier 3 without re-teaching from scratch. **If you re-enable any tier, do it by editing `get_capitalized` to consult `self.capitalization` again - don't reintroduce the old three-tier behaviour as the default.**
+
+### Adding to always-capitalize
+Edit `always_capitalize` on the language profile in `src/prediction/language.py`. Keep it tight - it's the one auto-cap that will fire mid-sentence regardless of what the user typed, so anything beyond the "I" family needs to be unambiguous in *every* mid-sentence context (which proper nouns aren't, which is why Tiers 2/3 are gone).
