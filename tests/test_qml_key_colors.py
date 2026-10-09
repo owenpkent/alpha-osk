@@ -335,7 +335,9 @@ class TestTheSectionsShareOneHeight:
         grid = _sections(root)["grid"]
         edges = set()
         for row in grid.childItems():
-            if not row.isVisible():
+            # The function rows are one grid column a key and centred, so
+            # they are deliberately narrower than the grid.
+            if not row.isVisible() or "unctionRow" in row.objectName():
                 continue
             keys = sorted(_keys(row), key=lambda k: _rect(k)[0])
             if not keys:

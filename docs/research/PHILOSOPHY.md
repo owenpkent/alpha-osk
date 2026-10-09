@@ -57,9 +57,11 @@ technically perform.
 Every click costs the user something real. That makes effort the unit the
 design optimises, and it decides arguments that would otherwise be aesthetic:
 
-- A taller or wider target is a cheaper click, which is why the function row
-  fills the grid rather than lining up with the columns beneath it, and why
-  the three sections share one height so the panel keys grow into it.
+- A taller or wider target is a cheaper click, which is why the three
+  sections share one height so the panel keys grow into it. It has a limit:
+  the function row was once stretched to span the grid, and keys that much
+  bigger than their neighbours read as too big, so it went back to one grid
+  column a key.
 - A click that lands between two keys and types nothing is worse than a click
   on the wrong key, because a wrong key is recoverable by the prediction
   engine and a dead click is not. Every key therefore claims a share of the
