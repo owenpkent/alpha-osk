@@ -253,15 +253,24 @@ class TestOneFunctionRowAtATime:
         assert key.property("_scanIgnored") is True
         assert _real_warnings(warnings) == []
 
-    def test_the_swap_key_does_not_widen_the_row(self, qml_root) -> None:
-        """Thirteen keys share the grid width, so the row stays the same width."""
+    def test_the_swap_key_is_the_same_size_as_the_f_keys(self, qml_root) -> None:
+        """The swap key is a key like the others, and the row still fits.
+
+        Each key is one grid column unless thirteen of them would overhang
+        the grid (compact), in which case all thirteen give way together.
+        """
         root, warnings, _, _ = qml_root
         root.setProperty("showFunctionRow", True)
-        _pump()
-        alone = _panel(root, "functionRowPanel").width()
         root.setProperty("showExtraFunctionRow", True)
         _pump()
-        assert _panel(root, "functionRowPanel").width() == pytest.approx(alone, abs=1.0)
+        panel = _panel(root, "functionRowPanel")
+        keys = _keys(panel)
+        assert keys
+        swap = panel.findChild(QQuickItem, "fnSwapKey")
+        assert swap is not None and swap.isVisible()
+        widths = {round(k.width(), 1) for k in keys.values()} | {round(swap.width(), 1)}
+        assert len(widths) == 1, f"F-keys and the swap key differ in width: {widths}"
+        assert swap.width() <= root.property("keyW") + 0.5
         assert _real_warnings(warnings) == []
 
     @pytest.mark.parametrize("qml_root", [{"savedFunctionRowPage": 2}], indirect=True)

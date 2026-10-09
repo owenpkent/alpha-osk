@@ -4,6 +4,9 @@ All notable changes to Alpha-OSK are documented in this file.
 
 ## [Unreleased]
 
+### Changed
+- **Function keys are the same size as the other keys.** Since 1.8.0 they were stretched across the whole width of the keyboard, which made each one about a fifth wider than the key below it. They are now exactly as wide and as tall as the letter keys, and the row sits centred above them.
+
 ## [1.8.0] (2026-10-07)
 
 ### Added
