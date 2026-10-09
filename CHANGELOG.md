@@ -14,6 +14,7 @@ All notable changes to Alpha-OSK are documented in this file.
 - Dictation has a new "polishing" state while Claude works, shown like the other busy states. Tapping the microphone during it does nothing, so a stray tap cannot discard your words.
 - The "type each phrase as it is finished" setting for dictation now works when switched off: the whole run is typed once at the end.
 - If the connection to the transcription service drops during a held-back run, what was said so far is now typed instead of being discarded.
+- **Function keys are the same size as the other keys.** Since 1.8.0 they were stretched across the whole width of the keyboard, which made each one about a fifth wider than the key below it. They are now exactly as wide and as tall as the letter keys, and the row sits centred above them.
 
 ## [1.8.0] (2026-10-07)
 

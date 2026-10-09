@@ -893,28 +893,27 @@ class TestPanelsSitFlushWithTheGrid:
             )
         assert _real_warnings(warnings) == []
 
-    def test_function_row_fills_the_widest_keyboard_row(self, qml_root) -> None:
-        """The row spans the grid exactly, and it is the keys that fill it.
+    def test_every_function_key_is_one_grid_column(self, qml_root) -> None:
+        """An F-key is the same size as the keys below it, centred.
 
-        This reverses what this test used to assert. The row drew each
-        F-key exactly one grid column wide and centred the result, and the
-        property pinned here was that no key ever grew. Both were
-        reconsidered with the alternatives rendered next to the number row
-        (the rule the old geometry note left behind), and filling the width
-        won on target size: every key gains 18% at full size, which on a
-        keyboard driven by an imprecise pointer outranks lining up with the
-        column below.
+        This reverses what this test asserted until 2026-10-08, that the
+        row stretched its keys to span the grid (18% wider than the key
+        below at full size). The owner found the stretched keys too big
+        and asked for them to match the other keys, height included, which
+        they already did.
 
-        Three properties, and the last two are what a width check on its
-        own cannot see:
+        Four properties:
 
-        * The panel is flush with the grid, the way the Number Row is.
-        * The *key* width accounts for it: 12 keys and 11 ordinary gaps.
-          A wrong key count or a changed gap both move that number.
+        * Every F-key is exactly ``keyW`` wide, as tall as ``keyH``, on
+          both views. Twelve keys always fit, so nothing clamps here.
+        * The fill width still accounts for the row (12 keys and 11
+          ordinary gaps), because it is the clamp that keeps a
+          thirteen-key row inside compact's grid.
         * There is no wider gap between the groups, in **both** views. The
           row was 4-4-4 with `keySpacing * 4` between the groups until the
           owner asked for no gap there (2026-10-07); every gap on the row
           is now an ordinary `keySpacing`, so no strip along it is dead.
+        * The row is never wider than the grid it sits above.
         """
         root, warnings, _ = qml_root
         root.setProperty("showNavigation", False)
@@ -931,13 +930,26 @@ class TestPanelsSitFlushWithTheGrid:
                 panel = self._panel(root, "functionRowPanel")
                 grid = self._widest_layout_row(root)
                 key_w = root.property("keyW")
+                key_h = root.property("keyH")
                 key_spacing = root.property("keySpacing")
 
-                assert panel.width() == pytest.approx(grid, abs=1.0), (
-                    f"function row is {panel.width() - grid:+.1f} px off the "
-                    f"keyboard grid at window width {width} (compact={compact}): "
-                    f"{panel.width():.1f} vs {grid:.1f}. It fills the grid "
-                    "exactly, the way the Number Row does."
+                # A walk, not findChild: a Repeater's delegates are not
+                # QObject children of the panel.
+                pending, f1 = [panel], None
+                while pending and f1 is None:
+                    item = pending.pop()
+                    if item.objectName() == "fnKey_f1":
+                        f1 = item
+                    pending.extend(item.childItems())
+                assert f1 is not None
+                assert f1.width() == pytest.approx(key_w, abs=0.5), (
+                    f"F1 is {f1.width():.1f} px wide against a {key_w:.1f} px "
+                    f"grid column at window width {width} (compact={compact}); "
+                    "an F-key is the same width as the keys below it."
+                )
+                assert f1.height() == pytest.approx(key_h, abs=0.5), (
+                    f"F1 is {f1.height():.1f} px tall against {key_h:.1f} at "
+                    f"window width {width} (compact={compact})."
                 )
 
                 # 12 keys, 11 ordinary gaps: 11 * keySpacing of the grid
@@ -954,16 +966,10 @@ class TestPanelsSitFlushWithTheGrid:
                     f"(compact={compact}); the owner asked for no gap there."
                 )
 
-                assert fill > key_w, (
-                    f"F-key ({fill:.1f}) is not wider than the key below it "
-                    f"({key_w:.1f}) at window width {width} (compact={compact}); "
-                    "filling the grid is the whole point of this geometry."
-                )
-
                 assert panel.width() <= grid + self.SLOP_PX, (
                     f"function row ({panel.width():.1f}) overhangs the widest "
                     f"keyboard row ({grid:.1f}) at window width {width} "
-                    f"(compact={compact}); it fills the grid, never exceeds it."
+                    f"(compact={compact}); it must never exceed the grid."
                 )
         assert _real_warnings(warnings) == []
 
