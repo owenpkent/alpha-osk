@@ -36,3 +36,12 @@ reason = "Upstream fix not yet released; tracked in upstream issue #1234."
 ```
 
 osv-scanner reads it automatically. Do not flip `fail-on-vuln` back to false globally to work around a single advisory.
+
+## Release artefacts (moved from CLAUDE.md)
+
+Items from the CLAUDE.md section *Release artefacts (EULA, lockfile, SBOM, CVE scanning)* that the sections above did not already carry.
+
+- **Clickwrap EULA**: the NSIS installer shows a `MUI_PAGE_LICENSE` page (checkbox-gated) backed by `build/windows/LICENSE.rtf`; keep that RTF and the repo-root plaintext `LICENSE` in sync. Silent install (`/S`, auto-updater) bypasses it, so it only blocks the first interactive install.
+- **Lockfile + SBOM**: every build emits a `pip freeze` lockfile and a CycloneDX 1.6 SBOM into `release/` (filenames encode the version), even on `--skip-build`. Upload both as release assets alongside the installer.
+- **Exact-pinned dependencies**: `requirements.txt` and `requirements-dev.txt` pin every dependency to an exact `==` version (most were `>=` floors before), so a fresh install is reproducible and an `osv-scanner` hit names a version you can look up. The macOS-only `pyobjc-framework-*` entries are the deliberate exception and stay on `>=` floors. Hash pinning (`--require-hashes`) is a known follow-up, not done yet.
+- **CI CVE scanning**: `osv-scanner` runs over both lockfiles with `fail-on-vuln: true`, in two modes. On a PR it fails only on vulnerabilities the PR introduces (`osv-scanner-reusable-pr.yml` scans base and head); main is scanned in full on every push and daily by `.github/workflows/osv-nightly.yml`. Before that split (2026-10-03), an advisory published against something already on main failed every open PR at once, and also failed the Dependabot PR fixing it whenever a second advisory remained. A new advisory now shows up as a failed nightly run, not a red X on PRs: fix the dep or quarantine it with a time-boxed `osv-scanner.toml` entry, and never flip `fail-on-vuln` off. **The toml is read only from the scanned lockfile's own directory**: repo root for `requirements-dev.txt`, `backend/cf-worker/` for the worker; a worker entry at the root is silently ignored. The PR job's name is load-bearing: branch protection requires `OSV Scanner (deps CVE check) / osv-scan` by name.
