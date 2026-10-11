@@ -109,7 +109,11 @@ src/platform/
 ├── windows.py         # Windows: SendInput via ctypes + shortcut helpers
 ├── macos.py           # macOS: Quartz CGEvent (phase 1, see docs/build/MACOS.md)
 ├── password_detect.py # Password fields, focused element, caret position
-└── pointer.py         # Was the last click ours, or somebody else's window
+├── pointer.py         # Was the last click ours, or somebody else's window
+├── windows_window.py  # Win32 window styling (WS_EX_NOACTIVATE, taskbar button, DWM corners)
+├── window_band.py     # Windows Z-order band for the Always on Top setting
+├── macos_window.py    # NSWindow / activation-policy styling (pyobjc)
+└── x11_window.py      # X11 DOCK-type tuck-away
 
 build/
 ├── launcher.py               # Frozen-mode entry point, shared by every platform
@@ -117,22 +121,23 @@ build/
 │   ├── build.py              # Full pipeline: PyInstaller → Sign → NSIS → Verify
 │   ├── sign.py               # Code signing with retry logic (matches gitconnect)
 │   ├── alpha-osk.spec        # PyInstaller build specification
-│   ├── alpha-osk.exe.manifest  # UIAccess manifest for EV signing
+│   ├── alpha-osk.exe.manifest  # Manifest source (UIAccess comes from uac_uiaccess=True in the spec)
 │   ├── alpha-osk.ico         # Application icon
 │   ├── installer.nsh         # NSIS installer customizations (shortcuts, cleanup)
 │   └── LICENSE.rtf           # Clickwrap EULA shown by the installer
-├── linux/                    # PyInstaller + optional AppImage (see build/LINUX.md)
+├── linux/                    # PyInstaller + optional AppImage (see docs/build/LINUX.md)
 └── macos/                    # PyInstaller BUNDLE + optional .dmg (in progress)
 ```
 
 ### `__init__.py`: The Public API
 
 Exports:
-- `CURRENT_PLATFORM`: `"windows"`, `"linux"`, or `"unsupported"`
+- `CURRENT_PLATFORM`: `"windows"`, `"linux"`, `"macos"`, or `"unsupported"`
 - `create_key_synthesizer()`: Factory that returns the correct backend
 - `get_platform_info()`: Diagnostic info dict for logging/UI
 - `get_config_dir()`: Platform-appropriate config directory
 - `get_model_dir()`: Platform-appropriate model storage directory
+- `get_log_path()`: Path of the diagnostic log (`alpha-osk.log`)
 
 ### `base.py`: The Interface
 
@@ -142,6 +147,9 @@ Defines `KeySynthesizerBase` with these abstract methods:
 - `send_key(key_name, modifiers)`: Send a single keystroke
 - `send_text(text)`: Type a Unicode string
 - `send_combination(keys)`: Send a key chord (e.g. Ctrl+C)
+
+It also provides non-abstract defaults that backends override where they can:
+`hold_modifier`, `release_modifier`, `reset_modifier_state` and `replace_text`.
 
 ### `linux.py`: Linux Backend
 
@@ -279,7 +287,7 @@ Applied in `keyboard_app.py` → `_apply_window_flags()`:
 | Flag | Purpose |
 |------|---------|
 | `WindowStaysOnTopHint` | Keep above normal windows |
-| `Tool` | Utility window (not in taskbar on Linux) |
+| `Tool` | Added on macOS only (makes the window an NSPanel so clicks do not activate the app); not applied on Windows, which keeps its taskbar entry |
 | `FramelessWindowHint` | We draw our own title bar in QML |
 | `WindowDoesNotAcceptFocus` | Qt-level focus prevention |
 
@@ -640,6 +648,9 @@ retry logic (matching gitconnect's `build/sign.js`).
 | `src/platform/password_detect.py` | Password fields + `focused_element_token` / `caret_position_token` |
 | `src/platform/pointer.py` | `external_click_detected()`: did the last click land outside our process |
 | `src/platform/x11_window.py` | X11 window-type control (`_NET_WM_WINDOW_TYPE_DOCK`) so the window can park off-screen for "Tuck away" |
+| `src/platform/windows_window.py` | Win32 window styling: `WS_EX_NOACTIVATE`, taskbar button, DWM rounded corners, single-instance hand-off |
+| `src/platform/window_band.py` | Windows Z-order band for the Always on Top setting |
+| `src/platform/macos_window.py` | NSWindow level / activation-policy styling (pyobjc) |
 
 ### Modified for Cross-Platform (Phase 7)
 
@@ -655,7 +666,7 @@ retry logic (matching gitconnect's `build/sign.js`).
 | File | Purpose |
 |------|---------|
 | `build/windows/alpha-osk.spec` | PyInstaller build specification |
-| `build/windows/alpha-osk.exe.manifest` | UIAccess manifest for EV signing |
+| `build/windows/alpha-osk.exe.manifest` | Manifest source (UIAccess itself is requested by `uac_uiaccess=True` in the spec, which rewrites the embedded manifest) |
 | `build/windows/alpha-osk.ico` | Application icon |
 | `build/windows/sign.py` | Code signing with retry logic (matches gitconnect) |
 | `build/windows/build.py` | Full pipeline: PyInstaller → Sign → NSIS → Verify |
