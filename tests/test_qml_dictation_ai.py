@@ -203,14 +203,8 @@ class TestTheWriteButtonNeedsEverythingInPlace:
         assert _child(root, "writeWithAiBarButton").property("visible") is False
 
 
-class TestTheWriteButtonIsNotAScanTarget:
-    def test_it_carries_no_contract_id(self, qml_root):
-        """ "bar" is not a section of the UIA contract; extending it is a deliberate edit."""
-        root, _, bridge = qml_root
-        _configure(root, bridge)
-        button = _child(root, "writeWithAiBarButton")
-        assert not button.property("scanTargetId")
-        assert "aosk.v1" not in root.property("scanRevision")
+class TestTheWriteButtonSitsInTheBar:
+    """Its scan target id is covered in tests/test_qml_scan_bar.py."""
 
     def test_the_bar_reserve_counts_it(self, qml_root):
         root, _, bridge = qml_root
@@ -242,7 +236,6 @@ class TestTheTitleBarTwin:
         twin = _child(root, "writeWithAiTitleBarButton")
         assert twin.property("visible") is True
         assert twin.property("width") > 0
-        assert not twin.property("scanTargetId")
 
     def test_never_both_at_once(self, qml_root):
         root, _, bridge = qml_root

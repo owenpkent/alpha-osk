@@ -1004,6 +1004,7 @@ The only route to a glyph outside a physical keyboard's printing, on every layou
 
 Every visible key and pill is published as a UI Automation `Button` so an external scanner (Switchify PC, issue #106) can enumerate and Invoke them. Normative contract: `docs/architecture/UIA_TARGETS.md`. Guard: `tests/test_qml_scan_targets.py`.
 
+- **The suggestion bar's buttons are the `bar` section**: `aosk.v1.bar.0.<index>` with one FIXED index per function (0 mic, 1 Write with AI, 2 Symbols, 3 Snippets, 4 clear), so a hidden control is absent and no other id moves; a title-bar twin carries its bar copy's id (never visible together). Built on `BarButton.qml`; click and Invoke both raise its `activated()` into one handler in `Main.qml`. Append indices, never renumber. Guard: `tests/test_qml_scan_bar.py`.
 - **UIA, not an IPC server**: the app runs with `uiAccess="true"`, so a user-validated pipe would make it a confused deputy. Don't "upgrade" to a socket.
 - Ids are `aosk.v1.<section>.<row>.<index>`; the format lives once in `Main.qml::scanTargetId`. Pills are `aosk.v1.pred.<index>.g<generation>`.
 - **Presence means activatable, and the check runs at activation too** (`KeyButton._scanActivatable`). A `KeyButton` without a `targetId` is silently unreachable.

@@ -713,6 +713,44 @@ Window {
         return true
     }
 
+    // The `bar` section: the suggestion bar's buttons and their title-bar
+    // twins.  One fixed index per FUNCTION, so an id always names the same
+    // control whichever of its siblings is hidden (a hidden control is absent,
+    // its index is not reused), and a twin carries its bar counterpart's id
+    // because the two are never visible together.  Row is always 0.  Indices
+    // are part of the contract: append, never renumber.
+    readonly property int barIndexMic: 0
+    readonly property int barIndexWrite: 1
+    readonly property int barIndexSymbols: 2
+    readonly property int barIndexSnippets: 3
+    readonly property int barIndexClear: 4
+    function scanBarId(idx) {
+        return root.scanTargetId("bar", 0, idx)
+    }
+    // What a bar button's click AND its Invoke run.  Each lives here rather
+    // than inline in the button so the two paths cannot drift.
+    function toggleSymbols() {
+        if (symbolsWindow.visible) symbolsWindow.hide()
+        else symbolsWindow.openPicker()
+    }
+    function toggleSnippets() {
+        if (snippetsWindow.visible) snippetsWindow.hide()
+        else snippetsWindow.openList()
+    }
+    function toggleDictationRun() {
+        if (keyboard) keyboard.toggleDictation()
+    }
+    function toggleWriting() {
+        if (root.dictationState === "idle") root.writeRunPending = true
+        keyboard.toggleAiWriting()
+        // Refused (privacy, a missing key): nothing started.
+        if (root.dictationState === "idle") root.writeRunPending = false
+    }
+    function clearSuggestionContext() {
+        if (keyboard) keyboard.resetContext()
+        contextClearedToast.flash()
+    }
+
     // One cheap thing for a scanner to poll.  Everything that can move a
     // target, change its label, or change whether it is there at all feeds
     // this string; the scanner reads one property at whatever rate its
@@ -746,6 +784,12 @@ Window {
         // Everything that decides whether the pills are there at all, not
         // just whether their words changed.
         root.predictionsArePresent ? 1 : 0,
+        // The `bar` section: which of its controls exist, and the two that
+        // report a toggle state.  suggestionsEnabled (below) decides bar
+        // copy versus title-bar twin.
+        root.dictationEnabled ? 1 : 0, root.writeAvailable ? 1 : 0,
+        (root.dictationActive && !root.writeRunPending) ? 1 : 0,
+        (root.dictationActive && root.writeRunPending) ? 1 : 0,
         root.visibility,
         Math.round(root.x), Math.round(root.y),
         Math.round(root.width), Math.round(root.height),
@@ -2137,8 +2181,12 @@ Window {
                 // because of an unrelated setting is not acceptable.  The
                 // clear-context button has always had that hole; this one
                 // does not get to inherit it.
-                Rectangle {
+                Comp.BarButton {
+                    id: symbolsTwin
                     objectName: "symbolsTitleBarButton"
+                    targetId: root.scanBarId(root.barIndexSymbols)
+                    scanName: qsTr("Symbols and emoji")
+                    onActivated: root.toggleSymbols()
                     visible: !root.suggestionsEnabled
                     width: visible ? 28 : 0
                     height: 24
@@ -2177,15 +2225,16 @@ Window {
                         anchors.fill: parent
                         hoverEnabled: true
                         cursorShape: Qt.PointingHandCursor
-                        onClicked: {
-                            if (symbolsWindow.visible) symbolsWindow.hide()
-                            else symbolsWindow.openPicker()
-                        }
+                        onClicked: symbolsTwin.activated()
                     }
                 }
 
-                Rectangle {
+                Comp.BarButton {
+                    id: snippetsTwin
                     objectName: "snippetsTitleBarButton"
+                    targetId: root.scanBarId(root.barIndexSnippets)
+                    scanName: qsTr("Snippets")
+                    onActivated: root.toggleSnippets()
                     visible: !root.suggestionsEnabled
                     width: visible ? 28 : 0
                     height: 24
@@ -2214,10 +2263,7 @@ Window {
                         anchors.fill: parent
                         hoverEnabled: true
                         cursorShape: Qt.PointingHandCursor
-                        onClicked: {
-                            if (snippetsWindow.visible) snippetsWindow.hide()
-                            else snippetsWindow.openList()
-                        }
+                        onClicked: snippetsTwin.activated()
                     }
                 }
 
@@ -2229,8 +2275,14 @@ Window {
                 // into it.  Hidden whenever the bar button is showing, so
                 // there is never a choice of two.
                 // Write with AI mirror, for the same reason as the mic's.
-                Rectangle {
+                Comp.BarButton {
+                    id: writeTwin
                     objectName: "writeWithAiTitleBarButton"
+                    targetId: root.scanBarId(root.barIndexWrite)
+                    scanName: qsTr("Write with AI")
+                    isToggleTarget: true
+                    scanOn: root.writeRunPending && root.dictationActive
+                    onActivated: root.toggleWriting()
                     visible: !root.suggestionsEnabled && root.writeAvailable
                     width: visible ? 28 : 0
                     height: 24
@@ -2241,11 +2293,6 @@ Window {
                     ToolTip.visible: writeTitleBtn.containsMouse
                     ToolTip.text: qsTr("Write with AI: say what to write, then review the draft")
                     ToolTip.delay: 400
-
-                    Accessible.role: Accessible.Button
-                    Accessible.name: qsTr("Write with AI")
-                    Accessible.ignored: !root.scanWindowShown || !visible
-                    Accessible.onPressAction: if (visible) writeTitleBtn.toggleRun()
 
                     Comp.StrokeIcon {
                         anchors.centerIn: parent
@@ -2261,17 +2308,18 @@ Window {
                         anchors.fill: parent
                         hoverEnabled: true
                         cursorShape: Qt.PointingHandCursor
-                        function toggleRun() {
-                            if (root.dictationState === "idle") root.writeRunPending = true
-                            keyboard.toggleAiWriting()
-                            if (root.dictationState === "idle") root.writeRunPending = false
-                        }
-                        onClicked: toggleRun()
+                        onClicked: writeTwin.activated()
                     }
                 }
 
-                Rectangle {
+                Comp.BarButton {
+                    id: micTwin
                     objectName: "dictationTitleBarButton"
+                    targetId: root.scanBarId(root.barIndexMic)
+                    scanName: qsTr("Dictate")
+                    isToggleTarget: true
+                    scanOn: root.dictationActive && !root.writeRunPending
+                    onActivated: root.toggleDictationRun()
                     visible: !root.suggestionsEnabled && root.dictationEnabled
                     width: visible ? 28 : 0
                     height: 24
@@ -2305,7 +2353,7 @@ Window {
                         anchors.fill: parent
                         hoverEnabled: true
                         cursorShape: Qt.PointingHandCursor
-                        onClicked: keyboard.toggleDictation()
+                        onClicked: micTwin.activated()
                     }
                 }
 
@@ -2659,9 +2707,14 @@ Window {
                     anchors.verticalCenter: parent.verticalCenter
                     visible: root.suggestionsEnabled && root.dictationEnabled
 
-                    Rectangle {
+                    Comp.BarButton {
                         id: micPill
                         objectName: "dictationMicButton"
+                        targetId: root.scanBarId(root.barIndexMic)
+                        scanName: qsTr("Dictate")
+                        isToggleTarget: true
+                        scanOn: root.dictationActive && !root.writeRunPending
+                        onActivated: root.toggleDictationRun()
                         width: predBar.predPillHeight
                         height: predBar.predPillHeight
                         radius: width / 2
@@ -2784,7 +2837,7 @@ Window {
                             anchors.fill: parent
                             hoverEnabled: true
                             cursorShape: Qt.PointingHandCursor
-                            onClicked: keyboard.toggleDictation()
+                            onClicked: micPill.activated()
                         }
 
                         Behavior on color { ColorAnimation { duration: 100 } }
@@ -3249,9 +3302,14 @@ Window {
                 // already here keeps its position: the ring in particular is
                 // pressed from muscle memory.  predBar.predButtonCount counts
                 // it.
-                Rectangle {
+                Comp.BarButton {
                     id: writePill
                     objectName: "writeWithAiBarButton"
+                    targetId: root.scanBarId(root.barIndexWrite)
+                    scanName: qsTr("Write with AI")
+                    isToggleTarget: true
+                    scanOn: writePill.active
+                    onActivated: root.toggleWriting()
                     visible: root.writeAvailable
                     width: predBar.predPillHeight
                     height: predBar.predPillHeight
@@ -3271,20 +3329,6 @@ Window {
                     ToolTip.text: writePill.active ? qsTr("Stop and write")
                                   : qsTr("Write with AI: say what to write, then review the draft")
                     ToolTip.delay: 400
-
-                    // Deliberately no scan target id: "bar" is not a section of
-                    // the UIA contract, and the mic and snippets buttons have none.
-                    Accessible.role: Accessible.Button
-                    Accessible.name: qsTr("Write with AI")
-                    Accessible.ignored: !root.scanWindowShown || !visible
-                    Accessible.onPressAction: if (visible) writePill.toggleRun()
-
-                    function toggleRun() {
-                        if (root.dictationState === "idle") root.writeRunPending = true
-                        keyboard.toggleAiWriting()
-                        // Refused (privacy, a missing key): nothing started.
-                        if (root.dictationState === "idle") root.writeRunPending = false
-                    }
 
                     // Feather "edit-2", MIT, (c) 2013-2023 Cole Bemis.
                     Comp.StrokeIcon {
@@ -3309,15 +3353,18 @@ Window {
                         anchors.fill: parent
                         hoverEnabled: true
                         cursorShape: Qt.PointingHandCursor
-                        onClicked: writePill.toggleRun()
+                        onClicked: writePill.activated()
                     }
 
                     Behavior on color { ColorAnimation { duration: 100 } }
                 }
 
-                Rectangle {
+                Comp.BarButton {
                     id: symbolsPill
                     objectName: "symbolsBarButton"
+                    targetId: root.scanBarId(root.barIndexSymbols)
+                    scanName: qsTr("Symbols and emoji")
+                    onActivated: root.toggleSymbols()
                     width: predBar.predPillHeight
                     height: predBar.predPillHeight
                     radius: width / 2
@@ -3363,18 +3410,18 @@ Window {
                         anchors.fill: parent
                         hoverEnabled: true
                         cursorShape: Qt.PointingHandCursor
-                        onClicked: {
-                            if (symbolsWindow.visible) symbolsWindow.hide()
-                            else symbolsWindow.openPicker()
-                        }
+                        onClicked: symbolsPill.activated()
                     }
 
                     Behavior on color { ColorAnimation { duration: 100 } }
                 }
 
-                Rectangle {
+                Comp.BarButton {
                     id: snippetsPill
                     objectName: "snippetsBarButton"
+                    targetId: root.scanBarId(root.barIndexSnippets)
+                    scanName: qsTr("Snippets")
+                    onActivated: root.toggleSnippets()
                     width: predBar.predPillHeight
                     height: predBar.predPillHeight
                     radius: width / 2
@@ -3405,18 +3452,18 @@ Window {
                         anchors.fill: parent
                         hoverEnabled: true
                         cursorShape: Qt.PointingHandCursor
-                        onClicked: {
-                            if (snippetsWindow.visible) snippetsWindow.hide()
-                            else snippetsWindow.openList()
-                        }
+                        onClicked: snippetsPill.activated()
                     }
 
                     Behavior on color { ColorAnimation { duration: 100 } }
                 }
 
-                Rectangle {
+                Comp.BarButton {
                     id: clearCtxPill
                     objectName: "clearContextButton"
+                    targetId: root.scanBarId(root.barIndexClear)
+                    scanName: qsTr("Clear suggestion context")
+                    onActivated: root.clearSuggestionContext()
                     width: predBar.predPillHeight
                     height: predBar.predPillHeight
                     radius: width / 2
@@ -3479,10 +3526,7 @@ Window {
                         anchors.fill: parent
                         hoverEnabled: true
                         cursorShape: Qt.PointingHandCursor
-                        onClicked: {
-                            if (keyboard) keyboard.resetContext()
-                            contextClearedToast.flash()
-                        }
+                        onClicked: clearCtxPill.activated()
                     }
 
                     Behavior on color { ColorAnimation { duration: 100 } }
