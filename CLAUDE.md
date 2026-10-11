@@ -1,6 +1,6 @@
 # CLAUDE.md: Alpha-OSK AI Onboarding
 
-Alpha-OSK is an AI-assisted, mouse-driven on-screen keyboard for Windows and Linux (macOS in progress). Users click QML keys to type into whatever app currently holds OS focus; a hybrid n-gram + fuzzy engine predicts words locally (a PPM character model trains alongside but has been out of the merge since 2026-09-03), with no LLM, no GPU, and nothing leaving the machine. It is an accessibility tool the owner depends on daily. This file is both the AI-onboarding doc and the human codebase map; the detailed reference sections below are authoritative project knowledge, not background.
+Alpha-OSK is an AI-assisted, mouse-driven on-screen keyboard for Windows and Linux (macOS in progress). Users click QML keys to type into whatever app currently holds OS focus; a hybrid n-gram + fuzzy engine predicts words locally (a PPM character model trains alongside but has been out of the merge since 2026-09-03), with no LLM, no GPU, and nothing leaving the machine for prediction. Opt-in dictation, and its optional Claude features (AI cleanup, Write with AI), are the exception and use the user's own Deepgram and Anthropic keys. It is an accessibility tool the owner depends on daily. This file is both the AI-onboarding doc and the human codebase map; the detailed reference sections below are authoritative project knowledge, not background.
 
 ## About the Owner
 
@@ -315,8 +315,12 @@ Mic at the left end of the suggestion bar; off by default, inert without a Deepg
 - `predBar.micReserve` must stay 0 whenever the mic is not on screen. There is a title-bar mirror (`dictationTitleBarButton`) for when suggestions are off. The busy pulse animates a `pulse` property, **never a bound `opacity`** (an animation takes ownership of what it animates).
 - Insertion opens with `_begin_verbatim_insert()` and sends via `_send_literal_text`; never gated on privacy mode. It mirrors into `_context_buffer` / `_sentence_buffer` (not the deferred space again, and not in privacy mode) and does **not** teach the prediction model.
 - **Privacy mode calls `cancel()`, not `stop()`**, and `cancel()` disconnects the controller's handlers before aborting the stream.
-- `dictation.json` holds the API key: DPAPI-wrapped on Windows, never logged, never returned to QML in the clear, never in the websocket URL, and **never in the Data Backup archive**.
-- Toggle rather than push-to-talk, two automatic stops, four states (`idle` / `connecting` / `listening` / `finishing`), **no automatic reconnect**, no transcript content in logs, custom vocabulary via `keyterm`.
+- `dictation.json` holds the API keys: DPAPI-wrapped on Windows, never logged, never returned to QML in the clear, never in the websocket URL, and **never in the Data Backup archive**. The Anthropic key follows the same rules and travels only in an `x-api-key` header.
+- Toggle rather than push-to-talk, two automatic stops, five states (`idle` / `connecting` / `listening` / `finishing` / `polishing`), **no automatic reconnect**, no transcript content in logs, custom vocabulary via `keyterm`.
+- **Claude is called through `QNetworkAccessManager` (`src/dictation/claude.py`), never the `anthropic` SDK or `requests`**: no new dependency, no thread. AI cleanup (Haiku, off by default) holds a run back and inserts it once; Write with AI (Sonnet, off by default) holds a run back and yields a draft.
+- **Speech is never lost to the LLM.** A failed cleanup inserts the raw words and says so; a dropped Deepgram stream in a held-back run delivers what was said; a tap during `polishing` does nothing. Privacy mode's `cancel()` is the only path that discards, and it aborts the Claude request too.
+- **A Write with AI draft is never auto-typed**: `draftReady` opens a preview (Insert / Copy / Discard) and Insert goes through `insertDictationDraft`.
+- **History (`<config>/dictation_history/`, last 20 runs with WAV audio) is excluded from Data Backup**, and a WAV path is derived from the validated 16-hex id, never read from the index.
 
 ## Data Backup (Export / Import)
 

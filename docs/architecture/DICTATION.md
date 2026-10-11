@@ -7,6 +7,11 @@ focus, through the same verbatim-insert path a snippet uses.
 
 Off by default, and inert until the user supplies a Deepgram API key.
 
+Two optional passes can run the transcript through Claude on the user's own
+Anthropic key (**AI cleanup** and **Write with AI**), and a short **history**
+of runs is kept locally. Each is off or inert until switched on; see the
+sections of those names below.
+
 ```
 mic click
   -> KeyboardBridge.toggleDictation()
@@ -53,11 +58,15 @@ than merely cheaper:
 | `src/dictation/config.py` | `dictation.json`, including the API key |
 | `src/dictation/audio.py` | `MicrophoneCapture`, the peak detector |
 | `src/dictation/providers.py` | `TranscriptionStream` seam, `DeepgramStream` |
-| `src/dictation/controller.py` | The state machine, silence and duration timers |
+| `src/dictation/claude.py` | `build_request` / `parse_response` (pure), `ClaudeRequest`, `ClaudeClient` over `QNetworkAccessManager` |
+| `src/dictation/prompts.py` | The cleanup and writing prompts |
+| `src/dictation/history.py` | `DictationHistory`, the local store of past runs |
+| `src/dictation/controller.py` | The state machine, silence and duration timers, the Claude passes |
 | `src/keyboard_bridge.py` | Slots, signals, and `_insert_dictated_text` |
 | `qml/Main.qml` | Mic button, transcript banner, error toast, settings wiring |
 | `qml/components/UnifiedSettingsPanel.qml` | The Dictation category |
-| `tests/test_dictation.py` | All of the above |
+| `tests/test_dictation.py` | The controller, config and bridge |
+| `tests/test_dictation_claude.py`, `tests/test_dictation_history.py` | The Claude client and the history store |
 
 ## The interaction model is a toggle, not push-to-talk
 
@@ -79,13 +88,14 @@ click misses leaves the microphone live and, on a metered API, billing:
 Both are configurable, because "a few seconds" is a guess about someone
 else's speech rhythm.
 
-## Four states, not a boolean
+## Five states, not a boolean
 
-`idle` / `connecting` / `listening` / `finishing`, surfaced to QML as a
-string. Two booleans would permit a fifth state that does not exist, and
-the UI genuinely has to render four different things: `connecting` and
-`finishing` both have to look busy **without looking like recording**, or
-the user clicks again and starts a second run.
+`idle` / `connecting` / `listening` / `finishing` / `polishing`, surfaced
+to QML as a string. Two booleans would permit a sixth state that does not
+exist, and the UI genuinely has to render five different things:
+`connecting`, `finishing` and `polishing` all have to look busy **without
+looking like recording**, or the user clicks again and starts a second run.
+(`polishing` is the newest: it is the wait for Claude, see below.)
 
 `finishing` is not cosmetic. `stop()` closes the microphone immediately
 (an open mic light is alarming) but keeps the socket open and sends
@@ -94,6 +104,129 @@ said arrives *after* that message. Closing on stop would throw away the
 tail of the user's sentence, which is the part they are most likely to be
 watching for. `FLUSH_GRACE_MS` (2.5 s) is the ceiling, so a wedged server
 cannot pin the UI in `finishing`.
+
+## AI cleanup
+
+Off by default (`cleanup_enabled`), and live only when the user has also
+saved an Anthropic key (`DictationConfig.cleanup_ready`). With it on, a
+dictation run is **held back and inserted once**: finals accumulate in
+`_run_text` instead of being typed phrase by phrase, the suggestion bar
+shows everything so far plus the phrase in flight, and when the run ends
+the whole transcript goes to Claude Haiku (`claude-haiku-5-5`, effort
+`low`, 20 s timeout, `max_tokens` from the input length, capped at 8000).
+The cleaned text is then inserted through the normal verbatim path.
+
+Held back is the price of a coherent edit: cleaning one phrase at a time
+cannot fix a sentence that spans two finals, and text already typed into
+another app cannot be taken back. The accumulate decision is made once at
+`start()`, so flipping a setting mid-run cannot switch a run between modes
+after part of it has been typed.
+
+The prompt (`prompts.py`) fixes recognition slips, punctuation and
+capitalisation, drops fillers only when clearly disfluent, keeps the
+speaker's words, never adds content, and treats the transcript as data
+inside `<transcript>` delimiters so a dictated "ignore the above" is not
+obeyed. It is told the dictation language (`multi` means keep each
+sentence's language) and the number format setting (`smart`, `digits` or
+`words`).
+
+## Write with AI
+
+A second button (off by default, `writing_enabled`, needs both keys): the
+user speaks an instruction ("write a polite email declining the meeting"),
+and Claude Sonnet (`claude-sonnet-5-5`, effort `medium`, 60 s timeout,
+`max_tokens` 8000) composes the text. The result arrives as `draftReady`,
+and **a draft is never typed on its own.** It opens a preview popup on the
+keyboard window with Insert, Copy and Discard, because this text was
+written by a model rather than said by the user, and a wrong paste into a
+live app is costly to undo. Insert goes through `insertDictationDraft`, the
+same verbatim path a dictated phrase uses; Copy goes to the clipboard. An
+optional style profile (`writing_style`, up to 2000 characters, newlines
+kept and other control characters stripped) rides in `<style_profile>`
+delimiters and describes the user's voice.
+
+Only the writing model sends the server-side fallback beta header and
+`"fallbacks": "default"`, so Anthropic retries a spurious refusal on
+another model rather than handing the user a "declined" they cannot easily
+rephrase their way around. Haiku has no fallback target. No request sends
+`thinking` or sampling parameters (these models reject them) or an
+assistant prefill.
+
+## Speech is never lost to the LLM
+
+This is the rule the controller is built around. Held-back text exists
+nowhere but in `_run_text`, so every failure path delivers or keeps it:
+
+- **Cleanup fails** (bad key, rate limit, timeout, refusal, truncation,
+  empty reply, no connection): the raw words are inserted anyway and the
+  error says so ("AI cleanup failed (reason). Inserted as spoken.").
+- **Write with AI fails**: nothing is typed, but the spoken instruction is
+  recorded in history, so the user can see it again.
+- **The Deepgram stream drops mid-run** while finals are held back:
+  `_on_stream_failed` finishes the run and delivers what was said, rather
+  than cancelling and discarding it. A held-back run must not be worse off
+  than a streamed one, where the phrases already typed would have stayed.
+- **A tap on the mic while `polishing` does nothing.** The words are
+  already with Claude, and treating a stray tap as a cancel would throw
+  them away.
+
+The one exception is the one that matters: **privacy mode calls `cancel()`,
+which aborts the in-flight Claude request and delivers nothing.** A spoken
+password must not be finished by a model on the way out.
+
+`stream_inserts = False` is implemented by the same machinery: with it off
+and no cleanup, the run is held back and inserted once, raw.
+
+## Claude is called over raw HTTPS on Qt, not through the SDK
+
+`claude.py` posts to `https://api.anthropic.com/v1/messages` with
+`QNetworkAccessManager`. The `anthropic` package would be a new dependency
+to freeze and sign, and `requests` would need a thread; the Qt route keeps
+the zero-new-dependency, no-thread property the rest of this package has.
+`build_request` and `parse_response` are pure functions (no Qt), so
+headers, bodies and every error mapping are tested without a network.
+`ClaudeRequest` is one-shot, owns a timeout timer, and fires no signal
+after `abort()`. `ClaudeClient.send` asserts the host is
+`api.anthropic.com`. The controller takes the client by constructor
+argument, so tests substitute a fake and never reach the network.
+
+`parse_response` keeps only `text` blocks (a `thinking`, `fallback` or any
+later block type is not the reply), rejects a body over 1 MB, and maps each
+status class to a short fixed sentence rather than echoing the server's
+message, which can quote the input.
+
+## History
+
+The last 20 runs (`history_enabled`, **on** by default) are kept in
+`<config>/dictation_history/`: an `index.json` plus one 16 kHz mono WAV per
+run, so a run can be played back, copied, reprocessed through cleanup or
+deleted. It exists because a held-back run and a failed cleanup are exactly
+when the user wants the original words back. It is local only and is never
+sent anywhere.
+
+Caps and validation (`history.py`): 20 entries, 200 MB of audio in total,
+a 2 MB index checked by `stat()` before it is opened, 20 000 characters per
+text field. Ids are `secrets.token_hex(8)` and validated against
+`^[0-9a-f]{16}$` on load; **the WAV path is always derived from the
+validated id, never read from the index**, so a hand-edited index cannot
+point playback or delete at another file. A bad entry is dropped on load;
+a WAV with no entry is deleted on load, but only if its name is exactly
+`<valid-id>.wav`. The store never raises on an I/O failure (it logs without
+content and reports False). A cancelled run is not recorded; a run whose
+cleanup failed is, with `cleaned` false.
+
+`reprocess(entry_id)` re-runs cleanup over an entry's raw text, updates the
+entry in place and emits `historyChanged`. It is refused while a live run
+is active and for write entries. The bridge exposes `getDictationHistory`,
+`playDictationHistory` (QtMultimedia, created lazily),
+`stopDictationPlayback`, `copyDictationHistory`,
+`reprocessDictationHistory`, `deleteDictationHistory` and
+`clearDictationHistory`; entries carry `hasAudio` but never a filesystem
+path.
+
+**The folder is deliberately absent from the Data Backup archive**: it holds
+recordings of the user's voice, and the archive is a file that gets carried
+and handed around. Do not add it to `data_export`'s allow-list.
 
 ## The transcript occupies the suggestion bar
 
@@ -285,6 +418,14 @@ never placed in the websocket URL: Deepgram authenticates the upgrade
 request, so it rides in an `Authorization` header, where a proxy or
 server access log along the way will not capture it.
 
+**The Anthropic key follows every rule above.** It lives in the same
+`dictation.json` as `anthropic_key` with its own protected flag (DPAPI on
+Windows, 0600 elsewhere), is never logged, never returned to QML (only
+`hasAnthropicKey` and a masked preview), is absent from the Data Backup
+archive with the rest of the file, and travels only in the `x-api-key`
+request header, never in a URL. `DictationConfig.__repr__` leaks neither
+key.
+
 ## No automatic reconnect, on purpose
 
 A dropped socket mid-utterance means the audio spoken during the gap is
@@ -318,10 +459,13 @@ Signals (QML binds these in `Main.qml`'s `Connections { target: keyboard }`):
 
 | Signal | Carries |
 |--------|---------|
-| `dictationStateChanged(str)` | `idle` / `connecting` / `listening` / `finishing` |
+| `dictationStateChanged(str)` | `idle` / `connecting` / `listening` / `finishing` / `polishing` |
 | `dictationTranscriptChanged(str)` | the in-flight phrase, empty when there is none |
 | `dictationLevelChanged(float)` | mic peak, 0.0 to 1.0, for the button's ring |
 | `dictationError(str)` | a user-facing sentence; always paired with a return to idle |
+| `dictationDraftReady(str)` | a Write with AI draft, for the preview popup; never typed on its own |
+| `dictationHistoryChanged()` | a run was recorded, or a reprocess updated an entry |
+| `dictationPlaybackChanged(str)` | the id now playing, empty when stopped |
 
 Slots:
 
@@ -335,7 +479,13 @@ Slots:
 | `setDictationEnabled(bool)` | Cancels a live run when switching off, the failure `setSnippetDetection(False)` learned. |
 | `setDictationModel/Language/Device(str)` | Model and language are validated against the allow-lists in `config.py`; an unknown value is ignored rather than stored. |
 | `setDictationMaxSeconds(int)` / `setDictationSilenceSeconds(int)` | Clamped to the ranges in `config.py`. |
-| `setDictationStreamInserts(bool)` | Stored; see *Known gaps*. |
+| `setDictationStreamInserts(bool)` | Off holds a run back and inserts it once, raw (or cleaned, if cleanup is on). |
+| `toggleAiWriting()` | Starts or stops a Write with AI run. Refused in privacy mode, when writing is off, or when either key is missing, each with a sentence naming the fix. |
+| `insertDictationDraft(str) -> bool` / `copyDictationDraft(str) -> bool` | The draft popup's Insert and Copy. Insert shares the dictated phrase's insert path (`_insert_spoken_text`), is not gated on privacy mode, and teaches nothing. |
+| `setDictationAnthropicKey(str) -> bool` / `clearDictationAnthropicKey() -> bool` | Honour the bool, like the Deepgram key. |
+| `setDictationCleanupEnabled(bool)` / `setDictationNumberFormat(str)` | The number format is allow-listed. |
+| `setDictationWritingEnabled(bool)` / `setDictationWritingStyle(str) -> bool` | |
+| `setDictationHistoryEnabled(bool)` and the history slots | See *History*. |
 | `setDictationKeyterms(str)` | Newline-separated; deduplicated, flattened and bounded on the way in. |
 
 Every setter persists immediately, the same way `SnippetStore` does, so there is no on-quit save path to wire up.
@@ -344,20 +494,27 @@ Every setter persists immediately, the same way `SnippetStore` does, so there is
 
 ## Known gaps
 
-- **The API key field takes physical-keyboard or pasted input only.**
-  Alpha-OSK cannot hold OS focus, so typing into a `TextField` with the
-  OSK needs the `setEditMode(true)` + `editKeyTyped` plumbing the
-  prediction-edit popup and the snippets editor use. Wiring that for the
-  settings panel is a follow-up. Pasting a key is the expected path
-  anyway (nobody types 40 hex characters by hand, least of all here).
+- **The API key fields take pasted input in practice.** The settings
+  window cannot hold OS focus, so typing a key into a `TextField` with the
+  OSK would need the edit-session plumbing the snippets editor uses. That
+  is still not wired, but it is mitigated: the key fields have large Paste
+  and Save buttons, so the whole path is two clicks and no typing. (Nobody
+  types 40 hex characters by hand, least of all here.)
 - **Dictation is a no-op while an edit popup is open.** Routing a phrase
   into the snippets editor or the prediction-edit field would need an
   "insert this string" edit signal; both surfaces currently take one
   character at a time. Dropping the phrase beats typing it into the app
   behind the popup, which is not where the user is looking.
-- **`stream_inserts` is stored and surfaced but the accumulate-then-
-  insert-once branch is not implemented.** Every run currently types each
-  phrase as it finalises.
+- **Held-back runs show nothing in the target app until they end.** The
+  suggestion bar carries the running transcript, but a long run with
+  cleanup on types nothing until the user stops and Claude answers (up to
+  the 20 s timeout). That is the price of the single coherent insert (see
+  *AI cleanup*); `stream_inserts` on with cleanup off keeps phrase by
+  phrase typing. (The earlier gap, that `stream_inserts = False` was stored
+  but not implemented, is closed.)
+- **Claude is a second third party.** With cleanup or writing on, the
+  transcript goes to Anthropic as well as the audio to Deepgram. Both are
+  opt-in and keyed by the user; see `docs/PRIVACY.md`.
 - **One provider.** The `TranscriptionStream` contract is four signals
   and three methods precisely so a second one does not require touching
   the controller or the bridge.
@@ -380,10 +537,17 @@ parameters: `model` / `punctuate` / `smart_format` / `interim_results`,
 with `keyterm` (not the legacy `keywords`, which nova-3 rejects) for
 custom vocabulary. It is Rust and TypeScript throughout, so nothing was
 ported directly; what was taken is the proven parameter set and the
-`{transcript, is_final}` contract, which MacroVox arrived at
-independently in its own provider-seam plan.
+`{transcript, is_final}` contract.
 
-Three things are deliberately different:
+**Its missing features have since been absorbed natively** (2026-10-11):
+AI cleanup, Write with AI (MacroVox's agentive writing) and a dictation
+history, all on the user's own Anthropic key. Their prompts were ported by
+intent, not verbatim. Deliberately **not** ported: the global hotkey (the
+mic is a button on a keyboard the user is already using), accounts, billing
+and subscription gating (a bring-your-own-key tool has none), and voice
+commands.
+
+Three things stay different:
 
 | | MacroVox | Alpha-OSK |
 |---|---|---|
@@ -391,11 +555,9 @@ Three things are deliberately different:
 | Interim results | requested, then ignored | requested and shown live |
 | Delivery | clipboard, then a synthetic Ctrl+V | typed via the verbatim-insert path |
 
-`docs/roadmap/MACROVOX_INTEGRATION.md` describes the *other* direction,
-launching and coordinating with MacroVox as a separate process. Native
-dictation does not replace that plan; the two answer different questions
-(the integration plan is about MacroVox's AI cleanup and agentic writing,
-which this does not attempt).
+`docs/roadmap/MACROVOX_INTEGRATION.md` keeps the history of the earlier
+plan to launch and coordinate with MacroVox as a separate process, and says
+which of it is now moot.
 
 ---
 
@@ -416,7 +578,7 @@ Click the mic at the **left end of the suggestion bar**, speak, click again. The
 - **Privacy mode calls `cancel()`, not `stop()`**, and the difference is the point: `cancel` does not wait for the provider to flush, so a run under way when the caret landed on a password field cannot deliver one more sentence. **`cancel()` disconnects the controller's own handlers before aborting the stream, and the disconnect is the load-bearing half**: clearing `self._stream` only stops us *sending*, not the provider *telling us* things, and a websocket can have a `textMessageReceived` already queued at teardown. Without it a cancelled run typed one more phrase into whatever field the user had moved to. Found by `tests/test_dictation.py::TestTheRunLifecycle::test_cancelling_drops_what_is_in_flight`.
 - **`dictation.json` is deliberately absent from the Data Backup archive** (do NOT add it to `_MODEL_FILES`), because it holds an API key and the archive exists to be carried between machines. The key is DPAPI-wrapped on Windows via ctypes, plaintext at 0600 elsewhere, never logged, never returned to QML in the clear (`getDictationSettings` gives `hasKey` plus a masked preview), and never in the websocket URL (it rides in an `Authorization` header, so no proxy log captures it). `TestTheKeyNeverLeavesTheMachine` asserts the export exclusion.
 - **Toggle, not push-to-talk**, same argument as the swipe-typing removal: a sustained precise hold is the one gesture this user cannot reliably make. Two automatic stops sit behind it (a silence timeout the user notices, and a wall-clock ceiling that is the backstop for the silence detector itself failing in a noisy room), because a missed "off" click leaves the mic live and, on a metered API, billing.
-- **Four states, not a boolean** (`idle`/`connecting`/`listening`/`finishing`): `connecting` and `finishing` both have to look busy **without looking like recording**, or the user clicks again and starts a second run. `finishing` is not cosmetic: `stop()` closes the mic immediately but keeps the socket open for the `CloseStream` flush, because the final fragment for the last thing said arrives *after* that message.
+- **Five states, not a boolean** (`idle`/`connecting`/`listening`/`finishing`/`polishing`): `connecting`, `finishing` and `polishing` all have to look busy **without looking like recording**, or the user clicks again and starts a second run. `finishing` is not cosmetic: `stop()` closes the mic immediately but keeps the socket open for the `CloseStream` flush, because the final fragment for the last thing said arrives *after* that message.
 - **No automatic reconnect, on purpose.** Audio spoken during a gap is gone, so a silent reconnect yields a transcript with an invisible hole: words the user said, believes they said, and cannot see. A drop ends the run and says so. Errors are mapped to sentences naming a next step (`_friendly_error`); nobody can act on `QAbstractSocket::RemoteHostClosedError`.
 - **Nothing in `src/dictation/` logs transcript content**, same rule as the rest of the keystroke path.
 - Deepgram parameters were taken from MacroVox's production set: `model`/`punctuate`/`smart_format`/`interim_results`, with **`keyterm`** for custom vocabulary (nova-3 rejects the legacy `keywords`).
