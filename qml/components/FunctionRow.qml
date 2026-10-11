@@ -139,13 +139,9 @@ Item {
     // disappears exactly when the row is tightest.
     readonly property real _groupGap: keySpacing * 4
 
-    // The rendered width of every key in this row.  The row spans the
-    // keyboard grid exactly, so what used to sit as empty margin at both
-    // ends is divided between the twelve keys instead.
-    //
-    // `maxWidth <= 0` means no caller wired the grid width (a test that
-    // builds this component on its own), and falls back to one grid
-    // column per key, which is what this row drew before.
+    // The width the keys would need to span the grid exactly.  0 for
+    // `maxWidth` means no caller wired the grid width (a test that builds
+    // this component on its own), which falls back to one grid column.
     readonly property real _fillKeyW: {
         if (maxWidth <= 0)
             return keyW
@@ -153,40 +149,31 @@ Item {
         return w > 0 ? w : keyW
     }
 
+    // The rendered width of every key: one grid column, the same as the
+    // keys below it, unless the row would then be wider than the grid
+    // (compact with the swap key: thirteen keys and four groups over a
+    // 13-unit grid), in which case the keys give way.
+    readonly property real _keyWidth: Math.min(keyW, _fillKeyW)
+
     function _activate(name) {
         keyboard.pressSpecialKey(name.toLowerCase())
     }
 
-    // **The row fills the keyboard grid, and that reverses an earlier
-    // decision on purpose.**
+    // **Every F-key is one grid column wide, the same as the keys below
+    // it, and the row is centred.**  This has gone back and forth, so the
+    // history matters.
     //
-    // It used to draw each F-key exactly one grid column wide and centre
-    // the result, which left a visible margin at both ends: twelve keys
-    // against a 15.5-column grid, so most of two key widths a side at a
-    // 940 px window.  That shape was chosen
-    // the first time this came up, over three ways of filling the width
-    // (spending the leftover on the group gaps, which made 108 px chasms;
-    // capping that gap, which left it visibly inset and so fixed nothing;
-    // and stretching the keys).  The note left behind said not to revisit
-    // the inset without rendering the result next to the number row.
+    // It started as exactly this (one column a key, centred, a visible
+    // margin at both ends).  It was then changed to stretch the keys until
+    // the row spanned the grid, which made an F-key 18-29% wider than the
+    // key below it.  The owner found the stretched keys too big
+    // (2026-10-08) and asked for them to match the other keys.  Do not
+    // stretch them again without asking him.
     //
-    // That is exactly what was done the second time, and stretching won.
-    // Every key gains 18% of target width, and on a keyboard driven by an
-    // imprecise pointer that outranks the alignment argument; the panel
-    // also reads as part of the keyboard's outline rather than a strip
-    // floating above it.
-    //
-    // **The cost was accepted with the picture in front of us**: at full
-    // size an F-key is 18% wider than the key directly below it (it was
-    // also 30% shorter then; the row is full height since 2026-10-06), so
-    // the row no longer lines up with the grid column by column.  Do not "fix" that back without rendering it next
-    // to the number row, which is the same rule as before, pointing the
-    // other way.
-    //
-    // The invariant that survived both decisions: this row must never be
-    // wider than the grid it sits above.  It is now exactly that width,
-    // so anything that adds a key or widens a gap has to come out of
-    // `_fillKeyW` and never out of `maxWidth`.
+    // The invariant that survived every version: this row must never be
+    // wider than the grid it sits above.  `_keyWidth` is clamped to the
+    // fill width for that reason, and anything that adds a key or widens a
+    // gap must keep that clamp rather than raise `maxWidth`.
     implicitWidth: fnLayout.implicitWidth
     implicitHeight: fnLayout.implicitHeight
 
@@ -238,19 +225,17 @@ Item {
 
                         keyText: modelData.toLowerCase()
                         displayText: fnRow._capFor(modelData)
-                        keyWidth: fnRow._fillKeyW
+                        keyWidth: fnRow._keyWidth
                         keyHeight: fnRow.keyH
                         hitMarginH: fnRow.hitMarginH
                         hitMarginV: fnRow.hitMarginV
                         // A custom label is a word, not a two-character key
                         // name, so a long one takes the smaller size rather
                         // than overflowing the cap.  The store caps the label
-                        // at 12 characters for the same reason.  The
-                        // threshold is 8 rather than 3 because the fill above
-                        // bought 18% more width: at 10 px eight characters
-                        // clear the cap and twelve do not, so only the
-                        // longest labels still step down.
-                        fontSize: displayText.length > 8 ? 9 : 10
+                        // at 12 characters for the same reason.  Anything
+                        // longer than a key name ("F13") steps down, since
+                        // the cap is one grid column wide.
+                        fontSize: displayText.length > 3 ? 9 : 10
                         isSpecial: true
                         enableRepeat: false
                         // A reassigned key is marked, so the user can see
@@ -291,7 +276,7 @@ Item {
             keyText: "fnswap"
             displayText: fnRow.swapLabel
             scanLabel: fnRow.swapScanName
-            keyWidth: fnRow._fillKeyW
+            keyWidth: fnRow._keyWidth
             keyHeight: fnRow.keyH
             hitMarginH: fnRow.hitMarginH
             hitMarginV: fnRow.hitMarginV
