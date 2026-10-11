@@ -790,6 +790,8 @@ Window {
         root.dictationEnabled ? 1 : 0, root.writeAvailable ? 1 : 0,
         (root.dictationActive && !root.writeRunPending) ? 1 : 0,
         (root.dictationActive && root.writeRunPending) ? 1 : 0,
+        // The `draft` section exists exactly while the preview is open.
+        aiDraftPopup.opened ? 1 : 0,
         root.visibility,
         Math.round(root.x), Math.round(root.y),
         Math.round(root.width), Math.round(root.height),
@@ -5412,7 +5414,16 @@ Window {
             }
 
             // Insert / Copy / Discard.  Functions rather than inline handlers
-            // so a headless test can drive them without a pointer.
+            // so a headless test can drive them without a pointer.  `run`
+            // is the one dispatcher a click and a UIA Invoke both reach
+            // (BarButton raises `activated` for either), so the two paths
+            // cannot drift: a switch user who started the writing run has
+            // to be able to finish it here.
+            function run(action) {
+                if (action === "insert") insertDraft()
+                else if (action === "copy") copyDraft()
+                else close()
+            }
             function insertDraft() {
                 if (keyboard && keyboard.insertDictationDraft(aiDraftPopup.draft))
                     aiDraftPopup.close()
@@ -5428,9 +5439,13 @@ Window {
 
             onClosed: aiDraftPopup.draft = ""
 
+            // Every colour here is the theme's: no literal hue, the same
+            // rule the keys follow.  Insert wears the accent wash (walked
+            // down until the theme's text clears 4.5:1), the other two
+            // are plain keys.
             background: Rectangle {
-                color: "#252535"
-                border.color: "#4a9eff"
+                color: root.themeBackground
+                border.color: root.themeAccent
                 border.width: 1.5
                 radius: 10
             }
@@ -5441,7 +5456,8 @@ Window {
                 Text {
                     text: qsTr("Draft")
                     textFormat: Text.PlainText
-                    color: "#aaa"
+                    color: root.themeTextColor
+                    opacity: 0.7
                     font.pixelSize: 12
                     font.bold: true
                 }
@@ -5457,7 +5473,7 @@ Window {
                         text: aiDraftPopup.draft
                         textFormat: Text.PlainText
                         wrapMode: Text.Wrap
-                        color: "#f0f0f0"
+                        color: root.themeTextColor
                         font.pixelSize: 14
                     }
                 }
@@ -5466,26 +5482,40 @@ Window {
                     Layout.fillWidth: true
                     spacing: 8
 
+                    // The three actions are switch-scan targets (section
+                    // `draft` of docs/architecture/UIA_TARGETS.md): the
+                    // writing run is invokable from the bar, so its result
+                    // has to be acceptable without a pointer too.  Index
+                    // is fixed per action (0 Insert, 1 Copy, 2 Discard);
+                    // presence follows the popup, which Qt prunes from the
+                    // accessibility tree while closed.
                     Repeater {
                         model: [
-                            { id: "insert", label: qsTr("Insert"), fill: "#2a6a2a", edge: "#44aa44" },
-                            { id: "copy", label: qsTr("Copy"), fill: "#2a3a4a", edge: "#4a6a8a" },
-                            { id: "discard", label: qsTr("Discard"), fill: "#4a2a2a", edge: "#8a4a4a" }
+                            { id: "insert", label: qsTr("Insert") },
+                            { id: "copy", label: qsTr("Copy") },
+                            { id: "discard", label: qsTr("Discard") }
                         ]
-                        delegate: Rectangle {
+                        delegate: Comp.BarButton {
+                            id: draftBtn
                             objectName: "aiDraft_" + modelData.id
+                            targetId: root.scanTargetId("draft", 0, index)
+                            scanName: modelData.label
+                            onActivated: aiDraftPopup.run(modelData.id)
                             Layout.fillWidth: true
                             Layout.preferredHeight: 44
                             radius: 8
-                            color: draftBtnArea.containsMouse ? Qt.lighter(modelData.fill, 1.3) : modelData.fill
-                            border.color: modelData.edge
+                            readonly property bool isInsert: modelData.id === "insert"
+                            readonly property color restFill:
+                                isInsert ? root.accentKeyColor : root.themeKeyColor
+                            color: draftBtnArea.containsMouse ? Qt.lighter(restFill, 1.2) : restFill
+                            border.color: isInsert ? root.themeAccent : root.themeBorder
                             border.width: 1
 
                             Text {
                                 anchors.centerIn: parent
                                 text: modelData.label
                                 textFormat: Text.PlainText
-                                color: "#fff"
+                                color: root.themeTextColor
                                 font.pixelSize: 14
                                 font.bold: true
                             }
@@ -5496,11 +5526,7 @@ Window {
                                 anchors.fill: parent
                                 hoverEnabled: true
                                 cursorShape: Qt.PointingHandCursor
-                                onClicked: {
-                                    if (modelData.id === "insert") aiDraftPopup.insertDraft()
-                                    else if (modelData.id === "copy") aiDraftPopup.copyDraft()
-                                    else aiDraftPopup.close()
-                                }
+                                onClicked: draftBtn.activated()
                             }
                         }
                     }
@@ -5519,7 +5545,10 @@ Window {
             objectName: "dictationErrorToast"
             parent: Overlay.overlay
             x: (root.width - width) / 2
-            y: 36
+            // Parked under the draft preview while that is open: a failed
+            // writing run with history off shows the spoken request there
+            // and explains itself here, and both default to the top.
+            y: aiDraftPopup.opened ? aiDraftPopup.y + aiDraftPopup.height + 8 : 36
             width: Math.min(root.width - 24, 420)
             // Wraps to two lines: the cleanup and writing failures name a
             // reason and a consequence ("Inserted as spoken"), which do not

@@ -71,6 +71,7 @@ AutomationId begins with `aosk.v1.`.
 | `pad`   | The numpad panel |
 | `pred`  | The prediction pills |
 | `bar`   | The suggestion bar's buttons and their title-bar twins (see *The bar*) |
+| `draft` | The Write with AI preview's Insert, Copy and Discard, while it is open (see *The draft*) |
 
 **Presence means activatable.** A key on a hidden panel, or on a symbol layer
 that is not showing, is absent from the tree rather than present and
@@ -97,6 +98,7 @@ help, snippets, symbols and dashboard windows (their bar buttons are targets); s
     aosk.v1.<section>.<row>.<index>          keys
     aosk.v1.pred.<index>.g<generation>       prediction pills
     aosk.v1.bar.0.<index>                    bar buttons and their twins
+    aosk.v1.draft.0.<index>                  the draft preview's actions
     aosk.v1.revision                         the revision beacon
 
 `row` and `index` are zero-based visual order, top to bottom and left to
@@ -169,6 +171,33 @@ does by state:
 Everything above that can change the target set feeds the beacon: which of the
 mic and pen exist, and the two toggle states.
 
+## The draft
+
+A Write with AI run ends in a preview rather than typed text (a draft is
+never inserted on its own), so a scanner that can start the run from
+`bar.0.1` has to be able to finish it: without targets here the workflow the
+bar exposes could not be completed without a pointer. The preview's three
+actions are `Button`s with the id `aosk.v1.draft.0.<index>`, built on the
+same `BarButton` as the bar, with the same fixed-index rule:
+
+| Index | Action | Name | Present when |
+|-------|--------|------|--------------|
+| 0 | Insert the draft | `Insert` | The preview is open |
+| 1 | Copy the draft | `Copy` | The preview is open |
+| 2 | Discard the draft | `Discard` | The preview is open |
+
+**Presence follows the preview.** It is a `Popup` on the keyboard window,
+and Qt prunes a closed popup's items from the accessibility tree, so the
+three exist exactly while a draft is showing; whether it is open feeds the
+revision beacon. Invoke goes through the same `run(action)` dispatcher a
+click does, flashes the button, and is refused once the preview has closed
+(`BarButton._scanActivatable`, so a target retained from before the close
+cannot fire). Insert types the draft through the verbatim path and closes
+the preview; Copy puts it on the clipboard and leaves the preview open;
+Discard closes it with nothing typed. A failed writing run with history
+off also opens this preview, holding the spoken request rather than a
+draft, and the same three targets apply.
+
 ## Names, and why they are not the keycaps
 
 
@@ -240,7 +269,8 @@ string. It changes whenever anything in this contract changes: window
 position and size, monitor or DPI, layout, compact view, active layer, any
 panel's visibility, any modifier or lock state, the prediction generation,
 whether the prediction row has any targets at all, the numpad's NumLock
-state, and keyboard visibility.
+state, which bar controls exist and their toggle states, whether the draft
+preview is open, and keyboard visibility.
 
 The last two were missing and are worth naming, because both changed the
 target set while leaving the string byte-identical, which a client following

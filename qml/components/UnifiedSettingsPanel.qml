@@ -3505,8 +3505,13 @@ Item {
                                                 }
                                                 SettingsButton {
                                                     objectName: "dictationHistoryReprocess"
+                                                    // Shown only while AI cleanup is on: this sends
+                                                    // the entry's text to Anthropic, and a stored key
+                                                    // alone is not consent to that (the bridge and
+                                                    // controller refuse it too).
                                                     visible: historyRow.entry.purpose === "dictate"
                                                              && unifiedSettings.dictationHasAnthropicKey
+                                                             && unifiedSettings.dictationCleanupEnabled
                                                     text: "Reprocess"
                                                     onClicked: unifiedSettings.settingChanged("dictationHistoryReprocess", historyRow.entry.id)
                                                 }

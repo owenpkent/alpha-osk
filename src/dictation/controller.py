@@ -137,6 +137,10 @@ class DictationController(QObject):
         self._run_text = ""
         #: Whether finals are held back and delivered once at the end.
         self._accumulate = False
+        #: Whether the finished transcript goes to Claude (cleanup, or a
+        #: write).  Decided with `_accumulate`, read with it, never the
+        #: live config.
+        self._polish = False
         self._record_history = False
         self._pcm = bytearray()
         self._pcm_cap = 0
@@ -222,13 +226,15 @@ class DictationController(QObject):
             return
 
         self._purpose = "write" if purpose == "write" else "dictate"
-        # Decided once, here, so a settings change mid-run cannot flip a
-        # run between modes after some of it has been typed.
-        self._accumulate = (
-            self._purpose == "write"
-            or self._config.cleanup_ready
-            or not self._config.stream_inserts
-        )
+        # Both decided once, here, so a settings change mid-run cannot flip
+        # a run between modes after some of it has been typed.  A run that
+        # polishes is always held back, and `_finish_run` reads these two
+        # rather than the config: it used to re-read `cleanup_ready`, so
+        # cleanup switched on after the first final had been typed sent the
+        # whole run to Claude and typed the result on top of the phrases
+        # already on screen.
+        self._polish = self._purpose == "write" or self._config.cleanup_ready
+        self._accumulate = self._polish or not self._config.stream_inserts
         self._record_history = self._config.history_enabled
         self._run_text = ""
         self._pcm = bytearray()
@@ -359,6 +365,15 @@ class DictationController(QObject):
 
     def _on_capture_failed(self, message: str) -> None:
         self.errorRaised.emit(message)
+        if self._run_text.strip():
+            # The microphone went away, not the user's words.  A held-back
+            # run exists nowhere but here, and a streamed one still owes
+            # history its record, so this is a stop rather than a cancel:
+            # the socket is alive, the provider flushes the tail of the
+            # last phrase, and the run ends through the same path a stop
+            # does.  Only a run with nothing said yet is torn down.
+            self.stop()
+            return
         self.cancel()
 
     # --- stream handlers ------------------------------------------------
@@ -449,7 +464,7 @@ class DictationController(QObject):
             self._set_interim("")
             self._set_state(DictationState.IDLE)
             return
-        if self._purpose == "write" or self._config.cleanup_ready:
+        if self._polish:
             self._begin_polish(text)
             return
         # No Claude involved.  Streamed finals were typed as they arrived;
@@ -538,12 +553,25 @@ class DictationController(QObject):
         self._set_state(DictationState.IDLE)
         # Recorded even on failure: for a write the spoken request is the
         # only copy, and for a dictation it is the raw words.
-        self._record(purpose, raw, raw, cleaned=False)
+        kept = self._record(purpose, raw, raw, cleaned=False)
         self._clear_run()
         if purpose == "write":
-            self.errorRaised.emit(
-                f"Write with AI failed ({_reason(reason)}). Your request is saved in History."
-            )
+            if kept:
+                self.errorRaised.emit(
+                    f"Write with AI failed ({_reason(reason)}). Your request is saved in History."
+                )
+            else:
+                # History is off, or the store refused, so the spoken
+                # instruction has no durable copy and promising one would
+                # be a lie.  The draft preview is the one surface that can
+                # hold it without writing to disk against the user's
+                # setting: shown there it can be read back or copied, and
+                # the message says that instead.
+                self.draftReady.emit(raw)
+                self.errorRaised.emit(
+                    f"Write with AI failed ({_reason(reason)}). "
+                    "Your spoken request is shown so you can copy it."
+                )
         else:
             self.finalReady.emit(raw)
             self.errorRaised.emit(f"AI cleanup failed ({_reason(reason)}). Inserted as spoken.")
@@ -558,8 +586,15 @@ class DictationController(QObject):
         """
         if self.active or self._reprocess_request is not None:
             return False
-        if not self._config.has_anthropic_key:
-            self.errorRaised.emit("Add your Anthropic API key in Settings to clean up with AI.")
+        # Gated on the cleanup toggle, not merely a stored key.  This sends
+        # stored text to Anthropic, and the privacy page promises that with
+        # both AI features off Anthropic is never contacted; a key left in
+        # Settings is not consent to that.
+        if not self._config.cleanup_ready:
+            if not self._config.has_anthropic_key:
+                self.errorRaised.emit("Add your Anthropic API key in Settings to clean up with AI.")
+            else:
+                self.errorRaised.emit("Turn on AI cleanup in Settings to reprocess a run.")
             return False
         entry = self._history_store().get(entry_id)
         if entry is None or entry["purpose"] != "dictate" or not entry["raw"].strip():
@@ -591,15 +626,18 @@ class DictationController(QObject):
             if pending is not None:
                 pending.abort()
 
-    def _record(self, purpose: str, raw: str, result: str, *, cleaned: bool) -> None:
+    def _record(self, purpose: str, raw: str, result: str, *, cleaned: bool) -> bool:
+        """Keep the run in history.  False when nothing was kept, whether
+        because the setting is off or because the store refused."""
         if not self._record_history:
-            return
+            return False
         seconds = max(0.0, time.monotonic() - self._run_started)
         entry_id = self._history_store().add(
             purpose, raw, result, cleaned, seconds, bytes(self._pcm) or None
         )
         if entry_id:
             self.historyChanged.emit()
+        return bool(entry_id)
 
     def _clear_run(self) -> None:
         self._run_text = ""

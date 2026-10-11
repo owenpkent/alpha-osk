@@ -25,7 +25,10 @@ pytest.importorskip("PySide6")
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from unittest.mock import patch  # noqa: E402
+
 from PySide6.QtCore import QCoreApplication, QMetaObject, QObject  # noqa: E402
+from PySide6.QtQml import QQmlEngine, QQmlExpression  # noqa: E402
 from PySide6.QtTest import QSignalSpy  # noqa: E402
 
 from tests.test_qml_scan_targets import (  # noqa: E402,F401
@@ -38,6 +41,10 @@ from tests.test_qml_scan_targets import (  # noqa: E402,F401
 )
 
 BAR_ID_RE = re.compile(r"^aosk\.v1\.bar\.0\.\d+$")
+DRAFT_ID_RE = re.compile(r"^aosk\.v1\.draft\.0\.\d+$")
+
+# action -> fixed index, section `draft`
+DRAFT_ACTIONS = {"insert": 0, "copy": 1, "discard": 2}
 
 # function -> (bar object, title-bar twin object, fixed index)
 CONTROLS = {
@@ -365,3 +372,144 @@ class TestTheRevisionCarriesTheBar:
         root.setProperty("dictationState", "listening")
         _settle(root)
         assert root.property("scanRevision") != idle
+
+
+# --- the Write with AI draft -------------------------------------------------
+
+
+def _descendants(item):
+    for child in item.childItems():
+        yield child
+        yield from _descendants(child)
+
+
+def _draft_popup(root):
+    popup = root.findChild(QObject, "aiDraftPopup")
+    assert popup is not None
+    return popup
+
+
+def _draft_buttons(root) -> dict[str, object]:
+    """The three action buttons by action name.  Delegates are not QObject
+    children of the popup, so they are reached through its content item."""
+    popup = _draft_popup(root)
+    ctx = QQmlEngine.contextForObject(popup)
+    content, _ = QQmlExpression(ctx, popup, "contentItem").evaluate()
+    found = {
+        i.objectName()[len("aiDraft_") :]: i
+        for i in _descendants(content)
+        if i.objectName().startswith("aiDraft_")
+    }
+    assert set(found) == set(DRAFT_ACTIONS), sorted(found)
+    return found
+
+
+def _open_draft(root, bridge, text: str = "Dear Sam, lunch?") -> None:
+    bridge.dictationDraftReady.emit(text)
+    _settle(root)
+    assert _draft_popup(root).property("opened") is True
+
+
+def _live_draft_ids(root) -> dict[str, str]:
+    out: dict[str, str] = {}
+    for action, item in _draft_buttons(root).items():
+        if _visible(item) and not item.property("_scanIgnored"):
+            out[action] = str(item.property("targetId"))
+    return out
+
+
+class TestTheDraftActionsAreTargets:
+    """A scanner that can start the writing run from the bar has to be able to
+    accept, copy or discard what comes back, or the workflow it was handed
+    cannot be finished.  Section `draft` of UIA_TARGETS.md."""
+
+    def test_the_three_actions_publish_fixed_ids_while_the_preview_is_open(self, qml_root):
+        root, _, bridge = qml_root
+        _open_draft(root, bridge)
+        ids = _live_draft_ids(root)
+        assert set(ids) == set(DRAFT_ACTIONS)
+        for action, idx in DRAFT_ACTIONS.items():
+            assert ids[action] == f"aosk.v1.draft.0.{idx}", action
+            assert DRAFT_ID_RE.match(ids[action])
+
+    def test_names_are_speakable_and_distinct(self, qml_root):
+        root, _, bridge = qml_root
+        _open_draft(root, bridge)
+        names = [str(b.property("_scanName")) for b in _draft_buttons(root).values()]
+        assert all(n.strip() for n in names) and len(set(names)) == len(names)
+
+    def test_absent_while_the_preview_is_closed(self, qml_root):
+        root, _, bridge = qml_root
+        _open_draft(root, bridge)
+        _draft_popup(root).close()
+        _settle(root)
+        assert _live_draft_ids(root) == {}
+
+    def test_the_ids_collide_with_nothing_else_on_screen(self, qml_root):
+        root, _, bridge = qml_root
+        _enable_everything(root, bridge)
+        bridge.predictionsChanged.emit(["hello", "help"])
+        _open_draft(root, bridge)
+        ids = [str(k.property("targetId")) for k in _visible_keys(root)]
+        ids += list(_live_bar_ids(root).values()) + list(_live_draft_ids(root).values())
+        assert len(ids) == len(set(ids)), sorted(i for i in ids if ids.count(i) > 1)
+
+    def test_opening_and_closing_the_preview_moves_the_revision(self, qml_root):
+        root, _, bridge = qml_root
+        before = root.property("scanRevision")
+        _open_draft(root, bridge)
+        during = root.property("scanRevision")
+        assert during != before
+        _draft_popup(root).close()
+        _settle(root)
+        assert root.property("scanRevision") != during
+
+    def test_invoke_on_insert_types_the_draft_and_closes_the_preview(self, qml_root):
+        root, _, bridge = qml_root
+        _open_draft(root, bridge, "Hello there")
+        with patch.object(bridge, "_insert_spoken_text", return_value=True) as insert:
+            assert QMetaObject.invokeMethod(
+                _draft_buttons(root)["insert"], "activateFromAssistiveClient"
+            )
+            QCoreApplication.processEvents()
+        insert.assert_called_once_with("Hello there")
+        assert _draft_popup(root).property("opened") is False
+
+    def test_invoke_on_copy_copies_and_stays_open(self, qml_root):
+        root, _, bridge = qml_root
+        _open_draft(root, bridge, "Copy me")
+        with patch.object(bridge, "_copy_to_clipboard", return_value=True) as copy:
+            QMetaObject.invokeMethod(_draft_buttons(root)["copy"], "activateFromAssistiveClient")
+            QCoreApplication.processEvents()
+        copy.assert_called_once_with("Copy me")
+        assert _draft_popup(root).property("opened") is True
+
+    def test_invoke_on_discard_closes_without_typing(self, qml_root):
+        root, _, bridge = qml_root
+        _open_draft(root, bridge)
+        with patch.object(bridge, "_insert_spoken_text") as insert:
+            QMetaObject.invokeMethod(_draft_buttons(root)["discard"], "activateFromAssistiveClient")
+            QCoreApplication.processEvents()
+        insert.assert_not_called()
+        assert _draft_popup(root).property("opened") is False
+
+    def test_invoke_and_click_raise_the_same_signal(self, qml_root):
+        root, _, bridge = qml_root
+        _open_draft(root, bridge)
+        button = _draft_buttons(root)["copy"]
+        spy = QSignalSpy(button, "2activated()")
+        with patch.object(bridge, "_copy_to_clipboard", return_value=True):
+            QMetaObject.invokeMethod(button, "activateFromAssistiveClient")
+            QCoreApplication.processEvents()
+        assert spy.count() == 1 and button.property("_flash") is True
+
+    def test_a_closed_preview_refuses_a_held_invoke(self, qml_root):
+        root, _, bridge = qml_root
+        _open_draft(root, bridge)
+        button = _draft_buttons(root)["insert"]
+        _draft_popup(root).close()
+        _settle(root)
+        with patch.object(bridge, "_insert_spoken_text", return_value=True) as insert:
+            QMetaObject.invokeMethod(button, "activateFromAssistiveClient")
+            QCoreApplication.processEvents()
+        insert.assert_not_called()

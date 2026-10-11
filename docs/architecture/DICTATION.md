@@ -118,9 +118,14 @@ The cleaned text is then inserted through the normal verbatim path.
 
 Held back is the price of a coherent edit: cleaning one phrase at a time
 cannot fix a sentence that spans two finals, and text already typed into
-another app cannot be taken back. The accumulate decision is made once at
-`start()`, so flipping a setting mid-run cannot switch a run between modes
-after part of it has been typed.
+another app cannot be taken back. Both decisions, whether finals are
+held back (`_accumulate`) and whether the finished transcript goes to
+Claude (`_polish`), are made once at `start()` and `_finish_run` reads
+those two fields, never the live config. The finish used to re-read
+`cleanup_ready`, so cleanup switched on after the first streamed final had
+been typed sent the whole run for polishing and typed the result again on
+top of the phrases already on screen; turned off mid-run, a held-back run
+still polishes, because the run it started is the run it finishes.
 
 The prompt (`prompts.py`) fixes recognition slips, punctuation and
 capitalisation, drops fillers only when clearly disfluent, keeps the
@@ -161,11 +166,24 @@ nowhere but in `_run_text`, so every failure path delivers or keeps it:
   empty reply, no connection): the raw words are inserted anyway and the
   error says so ("AI cleanup failed (reason). Inserted as spoken.").
 - **Write with AI fails**: nothing is typed, but the spoken instruction is
-  recorded in history, so the user can see it again.
+  recorded in history, so the user can see it again. With history off (or
+  if the store refuses the write) there is no durable copy, so the message
+  must not promise one: `_record` reports whether anything was kept, and
+  when nothing was, the raw instruction is emitted as `draftReady` so the
+  preview shows it to be read back or copied, and the error says that
+  instead of "saved in History". The preview is the one surface that can
+  hold it without writing to disk against the user's setting.
 - **The Deepgram stream drops mid-run** while finals are held back:
   `_on_stream_failed` finishes the run and delivers what was said, rather
   than cancelling and discarding it. A held-back run must not be worse off
   than a streamed one, where the phrases already typed would have stayed.
+- **The microphone fails mid-run** (unplugged, claimed by another app):
+  `_on_capture_failed` *stops* rather than cancels once anything has been
+  said. The socket is still up, so the provider flushes the tail of the
+  last phrase and the run ends through the ordinary finish: a held-back
+  run is delivered (or polished), a streamed one gets its history record.
+  Only a run with nothing said yet is torn down. It used to cancel
+  outright, which cleared a held-back run nobody had typed yet.
 - **A tap on the mic while `polishing` does nothing.** The words are
   already with Claude, and treating a stray tap as a cancel would throw
   them away.
@@ -201,8 +219,8 @@ The last 20 runs (`history_enabled`, **on** by default) are kept in
 `<config>/dictation_history/`: an `index.json` plus one 16 kHz mono WAV per
 run, so a run can be played back, copied, reprocessed through cleanup or
 deleted. It exists because a held-back run and a failed cleanup are exactly
-when the user wants the original words back. It is local only and is never
-sent anywhere.
+when the user wants the original words back. It is local and nothing in it
+is sent anywhere on its own; the one outbound path is Reprocess, below.
 
 Caps and validation (`history.py`): 20 entries, 200 MB of audio in total,
 a 2 MB index checked by `stat()` before it is opened, 20 000 characters per
@@ -217,7 +235,14 @@ cleanup failed is, with `cleaned` false.
 
 `reprocess(entry_id)` re-runs cleanup over an entry's raw text, updates the
 entry in place and emits `historyChanged`. It is refused while a live run
-is active and for write entries. The bridge exposes `getDictationHistory`,
+is active and for write entries, and **it carries the same two gates a live
+cleanup does**: the controller refuses it unless `cleanup_ready` (the AI
+cleanup toggle, not merely a stored key: the privacy page promises that
+with both AI features off Anthropic is never contacted, and a key left in
+Settings is not consent to sending stored text), and the bridge refuses it
+in privacy mode, since the controller cannot see that flag. The Settings
+button is shown only while cleanup is on, so reaching a refusal means the
+settings changed underneath it. The bridge exposes `getDictationHistory`,
 `playDictationHistory` (QtMultimedia, created lazily),
 `stopDictationPlayback`, `copyDictationHistory`,
 `reprocessDictationHistory`, `deleteDictationHistory` and

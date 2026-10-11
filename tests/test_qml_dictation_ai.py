@@ -144,13 +144,16 @@ def _wait_ms(ms: int) -> None:
     loop.exec()
 
 
-def _configure(root, bridge, *, writing=True, anthropic=True, deepgram=True, enabled=True):
+def _configure(
+    root, bridge, *, writing=True, anthropic=True, deepgram=True, enabled=True, cleanup=False
+):
     """Put the bridge's in-memory config in a state and let QML pull it."""
     cfg = bridge._dictation_config
     cfg.enabled = enabled
     cfg.api_key = "d" * 40 if deepgram else ""
     cfg.anthropic_key = "a" * 40 if anthropic else ""
     cfg.writing_enabled = writing
+    cfg.cleanup_enabled = cleanup
     root.setProperty("dictationEnabled", enabled)
     _call(root, "root.refreshDictation(false)")
     QCoreApplication.processEvents()
@@ -363,6 +366,44 @@ class TestTheDraftPopup:
             assert found, f"no {name} button in the draft popup"
             assert found[0].height() >= 40
 
+    def test_the_buttons_take_their_colours_from_the_theme(self, qml_root):
+        # No literal hue, the rule the keys follow: Insert wears the accent
+        # wash, the other two are plain keys, and all three ink with the
+        # theme's text colour.
+        root, _, bridge = qml_root
+        bridge.dictationDraftReady.emit("x")
+        QCoreApplication.processEvents()
+        buttons = {
+            i.objectName()[len("aiDraft_") :]: i
+            for i in _descendants(_evaluate(_child(root, "aiDraftPopup"), "contentItem"))
+            if i.objectName().startswith("aiDraft_")
+        }
+        assert set(buttons) == {"insert", "copy", "discard"}
+        assert buttons["insert"].property("restFill") == root.property("accentKeyColor")
+        for name in ("copy", "discard"):
+            assert buttons[name].property("restFill") == root.property("themeKeyColor")
+        for button in buttons.values():
+            (label,) = [c for c in button.childItems() if c.property("text") is not None]
+            assert label.property("color") == root.property("themeTextColor")
+
+    def test_the_error_toast_parks_under_an_open_preview(self, qml_root):
+        # A failed writing run with history off shows the request in the
+        # preview and explains itself in the toast; both default to y=36.
+        root, _, bridge = qml_root
+        popup = _child(root, "aiDraftPopup")
+        toast = _child(root, "dictationErrorToast")
+        bridge.dictationError.emit("AI cleanup failed (timed out). Inserted as spoken.")
+        QCoreApplication.processEvents()
+        assert toast.property("opened") is True and toast.property("y") == 36
+        toast.close()
+        bridge.dictationDraftReady.emit("write a note to Alex")
+        bridge.dictationError.emit(
+            "Write with AI failed (timed out). Your spoken request is shown."
+        )
+        QCoreApplication.processEvents()
+        assert popup.property("opened") is True and toast.property("opened") is True
+        assert toast.property("y") >= popup.property("y") + popup.property("height")
+
 
 SETTINGS_WIDTH_SLACK = OVERFLOW_TOLERANCE_PX
 
@@ -522,12 +563,16 @@ class TestTheHistoryList:
         QCoreApplication.processEvents()
         assert with_audio.property("text") == "Play"
 
-    def test_reprocess_needs_a_dictation_entry_and_a_key(self, qml_root):
+    def test_reprocess_needs_a_dictation_entry_a_key_and_cleanup_on(self, qml_root):
         root, _, bridge, _, panel = self._open(qml_root)
         rows = _by_name(panel, "dictationHistoryRow")
+        # A stored key alone does not offer it: the button sends text to
+        # Anthropic, and only the cleanup toggle is consent to that.
+        assert _by_name(rows[0], "dictationHistoryReprocess")[0].property("visible") is False
+        _configure(root, bridge, cleanup=True)
         assert _by_name(rows[0], "dictationHistoryReprocess")[0].property("visible") is True
         assert _by_name(rows[1], "dictationHistoryReprocess")[0].property("visible") is False
-        _configure(root, bridge, anthropic=False)
+        _configure(root, bridge, anthropic=False, cleanup=True)
         assert _by_name(rows[0], "dictationHistoryReprocess")[0].property("visible") is False
 
     def test_clear_all_takes_two_taps(self, qml_root):

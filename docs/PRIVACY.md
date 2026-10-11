@@ -172,12 +172,13 @@ Two further features are **off by default** and need a second key, your own **An
 - **AI cleanup** (*Settings > Dictation*): when it is on, the text of a dictation run, after Deepgram has transcribed it, is sent to Anthropic (Claude Haiku) to fix punctuation and recognition slips. The audio itself is not sent to Anthropic. If the request fails, the words are typed exactly as you said them.
 - **Write with AI**: when it is on, you speak an instruction, and the transcript of that instruction (plus the optional description of your writing style you saved in Settings) is sent to Anthropic (Claude Sonnet), which writes a draft. The draft is shown for you to Insert, Copy or Discard; it is never typed on its own.
 - **What goes with the text**: your Anthropic key, the dictation language and number-format setting, and nothing else. Not your vocabulary, your prediction model or your typed context.
+- **Reprocess** (*Settings > Dictation > History*): a button on a past dictation run that sends that run's **raw transcript** (never its audio) to Anthropic for cleanup again, and updates the entry with the result. It is a tap you make, it is only offered while AI cleanup is switched on, and it is refused while a password field is focused.
 - **A focused password field cancels a run** here too: the in-flight request is aborted and nothing is typed.
 - **Your relationship is with Anthropic, not with us.** You use your own key and your own account; we neither see nor proxy the request. Their handling is governed by their terms.
 
 ### Dictation history
 
-By default (*Settings > Dictation > History*, switchable off) Alpha-OSK keeps your **last 20 dictation runs** on your own computer so you can play one back, copy it, run cleanup on it again or delete it: the raw transcript, the final text, and a recording of the audio, in `dictation_history/` inside your config directory. It is **never sent anywhere** and is **excluded from Data Backup exports**. Delete one entry or all of them from the same screen; turning the setting off stops new runs being kept. A run you cancel is not kept.
+By default (*Settings > Dictation > History*, switchable off) Alpha-OSK keeps your **last 20 dictation runs** on your own computer so you can play one back, copy it, run cleanup on it again or delete it: the raw transcript, the final text, and a recording of the audio, in `dictation_history/` inside your config directory. Nothing in it leaves your computer on its own, and it is **excluded from Data Backup exports**. The one way any of it is sent anywhere is the **Reprocess** button described above, which sends that one entry's text (never the audio) to Anthropic when you tap it, and only while AI cleanup is on. Delete one entry or all of them from the same screen; turning the setting off stops new runs being kept. A run you cancel is not kept.
 
 ### Your keys
 

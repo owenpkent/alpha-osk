@@ -300,6 +300,111 @@ class TestAccumulateMode:
         assert ctl.state is DictationState.IDLE
 
 
+class TestTheModeIsFixedAtStart:
+    """A settings change mid-run must not change how the run ends.
+
+    The accumulate decision was already made once at `start()`, but the
+    finish read `cleanup_ready` live, so cleanup switched on after the first
+    streamed final sent the whole run for polishing and typed the result on
+    top of the phrases already on screen.
+    """
+
+    def test_cleanup_turned_on_mid_run_does_not_retype_the_streamed_phrases(
+        self, qapp, monkeypatch, claude, history
+    ):
+        ctl = _make_controller(qapp, monkeypatch, claude, history, anthropic_key=ANTHROPIC)
+        spy = _Spy(ctl)
+        ctl.start()
+        _FakeStream.last.opened.emit()
+        _FakeStream.last.final.emit("first sentence")
+        assert spy.finals == ["first sentence"]
+        ctl._config.cleanup_enabled = True
+        _FakeStream.last.final.emit("second sentence")
+        ctl.stop()
+        _FakeStream.last.closed.emit()
+        # Each phrase arrived exactly once, raw, and Claude was never asked.
+        assert spy.finals == ["first sentence", "second sentence"]
+        assert claude.calls == []
+        assert ctl.state is DictationState.IDLE
+        (entry,) = history.entries()
+        assert entry["raw"] == "first sentence second sentence" and entry["cleaned"] is False
+
+    def test_cleanup_turned_off_mid_run_still_polishes_the_held_back_run(self, cleanup_ctl, claude):
+        spy = _Spy(cleanup_ctl)
+        cleanup_ctl.start()
+        _FakeStream.last.opened.emit()
+        _FakeStream.last.final.emit("held back")
+        cleanup_ctl._config.cleanup_enabled = False
+        cleanup_ctl.stop()
+        _FakeStream.last.closed.emit()
+        # The words were never typed, so the run it started is the run it
+        # finishes: one request, and nothing inserted until it answers.
+        assert cleanup_ctl.state is DictationState.POLISHING
+        assert len(claude.calls) == 1 and spy.finals == []
+        claude.last.succeeded.emit("Held back.")
+        assert spy.finals == ["Held back."]
+
+
+class TestTheMicrophoneFailing:
+    """A microphone that goes away mid-run must not take the words with it.
+
+    `_on_capture_failed` used to cancel outright, which cleared a held-back
+    run nobody had typed yet and recorded nothing.  It now stops: the socket
+    is still up, so the provider flushes the tail and the run ends the way a
+    stop does.  Privacy mode's `cancel()` is untouched.
+    """
+
+    def test_a_held_back_run_is_still_delivered(self, qapp, monkeypatch, claude, history):
+        ctl = _make_controller(qapp, monkeypatch, claude, history, stream_inserts=False)
+        spy = _Spy(ctl)
+        ctl.start()
+        _FakeStream.last.opened.emit()
+        _FakeStream.last.final.emit("said before the mic died")
+        ctl._capture.failed.emit("Microphone disconnected.")
+        assert spy.errors == ["Microphone disconnected."]
+        # Stopped, not cancelled: the provider is asked for the tail.
+        assert ctl.state is DictationState.FINISHING
+        assert _FakeStream.last.finished is True
+        _FakeStream.last.final.emit("and the tail")
+        _FakeStream.last.closed.emit()
+        assert spy.finals == ["said before the mic died and the tail"]
+        assert ctl.state is DictationState.IDLE
+        (entry,) = history.entries()
+        assert entry["raw"] == "said before the mic died and the tail"
+
+    def test_with_cleanup_on_the_run_is_still_polished(self, cleanup_ctl, claude):
+        spy = _Spy(cleanup_ctl)
+        cleanup_ctl.start()
+        _FakeStream.last.opened.emit()
+        _FakeStream.last.final.emit("said before the mic died")
+        cleanup_ctl._capture.failed.emit("Microphone disconnected.")
+        _FakeStream.last.closed.emit()
+        assert cleanup_ctl.state is DictationState.POLISHING
+        assert len(claude.calls) == 1 and spy.finals == []
+
+    def test_a_streamed_run_is_recorded_and_not_retyped(self, qapp, monkeypatch, claude, history):
+        ctl = _make_controller(qapp, monkeypatch, claude, history)
+        spy = _Spy(ctl)
+        ctl.start()
+        _FakeStream.last.opened.emit()
+        _FakeStream.last.final.emit("already typed")
+        ctl._capture.failed.emit("Microphone disconnected.")
+        _FakeStream.last.closed.emit()
+        assert spy.finals == ["already typed"]
+        assert ctl.state is DictationState.IDLE
+        (entry,) = history.entries()
+        assert entry["raw"] == "already typed"
+
+    def test_with_nothing_said_the_run_is_torn_down(self, qapp, monkeypatch, claude, history):
+        ctl = _make_controller(qapp, monkeypatch, claude, history, stream_inserts=False)
+        spy = _Spy(ctl)
+        ctl.start()
+        ctl._capture.failed.emit("No microphone found.")
+        assert ctl.state is DictationState.IDLE
+        assert spy.finals == [] and history.entries() == []
+        assert spy.errors == ["No microphone found."]
+
+
 class TestCleanup:
     def test_success_inserts_the_cleaned_text_once(self, cleanup_ctl, claude, history):
         spy = _Spy(cleanup_ctl)
@@ -424,8 +529,45 @@ class TestWriting:
         claude.last.failed.emit("Claude declined this request.")
         assert spy.drafts == [] and spy.finals == []
         assert len(spy.errors) == 1 and "declined" in spy.errors[0]
+        assert "saved in History" in spy.errors[0]
         (entry,) = history.entries()
         assert entry["raw"] == "write a note to Alex" and entry["cleaned"] is False
+
+    def test_failure_with_history_off_shows_the_request_instead(
+        self, qapp, monkeypatch, claude, history
+    ):
+        # With history off the spoken instruction has no durable copy, so
+        # the message must not promise one.  The preview is where it goes:
+        # readable and copyable, and nothing written to disk against the
+        # user's setting.
+        ctl = _make_controller(
+            qapp,
+            monkeypatch,
+            claude,
+            history,
+            anthropic_key=ANTHROPIC,
+            writing_enabled=True,
+            history_enabled=False,
+        )
+        spy = _Spy(ctl)
+        _speak(ctl, "write a note to Alex", purpose="write")
+        claude.last.failed.emit("The request timed out.")
+        assert spy.drafts == ["write a note to Alex"] and spy.finals == []
+        assert len(spy.errors) == 1 and "timed out" in spy.errors[0]
+        assert "History" not in spy.errors[0] and "copy" in spy.errors[0]
+        assert history.entries() == []
+        assert ctl._run_text == "" and ctl.state is DictationState.IDLE
+
+    def test_failure_when_the_store_refuses_does_not_claim_an_entry(
+        self, writer, claude, history, monkeypatch
+    ):
+        monkeypatch.setattr(history, "add", lambda *a, **k: "")
+        spy = _Spy(writer)
+        _speak(writer, "write a note to Alex", purpose="write")
+        claude.last.failed.emit("Claude declined this request.")
+        assert spy.drafts == ["write a note to Alex"]
+        assert "History" not in spy.errors[0]
+        assert spy.history_changes == 0
 
     def test_it_needs_an_anthropic_key(self, qapp, monkeypatch, claude, history):
         ctl = _make_controller(qapp, monkeypatch, claude, history, writing_enabled=True)
@@ -527,11 +669,28 @@ class TestReprocess:
         keyless = _make_controller(qapp, monkeypatch, claude, history)
         entry_id = self._seed(history)
         assert keyless.reprocess(entry_id) is False
-        keyed = _make_controller(qapp, monkeypatch, claude, history, anthropic_key=ANTHROPIC)
-        assert keyed.reprocess("f" * 16) is False
-        assert keyed.reprocess("../x") is False
-        assert keyed.reprocess(self._seed(history, "write")) is False
+        ready = _make_controller(
+            qapp, monkeypatch, claude, history, anthropic_key=ANTHROPIC, cleanup_enabled=True
+        )
+        assert ready.reprocess("f" * 16) is False
+        assert ready.reprocess("../x") is False
+        assert ready.reprocess(self._seed(history, "write")) is False
         assert claude.calls == []
+
+    def test_refused_with_the_cleanup_toggle_off_even_with_a_key(
+        self, qapp, monkeypatch, claude, history
+    ):
+        # The privacy page promises that with both AI features off Anthropic
+        # is never contacted.  A key left in Settings is not consent, so the
+        # toggle gates this the way it gates a live run.
+        keyed = _make_controller(qapp, monkeypatch, claude, history, anthropic_key=ANTHROPIC)
+        spy = _Spy(keyed)
+        entry_id = self._seed(history)
+        assert keyed.reprocess(entry_id) is False
+        assert claude.calls == []
+        assert spy.errors and "AI cleanup" in spy.errors[0]
+        entry = history.get(entry_id)
+        assert entry is not None and entry["result"] == "raw um words"
 
     def test_cancel_aborts_a_reprocess(self, cleanup_ctl, claude, history):
         entry_id = self._seed(history)
@@ -782,6 +941,7 @@ class TestBridgeHistory:
 
     def test_reprocess_goes_to_the_controller(self, bridge: KeyboardBridge, claude):
         bridge.setDictationAnthropicKey(ANTHROPIC)
+        bridge.setDictationCleanupEnabled(True)
         entry_id = self._seed(bridge)
         changes: List[int] = []
         bridge.dictationHistoryChanged.connect(lambda: changes.append(1))
@@ -789,6 +949,21 @@ class TestBridgeHistory:
         claude.last.succeeded.emit("Better.")
         assert changes == [1]
         assert bridge.getDictationHistory()[0]["result"] == "Better."
+
+    def test_reprocess_is_refused_in_privacy_mode(self, bridge: KeyboardBridge, claude):
+        # Same gate as starting a run: the bridge is the only place that
+        # knows privacy mode is on, so it refuses before the controller.
+        bridge.setDictationAnthropicKey(ANTHROPIC)
+        bridge.setDictationCleanupEnabled(True)
+        entry_id = self._seed(bridge)
+        errors: List[str] = []
+        bridge.dictationError.connect(errors.append)
+        bridge.setPrivacyMode(True)
+        assert bridge.reprocessDictationHistory(entry_id) is False
+        assert claude.calls == []
+        assert errors and "password" in errors[0]
+        bridge.setPrivacyMode(False)
+        assert bridge.reprocessDictationHistory(entry_id) is True
 
     def test_play_and_stop(self, bridge: KeyboardBridge, monkeypatch):
         player = _FakePlayer()

@@ -4927,6 +4927,16 @@ class KeyboardBridge(QObject):
 
     @Slot(str, result=bool)
     def reprocessDictationHistory(self, entry_id: str) -> bool:
+        """Re-run AI cleanup over a history entry.
+
+        This sends stored text to Anthropic, so it carries the same gates
+        a live run does: privacy mode refuses it here (the controller
+        cannot see that flag), and the controller refuses it unless the
+        AI cleanup toggle is on, not merely a key stored.
+        """
+        if self._privacy_mode:
+            self.dictationError.emit("AI cleanup is off while a password field is focused.")
+            return False
         return self._dictation_controller().reprocess(entry_id)
 
     @Slot(str, result=bool)
