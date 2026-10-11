@@ -234,7 +234,7 @@ is False by default; the character model still trains on every `learn`
 and still loads and saves `ppm_model.json`, so a fusion of its
 per-character probabilities inside `prefix_beam.py` (the VelociTap shape)
 remains the intended next use. See the *Fuzzy dictionary refresh, and PPM
-out of the merge* section of `CLAUDE.md`.
+out of the merge* section of `PREDICTION_NOTES.md`.
 
 ## Measured cross-entropy (2026-10-04)
 

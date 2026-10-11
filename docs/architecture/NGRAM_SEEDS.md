@@ -5,7 +5,7 @@ hand-written ones are not enough, and how to convert a public language model
 into them.
 
 This is the base half of the split described in the *Context tables* section
-of `CLAUDE.md`. The user half is learned from typing and persisted; the base
+of `PREDICTION_NOTES.md`. The user half is learned from typing and persisted; the base
 half is rebuilt from `data/` at every launch and never written back. Nothing
 here touches the user half.
 

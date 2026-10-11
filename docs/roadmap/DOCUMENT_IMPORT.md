@@ -72,7 +72,7 @@ The PPM model (`PPMPredictor`) also learns character-level patterns but is not c
 
 **Effort: Small, mostly UI work, backend already exists.**
 
-1. Add an "Import Documents" button to the Settings panel (under Data section)
+1. Add an "Import Documents" button to the Settings panel (under Your Language Model -> Prediction Model, next to Save Now and Clear Learned Data)
 2. Open a native file dialog (`FileDialog` in QML or `QFileDialog`)
 3. Support formats: `.txt`, `.md`, `.doc/.docx`, `.pdf`, `.rtf`, `.eml`, `.html`
 4. Show progress (word count, file name) during import
@@ -179,10 +179,10 @@ The recency decay system (`_decay_factor = 0.95` every 50 learns) naturally prun
 
 ## UI Mockup
 
-In the Settings panel, under the existing "Data" section:
+In the Settings panel, under *Your Language Model -> Prediction Model* (where Save Now and Clear Learned Data live today):
 
 ```
-┌─ Data ──────────────────────────────────┐
+┌─ Prediction Model ──────────────────────┐
 │                                         │
 │  [  Import File...  ]  [  Import Folder... ] │
 │                                         │

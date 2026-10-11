@@ -23,7 +23,7 @@ platforms**. These are perpendicular axes, and the repo is organised around that
   state; reviving it starts by giving CI that binary.
 
 Platform is a thin sub-layer, **never** a repo boundary: a per-platform split would
-slice through both backends and fork the 8,500-line QML three ways.
+slice through both backends and fork the whole QML tree three ways.
 
 ## Legend
 
@@ -67,7 +67,7 @@ Python status columns reflect `main`; C++ columns reflect the `cpp-rewrite` bran
 | Telemetry (opt-in, off by default) | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ |
 | Auto-update | ✅ | 🚧 ³ | ❌ | 🚧 ² | ❌ | ❌ |
 | **Platform integration** | | | | | | |
-| Password detection + privacy auto-pause | ✅ | ✅ | ❌ ⁴ | ✅ | ❌ | ❌ |
+| Password detection + privacy auto-pause | ✅ | ✅ | 🚧 ⁴ | ✅ | ❌ | ❌ |
 | Compat auto-detect (IDE / RDP) | ✅ | n/a ⁶ | n/a ⁶ | ✅ | ❌ | ❌ |
 | Game key-hold compat | ✅ ¹ | n/a ⁶ | n/a ⁶ | ✅ | ❌ | ❌ |
 | Context reset on focus change | ✅ ¹ | 🚧 ⁸ | 🚧 ⁸ | ✅ | ❌ | ❌ |
@@ -91,11 +91,13 @@ Python status columns reflect `main`; C++ columns reflect the `cpp-rewrite` bran
 3. Linux auto-update: the AppImage is unsigned by design; the update *path* differs
    from Windows (no in-place signed installer). Version check applies; install is manual.
 4. macOS is Phase-1 WIP: `MacOSKeySynthesizer` (Quartz CGEvent) exists but needs an
-   Accessibility TCC grant to reach other apps; AXUIElement password detection and
-   notarized auto-update are explicit follow-up phases. See `docs/build/MACOS.md`.
+   Accessibility TCC grant to reach other apps. AXUIElement password detection
+   (`_MacOSAXDetector` in `password_detect.py`) is written but, like the rest of the
+   macOS column, has not been run on a Mac; notarized auto-update is an explicit
+   follow-up phase. See `docs/build/MACOS.md`.
 5. Linux never *holds* Super/`win` (a held Super triggers a WM pointer grab);
    Super+key combos still fire as atomic chords. See the Sticky Modifiers note in
-   `CLAUDE.md`.
+   [`MODIFIERS_AND_CASING.md`](MODIFIERS_AND_CASING.md).
 6. Compat auto-detect matches on Windows `.exe` basenames (VS Code / JetBrains /
    RDP). The mechanism is Windows-specific today; the Linux/macOS equivalent is
    unbuilt, so it reads as N/A rather than missing. Game key-hold compat shares
@@ -111,16 +113,16 @@ Python status columns reflect `main`; C++ columns reflect the `cpp-rewrite` bran
    the C++ columns track the C++ backend's general state rather than this
    feature. See [`COMPACT_VIEW.md`](COMPACT_VIEW.md). A row like this is the
    argument for keeping `qml/` and `data/` shared.
-8. **Context reset is four signals on Windows and one everywhere else.** All
+8. **Context reset has more signals on Windows than anywhere else.** All
    platforms notice an app switch (`GetForegroundWindow` / `xdotool
-   getactivewindow`; Wayland exposes nothing, so it is a no-op there). The three
+   getactivewindow`; Wayland exposes nothing, so it is a no-op there), and the
+   bridge-level Tab and navigation-key resets are platform-neutral. The three
    that catch a move *inside* one window are Windows-only: the UIA focused-element
    RuntimeId, the published caret rectangle, and an outside-click probe
    (`src/platform/pointer.py`). Linux could gain the first through AT-SPI, which
    already backs password detection there; macOS could through AX. Both are
    unbuilt, so those platforms still carry stale context when the user clicks from
-   one field to another in a single window. See the *Clearing stale context* section
-   in `CLAUDE.md`.
+   one field to another in a single window. See [`CONTEXT_RESET.md`](CONTEXT_RESET.md).
 9. **Python-only, and it is a real gap rather than a platform one.** The token
    store (`src/prediction/token_predictor.py`), its admission rule
    (`text_patterns.is_learnable_token`) and the bridge's two-bar switch
@@ -131,7 +133,7 @@ Python status columns reflect `main`; C++ columns reflect the `cpp-rewrite` bran
    test it against the same SSN / card near-misses. That half is what keeps the
    feature from remembering things it should not, and it is the half that looks
    most droppable when transcribing. See the *Structured Tokens* section in
-   `CLAUDE.md`.
+   [`TEXT_PATTERNS.md`](TEXT_PATTERNS.md).
 10. **Python-only, and platform-neutral by construction.** `src/dictation/`
     plus the bridge slots and the Dictation settings category have no C++
     counterpart. Nothing in it is per-OS: capture is `QAudioSource` and the

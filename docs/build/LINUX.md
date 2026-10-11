@@ -119,6 +119,10 @@ python build/linux/build.py --appimage --fetch-appimagetool
 
 # Skip PyInstaller, only re-wrap an existing dist/ into an AppImage
 python build/linux/build.py --skip-build --appimage
+
+# Also a .deb (needs dpkg-deb) and/or a portable tar.gz with install.sh
+python build/linux/build.py --deb --tarball
+# --all is shorthand for --appimage --deb --tarball
 ```
 
 Outputs:
@@ -127,6 +131,8 @@ Outputs:
 |------|-------------|
 | `dist/alpha-osk/alpha-osk` | PyInstaller single-directory bundle |
 | `release/Alpha-OSK-<version>-x86_64.AppImage` | `--appimage` wrapper |
+| `release/alpha-osk_<version>_amd64.deb` | `--deb` |
+| `release/alpha-osk-<version>-linux-x86_64.tar.gz` | `--tarball`, with `install.sh` / `uninstall.sh` |
 | `release/Alpha-OSK-<version>-linux-requirements.lock.txt` | `pip freeze --all` of the build venv, human/pip-friendly. Always emitted. |
 | `release/Alpha-OSK-<version>-linux-sbom.cyclonedx.json` | CycloneDX 1.6 SBOM of the build venv, machine/scanner-friendly (purl, license, hashes). Always emitted. |
 

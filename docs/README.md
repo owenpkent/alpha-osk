@@ -25,6 +25,17 @@ Active design docs for the engine, the platform abstraction, and the user-facing
 - [`architecture/MODULAR_LAYOUTS.md`](architecture/MODULAR_LAYOUTS.md): custom keyboard layouts inspired by Octavium / Nimbus.
 - [`architecture/UIA_TARGETS.md`](architecture/UIA_TARGETS.md): the switch-scanning contract. How an external scanner finds the keyboard through Windows UI Automation, the target ids, stale-prediction safety, minimizing and restoring without taking focus, and what was verified and how.
 - [`architecture/DICTATION.md`](architecture/DICTATION.md): voice input. The Qt-only audio and websocket stack, the four-state run model, where the Deepgram API key lives, and why privacy mode cancels a run outright.
+- [`architecture/MODIFIERS_AND_CASING.md`](architecture/MODIFIERS_AND_CASING.md): sticky modifiers, Caps Lock versus Shift, pill casing and pill widths.
+- [`architecture/TEXT_PATTERNS.md`](architecture/TEXT_PATTERNS.md): intelligent spacing, snippet auto-detection and structured tokens (numbers, phones, email domains).
+- [`architecture/SNIPPETS.md`](architecture/SNIPPETS.md): the Snippets window and its store.
+- [`architecture/SYMBOLS_WINDOW.md`](architecture/SYMBOLS_WINDOW.md): the Symbols & Emoji window.
+- [`architecture/FUNCTION_KEYS.md`](architecture/FUNCTION_KEYS.md): F13-F24 and programmable function keys.
+- [`architecture/CONTEXT_RESET.md`](architecture/CONTEXT_RESET.md): clearing stale typing context when focus or the caret moves.
+- [`architecture/KEY_COLOURS.md`](architecture/KEY_COLOURS.md): the role-based Key Colours schemes and their contrast guarantees.
+- [`architecture/LAYOUT_GEOMETRY.md`](architecture/LAYOUT_GEOMETRY.md): flush rows, shared section height and dead space between keys.
+- [`architecture/WINDOW_CHROME.md`](architecture/WINDOW_CHROME.md): window corners, taskbar button, title-bar menu, Move mode, snapping and stepping aside for notifications.
+- [`architecture/USER_DATA.md`](architecture/USER_DATA.md): where user data lives, the diagnostic log and the installer's registry handling.
+- [`architecture/NGRAM_SEEDS.md`](architecture/NGRAM_SEEDS.md): the n-gram seed data.
 - [`architecture/BACKEND_PARITY.md`](architecture/BACKEND_PARITY.md): what the Python and C++ backends each implement, and the cross-backend conformance harness.
 - [`architecture/GOTCHAS.md`](architecture/GOTCHAS.md): the implementation traps and invariants. Read before touching keystroke synthesis, the prediction context buffers, window flags, or the build pipeline.
 - [`architecture/LONG_PRESS_ALTERNATES.md`](architecture/LONG_PRESS_ALTERNATES.md): long-press accent picker design (deferred; rationale in the doc).
