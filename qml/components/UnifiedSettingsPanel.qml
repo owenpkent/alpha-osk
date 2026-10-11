@@ -130,6 +130,22 @@ Item {
     property int dictationSilenceSeconds: 4
     property string dictationKeyterms: ""
     property bool dictationStreamInserts: true
+    // AI cleanup / Write with AI / history (Anthropic-backed).  Same
+    // arrangement: the parent pulls them from the bridge and hands them down;
+    // the key itself is never here, only whether one is stored and a mask.
+    property bool dictationHasAnthropicKey: false
+    property string dictationMaskedAnthropicKey: ""
+    property bool dictationCleanupEnabled: false
+    property string dictationNumberFormat: "smart"
+    property var dictationNumberFormats: []      // [{id, label}]
+    property bool dictationWritingEnabled: false
+    property string dictationWritingStyle: ""
+    property bool dictationHistoryEnabled: true
+    property var dictationHistory: []            // newest first, see getDictationHistory()
+    property string dictationPlayingId: ""       // "" = nothing playing
+    // Id of the history entry whose Delete / "Clear all" is awaiting its
+    // second tap.  "" = none, "*" = Clear all.
+    property string dictationHistoryConfirm: ""
 
     // Drill-down navigation.  "home" shows the four category cards;
     // each other value shows that category's sub-view with a back
@@ -2693,10 +2709,8 @@ Item {
 
                                         // This window can't hold OS focus (WS_EX_NOACTIVATE /
                                         // WindowDoesNotAcceptFocus), so the OSK's own keys can't
-                                        // type into this field yet -- that needs the edit-mode
-                                        // signal plumbing the snippets editor uses, which is a
-                                        // follow-up. For now the key has to be pasted or typed
-                                        // from a physical keyboard.
+                                        // type into this field. The Paste button below is the
+                                        // route for a user who cannot use a physical keyboard.
                                         background: Rectangle {
                                             color: "#1a1a2a"
                                             radius: 6
@@ -2704,56 +2718,35 @@ Item {
                                             border.width: 1
                                         }
                                     }
+                                }
 
-                                    Rectangle {
-                                        Layout.preferredWidth: 60
-                                        Layout.preferredHeight: 32
-                                        radius: 5
-                                        color: dictSaveKeyArea.containsMouse ? "#3a5a3a" : "#2a3a2a"
-                                        border.color: "#4a6a4a"
+                                // Large, labelled targets.  Paste matters most: this
+                                // window cannot take OS focus, so the OSK's own keys
+                                // cannot type into the field above.
+                                Flow {
+                                    Layout.fillWidth: true
+                                    spacing: 6
 
-                                        Text {
-                                            anchors.centerIn: parent
-                                            text: "Save"
-                                            textFormat: Text.PlainText
-                                            color: "#aaffaa"
-                                            font.pixelSize: 12
-                                        }
-
-                                        MouseArea {
-                                            id: dictSaveKeyArea
-                                            anchors.fill: parent
-                                            hoverEnabled: true
-                                            cursorShape: Qt.PointingHandCursor
-                                            onClicked: {
-                                                unifiedSettings.settingChanged("dictationApiKey", dictationKeyField.text)
-                                                dictationKeyField.text = ""
-                                            }
+                                    SettingsButton {
+                                        objectName: "dictationKeyPasteButton"
+                                        text: "Paste and Save"
+                                        tone: "go"
+                                        onClicked: {
+                                            dictationKeyField.paste()
+                                            unifiedSettings.settingChanged("dictationApiKey", dictationKeyField.text)
+                                            dictationKeyField.text = ""
                                         }
                                     }
-
-                                    Rectangle {
-                                        Layout.preferredWidth: 60
-                                        Layout.preferredHeight: 32
-                                        radius: 5
-                                        color: dictClearKeyArea.containsMouse ? "#3a3a3a" : "#2a2a2a"
-                                        border.color: "#4a4a4a"
-
-                                        Text {
-                                            anchors.centerIn: parent
-                                            text: "Clear"
-                                            textFormat: Text.PlainText
-                                            color: "#ccc"
-                                            font.pixelSize: 12
+                                    SettingsButton {
+                                        text: "Save"
+                                        onClicked: {
+                                            unifiedSettings.settingChanged("dictationApiKey", dictationKeyField.text)
+                                            dictationKeyField.text = ""
                                         }
-
-                                        MouseArea {
-                                            id: dictClearKeyArea
-                                            anchors.fill: parent
-                                            hoverEnabled: true
-                                            cursorShape: Qt.PointingHandCursor
-                                            onClicked: unifiedSettings.settingChanged("dictationApiKeyCleared", true)
-                                        }
+                                    }
+                                    SettingsButton {
+                                        text: "Clear"
+                                        onClicked: unifiedSettings.settingChanged("dictationApiKeyCleared", true)
                                     }
                                 }
 
@@ -3170,6 +3163,408 @@ Item {
                                         hoverEnabled: true
                                         cursorShape: Qt.PointingHandCursor
                                         onClicked: unifiedSettings.settingChanged("dictationKeyterms", dictationKeytermsField.text)
+                                    }
+                                }
+                            }
+                        }
+
+                        // -- AI Cleanup --
+                        SettingsSection {
+                            title: "AI Cleanup"
+                            Layout.fillWidth: true
+
+                            ColumnLayout {
+                                Layout.fillWidth: true
+                                spacing: 8
+
+                                Text {
+                                    Layout.fillWidth: true
+                                    text: "Sends the transcript to Anthropic using your key. Used for AI cleanup and for Write with AI below; nothing is sent unless one of them is on."
+                                    textFormat: Text.PlainText
+                                    color: "#888"
+                                    font.pixelSize: 10
+                                    wrapMode: Text.WordWrap
+                                }
+
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    spacing: 6
+
+                                    TextField {
+                                        id: anthropicKeyField
+                                        objectName: "anthropicKeyField"
+                                        Layout.fillWidth: true
+                                        Layout.preferredHeight: 32
+                                        echoMode: TextInput.Password
+                                        selectByMouse: true
+                                        color: "#f0f0f0"
+                                        font.pixelSize: 13
+                                        selectionColor: "#4a9eff"
+                                        selectedTextColor: "#fff"
+                                        leftPadding: 10
+                                        rightPadding: 10
+                                        verticalAlignment: Text.AlignVCenter
+                                        placeholderText: unifiedSettings.dictationHasAnthropicKey
+                                                       ? unifiedSettings.dictationMaskedAnthropicKey
+                                                       : "Paste your Anthropic API key"
+                                        background: Rectangle {
+                                            color: "#1a1a2a"
+                                            radius: 6
+                                            border.color: anthropicKeyField.activeFocus ? "#4a9eff" : "#444"
+                                            border.width: 1
+                                        }
+                                    }
+                                }
+
+                                Flow {
+                                    Layout.fillWidth: true
+                                    spacing: 6
+
+                                    SettingsButton {
+                                        objectName: "anthropicKeyPasteButton"
+                                        text: "Paste and Save"
+                                        tone: "go"
+                                        onClicked: {
+                                            anthropicKeyField.paste()
+                                            unifiedSettings.settingChanged("dictationAnthropicKey", anthropicKeyField.text)
+                                            anthropicKeyField.text = ""
+                                        }
+                                    }
+                                    SettingsButton {
+                                        text: "Save"
+                                        onClicked: {
+                                            unifiedSettings.settingChanged("dictationAnthropicKey", anthropicKeyField.text)
+                                            anthropicKeyField.text = ""
+                                        }
+                                    }
+                                    SettingsButton {
+                                        text: "Clear"
+                                        onClicked: unifiedSettings.settingChanged("dictationAnthropicKeyCleared", true)
+                                    }
+                                }
+
+                                SettingsToggle {
+                                    objectName: "dictationCleanupToggle"
+                                    Layout.fillWidth: true
+                                    text: "Clean up with AI"
+                                    description: unifiedSettings.dictationHasAnthropicKey
+                                               ? "Fix punctuation and slips in what you said before it is typed"
+                                               : "Add an Anthropic API key above to use this"
+                                    enabled: unifiedSettings.dictationEnabled && unifiedSettings.dictationHasAnthropicKey
+                                    checked: unifiedSettings.dictationCleanupEnabled
+                                    onToggled: function(c) { unifiedSettings.settingChanged("dictationCleanupEnabled", c) }
+                                }
+
+                                Text {
+                                    text: "Numbers"
+                                    textFormat: Text.PlainText
+                                    color: "#c0c0c0"
+                                    font.pixelSize: 12
+                                    Layout.topMargin: 4
+                                }
+
+                                Flow {
+                                    objectName: "dictationNumberFormatFlow"
+                                    Layout.fillWidth: true
+                                    spacing: 6
+
+                                    Repeater {
+                                        model: unifiedSettings.dictationNumberFormats
+                                        delegate: Rectangle {
+                                            property bool isCurrent: unifiedSettings.dictationNumberFormat === modelData.id
+                                            width: Math.max(72, numFmtLabel.implicitWidth + 28)
+                                            height: 38
+                                            radius: 6
+                                            color: isCurrent ? "#2a4a6a" : (numFmtArea.containsMouse ? "#3a3a3a" : "#2a2a2a")
+                                            border.color: isCurrent ? "#4a9eff" : "#444"
+                                            border.width: 1
+                                            Text {
+                                                id: numFmtLabel
+                                                anchors.centerIn: parent
+                                                text: modelData.label
+                                                textFormat: Text.PlainText
+                                                color: isCurrent ? "#fff" : "#ccc"
+                                                font.pixelSize: 13
+                                            }
+                                            MouseArea {
+                                                id: numFmtArea
+                                                anchors.fill: parent
+                                                hoverEnabled: true
+                                                cursorShape: Qt.PointingHandCursor
+                                                onClicked: unifiedSettings.settingChanged("dictationNumberFormat", modelData.id)
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // -- Write with AI --
+                        SettingsSection {
+                            title: "Write with AI"
+                            Layout.fillWidth: true
+
+                            ColumnLayout {
+                                Layout.fillWidth: true
+                                spacing: 8
+
+                                SettingsToggle {
+                                    objectName: "dictationWritingToggle"
+                                    Layout.fillWidth: true
+                                    text: "Write with AI"
+                                    description: unifiedSettings.dictationHasAnthropicKey
+                                               ? "Say what you want written; a button in the suggestion bar shows a draft to insert, copy or discard"
+                                               : "Add an Anthropic API key above to use this"
+                                    enabled: unifiedSettings.dictationEnabled && unifiedSettings.dictationHasAnthropicKey
+                                    checked: unifiedSettings.dictationWritingEnabled
+                                    onToggled: function(c) { unifiedSettings.settingChanged("dictationWritingEnabled", c) }
+                                }
+
+                                Text {
+                                    Layout.fillWidth: true
+                                    text: "Your writing style (optional): describe how you write, so drafts sound like you."
+                                    textFormat: Text.PlainText
+                                    color: "#888"
+                                    font.pixelSize: 10
+                                    wrapMode: Text.WordWrap
+                                }
+
+                                ScrollView {
+                                    Layout.fillWidth: true
+                                    Layout.preferredHeight: 100
+                                    clip: true
+
+                                    TextArea {
+                                        id: dictationStyleField
+                                        objectName: "dictationStyleField"
+                                        text: unifiedSettings.dictationWritingStyle
+                                        wrapMode: TextArea.Wrap
+                                        selectByMouse: true
+                                        color: "#f0f0f0"
+                                        font.pixelSize: 12
+                                        selectionColor: "#4a9eff"
+                                        selectedTextColor: "#fff"
+                                        leftPadding: 8
+                                        rightPadding: 8
+                                        topPadding: 6
+                                        bottomPadding: 6
+
+                                        background: Rectangle {
+                                            color: "#1a1a2a"
+                                            radius: 6
+                                            border.color: dictationStyleField.activeFocus ? "#4a9eff" : "#444"
+                                            border.width: 1
+                                        }
+                                    }
+                                }
+
+                                Flow {
+                                    Layout.fillWidth: true
+                                    spacing: 6
+
+                                    SettingsButton {
+                                        objectName: "dictationStylePasteButton"
+                                        text: "Paste and Save"
+                                        tone: "go"
+                                        onClicked: {
+                                            dictationStyleField.paste()
+                                            unifiedSettings.settingChanged("dictationWritingStyle", dictationStyleField.text)
+                                        }
+                                    }
+                                    SettingsButton {
+                                        text: "Save"
+                                        onClicked: unifiedSettings.settingChanged("dictationWritingStyle", dictationStyleField.text)
+                                    }
+                                    SettingsButton {
+                                        text: "Clear"
+                                        onClicked: {
+                                            dictationStyleField.text = ""
+                                            unifiedSettings.settingChanged("dictationWritingStyle", "")
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // -- History --
+                        SettingsSection {
+                            title: "History"
+                            Layout.fillWidth: true
+
+                            ColumnLayout {
+                                Layout.fillWidth: true
+                                spacing: 8
+
+                                SettingsToggle {
+                                    objectName: "dictationHistoryToggle"
+                                    Layout.fillWidth: true
+                                    text: "Keep dictation history"
+                                    description: "Saves the last 20 dictations and their audio on this computer only"
+                                    enabled: unifiedSettings.dictationEnabled
+                                    checked: unifiedSettings.dictationHistoryEnabled
+                                    onToggled: function(c) { unifiedSettings.settingChanged("dictationHistoryEnabled", c) }
+                                }
+
+                                Text {
+                                    objectName: "dictationHistoryEmpty"
+                                    Layout.fillWidth: true
+                                    visible: unifiedSettings.dictationHistory.length === 0
+                                    text: "Nothing saved yet."
+                                    textFormat: Text.PlainText
+                                    color: "#888"
+                                    font.pixelSize: 11
+                                }
+
+                                // A pending Delete or Clear all reverts on its own.
+                                Timer {
+                                    id: historyConfirmTimer
+                                    interval: 4000
+                                    running: unifiedSettings.dictationHistoryConfirm !== ""
+                                    onTriggered: unifiedSettings.dictationHistoryConfirm = ""
+                                }
+
+                                Repeater {
+                                    id: dictationHistoryRepeater
+                                    objectName: "dictationHistoryRepeater"
+                                    model: unifiedSettings.dictationHistory
+
+                                    delegate: Rectangle {
+                                        id: historyRow
+                                        objectName: "dictationHistoryRow"
+                                        property var entry: modelData
+                                        property bool playing: unifiedSettings.dictationPlayingId === entry.id
+                                        property bool confirming: unifiedSettings.dictationHistoryConfirm === entry.id
+                                        Layout.fillWidth: true
+                                        Layout.preferredHeight: historyCol.implicitHeight + 16
+                                        radius: 6
+                                        color: "#242434"
+                                        border.color: "#3a3a4a"
+                                        border.width: 1
+
+                                        ColumnLayout {
+                                            id: historyCol
+                                            anchors.left: parent.left
+                                            anchors.right: parent.right
+                                            anchors.top: parent.top
+                                            anchors.margins: 8
+                                            spacing: 6
+
+                                            RowLayout {
+                                                Layout.fillWidth: true
+                                                spacing: 8
+
+                                                Text {
+                                                    objectName: "dictationHistoryLabel"
+                                                    text: historyRow.entry.purpose === "write" ? "Written" : "Dictated"
+                                                    textFormat: Text.PlainText
+                                                    color: historyRow.entry.purpose === "write" ? "#8ab4ff" : "#9fd89f"
+                                                    font.pixelSize: 11
+                                                    font.bold: true
+                                                }
+                                                Text {
+                                                    Layout.fillWidth: true
+                                                    text: {
+                                                        var d = new Date(historyRow.entry.created)
+                                                        return isNaN(d.getTime()) ? "" : d.toLocaleString(Qt.locale(), Locale.ShortFormat)
+                                                    }
+                                                    textFormat: Text.PlainText
+                                                    color: "#999"
+                                                    font.pixelSize: 11
+                                                    elide: Text.ElideRight
+                                                }
+                                            }
+
+                                            Text {
+                                                objectName: "dictationHistoryText"
+                                                Layout.fillWidth: true
+                                                text: historyRow.entry.result
+                                                textFormat: Text.PlainText
+                                                color: "#d8d8d8"
+                                                font.pixelSize: 12
+                                                wrapMode: Text.WordWrap
+                                                maximumLineCount: 2
+                                                elide: Text.ElideRight
+                                            }
+
+                                            Flow {
+                                                Layout.fillWidth: true
+                                                spacing: 6
+
+                                                SettingsButton {
+                                                    objectName: "dictationHistoryPlay"
+                                                    visible: historyRow.entry.hasAudio === true
+                                                    text: historyRow.playing ? "Stop" : "Play"
+                                                    onClicked: unifiedSettings.settingChanged(
+                                                        historyRow.playing ? "dictationHistoryStop" : "dictationHistoryPlay",
+                                                        historyRow.entry.id)
+                                                }
+                                                SettingsButton {
+                                                    objectName: "dictationHistoryCopy"
+                                                    text: "Copy"
+                                                    onClicked: unifiedSettings.settingChanged("dictationHistoryCopy", historyRow.entry.id)
+                                                }
+                                                SettingsButton {
+                                                    objectName: "dictationHistoryReprocess"
+                                                    // Shown only while AI cleanup is on: this sends
+                                                    // the entry's text to Anthropic, and a stored key
+                                                    // alone is not consent to that (the bridge and
+                                                    // controller refuse it too).
+                                                    visible: historyRow.entry.purpose === "dictate"
+                                                             && unifiedSettings.dictationHasAnthropicKey
+                                                             && unifiedSettings.dictationCleanupEnabled
+                                                    text: "Reprocess"
+                                                    onClicked: unifiedSettings.settingChanged("dictationHistoryReprocess", historyRow.entry.id)
+                                                }
+                                                SettingsButton {
+                                                    objectName: "dictationHistoryDelete"
+                                                    text: historyRow.confirming ? "Confirm delete" : "Delete"
+                                                    tone: "danger"
+                                                    onClicked: {
+                                                        if (historyRow.confirming) {
+                                                            unifiedSettings.dictationHistoryConfirm = ""
+                                                            unifiedSettings.settingChanged("dictationHistoryDelete", historyRow.entry.id)
+                                                        } else {
+                                                            unifiedSettings.dictationHistoryConfirm = historyRow.entry.id
+                                                        }
+                                                    }
+                                                }
+                                                SettingsButton {
+                                                    objectName: "dictationHistoryDeleteCancel"
+                                                    visible: historyRow.confirming
+                                                    text: "Cancel"
+                                                    onClicked: unifiedSettings.dictationHistoryConfirm = ""
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+
+                                // Two-step, like Snippets delete: the first tap
+                                // asks, the second does it.
+                                Flow {
+                                    Layout.fillWidth: true
+                                    spacing: 6
+                                    visible: unifiedSettings.dictationHistory.length > 0
+
+                                    SettingsButton {
+                                        objectName: "dictationHistoryClearAll"
+                                        text: unifiedSettings.dictationHistoryConfirm === "*"
+                                              ? "Yes, delete everything" : "Clear all"
+                                        tone: "danger"
+                                        onClicked: {
+                                            if (unifiedSettings.dictationHistoryConfirm === "*") {
+                                                unifiedSettings.dictationHistoryConfirm = ""
+                                                unifiedSettings.settingChanged("dictationHistoryClear", true)
+                                            } else {
+                                                unifiedSettings.dictationHistoryConfirm = "*"
+                                            }
+                                        }
+                                    }
+                                    SettingsButton {
+                                        objectName: "dictationHistoryClearCancel"
+                                        visible: unifiedSettings.dictationHistoryConfirm === "*"
+                                        text: "Keep them"
+                                        onClicked: unifiedSettings.dictationHistoryConfirm = ""
                                     }
                                 }
                             }

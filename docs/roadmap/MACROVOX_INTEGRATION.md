@@ -1,5 +1,35 @@
 # MacroVox + Alpha-OSK Integration Plan
 
+> **Status note (2026-10-11):** the features this plan reserved for MacroVox
+> have been **absorbed natively into Alpha-OSK's dictation**: AI transcript
+> cleanup (Claude Haiku), Write with AI (MacroVox's agentive writing, Claude
+> Sonnet, with a preview before anything is typed) and a local dictation
+> history (last 20 runs with audio). They run on the user's own Anthropic
+> key through raw HTTPS on Qt, with no new dependency. See
+> `docs/architecture/DICTATION.md`.
+>
+> What that settles:
+>
+> - **Phases 1 and 2** were already superseded (2026-08-18, below).
+> - **Phase 3's IPC channel is no longer needed** for cleanup or writing,
+>   which was the reason for it. Its other capabilities (sending recent words
+>   to MacroVox for keyword boosting, syncing theme and profile) are moot for
+>   dictation too: Alpha-OSK has `keyterm` custom vocabulary of its own.
+>   What still stands is only the idea of a shared profile layer between
+>   *different* tools, which belongs to the ecosystem plan, not to MacroVox.
+> - **Phase 4's unified suite** is mostly moot: there is no shared
+>   subscription to unlock (Alpha-OSK is bring-your-own-key), and one
+>   installer with two dictation apps has no remaining job. A single tray
+>   icon or combined settings panel is a separate decision, not a
+>   dictation one.
+>
+> **Deliberately not ported:** the global hotkey (the mic is a button on a
+> keyboard the user is already using, and a hotkey needs a physical key),
+> accounts, billing and subscription gating, the Supabase and Netlify proxy
+> layer, and voice commands. MacroVox itself is unchanged and remains a
+> separate app for anyone who wants its global hotkey.
+> Read the rest of this file as history.
+
 > **Status note (2026-08-18):** Alpha-OSK now has **native dictation** of its
 > own, streaming to Deepgram directly from the keyboard. See
 > `docs/architecture/DICTATION.md`. That supersedes **Phase 1** and **Phase 2**

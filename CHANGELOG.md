@@ -4,6 +4,17 @@ All notable changes to Alpha-OSK are documented in this file.
 
 ## [Unreleased]
 
+### Added
+- **AI cleanup for dictation.** *Settings -> Dictation*, off by default and live only once you add your own Anthropic API key. A dictation run is held back until you stop, then sent to Claude Haiku to fix punctuation and recognition slips, and typed once. If the request fails, your words are typed exactly as you said them and a message says so. Nothing is sent to Anthropic unless you switch this on.
+- **Write with AI.** A new button next to the microphone (off by default, needs both keys): speak what you want written, such as an email, and Claude Sonnet drafts it. The draft appears in a preview with Insert, Copy and Discard; it is never typed on its own. An optional style description in Settings keeps drafts sounding like you.
+- **Dictation history.** The last 20 runs are kept on your computer, on by default, with the recording, so you can play one back, copy it, run cleanup on it again or delete it, or clear everything. It is never sent anywhere and is not included in Data Backup exports.
+- **Large Paste and Save buttons for the API key fields**, because the settings window cannot take focus from the on-screen keyboard.
+
+### Changed
+- Dictation has a new "polishing" state while Claude works, shown like the other busy states. Tapping the microphone during it does nothing, so a stray tap cannot discard your words.
+- The "type each phrase as it is finished" setting for dictation now works when switched off: the whole run is typed once at the end.
+- If the connection to the transcription service drops during a held-back run, what was said so far is now typed instead of being discarded.
+
 ## [1.8.0] (2026-10-07)
 
 ### Added

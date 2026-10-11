@@ -46,6 +46,7 @@ except ImportError:
 from .__version__ import __version__ as APP_VERSION
 from .analytics import TypingAnalytics
 from .dictation import DictationConfig, DictationController
+from .dictation.history import DictationHistory
 from .glyphs import MAX_RECENT
 from .glyphs import categories as glyph_categories
 from .key_actions import (
@@ -676,9 +677,10 @@ class KeyboardBridge(QObject):
     snippetOfferWithdrawn = Signal()
 
     # --- Dictation ---
-    # One of "idle" / "connecting" / "listening" / "finishing".  QML
-    # renders four visibly different mic buttons off this rather than a
-    # bool, because "connecting" and "finishing" both need to look busy
+    # One of "idle" / "connecting" / "listening" / "finishing" /
+    # "polishing" (the transcript is with Claude).  QML renders visibly
+    # different mic buttons off this rather than a bool, because
+    # "connecting", "finishing" and "polishing" all need to look busy
     # without looking like they are recording.
     dictationStateChanged = Signal(str)
     # The revisable text for the phrase being spoken right now, shown
@@ -692,6 +694,14 @@ class KeyboardBridge(QObject):
     # A user-facing sentence with a next step in it.  Always paired with
     # a return to the idle state.
     dictationError = Signal(str)
+    # Text written by Write with AI, waiting for the user to Insert, Copy
+    # or Discard it.  Never typed automatically.
+    dictationDraftReady = Signal(str)
+    # The history list changed (a run was recorded, or an entry was
+    # edited, reprocessed or deleted).  QML re-reads getDictationHistory().
+    dictationHistoryChanged = Signal()
+    # The id of the history entry now playing, or "" once playback stops.
+    dictationPlaybackChanged = Signal(str)
 
     def __init__(
         self, parent: Optional[QObject] = None, *, defer_predictions: bool = False
@@ -1035,6 +1045,14 @@ class KeyboardBridge(QObject):
         # function-scoped fixture.
         self._dictation_config = DictationConfig.load()
         self._dictation: Optional[DictationController] = None
+        # Built on first use, like the controller.  Both are attributes
+        # (not locals) so a test can substitute a fake client or a history
+        # rooted in a temp dir before the controller is first built.
+        self._dictation_history: Optional[DictationHistory] = None
+        self._claude_client: Any = None
+        self._player: Any = None
+        self._audio_out: Any = None
+        self._playing_id = ""
 
     # How long shutdown gives a still-running engine build to stop.
     _LOADER_SHUTDOWN_WAIT_S = 1.5
@@ -4555,14 +4573,26 @@ class KeyboardBridge(QObject):
         :meth:`~src.dictation.controller.DictationController.start`.
         """
         if self._dictation is None:
-            controller = DictationController(self._dictation_config, self)
+            controller = DictationController(
+                self._dictation_config,
+                self,
+                claude_client=self._claude_client,
+                history=self._history_store(),
+            )
             controller.stateChanged.connect(self.dictationStateChanged)
             controller.interimChanged.connect(self.dictationTranscriptChanged)
             controller.levelChanged.connect(self.dictationLevelChanged)
             controller.errorRaised.connect(self.dictationError)
             controller.finalReady.connect(self._insert_dictated_text)
+            controller.draftReady.connect(self.dictationDraftReady)
+            controller.historyChanged.connect(self.dictationHistoryChanged)
             self._dictation = controller
         return self._dictation
+
+    def _history_store(self) -> DictationHistory:
+        if self._dictation_history is None:
+            self._dictation_history = DictationHistory()
+        return self._dictation_history
 
     def _insert_dictated_text(self, text: str) -> None:
         """Type one finalised phrase into the focused app.
@@ -4585,16 +4615,26 @@ class KeyboardBridge(QObject):
         while the caret sits in a password field is the thing worth
         preventing, not the typing.
         """
+        self._insert_spoken_text(text)
+
+    def _insert_spoken_text(self, text: str) -> bool:
+        """The verbatim insert behind dictated phrases and AI drafts.
+
+        Returns False when nothing was typed.  Shared so a written draft
+        and a dictated phrase cannot drift apart on spacing, buffer
+        mirroring or modifier handling, which is the whole point of
+        having one path.
+        """
         phrase = text.strip()
         if not phrase:
-            return
+            return False
         if self._edit_mode_active:
             # Dictating into our own edit popups would need an
             # "insert this string" edit signal, which does not exist yet
             # (the edit surfaces take one character at a time).  Dropping
             # the phrase beats typing it into the app behind the popup,
             # which is not where the user is looking.
-            return
+            return False
 
         deferred_space, _ = self._begin_verbatim_insert()
 
@@ -4640,6 +4680,7 @@ class KeyboardBridge(QObject):
         self._predictions = []
         self.predictionsChanged.emit([])
         _logger.debug("Dictated phrase inserted (%d chars)", len(phrase))
+        return True
 
     @Slot()
     def toggleDictation(self) -> None:
@@ -4648,6 +4689,43 @@ class KeyboardBridge(QObject):
             self.dictationError.emit("Dictation is off while a password field is focused.")
             return
         self._dictation_controller().toggle()
+
+    @Slot()
+    def toggleAiWriting(self) -> None:
+        """Start dictating a request for Claude to write, or stop that run.
+
+        Refused in privacy mode for the same reason dictation is: the
+        spoken request goes to two third parties.  The other refusals say
+        what to fix, because the button that calls this is only shown when
+        they hold, so reaching one means settings changed underneath it.
+        """
+        cfg = self._dictation_config
+        if self._privacy_mode:
+            self.dictationError.emit("Write with AI is off while a password field is focused.")
+            return
+        if not cfg.writing_enabled:
+            self.dictationError.emit("Turn on Write with AI in Settings first.")
+            return
+        if not cfg.has_anthropic_key:
+            self.dictationError.emit("Add your Anthropic API key in Settings to write with AI.")
+            return
+        if not cfg.has_key:
+            self.dictationError.emit("Add your Deepgram API key in Settings to use dictation.")
+            return
+        self._dictation_controller().toggle("write")
+
+    @Slot(str, result=bool)
+    def insertDictationDraft(self, text: str) -> bool:
+        """Type an accepted AI draft.  False if nothing could be typed.
+
+        Same path and same privacy rule as a dictated phrase (not gated:
+        the user pressed Insert).  Does not teach the prediction model.
+        """
+        return self._insert_spoken_text(text)
+
+    @Slot(str, result=bool)
+    def copyDictationDraft(self, text: str) -> bool:
+        return self._copy_to_clipboard(text)
 
     @Slot(result="QVariantMap")
     def getDictationSettings(self) -> Dict[str, Any]:
@@ -4684,6 +4762,16 @@ class KeyboardBridge(QObject):
             "silenceSeconds": cfg.silence_seconds,
             "keyterms": "\n".join(cfg.keyterms),
             "streamInserts": cfg.stream_inserts,
+            "hasAnthropicKey": cfg.has_anthropic_key,
+            "maskedAnthropicKey": cfg.masked_anthropic_key(),
+            "cleanupEnabled": cfg.cleanup_enabled,
+            "numberFormat": cfg.number_format,
+            "numberFormats": [
+                {"id": n, "label": label} for n, label in dictation_config.NUMBER_FORMATS
+            ],
+            "writingEnabled": cfg.writing_enabled,
+            "writingStyle": cfg.writing_style,
+            "historyEnabled": cfg.history_enabled,
             "models": [{"id": m, "label": label} for m, label in dictation_config.MODELS],
             "languages": [{"id": c, "label": label} for c, label in dictation_config.LANGUAGES],
         }
@@ -4771,6 +4859,158 @@ class KeyboardBridge(QObject):
         self._dictation_config.silence_seconds = max(0, min(MAX_SILENCE_SECONDS, seconds))
         self._dictation_config.save()
 
+    @Slot(str, result=bool)
+    def setDictationAnthropicKey(self, key: str) -> bool:
+        """Store the Anthropic key.  Same handling as the Deepgram key."""
+        from .dictation.config import MAX_KEY_LEN
+
+        cleaned = "".join(key.split())[:MAX_KEY_LEN]
+        self._dictation_config.anthropic_key = cleaned
+        ok = self._dictation_config.save()
+        _logger.info("Anthropic key %s (%d chars)", "stored" if ok else "NOT stored", len(cleaned))
+        return ok
+
+    @Slot(result=bool)
+    def clearDictationAnthropicKey(self) -> bool:
+        self._dictation_config.anthropic_key = ""
+        if self._dictation is not None:
+            # A request in flight carries the old key and the user has
+            # just said to forget it.
+            self._dictation.cancel()
+        return self._dictation_config.save()
+
+    @Slot(bool)
+    def setDictationCleanupEnabled(self, enabled: bool) -> None:
+        self._dictation_config.cleanup_enabled = bool(enabled)
+        self._dictation_config.save()
+
+    @Slot(str)
+    def setDictationNumberFormat(self, number_format: str) -> None:
+        from .dictation.config import NUMBER_FORMATS
+
+        if number_format in {n for n, _ in NUMBER_FORMATS}:
+            self._dictation_config.number_format = number_format
+            self._dictation_config.save()
+
+    @Slot(bool)
+    def setDictationWritingEnabled(self, enabled: bool) -> None:
+        self._dictation_config.writing_enabled = bool(enabled)
+        self._dictation_config.save()
+        if not enabled and self._dictation is not None:
+            # Same rule as `setDictationEnabled(False)`: a live write run
+            # must not outlive the switch that offers it.
+            self._dictation.cancel()
+
+    @Slot(str, result=bool)
+    def setDictationWritingStyle(self, style: str) -> bool:
+        from .dictation.config import _clean_style
+
+        self._dictation_config.writing_style = _clean_style(style)
+        return self._dictation_config.save()
+
+    @Slot(bool)
+    def setDictationHistoryEnabled(self, enabled: bool) -> None:
+        self._dictation_config.history_enabled = bool(enabled)
+        self._dictation_config.save()
+
+    # --- Dictation history -----------------------------------------------
+
+    @Slot(result="QVariantList")
+    def getDictationHistory(self) -> List[Dict[str, Any]]:
+        """Newest first.  Entries carry ``hasAudio`` and never a path."""
+        return self._history_store().entries()
+
+    @Slot(str, result=bool)
+    def copyDictationHistory(self, entry_id: str) -> bool:
+        entry = self._history_store().get(entry_id)
+        return bool(entry) and self._copy_to_clipboard(entry["result"] if entry else "")
+
+    @Slot(str, result=bool)
+    def reprocessDictationHistory(self, entry_id: str) -> bool:
+        """Re-run AI cleanup over a history entry.
+
+        This sends stored text to Anthropic, so it carries the same gates
+        a live run does: privacy mode refuses it here (the controller
+        cannot see that flag), and the controller refuses it unless the
+        AI cleanup toggle is on, not merely a key stored.
+        """
+        if self._privacy_mode:
+            self.dictationError.emit("AI cleanup is off while a password field is focused.")
+            return False
+        return self._dictation_controller().reprocess(entry_id)
+
+    @Slot(str, result=bool)
+    def deleteDictationHistory(self, entry_id: str) -> bool:
+        if self._playing_id == entry_id:
+            self.stopDictationPlayback()
+        ok = self._history_store().delete(entry_id)
+        if ok:
+            self.dictationHistoryChanged.emit()
+        return ok
+
+    @Slot()
+    def clearDictationHistory(self) -> None:
+        self.stopDictationPlayback()
+        self._history_store().clear()
+        self.dictationHistoryChanged.emit()
+
+    def _ensure_player(self) -> Any:
+        """The playback pair, built on first Play.
+
+        QtMultimedia is imported here, not at module scope, for the same
+        reason `_copy_to_clipboard` imports QtGui here: this module is
+        imported by most of the suite.
+        """
+        if self._player is None:
+            from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
+
+            player = QMediaPlayer(self)
+            output = QAudioOutput(self)
+            player.setAudioOutput(output)
+            player.playbackStateChanged.connect(self._on_playback_state)
+            self._player, self._audio_out = player, output
+        return self._player
+
+    def _on_playback_state(self, state: Any) -> None:
+        from PySide6.QtMultimedia import QMediaPlayer
+
+        if state == QMediaPlayer.PlaybackState.StoppedState and self._playing_id:
+            self._playing_id = ""
+            self.dictationPlaybackChanged.emit("")
+
+    @Slot(str, result=bool)
+    def playDictationHistory(self, entry_id: str) -> bool:
+        """Play an entry's recording, stopping any other.  False if it has none."""
+        path = self._history_store().audio_path(entry_id)
+        if path is None:
+            return False
+        from PySide6.QtCore import QUrl
+
+        try:
+            player = self._ensure_player()
+            self.stopDictationPlayback()
+            player.setSource(QUrl.fromLocalFile(str(path)))
+            self._playing_id = entry_id
+            player.play()
+        except Exception:
+            _logger.warning("Dictation playback failed", exc_info=True)
+            self._playing_id = ""
+            return False
+        self.dictationPlaybackChanged.emit(entry_id)
+        return True
+
+    @Slot()
+    def stopDictationPlayback(self) -> None:
+        if self._player is None:
+            return
+        was_playing, self._playing_id = self._playing_id, ""
+        try:
+            self._player.stop()
+        except Exception:
+            _logger.debug("Dictation playback stop failed", exc_info=True)
+        if was_playing:
+            self.dictationPlaybackChanged.emit("")
+
     @Slot(bool)
     def setDictationStreamInserts(self, stream: bool) -> None:
         self._dictation_config.stream_inserts = bool(stream)
@@ -4844,6 +5084,11 @@ class KeyboardBridge(QObject):
                 self._dictation.shutdown()
             except Exception:
                 _logger.debug("Dictation shutdown failed", exc_info=True)
+        if self._player is not None:
+            try:
+                self.stopDictationPlayback()
+            except Exception:
+                _logger.debug("Dictation playback shutdown failed", exc_info=True)
 
         # Release the password detector's COM interface + CoInitializeEx
         # token.  Negligible at process exit (the OS reaps it anyway) but
