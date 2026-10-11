@@ -297,3 +297,18 @@ small aggregate gains are below the benchmark's noise floor; the concrete
 improvement is making short corrections available where dictionary entries
 previously blocked them. Newly eligible prefixes now incur a fuzzy beam
 search. No dictionary entries, frequencies, or merge weights changed.
+
+## Fuzzy Recognition Defaults
+
+Hardcoded in `src/prediction/fuzzy_recognizer.py` as `DEFAULT_*` / `_*_PROB` constants. There used to be six named "accessibility profiles" but they were confusing - the profile UI is gone and there's now one generous, Gboard-leaning default. Knobs:
+- **`spatial_uncertainty` (1.4)**: how far off-center a press still counts as the intended key, in key-widths. It governs the whole-word paths only (`generate_candidates`, `get_correction`, `should_autocorrect`); the mid-word prefix beam scores with its own emission width, `SpatialEmissions.sigma`, which was set by sweep and deliberately does not follow this knob (see *Prefix beam*).
+- **`confidence_threshold` (0.65)**: minimum *absolute* score for `should_autocorrect` to fire - the first gate.
+- **`autocorrect_margin` (1.5)**: *relative* gate. The correction's score must clear `typed_baseline * autocorrect_margin`, where `typed_baseline = log1p(1) approx 0.69` for plausibly-shaped typings (vowel + consonant) and `0` for implausible slop. This is the LatinIME / Gboard "the literal typed word competes against corrections" pattern - keeps autocorrect from stomping on deliberate typings like "thru", "lol", "btw" while still letting obvious typos through. Implausible inputs ("xqz", "thx") fall back to the absolute threshold alone since their baseline is 0.
+- **`prediction_weight` (0.6)**: weight applied to fuzzy candidates in the hybrid merge.
+- **`min_prob` (0.001)**: beam-search pruning threshold inside candidate generation - low enough that a single substitution survives across a 5+ char word.
+- **`_TRANSPOSITION_PROB` (0.30) / `_DELETION_PROB` (0.20) / `_INSERTION_PROB` (0.15)**: per-edit penalties for the edit-distance candidate path (alongside the spatial beam search), so "teh" -> "the", "thee" -> "the", "th" -> "the" all surface.
+- **`_APOSTROPHE_INSERTION_PROB` (0.50)**: insertion of `'` specifically, bumped well above the generic letter-insertion penalty because missing apostrophes ("im" -> "I'm", "dont" -> "don't") are by far the dominant insertion error in real typing on a low-precision OSK.
+
+To tune, override the class attributes on `FuzzyRecognizer`. There's no UI for it.
+
+The spatial layout (`QWERTY_POSITIONS`) covers a-z plus 0-9 - the digit row sits at row -1 directly above qwerty (5 above t, 6 above y, etc.) so an off-by-one-row mistype between letter and digit ("h3llo" -> "hello") is recoverable. Punctuation and the numpad are deliberately unmapped: punctuation has a different error mode, and the numpad is spatially isolated from letters and has no dictionary to correct against. If you add a new layout (Dvorak, Colemak), mirror this - letters + digit row only.
