@@ -445,6 +445,25 @@ class TestLoadBounds:
         # Base dictionary state preserved; crafted file discarded.
         assert dict(pred.unigrams) == before
 
+    def test_a_non_string_capitalization_costs_only_its_own_entry(self, tmp_path):
+        """Found by the nightly fuzz: ``i`` survived the fragment strip with
+        ``[False, NaN]`` as its form, and save() then refused the NaN."""
+        import json
+
+        src = tmp_path / "hostile.json"
+        caps = {"i": [False, float("nan")], "the": None, "a": 3, "nasa": "NASA", "x": ""}
+        src.write_text(json.dumps({"capitalization": caps}))
+        pred = NgramPredictor()
+        pred.load(src)
+        assert pred.capitalization.get("nasa") == "NASA"
+        assert all(isinstance(v, str) and v for v in pred.capitalization.values())
+
+        out = tmp_path / "out.json"
+        pred.save(out)
+        again = NgramPredictor()
+        again.load(out)
+        assert again.capitalization.get("nasa") == "NASA"
+
 
 class TestContextualRanking:
     """Linear-interpolation scoring must let context actually beat unigram prior.
