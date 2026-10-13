@@ -461,14 +461,29 @@ class TestTheSelfTest:
         assert result.returncode == 0, result.stderr[-2000:]
         assert report.read_text(encoding="utf-8") == "ok"
 
-    def test_it_reports_a_failure_instead_of_raising(self, tmp_path, monkeypatch):
-        def boom(*a, **k):
-            raise RuntimeError("no widgets today")
-
-        monkeypatch.setattr(relauncher, "_build_splash_widget", boom)
+    def test_it_reports_a_failure_instead_of_raising(self, tmp_path):
+        # In a child, like the test above: run_self_test builds an
+        # application with no organisation when none exists, and in this
+        # process that one would outlive the test and fail every QML
+        # module that later shares the worker. The child builds a
+        # QGuiApplication first, since the widget is built after the
+        # application and the failure must still be reported, not raised.
         report = tmp_path / "report.txt"
-        # The widget is built after the QApplication, which this process may
-        # already hold as a QGuiApplication; the failure still has to be
-        # reported, not raised.
-        assert relauncher.run_self_test(str(report)) == 1
+        code = (
+            f"import os, sys; sys.path.insert(0, {REPO!r});"
+            "os.environ['QT_QPA_PLATFORM'] = 'offscreen';"
+            "from PySide6.QtGui import QGuiApplication; app = QGuiApplication([]);"
+            "from src import _update_relauncher as r;"
+            "r._build_splash_widget = lambda *a, **k: (_ for _ in ()).throw("
+            "RuntimeError('no widgets today'));"
+            f"sys.exit(r.run_self_test({str(report)!r}))"
+        )
+        result = subprocess.run(
+            [sys.executable, "-c", code],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        assert result.returncode == 1, result.stderr[-2000:]
         assert report.read_text(encoding="utf-8")
