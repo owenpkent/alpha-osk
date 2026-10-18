@@ -12,9 +12,9 @@
     "sbom": "npm sbom --sbom-format cyclonedx --sbom-type application --package-lock-only >cf-worker-sbom.cyclonedx.json"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "^5.20261008.1",
+    "@cloudflare/workers-types": "^5.20261015.1",
     "typescript": "^7.0.2",
-    "wrangler": "^4.148.0"
+    "wrangler": "^4.151.0"
   },
   "overrides": {
     "ws": "^8.20.1",
