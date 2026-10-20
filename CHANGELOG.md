@@ -4,10 +4,13 @@ All notable changes to Alpha-OSK are documented in this file.
 
 ## [Unreleased]
 
+## [1.9.0] (2026-10-20)
+
 ### Added
 - **AI cleanup for dictation.** *Settings -> Dictation*, off by default and live only once you add your own Anthropic API key. A dictation run is held back until you stop, then sent to Claude Haiku to fix punctuation and recognition slips, and typed once. If the request fails, your words are typed exactly as you said them and a message says so. Nothing is sent to Anthropic unless you switch this on.
 - **Write with AI.** A new button next to the microphone (off by default, needs both keys): speak what you want written, such as an email, and Claude Sonnet drafts it. The draft appears in a preview with Insert, Copy and Discard; it is never typed on its own. An optional style description in Settings keeps drafts sounding like you.
 - **Dictation history.** The last 20 runs are kept on your computer, on by default, with the recording, so you can play one back, copy it, run cleanup on it again or delete it, or clear everything. It is never sent anywhere and is not included in Data Backup exports.
+- **The suggestion bar's buttons can be reached by a switch scanner.** The microphone, Write with AI, Symbols, Snippets and clear-context buttons, and the Insert, Copy and Discard actions on a Write with AI draft, are now published to UI Automation the same way the keys and prediction pills are, with ids that never move, so a scanner that can start a run can also finish it.
 - **Large Paste and Save buttons for the API key fields**, because the settings window cannot take focus from the on-screen keyboard.
 
 ### Changed
@@ -15,6 +18,11 @@ All notable changes to Alpha-OSK are documented in this file.
 - The "type each phrase as it is finished" setting for dictation now works when switched off: the whole run is typed once at the end.
 - If the connection to the transcription service drops during a held-back run, what was said so far is now typed instead of being discarded.
 - **Function keys are the same size as the other keys.** Since 1.8.0 they were stretched across the whole width of the keyboard, which made each one about a fifth wider than the key below it. They are now exactly as wide and as tall as the letter keys, and the row sits centred above them.
+- **No gap between the function-key groups.** F1-F4, F5-F8 and F9-F12 sat a wide gap apart, like a physical keyboard; those gaps were two dead strips along the row, and the keys can use the width. Every gap on the row is now an ordinary key gap.
+
+### Fixed
+- **No email domain suggestion after a quote or bracket.** Typing `'@` offered `gmail.com`, and tapping it typed `'@gmail.com` with a space after it. Domain suggestions now need an email-shaped name before the `@`.
+- **A damaged capitalisation entry in the saved model no longer stops the model saving.** A non-text value in that table loaded without complaint and then made every later save fail; such entries are dropped on load, so the rest of the model is kept.
 
 ## [1.8.0] (2026-10-07)
 
