@@ -74,9 +74,11 @@ from .prediction.token_predictor import TokenPredictor
 from .snippets import MAX_SNIPPETS, SNIPPET_COLORS, SnippetStore
 from .text_patterns import (
     detect_snippet_candidate,
+    is_address_in_progress,
     is_email,
     is_phone,
     label_for_kind,
+    strip_opening_punctuation,
     suppresses_auto_space,
     suppression_is_provisional,
 )
@@ -3622,10 +3624,12 @@ class KeyboardBridge(QObject):
         * **A digit anywhere.**  The word engine discards digits when it
           tokenises, so anything containing one is already outside what
           it can complete.
-        * **An "@" that is not the first character.**  ``@owen`` is a
+        * **An "@" after an address's local part.**  ``@owen`` is a
           mention and belongs to the word model, which can genuinely
           complete a name the user has typed before.  ``owen@`` is an
-          address, and the only useful continuation is a domain.
+          address, and the only useful continuation is a domain.  An
+          opening quote or bracket does not count as the local part, so
+          ``'@owen`` is still a mention (see ``is_address_in_progress``).
 
         Two characters minimum: on a single one the prefix matches most
         of the store, so the bar would fill with unrelated numbers the
@@ -3636,7 +3640,7 @@ class KeyboardBridge(QObject):
             return False
         if any(ch.isdigit() for ch in tok):
             return True
-        return tok.find("@") > 0
+        return is_address_in_progress(tok)
 
     def _token_suggestions(self) -> Tuple[str, List[str]]:
         """``(the typed run these pills continue, [pill text, ...])``.
@@ -3774,9 +3778,12 @@ class KeyboardBridge(QObject):
         validation error the user then has to notice, diagnose and
         backspace out of -- a far worse outcome than the one click a
         wanted space costs.  Nothing follows either shape in the same
-        field anyway.
+        field anyway.  An address opened by a quote or bracket
+        (``<owen@gmail.com``) is still one.
         """
-        return "" if is_email(completed) or is_phone(completed) else " "
+        if is_email(strip_opening_punctuation(completed)) or is_phone(completed):
+            return ""
+        return " "
 
     def _insert_token_pill(self, word: str) -> None:
         """Type the continuation behind a structured-token pill.

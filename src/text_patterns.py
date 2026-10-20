@@ -54,9 +54,15 @@ _MAX_TOKEN_LEN = 128
 # Deliberately looser than RFC 5322, which is unimplementable in a regex
 # and would reject nothing a user actually types.  The job is "does this
 # look like an email to a human", not "is this deliverable".
-_EMAIL_RE = re.compile(
-    r"^[A-Za-z0-9._%+\-]{1,64}@[A-Za-z0-9\-]{1,63}(?:\.[A-Za-z0-9\-]{1,63}){1,4}$"
-)
+_EMAIL_LOCAL = r"[A-Za-z0-9._%+\-]{1,64}"
+_EMAIL_RE = re.compile(rf"^{_EMAIL_LOCAL}@[A-Za-z0-9\-]{{1,63}}(?:\.[A-Za-z0-9\-]{{1,63}}){{1,4}}$")
+# The local part alone, so "is an address being typed" and "is this an
+# address" cannot disagree about which characters may come before the "@".
+_EMAIL_LOCAL_RE = re.compile(rf"^{_EMAIL_LOCAL}$")
+
+# Quotes and brackets that can open a token: <owen@example.com>,
+# "owen@example.com".
+_OPENING_PUNCTUATION = "\"'([{<"
 
 # A run of digits with optional separators: 3.14, 1,000, 1,000.50, 12:30,
 # 192.168.1.1, 2026-08-13.  The alternation is over single characters, so
@@ -191,6 +197,29 @@ def is_email(token: str) -> bool:
     if not token or len(token) > _MAX_TOKEN_LEN:
         return False
     return bool(_EMAIL_RE.match(token))
+
+
+def strip_opening_punctuation(token: str) -> str:
+    """Drop the quotes and brackets that open a token.
+
+    Not folded into ``is_email``, which leaves leading punctuation alone
+    on purpose (see ``strip_trailing_punctuation``): this is for callers
+    that already know the run is an address, such as a domain pill
+    deciding whether ``<owen@gmail.com`` is a field value.
+    """
+    return token.lstrip(_OPENING_PUNCTUATION)
+
+
+def is_address_in_progress(token: str) -> bool:
+    """True if *token* is an email address part-way through being typed.
+
+    An "@" with something before it that can be an address's local part,
+    after any opening quote or bracket.  ``@owen`` and ``'@owen`` are
+    mentions, and ``!@`` is not an address at all: offering a domain
+    after either would complete something ``is_email`` then rejects.
+    """
+    local, at, _ = strip_opening_punctuation(token).partition("@")
+    return bool(at) and bool(_EMAIL_LOCAL_RE.match(local))
 
 
 def is_numeric_run(token: str) -> bool:

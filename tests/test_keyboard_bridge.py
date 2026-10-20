@@ -4456,6 +4456,18 @@ class TestEmailDomainSuggestions:
         _type(bridge, "@ow")
         assert bridge._token_pill_words == set()
 
+    @pytest.mark.parametrize("run", ["'@", '"@', "(@", "!@"])
+    def test_an_at_with_no_local_part_offers_no_domain(self, bridge: KeyboardBridge, run: str):
+        """Found by the nightly fuzz: "'@" offered gmail.com, which then
+        arrived as "'@gmail.com " because that is not an address."""
+        _type(bridge, run)
+        assert bridge._token_pill_words == set()
+
+    def test_a_bracketed_address_still_offers_its_domain(self, bridge: KeyboardBridge):
+        _type(bridge, "<owen@")
+        bridge.pressPrediction("gmail.com")
+        assert "".join(_typed(bridge)) == "<owen@gmail.com"
+
     def test_the_pill_map_is_dropped_when_words_come_back(self, bridge: KeyboardBridge):
         """A pill can only ever be inserted the way it was emitted."""
         _type(bridge, "owen@")
