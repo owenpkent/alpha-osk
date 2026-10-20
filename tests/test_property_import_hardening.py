@@ -45,7 +45,7 @@ from src.data_export import (
     import_user_data,
     inspect_export,
 )
-from src.prediction.pack_ids import PACK_ID_RE
+from src.prediction.pack_ids import PACK_ID_RE, is_valid_pack_id
 from src.prediction.vocabulary_pack import PackManager
 
 # ---------------------------------------------------------------------------
@@ -96,7 +96,10 @@ _SEGMENTS = [
 
 _PREFIXES = ["", "/", "\\", "C:", "C:\\", "//", "./"]
 
-valid_pack_ids = st.from_regex(r"\A[a-z0-9][a-z0-9_\-]{0,12}\Z")
+# Filtered through is_valid_pack_id so reserved device names such as "aux"
+# (which match the regex but are deliberately skipped on export) are not
+# generated as ids the round-trip properties expect to survive.
+valid_pack_ids = st.from_regex(r"\A[a-z0-9][a-z0-9_\-]{0,12}\Z").filter(is_valid_pack_id)
 
 # Names the allow-list is *supposed* to admit. Generated as a first-class
 # strategy rather than left to chance: a filter-until-allowed approach
