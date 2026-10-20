@@ -174,6 +174,11 @@ class DictationController(QObject):
         return self._state
 
     @property
+    def purpose(self) -> str:
+        """``"write"`` while a Write with AI run is under way, else ``"dictate"``."""
+        return self._purpose
+
+    @property
     def active(self) -> bool:
         """Whether a run is under way, including connecting and finishing.
 

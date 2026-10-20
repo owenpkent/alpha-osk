@@ -841,6 +841,47 @@ class TestToggleAiWriting:
         assert drafts == ["Hello!"]
         assert _sent(bridge) == ""  # a draft is never typed on its own
 
+    def _dictating(self, bridge: KeyboardBridge, monkeypatch) -> DictationController:
+        bridge.setDictationWritingEnabled(True)
+        bridge.setDictationAnthropicKey(ANTHROPIC)
+        bridge.setDictationApiKey("k" * 40)
+        bridge.setDictationEnabled(True)
+        bridge._dictation_config.stream_inserts = False
+        monkeypatch.setattr("src.dictation.controller.DeepgramStream", _FakeStream)
+        ctl = bridge._dictation_controller()
+        monkeypatch.setattr(ctl._capture, "start", lambda device="": True)
+        monkeypatch.setattr(ctl._capture, "stop", lambda: None)
+        return ctl
+
+    def test_switching_it_off_leaves_an_ordinary_dictation_alone(
+        self, bridge: KeyboardBridge, monkeypatch
+    ):
+        # The controller is shared.  A held-back dictation keeps what has
+        # been said in its buffer until the run ends, and the Write with
+        # AI switch used to cancel it, buffer and all, for a feature the
+        # run was not using.
+        ctl = self._dictating(bridge, monkeypatch)
+        ctl.start("dictate")
+        _FakeStream.last.opened.emit()
+        _FakeStream.last.final.emit("a whole paragraph")
+        bridge.setDictationWritingEnabled(False)
+        assert ctl.active and ctl.purpose == "dictate"
+        ctl.stop()
+        _FakeStream.last.closed.emit()
+        assert _sent(bridge) == "a whole paragraph"
+        assert [e["raw"] for e in bridge.getDictationHistory()] == ["a whole paragraph"]
+
+    def test_switching_it_off_still_cancels_a_write_run(self, bridge: KeyboardBridge, monkeypatch):
+        ctl = self._dictating(bridge, monkeypatch)
+        drafts: List[str] = []
+        bridge.dictationDraftReady.connect(drafts.append)
+        ctl.start("write")
+        _FakeStream.last.opened.emit()
+        _FakeStream.last.final.emit("write hello")
+        bridge.setDictationWritingEnabled(False)
+        assert ctl.state is DictationState.IDLE
+        assert drafts == [] and _sent(bridge) == ""
+
     def test_privacy_mode_mid_request_drops_the_draft(self, bridge: KeyboardBridge, monkeypatch):
         bridge.setDictationWritingEnabled(True)
         bridge.setDictationAnthropicKey(ANTHROPIC)

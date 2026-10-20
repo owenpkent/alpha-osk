@@ -128,11 +128,13 @@ class DictationHistory:
         if self._entries is not None:
             return self._entries
         entries: list[dict[str, Any]] = []
+        rejected = False
         try:
             path = self._index_path()
             if path.exists():
                 if path.stat().st_size > MAX_INDEX_BYTES:
                     _logger.warning("dictation history index exceeds the size cap, ignoring it")
+                    rejected = True
                 else:
                     with open(path, encoding="utf-8") as fh:
                         data = json.load(fh)
@@ -146,8 +148,14 @@ class DictationHistory:
         except (OSError, ValueError, RecursionError):
             _logger.warning("dictation history index could not be read", exc_info=True)
             entries = []
+            rejected = True
         self._entries = entries[:MAX_ENTRIES]
-        self._remove_orphans()
+        if not rejected:
+            # An index that could not be read says nothing about which
+            # recordings are owned, so sweeping "orphans" against an empty
+            # list would delete every one of them.  They are kept until an
+            # index that loads cleanly says otherwise.
+            self._remove_orphans()
         return self._entries
 
     def _remove_orphans(self) -> None:
@@ -174,14 +182,22 @@ class DictationHistory:
 
     # --- saving ---------------------------------------------------------
 
-    def _save(self) -> bool:
+    def _payload(self) -> dict[str, Any]:
         assert self._entries is not None
+        return {"schema_version": SCHEMA_VERSION, "entries": self._entries}
+
+    def _encoded_bytes(self) -> int:
+        """The size the index will have on disk, in the writer's own encoding.
+
+        ``atomic_write_json`` escapes non-ASCII, so a character of
+        Japanese costs six bytes rather than three; the only honest
+        measure is to encode the payload exactly as the writer will.
+        """
+        return len(json.dumps(self._payload(), indent=2, ensure_ascii=True).encode("utf-8"))
+
+    def _save(self) -> bool:
         try:
-            atomic_write_json(
-                self._index_path(),
-                {"schema_version": SCHEMA_VERSION, "entries": self._entries},
-                indent=2,
-            )
+            atomic_write_json(self._index_path(), self._payload(), indent=2)
         except OSError:
             _logger.warning("dictation history index could not be saved", exc_info=True)
             return False
@@ -222,6 +238,12 @@ class DictationHistory:
         # Oldest entries go first when the disk budget is exceeded.  The
         # newest is never evicted by its own size alone.
         while len(entries) > 1 and self._audio_bytes() > MAX_AUDIO_BYTES_TOTAL:
+            self._drop(entries.pop())
+        # The index has a byte cap of its own, and `_load` refuses a file
+        # over it unread.  Each entry's text is capped, but twenty entries
+        # of non-ASCII text at the cap encode past the index cap, and a
+        # saved index the loader rejects reads back as nothing.
+        while len(entries) > 1 and self._encoded_bytes() > MAX_INDEX_BYTES:
             self._drop(entries.pop())
 
     def _drop(self, entry: dict[str, Any]) -> None:

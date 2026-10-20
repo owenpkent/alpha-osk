@@ -113,6 +113,24 @@ class TestPruning:
         (entry_id,) = _add(store)
         assert [e["id"] for e in store.entries()] == [entry_id]
 
+    def test_the_saved_index_always_fits_the_loader(
+        self, store: DictationHistory, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        # Non-ASCII text is the trap: the writer escapes it, so a character
+        # costs six bytes on disk.  Ten entries at the text cap stayed
+        # under the audio budget but encoded past the index cap, and the
+        # next launch read back nothing and swept every WAV as an orphan.
+        monkeypatch.setattr(hist, "MAX_INDEX_BYTES", 500_000)
+        text = "\u3042" * hist.MAX_TEXT_CHARS
+        ids = [store.add("dictate", text, text, True, 1.0, PCM) for _ in range(10)]
+        assert (tmp_path / "h" / "index.json").stat().st_size <= hist.MAX_INDEX_BYTES
+        kept = [e["id"] for e in store.entries()]
+        assert kept and kept[0] == ids[-1] and len(kept) < 10
+        again = DictationHistory(tmp_path / "h")
+        assert [e["id"] for e in again.entries()] == kept
+        for entry_id in kept:
+            assert (tmp_path / "h" / f"{entry_id}.wav").exists()
+
 
 class TestEditing:
     def test_update_result(self, store: DictationHistory):
@@ -217,6 +235,21 @@ class TestAHostileIndex:
         _index(tmp_path / "h", {"entries": [_good()]})
         monkeypatch.setattr(hist, "MAX_INDEX_BYTES", 10)
         assert DictationHistory(tmp_path / "h").entries() == []
+
+    @pytest.mark.parametrize("damage", ["oversize", "garbage"])
+    def test_a_rejected_index_keeps_every_recording(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, damage: str
+    ):
+        directory = tmp_path / "h"
+        if damage == "oversize":
+            _index(directory, {"entries": [_good()]})
+            monkeypatch.setattr(hist, "MAX_INDEX_BYTES", 10)
+        else:
+            _index(directory, "not json")
+        wav = directory / f"{'a' * 16}.wav"
+        wav.write_bytes(b"x")
+        assert DictationHistory(directory).entries() == []
+        assert wav.exists()
 
 
 class TestOrphans:

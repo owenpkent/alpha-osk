@@ -4896,9 +4896,19 @@ class KeyboardBridge(QObject):
     def setDictationWritingEnabled(self, enabled: bool) -> None:
         self._dictation_config.writing_enabled = bool(enabled)
         self._dictation_config.save()
-        if not enabled and self._dictation is not None:
+        if (
+            not enabled
+            and self._dictation is not None
+            and self._dictation.active
+            and self._dictation.purpose == "write"
+        ):
             # Same rule as `setDictationEnabled(False)`: a live write run
-            # must not outlive the switch that offers it.
+            # must not outlive the switch that offers it.  Only a *write*
+            # run, though: the controller is shared with ordinary
+            # dictation, and a held-back dictation (cleanup on, or
+            # streaming off) keeps everything said so far in its buffer
+            # until the run ends, so cancelling it here threw away a
+            # paragraph because an unrelated switch was flipped.
             self._dictation.cancel()
 
     @Slot(str, result=bool)
