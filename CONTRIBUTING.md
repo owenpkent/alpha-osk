@@ -70,6 +70,16 @@ Reproduce it by pasting the `@reproduce_failure(...)` decorator Hypothesis
 suggests onto the test, or just add the shrunk case as a plain example
 test: a minimal counterexample usually deserves to be pinned permanently.
 
+The nightly `Fuzz nightly` workflow runs the same suites under the much
+larger `alpha-osk-deep` profile, so it reaches inputs a normal run never
+draws. When a strategy generates "valid" inputs, build it from the same
+predicate the code under test uses, not a looser stand-in. `valid_pack_ids`
+once matched only `PACK_ID_RE`, so the deep profile eventually drew `aux`, a
+reserved Windows device name that export deliberately skips, and failed a
+round-trip property for behaviour that was correct. Filtering it through
+`is_valid_pack_id` (from `src/prediction/pack_ids.py`) keeps the test and
+the rule from drifting.
+
 Some QML tests (`tests/test_qml_*.py`) need Qt's GL/xkb system libraries.
 They skip themselves with a message naming the missing library if it is not
 present, rather than failing the run; on Debian/Ubuntu, `sudo apt-get
