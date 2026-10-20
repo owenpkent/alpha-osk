@@ -1,6 +1,6 @@
 import QtQuick 2.15
 
-// A row of function keys, 4-4-4 grouped.
+// A row of function keys, evenly spaced (no gaps between the groups).
 //
 // Instantiated twice by Main.qml: once for F1-F12 (the standard keys
 // every app already binds) and once for F13-F24, which exist because
@@ -23,11 +23,9 @@ Item {
     property real keyH: 36
     property real keySpacing: 2
     // Each key's share of the gap around it; see KeyButton's
-    // `hitMarginH`.  A key reaches half an ordinary gap past its own
-    // slot, so the wider `keySpacing * 4` between the three groups keeps
-    // a dead strip in the middle of it.  That is the same trade as the
-    // gutter between two panels: a separator, not a gap nobody meant to
-    // leave.
+    // `hitMarginH`.  A key reaches half a gap past its own slot, and
+    // every gap on this row is an ordinary one, so neighbours meet
+    // mid-gap and no strip along the row is dead.
     property real hitMarginH: 0
     property real hitMarginV: 0
     property color keyColor: "#333333"
@@ -40,8 +38,9 @@ Item {
     property var roleColors: null
 
     // Which keys this row draws.  Settable so the same component serves
-    // F1-F12 and F13-F24; the 4-4-4 shape is the row's, the contents are
-    // the caller's.
+    // F1-F12 and F13-F24.  The groups of four survive only as data (they
+    // number the scan ids); on screen every key sits one ordinary gap
+    // from the next.
     property var keyGroups: [
         ["F1", "F2", "F3", "F4"],
         ["F5", "F6", "F7", "F8"],
@@ -56,8 +55,7 @@ Item {
     // the same thing, which is state that can go stale.
     property var actions: ({})
 
-    // The page-swap key at the right end of the row, in a group of its own
-    // (4-4-4-1).  Empty (the default) means no swap key and the row is
+    // The page-swap key at the right end of the row.  Empty (the default) means no swap key and the row is
     // twelve keys, which is every case but "both rows are enabled".  The
     // label names the DESTINATION, the way compact's ?123 / ABC does, so
     // the key says where a tap goes rather than where you already are.
@@ -118,7 +116,7 @@ Item {
         return n
     }
     // The swap key is a key like any other for the fill: it takes one
-    // share of the width and one more group gap, and the others give way.
+    // share of the width and one more gap, and the others give way.
     readonly property int _keyCount: _groupedKeyCount + (_hasSwap ? 1 : 0)
     // Gaps *inside* the groups (three per group of four), and the gaps
     // *between* them, which are the outer Row's own spacing: one fewer
@@ -127,17 +125,15 @@ Item {
     readonly property int _groupGaps:
         Math.max(0, keyGroups.length + (_hasSwap ? 1 : 0) - 1)
 
-    // **The group gap never gives.  The keys do.**
+    // **No gap between the groups, at the owner's request (2026-10-07).**
     //
-    // It used to be the other way round, and that is what erased the
-    // 4-4-4 shape on compact: with the Edit toggle in the run this was 13
-    // keys against a 13-unit grid, 3 px of slack, so the gap clamped to
-    // `keySpacing` and twelve identical keys rendered as one
-    // undifferentiated run, on the view where telling them apart matters
-    // most.  The toggle has since moved to Settings and the row is twelve
-    // keys again, but the rule stays: a gap that gives is a gap that
-    // disappears exactly when the row is tightest.
-    readonly property real _groupGap: keySpacing * 4
+    // This was `keySpacing * 4`, a 4-4-4 shape like a physical keyboard's,
+    // and the wider gap was a dead strip twice along the row.  It is now
+    // the same gap as every other key on the keyboard: the width it gave
+    // back goes to the keys through `_fillKeyW`, and the hit margins close
+    // every strip.  Kept as a property rather than inlined so the fill
+    // arithmetic and the outer Row's spacing still read one value.
+    readonly property real _groupGap: keySpacing
 
     // The rendered width of every key in this row.  The row spans the
     // keyboard grid exactly, so what used to sit as empty margin at both
@@ -194,15 +190,11 @@ Item {
     // a whole pixel, which pushes the panel wider than the keyboard grid it
     // has to sit flush with. Full rationale in NumberRow.qml.
     //
-    // The 4-4-4 grouping is expressed as one KeyButton delegate reused by a
-    // Repeater-of-Repeaters rather than three copies of the same ~30 lines:
-    // the outer Row lays out the three group Rows, and its own `spacing` IS
-    // the group gap, so there is no separate spacer Item to keep in sync
-    // with it. That spacing is keySpacing * 4, not keySpacing * 2, because
-    // the visible gap used to be the old spacer's own width (keySpacing * 2)
-    // plus the ordinary Row spacing on either side of it (keySpacing each) -
-    // the outer spacing here has to reproduce that whole width on its own,
-    // since nothing sits between the two group Rows to contribute the rest.
+    // One KeyButton delegate reused by a Repeater-of-Repeaters rather than
+    // three copies of the same ~30 lines: the outer Row lays out the group
+    // Rows, and its own `spacing` is the gap between them, which is the
+    // same `keySpacing` the group Rows use inside, so the row reads as one
+    // even run.
     Row {
         id: fnLayout
         spacing: fnRow._groupGap
@@ -281,9 +273,8 @@ Item {
             }
         }
 
-        // The swap key.  Its own group, so the 4-4-4 shape survives and the
-        // outer Row's spacing supplies the same wide gap as between the
-        // groups.  An invisible child takes no space and no spacing in a
+        // The swap key.  The outer Row's spacing supplies the same ordinary
+        // gap as between every other key.  An invisible child takes no space and no spacing in a
         // Row, so a row without a swap label lays out exactly as before.
         KeyButton {
             objectName: "fnSwapKey"

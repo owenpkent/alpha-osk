@@ -909,16 +909,12 @@ class TestPanelsSitFlushWithTheGrid:
         own cannot see:
 
         * The panel is flush with the grid, the way the Number Row is.
-        * The *key* width accounts for it: 12 keys, 9 ordinary gaps
-          inside the three 4-key groups, and 2 group gaps between them. A
-          wrong key count or a changed group gap both move that number.
-          (It was 13 keys and 3 group gaps while the row carried an Edit
-          toggle; that moved to Settings -> Function Keys.)
-        * The group gap is fixed at the 4-4-4 width in **both** views. It
-          used to be the thing that gave, which on compact (13 keys over a
-          13-unit grid, 3 px of slack) collapsed 4-4-4 into one
-          undifferentiated run. Filling with the keys is what pays for the
-          grouping surviving there.
+        * The *key* width accounts for it: 12 keys and 11 ordinary gaps.
+          A wrong key count or a changed gap both move that number.
+        * There is no wider gap between the groups, in **both** views. The
+          row was 4-4-4 with `keySpacing * 4` between the groups until the
+          owner asked for no gap there (2026-10-07); every gap on the row
+          is now an ordinary `keySpacing`, so no strip along it is dead.
         """
         root, warnings, _ = qml_root
         root.setProperty("showNavigation", False)
@@ -944,19 +940,18 @@ class TestPanelsSitFlushWithTheGrid:
                     "exactly, the way the Number Row does."
                 )
 
-                # 12 keys, 9 gaps inside the groups, 2 group gaps of
-                # 4 * keySpacing: 17 * keySpacing of the grid is not key.
+                # 12 keys, 11 ordinary gaps: 11 * keySpacing of the grid
+                # is not key.
                 fill = panel.property("_fillKeyW")
-                assert fill == pytest.approx((grid - 17 * key_spacing) / 12, abs=0.2), (
+                assert fill == pytest.approx((grid - 11 * key_spacing) / 12, abs=0.2), (
                     f"the fill width does not account for the row at window "
                     f"width {width} (compact={compact}): {fill:.2f} px per key "
-                    "against 12 keys + 9 internal gaps + 2 group gaps."
+                    "against 12 keys + 11 gaps."
                 )
-                assert panel.property("_groupGap") == pytest.approx(4 * key_spacing), (
-                    f"group gap is no longer the 4-4-4 width at window width "
-                    f"{width} (compact={compact}); it is the keys that give, "
-                    "not the gap. On compact this is the only thing stopping "
-                    "the three groups rendering as one run."
+                assert panel.property("_groupGap") == pytest.approx(key_spacing), (
+                    f"the gap between the function-key groups is wider than "
+                    f"an ordinary key gap at window width {width} "
+                    f"(compact={compact}); the owner asked for no gap there."
                 )
 
                 assert fill > key_w, (
