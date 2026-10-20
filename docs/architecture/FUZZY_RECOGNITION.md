@@ -69,7 +69,7 @@ _generate_fuzzy_sequences("hel"):
   for each char c in typed:
     multiply every (prefix, p) in beam by every (c', p(c'|c))
     prune: drop any combined probability < min_prob (default 0.001)
-    keep top 2 · max_candidates (100) by probability
+    keep top 2 · max_candidates (default 50, so 100) by probability
 ```
 
 This is a **beam search over possible typing interpretations**, one
@@ -79,15 +79,16 @@ a few hundred.
 
 `generate_candidates` then filters the surviving sequences to those
 that are in `self.dictionary`, returning `(word, probability)` sorted
-by probability.  In parallel, `_edit_distance_candidates(typed)` runs
-three single-edit transformations of the literal typed string,
-**transposition** (swap each adjacent pair: "teh" → "the"),
-**deletion** (drop each char: "thee" → "the"), and **insertion** (try
-each `a-z'` letter at each position: "th" → "the", "im" → "i'm"),
-and merges the dictionary hits into the same scored set.  The two
-sources never duplicate because the spatial path can't express
-length-changing edits.  Insertion is skipped for inputs over 12 chars
-to keep the per-keystroke cost bounded.
+by probability.  In parallel, `_edit_distance_candidates(typed)` asks the SymSpell index
+(`symspell.py`, maximum edit distance 2) for dictionary words near the
+literal typed string and merges the hits into the same scored set.  A
+distance-1 hit is scored with the penalty for its edit type, classified by
+`_classify_edit_prob`: **transposition** ("teh" → "the"), **deletion**
+("thee" → "the"), **insertion** ("th" → "the", "im" → "i'm") or
+**substitution** (`_SUBSTITUTION_PROB`, 0.18); a distance-2 hit gets the flat
+`_DOUBLE_EDIT_PROB` (0.05).  Each is divided by the input length.  Inputs
+under two characters yield nothing, and an exact dictionary word is skipped.
+The two sources overlap only on substitutions, where the higher score wins.
 
 The dictionary stores **frequencies**, not just membership: each
 candidate's spatial / edit probability is multiplied by `log(freq + 1)`
@@ -117,8 +118,8 @@ recognizer uses one set of generous, Gboard-leaning constants:
 | `DEFAULT_PREDICTION_WEIGHT` | 0.6 | How heavily `HybridPredictor._source_weights` trusts fuzzy candidates vs. n-gram.  Shared across every merge strategy (rank / RRF / linear / log-linear). |
 | `DEFAULT_MIN_PROB` | 0.001 | Beam-search pruning threshold inside `_generate_fuzzy_sequences`.  Lower than the old 0.01 so a single-substitution path can survive across a 5+ character word. |
 | `_TRANSPOSITION_PROB` | 0.30 | Per-edit probability for `_edit_distance_candidates` when the typed string can be turned into a dictionary word by swapping two adjacent characters ("teh" → "the"). |
-| `_DELETION_PROB` | 0.20 | Same, for the "typed has an extra letter" path, drop each char and look up. |
-| `_INSERTION_PROB` | 0.15 | Same, for "typed is missing a letter", try each `a-z` insertion at each position. |
+| `_DELETION_PROB` | 0.20 | Same, for the "typed has an extra letter" path (the candidate is one letter shorter than the typed string). |
+| `_INSERTION_PROB` | 0.15 | Same, for "typed is missing a letter" (the candidate is one letter longer than the typed string). |
 | `_APOSTROPHE_INSERTION_PROB` | 0.50 | Special case of insertion: when the inserted character is `'`. Bumped well above the generic letter-insertion penalty because missing apostrophes ("im" → "I'm", "dont" → "don't") are by far the dominant insertion error in real typing, especially for users who struggle with the apostrophe key on a low-precision OSK. |
 
 If you need to tune behaviour for a specific user, override these on
@@ -258,7 +259,7 @@ out. Measured on the shipped list with the n-gram's counts, a one-slip
 5-letter prefix completes to the intended word 94.5% of the time (0.0%
 before) and a clean 4-letter prefix 92% (1.4% before). The whole account,
 including the sweep behind each constant and why there is no user setting,
-is the *Prefix beam* section of `CLAUDE.md`.
+is the *Prefix beam* section of `PREDICTION_NOTES.md`.
 
 ### Sparse two-letter prefixes (2026-09-10)
 

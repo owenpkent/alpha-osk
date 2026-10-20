@@ -54,13 +54,13 @@ Bring the look and feel up to current design standards, the keyboard should feel
 
 Drop new ideas here. One line is fine, expand later if it gains traction.
 
-- Emoji panel with search and recently-used
+- Emoji panel with search and recently-used (shipped without search: the Symbols & Emoji window, with a Recent page)
 - Clipboard history panel (last N copied items, one-tap paste)
-- Phrase shortcuts / text expansion (e.g., "addr" expands to full address)
-- Customizable keyboard layouts (Dvorak, Colemak, regional)
+- Phrase shortcuts / text expansion (e.g., "addr" expands to full address) (partly shipped as Snippets, which are tapped rather than abbreviation-triggered)
+- Customizable keyboard layouts (Dvorak, Colemak, regional) (Dvorak and Colemak shipped; regional and user-made layouts are not)
 - Floating mini-mode (just the prediction bar, no keyboard)
 - Theming engine (user-created themes, import/export)
-- Integration with system accessibility APIs (AT-SPI on Linux, UI Automation on Windows)
+- Integration with system accessibility APIs (AT-SPI on Linux, UI Automation on Windows) (shipped for password detection on both, and Windows UI Automation targets for switch scanners)
 - Touch gesture support (swipe to delete word, swipe down to dismiss)
 - Multi-language switching with per-language prediction models
-- Usage analytics dashboard (words per minute, most used words, prediction hit rate)
+- Usage analytics dashboard (words per minute, most used words, prediction hit rate) (shipped as the Dashboard tab)

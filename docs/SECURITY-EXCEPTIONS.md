@@ -19,8 +19,8 @@ finding.
   2026-09-15), and refuses force-pushes and branch deletion. It does not
   apply to administrators and does not require a branch to be up to date
   before merging. Those two gaps are deliberate: GitHub will not let an
-  author approve their own PR, so the sole maintainer merges with
-  `gh pr merge --admin`, and the up-to-date requirement carries the
+  author approve their own PR, so the sole maintainer merges with an
+  admin bypass (`scripts/merge_pr.py`, never a bare `gh pr merge --admin`), and the up-to-date requirement carries the
   motor-cost the original skip described. They are the residual this
   entry now records, and Scorecard will keep scoring the rule below 10/10
   on them.

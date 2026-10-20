@@ -81,6 +81,8 @@ A phased plan to harden Alpha-OSK's codebase, starting with the highest-impact, 
 
 **Status:** Complete. 266 tests passing.
 
+**Later change:** the five built-in packs were removed (200-400 words each was too thin to beat personal learning); the pack system is now import-only and no packs ship. See *Vocabulary Packs* in `CLAUDE.md`.
+
 ---
 
 ## Phase 4: Error Handling & Resilience
@@ -136,7 +138,7 @@ A phased plan to harden Alpha-OSK's codebase, starting with the highest-impact, 
 
 **Goal:** Streamline the release pipeline.
 
-- [ ] Lock dependencies (`pip-compile` or `uv lock`)
+- [ ] Lock dependencies (`pip-compile` or `uv lock`) (partly done: `requirements.txt` and `requirements-dev.txt` pin exact `==` versions and every build emits a `pip freeze` lockfile; hash pinning is not done)
 - [x] Separate `requirements-dev.txt` and `requirements-build.txt` (`requirements-dev.txt` exists; no separate `requirements-build.txt`)
 - [ ] Automated Windows build in CI (PyInstaller + signing)
 - [x] Linux packaging (AppImage or Flatpak): AppImage via `build/linux/build.py --appimage`; Flatpak not done
