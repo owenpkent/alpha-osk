@@ -15,6 +15,7 @@ patched at the Python level.
 from __future__ import annotations
 
 import os
+import time
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -623,7 +624,14 @@ class TestTheHistoryList:
         _call(button, "clicked()")
         QCoreApplication.processEvents()
         assert button.property("text") == "Confirm delete"
-        _wait_ms(4400)
+        # The revert timer is 4 s. Poll for it rather than sleeping a fixed
+        # 4.4 s: Qt's coarse timers may fire 5% either side of their
+        # interval, so on a loaded CI runner the sleep could end before the
+        # revert fired, and this test failed on a release PR for exactly
+        # that reason.
+        deadline = time.monotonic() + 15.0
+        while button.property("text") != "Delete" and time.monotonic() < deadline:
+            _wait_ms(100)
         assert button.property("text") == "Delete"
 
     def test_an_empty_history_says_so(self, qml_root):
