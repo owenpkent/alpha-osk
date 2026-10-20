@@ -46,7 +46,7 @@
 - [x] **Predictions clear on deactivation**: Suggestions clear when user clicks away
 - [x] **No predictions for numbers**: Typing digits/symbols clears suggestion bar
 - [x] **Configurable suggestion count**: 3–10 suggestions (default 8), adjustable in settings
-- [x] **Comprehensive settings panel**: Four-category drill-down: Appearance, Smart Typing, Your Language Model, Data & Privacy
+- [x] **Comprehensive settings panel**: Six-category drill-down: Appearance, Smart Typing, Function Keys, Dictation, Your Language Model, Data & Privacy
 
 ## Phase 3: AI Prediction ✅
 
@@ -131,7 +131,7 @@
 - [x] Escape key always visible in number row
 - [x] Navigation panel (PrtSc, ScrLk, Pause, Ins, Del, Home, End, PgUp, PgDn, Arrows)
 - [x] Number pad with NumLock
-- [x] Settings panel, four-category drill-down (Appearance / Smart Typing / Your Language Model / Data & Privacy)
+- [x] Settings panel, six-category drill-down (Appearance / Smart Typing / Function Keys / Dictation / Your Language Model / Data & Privacy)
 - [x] Compact mode option
 - [x] LLM_ONBOARDING.md updated for AI assistants
 - [x] Key hold/repeat functionality

@@ -14,19 +14,24 @@ alongside every installer, and retain their own licences.
 ## Feather
 
 Several small controls draw Feather icons. Their path data is embedded verbatim
-in [`qml/Main.qml`](qml/Main.qml) rather than bundled as an asset, because it is
+in the QML ([`qml/Main.qml`](qml/Main.qml) and, for one icon,
+[`qml/components/SymbolsWindow.qml`](qml/components/SymbolsWindow.qml)) rather
+than bundled as an asset, because it is
 fed to a `Canvas` via `ctx.path` (see `qml/components/StrokeIcon.qml`).
 
 - Project: https://github.com/feathericons/feather
 - Icons: `rotate-ccw` (clear-context button), `bookmark` (Snippets),
   `mic` (Dictation), `x` (close buttons)
 - Licence: MIT
-- Icons in use, all in [`qml/Main.qml`](qml/Main.qml):
+- Icons in use:
   - `rotate-ccw`, the clear-context button in the suggestion bar
+    ([`qml/Main.qml`](qml/Main.qml))
   - `bookmark`, the Snippets buttons in the suggestion bar and the title bar
+    ([`qml/Main.qml`](qml/Main.qml))
   - `mic`, the dictation buttons in the suggestion bar and the title bar
-  - `chevron-left` / `chevron-right`, the Snippets window's back control and
-    its page pager
+    ([`qml/Main.qml`](qml/Main.qml))
+  - `x`, the Symbols & Emoji window's close button
+    ([`qml/components/SymbolsWindow.qml`](qml/components/SymbolsWindow.qml))
 
 ```
 The MIT License (MIT)
@@ -111,8 +116,9 @@ redistribution, and sale with those notices retained.
 [`scripts/gen_vocabulary.py`](scripts/gen_vocabulary.py) verifies the source
 archive checksum before generating the derivative. It removes uppercase
 forms, possessives, unsupported word shapes, already shipped words, and the
-reviewed explicit-content forms in
-[`data/explicit_stems.txt`](data/explicit_stems.txt). All remaining
+slurs named in [`data/slurs.txt`](data/slurs.txt). Profanity is retained and
+governed by the suggestion filter instead (seeded from
+[`data/explicit_stems.txt`](data/explicit_stems.txt)). All remaining
 words are retained; no frequency estimates are inferred from their order.
 [`data/english-expanded.manifest`](data/english-expanded.manifest) records the
 release, checksum, filtering, and generated count. These words receive one

@@ -172,7 +172,7 @@ So the floor is ~5 s and the ceiling is ~245 s. Real installs land at ~15-30 s o
 
 ### Implementation (two layers, both shipping together)
 
-**Layer 1: pre-update expectation-setting in the live OSK.** Before `updater.download_and_install` spawns the installer (after download + signature verify succeed), it invokes a new optional `on_installer_launching` callback. The bridge wires this to emit `updateInstallHandoffPending(version)` and then sleep 1.8 s in the worker thread, so the toast paints and is legible before the installer's taskkill arrives. The QML side adds an `updateStartingToast` Popup ("Installing v1.0.X. The keyboard will disappear briefly and come back.") modeled on the existing `updateAppliedToast`. Worth noting: the toast deliberately has no auto-close timer, because the installer's taskkill closes the whole process within ~1-2 s anyway, and a timer that fires just before the taskkill would leave the user with the same silence we're trying to avoid.
+**Layer 1: pre-update expectation-setting in the live OSK.** Before `updater.download_and_install` spawns the installer (after download + signature verify succeed), it invokes a new optional `on_installer_launching` callback. The bridge wires this to emit `updateInstallHandoffPending(version)` and then sleep in the worker thread for `_PRE_INSTALL_TOAST_DWELL_S` (originally 1.8 s, now 0.3 s), so the toast paints and is legible before the installer's taskkill arrives. The QML side adds an `updateStartingToast` Popup ("Installing v1.0.X. The keyboard will disappear briefly and come back.") modeled on the existing `updateAppliedToast`. Worth noting: the toast deliberately has no auto-close timer, because the installer's taskkill closes the whole process within ~1-2 s anyway, and a timer that fires just before the taskkill would leave the user with the same silence we're trying to avoid.
 
 **Layer 2: visible relauncher splash during the gap.** *(The phases, the dwell, the close
 button and the failure message described in this layer and the next few paragraphs are
@@ -195,7 +195,7 @@ The interactive NSIS UI would solve the visibility problem trivially, but at the
 ### Files
 
 - `src/updater.py`: `download_and_install` accepts `on_installer_launching: Optional[HandoffCb]`; `_spawn_relauncher` adds `--show-splash` to the relauncher cmd (frozen installs only since 1.5.1; dev runs no longer spawn a helper at all).
-- `src/keyboard_bridge.py`: `updateInstallHandoffPending = Signal(str)`; `installUpdate` worker passes a callback that emits the signal then sleeps `_PRE_INSTALL_TOAST_DWELL_S` (1.8 s).
+- `src/keyboard_bridge.py`: `updateInstallHandoffPending = Signal(str)`; `installUpdate` worker passes a callback that emits the signal then sleeps `_PRE_INSTALL_TOAST_DWELL_S` (originally 1.8 s, now 0.3 s; see item 8 below).
 - `src/_update_relauncher.py`: `run_relauncher` dispatch, `_run_headless` (legacy + fallback), `_run_with_splash` (Qt path), `_build_splash_widget`, `_new_exe_ready`, `_is_dev_target`.
 - `qml/Main.qml`: `updateStartingToast` Popup + the `Connections.onUpdateInstallHandoffPending` handler that flashes it.
 - Tests: `tests/test_updater.py::TestInstallerLaunchingCallback` (4), `tests/test_update_relauncher.py::TestNewExeReady` (5), `TestShowSplashFlag` (4 incl. dev-mode skip), `TestIsDevTarget` (4).
@@ -377,7 +377,7 @@ location, snapshot in the argv, sweep, non-fatal staging failure) and
 (the build-stamped-mtime case end to end, plus the no-snapshot fallback in
 both directions).
 
-## The helper is its own exe, and the update screen never goes away (unreleased)
+## The helper is its own exe, and the update screen never goes away (1.8.0)
 
 **Owner's requirement: an update screen on screen from the moment the keyboard
 goes away until the new keyboard window is actually visible, so it never looks

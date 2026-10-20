@@ -16,7 +16,7 @@ Implementation: `src/prediction/hybrid_predictor.py`.
 > reference for how the strategies combine, and reviving PPM inside the
 > prefix beam would need it. See *Status (2026-09-03)* at the end of this
 > file for the measurements, and *Fuzzy dictionary refresh, and PPM out of
-> the merge* in `CLAUDE.md`.
+> the merge* in `PREDICTION_NOTES.md`.
 
 Design philosophy matches Presage and early Gboard/LatinIME: **fast
 complementary predictors that each do one thing well, merged by linear
@@ -258,7 +258,7 @@ prior, and the user's actual learning:
 
 | Table | Source | Lifetime |
 |-------|--------|----------|
-| `_base_unigrams` | Google 10K, 20K supplement, and `data/base_dictionary.txt` | Rebuilt at startup |
+| `_base_unigrams` | Google 10K, 20K supplement, `data/base_dictionary.txt`, and the profile's `extra_vocabulary` (`data/english-expanded.txt`, one base count each) | Rebuilt at startup |
 | `_corpus_unigrams` | Accepted words in the shipped training corpus | Rebuilt in memory, never saved as personal history |
 | `user_vocab` | Words typed or explicitly taught by the user | Saved and recency-decayed |
 
@@ -340,7 +340,7 @@ is used for the shipped text. Regression coverage is in
 keyboard bridge tests.
 
 Base context tables already have their own user/base split and proportional
-trust rule; see the context-table account in `CLAUDE.md`.
+trust rule; see the *Context tables* section of `PREDICTION_NOTES.md`.
 
 ## Recency Decay
 
@@ -738,7 +738,7 @@ that needs raw data should use these forwarders:
 If you need data that isn't exposed, add a new forwarder here rather
 than reaching through private attributes.  Private access from the
 bridge or UI was removed during the security review; don't re-introduce
-it.  CLAUDE.md "Things to Watch Out For" calls this out.
+it.  `GOTCHAS.md` calls this out.
 
 ## References
 
@@ -799,5 +799,5 @@ Everything above that blends a PPM source describes the merge before
 intact, and `scripts/bench/ksr.py --conditions ppm-merge` puts the list
 back for a before/after. The fuzzy source, meanwhile, is the prefix beam
 mid-word (`prefix_beam.py`) and its dictionary now follows the vocabulary
-during a session. Rationale and numbers in `CLAUDE.md`, sections *Prefix
+during a session. Rationale and numbers in `PREDICTION_NOTES.md`, sections *Prefix
 beam* and *Fuzzy dictionary refresh, and PPM out of the merge*.

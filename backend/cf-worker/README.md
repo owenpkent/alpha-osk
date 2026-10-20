@@ -63,7 +63,7 @@ npm run deploy
 
 That uploads the worker and binds it to the configured route. The
 endpoint URL is printed at the end of `wrangler deploy`. Configure
-the client's `TELEMETRY_ENDPOINT` (in `src/telemetry.py`) to match
+the client's `DEFAULT_ENDPOINT` (in `src/telemetry.py`) to match
 before shipping a release that has telemetry enabled.
 
 ## Routes
@@ -72,7 +72,7 @@ before shipping a release that has telemetry enabled.
   success, 400 with a one-line reason on validation failure. Also 204,
   but a no-op, when the same `anon_id` was submitted too recently (see
   Rate limiting below). That case is deliberately indistinguishable
-  from a real success, so re-running the curl example below in quick
+  from a real success, so re-running the curl example above in quick
   succession will keep returning 204 without necessarily updating the
   row.
 - `GET /v1/aggregate`: return summed counters across all users.
@@ -136,10 +136,12 @@ nothing.
    below is a no-op by design rather than by accident.
 
 2. **Set `DEFAULT_ENDPOINT` in `src/telemetry.py`** to that URL, per the
-   release checklist in `docs/build/WINDOWS.md` step 2a. It ships as the
-   empty string, which the client reads as "not configured" and silently
-   no-ops every submit. **A build shipped without this step has a working
-   consent toggle that sends nothing**, which is the failure mode worth
+   release checklist in `docs/build/WINDOWS.md` step 2a. It has pointed at
+   the production worker since 1.4.0 (it shipped as the empty string before
+   that); an empty string is read by the client as "not configured" and
+   silently no-ops every submit. **A build whose `DEFAULT_ENDPOINT` is empty
+   or points at the wrong worker has a working consent toggle that sends
+   nothing**, which is the failure mode worth
    naming because it is invisible from the UI: the user opts in, the switch
    stays on, and no data ever arrives.
 

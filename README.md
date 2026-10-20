@@ -11,7 +11,7 @@ Type into any Windows or Linux app by clicking on-screen keys. Built for people 
 [![Website](https://img.shields.io/badge/website-alphaosk.com-4a9eff.svg)](https://alphaosk.com)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![CI](https://github.com/owenpkent/alpha-osk/actions/workflows/ci.yml/badge.svg)](https://github.com/owenpkent/alpha-osk/actions/workflows/ci.yml)
-[![Tests](https://img.shields.io/badge/tests-3400%2B-brightgreen.svg)](tests/)
+[![Tests](https://github.com/owenpkent/alpha-osk/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/owenpkent/alpha-osk/actions/workflows/ci.yml)
 [![Releases](https://img.shields.io/badge/releases-alpha--osk--releases-orange.svg)](https://github.com/owenpkent/alpha-osk-releases/releases)
 
 <img src="assets/screenshots/dark-theme-keyboard.png" alt="Alpha-OSK on-screen keyboard with function row, QWERTY block, navigation cluster, and numpad" width="900" />
@@ -120,7 +120,7 @@ That covers ~90% of day-to-day use. The rest of this README and the [white paper
 <tr>
 <td width="50%" align="center">
 <img src="assets/screenshots/settings-appearance.png" alt="Appearance settings: panel toggles, layout picker, theme picker, opacity slider" width="100%" />
-<br /><em>Appearance: Compact View plus the function row, extra function row, navigation, and numpad panel toggles; pick QWERTY / Dvorak / Colemak; pick a theme; adjust opacity.</em>
+<br /><em>Appearance: Compact View plus the navigation and numpad panel toggles; pick QWERTY / Dvorak / Colemak; pick a theme; adjust opacity.</em>
 </td>
 <td width="50%" align="center">
 <img src="assets/screenshots/settings-data-privacy.png" alt="Data and Privacy settings: data backup export and import, opt-ins for saving detected emails and phone numbers and for anonymous telemetry, research study invitation, auto-update toggle" width="100%" />
@@ -208,7 +208,7 @@ Yes on Windows (Unicode keystroke injection covers anything in BMP and supplemen
 ### Typing
 
 - QWERTY, Dvorak, and Colemak layouts
-- Compact View: a denser 13x4 grid for small screens, with digits on their own panel and two symbol pages behind `?123`
+- Compact View: a denser 13x4 grid for small screens, with digits on their own panel and a symbol page behind `?123`
 - Sticky modifiers (Shift, Ctrl, Alt, Win) with auto-release after the next key, or right-click one to lock it held
 - Multi-modifier chords (Win+Shift+S, Ctrl+Alt+Del, etc.)
 - Right-click a character key for its shifted variant without flipping sticky shift

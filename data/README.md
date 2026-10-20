@@ -16,6 +16,11 @@ learned.
 |------|---------|--------|
 | `google-10000-english-usa-no-swears.txt` | Frequency-ranked base vocabulary (~9.9k words) | One word per line, ranked by frequency |
 | `google-20000-supplement.txt` | Second ~10k, filtered for explicit content | Same |
+| `english-expanded.txt` | ~64k further words from SCOWL (size 60), entering at one base count each; pinned by sha256 in `english-expanded.manifest`, licence in `licenses/` | One word per line, generated (`scripts/gen_vocabulary.py`) |
+| `slurs.txt` | Exact words removed from the vocabulary (never stems) | One word per line |
+| `explicit_words.txt` | Exact words the suggestion bar will not volunteer while *Filter Explicit Words* is on; seeded from `explicit_stems.txt` | One word per line, generated (`scripts/gen_explicit_words.py`), not hand-edited |
+| `explicit_stems.txt` | Stems and the closed suffix set that seed `explicit_words.txt` | See the file header |
+| `seed_bigrams.txt` / `seed_trigrams.txt` | Generated base context seeds covering most of the vocabulary (see `docs/architecture/NGRAM_SEEDS.md`) | Generated (`scripts/gen_seed_ngrams.py`) |
 | `base_dictionary.txt` | Additional vocabulary for unigram boosting | One word per line. **Never** put multiple words on one line: that creates fake bigrams. |
 | `common_bigrams.txt` | Seed word pairs for next-word prediction | `word1 word2` per line, whitespace-separated |
 | `common_trigrams.txt` | Seed word triples for next-word prediction | `word1 word2 word3` per line |
@@ -33,13 +38,16 @@ All of it happens in `HybridPredictor.__init__` (`src/prediction/hybrid_predicto
 
 1. `NgramPredictor.__init__` loads the profile's wordlists for base unigram
    frequencies (`google-10000…` plus the supplement, named by
-   `language.ENGLISH`).
+   `language.ENGLISH`), then `_load_extra_vocabulary()` adds
+   `english-expanded.txt` and drops `slurs.txt`.
 2. `load_base_dictionary()` boosts unigrams from `base_dictionary.txt`.
 3. `load_common_bigrams()` / `load_common_trigrams()` seed the base context
    tables at **+50 per entry**, with each trigram also reinforcing its two
    internal bigrams at +10.
-4. `CommonMisspellings.load()` reads `common_misspellings.txt`.
-5. `_load_training_corpus()` trains both the n-gram model and PPM on
+4. `load_seed_ngrams()` adds the generated `seed_bigrams.txt` and
+   `seed_trigrams.txt` to the same base tables.
+5. `CommonMisspellings.load()` reads `common_misspellings.txt`.
+6. `_load_training_corpus()` trains both the n-gram model and PPM on
    `training_corpus.txt`, contributing **+1** per observed pair.
 
 `proper_nouns.txt` is read by `NgramPredictor._load_proper_nouns()` into the
@@ -69,8 +77,11 @@ guessing.
 ## Provenance and licensing
 
 The base vocabulary is derived from the Google 10 000 / 20 000
-English word-frequency lists, filtered for explicit content. The bigram,
-trigram, misspelling and corpus files are hand-curated for this project.
+English word-frequency lists, filtered for explicit content, plus the SCOWL
+size-60 list in `english-expanded.txt` (licence in `licenses/ESDB.txt`).
+The curated bigram, trigram, misspelling and corpus files are hand-written
+for this project; `seed_bigrams.txt` and `seed_trigrams.txt` are generated
+from a public language model.
 
 Anything added here has to be redistributable under terms compatible with the
 project's MIT licence. In practice that means public domain, CC0, or CC BY

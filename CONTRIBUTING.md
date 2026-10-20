@@ -201,15 +201,18 @@ runs on any machine with nothing to set up first.
 3. Run `python check.py` locally.
 4. Push and open a PR using the template.
 5. CI runs ruff + ruff-format + mypy + pytest + OSV vulnerability scan. `main` is a
-   protected branch: the merge button stays disabled until five required
-   checks pass green: `Lint`, `Type Check`, `Test (ubuntu-latest)`,
-   `Test (windows-latest)`, and `OSV Scanner (deps CVE check)`. On a PR the
+   protected branch: the merge button stays disabled until four required
+   checks pass green: `Lint`, `Type Check`, `Tests` (one job that
+   aggregates the four-way test shards on both operating systems), and
+   `OSV Scanner (deps CVE check)`. On a PR the
    OSV gate compares your branch with its base and fails only on a known
    vulnerability your change introduces, which blocks the merge just like a
    failing test would. Advisories against dependencies already on `main`
    are caught by a full scan on every push to `main` and a nightly run,
    not by your PR.
-6. A maintainer will review. Iterate as needed.
+6. A maintainer will review (one approving review is required). Iterate as needed.
+   Maintainers merge with `python scripts/merge_pr.py <number>`, which waits
+   for the required checks on an up-to-date branch before merging.
 
 If your PR touches the prediction engine, build pipeline, or telemetry,
 please call that out in the PR description so it gets extra eyes.
