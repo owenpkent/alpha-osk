@@ -82,6 +82,19 @@ LANGUAGES: tuple[tuple[str, str], ...] = (
     ("multi", "Multilingual"),
 )
 
+#: How the AI cleanup pass writes numbers.  "smart" lets the model decide
+#: from context ("two dogs" but "12 items"), as MacroVox does.
+NUMBER_FORMATS: tuple[tuple[str, str], ...] = (
+    ("smart", "Smart"),
+    ("digits", "Digits"),
+    ("words", "Words"),
+)
+
+#: The user's own description of their writing voice, sent with a "Write
+#: with AI" request.  A paragraph or two; the cap keeps a pasted document
+#: out of every request (and out of the bill).
+MAX_STYLE_LEN = 2000
+
 #: Wall-clock ceiling on one dictation run, in seconds.  Not a silence
 #: detector: it is the backstop for a microphone left live by a click that
 #: did not register as a stop, which on a metered API is the failure that
@@ -206,6 +219,46 @@ def _clip_int(value: Any, low: int, high: int, fallback: int) -> int:
     return max(low, min(high, n))
 
 
+def _clean_style(raw: Any) -> str:
+    """A style profile with control characters removed, newlines kept."""
+    if not isinstance(raw, str):
+        return ""
+    kept = "".join(ch for ch in raw if ch == chr(10) or ch.isprintable())
+    return kept.strip()[:MAX_STYLE_LEN]
+
+
+def _mask(secret: str) -> str:
+    if not secret:
+        return ""
+    if len(secret) <= 8:
+        return "*" * len(secret)
+    return f"{secret[:4]}{'*' * 8}{secret[-4:]}"
+
+
+def _load_secret(data: dict[str, Any], name: str, flag: str) -> str:
+    """Read one possibly-DPAPI-wrapped secret field out of the parsed file."""
+    stored = data.get(name, "")
+    if not (isinstance(stored, str) and 0 < len(stored) <= MAX_KEY_LEN * 4):
+        return ""
+    if data.get(flag):
+        # Written on another machine or under another login is not an
+        # error worth shouting about; the user re-enters it.
+        return _unprotect(stored) or ""
+    return stored[:MAX_KEY_LEN]
+
+
+def _store_secret(payload: dict[str, Any], name: str, flag: str, secret: str) -> None:
+    if not secret:
+        return
+    wrapped = _protect(secret)
+    if wrapped is not None:
+        payload[name] = wrapped
+        payload[flag] = True
+    else:
+        payload[name] = secret[:MAX_KEY_LEN]
+        payload[flag] = False
+
+
 def _clean_keyterms(raw: Any) -> list[str]:
     if not isinstance(raw, list):
         return []
@@ -243,6 +296,21 @@ class DictationConfig:
     #: When off, the transcript accumulates in the suggestion bar and is
     #: inserted in one go when the user stops.
     stream_inserts: bool = True
+    #: Anthropic key for AI cleanup and Write with AI.  Same handling as
+    #: ``api_key`` (clear in memory, DPAPI on disk, never logged), and it
+    #: is a separate credential for a separate third party, so it has its
+    #: own wrapped-or-not flag on disk.
+    anthropic_key: str = ""
+    #: Run the transcript through Claude before it is typed.  Needs the key.
+    cleanup_enabled: bool = False
+    number_format: str = "smart"
+    #: Offer the Write with AI button.  Needs both keys.
+    writing_enabled: bool = False
+    #: The user's own description of their voice, for Write with AI.
+    writing_style: str = ""
+    #: Keep the last few runs (text and audio) so a lost sentence can be
+    #: copied back out.  On by default: the point is recovery.
+    history_enabled: bool = True
 
     # Hand-written rather than dataclass-generated.  A generated repr puts
     # the key into every log line, f-string and traceback that formats this
@@ -255,8 +323,11 @@ class DictationConfig:
     def __repr__(self) -> str:
         parts = []
         for f in dataclass_fields(self):
-            if f.name == "api_key":
-                parts.append(f"api_key={'<set>' if self.api_key else '<unset>'}")
+            if f.name in ("api_key", "anthropic_key"):
+                parts.append(f"{f.name}={'<set>' if getattr(self, f.name) else '<unset>'}")
+            elif f.name == "writing_style":
+                # Prose about the user's voice; length only, like a transcript.
+                parts.append(f"writing_style=<{len(self.writing_style)} chars>")
             else:
                 parts.append(f"{f.name}={getattr(self, f.name)!r}")
         return f"{type(self).__name__}({', '.join(parts)})"
@@ -267,11 +338,20 @@ class DictationConfig:
 
     def masked_key(self) -> str:
         """A key preview safe to render in the settings panel."""
-        if not self.api_key:
-            return ""
-        if len(self.api_key) <= 8:
-            return "*" * len(self.api_key)
-        return f"{self.api_key[:4]}{'*' * 8}{self.api_key[-4:]}"
+        return _mask(self.api_key)
+
+    @property
+    def has_anthropic_key(self) -> bool:
+        return bool(self.anthropic_key)
+
+    def masked_anthropic_key(self) -> str:
+        """The Anthropic key preview safe to render in the settings panel."""
+        return _mask(self.anthropic_key)
+
+    @property
+    def cleanup_ready(self) -> bool:
+        """Whether a dictation run should be polished by Claude."""
+        return self.cleanup_enabled and self.has_anthropic_key
 
     # --- persistence ---------------------------------------------------
 
@@ -301,16 +381,10 @@ class DictationConfig:
 
         cfg.enabled = bool(data.get("enabled", False))
 
-        stored = data.get("api_key", "")
-        if isinstance(stored, str) and 0 < len(stored) <= MAX_KEY_LEN * 4:
-            if data.get("key_protected"):
-                cfg.api_key = _unprotect(stored) or ""
-                if not cfg.api_key:
-                    # Written on another machine or under another login.
-                    # Not an error worth shouting about; the user re-enters it.
-                    _logger.info("Stored dictation key could not be unwrapped on this account")
-            else:
-                cfg.api_key = stored[:MAX_KEY_LEN]
+        cfg.api_key = _load_secret(data, "api_key", "key_protected")
+        if not cfg.api_key and data.get("api_key") and data.get("key_protected"):
+            _logger.info("Stored dictation key could not be unwrapped on this account")
+        cfg.anthropic_key = _load_secret(data, "anthropic_key", "anthropic_key_protected")
 
         model = data.get("model")
         cfg.model = (
@@ -332,6 +406,16 @@ class DictationConfig:
         )
         cfg.keyterms = _clean_keyterms(data.get("keyterms"))
         cfg.stream_inserts = bool(data.get("stream_inserts", True))
+        cfg.cleanup_enabled = bool(data.get("cleanup_enabled", False))
+        number_format = data.get("number_format")
+        cfg.number_format = (
+            number_format
+            if isinstance(number_format, str) and number_format in {n for n, _ in NUMBER_FORMATS}
+            else cls.number_format
+        )
+        cfg.writing_enabled = bool(data.get("writing_enabled", False))
+        cfg.writing_style = _clean_style(data.get("writing_style"))
+        cfg.history_enabled = bool(data.get("history_enabled", True))
         return cfg
 
     def save(self, path: Path | None = None) -> bool:
@@ -348,14 +432,17 @@ class DictationConfig:
             "keyterms": self.keyterms[:MAX_KEYTERMS],
             "stream_inserts": self.stream_inserts,
         }
-        if self.api_key:
-            wrapped = _protect(self.api_key)
-            if wrapped is not None:
-                payload["api_key"] = wrapped
-                payload["key_protected"] = True
-            else:
-                payload["api_key"] = self.api_key[:MAX_KEY_LEN]
-                payload["key_protected"] = False
+        payload.update(
+            {
+                "cleanup_enabled": self.cleanup_enabled,
+                "number_format": self.number_format,
+                "writing_enabled": self.writing_enabled,
+                "writing_style": self.writing_style[:MAX_STYLE_LEN],
+                "history_enabled": self.history_enabled,
+            }
+        )
+        _store_secret(payload, "api_key", "key_protected", self.api_key)
+        _store_secret(payload, "anthropic_key", "anthropic_key_protected", self.anthropic_key)
 
         try:
             # mode=0o600 narrows the file before the rename, so it is never

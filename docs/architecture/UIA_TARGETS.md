@@ -70,6 +70,8 @@ AutomationId begins with `aosk.v1.`.
 | `nav`   | The navigation panel |
 | `pad`   | The numpad panel |
 | `pred`  | The prediction pills |
+| `bar`   | The suggestion bar's buttons and their title-bar twins (see *The bar*) |
+| `draft` | The Write with AI preview's Insert, Copy and Discard, while it is open (see *The draft*) |
 
 **Presence means activatable.** A key on a hidden panel, or on a symbol layer
 that is not showing, is absent from the tree rather than present and
@@ -88,24 +90,113 @@ otherwise look like bugs to a client:
   the same logical key is under `grid` there and under `nav` in the full-size
   layouts.
 
-Out of scope for v1, and absent from the tree: the settings, help, snippets,
-symbols and dashboard windows; secondary-click actions; held-key commands.
+Out of scope for v1, and absent from the tree: the contents of the settings,
+help, snippets, symbols and dashboard windows (their bar buttons are targets); secondary-click actions; held-key commands.
 
 ## Identity
 
     aosk.v1.<section>.<row>.<index>          keys
     aosk.v1.pred.<index>.g<generation>       prediction pills
+    aosk.v1.bar.0.<index>                    bar buttons and their twins
+    aosk.v1.draft.0.<index>                  the draft preview's actions
     aosk.v1.revision                         the revision beacon
 
 `row` and `index` are zero-based visual order, top to bottom and left to
 right within the section. `aosk.v1` is the contract version and changes if
 the scheme does.
 
-The format is defined once, in `Main.qml`'s `scanTargetId`, and the six
-surfaces that draw targets all call it. That is deliberate: two surfaces
+The format is defined once, in `Main.qml`'s `scanTargetId`, and every
+surface that draws targets calls it. That is deliberate: two surfaces
 computing the same format independently would eventually hand a scanner
 colliding ids, and a collision is invisible to the client (it reads as one
 target that moved, not as a fault).
+
+## The bar
+
+The suggestion bar's five buttons are targets, so a switch user can reach
+dictation, Write with AI, Symbols, Snippets and the clear-context ring. They
+are `Button`s with the id `aosk.v1.bar.0.<index>`. `row` is always `0` (the
+bar is one row); **`index` is fixed per function, not per position**:
+
+| Index | Function | Name | Present when |
+|-------|----------|------|--------------|
+| 0 | Dictation mic | `Dictate` | Dictation is enabled (the setting), whether or not a key is stored |
+| 1 | Write with AI | `Write with AI` | Dictation and writing are enabled and both API keys are stored |
+| 2 | Symbols and emoji | `Symbols and emoji` | Always |
+| 3 | Snippets | `Snippets` | Always |
+| 4 | Clear suggestion context | `Clear suggestion context` | Suggestions are on (the ring has no twin) |
+
+**Stable indices.** A hidden control is simply absent; its index is not
+reused and no other id moves. `bar.0.3` is Snippets whether or not the mic and
+the pen exist. Indices are part of the contract: a new control takes the next
+number, existing ones are never renumbered, and a change to either is a
+version bump.
+
+**Title-bar twins carry their bar counterpart's id.** With suggestions off the
+bar collapses to zero height, and the mic, pen, Symbols and Snippets
+controls reappear in the title bar. Each twin publishes the same id as its bar
+copy. The contract allows this because an id names a function, a bar copy and
+its twin are never visible together (`suggestionsEnabled` decides which one
+exists), and `suggestionsEnabled` is already in the revision beacon, so a
+scanner that re-snapshots on a revision change sees the id move location and
+never two elements with one id. A distinct section would have made the same
+function two targets a scanner must be taught are one, and would have changed
+the id the user's saved scan order refers to when they toggle a setting.
+The clear-context ring has no twin and is absent with suggestions off.
+
+**State.** The mic and the pen are genuine start/stop controls and expose
+`TogglePattern`: the mic is `On` while a dictation run that the pen did not
+start is under way, the pen is `On` for the run it started, in any non-idle
+state (connecting, listening, finishing, polishing). The other three are plain
+buttons.
+
+**Invoke** raises the same one-shot signal a click does, so each control's
+handler lives once in `Main.qml` and both paths call it. It flashes the
+button, carries no pointer position (there is none), and is refused when the
+button is not visible, the window is minimized, or the button is disabled
+(`BarButton._scanActivatable`, checked at presence and at activation). What it
+does by state:
+
+- Mic, idle: starts dictation (or reports the missing key through the usual
+  error toast; an unconfigured mic is present, greyed, and says why).
+  Privacy mode refuses with the usual error toast.
+- Mic, connecting / listening / finishing: stops the run. While *polishing*
+  the words are already with Claude, so the bridge treats the tap as a no-op;
+  the button stays present so the id does not flicker mid-run.
+- Pen: the same, with `write` as the purpose; refused with a toast if privacy
+  mode or a missing key forbids it.
+- Symbols / Snippets: open the window, or close it if it is already open.
+- Clear: resets the typing context and flashes the confirmation toast.
+
+Everything above that can change the target set feeds the beacon: which of the
+mic and pen exist, and the two toggle states.
+
+## The draft
+
+A Write with AI run ends in a preview rather than typed text (a draft is
+never inserted on its own), so a scanner that can start the run from
+`bar.0.1` has to be able to finish it: without targets here the workflow the
+bar exposes could not be completed without a pointer. The preview's three
+actions are `Button`s with the id `aosk.v1.draft.0.<index>`, built on the
+same `BarButton` as the bar, with the same fixed-index rule:
+
+| Index | Action | Name | Present when |
+|-------|--------|------|--------------|
+| 0 | Insert the draft | `Insert` | The preview is open |
+| 1 | Copy the draft | `Copy` | The preview is open |
+| 2 | Discard the draft | `Discard` | The preview is open |
+
+**Presence follows the preview.** It is a `Popup` on the keyboard window,
+and Qt prunes a closed popup's items from the accessibility tree, so the
+three exist exactly while a draft is showing; whether it is open feeds the
+revision beacon. Invoke goes through the same `run(action)` dispatcher a
+click does, flashes the button, and is refused once the preview has closed
+(`BarButton._scanActivatable`, so a target retained from before the close
+cannot fire). Insert types the draft through the verbatim path and closes
+the preview; Copy puts it on the clipboard and leaves the preview open;
+Discard closes it with nothing typed. A failed writing run with history
+off also opens this preview, holding the spoken request rather than a
+draft, and the same three targets apply.
 
 ## Names, and why they are not the keycaps
 
@@ -178,7 +269,8 @@ string. It changes whenever anything in this contract changes: window
 position and size, monitor or DPI, layout, compact view, active layer, any
 panel's visibility, any modifier or lock state, the prediction generation,
 whether the prediction row has any targets at all, the numpad's NumLock
-state, and keyboard visibility.
+state, which bar controls exist and their toggle states, whether the draft
+preview is open, and keyboard visibility.
 
 The last two were missing and are worth naming, because both changed the
 target set while leaving the string byte-identical, which a client following
@@ -448,7 +540,8 @@ rather than injecting desktop input.
 
 ## What the headless tests can and cannot hold
 
-`tests/test_qml_scan_targets.py` cannot see any of the above, because there
+`tests/test_qml_scan_targets.py` (and `tests/test_qml_scan_bar.py` for the
+`bar` section) cannot see any of the above, because there
 is no UIA provider under `offscreen`. What it holds is the half that is ours
 and the half that will actually rot: that every visible key carries an
 identity, that identities are unique and well-formed, that names are
@@ -464,7 +557,7 @@ PySide cannot read an attached `Accessible.*` property at all (`QQmlProperty`
 reports it invalid), so every accessible value is kept in a named property
 that the attached binding passes straight through. That is why
 `KeyButton` has `_scanName`, `_scanChecked`, `_scanDescription` and
-`_scanIgnored`, and why the `Accessible` block must stay free of logic: any
+`_scanIgnored` (and `BarButton` the same set, minus the description), and why the `Accessible` block must stay free of logic: any
 expression written directly into it is untestable.
 
 ---

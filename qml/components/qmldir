@@ -9,3 +9,4 @@ AnalyticsDashboard 1.0 AnalyticsDashboard.qml
 ModelVisualization 1.0 ModelVisualization.qml
 SnippetsWindow 1.0 SnippetsWindow.qml
 SymbolsWindow 1.0 SymbolsWindow.qml
+BarButton 1.0 BarButton.qml

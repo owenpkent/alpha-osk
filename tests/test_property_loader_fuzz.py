@@ -416,6 +416,13 @@ _DICTATION_BASE = {
     "silence_seconds": 5,
     "keyterms": ["alpha"],
     "stream_inserts": True,
+    "anthropic_key": "sk-ant",
+    "anthropic_key_protected": False,
+    "cleanup_enabled": True,
+    "number_format": "digits",
+    "writing_enabled": True,
+    "writing_style": "warm",
+    "history_enabled": True,
 }
 
 
@@ -429,9 +436,45 @@ def test_dictation_config_load_never_raises_and_stays_usable(blob: bytes) -> Non
         assert isinstance(cfg.max_seconds, int) and isinstance(cfg.silence_seconds, int)
         repr(cfg)
         cfg.masked_key()
+        cfg.masked_anthropic_key()
+        assert isinstance(cfg.anthropic_key, str) and isinstance(cfg.writing_style, str)
+        assert cfg.number_format in {"smart", "digits", "words"}
         cfg.save(path)
         again = DictationConfig.load(path)
         assert again.model == cfg.model and again.language == cfg.language
+
+
+_HISTORY_BASE = {
+    "schema_version": 1,
+    "entries": [
+        {
+            "id": "a" * 16,
+            "created": "2026-01-01T00:00:00+00:00",
+            "purpose": "dictate",
+            "raw": "raw",
+            "result": "result",
+            "cleaned": True,
+            "seconds": 2.5,
+        }
+    ],
+}
+
+
+@given(blob=_documents(_HISTORY_BASE))
+def test_dictation_history_load_never_raises_and_stays_usable(blob: bytes) -> None:
+    from src.dictation.history import MAX_ENTRIES, DictationHistory
+
+    with _scratch() as d:
+        directory = d / "history"
+        directory.mkdir()
+        _write(directory, "index.json", blob)
+        store = DictationHistory(directory)
+        entries = store.entries()
+        assert len(entries) <= MAX_ENTRIES
+        assert all(len(e["id"]) == 16 and isinstance(e["raw"], str) for e in entries)
+        new_id = store.add("dictate", "r", "x", False, 1.0, None)
+        assert new_id and store.delete(new_id)
+        store.clear()
 
 
 _TELEMETRY_BASE = {
