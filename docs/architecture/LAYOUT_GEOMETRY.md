@@ -48,9 +48,9 @@ each press to the nearest key is the swipe overlay's design flaw exactly (see
 every key it does not know about into a dead tap, and that bill was paid
 three times.
 
-`FunctionRow`'s deliberate `keySpacing * 4` between its three groups keeps a
-dead strip in the middle of it. That is the same trade as the gutter between
-two panels: a separator, not a gap nobody meant to leave.
+`FunctionRow` used to keep `keySpacing * 4` between its three groups, and so a
+dead strip in the middle of each. Since 2026-10-07 its groups sit one ordinary
+gap apart, at the owner's request, so the margins close that row too.
 
 Guarded by `tests/test_qml_compact_view.py::TestNoDeadStripBetweenKeys`, which
 measures the live MouseArea rather than recomputing the rectangle from the

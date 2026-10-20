@@ -2133,6 +2133,13 @@ class NgramPredictor:
                     self._MAX_CAPITALIZATIONS,
                 )
                 return
+            # Each entry is a word and the form it is shown in, both
+            # strings. A plausible key (``i``) survives the fragment strip
+            # below whatever its value is, so a NaN there used to reach
+            # save(), which refuses non-finite floats.
+            caps = {
+                k: v for k, v in caps.items() if isinstance(k, str) and isinstance(v, str) and v
+            }
 
             # Merge saved capitalization with built-in proper nouns
             # (user overrides win).  This has to happen *before* the

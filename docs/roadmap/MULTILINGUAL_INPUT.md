@@ -41,11 +41,11 @@ IME, already built for unrelated reasons.
 is no synthesis work for any of these languages.
 `WindowsKeySynthesizer.send_text` tries a scancode first and falls back
 per character to `KEYEVENTF_UNICODE`, and `_resolve_char_scancode`
-returns `None` for anything at or above `U+0080` (`windows.py:937`), so
+returns `None` for anything at or above `U+0080` (`windows.py::_resolve_char_scancode`), so
 `é`, `拼`, `漢` already take the Unicode path, and `_make_unicode_events`
 already emits UTF-16 surrogate pairs for supplementary characters
-(`windows.py:1115`, which covers the rarer CJK extension blocks). macOS
-goes through `CGEventKeyboardSetUnicodeString` (`macos.py:448`), which is
+(`windows.py::_make_unicode_events`, which covers the rarer CJK extension blocks). macOS
+goes through `CGEventKeyboardSetUnicodeString` (`macos.py`), which is
 the same contract. Linux `xdotool type` handles UTF-8 by remapping a
 spare keycode. A French `é` key added to a layout JSON right now would
 type correctly with zero Python changes.
@@ -58,7 +58,7 @@ common French typing complaint. This is a genuine advantage over the
 hardware we are emulating, and it is free.
 
 **Layouts are data, auto-discovered.** `_load_layouts` globs
-`data/layouts/*.json` (`keyboard_bridge.py:4963`) and
+`data/layouts/*.json` (`keyboard_bridge.py::_load_layouts`) and
 `getAvailableLayouts()` feeds the picker from whatever it found.
 `data/layouts/azerty.json` is a new layout with no Python and no QML
 change. `tests/test_layouts.py::TestEveryLayout` is parametrised over the
@@ -70,7 +70,7 @@ names and will not fire on it.
 path is already an IME commit.** This is the important one. A CJK IME
 needs to (a) show a ranked candidate list, (b) let the user pick one, and
 (c) replace the run of characters they typed with something that is not a
-prefix of it. `_insert_token_pill` (`keyboard_bridge.py:3089`) does
+prefix of it. `_insert_token_pill` (`keyboard_bridge.py`) does
 exactly (c) already: it computes `head = _raw_token[:len(_raw_token) -
 len(typed)]`, decides between a suffix insert and a select-and-overwrite
 based on whether the pill continues the typed run, and drives
@@ -82,15 +82,15 @@ documents at length (release sticky modifiers first, wrap in
 compat-mode rewires to BackSpace and retype) are exactly the invariants an
 IME commit needs, and they are already written down.
 
-**Edit-mode routing is already a preedit mechanism.** `setEditMode(true)`
-plus `editKeyTyped` / `editSpecialPressed` (`keyboard_bridge.py:1194`)
+**Edit-mode routing is already a preedit mechanism.** `beginEditSession(owner)`
+plus `editKeyTyped` / `editSpecialPressed` (`keyboard_bridge.py`)
 exists because our window cannot hold OS focus, so in-app text entry has
-to be routed rather than focused. An IME composition buffer is the third
-consumer of that pattern after the prediction-edit popup and the snippets
-editor: keystrokes go to a buffer we own instead of to the app, until the
-user commits. The plumbing, including the Ctrl chord table and the
-`_release_edit_chord_modifiers` fifth copy of the auto-release block, is
-already there.
+to be routed rather than focused. An IME composition buffer would be a further
+consumer of that pattern after the prediction-edit popup, the snippets
+editor and the key-action editor, each of which holds its own named edit
+session: keystrokes go to a buffer we own instead of to the app, until the
+user commits. The plumbing, including the Ctrl chord table and the shared
+`_release_sticky_modifiers` auto-release, is already there.
 
 **The vocabulary-pack system is already an import path for data we do not
 want to ship.** Packs are import-only by design, hardened against
@@ -114,15 +114,15 @@ prerequisite for the other two.
 | `_always_capitalize` | The English "I" family | French has no equivalent (`je` is lowercase mid-sentence). **Now `profile.always_capitalize`**, and empty is a valid value. |
 | Wordlist paths | Hardcoded `data/base_dictionary.txt` and `data/google-10000-...` | **Now `profile.dictionary` / `profile.frequency`**, the latter optional for a language whose dictionary already carries counts. |
 | `fuzzy_recognizer.py` key positions | Was hardcoded to `QWERTY_POSITIONS` with nothing ever passing `positions`, so Dvorak and Colemak users were corrected against a QWERTY board | **Fixed.** `positions_from_layout` derives the grid from the layout JSON and the bridge pushes it on every `setLayout`. AZERTY inherits it for free. |
-| `fuzzy_recognizer.py:528`, `ppm_predictor.py:613`, `transformer_predictor.py:138` | `c.isalpha() or c == "'"` filters | Unicode-safe for French by accident (`é`.isalpha() is True), but the apostrophe rule is English contraction logic, not French elision logic. |
+| `fuzzy_recognizer.py`, `ppm_predictor.py`, `transformer_predictor.py` | `c.isalpha() or c == "'"` filters | Unicode-safe for French by accident (`é`.isalpha() is True), but the apostrophe rule is English contraction logic, not French elision logic. |
 | `symspell.py` | `.lower()` and a character-agnostic deletion index | Actually works for French unmodified, but accent-insensitive lookup needs the index built on the folded form. Meaningless for CJK. |
 | `autocorrect.py` + `data/common_misspellings.txt` | English misspellings | Needs a French table or to be disabled. |
-| `text_patterns.py:109` `_PHONE_GROUPINGS` | `(10,)`, `(3,3,4)`, `(3,4)`, `(1,3,3,4)`, all NANP | French mobile numbers are `06 12 34 56 78`, grouping `(2,2,2,2,2)`. Never detected today. |
-| `text_patterns.py:116` `_STREET_SUFFIXES` + `_ADDRESS_RE` | US "123 Main Street" with a capitalised street-name anchor | French is `12 rue de la Paix`, lowercase `rue`, and the capitalised-word anchor lands on `Paix` at the wrong end. |
-| `text_patterns.py:64` `_NUMERIC_RUN_RE`, intelligent spacing | `3.14` decimal point, `1,000` thousands | French is `3,14` and `1 000` with a non-breaking space. Intelligent spacing suppresses the wrong marks. |
-| `text_patterns.py:354` `_AUTO_SPACED_PUNCTUATION` | Space *after* `.,:;` | French puts a narrow no-break space *before* `;`, `:`, `!`, `?`, `»` and after `«`. Chinese and Japanese use full-width punctuation with no space at all. |
-| `keyboard_bridge.py:1509`, `:1533`, `:1305` | `char.isalnum()` / `char.isalpha()` word-character gates | Already Unicode-correct. Accented Latin and CJK characters pass both. Nothing to do; noted so nobody "fixes" it. |
-| `KeyButton.qml:390` | `"Segoe UI, Inter, Ubuntu, Noto Sans, sans-serif"` | None of those carry CJK glyphs. Windows and macOS font fallback will find Yu Gothic / Microsoft YaHei / PingFang. A Linux AppImage on a minimal host will render tofu. |
+| `text_patterns.py` `_PHONE_GROUPINGS` | `(10,)`, `(3,3,4)`, `(3,4)`, `(1,3,3,4)`, all NANP | French mobile numbers are `06 12 34 56 78`, grouping `(2,2,2,2,2)`. Never detected today. |
+| `text_patterns.py` `_STREET_SUFFIXES` + `_ADDRESS_RE` | US "123 Main Street" with a capitalised street-name anchor | French is `12 rue de la Paix`, lowercase `rue`, and the capitalised-word anchor lands on `Paix` at the wrong end. |
+| `text_patterns.py` `_NUMERIC_RUN_RE`, intelligent spacing | `3.14` decimal point, `1,000` thousands | French is `3,14` and `1 000` with a non-breaking space. Intelligent spacing suppresses the wrong marks. |
+| `text_patterns.py` `_AUTO_SPACED_PUNCTUATION` | Space *after* `.,:;` | French puts a narrow no-break space *before* `;`, `:`, `!`, `?`, `»` and after `«`. Chinese and Japanese use full-width punctuation with no space at all. |
+| `keyboard_bridge.py` | `char.isalnum()` / `char.isalpha()` word-character gates | Already Unicode-correct. Accented Latin and CJK characters pass both. Nothing to do; noted so nobody "fixes" it. |
+| `KeyButton.qml` | `"Segoe UI, Inter, Ubuntu, Noto Sans, sans-serif"` | None of those carry CJK glyphs. Windows and macOS font fallback will find Yu Gothic / Microsoft YaHei / PingFang. A Linux AppImage on a minimal host will render tofu. |
 | Prediction bar (`Main.qml` `computeFit`) | Latin advance widths, drops low-ranked pills rather than eliding | Measures CJK correctly (`FontMetrics.advanceWidth` handles wide glyphs), but an IME needs **paging** through 20+ candidates, and this bar has no paging concept at all: it silently drops what does not fit. |
 
 ---
@@ -190,7 +190,7 @@ right-click alternates on their base letter (the right-click-shifted
 mechanism already resolves `kd.shifted` from the layout JSON and routes
 through `pressKeyLiteral`, which is exactly the right path since
 `pressKey` would lowercase it). Note that `_resolve_char_scancode`
-deliberately bails on dead-key virtual keys (`windows.py:958`), so even a
+deliberately bails on dead-key virtual keys (`windows.py`), so even a
 user whose *OS* layout is US-International gets the composed character
 rather than a dead-key state, because we fall through to Unicode.
 
@@ -388,7 +388,7 @@ there is a choice.
 
 Language data should not go in the installer.
 
-The current `data/` directory is about 250 KB. A French wordlist with
+The `data/` directory was about 250 KB when this was written; with the expanded vocabulary and the generated context seeds it is now a few megabytes. A French wordlist with
 frequencies is a few megabytes. A Chinese phrase dictionary is 10 to 30.
 `SKK-JISYO.L` alone is around 20. Bundling all of it multiplies the
 download for every user to serve a minority of them, and it lands on
