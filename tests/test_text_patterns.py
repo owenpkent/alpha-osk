@@ -23,11 +23,13 @@ import pytest
 
 from src.text_patterns import (
     detect_snippet_candidate,
+    is_address_in_progress,
     is_email,
     is_learnable_token,
     is_numeric_run,
     is_phone,
     label_for_kind,
+    strip_opening_punctuation,
     suppresses_auto_space,
     suppression_is_provisional,
 )
@@ -65,6 +67,20 @@ class TestEmailShape:
     def test_a_trailing_full_stop_is_not_part_of_the_address(self) -> None:
         """ "...email me at owen@example.com." is still an email."""
         assert is_email("owen@example.com.")
+
+
+class TestAddressInProgress:
+    """The gate for domain pills: whatever it admits, is_email must accept
+    once a domain is added, or the pill completes a non-address."""
+
+    @pytest.mark.parametrize("token", ["owen@", "o@g", "<owen@", '"owen@gm', "(o.p+t@"])
+    def test_recognised(self, token) -> None:
+        assert is_address_in_progress(token)
+        assert is_email(strip_opening_punctuation(token.split("@")[0]) + "@gmail.com")
+
+    @pytest.mark.parametrize("token", ["", "owen", "@owen", "'@", '"@ow', "!@", "ow en@", "<@"])
+    def test_rejected(self, token) -> None:
+        assert not is_address_in_progress(token)
 
 
 class TestPhoneShape:

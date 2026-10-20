@@ -2138,7 +2138,9 @@ class NgramPredictor:
             # below whatever its value is, so a NaN there used to reach
             # save(), which refuses non-finite floats.
             caps = {
-                k: v for k, v in caps.items() if isinstance(k, str) and isinstance(v, str) and v
+                k: v
+                for k, v in caps.items()
+                if isinstance(k, str) and k and isinstance(v, str) and v
             }
 
             # Merge saved capitalization with built-in proper nouns

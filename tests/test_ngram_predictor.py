@@ -1340,3 +1340,20 @@ class TestLearnWordRetiresTheCandidateEntry:
         predictor.learn("zzqother")
         predictor.learn_word("zzqcand")
         assert predictor._candidate_counts["zzqother"] == 1
+
+
+class TestCapitalizationLoadDropsNonStrings:
+    """Found by the nightly fuzz: a NaN loaded fine and then made the next
+    save raise, because json.dump refuses it."""
+
+    def test_a_nan_value_does_not_reach_the_next_save(self, tmp_path):
+        path = tmp_path / "bad.json"
+        path.write_text('{"capitalization": {"iphone": "iPhone", "x": NaN, "y": null, "": "Z"}}')
+        p = NgramPredictor()
+        p.load(path)
+        assert p.capitalization["iphone"] == "iPhone"
+        assert "x" not in p.capitalization and "y" not in p.capitalization
+        assert "" not in p.capitalization
+        out = tmp_path / "out.json"
+        p.save(out)
+        assert json.loads(out.read_text())["capitalization"]["iphone"] == "iPhone"
