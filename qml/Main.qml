@@ -713,6 +713,44 @@ Window {
         return true
     }
 
+    // The `bar` section: the suggestion bar's buttons and their title-bar
+    // twins.  One fixed index per FUNCTION, so an id always names the same
+    // control whichever of its siblings is hidden (a hidden control is absent,
+    // its index is not reused), and a twin carries its bar counterpart's id
+    // because the two are never visible together.  Row is always 0.  Indices
+    // are part of the contract: append, never renumber.
+    readonly property int barIndexMic: 0
+    readonly property int barIndexWrite: 1
+    readonly property int barIndexSymbols: 2
+    readonly property int barIndexSnippets: 3
+    readonly property int barIndexClear: 4
+    function scanBarId(idx) {
+        return root.scanTargetId("bar", 0, idx)
+    }
+    // What a bar button's click AND its Invoke run.  Each lives here rather
+    // than inline in the button so the two paths cannot drift.
+    function toggleSymbols() {
+        if (symbolsWindow.visible) symbolsWindow.hide()
+        else symbolsWindow.openPicker()
+    }
+    function toggleSnippets() {
+        if (snippetsWindow.visible) snippetsWindow.hide()
+        else snippetsWindow.openList()
+    }
+    function toggleDictationRun() {
+        if (keyboard) keyboard.toggleDictation()
+    }
+    function toggleWriting() {
+        if (root.dictationState === "idle") root.writeRunPending = true
+        keyboard.toggleAiWriting()
+        // Refused (privacy, a missing key): nothing started.
+        if (root.dictationState === "idle") root.writeRunPending = false
+    }
+    function clearSuggestionContext() {
+        if (keyboard) keyboard.resetContext()
+        contextClearedToast.flash()
+    }
+
     // One cheap thing for a scanner to poll.  Everything that can move a
     // target, change its label, or change whether it is there at all feeds
     // this string; the scanner reads one property at whatever rate its
@@ -746,6 +784,14 @@ Window {
         // Everything that decides whether the pills are there at all, not
         // just whether their words changed.
         root.predictionsArePresent ? 1 : 0,
+        // The `bar` section: which of its controls exist, and the two that
+        // report a toggle state.  suggestionsEnabled (below) decides bar
+        // copy versus title-bar twin.
+        root.dictationEnabled ? 1 : 0, root.writeAvailable ? 1 : 0,
+        (root.dictationActive && !root.writeRunPending) ? 1 : 0,
+        (root.dictationActive && root.writeRunPending) ? 1 : 0,
+        // The `draft` section exists exactly while the preview is open.
+        aiDraftPopup.opened ? 1 : 0,
         root.visibility,
         Math.round(root.x), Math.round(root.y),
         Math.round(root.width), Math.round(root.height),
@@ -861,6 +907,18 @@ Window {
     readonly property bool dictationActive: root.dictationState !== "idle"
     property string dictationTranscript: ""
     property real dictationLevel: 0.0
+    // Write with AI.  `writingConfigured` is pulled from the bridge by
+    // refreshDictation(): the setting is on AND both keys are stored.  The
+    // button needs all of it (and dictation itself) before it exists at all,
+    // because a pen that can only fail on click is worse than no pen.
+    property bool writingConfigured: false
+    readonly property bool writeAvailable: root.dictationEnabled && root.writingConfigured
+    // True from the moment the Write button starts a run until the run ends,
+    // so the mic and the pen do not both light up for one run.
+    property bool writeRunPending: false
+    readonly property bool dictationBusy: root.dictationState === "connecting"
+                                          || root.dictationState === "finishing"
+                                          || root.dictationState === "polishing"
 
     // Visualization
     property bool showVisualization: false
@@ -1096,6 +1154,8 @@ Window {
             return
         var d = keyboard.getDictationSettings()
         root.dictationConfigured = d.available && d.enabled && d.hasKey
+        root.writingConfigured = d.available && d.enabled && d.hasKey
+                                 && d.hasAnthropicKey && d.writingEnabled
         if (typeof settingsPanel === "undefined" || !settingsPanel)
             return
         if (withDevices)
@@ -1112,6 +1172,26 @@ Window {
         settingsPanel.dictationSilenceSeconds = d.silenceSeconds
         settingsPanel.dictationKeyterms = d.keyterms
         settingsPanel.dictationStreamInserts = d.streamInserts
+        settingsPanel.dictationHasAnthropicKey = d.hasAnthropicKey
+        settingsPanel.dictationMaskedAnthropicKey = d.maskedAnthropicKey
+        settingsPanel.dictationCleanupEnabled = d.cleanupEnabled
+        settingsPanel.dictationNumberFormat = d.numberFormat
+        settingsPanel.dictationNumberFormats = d.numberFormats
+        settingsPanel.dictationWritingEnabled = d.writingEnabled
+        settingsPanel.dictationWritingStyle = d.writingStyle
+        settingsPanel.dictationHistoryEnabled = d.historyEnabled
+        root.refreshDictationHistory()
+    }
+
+    // The history list is read on its own, and again whenever the bridge says
+    // it changed, rather than with the rest of the record: it can grow while
+    // the settings window is closed (a dictation finishes), and re-reading
+    // 20 small entries is cheap.
+    function refreshDictationHistory() {
+        if (!keyboard || typeof settingsPanel === "undefined" || !settingsPanel)
+            return
+        settingsPanel.dictationHistory = keyboard.getDictationHistory()
+        settingsPanel.dictationHistoryConfirm = ""
     }
 
     // Apply a Ctrl chord the bridge resolved for us to `field`, returning
@@ -1566,8 +1646,16 @@ Window {
         // Dictation
         function onDictationStateChanged(state) {
             root.dictationState = state
-            if (state === "idle")
+            if (state === "idle") {
                 root.dictationLevel = 0.0
+                root.writeRunPending = false
+            }
+        }
+        function onDictationDraftReady(draft) { aiDraftPopup.show(draft) }
+        function onDictationHistoryChanged() { root.refreshDictationHistory() }
+        function onDictationPlaybackChanged(playingId) {
+            if (typeof settingsPanel !== "undefined" && settingsPanel)
+                settingsPanel.dictationPlayingId = playingId
         }
         function onDictationTranscriptChanged(text) { root.dictationTranscript = text }
         function onDictationLevelChanged(level) { root.dictationLevel = level }
@@ -2095,8 +2183,12 @@ Window {
                 // because of an unrelated setting is not acceptable.  The
                 // clear-context button has always had that hole; this one
                 // does not get to inherit it.
-                Rectangle {
+                Comp.BarButton {
+                    id: symbolsTwin
                     objectName: "symbolsTitleBarButton"
+                    targetId: root.scanBarId(root.barIndexSymbols)
+                    scanName: qsTr("Symbols and emoji")
+                    onActivated: root.toggleSymbols()
                     visible: !root.suggestionsEnabled
                     width: visible ? 28 : 0
                     height: 24
@@ -2135,15 +2227,16 @@ Window {
                         anchors.fill: parent
                         hoverEnabled: true
                         cursorShape: Qt.PointingHandCursor
-                        onClicked: {
-                            if (symbolsWindow.visible) symbolsWindow.hide()
-                            else symbolsWindow.openPicker()
-                        }
+                        onClicked: symbolsTwin.activated()
                     }
                 }
 
-                Rectangle {
+                Comp.BarButton {
+                    id: snippetsTwin
                     objectName: "snippetsTitleBarButton"
+                    targetId: root.scanBarId(root.barIndexSnippets)
+                    scanName: qsTr("Snippets")
+                    onActivated: root.toggleSnippets()
                     visible: !root.suggestionsEnabled
                     width: visible ? 28 : 0
                     height: 24
@@ -2172,10 +2265,7 @@ Window {
                         anchors.fill: parent
                         hoverEnabled: true
                         cursorShape: Qt.PointingHandCursor
-                        onClicked: {
-                            if (snippetsWindow.visible) snippetsWindow.hide()
-                            else snippetsWindow.openList()
-                        }
+                        onClicked: snippetsTwin.activated()
                     }
                 }
 
@@ -2186,8 +2276,52 @@ Window {
                 // unrelated setting must not be able to remove the only way
                 // into it.  Hidden whenever the bar button is showing, so
                 // there is never a choice of two.
-                Rectangle {
+                // Write with AI mirror, for the same reason as the mic's.
+                Comp.BarButton {
+                    id: writeTwin
+                    objectName: "writeWithAiTitleBarButton"
+                    targetId: root.scanBarId(root.barIndexWrite)
+                    scanName: qsTr("Write with AI")
+                    isToggleTarget: true
+                    scanOn: root.writeRunPending && root.dictationActive
+                    onActivated: root.toggleWriting()
+                    visible: !root.suggestionsEnabled && root.writeAvailable
+                    width: visible ? 28 : 0
+                    height: 24
+                    radius: 4
+                    color: (root.writeRunPending && root.dictationActive) ? root.themeAccent
+                           : (writeTitleBtn.containsMouse ? "#444" : "transparent")
+
+                    ToolTip.visible: writeTitleBtn.containsMouse
+                    ToolTip.text: qsTr("Write with AI: say what to write, then review the draft")
+                    ToolTip.delay: 400
+
+                    Comp.StrokeIcon {
+                        anchors.centerIn: parent
+                        width: 16
+                        height: 16
+                        paths: ["M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"]
+                        ink: (root.writeRunPending && root.dictationActive)
+                             ? root.inkOn(root.themeAccent) : "#999"
+                    }
+
+                    MouseArea {
+                        id: writeTitleBtn
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: writeTwin.activated()
+                    }
+                }
+
+                Comp.BarButton {
+                    id: micTwin
                     objectName: "dictationTitleBarButton"
+                    targetId: root.scanBarId(root.barIndexMic)
+                    scanName: qsTr("Dictate")
+                    isToggleTarget: true
+                    scanOn: root.dictationActive && !root.writeRunPending
+                    onActivated: root.toggleDictationRun()
                     visible: !root.suggestionsEnabled && root.dictationEnabled
                     width: visible ? 28 : 0
                     height: 24
@@ -2221,7 +2355,7 @@ Window {
                         anchors.fill: parent
                         hoverEnabled: true
                         cursorShape: Qt.PointingHandCursor
-                        onClicked: keyboard.toggleDictation()
+                        onClicked: micTwin.activated()
                     }
                 }
 
@@ -2412,7 +2546,7 @@ Window {
                 // number rather than a hardcoded reserve below, because the
                 // reserve went from one button to two to three and each time
                 // it was the formula that had to be re-derived by hand.
-                property int predButtonCount: 3
+                property int predButtonCount: 3 + (root.writeAvailable ? 1 : 0)
                 // Width the pills must keep clear so the row can never render
                 // underneath the buttons.  Derived from the same numbers the
                 // Row is laid out from, because a reserve that is merely
@@ -2575,16 +2709,26 @@ Window {
                     anchors.verticalCenter: parent.verticalCenter
                     visible: root.suggestionsEnabled && root.dictationEnabled
 
-                    Rectangle {
+                    Comp.BarButton {
                         id: micPill
                         objectName: "dictationMicButton"
+                        targetId: root.scanBarId(root.barIndexMic)
+                        scanName: qsTr("Dictate")
+                        isToggleTarget: true
+                        scanOn: root.dictationActive && !root.writeRunPending
+                        onActivated: root.toggleDictationRun()
                         width: predBar.predPillHeight
                         height: predBar.predPillHeight
                         radius: width / 2
 
+                        // A run started from the Write button belongs to the pen,
+                        // so the mic stays idle-looking for it.
                         readonly property bool listening: root.dictationState === "listening"
-                        readonly property bool busy: root.dictationState === "connecting"
-                                                     || root.dictationState === "finishing"
+                                                          && !root.writeRunPending
+                        // `polishing` is the transcript being with Claude: busy,
+                        // same pulse as connecting and finishing.
+                        readonly property bool busy: root.dictationBusy
+                                                     && !root.writeRunPending
                         // "Enabled but unusable" is a real state (the toggle is
                         // on and no API key has been entered yet) and it has to
                         // read as unavailable rather than as broken, so the
@@ -2695,7 +2839,7 @@ Window {
                             anchors.fill: parent
                             hoverEnabled: true
                             cursorShape: Qt.PointingHandCursor
-                            onClicked: keyboard.toggleDictation()
+                            onClicked: micPill.activated()
                         }
 
                         Behavior on color { ColorAnimation { duration: 100 } }
@@ -2742,7 +2886,10 @@ Window {
                               ? root.dictationTranscript
                               : (root.dictationState === "connecting" ? qsTr("Connecting...")
                                  : (root.dictationState === "finishing" ? qsTr("Finishing...")
-                                    : qsTr("Listening...")))
+                                    : (root.dictationState === "polishing"
+                                       ? (root.writeRunPending ? qsTr("Writing...") : qsTr("Polishing..."))
+                                       : (root.writeRunPending ? qsTr("Say what to write...")
+                                                               : qsTr("Listening...")))))
                     }
                 }
 
@@ -3151,9 +3298,75 @@ Window {
                     spacing: predBar.predButtonGap
                     visible: root.suggestionsEnabled
 
-                Rectangle {
+                // Write with AI.  Present only when dictation, writing and
+                // both API keys are all in place (root.writeAvailable), and
+                // first in this right-anchored Row so every button that was
+                // already here keeps its position: the ring in particular is
+                // pressed from muscle memory.  predBar.predButtonCount counts
+                // it.
+                Comp.BarButton {
+                    id: writePill
+                    objectName: "writeWithAiBarButton"
+                    targetId: root.scanBarId(root.barIndexWrite)
+                    scanName: qsTr("Write with AI")
+                    isToggleTarget: true
+                    scanOn: writePill.active
+                    onActivated: root.toggleWriting()
+                    visible: root.writeAvailable
+                    width: predBar.predPillHeight
+                    height: predBar.predPillHeight
+                    radius: width / 2
+                    property real pulse: 1.0
+                    readonly property bool active: root.writeRunPending && root.dictationActive
+                    readonly property bool busy: active && root.dictationBusy
+                    color: writePill.active ? root.themeAccent
+                           : (writeBarBtn.containsMouse ? Qt.lighter(root.themeKeyColor, 1.3)
+                                                        : Qt.rgba(0, 0, 0, 0.18))
+                    border.color: writePill.active || writeBarBtn.containsMouse
+                                  ? root.themeAccent : Qt.rgba(1, 1, 1, 0.18)
+                    border.width: 1
+                    opacity: writePill.pulse
+
+                    ToolTip.visible: writeBarBtn.containsMouse
+                    ToolTip.text: writePill.active ? qsTr("Stop and write")
+                                  : qsTr("Write with AI: say what to write, then review the draft")
+                    ToolTip.delay: 400
+
+                    // Feather "edit-2", MIT, (c) 2013-2023 Cole Bemis.
+                    Comp.StrokeIcon {
+                        anchors.fill: parent
+                        paths: ["M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"]
+                        boxFraction: 0.58
+                        ink: writePill.active ? root.inkOn(root.themeAccent)
+                             : (writeBarBtn.containsMouse ? root.themeTextColor : "#bbb")
+                    }
+
+                    // Same ownership argument as the mic's pulse.
+                    SequentialAnimation {
+                        running: writePill.busy
+                        loops: Animation.Infinite
+                        onRunningChanged: if (!running) writePill.pulse = 1.0
+                        NumberAnimation { target: writePill; property: "pulse"; to: 0.45; duration: 420 }
+                        NumberAnimation { target: writePill; property: "pulse"; to: 1.0; duration: 420 }
+                    }
+
+                    MouseArea {
+                        id: writeBarBtn
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: writePill.activated()
+                    }
+
+                    Behavior on color { ColorAnimation { duration: 100 } }
+                }
+
+                Comp.BarButton {
                     id: symbolsPill
                     objectName: "symbolsBarButton"
+                    targetId: root.scanBarId(root.barIndexSymbols)
+                    scanName: qsTr("Symbols and emoji")
+                    onActivated: root.toggleSymbols()
                     width: predBar.predPillHeight
                     height: predBar.predPillHeight
                     radius: width / 2
@@ -3199,18 +3412,18 @@ Window {
                         anchors.fill: parent
                         hoverEnabled: true
                         cursorShape: Qt.PointingHandCursor
-                        onClicked: {
-                            if (symbolsWindow.visible) symbolsWindow.hide()
-                            else symbolsWindow.openPicker()
-                        }
+                        onClicked: symbolsPill.activated()
                     }
 
                     Behavior on color { ColorAnimation { duration: 100 } }
                 }
 
-                Rectangle {
+                Comp.BarButton {
                     id: snippetsPill
                     objectName: "snippetsBarButton"
+                    targetId: root.scanBarId(root.barIndexSnippets)
+                    scanName: qsTr("Snippets")
+                    onActivated: root.toggleSnippets()
                     width: predBar.predPillHeight
                     height: predBar.predPillHeight
                     radius: width / 2
@@ -3241,18 +3454,18 @@ Window {
                         anchors.fill: parent
                         hoverEnabled: true
                         cursorShape: Qt.PointingHandCursor
-                        onClicked: {
-                            if (snippetsWindow.visible) snippetsWindow.hide()
-                            else snippetsWindow.openList()
-                        }
+                        onClicked: snippetsPill.activated()
                     }
 
                     Behavior on color { ColorAnimation { duration: 100 } }
                 }
 
-                Rectangle {
+                Comp.BarButton {
                     id: clearCtxPill
                     objectName: "clearContextButton"
+                    targetId: root.scanBarId(root.barIndexClear)
+                    scanName: qsTr("Clear suggestion context")
+                    onActivated: root.clearSuggestionContext()
                     width: predBar.predPillHeight
                     height: predBar.predPillHeight
                     radius: width / 2
@@ -3315,10 +3528,7 @@ Window {
                         anchors.fill: parent
                         hoverEnabled: true
                         cursorShape: Qt.PointingHandCursor
-                        onClicked: {
-                            if (keyboard) keyboard.resetContext()
-                            contextClearedToast.flash()
-                        }
+                        onClicked: clearCtxPill.activated()
                     }
 
                     Behavior on color { ColorAnimation { duration: 100 } }
@@ -5178,6 +5388,152 @@ Window {
             }
         }
 
+        // AI draft preview.  The result of Write with AI is never typed on
+        // its own: it lands here and the user decides.  Built like the other
+        // edit popups (non-modal, Escape only, parked at the top) because
+        // every OSK key click is a press-outside and a modal overlay would
+        // swallow the keyboard.  It takes no edit session: the draft is
+        // read-only, so nothing needs to be typed into it.
+        Popup {
+            id: aiDraftPopup
+            objectName: "aiDraftPopup"
+            parent: Overlay.overlay
+            x: (root.width - width) / 2
+            y: 36
+            width: Math.min(root.width - 24, 460)
+            height: 250
+            modal: false
+            dim: false
+            closePolicy: Popup.CloseOnEscape
+
+            property string draft: ""
+
+            function show(text) {
+                aiDraftPopup.draft = text
+                open()
+            }
+
+            // Insert / Copy / Discard.  Functions rather than inline handlers
+            // so a headless test can drive them without a pointer.  `run`
+            // is the one dispatcher a click and a UIA Invoke both reach
+            // (BarButton raises `activated` for either), so the two paths
+            // cannot drift: a switch user who started the writing run has
+            // to be able to finish it here.
+            function run(action) {
+                if (action === "insert") insertDraft()
+                else if (action === "copy") copyDraft()
+                else close()
+            }
+            function insertDraft() {
+                if (keyboard && keyboard.insertDictationDraft(aiDraftPopup.draft))
+                    aiDraftPopup.close()
+                else
+                    snippetProblemToast.flash(qsTr("Could not insert the draft. Close any open editor and try again."))
+            }
+            function copyDraft() {
+                if (keyboard && keyboard.copyDictationDraft(aiDraftPopup.draft))
+                    editSavedToast.flash()
+                else
+                    snippetProblemToast.flash(qsTr("Could not copy the draft"))
+            }
+
+            onClosed: aiDraftPopup.draft = ""
+
+            // Every colour here is the theme's: no literal hue, the same
+            // rule the keys follow.  Insert wears the accent wash (walked
+            // down until the theme's text clears 4.5:1), the other two
+            // are plain keys.
+            background: Rectangle {
+                color: root.themeBackground
+                border.color: root.themeAccent
+                border.width: 1.5
+                radius: 10
+            }
+
+            contentItem: ColumnLayout {
+                spacing: 8
+
+                Text {
+                    text: qsTr("Draft")
+                    textFormat: Text.PlainText
+                    color: root.themeTextColor
+                    opacity: 0.7
+                    font.pixelSize: 12
+                    font.bold: true
+                }
+
+                ScrollView {
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    clip: true
+
+                    Text {
+                        objectName: "aiDraftText"
+                        width: aiDraftPopup.width - 48
+                        text: aiDraftPopup.draft
+                        textFormat: Text.PlainText
+                        wrapMode: Text.Wrap
+                        color: root.themeTextColor
+                        font.pixelSize: 14
+                    }
+                }
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 8
+
+                    // The three actions are switch-scan targets (section
+                    // `draft` of docs/architecture/UIA_TARGETS.md): the
+                    // writing run is invokable from the bar, so its result
+                    // has to be acceptable without a pointer too.  Index
+                    // is fixed per action (0 Insert, 1 Copy, 2 Discard);
+                    // presence follows the popup, which Qt prunes from the
+                    // accessibility tree while closed.
+                    Repeater {
+                        model: [
+                            { id: "insert", label: qsTr("Insert") },
+                            { id: "copy", label: qsTr("Copy") },
+                            { id: "discard", label: qsTr("Discard") }
+                        ]
+                        delegate: Comp.BarButton {
+                            id: draftBtn
+                            objectName: "aiDraft_" + modelData.id
+                            targetId: root.scanTargetId("draft", 0, index)
+                            scanName: modelData.label
+                            onActivated: aiDraftPopup.run(modelData.id)
+                            Layout.fillWidth: true
+                            Layout.preferredHeight: 44
+                            radius: 8
+                            readonly property bool isInsert: modelData.id === "insert"
+                            readonly property color restFill:
+                                isInsert ? root.accentKeyColor : root.themeKeyColor
+                            color: draftBtnArea.containsMouse ? Qt.lighter(restFill, 1.2) : restFill
+                            border.color: isInsert ? root.themeAccent : root.themeBorder
+                            border.width: 1
+
+                            Text {
+                                anchors.centerIn: parent
+                                text: modelData.label
+                                textFormat: Text.PlainText
+                                color: root.themeTextColor
+                                font.pixelSize: 14
+                                font.bold: true
+                            }
+
+                            MouseArea {
+                                id: draftBtnArea
+                                objectName: "aiDraftArea_" + modelData.id
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: draftBtn.activated()
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         // Dictation failures.  Same argument as snippetProblemToast: the
         // mic button is a control whose failure is silent (no transcript
         // ever arrives, and the button returns to idle looking exactly as
@@ -5189,9 +5545,15 @@ Window {
             objectName: "dictationErrorToast"
             parent: Overlay.overlay
             x: (root.width - width) / 2
-            y: 36
-            width: Math.min(root.width - 24, dictationErrorText.implicitWidth + 28)
-            height: 32
+            // Parked under the draft preview while that is open: a failed
+            // writing run with history off shows the spoken request there
+            // and explains itself here, and both default to the top.
+            y: aiDraftPopup.opened ? aiDraftPopup.y + aiDraftPopup.height + 8 : 36
+            width: Math.min(root.width - 24, 420)
+            // Wraps to two lines: the cleanup and writing failures name a
+            // reason and a consequence ("Inserted as spoken"), which do not
+            // fit one line at the default width.
+            height: Math.max(32, dictationErrorText.contentHeight + 16)
             modal: false
             dim: false
             // Every OSK key click is a press-outside.
@@ -5212,6 +5574,8 @@ Window {
                 color: "#f0d0a0"
                 font.pixelSize: 12
                 textFormat: Text.PlainText
+                wrapMode: Text.WordWrap
+                maximumLineCount: 2
                 elide: Text.ElideRight
                 verticalAlignment: Text.AlignVCenter
             }
@@ -5650,6 +6014,54 @@ Window {
                         keyboard.clearDictationApiKey()
                         root.refreshDictation(true)
                     }
+                } else if (setting === "dictationAnthropicKey") {
+                    if (keyboard) {
+                        if (keyboard.setDictationAnthropicKey(value)) {
+                            editSavedToast.flash()
+                            root.refreshDictation(true)
+                        } else {
+                            dictationErrorToast.flash(qsTr("Could not save that key"))
+                        }
+                    }
+                } else if (setting === "dictationAnthropicKeyCleared") {
+                    if (keyboard) {
+                        keyboard.clearDictationAnthropicKey()
+                        root.refreshDictation(true)
+                    }
+                } else if (setting === "dictationCleanupEnabled") {
+                    if (keyboard) { keyboard.setDictationCleanupEnabled(value); root.refreshDictation(true) }
+                } else if (setting === "dictationNumberFormat") {
+                    if (keyboard) { keyboard.setDictationNumberFormat(value); root.refreshDictation(true) }
+                } else if (setting === "dictationWritingEnabled") {
+                    if (keyboard) { keyboard.setDictationWritingEnabled(value); root.refreshDictation(true) }
+                } else if (setting === "dictationWritingStyle") {
+                    if (keyboard) {
+                        if (keyboard.setDictationWritingStyle(value)) {
+                            editSavedToast.flash()
+                            root.refreshDictation(true)
+                        } else {
+                            dictationErrorToast.flash(qsTr("Could not save that style"))
+                        }
+                    }
+                } else if (setting === "dictationHistoryEnabled") {
+                    if (keyboard) { keyboard.setDictationHistoryEnabled(value); root.refreshDictation(true) }
+                } else if (setting === "dictationHistoryPlay") {
+                    if (keyboard && !keyboard.playDictationHistory(value))
+                        dictationErrorToast.flash(qsTr("That recording could not be played"))
+                } else if (setting === "dictationHistoryStop") {
+                    if (keyboard) keyboard.stopDictationPlayback()
+                } else if (setting === "dictationHistoryCopy") {
+                    if (keyboard) {
+                        if (keyboard.copyDictationHistory(value)) editSavedToast.flash()
+                        else dictationErrorToast.flash(qsTr("Nothing to copy"))
+                    }
+                } else if (setting === "dictationHistoryReprocess") {
+                    if (keyboard && !keyboard.reprocessDictationHistory(value))
+                        dictationErrorToast.flash(qsTr("Could not reprocess that entry"))
+                } else if (setting === "dictationHistoryDelete") {
+                    if (keyboard) keyboard.deleteDictationHistory(value)
+                } else if (setting === "dictationHistoryClear") {
+                    if (keyboard) keyboard.clearDictationHistory()
                 } else if (setting === "dictationModel") {
                     if (keyboard) { keyboard.setDictationModel(value); root.refreshDictation(true) }
                 } else if (setting === "dictationLanguage") {

@@ -7,7 +7,7 @@ Four tools that together form a complete adaptive input platform:
 | Tool | Input | Output | Purpose |
 |------|-------|--------|---------|
 | **Alpha-OSK** | Mouse clicks on virtual keys | Keystrokes (SendInput) | On-screen keyboard with AI prediction |
-| **MacroVox** | Voice (microphone) | Text (clipboard → paste) | Voice dictation with AI cleanup |
+| **MacroVox** | Voice (microphone) | Text (clipboard → paste) | Standalone voice dictation with a global hotkey (its AI cleanup, writing and history are now also native in Alpha-OSK) |
 | **Octavium** | Mouse clicks on virtual keys/pads | MIDI notes/CC | Virtual MIDI keyboard for music |
 | **Nimbus** | Mouse drag/click on virtual sticks/buttons | Joystick (vJoy/ViGEm) | Virtual game controller |
 
@@ -23,7 +23,7 @@ All four are:
 A person with muscular dystrophy, cerebral palsy, or a spinal cord injury may only be able to use a mouse (or trackball, head tracker, eye gaze). They need:
 
 - **Text input** → Alpha-OSK (keyboard predictions reduce effort)
-- **Voice input** → Alpha-OSK's own dictation for plain speech-to-text (see [`../architecture/DICTATION.md`](../architecture/DICTATION.md)), or MacroVox when the transcript needs AI cleanup or agentic writing
+- **Voice input** → Alpha-OSK's own dictation (see [`../architecture/DICTATION.md`](../architecture/DICTATION.md)), which now includes optional AI cleanup, Write with AI and a local history on the user's own Anthropic key. MacroVox remains only for its global hotkey
 - **Game input** → Nimbus (mouse → joystick with sensitivity curves + tremor filtering)
 - **Music input** → Octavium (mouse → MIDI with scale quantization + latch)
 
@@ -82,7 +82,7 @@ Each app can launch and trigger the others.
 
 | From | To | Trigger |
 |------|----|---------|
-| Alpha-OSK | MacroVox | A launch control of its own, **not** the mic button (see the note below) |
+| Alpha-OSK | MacroVox | Optional launch control; no longer needed for AI features (see the note below) |
 | Alpha-OSK | Nimbus | Gamepad icon → launch Nimbus with gaming profile |
 | Alpha-OSK | Octavium | Music icon → launch Octavium with DAW profile |
 | Nimbus | Alpha-OSK | Button mapped to "open keyboard" |
@@ -93,10 +93,11 @@ Each app can launch and trigger the others.
 > dictation ([`../architecture/DICTATION.md`](../architecture/DICTATION.md)):
 > the microphone at the left end of the suggestion bar starts and stops
 > Alpha-OSK's own Deepgram run, and there is a title-bar mirror of it when
-> suggestions are switched off. This does not retire the MacroVox hook, since
-> the two answer different questions (MacroVox adds AI transcript cleanup and
-> agentic writing on top of raw dictation), but that hook needs a control of
-> its own rather than an icon a real feature is using.
+> suggestions are switched off. As of 2026-10-11 native dictation also does
+> AI transcript cleanup and agentic writing (Write with AI), which were the
+> reasons for a MacroVox hook, so the hook is now optional: worth building
+> only for someone who wants MacroVox's global hotkey, and it still needs a
+> control of its own rather than the mic button.
 
 ### Phase 3: Profile Auto-Switch
 
@@ -209,7 +210,7 @@ Since Alpha-OSK, Octavium, and Nimbus are all PySide6/Qt, their widgets can be e
 ## Recommended Next Steps
 
 1. **Document the ecosystem** (this file) ✅
-2. **Alpha-OSK Phase 2**: gamepad icon (Nimbus), music icon (Octavium) in the title bar. The MacroVox hook needs a control that is not the mic button, which native dictation now owns.
+2. **Alpha-OSK Phase 2**: gamepad icon (Nimbus), music icon (Octavium) in the title bar. A MacroVox hook is optional now that cleanup and writing are native; if built, it needs a control that is not the mic button, which native dictation owns.
 3. **Shared foreground monitor**: Alpha-OSK broadcasts foreground window changes via named pipe; Nimbus and Octavium subscribe
 4. **Nimbus keyboard output**: When Nimbus adds keyboard output mode, it becomes a direct complement to Alpha-OSK (joystick for movement, keyboard for text)
 5. **Unified profile format**: JSON schema that all four tools can read for auto-switch rules

@@ -6,7 +6,7 @@
 
 **The smartest keyboard you'll never touch.**
 
-Type into any Windows or Linux app by clicking on-screen keys. Built for people who can't comfortably use a physical keyboard. Prediction that learns as you go, with no LLM, no GPU, and nothing leaving your machine. Optional voice dictation is the one exception, and it is off until you turn it on.
+Type into any Windows or Linux app by clicking on-screen keys. Built for people who can't comfortably use a physical keyboard. Prediction that learns as you go, with no LLM, no GPU, and nothing leaving your machine. Optional voice dictation, and its optional AI features, are the one exception, and they are off until you turn them on.
 
 [![Website](https://img.shields.io/badge/website-alphaosk.com-4a9eff.svg)](https://alphaosk.com)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
@@ -60,7 +60,7 @@ You're a hiring manager, reviewer, or accessibility researcher checking the rigo
 
 Alpha-OSK is an on-screen keyboard for Windows and Linux. You click keys in the keyboard window to type into whatever other application has focus: editor, browser, terminal, chat client, even a game or a remote-desktop session. The keyboard never steals focus from the app you're typing into, stays above other windows (unless you turn *Always on Top* off), and remembers its size and position between sessions.
 
-As you click, the keyboard learns your vocabulary and surfaces predictions as clickable pills above the keys. Accept a pill to skip the rest of the word. Right-click a pill to teach the keyboard your preferences. Prediction and learning run entirely on your machine: no model upload, no cloud round-trip, no LLM. Optional voice dictation is the single feature that sends anything out, it is off by default, and it needs a recogniser API key of your own before it does anything at all. The project exists because the author is a wheelchair user with muscular dystrophy and the keyboards shipped with Windows and Linux are inadequate for daily use. Every design decision in here is grounded in that constraint.
+As you click, the keyboard learns your vocabulary and surfaces predictions as clickable pills above the keys. Accept a pill to skip the rest of the word. Right-click a pill to teach the keyboard your preferences. Prediction and learning run entirely on your machine: no model upload, no cloud round-trip, no LLM. Optional voice dictation, with its optional AI cleanup and writing, is the single feature that sends anything out, it is off by default, and it needs API keys of your own before it does anything at all. The project exists because the author is a wheelchair user with muscular dystrophy and the keyboards shipped with Windows and Linux are inadequate for daily use. Every design decision in here is grounded in that constraint.
 
 ## Install
 
@@ -171,10 +171,10 @@ Settings ⚙ → Appearance → Theme. Nine choices including Blackboard for hig
 Settings ⚙ → Appearance → Sound & Opacity → Opacity slider.
 
 **Where does my data live?**
-Windows: `%APPDATA%\alpha-osk\`. Linux: `~/.config/alpha-osk/`. The model files are `models/ngram_model.json` and `models/ppm_model.json`. Lifetime stats are in `analytics.json`, saved snippets in `snippets.json`, and dictation settings in `dictation.json`. Settings → Data & Privacy → Data Backup writes all of it (plus any imported vocabulary packs) to a single `.zip` you can move between machines.
+Windows: `%APPDATA%\alpha-osk\`. Linux: `~/.config/alpha-osk/`. The model files are `models/ngram_model.json` and `models/ppm_model.json`. Lifetime stats are in `analytics.json`, saved snippets in `snippets.json`, and dictation settings in `dictation.json`. Dictation history (recent recordings and their text) is in `dictation_history/`. Settings → Data & Privacy → Data Backup writes the model, stats and snippets (plus any imported vocabulary packs) to a single `.zip` you can move between machines; your API keys and dictation history stay on this machine.
 
 **Does any of this send my typing to a server?**
-Your typing, no. Your voice, only if you switch on Dictation and supply your own Deepgram API key: while the microphone is open that audio goes to Deepgram to be transcribed, and at no other time. Dictation is off by default and inert without a key. See [`docs/PRIVACY.md`](docs/PRIVACY.md).
+Your typing, no. Your voice, only if you switch on Dictation and supply your own Deepgram API key: while the microphone is open that audio goes to Deepgram to be transcribed, and at no other time. If you also switch on AI cleanup or Write with AI and add your own Anthropic key, the transcribed text (not the audio) goes to Anthropic. Dictation and both AI features are off by default and inert without a key. See [`docs/PRIVACY.md`](docs/PRIVACY.md).
 
 The other thing that can leave the machine is anonymous usage stats, and only if you agree to them. They are off in the app by default (*Settings > Data & Privacy > Privacy*, "Share anonymous usage stats"). The Windows installer asks the same question on its own page, showing the whole message, and its box is ticked, so clicking straight past it agrees; untick it to decline. With it on, the keyboard sends a weekly report of ten fields: your lifetime counters (keystrokes, words, predictions used, keystrokes saved, minutes, sessions, suggestions offered), the app version, your OS, and a random ID that is replaced if you turn the setting off and on again. Never content, word frequencies, key frequencies, IP, or hostname. See [`docs/PRIVACY.md`](docs/PRIVACY.md).
 
@@ -202,6 +202,7 @@ Yes on Windows (Unicode keystroke injection covers anything in BMP and supplemen
 | macOS port | In progress |
 | Federated learning | Designed, not implemented |
 | Voice dictation (opt-in, bring your own Deepgram key) | Shipping |
+| AI cleanup, Write with AI, dictation history (opt-in, bring your own Anthropic key) | Shipping |
 
 ## Features
 
@@ -223,7 +224,10 @@ Yes on Windows (Unicode keystroke injection covers anything in BMP and supplemen
 - Dictation: click the microphone at the left of the suggestion bar, speak, click again. There is nothing to hold down, which matters if a sustained press is exactly the gesture you cannot make
 - What you have said so far shows in the suggestion bar; each finished phrase is typed into whatever app you were already using
 - Stops itself after a few seconds of silence, so a click that misses cannot leave the microphone open. Both that delay and a maximum run length are adjustable
-- Off by default and inert until you add your own Deepgram API key. Audio is sent only while the microphone is open, never recorded to disk, and a focused password field cancels a run outright (see [Privacy](docs/PRIVACY.md))
+- Off by default and inert until you add your own Deepgram API key. Audio is sent only while the microphone is open, and a focused password field cancels a run outright (see [Privacy](docs/PRIVACY.md))
+- AI cleanup (optional, your own Anthropic key): the run is held back until you stop, tidied by Claude, and typed once. If it fails, your words are typed as you said them
+- Write with AI (optional): speak what you want written, such as an email, and get a draft to Insert, Copy or Discard. Nothing is typed until you choose
+- History (on by default, kept only on your computer, not in backups): the last 20 runs with their audio, to play back, copy, re-clean or delete
 
 ### Prediction
 
@@ -324,7 +328,7 @@ For security issues, follow [`SECURITY.md`](SECURITY.md). Do not file public iss
 ## Privacy
 
 - Learning is on-device only. Your typing never leaves your computer unless you opt into telemetry.
-- Dictation is the one feature that sends content rather than counters, and it is off until you enable it and add your own Deepgram API key. Audio goes to Deepgram only while the microphone is open, is never written to disk, and what you dictate is not added to your learned vocabulary. A focused password field cancels a run outright rather than letting it finish. Your key is stored on this machine (encrypted with DPAPI on Windows) and is **excluded** from Data Backup exports.
+- Dictation is the one feature that sends content rather than counters, and it is off until you enable it and add your own Deepgram API key. Audio goes to Deepgram only while the microphone is open, and what you dictate is not added to your learned vocabulary. The optional AI cleanup and Write with AI send the transcribed text (not the audio) to Anthropic, only with your own Anthropic key and only once you switch them on. The last 20 runs are kept in a local history, which you can switch off, and which is never sent anywhere. A focused password field cancels a run outright rather than letting it finish. Your keys are stored on this machine (encrypted with DPAPI on Windows) and, like the history, are **excluded** from Data Backup exports.
 - Password fields are auto-detected (Windows UI Automation, Linux AT-SPI) and pause learning automatically. There's also a manual **Learning** switch in the title bar.
 - To know when its suggestions have gone stale, the keyboard watches which app is in front, which control has focus, where the caret is, and whether you clicked outside the keyboard. All of it is read locally, used once, and discarded: nothing is logged, stored, or sent. See [`docs/PRIVACY.md`](docs/PRIVACY.md).
 - Telemetry is opt-in: off in the app by default, and asked once on its own page by the Windows installer, where the box is ticked and unticking it declines. Opting in sends ten fields a week (lifetime counters, app version, OS and a random ID) and never any content. Turning it off clears the ID, and *Delete my contributed data* removes what was sent. See [`docs/PRIVACY.md`](docs/PRIVACY.md) and [`docs/architecture/TELEMETRY.md`](docs/architecture/TELEMETRY.md).
@@ -346,7 +350,7 @@ Alpha-OSK is open-source primarily as a code-quality showcase. MIT is the lowest
 Alpha-OSK is part of a four-tool adaptive-input platform built by the same author:
 
 - **Alpha-OSK** (this repo): keystrokes
-- **MacroVox**: voice dictation (Deepgram STT to clipboard)
+- **MacroVox**: standalone voice dictation with a global hotkey (Deepgram STT to clipboard); its AI cleanup, writing and history now also live natively in Alpha-OSK's dictation
 - **Octavium**: MIDI control (virtual piano and pads)
 - **Nimbus**: joystick (vJoy / ViGEm)
 
