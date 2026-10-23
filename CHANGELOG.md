@@ -4,6 +4,17 @@ All notable changes to Alpha-OSK are documented in this file.
 
 ## [Unreleased]
 
+## [1.9.1] (2026-10-23)
+
+### Fixed
+- **The keyboard is no longer closed by Windows when the app you are typing into hangs.** Password detection asked the focused app a question and waited for the answer with no time limit, so when that app froze (DaVinci Resolve, Acrobat and Premiere Pro all did), the keyboard froze with it and Windows closed it as "not responding". Every check now gives up after a fraction of a second, and an app that does not answer is treated as not showing a password field.
+- **Password fields in web browsers and modern apps now pause learning automatically.** The detection that can see these fields had never actually started in the installed app, so only classic Windows password boxes were recognised and a browser password could be learned unless the Learning switch was off. It now starts as intended. Each check is time-limited, and a frozen app is skipped rather than asked.
+- **Moving to another field in the same window is now noticed directly.** This came with the fix above. Clicks, Tab and the arrow keys already cleared the suggestions; now a move the app makes on its own, such as a form jumping to its next box, clears them too, so you are not offered completions for the field you just left.
+
+### Chores
+- The telemetry worker's build tools were updated for three security advisories in a development dependency (`undici`). Nothing in the keyboard itself changed.
+- Two timing-sensitive tests now wait for what they check instead of sleeping a fixed time.
+
 ## [1.9.0] (2026-10-20)
 
 ### Added
