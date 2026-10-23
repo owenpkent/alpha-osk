@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from typing import Any, List
 
 import pytest
@@ -238,7 +239,12 @@ class TestClaudeRequest:
         reply = _FakeReply()
         req = ClaudeRequest(reply, 20)
         got = self._watch(req)
-        QTest.qWait(120)
+        # Poll for the timeout rather than sleeping a fixed 120 ms: on a
+        # loaded Windows CI runner the 20 ms timer did not fire inside
+        # that window and the test failed on an unrelated PR (#206).
+        deadline = time.monotonic() + 5.0
+        while not got and time.monotonic() < deadline:
+            QTest.qWait(20)
         assert len(got) == 1 and got[0][0] == "fail"
         assert "too long" in got[0][1]
         assert reply.aborted is True
