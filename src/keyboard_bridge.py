@@ -5825,6 +5825,14 @@ class KeyboardBridge(QObject):
         switch and privacy mode take the default and still withdraw.
         """
         self._predictions = []
+        # The focused-element baseline goes too.  Tab, a nav key and the
+        # outside click all reset *before* the 4 Hz poll sees the caret
+        # land in the new field; left pointing at the old field, that
+        # poll read old-to-new as a second move and wiped whatever had
+        # been typed into the new field in the meantime (the screen said
+        # "h", the bridge said nothing, and the next pill typed "hellis").
+        # None means "seed on the next reading, don't compare".
+        self._last_focus_token = None
         # A reset that lands mid-word leaves the word's opening on screen
         # with nothing tracking it, so what the user types next is a
         # tail.  See _take_lost_prefix for what learning it would cost.

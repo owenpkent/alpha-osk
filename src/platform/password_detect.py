@@ -56,6 +56,7 @@ from __future__ import annotations
 
 import ctypes
 import logging
+import os
 import sys
 from typing import Any, Optional, Protocol
 
@@ -562,20 +563,33 @@ if sys.platform == "win32":
             ("Data4", ctypes.c_ubyte * 8),
         ]
 
-    # CUIAutomation {ff48dba4-60ef-4201-aa87-54103eef594e}
-    _CLSID_CUIAutomation = _GUID(
-        0xFF48DBA4,
-        0x60EF,
-        0x4201,
-        (ctypes.c_ubyte * 8)(0xAA, 0x87, 0x54, 0x10, 0x3E, 0xEF, 0x59, 0x4E),
+    # CUIAutomation8 {e22ad333-b25f-460c-83d0-0581107395c9}: the plain
+    # CUIAutomation class refuses IUIAutomation2, which carries the timeouts.
+    _CLSID_CUIAutomation8 = _GUID(
+        0xE22AD333,
+        0xB25F,
+        0x460C,
+        (ctypes.c_ubyte * 8)(0x83, 0xD0, 0x05, 0x81, 0x10, 0x73, 0x95, 0xC9),
     )
-    # IUIAutomation {30cbe57d-d9d0-452a-ab13-7ac5ac4825ee}
-    _IID_IUIAutomation = _GUID(
-        0x30CBE57D,
-        0xD9D0,
-        0x452A,
-        (ctypes.c_ubyte * 8)(0xAB, 0x13, 0x7A, 0xC5, 0xAC, 0x48, 0x25, 0xEE),
+    # IUIAutomation2 {34723aff-0c9d-49d0-9896-7ab52df8cd8a}
+    _IID_IUIAutomation2 = _GUID(
+        0x34723AFF,
+        0x0C9D,
+        0x49D0,
+        (ctypes.c_ubyte * 8)(0x98, 0x96, 0x7A, 0xB5, 0x2D, 0xF8, 0xCD, 0x8A),
     )
+    # IUIAutomation2 vtable slots, after IUIAutomation's 58.
+    _VT_GET_CONNECTION_TIMEOUT = 60
+    _VT_PUT_CONNECTION_TIMEOUT = 61
+    _VT_GET_TRANSACTION_TIMEOUT = 62
+    _VT_PUT_TRANSACTION_TIMEOUT = 63
+    # Every UIA call here runs on the UI thread. The defaults (2 s to
+    # connect, 20 s per call) would freeze the keyboard behind a hung app;
+    # a responsive provider answers the focused-element queries in a few ms.
+    _UIA_CONNECTION_TIMEOUT_MS = 250
+    _UIA_TRANSACTION_TIMEOUT_MS = 250
+
+    _RPC_E_CHANGED_MODE = 0x80010106
 
     _UIA_IsPasswordPropertyId = 30019
     _VT_BOOL = 11
@@ -671,20 +685,35 @@ if sys.platform == "win32":
 
             try:
                 ole32 = ctypes.windll.ole32
-                hr = ole32.CoInitializeEx(None, 0)
+                hr = ole32.CoInitializeEx(None, 0) & 0xFFFFFFFF
                 if hr == 0:  # S_OK — we initialised it
                     self._owns_com = True
-                elif hr != 1:  # S_FALSE = already inited; anything else fails
+                elif hr not in (1, _RPC_E_CHANGED_MODE):
+                    # S_FALSE: already initialised in this mode.
+                    # RPC_E_CHANGED_MODE: already initialised as an STA,
+                    # which Qt's Windows platform plugin always does to the
+                    # UI thread before we get here. UIA works from an STA;
+                    # refusing it here kept the real app on the Win32
+                    # fallback from the first release.
+                    _logger.info("UIA unavailable: CoInitializeEx 0x%08x", hr)
                     return
 
-                hr = ole32.CoCreateInstance(
-                    ctypes.byref(_CLSID_CUIAutomation),
-                    None,
-                    1,  # CLSCTX_INPROC_SERVER
-                    ctypes.byref(_IID_IUIAutomation),
-                    ctypes.byref(self._automation),
+                hr = (
+                    ole32.CoCreateInstance(
+                        ctypes.byref(_CLSID_CUIAutomation8),
+                        None,
+                        1,  # CLSCTX_INPROC_SERVER
+                        ctypes.byref(_IID_IUIAutomation2),
+                        ctypes.byref(self._automation),
+                    )
+                    & 0xFFFFFFFF
                 )
-                if hr != 0 or not self._automation:
+                if hr != 0 or not self._automation or not self._bound_timeouts():
+                    # Unbounded UIA on the UI thread is worse than the
+                    # Win32 fallback, so no timeouts means no UIA.
+                    _logger.info("UIA unavailable: no bounded IUIAutomation2 (0x%08x)", hr)
+                    _com_release(self._automation)
+                    self._automation = ctypes.c_void_p()
                     if self._owns_com:
                         ole32.CoUninitialize()
                         self._owns_com = False
@@ -717,8 +746,40 @@ if sys.platform == "win32":
                     pass
                 self._owns_com = False
 
+        def _bound_timeouts(self) -> bool:
+            """Cap how long any UIA call may block, or report False."""
+            for put_slot, value in (
+                (_VT_PUT_CONNECTION_TIMEOUT, _UIA_CONNECTION_TIMEOUT_MS),
+                (_VT_PUT_TRANSACTION_TIMEOUT, _UIA_TRANSACTION_TIMEOUT_MS),
+            ):
+                put = _vtable_func(self._automation, put_slot, ctypes.c_long, ctypes.c_ulong)
+                if put(self._automation, value) != 0:
+                    return False
+            return True
+
+        @staticmethod
+        def _foreground_unreachable() -> bool:
+            """True when asking UIA about the focus would only cost time.
+
+            A hung app cannot answer within the timeout anyway, and a UIA
+            client asking its own UI thread about its own windows is the
+            documented way to deadlock; our own fields are edit sessions,
+            not OS text boxes.
+            """
+            user32 = ctypes.windll.user32
+            hwnd = user32.GetForegroundWindow()
+            if not hwnd:
+                return False
+            if user32.IsHungAppWindow(hwnd):
+                return True
+            pid = wintypes.DWORD(0)
+            user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+            return pid.value == os.getpid()
+
         def check(self) -> bool:
             if not self.available or not self._automation:
+                return False
+            if self._foreground_unreachable():
                 return False
 
             element = ctypes.c_void_p()
@@ -765,6 +826,8 @@ if sys.platform == "win32":
             differs between two text boxes in the same browser window.
             """
             if not self.available or not self._automation:
+                return None
+            if self._foreground_unreachable():
                 return None
 
             element = ctypes.c_void_p()

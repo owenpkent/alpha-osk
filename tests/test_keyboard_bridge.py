@@ -4255,6 +4255,43 @@ class TestTabClearsContext:
         assert bridge._pending_snippet_offer is not None
         assert withdrawn == []
 
+    def _poll(self, bridge: KeyboardBridge, monkeypatch, token: str) -> None:
+        monkeypatch.setattr(bridge, "_get_foreground_window_id", lambda: 100)
+        monkeypatch.setattr("src.keyboard_bridge.focused_element_token", lambda: token)
+        bridge._check_foreground_window()
+
+    def test_a_character_typed_before_the_next_focus_poll_survives_it(
+        self, bridge: KeyboardBridge, monkeypatch
+    ):
+        """Tab's reset must also drop the focused-element baseline.
+
+        Tab clears the context, but the 4 Hz poll still held the *old*
+        field's element token.  A character typed into the new field
+        before the next poll was then wiped a second time when the poll
+        saw old-to-new, so the screen said ``h`` while the bridge said
+        nothing: ``ello`` then offered ``ellis`` and tapping it typed
+        ``hellis``.  Only visible once UIA detection actually started
+        (``focused_element_token`` returned None on every real launch
+        before 2026-10).
+        """
+        self._poll(bridge, monkeypatch, "A")  # seed the baseline in field A
+        _type(bridge, "dear bob hel")
+        bridge.pressSpecialKey("tab")
+        _type(bridge, "h")  # lands in field B before the poll notices
+        self._poll(bridge, monkeypatch, "B")
+        assert bridge._current_word == "h"
+        assert bridge._last_focus_token == "B"
+
+    def test_the_next_field_change_still_clears(self, bridge: KeyboardBridge, monkeypatch):
+        """The inverse: dropping the baseline must not blind the poll for good."""
+        self._poll(bridge, monkeypatch, "A")
+        bridge.pressSpecialKey("tab")
+        _type(bridge, "h")
+        self._poll(bridge, monkeypatch, "B")  # re-seeds on B
+        _type(bridge, "el")
+        self._poll(bridge, monkeypatch, "C")  # the app moved focus again
+        assert bridge._current_word == ""
+
 
 class TestCaretMoveClearsContext:
     """Clearing stale context when the user moves the caret themselves.
