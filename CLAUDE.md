@@ -455,6 +455,7 @@ Full write-up: `docs/architecture/CONTEXT_RESET.md` (section of the same name). 
 Six signals reset context: foreground window, focused element, caret position (4 Hz in `_check_foreground_window`), a click outside our process (`src/platform/pointer.py`), Tab, `_NAV_KEYS`. **Stale `_current_word` / `_context_buffer` is a pill tap that eats text elsewhere.**
 
 - A `None` token means unknown; state is untouched.
+- **`_reset_typing_context` drops `_last_focus_token`**, so the poll re-seeds after Tab / nav / click instead of resetting a second time and wiping a character typed in the new field (`hellis`). Guard: `TestTabClearsContext::test_a_character_typed_before_the_next_focus_poll_survives_it`.
 - **The outside click resets mid-word; `_check_caret_moved` keeps its only-between-words guard. Do not re-unify them.**
 - Clicks settle over `_CLICK_SETTLE_MS` against `_caret_before_click`; `_note_own_keystroke` is set in the synth wrappers. Within-window resets pass `keep_snippet_offer=True`.
 - **The tail of an interrupted word is never learned** (`_word_prefix_lost`); tests must type the word three times.
