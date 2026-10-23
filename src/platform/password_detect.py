@@ -807,6 +807,14 @@ if sys.platform == "win32":
     # ------------------------------------------------------------------
 
     _EM_GETPASSWORDCHAR = 0x00D2
+    _SMTO_BLOCK = 0x0001
+    _SMTO_ABORTIFHUNG = 0x0002
+    # The probe runs on the UI thread every 200 ms and on every keystroke.
+    # A plain SendMessageW to a hung window never returns, and Windows then
+    # closes the keyboard as hung (AppHangXProcB1, seen with Resolve,
+    # Acrobat and Premiere Pro). A responsive edit control answers in
+    # microseconds, so this only ever bounds the hung case.
+    _EM_GETPASSWORDCHAR_TIMEOUT_MS = 100
 
     class _GUITHREADINFO(ctypes.Structure):
         _fields_ = [
@@ -846,9 +854,20 @@ if sys.platform == "win32":
                 if not focused:
                     return False
 
-                # EM_GETPASSWORDCHAR returns the mask char (e.g. '*') or 0
-                result: int = self._user32.SendMessageW(focused, _EM_GETPASSWORDCHAR, 0, 0)
-                return result != 0
+                # EM_GETPASSWORDCHAR returns the mask char (e.g. '*') or 0.
+                # A hung or timed-out target reads as "not a password field",
+                # the same fail-open answer as every other probe failure.
+                mask = ctypes.c_size_t(0)
+                sent: int = self._user32.SendMessageTimeoutW(
+                    focused,
+                    _EM_GETPASSWORDCHAR,
+                    0,
+                    0,
+                    _SMTO_ABORTIFHUNG | _SMTO_BLOCK,
+                    _EM_GETPASSWORDCHAR_TIMEOUT_MS,
+                    ctypes.byref(mask),
+                )
+                return bool(sent) and mask.value != 0
 
             except Exception:
                 return False

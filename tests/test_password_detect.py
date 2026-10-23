@@ -8,10 +8,15 @@ flag) and the fallback path (no gi → null detector).
 
 from __future__ import annotations
 
+import ctypes
 import logging
+import subprocess
 import sys
+import time
 import types
 from unittest.mock import MagicMock
+
+import pytest
 
 from src.platform import password_detect as pd
 
@@ -238,3 +243,94 @@ class TestUnavailableDetectionWarns:
         with caplog.at_level(logging.WARNING, logger="PasswordDetect"):
             pd._create_detector()
         assert any(r.levelno == logging.WARNING for r in caplog.records)
+
+
+# A hidden password edit control owned by a child process. "pump" answers
+# messages; "hang" never pumps, which is what a hung Resolve or Premiere
+# looks like from our side of SendMessage.
+_EDIT_OWNER_SCRIPT = r"""
+import ctypes, sys, time
+from ctypes import wintypes
+user32 = ctypes.WinDLL("user32")
+user32.CreateWindowExW.restype = wintypes.HWND
+user32.CreateWindowExW.argtypes = [
+    wintypes.DWORD, wintypes.LPCWSTR, wintypes.LPCWSTR, wintypes.DWORD,
+    ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int,
+    wintypes.HWND, wintypes.HMENU, wintypes.HINSTANCE, wintypes.LPVOID,
+]
+ES_PASSWORD = 0x0020
+hwnd = user32.CreateWindowExW(0, "EDIT", None, ES_PASSWORD, 0, 0, 0, 0, None, None, None, None)
+print(hwnd or 0, flush=True)
+if sys.argv[1] == "hang":
+    time.sleep(60)
+else:
+    msg = wintypes.MSG()
+    while user32.GetMessageW(ctypes.byref(msg), None, 0, 0) > 0:
+        user32.TranslateMessage(ctypes.byref(msg))
+        user32.DispatchMessageW(ctypes.byref(msg))
+"""
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Win32 window messages")
+class TestTheWin32ProbeNeverHangsTheKeyboard:
+    """A hung foreground app must not hang the keyboard's UI thread.
+
+    The probe runs on the UI thread. With a plain ``SendMessageW`` a hung
+    target never answered, and Windows closed the keyboard as hung
+    (AppHangXProcB1, blocked on Resolve, Acrobat and Premiere Pro).
+    """
+
+    @staticmethod
+    def _edit_owner(mode: str):
+        proc = subprocess.Popen(
+            [sys.executable, "-c", _EDIT_OWNER_SCRIPT, mode],
+            stdout=subprocess.PIPE,
+            text=True,
+            creationflags=subprocess.CREATE_NO_WINDOW,  # type: ignore[attr-defined]
+        )
+        assert proc.stdout is not None
+        hwnd = int(proc.stdout.readline().strip() or 0)
+        if not hwnd:
+            proc.kill()
+            pytest.fail("child process could not create its edit control")
+        return proc, hwnd
+
+    @staticmethod
+    def _detector_focused_on(hwnd: int):
+        """The real detector, with the foreground lookups pointed at ``hwnd``."""
+        real = ctypes.windll.user32  # type: ignore[attr-defined]
+
+        def gui_thread_info(_tid, info_ref):
+            info_ref._obj.hwndFocus = hwnd
+            return 1
+
+        class _FocusedOn:
+            GetForegroundWindow = staticmethod(lambda: hwnd)
+            GetWindowThreadProcessId = staticmethod(lambda _h, _p: 1)
+            GetGUIThreadInfo = staticmethod(gui_thread_info)
+
+            def __getattr__(self, name):
+                return getattr(real, name)
+
+        det = pd._WindowsWin32Detector()
+        det._user32 = _FocusedOn()
+        return det
+
+    def test_a_hung_target_answers_not_a_password_field_promptly(self):
+        proc, hwnd = self._edit_owner("hang")
+        try:
+            det = self._detector_focused_on(hwnd)
+            started = time.monotonic()
+            assert det.check() is False
+            assert time.monotonic() - started < 2.0
+        finally:
+            proc.kill()
+            proc.wait()
+
+    def test_a_responsive_password_field_is_still_detected(self):
+        proc, hwnd = self._edit_owner("pump")
+        try:
+            assert self._detector_focused_on(hwnd).check() is True
+        finally:
+            proc.kill()
+            proc.wait()
