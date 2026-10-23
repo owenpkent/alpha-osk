@@ -10,8 +10,10 @@ from __future__ import annotations
 
 import ctypes
 import logging
+import os
 import subprocess
 import sys
+import threading
 import time
 import types
 from unittest.mock import MagicMock
@@ -334,3 +336,184 @@ class TestTheWin32ProbeNeverHangsTheKeyboard:
         finally:
             proc.kill()
             proc.wait()
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows UI Automation")
+class TestUIAStartsUnderQt:
+    """UIA detection must start on the thread Qt has already claimed.
+
+    Qt's Windows platform plugin initialises the UI thread as a
+    single-threaded apartment, so a multithreaded ``CoInitializeEx``
+    answers RPC_E_CHANGED_MODE. Treating that as failure kept every real
+    launch on the Win32 fallback, which cannot see browser password fields.
+    """
+
+    @staticmethod
+    def _in_thread(fn, apartment: int | None):
+        """Run ``fn`` on a fresh thread whose COM state is set up first.
+
+        ``apartment`` 2 is COINIT_APARTMENTTHREADED, the state Qt's Windows
+        platform plugin leaves the UI thread in; None leaves COM untouched.
+        """
+        result: dict = {}
+
+        def body():
+            ole32 = ctypes.windll.ole32  # type: ignore[attr-defined]
+            if apartment is not None:
+                ole32.CoInitializeEx(None, apartment)
+            try:
+                result["value"] = fn()
+            except BaseException as exc:  # noqa: BLE001 - re-raised on the test thread
+                result["error"] = exc
+            finally:
+                if apartment is not None:
+                    ole32.CoUninitialize()
+
+        t = threading.Thread(target=body)
+        t.start()
+        t.join(30)
+        if "error" in result:
+            raise result["error"]
+        return result["value"]
+
+    @staticmethod
+    def _read_timeouts(det) -> tuple[int, int]:
+        values = []
+        for slot in (pd._VT_GET_CONNECTION_TIMEOUT, pd._VT_GET_TRANSACTION_TIMEOUT):
+            get = pd._vtable_func(
+                det._automation, slot, ctypes.c_long, ctypes.POINTER(ctypes.c_ulong)
+            )
+            out = ctypes.c_ulong()
+            assert get(det._automation, ctypes.byref(out)) == 0
+            values.append(out.value)
+        return values[0], values[1]
+
+    def test_it_starts_on_a_single_threaded_apartment(self):
+        def build():
+            det = pd._WindowsUIADetector()
+            try:
+                return det.available, det._owns_com
+            finally:
+                det.close()
+
+        available, owns_com = self._in_thread(build, apartment=2)
+        assert available is True
+        # Qt owns that apartment; closing the detector must not tear it down.
+        assert owns_com is False
+
+    def test_closing_leaves_the_apartment_it_did_not_open(self):
+        def build_and_close():
+            pd._WindowsUIADetector().close()
+            ole32 = ctypes.windll.ole32  # type: ignore[attr-defined]
+            # S_FALSE (1): COM is still initialised as an STA on this thread.
+            hr = ole32.CoInitializeEx(None, 2)
+            ole32.CoUninitialize()
+            return hr
+
+        assert self._in_thread(build_and_close, apartment=2) == 1
+
+    def test_it_still_starts_where_nothing_initialised_com(self):
+        def build():
+            det = pd._WindowsUIADetector()
+            try:
+                return det.available
+            finally:
+                det.close()
+
+        assert self._in_thread(build, apartment=None) is True
+
+    def test_every_call_is_bounded_well_below_the_hang_threshold(self):
+        def build():
+            det = pd._WindowsUIADetector()
+            try:
+                return self._read_timeouts(det)
+            finally:
+                det.close()
+
+        connection, transaction = self._in_thread(build, apartment=2)
+        assert (connection, transaction) == (
+            pd._UIA_CONNECTION_TIMEOUT_MS,
+            pd._UIA_TRANSACTION_TIMEOUT_MS,
+        )
+        # UIA's defaults are 2000 and 20000 ms; Windows calls a window hung at 5 s.
+        assert connection <= 500 and transaction <= 500
+
+    def test_the_real_qt_platform_gets_uia(self):
+        """End to end: a QGuiApplication on the real Windows platform, no window."""
+        script = (
+            "import sys\n"
+            "from PySide6.QtGui import QGuiApplication\n"
+            "app = QGuiApplication(['probe', '-platform', 'windows'])\n"
+            "from src.platform import password_detect as pd\n"
+            "print(pd._create_detector().__class__.__name__)\n"
+        )
+        env = {k: v for k, v in os.environ.items() if k != "QT_QPA_PLATFORM"}
+        out = subprocess.run(
+            [sys.executable, "-c", script],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            env=env,
+            cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            creationflags=subprocess.CREATE_NO_WINDOW,  # type: ignore[attr-defined]
+        )
+        assert out.stdout.strip().splitlines()[-1] == "_WindowsUIADetector", out.stderr
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows UI Automation")
+class TestUIASkipsWhatCannotAnswer:
+    """A hung foreground app, or our own window, is never asked."""
+
+    @staticmethod
+    def _foreground(monkeypatch, *, hung: bool, pid: int):
+        def thread_process_id(_hwnd, pid_ref):
+            pid_ref._obj.value = pid
+            return 1
+
+        fake = types.SimpleNamespace(
+            GetForegroundWindow=lambda: 0x1234,
+            IsHungAppWindow=lambda _hwnd: 1 if hung else 0,
+            GetWindowThreadProcessId=thread_process_id,
+        )
+        monkeypatch.setattr(ctypes.windll, "user32", fake)  # type: ignore[attr-defined]
+
+    @staticmethod
+    def _uia_calls(monkeypatch) -> list:
+        calls: list = []
+
+        def spy(*args, **kwargs):
+            calls.append(args)
+            raise AssertionError("UIA was queried")
+
+        monkeypatch.setattr(pd, "_vtable_func", spy)
+        return calls
+
+    @staticmethod
+    def _armed_detector():
+        det = pd._WindowsUIADetector.__new__(pd._WindowsUIADetector)
+        det.available = True
+        det._automation = ctypes.c_void_p(1)
+        det._owns_com = False
+        return det
+
+    def test_a_hung_app_is_not_queried(self, monkeypatch):
+        self._foreground(monkeypatch, hung=True, pid=os.getpid() + 1)
+        calls = self._uia_calls(monkeypatch)
+        det = self._armed_detector()
+        assert det.check() is False
+        assert det.focus_token() is None
+        assert calls == []
+
+    def test_our_own_window_is_not_queried(self, monkeypatch):
+        self._foreground(monkeypatch, hung=False, pid=os.getpid())
+        calls = self._uia_calls(monkeypatch)
+        det = self._armed_detector()
+        assert det.check() is False
+        assert det.focus_token() is None
+        assert calls == []
+
+    def test_a_responsive_app_is_queried(self, monkeypatch):
+        self._foreground(monkeypatch, hung=False, pid=os.getpid() + 1)
+        calls = self._uia_calls(monkeypatch)
+        self._armed_detector().check()
+        assert calls != []
