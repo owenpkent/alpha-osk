@@ -275,7 +275,12 @@ set no interim at all, so the banner shows its own "Listening..." label
 until the run is typed in one go. It used to show everything heard so far
 plus the phrase in flight, which read as "it is typing" when it was not.
 The level bars beside the mic (next section) carry "it hears you" instead.
-Guard: `tests/test_dictation_ai.py::TestAccumulateMode`.
+The same holds while Claude has the text: `_begin_polish` clears the
+interim rather than showing the raw run, so the banner reads
+"Polishing..." or "Writing..." until the cleaned text is typed or the
+draft preview opens (the review of #212 caught the raw text reappearing
+there). Guard: `tests/test_dictation_ai.py::TestAccumulateMode`, through
+`stop()` and the provider's `closed` for both cleanup and Write with AI.
 
 ## The mic button, and the left edge
 

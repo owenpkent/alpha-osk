@@ -380,6 +380,31 @@ class TestAccumulateMode:
         _FakeStream.last.final.emit("how are you")
         assert spy.finals == []
         assert spy.interims == []
+        # ...and nothing while Claude has it either: the raw words on screen
+        # during polishing read as "this is being typed" (review of #212).
+        cleanup_ctl.stop()
+        _FakeStream.last.closed.emit()
+        assert cleanup_ctl.state is DictationState.POLISHING
+        assert cleanup_ctl.interim == ""
+        assert "hello world how are you" not in spy.interims
+        assert all(text == "" for text in spy.interims)
+
+    def test_write_with_ai_previews_nothing_while_writing(self, qapp, monkeypatch, claude, history):
+        ctl = _make_controller(
+            qapp, monkeypatch, claude, history, anthropic_key=ANTHROPIC, writing_enabled=True
+        )
+        spy = _Spy(ctl)
+        ctl.start("write")
+        _FakeStream.last.opened.emit()
+        _FakeStream.last.interim.emit("write a note to")
+        _FakeStream.last.final.emit("write a note to the team")
+        assert all(text == "" for text in spy.interims)
+        ctl.stop()
+        _FakeStream.last.closed.emit()
+        assert ctl.state is DictationState.POLISHING
+        assert ctl.interim == ""
+        assert spy.drafts == []
+        assert len(claude.requests) == 1
 
     def test_type_as_you_speak_off_previews_nothing_either(
         self, qapp, monkeypatch, claude, history

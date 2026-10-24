@@ -544,8 +544,15 @@ class DictationController(QObject):
         return request
 
     def _begin_polish(self, text: str) -> None:
-        """Hand the finished transcript to Claude and wait for the answer."""
-        self._set_interim(text)
+        """Hand the finished transcript to Claude and wait for the answer.
+
+        The bar shows nothing of the text while Claude has it, for the same
+        reason a held-back run previews nothing while listening: the raw
+        words on screen read as "this is being typed", and what gets typed
+        is Claude's version.  The banner's own "Polishing..." / "Writing..."
+        label stands in (review of #212, 2026-10-24).
+        """
+        self._set_interim("")
         self._set_state(DictationState.POLISHING)
         request: ClaudeRequest
         if self._purpose == "write":
