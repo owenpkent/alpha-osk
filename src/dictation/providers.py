@@ -286,7 +286,10 @@ def _friendly_error(raw: str) -> str:
     your connection", and those two cover essentially every real failure.
     """
     lowered = raw.lower()
-    if "401" in lowered or "403" in lowered or "unauthor" in lowered or "forbidden" in lowered:
+    # Qt reports a 401 carrying a WWW-Authenticate header (Deepgram sends
+    # one) as "Unsupported WWW-Authenticate challenges", with no status code.
+    refused = ("401", "403", "unauthor", "forbidden", "www-authenticate")
+    if any(marker in lowered for marker in refused):
         return "Dictation was refused: check your API key in Settings."
     if "host" in lowered or "resolve" in lowered or "network" in lowered or "unreach" in lowered:
         return "Could not reach the dictation service: check your connection."

@@ -487,6 +487,11 @@ class TestTheProviderUrl:
         "raw,expected",
         [
             ("Error 401 unauthorized", "key"),
+            (
+                "QWebSocketPrivate::processHandshake: "
+                "Unsupported WWW-Authenticate challenges encountered.",
+                "key",
+            ),
             ("Host api.deepgram.com not found", "connection"),
             ("The operation timed out", "respond"),
             ("", "connection was lost"),
@@ -711,6 +716,22 @@ class TestTheBridgeSettingsSurface:
     def test_whitespace_is_stripped_from_a_pasted_key(self, bridge: KeyboardBridge):
         bridge.setDictationApiKey("  sk-abc \n def  ")
         assert bridge._dictation_config.api_key == "sk-abcdef"
+
+    @pytest.mark.parametrize(
+        "setter,field",
+        [
+            ("setDictationApiKey", "api_key"),
+            ("setDictationAnthropicKey", "anthropic_key"),
+        ],
+    )
+    def test_a_key_pasted_twice_is_stored_once(self, bridge: KeyboardBridge, setter, field):
+        key = "0123456789abcdef0123456789abcdef01234567"
+        getattr(bridge, setter)(key + key)
+        assert getattr(bridge._dictation_config, field) == key
+
+    def test_a_key_that_merely_repeats_a_run_is_kept(self, bridge: KeyboardBridge):
+        bridge.setDictationApiKey("abcabcabc")
+        assert bridge._dictation_config.api_key == "abcabcabc"
 
     def test_an_unknown_model_is_refused(self, bridge: KeyboardBridge):
         before = bridge._dictation_config.model
