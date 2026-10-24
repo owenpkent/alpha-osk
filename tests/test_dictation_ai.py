@@ -389,9 +389,7 @@ class TestAccumulateMode:
         assert "hello world how are you" not in spy.interims
         assert all(text == "" for text in spy.interims)
 
-    def test_write_with_ai_previews_nothing_while_writing(
-        self, qapp, monkeypatch, claude, history
-    ):
+    def test_write_with_ai_previews_nothing_while_writing(self, qapp, monkeypatch, claude, history):
         ctl = _make_controller(
             qapp, monkeypatch, claude, history, anthropic_key=ANTHROPIC, writing_enabled=True
         )
