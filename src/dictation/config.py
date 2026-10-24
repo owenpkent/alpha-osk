@@ -227,6 +227,20 @@ def _clean_style(raw: Any) -> str:
     return kept.strip()[:MAX_STYLE_LEN]
 
 
+def clean_pasted_key(raw: str) -> str:
+    """A pasted key with its whitespace removed and a double paste undone.
+
+    A key pasted twice into the field arrives as one string of twice the
+    length; the provider refuses it and the user sees only "check your
+    key".  No real key is two identical halves, so collapsing one is safe.
+    """
+    key = "".join(raw.split())[:MAX_KEY_LEN]
+    half = len(key) // 2
+    if half and key[:half] == key[half:]:
+        key = key[:half]
+    return key
+
+
 def _mask(secret: str) -> str:
     if not secret:
         return ""

@@ -4816,9 +4816,9 @@ class KeyboardBridge(QObject):
         ``acceptSnippetOffer`` and ``setSnippet`` were each given a bool
         return for).
         """
-        from .dictation.config import MAX_KEY_LEN
+        from .dictation.config import clean_pasted_key
 
-        cleaned = "".join(key.split())[:MAX_KEY_LEN]
+        cleaned = clean_pasted_key(key)
         self._dictation_config.api_key = cleaned
         ok = self._dictation_config.save()
         _logger.info("Dictation key %s (%d chars)", "stored" if ok else "NOT stored", len(cleaned))
@@ -4869,9 +4869,9 @@ class KeyboardBridge(QObject):
     @Slot(str, result=bool)
     def setDictationAnthropicKey(self, key: str) -> bool:
         """Store the Anthropic key.  Same handling as the Deepgram key."""
-        from .dictation.config import MAX_KEY_LEN
+        from .dictation.config import clean_pasted_key
 
-        cleaned = "".join(key.split())[:MAX_KEY_LEN]
+        cleaned = clean_pasted_key(key)
         self._dictation_config.anthropic_key = cleaned
         ok = self._dictation_config.save()
         _logger.info("Anthropic key %s (%d chars)", "stored" if ok else "NOT stored", len(cleaned))

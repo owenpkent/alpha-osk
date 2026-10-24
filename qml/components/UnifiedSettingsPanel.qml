@@ -2692,6 +2692,7 @@ Item {
 
                                     TextField {
                                         id: dictationKeyField
+                                        objectName: "dictationKeyField"
                                         Layout.fillWidth: true
                                         Layout.preferredHeight: 32
                                         echoMode: TextInput.Password
@@ -2732,6 +2733,10 @@ Item {
                                         text: "Paste and Save"
                                         tone: "go"
                                         onClicked: {
+                                            // paste() inserts at the caret, so a key already
+                                            // in the field (Ctrl+V, or a second tap) would be
+                                            // saved twice over.  The button means "replace".
+                                            dictationKeyField.text = ""
                                             dictationKeyField.paste()
                                             unifiedSettings.settingChanged("dictationApiKey", dictationKeyField.text)
                                             dictationKeyField.text = ""
@@ -3225,6 +3230,10 @@ Item {
                                         text: "Paste and Save"
                                         tone: "go"
                                         onClicked: {
+                                            // paste() inserts at the caret, so a key already
+                                            // in the field (Ctrl+V, or a second tap) would be
+                                            // saved twice over.  The button means "replace".
+                                            anthropicKeyField.text = ""
                                             anthropicKeyField.paste()
                                             unifiedSettings.settingChanged("dictationAnthropicKey", anthropicKeyField.text)
                                             anthropicKeyField.text = ""

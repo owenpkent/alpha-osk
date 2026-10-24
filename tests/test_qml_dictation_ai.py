@@ -498,6 +498,29 @@ class TestTheSettingsSections:
         _call(_by_name(panel, "anthropicKeyPasteButton")[0], "clicked()")
         assert ("dictationAnthropicKey", "sk-ant-test-clipboard") in seen
 
+    @pytest.mark.parametrize(
+        "button,field,setting",
+        [
+            ("dictationKeyPasteButton", "dictationKeyField", "dictationApiKey"),
+            ("anthropicKeyPasteButton", "anthropicKeyField", "dictationAnthropicKey"),
+        ],
+    )
+    def test_paste_replaces_a_key_already_in_the_field(self, qml_root, button, field, setting):
+        # paste() inserts at the caret; a key pasted with Ctrl+V and then
+        # saved with the button used to be stored as two copies.
+        root, _, bridge = qml_root
+        _configure(root, bridge, anthropic=False)
+        window, panel = _dictation_panel(root)
+        _settle_view(window, panel, "dictation")
+        seen = []
+        panel.settingChanged.connect(lambda name, value: seen.append((name, value)))
+        key = "0123456789abcdef0123456789abcdef01234567"
+        _by_name(panel, field)[0].setProperty("text", key)
+        QGuiApplication.clipboard().setText(key)
+        _call(_by_name(panel, button)[0], "clicked()")
+        assert (setting, key) in seen
+        assert all(value == key for name, value in seen if name == setting)
+
 
 HISTORY = [
     {
