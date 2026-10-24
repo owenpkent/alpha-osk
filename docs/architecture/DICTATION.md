@@ -470,6 +470,47 @@ probable key problem, because otherwise the button spins back to idle
 having said nothing at all, which is indistinguishable from a click that
 did not register. A close after a successful run is silent.
 
+### What a failed run keeps (lessons from MacroVox, 2026-10-24)
+
+MacroVox lost a dictation three ways in one afternoon: a stop whose wait
+was shorter than the provider's flush, a stop response with no transcript
+that the UI trusted over the finals it had already shown, and a failed
+upload that discarded the audio with the error. The same three rules now
+hold here.
+
+- **A stream that fails after anything was heard ends like a stop.**
+  `_on_stream_failed` calls `_finish_run` whenever `_run_text` is
+  non-empty, not only for a held-back run: streamed finals were typed as
+  they arrived, but the history record (with its audio) was owed too, and
+  `cancel()` used to drop it with the socket.
+- **A stream that fails before anything was transcribed keeps its audio.**
+  `_keep_failed_audio` records an audio-only history entry (empty `raw`
+  and `result`) when history is on and at least a second of audio was
+  captured (`_MIN_KEPT_PCM_BYTES`), and the toast ends with "The audio is
+  saved in History." The History row shows "Not transcribed. Play the
+  audio to hear what was said." with Play and Delete only: nothing to
+  copy, nothing to send to Anthropic. The same applies to the early-close
+  path (`_on_stream_closed` before any transcript, the rejected-key case).
+  Privacy mode's `cancel()` is still the one path that discards audio.
+- **The provider's two deadlines report themselves.** `finish()` arms
+  `FLUSH_GRACE_MS` (now 5 s; Deepgram answers `CloseStream` in well under
+  a second, MacroVox waits 8 s, and a slow but healthy flush must not read
+  as a failure). Running out of it emits `failed(FLUSH_TIMEOUT_MESSAGE)`
+  rather than a quiet `closed`, so a missing tail is said out loud; the
+  controller suppresses that toast only when nothing was ever heard.
+  `start()` arms `CONNECT_TIMEOUT_MS` (10 s) so a dropped upgrade request
+  cannot leave the mic open and the button spinning until the OS gives
+  up. `failed` stands in for `closed` (never both), as before.
+- `_friendly_error` maps `ssl` / `tls` / `certificate` to "Could not make
+  a secure connection", the wording a proxy or inspecting firewall
+  produces. `handshake` alone is not a marker: Qt says `processHandshake`
+  for a plain HTTP refusal too.
+
+Tests: `tests/test_dictation.py::TestTheProviderGivesUpOnTime` (a real
+`DeepgramStream` over a fake socket), `tests/test_dictation_ai.py::
+TestAFailedRunKeepsWhatWasHeard`, and the audio-only row in
+`tests/test_qml_dictation_ai.py::TestTheHistoryList`.
+
 ## Nothing here logs what was said
 
 Same rule as the rest of the keystroke path, and for the same reason: the

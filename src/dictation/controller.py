@@ -74,7 +74,10 @@ class DictationState(enum.Enum):
 
 
 #: 16 kHz mono s16 is 32,000 bytes a second; bounds the history audio tee.
+#: A failed run keeps its audio in history only past this much: under a
+#: second is a click, not a sentence, and would litter the list.
 _PCM_BYTES_PER_SECOND = 32_000
+_MIN_KEPT_PCM_BYTES = _PCM_BYTES_PER_SECOND
 
 _CLEANUP_TIMEOUT_MS = 20_000
 _WRITING_TIMEOUT_MS = 60_000
@@ -414,13 +417,23 @@ class DictationController(QObject):
         return f"{self._run_text} {tail.strip()}".strip()
 
     def _on_stream_failed(self, message: str) -> None:
-        self.errorRaised.emit(message)
-        if self._accumulate and self._run_text.strip():
-            # Held-back finals exist nowhere but here.  A dropped socket is
-            # not a privacy cancel, so deliver what was said rather than
-            # discard it, through the same path a normal stop takes.
+        if self._run_text.strip():
+            # Something was heard.  A dropped socket is not a privacy
+            # cancel, so the run ends through the same path a stop takes:
+            # held-back finals are delivered, streamed ones were typed as
+            # they arrived, and either way history gets its record (with
+            # the audio).  Cancelling here used to drop a streamed run's
+            # history entry along with the socket.
+            self.errorRaised.emit(message)
             self._finish_run()
             return
+        kept = self._keep_failed_audio()
+        if kept:
+            self.errorRaised.emit(f"{message} The audio is saved in History.")
+        elif self._state is not DictationState.FINISHING:
+            # A flush timeout after a run in which nothing was ever heard,
+            # and with no audio worth keeping, is not news to anyone.
+            self.errorRaised.emit(message)
         self.cancel()
 
     def _on_stream_closed(self) -> None:
@@ -430,8 +443,26 @@ class DictationController(QObject):
             # Closed during the handshake without ever transcribing:
             # almost always a rejected key, and reporting nothing here
             # would leave the button spinning with no explanation.
-            self.errorRaised.emit("Dictation could not start: check your API key in Settings.")
+            message = "Dictation could not start: check your API key in Settings."
+            if self._keep_failed_audio():
+                message = f"{message} The audio is saved in History."
+            self.errorRaised.emit(message)
         self._finish_run()
+
+    def _keep_failed_audio(self) -> bool:
+        """Keep a failed run's audio as an audio-only history entry.
+
+        The words were spoken and nobody transcribed them: a rejected key,
+        a connection that never opened, a flush that never came back.  The
+        audio tee has them, so history gets an entry with no text, where
+        Play lets the user hear what they said and type it.  Discarding
+        the audio with the error (what MacroVox used to do on a failed
+        upload) is the one outcome that cannot be recovered from.
+        Returns whether an entry was kept.
+        """
+        if not self._record_history or len(self._pcm) < _MIN_KEPT_PCM_BYTES:
+            return False
+        return self._record(self._purpose, "", "", cleaned=False)
 
     # --- timers ----------------------------------------------------------
 

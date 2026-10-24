@@ -35,7 +35,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from src.dictation import config as dictation_config
 from src.dictation.config import DictationConfig
 from src.dictation.controller import DictationController, DictationState
-from src.dictation.providers import _friendly_error
+from src.dictation.providers import DeepgramStream, _friendly_error
 from src.keyboard_bridge import KeyboardBridge
 
 
@@ -309,6 +309,139 @@ def qapp():
     return app
 
 
+class _FakeSocket:
+    """Stands in for ``QWebSocket`` so the provider's timers can be driven
+    without a network.  ``open`` connects nothing; the test decides whether
+    the socket ever reports connected."""
+
+    def __init__(self):
+        from PySide6.QtCore import QObject, Signal
+
+        class _Impl(QObject):
+            connected = Signal()
+            disconnected = Signal()
+            textMessageReceived = Signal(str)
+            errorOccurred = Signal(object)
+
+        self._impl = _Impl()
+        self.sent: List[str] = []
+        self.aborted = False
+        _FakeSocket.last = self
+
+    def __getattr__(self, name):
+        return getattr(self._impl, name)
+
+    def setParent(self, parent):
+        pass
+
+    def open(self, request):
+        pass
+
+    def state(self):
+        from PySide6.QtNetwork import QAbstractSocket
+
+        return QAbstractSocket.SocketState.ConnectedState
+
+    def sendTextMessage(self, text):
+        self.sent.append(text)
+        return len(text)
+
+    def sendBinaryMessage(self, data):
+        return len(data)
+
+    def errorString(self):
+        return ""
+
+    def abort(self):
+        self.aborted = True
+
+    def deleteLater(self):
+        pass
+
+
+@pytest.fixture
+def stream(qapp, monkeypatch):
+    """A real :class:`DeepgramStream` over a fake socket."""
+    import PySide6.QtWebSockets
+
+    monkeypatch.setattr(PySide6.QtWebSockets, "QWebSocket", _FakeSocket)
+    return DeepgramStream("k" * 40)
+
+
+class TestTheProviderGivesUpOnTime:
+    """What MacroVox taught: a stop that never comes back must say so, and a
+    connect that never answers must not pin the mic open."""
+
+    def test_a_connect_that_never_answers_fails_with_a_next_step(self, stream):
+        from src.dictation.providers import CONNECT_TIMEOUT_MESSAGE
+
+        failures: List[str] = []
+        closes: List[int] = []
+        stream.failed.connect(failures.append)
+        stream.closed.connect(lambda: closes.append(1))
+        stream.start()
+        assert stream._connect_timer is not None and stream._connect_timer.isActive()
+        stream._connect_timer.timeout.emit()
+        assert failures == [CONNECT_TIMEOUT_MESSAGE]
+        # `failed` stands in for `closed`: the controller ends the run on it,
+        # and a second signal would end it twice.
+        assert closes == []
+        assert _FakeSocket.last.aborted is True
+
+    def test_a_socket_that_opens_disarms_the_connect_timer(self, stream):
+        failures: List[str] = []
+        stream.failed.connect(failures.append)
+        stream.start()
+        _FakeSocket.last.connected.emit()
+        assert stream._connect_timer is None
+        assert failures == []
+
+    def test_a_flush_that_never_comes_back_is_reported_not_swallowed(self, stream):
+        """The old behaviour closed quietly, so a missing tail looked like
+        a complete transcript."""
+        from src.dictation.providers import FLUSH_TIMEOUT_MESSAGE
+
+        failures: List[str] = []
+        closes: List[int] = []
+        stream.failed.connect(failures.append)
+        stream.closed.connect(lambda: closes.append(1))
+        stream.start()
+        _FakeSocket.last.connected.emit()
+        stream.finish()
+        assert any("CloseStream" in sent for sent in _FakeSocket.last.sent)
+        assert stream._flush_timer is not None and stream._flush_timer.isActive()
+        stream._flush_timer.timeout.emit()
+        assert failures == [FLUSH_TIMEOUT_MESSAGE]
+        assert closes == []
+        assert _FakeSocket.last.aborted is True
+
+    def test_a_final_that_arrives_in_time_is_still_delivered(self, stream):
+        """The grace period exists for this fragment; make sure the timer
+        does not get in its way."""
+        import json
+
+        finals: List[str] = []
+        stream.final.connect(finals.append)
+        stream.start()
+        _FakeSocket.last.connected.emit()
+        stream.finish()
+        _FakeSocket.last.textMessageReceived.emit(
+            json.dumps(
+                {"is_final": True, "channel": {"alternatives": [{"transcript": "the tail"}]}}
+            )
+        )
+        assert finals == ["the tail"]
+
+    def test_the_flush_grace_is_generous_but_bounded(self):
+        from src.dictation.providers import CONNECT_TIMEOUT_MS, FLUSH_GRACE_MS
+
+        # Long enough that a slow but healthy flush is not called a failure
+        # (Deepgram answers in well under a second), short enough that a
+        # wedged server cannot pin the bar in "finishing" for long.
+        assert 3000 <= FLUSH_GRACE_MS <= 8000
+        assert 5000 <= CONNECT_TIMEOUT_MS <= 20000
+
+
 class TestTheRunLifecycle:
     def test_a_run_reaches_listening_once_the_socket_opens(self, controller):
         states: List[str] = []
@@ -493,6 +626,10 @@ class TestTheProviderUrl:
                 "key",
             ),
             ("Host api.deepgram.com not found", "connection"),
+            ("SSL handshake failed", "secure connection"),
+            ("The TLS/SSL connection has been closed", "secure connection"),
+            # "processHandshake" is Qt's plain-HTTP refusal, not TLS.
+            ("QWebSocketPrivate::processHandshake: Handshake failed", "dictation stopped"),
             ("The operation timed out", "respond"),
             ("", "connection was lost"),
         ],

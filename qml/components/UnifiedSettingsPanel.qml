@@ -3486,9 +3486,14 @@ Item {
                                             Text {
                                                 objectName: "dictationHistoryText"
                                                 Layout.fillWidth: true
-                                                text: historyRow.entry.result
+                                                // A run that failed before anything was
+                                                // transcribed keeps its audio and no text.
+                                                text: historyRow.entry.result !== ""
+                                                      ? historyRow.entry.result
+                                                      : "Not transcribed. Play the audio to hear what was said."
+                                                font.italic: historyRow.entry.result === ""
                                                 textFormat: Text.PlainText
-                                                color: "#d8d8d8"
+                                                color: historyRow.entry.result !== "" ? "#d8d8d8" : "#999"
                                                 font.pixelSize: 12
                                                 wrapMode: Text.WordWrap
                                                 maximumLineCount: 2
@@ -3509,6 +3514,7 @@ Item {
                                                 }
                                                 SettingsButton {
                                                     objectName: "dictationHistoryCopy"
+                                                    visible: historyRow.entry.result !== ""
                                                     text: "Copy"
                                                     onClicked: unifiedSettings.settingChanged("dictationHistoryCopy", historyRow.entry.id)
                                                 }
@@ -3519,6 +3525,7 @@ Item {
                                                     // alone is not consent to that (the bridge and
                                                     // controller refuse it too).
                                                     visible: historyRow.entry.purpose === "dictate"
+                                                             && historyRow.entry.raw !== ""
                                                              && unifiedSettings.dictationHasAnthropicKey
                                                              && unifiedSettings.dictationCleanupEnabled
                                                     text: "Reprocess"

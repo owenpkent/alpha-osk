@@ -218,6 +218,138 @@ def _speak(ctl: DictationController, *phrases: str, purpose: str = "dictate") ->
     _FakeStream.last.closed.emit()
 
 
+class TestAFailedRunKeepsWhatWasHeard:
+    """Three lessons from MacroVox, applied here.
+
+    A stream that fails after words were heard ends like a stop (history
+    and the held-back text survive).  A stream that fails before anything
+    was transcribed keeps its audio as an audio-only history entry, and
+    the toast says so.  A flush timeout on an empty run says nothing.
+    """
+
+    def _spoken_audio(self, ctl: DictationController, seconds: float = 2.0) -> None:
+        from src.dictation.controller import _PCM_BYTES_PER_SECOND
+
+        ctl._on_chunk(b"\x01\x00" * (int(_PCM_BYTES_PER_SECOND * seconds) // 2))
+
+    def test_a_streamed_run_that_drops_still_records_history(
+        self, qapp, monkeypatch, claude, history
+    ):
+        ctl = _make_controller(qapp, monkeypatch, claude, history, stream_inserts=True)
+        spy = _Spy(ctl)
+        ctl.start()
+        _FakeStream.last.opened.emit()
+        _FakeStream.last.final.emit("typed as I spoke")
+        self._spoken_audio(ctl)
+        _FakeStream.last.failed.emit("Dictation stopped: the connection was lost.")
+        assert spy.errors == ["Dictation stopped: the connection was lost."]
+        # Streamed finals were already typed; the record is what was owed.
+        assert spy.finals == ["typed as I spoke"]
+        entries = history.entries()
+        assert len(entries) == 1
+        assert entries[0]["result"] == "typed as I spoke"
+        assert entries[0]["hasAudio"] is True
+        assert ctl.state is DictationState.IDLE
+
+    def test_a_held_back_run_that_drops_is_delivered(self, qapp, monkeypatch, claude, history):
+        ctl = _make_controller(qapp, monkeypatch, claude, history, stream_inserts=False)
+        spy = _Spy(ctl)
+        ctl.start()
+        _FakeStream.last.opened.emit()
+        _FakeStream.last.final.emit("held back")
+        _FakeStream.last.failed.emit("Dictation stopped: the connection was lost.")
+        assert spy.finals == ["held back"]
+        assert history.entries()[0]["result"] == "held back"
+
+    def test_a_run_that_never_transcribed_keeps_its_audio(self, qapp, monkeypatch, claude, history):
+        ctl = _make_controller(qapp, monkeypatch, claude, history)
+        spy = _Spy(ctl)
+        ctl.start()
+        self._spoken_audio(ctl, seconds=3.0)
+        _FakeStream.last.failed.emit(
+            "Could not make a secure connection to the dictation service: check your connection."
+        )
+        assert spy.errors == [
+            "Could not make a secure connection to the dictation service: "
+            "check your connection. The audio is saved in History."
+        ]
+        assert spy.finals == []
+        entries = history.entries()
+        assert len(entries) == 1
+        assert entries[0]["raw"] == "" and entries[0]["result"] == ""
+        assert entries[0]["hasAudio"] is True
+        assert ctl.state is DictationState.IDLE
+
+    def test_a_rejected_key_keeps_the_audio_too(self, qapp, monkeypatch, claude, history):
+        ctl = _make_controller(qapp, monkeypatch, claude, history)
+        spy = _Spy(ctl)
+        ctl.start()
+        self._spoken_audio(ctl)
+        _FakeStream.last.closed.emit()
+        assert spy.errors == [
+            "Dictation could not start: check your API key in Settings. "
+            "The audio is saved in History."
+        ]
+        assert history.entries()[0]["hasAudio"] is True
+
+    def test_under_a_second_of_audio_is_not_worth_an_entry(
+        self, qapp, monkeypatch, claude, history
+    ):
+        ctl = _make_controller(qapp, monkeypatch, claude, history)
+        spy = _Spy(ctl)
+        ctl.start()
+        self._spoken_audio(ctl, seconds=0.4)
+        _FakeStream.last.failed.emit("Dictation stopped: the connection was lost.")
+        assert spy.errors == ["Dictation stopped: the connection was lost."]
+        assert history.entries() == []
+
+    def test_history_off_keeps_nothing_and_says_nothing_about_it(
+        self, qapp, monkeypatch, claude, history
+    ):
+        ctl = _make_controller(qapp, monkeypatch, claude, history, history_enabled=False)
+        spy = _Spy(ctl)
+        ctl.start()
+        self._spoken_audio(ctl)
+        _FakeStream.last.failed.emit("Dictation stopped: the connection was lost.")
+        assert spy.errors == ["Dictation stopped: the connection was lost."]
+        assert history.entries() == []
+
+    def test_a_flush_timeout_on_an_empty_run_is_silent(self, qapp, monkeypatch, claude, history):
+        from src.dictation.providers import FLUSH_TIMEOUT_MESSAGE
+
+        ctl = _make_controller(qapp, monkeypatch, claude, history)
+        spy = _Spy(ctl)
+        ctl.start()
+        _FakeStream.last.opened.emit()
+        ctl.stop()
+        _FakeStream.last.failed.emit(FLUSH_TIMEOUT_MESSAGE)
+        assert spy.errors == []
+        assert ctl.state is DictationState.IDLE
+
+    def test_a_flush_timeout_after_speech_delivers_and_warns(
+        self, qapp, monkeypatch, claude, history
+    ):
+        from src.dictation.providers import FLUSH_TIMEOUT_MESSAGE
+
+        ctl = _make_controller(qapp, monkeypatch, claude, history, stream_inserts=False)
+        spy = _Spy(ctl)
+        ctl.start()
+        _FakeStream.last.opened.emit()
+        _FakeStream.last.final.emit("most of it")
+        ctl.stop()
+        _FakeStream.last.failed.emit(FLUSH_TIMEOUT_MESSAGE)
+        assert spy.errors == [FLUSH_TIMEOUT_MESSAGE]
+        assert spy.finals == ["most of it"]
+
+    def test_privacy_cancel_still_discards_everything(self, qapp, monkeypatch, claude, history):
+        """The one path that may throw audio away is unchanged."""
+        ctl = _make_controller(qapp, monkeypatch, claude, history)
+        ctl.start()
+        self._spoken_audio(ctl)
+        ctl.cancel()
+        assert history.entries() == []
+
+
 @pytest.fixture
 def cleanup_ctl(qapp, monkeypatch, claude, history):
     return _make_controller(
