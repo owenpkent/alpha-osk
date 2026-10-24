@@ -32,6 +32,7 @@ at risk.
 from __future__ import annotations
 
 import logging
+import math
 from typing import Any
 
 from PySide6.QtCore import QObject, Signal
@@ -57,6 +58,32 @@ CHUNK_BYTES = SAMPLE_RATE * CHANNELS * SAMPLE_BYTES * CHUNK_MS // 1000
 #: stopping on a pause mid-sentence is far worse than running a few
 #: seconds long.  Room tone on a desktop mic sits well under this.
 SILENCE_PEAK = 0.015
+
+#: Peak amplitude the level indicator treats as "as loud as it gets".
+#: Speech into a desktop mic peaks between about 0.05 and 0.3 of full
+#: scale, so half scale is already shouting.
+DISPLAY_CEILING = 0.5
+
+
+def display_level(peak: float) -> float:
+    """Map a raw peak onto the 0.0 to 1.0 the mic indicator draws.
+
+    The raw peak is the wrong thing to draw.  Normal speech sits at 0.05
+    to 0.3 of full scale, so an indicator fed the peak directly moves a
+    pixel or two and stays almost transparent, which is how the mic ring
+    was invisible for a year.  This maps the span between the silence
+    floor and :data:`DISPLAY_CEILING` in decibels, the way a studio meter
+    does, so a quiet voice on a quiet mic still fills a third of the
+    scale and a loud one does not pin it.  The silence auto-stop keeps
+    reading the raw peak; only the picture changes.
+    """
+    if not peak or peak <= SILENCE_PEAK:
+        return 0.0
+    if peak >= DISPLAY_CEILING:
+        return 1.0
+    floor_db = math.log10(SILENCE_PEAK)
+    ceiling_db = math.log10(DISPLAY_CEILING)
+    return (math.log10(peak) - floor_db) / (ceiling_db - floor_db)
 
 
 def available() -> bool:

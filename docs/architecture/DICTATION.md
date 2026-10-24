@@ -269,6 +269,14 @@ Repeater's model both gate on `!root.dictationActive`). They cannot share
 the row, and a pill during dictation would be about a prefix the user is
 no longer typing.
 
+**A held-back run shows nothing here** (the owner's call, 2026-10-24).
+With Type As You Speak off, or cleanup on, `_on_interim` and `_on_final`
+set no interim at all, so the banner shows its own "Listening..." label
+until the run is typed in one go. It used to show everything heard so far
+plus the phrase in flight, which read as "it is typing" when it was not.
+The level bars beside the mic (next section) carry "it hears you" instead.
+Guard: `tests/test_dictation_ai.py::TestAccumulateMode`.
+
 ## The mic button, and the left edge
 
 It sits at the **left** end of the bar for the same reason the snippets
@@ -297,6 +305,28 @@ height with that setting, taking everything in it, and an unrelated
 setting must not be able to remove the only way into a feature. This is
 the precedent `snippetsTitleBarButton` set, and the hole the
 clear-context button still has.
+
+**The level bars are the only sign the mic hears you.** Four bars sit
+beside the mic (`micLevelBars`, in `predBarMicRow`), visible only while
+`dictationState === "listening"`, for a mic run or a Write run alike. The
+owner picked them over a louder ring, a bottom fill, ripples and a
+whole-bar wash (`docs/roadmap/dictation-speaking-indicator.html` shows
+all five side by side; chosen 2026-10-24). They widen `micReserve` by
+their width plus 8 px while shown; the pills are hidden for the whole run,
+so only the transcript label moves, and the reserve returns to exactly
+`predPillHeight + 16` at idle.
+
+They replace a ring that nobody ever saw move, and the reason was not the
+ring: it was fed the **raw peak**. Speech into a desktop mic peaks at
+0.05 to 0.3 of full scale, so `10 × level` pixels was one pixel and
+`0.15 + 0.5 × level` opacity was near-transparent. `audio.display_level`
+maps the peak in decibels between the silence floor (`SILENCE_PEAK`,
+0.015, the same constant the auto-stop reads) and `DISPLAY_CEILING`
+(0.5), and the bridge's `_on_dictation_level` emits that, so every QML
+consumer of `dictationLevel` reads a usable 0 to 1. The controller's
+`levelChanged` stays raw: the silence auto-stop needs it. Guards:
+`tests/test_dictation.py::TestTheDisplayLevel`,
+`tests/test_qml_dictation.py::TestTheLevelBarsSayTheMicHearsYou`.
 
 Both icons are Feather's `mic` drawn through `StrokeIcon`, never a glyph:
 on Windows a small glyph commonly resolves through Segoe UI Emoji, which
@@ -527,7 +557,7 @@ Signals (QML binds these in `Main.qml`'s `Connections { target: keyboard }`):
 |--------|---------|
 | `dictationStateChanged(str)` | `idle` / `connecting` / `listening` / `finishing` / `polishing` |
 | `dictationTranscriptChanged(str)` | the in-flight phrase, empty when there is none |
-| `dictationLevelChanged(float)` | mic peak, 0.0 to 1.0, for the button's ring |
+| `dictationLevelChanged(float)` | mic level, 0.0 to 1.0, decibel-mapped by `audio.display_level` (not the raw peak), for the level bars |
 | `dictationError(str)` | a user-facing sentence; always paired with a return to idle |
 | `dictationDraftReady(str)` | a Write with AI draft, for the preview popup; never typed on its own |
 | `dictationHistoryChanged()` | a run was recorded, or a reprocess updated an entry |
@@ -572,9 +602,10 @@ Every setter persists immediately, the same way `SnippetStore` does, so there is
   character at a time. Dropping the phrase beats typing it into the app
   behind the popup, which is not where the user is looking.
 - **Held-back runs show nothing in the target app until they end.** The
-  suggestion bar carries the running transcript, but a long run with
-  cleanup on types nothing until the user stops and Claude answers (up to
-  the 20 s timeout). That is the price of the single coherent insert (see
+  suggestion bar shows only "Listening..." and the level bars (the running
+  transcript preview was removed at the owner's request, 2026-10-24), and
+  a long run with cleanup on types nothing until the user stops and Claude
+  answers (up to the 20 s timeout). That is the price of the single coherent insert (see
   *AI cleanup*); `stream_inserts` on with cleanup off keeps phrase by
   phrase typing. (The earlier gap, that `stream_inserts = False` was stored
   but not implemented, is closed.)

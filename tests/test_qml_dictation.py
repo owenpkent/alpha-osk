@@ -400,6 +400,71 @@ class TestTheMicCostsNothingWhileDictationIsOff:
         assert _child(root, "dictationTranscript").property("visible") is False
 
 
+class TestTheLevelBarsSayTheMicHearsYou:
+    """Four bars beside the mic, visible only while listening, fed the
+    decibel-mapped level.  They widen `micReserve` while shown, and the
+    pills are hidden for the whole run, so only the transcript label moves."""
+
+    def _bars(self, root):
+        row = _child(root, "dictationLevelBars")
+        return row, [c for c in row.childItems() if c.objectName() == "dictationLevelBar"]
+
+    def test_hidden_until_listening_and_the_reserve_stays_put(self, qml_root):
+        root, _, _ = qml_root
+        _turn_dictation_on(root)
+        row, _ = self._bars(root)
+        assert row.property("visible") is False
+        base = _bar(root, "predBar.micReserve")
+        assert base == _bar(root, "predBar.predPillHeight") + 16
+        root.setProperty("dictationState", "connecting")
+        QCoreApplication.processEvents()
+        assert row.property("visible") is False
+        assert _bar(root, "predBar.micReserve") == base
+
+    def test_listening_shows_four_bars_that_follow_the_level(self, qml_root):
+        root, warnings, _ = qml_root
+        _turn_dictation_on(root)
+        root.setProperty("dictationState", "listening")
+        root.setProperty("dictationLevel", 0.0)
+        QCoreApplication.processEvents()
+        row, bars = self._bars(root)
+        assert row.property("visible") is True
+        assert len(bars) == 4
+        quiet = [b.property("height") for b in bars]
+        assert all(h == 4 for h in quiet)
+        root.setProperty("dictationLevel", 1.0)
+        _wait_ms(200)
+        loud = [b.property("height") for b in bars]
+        assert all(tall > q for tall, q in zip(loud, quiet))
+        # Tallest in the middle, never taller than the pill.
+        assert max(loud) == loud[1]
+        assert max(loud) <= _bar(root, "predBar.predPillHeight")
+        assert _real_warnings(warnings) == []
+
+    def test_the_reserve_grows_by_the_bars_while_listening(self, qml_root):
+        root, _, _ = qml_root
+        _turn_dictation_on(root)
+        base = _bar(root, "predBar.micReserve")
+        root.setProperty("dictationState", "listening")
+        QCoreApplication.processEvents()
+        row, _ = self._bars(root)
+        assert _bar(root, "predBar.micReserve") == base + row.property("width") + 8
+        label = _child(root, "dictationTranscript")
+        assert label.property("x") >= _bar(root, "predBar.micReserve")
+        root.setProperty("dictationState", "idle")
+        QCoreApplication.processEvents()
+        assert _bar(root, "predBar.micReserve") == base
+
+    def test_the_bars_are_not_scan_targets(self, qml_root):
+        root, _, _ = qml_root
+        _turn_dictation_on(root)
+        root.setProperty("dictationState", "listening")
+        QCoreApplication.processEvents()
+        _, bars = self._bars(root)
+        for bar in bars:
+            assert bar.property("targetId") is None
+
+
 class TestTurningDictationOnShiftsThePillsClear:
     """The mirror of TestClearButtonNeverCoversPills at the other end of the
     bar: a control parked at an edge owns a strip the pill row may not enter,
