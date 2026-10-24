@@ -1,0 +1,271 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Speaking indicator options</title>
+<link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&family=Roboto+Condensed:wght@500;700&family=Roboto+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="alex-style/tokens.css">
+<style>
+  /* The replica of the keyboard's suggestion bar, Dark theme values from
+     Main.qml::themeData ("dark"): background #1a1a1a, key #3a3a3a,
+     text #e0e0e0, accent #4a9eff.  Pill height 36 px (predPillHeight). */
+  .bar {
+    position: relative;
+    display: flex; align-items: center; gap: 8px;
+    height: 56px; padding: 0 12px;
+    background: #1a1a1a; border: 1px solid #505050;
+    overflow: visible;
+    font: 14px var(--ax-font);
+  }
+  .bar .pill {
+    height: 36px; padding: 0 14px; display: flex; align-items: center;
+    background: #3a3a3a; color: #e0e0e0; border-radius: 18px; white-space: nowrap;
+  }
+  .bar .pill.ghost { color: #777; }
+  .bar .spacer { flex: 1; }
+  .mic {
+    position: relative; width: 36px; height: 36px; border-radius: 50%;
+    background: #4a9eff; border: 1px solid #4a9eff; flex: none;
+    display: grid; place-items: center;
+  }
+  .mic svg { width: 21px; height: 21px; stroke: #0b1a2e; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; position: relative; z-index: 2; }
+
+  /* A: louder ring */
+  .ring {
+    position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+    border: 2px solid #4a9eff; border-radius: 50%; pointer-events: none;
+    transition: width 90ms linear, height 90ms linear, opacity 90ms linear;
+  }
+  /* B: level bars */
+  .bars { display: flex; align-items: center; gap: 3px; height: 36px; }
+  .bars i { display: block; width: 4px; background: #4a9eff; border-radius: 2px; min-height: 4px; transition: height 90ms linear, opacity 90ms linear; }
+  /* C: fill */
+  .fill { position: absolute; left: 0; right: 0; bottom: 0; background: #4a9eff; border-radius: 0 0 18px 18px; transition: height 90ms linear; z-index: 1; }
+  .mic.fillable { background: #3a3a3a; border-color: #4a9eff; overflow: hidden; }
+  .mic.fillable svg { stroke: #e0e0e0; }
+  /* D: ripples */
+  .ripple {
+    position: absolute; left: 50%; top: 50%; width: 36px; height: 36px;
+    transform: translate(-50%, -50%); border: 2px solid #4a9eff; border-radius: 50%;
+    pointer-events: none; animation: ripple 700ms ease-out forwards;
+  }
+  @keyframes ripple { from { width: 36px; height: 36px; opacity: 0.9; } to { width: 84px; height: 84px; opacity: 0; } }
+  .glow { position: absolute; inset: -6px; border-radius: 50%; box-shadow: 0 0 0 0 rgba(74,158,255,0.0); transition: box-shadow 90ms linear; pointer-events: none; }
+  /* E: bar wash */
+  .wash { position: absolute; inset: 0; background: #4a9eff; opacity: 0; transition: opacity 90ms linear; pointer-events: none; }
+
+  .option { display: grid; grid-template-columns: 56px 1fr; gap: 12px 16px; align-items: start; }
+  .option .letter { font: 700 28px/1 var(--ax-font-title); color: var(--ax-accent); padding-top: 2px; }
+  .option .bar { margin-top: 10px; }
+  .option .pick { margin-top: 10px; }
+  .readouts { display: flex; gap: 24px; flex-wrap: wrap; }
+  .readouts .ax-value { font-size: 22px; }
+  .controls { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; }
+  .controls label { display: flex; gap: 8px; align-items: center; }
+  .meter { height: 6px; background: var(--ax-grid); position: relative; }
+  .meter i { position: absolute; left: 0; top: 0; bottom: 0; background: var(--ax-accent); transition: width 90ms linear; }
+  .meter.raw i { background: var(--ax-muted); }
+  .chosen { outline: 2px solid var(--ax-accent); outline-offset: 2px; }
+  @media (prefers-reduced-motion: reduce) { .ripple { animation-duration: 1ms; } }
+</style>
+</head>
+<body class="ax">
+<div class="ax-page">
+  <div class="ax-mast">
+    <div>
+      <h1>Speaking indicator options</h1>
+      <div class="ax-meta">Dictation mic button, alpha-osk suggestion bar, Dark theme. Open this file locally; nothing loads but the fonts. <span class="ax-status good">Decided</span> B, level bars, 2026-10-24 (shipped in Main.qml as <span class="ax-mono">micLevelBars</span>).</div>
+    </div>
+    <div class="controls">
+      <button class="ax-btn primary" id="toggle">Pause speech</button>
+      <label class="ax-label">Mic gain
+        <input class="ax-range" id="gain" type="range" min="0.05" max="0.5" step="0.01" value="0.2">
+        <span class="ax-mono" id="gainOut">0.20</span>
+      </label>
+    </div>
+  </div>
+
+  <section class="ax-panel" style="margin-top: 16px">
+    <h2>Why the current ring is invisible</h2>
+    <p class="ax-muted">The ring in <span class="ax-mono">Main.qml</span> grows by <span class="ax-mono">10 × level</span> pixels and sits at <span class="ax-mono">0.15 + 0.5 × level</span> opacity, where <span class="ax-mono">level</span> is the raw peak amplitude. Normal speech peaks between 0.05 and 0.3 of full scale, so the ring moves about 1 px and stays almost transparent. Every option below first maps the raw peak onto a 0 to 1 scale between the silence floor (0.015, the same constant the auto-stop uses) and half scale, in decibels. The two meters show the difference; drag the gain to see that the shown level stays usable from a quiet mic to a loud one.</p>
+    <div class="readouts">
+      <div><div class="ax-label">Raw peak</div><div class="ax-value ax-mono" id="rawOut">0.000</div><div class="meter raw"><i id="rawMeter"></i></div></div>
+      <div><div class="ax-label">Shown level</div><div class="ax-value ax-mono" id="shownOut">0.00</div><div class="meter"><i id="shownMeter"></i></div></div>
+      <div><div class="ax-label">Hearing speech</div><div class="ax-value" id="speechOut"><span class="ax-status off">Quiet</span></div></div>
+    </div>
+  </section>
+
+  <section class="ax-panel" style="margin-top: 8px">
+    <h2>Pick one, or two to combine</h2>
+    <p class="ax-muted">Reply with the letter. A and D are changes to the mic button alone; B adds a meter beside it; C recolours the button; E recolours the whole bar, the largest cue for peripheral vision. The same simulated speech drives all five, updated ten times a second like the real meter.</p>
+
+    <div class="ax-grid" style="grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 12px">
+
+      <div class="option ax-tile" data-opt="A">
+        <div class="letter">A</div>
+        <div>
+          <h2>Louder ring</h2>
+          <div class="ax-muted">The ring we have, fed the normalised level: grows up to 24 px and goes fully opaque on a loud syllable. Smallest change, nothing new on the bar.</div>
+          <div class="bar">
+            <div class="pill ghost">the</div><div class="pill ghost">and</div><div class="pill ghost">to</div>
+            <div class="spacer"></div>
+            <div class="mic"><div class="ring" id="ringA"></div><svg viewBox="0 0 24 24"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><path d="M12 19 L12 23"/><path d="M8 23 L16 23"/></svg></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="option ax-tile" data-opt="B">
+        <div class="letter">B</div>
+        <div>
+          <h2>Level bars</h2>
+          <div class="ax-muted">Four bars beside the mic, like a voice meter. Reads as "hearing you" at a glance, and the heights carry how loud. Takes about 20 px of bar width.</div>
+          <div class="bar">
+            <div class="pill ghost">the</div><div class="pill ghost">and</div><div class="pill ghost">to</div>
+            <div class="spacer"></div>
+            <div class="bars" id="barsB"><i></i><i></i><i></i><i></i></div>
+            <div class="mic"><svg viewBox="0 0 24 24"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><path d="M12 19 L12 23"/><path d="M8 23 L16 23"/></svg></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="option ax-tile" data-opt="C">
+        <div class="letter">C</div>
+        <div>
+          <h2>Fill from the bottom</h2>
+          <div class="ax-muted">The button is a key colour while listening and fills with the accent from the bottom as you speak. Big colour change inside a shape you already watch; the icon stays readable on both.</div>
+          <div class="bar">
+            <div class="pill ghost">the</div><div class="pill ghost">and</div><div class="pill ghost">to</div>
+            <div class="spacer"></div>
+            <div class="mic fillable"><div class="fill" id="fillC"></div><svg viewBox="0 0 24 24"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><path d="M12 19 L12 23"/><path d="M8 23 L16 23"/></svg></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="option ax-tile" data-opt="D">
+        <div class="letter">D</div>
+        <div>
+          <h2>Ripples on speech</h2>
+          <div class="ax-muted">A ring ripples outward each time a syllable starts, over a steady glow that follows the level. Motion rather than size, so it is visible even when the level barely moves.</div>
+          <div class="bar">
+            <div class="pill ghost">the</div><div class="pill ghost">and</div><div class="pill ghost">to</div>
+            <div class="spacer"></div>
+            <div class="mic" id="micD"><div class="glow" id="glowD"></div><svg viewBox="0 0 24 24"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><path d="M12 19 L12 23"/><path d="M8 23 L16 23"/></svg></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="option ax-tile" data-opt="E" style="grid-column: 1 / -1">
+        <div class="letter">E</div>
+        <div>
+          <h2>Whole-bar wash</h2>
+          <div class="ax-muted">The suggestion bar itself tints toward the accent with the level (up to 22 percent), on top of the louder ring from A. The largest surface on the keyboard moves, so it shows in peripheral vision while you look at the app you are dictating into. Pills stay readable at that strength on all nine themes (the wash goes through the same contrast guard as key fills).</div>
+          <div class="bar"><div class="wash" id="washE"></div>
+            <div class="pill ghost" style="position:relative">the</div><div class="pill ghost" style="position:relative">and</div><div class="pill ghost" style="position:relative">to</div>
+            <div class="spacer"></div>
+            <div class="mic"><div class="ring" id="ringE"></div><svg viewBox="0 0 24 24"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><path d="M12 19 L12 23"/><path d="M8 23 L16 23"/></svg></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="ax-panel" style="margin-top: 8px">
+    <h2>Notes</h2>
+    <p class="ax-muted">Whichever is chosen also hides the running transcript from the bar while a run is held back (Type As You Speak off), as agreed, so this indicator becomes the only sign that the microphone hears you. The normalisation lives in the bridge, not QML, so every option reads the same <span class="ax-mono">dictationLevel</span>. Each option is one Behavior-animated property in <span class="ax-mono">Main.qml</span>, never a binding owned by an animation (see the existing busy-pulse comment).</p>
+  </section>
+</div>
+
+<script>
+(function () {
+  'use strict';
+  var FLOOR = 0.015, CEIL = 0.5;
+  var lf = Math.log10(FLOOR), lc = Math.log10(CEIL);
+  function shown(raw) {
+    if (raw <= FLOOR) return 0;
+    var v = (Math.log10(raw) - lf) / (lc - lf);
+    return Math.max(0, Math.min(1, v));
+  }
+
+  // Simulated speech: syllable bursts of 120-280 ms separated by short gaps,
+  // phrases of 4-9 syllables separated by pauses, at ten updates a second.
+  var running = true, gain = 0.2;
+  var t = 0, state = 'pause', left = 8, burstPeak = 0;
+  var wasSpeaking = false;
+  function tick() {
+    if (!running) return;
+    var raw;
+    if (state === 'pause') {
+      raw = FLOOR * 0.4 * (0.6 + Math.random() * 0.8);
+      if (--left <= 0) { state = 'burst'; left = 1 + Math.floor(Math.random() * 2); burstPeak = gain * (0.5 + Math.random() * 0.7); syll = 4 + Math.floor(Math.random() * 6); }
+    } else if (state === 'burst') {
+      raw = burstPeak * (0.7 + Math.random() * 0.4);
+      if (--left <= 0) { state = 'gap'; left = 1; }
+    } else {
+      raw = gain * 0.12 * Math.random();
+      if (--left <= 0) {
+        if (--syll <= 0) { state = 'pause'; left = 5 + Math.floor(Math.random() * 10); }
+        else { state = 'burst'; left = 1 + Math.floor(Math.random() * 2); burstPeak = gain * (0.5 + Math.random() * 0.7); }
+      }
+    }
+    render(raw);
+  }
+  var syll = 0;
+
+  var rawOut = document.getElementById('rawOut'), shownOut = document.getElementById('shownOut');
+  var rawMeter = document.getElementById('rawMeter'), shownMeter = document.getElementById('shownMeter');
+  var speechOut = document.getElementById('speechOut');
+  var ringA = document.getElementById('ringA'), ringE = document.getElementById('ringE');
+  var barsB = document.getElementById('barsB').children;
+  var fillC = document.getElementById('fillC');
+  var micD = document.getElementById('micD'), glowD = document.getElementById('glowD');
+  var washE = document.getElementById('washE');
+  var barHeights = [0.55, 1.0, 0.8, 0.4];
+
+  function ring(el, s) {
+    var size = 36 + 8 + 24 * s;
+    el.style.width = size + 'px'; el.style.height = size + 'px';
+    el.style.opacity = s > 0 ? (0.3 + 0.7 * s) : 0.15;
+  }
+  function render(raw) {
+    var s = shown(raw);
+    var speaking = raw >= FLOOR * 2;
+    rawOut.textContent = raw.toFixed(3);
+    shownOut.textContent = s.toFixed(2);
+    rawMeter.style.width = (raw * 100) + '%';
+    shownMeter.style.width = (s * 100) + '%';
+    speechOut.innerHTML = speaking ? '<span class="ax-status good">Speech</span>' : '<span class="ax-status off">Quiet</span>';
+
+    ring(ringA, s); ring(ringE, s);
+    for (var i = 0; i < barsB.length; i++) {
+      var h = 4 + 28 * s * barHeights[i] * (0.85 + Math.random() * 0.3);
+      barsB[i].style.height = Math.min(32, h) + 'px';
+      barsB[i].style.opacity = s > 0 ? 1 : 0.35;
+    }
+    fillC.style.height = (100 * s) + '%';
+    glowD.style.boxShadow = '0 0 0 ' + (2 + 8 * s) + 'px rgba(74,158,255,' + (0.15 + 0.45 * s) + ')';
+    if (speaking && !wasSpeaking) {
+      var r = document.createElement('div'); r.className = 'ripple'; micD.appendChild(r);
+      setTimeout(function () { r.remove(); }, 720);
+    }
+    wasSpeaking = speaking;
+    washE.style.opacity = (0.22 * s).toFixed(3);
+  }
+
+  setInterval(tick, 100);
+  document.getElementById('toggle').addEventListener('click', function () {
+    running = !running; this.textContent = running ? 'Pause speech' : 'Resume speech';
+    if (!running) render(0);
+  });
+  var gainEl = document.getElementById('gain'), gainOut = document.getElementById('gainOut');
+  gainEl.addEventListener('input', function () { gain = parseFloat(this.value); gainOut.textContent = gain.toFixed(2); });
+
+  // Clicking a tile outlines it so the choice can be read back; nothing is
+  // sent anywhere.
+  Array.prototype.forEach.call(document.querySelectorAll('.option'), function (tile) {
+    tile.addEventListener('click', function () { tile.classList.toggle('chosen'); });
+  });
+})();
+</script>
+</body>
+</html>

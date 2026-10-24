@@ -1,0 +1,212 @@
+/* alex-style tokens + components. Values mirror ../tokens.json.
+   Dark is the default. Put data-mode="light" on <html> for reports and print.
+   Load the fonts first:
+   <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&family=Roboto+Condensed:wght@500;700&family=Roboto+Mono:wght@400;500;700&display=swap" rel="stylesheet"> */
+
+:root {
+  --ax-font: 'Roboto', system-ui, sans-serif;
+  --ax-font-title: 'Roboto Condensed', 'Roboto', sans-serif;
+  --ax-font-mono: 'Roboto Mono', ui-monospace, Menlo, monospace;
+
+  --ax-bg: #0e0f10;
+  --ax-panel: #141516;
+  --ax-border: #2a2c2f;
+  --ax-border-strong: #3a3c3f;
+  --ax-rule: #222426;
+  --ax-grid: #26282b;
+  --ax-axis: #4a4c4e;
+  --ax-ink: #e4e1d8;
+  --ax-muted: #8a877e;
+  --ax-accent: #e2683c;
+  --ax-accent-rgb: 226, 104, 60;
+  --ax-on-accent: #0e0f10;
+  --ax-glow: 0 0 14px rgba(var(--ax-accent-rgb), 0.28);
+
+  /* Categorical order is fixed. Never cycle past 6; fold the rest into "Other". */
+  --ax-s1: #2f62e8;
+  --ax-s2: #e03a2f;
+  --ax-s3: #0f9a66;
+  --ax-s4: #a45ee0;
+  --ax-s5: #1a9cc0;
+  --ax-s6: #d9539a;
+
+  --ax-good: #4fbf5a;
+  --ax-warning: #e6c229;
+  --ax-critical: #ff5a4a;
+  --ax-off: #5a5c5e;
+
+  --ax-line-w: 2.5;
+  --ax-grid-dash: 2 4;
+  --ax-gap: 8px;
+  --ax-ease: cubic-bezier(0.2, 0.9, 0.3, 1.2);
+}
+
+[data-mode="light"] {
+  --ax-bg: #ffffff;
+  --ax-panel: #ffffff;
+  --ax-border: #d4d4d0;
+  --ax-border-strong: #0b0b0b;
+  --ax-rule: #e6e6e3;
+  --ax-grid: #e6e6e3;
+  --ax-axis: #0b0b0b;
+  --ax-ink: #0b0b0b;
+  --ax-muted: #5f5f5a;
+  --ax-accent: #c4532a;
+  --ax-accent-rgb: 196, 83, 42;
+  --ax-on-accent: #ffffff;
+  --ax-glow: none;
+
+  --ax-s1: #1f4fd8;
+  --ax-s2: #e3241b;
+  --ax-s3: #0f8a5f;
+  --ax-s4: #8a3fd1;
+  --ax-s5: #0e7fa3;
+  --ax-s6: #c2307a;
+
+  --ax-good: #1d8a3e;
+  --ax-warning: #b58900;
+  --ax-critical: #d42a1c;
+  --ax-off: #9a9a95;
+}
+
+/* ── Base ───────────────────────────────────────────────────── */
+.ax, .ax * { box-sizing: border-box; }
+.ax { background: var(--ax-bg); color: var(--ax-ink); font: 14px/1.5 var(--ax-font); font-variant-numeric: tabular-nums; }
+.ax h1 { font: 700 24px/1.1 var(--ax-font-title); letter-spacing: 0.06em; text-transform: uppercase; margin: 0; }
+.ax h1::before { content: "■ "; color: var(--ax-accent); }
+.ax h2 { font: 500 14px/1.3 var(--ax-font-title); letter-spacing: 0.1em; text-transform: uppercase; margin: 0 0 2px; }
+.ax p { max-width: 70ch; }
+.ax-page { max-width: 1120px; margin: 0 auto; padding: 28px 32px 64px; }
+.ax-label { font: 500 10px var(--ax-font-mono); letter-spacing: 0.12em; text-transform: uppercase; color: var(--ax-muted); }
+.ax-mono { font-family: var(--ax-font-mono); }
+.ax-muted { color: var(--ax-muted); }
+.ax-cap { color: var(--ax-muted); font-size: 12px; margin-bottom: 10px; }
+
+/* Header bar: title left, controls right, one rule under it */
+.ax-mast { display: flex; align-items: flex-end; justify-content: space-between; gap: 24px; padding-bottom: 14px; margin-bottom: 22px; border-bottom: 1px solid var(--ax-border); }
+.ax-meta { display: flex; gap: 14px; color: var(--ax-muted); font: 12px var(--ax-font-mono); margin-top: 6px; }
+
+/* ── Panels and tiles ───────────────────────────────────────── */
+.ax-panel, .ax-tile { position: relative; background: var(--ax-panel); border: 1px solid var(--ax-border); padding: 16px 18px; }
+.ax-panel::before, .ax-tile::before { content: ""; position: absolute; top: -1px; left: -1px; width: 8px; height: 8px; border-top: 2px solid var(--ax-accent); border-left: 2px solid var(--ax-accent); }
+.ax-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: var(--ax-gap); margin-bottom: var(--ax-gap); }
+.ax-tile { padding: 14px 16px; }
+.ax-value { font: 500 32px/1 var(--ax-font-mono); margin-top: 6px; color: var(--ax-accent); text-shadow: var(--ax-glow); transition: color 0.6s; }
+.ax-value small { font-size: 0.45em; color: var(--ax-muted); margin-left: 4px; font-weight: 400; text-shadow: none; }
+.ax-value.changed { color: var(--ax-ink); transition: none; }
+.ax-sub { font: 12px var(--ax-font-mono); color: var(--ax-muted); margin-top: 4px; }
+.ax-grid { display: grid; gap: var(--ax-gap); margin-bottom: var(--ax-gap); }
+
+/* ── Controls ───────────────────────────────────────────────── */
+.ax-btn { position: relative; display: inline-flex; align-items: center; gap: 8px; font: 500 12px/1 var(--ax-font-mono); text-transform: uppercase; letter-spacing: 0.1em; padding: 9px 13px; border: 1px solid var(--ax-border-strong); background: var(--ax-panel); color: var(--ax-ink); border-radius: 0; cursor: pointer; transition: border-color 0.15s, transform 0.08s; }
+.ax-btn:hover { border-color: var(--ax-accent); }
+.ax-btn:active { transform: translateY(1px); }
+.ax-btn:focus-visible { outline: 2px solid var(--ax-accent); outline-offset: 2px; }
+.ax-btn.primary { background: var(--ax-accent); color: var(--ax-on-accent); border-color: var(--ax-accent); }
+.ax-btn.danger { border-color: var(--ax-critical); color: var(--ax-critical); }
+.ax-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.ax-input { font: 13px var(--ax-font-mono); background: var(--ax-bg); color: var(--ax-ink); border: 1px solid var(--ax-border); border-radius: 0; padding: 6px 8px; }
+.ax-input:focus { outline: none; border-color: var(--ax-accent); }
+.ax-range { accent-color: var(--ax-accent); width: 100%; }
+
+/* Status: always a square + a word. Never color alone. */
+.ax-status { display: inline-flex; align-items: center; gap: 6px; font: 12px var(--ax-font-mono); }
+.ax-status::before { content: ""; width: 8px; height: 8px; background: var(--ax-off); }
+.ax-status.good::before { background: var(--ax-good); }
+.ax-status.warning::before { background: var(--ax-warning); }
+.ax-status.critical::before { background: var(--ax-critical); }
+/* Live indicator: the square breathes while data is streaming */
+.ax-status.live::before { background: var(--ax-good); animation: ax-breathe 1.6s ease-in-out infinite; }
+@keyframes ax-breathe { 50% { opacity: 0.35; transform: scale(0.75); } }
+
+/* ── Tables ─────────────────────────────────────────────────── */
+.ax table { width: 100%; border-collapse: collapse; }
+.ax th { text-align: left; font: 500 10px var(--ax-font-mono); letter-spacing: 0.12em; text-transform: uppercase; color: var(--ax-muted); padding: 6px 8px; border-bottom: 1px solid var(--ax-border-strong); }
+.ax td { padding: 7px 8px; border-bottom: 1px solid var(--ax-rule); }
+.ax td.num, .ax th.num { text-align: right; font-family: var(--ax-font-mono); }
+.ax .ax-n { font-family: var(--ax-font-mono); font-variant-numeric: tabular-nums; }
+.ax td.time { color: var(--ax-muted); font-family: var(--ax-font-mono); }
+.ax tbody tr { transition: background 0.12s; }
+.ax tbody tr:hover { background: rgba(var(--ax-accent-rgb), 0.06); }
+
+/* ── Charts ─────────────────────────────────────────────────── */
+.ax-legend { display: flex; flex-wrap: wrap; gap: 14px; font: 12px var(--ax-font-mono); color: var(--ax-muted); margin-bottom: 6px; }
+.ax-legend span::before { content: ""; display: inline-block; width: 10px; height: 10px; background: var(--c); margin-right: 6px; vertical-align: -1px; }
+.ax svg { display: block; width: 100%; height: auto; overflow: visible; }
+.ax svg text { font-family: var(--ax-font-mono); font-size: 11px; fill: var(--ax-muted); }
+.ax svg text.ax-axis-title { font-family: var(--ax-font); font-size: 11px; fill: var(--ax-ink); }
+.ax-tip { position: fixed; pointer-events: none; z-index: 50; display: none; background: var(--ax-bg); color: var(--ax-ink); border: 1px solid var(--ax-border); padding: 6px 8px; font: 12px/1.45 var(--ax-font-mono); }
+
+/* ── Report prose ───────────────────────────────────────────── */
+.ax figure { margin: 0; }
+.ax figcaption { font-size: 12px; color: var(--ax-muted); margin-top: 6px; }
+.ax figcaption b { color: var(--ax-ink); }
+.ax code { font-family: var(--ax-font-mono); font-size: 0.92em; color: var(--ax-accent); }
+
+/* ── Spinner ────────────────────────────────────────────────────
+   <span class="ax-spin"></span>, or add data-busy to any element (ax-fx.js
+   puts a spinner in it). An arc chases around a track while a small
+   satellite dot orbits the other way and the center dot bobs. */
+.ax-spin { --sz: 16px; position: relative; display: inline-block; width: var(--sz); height: var(--sz); flex: none; vertical-align: -3px; }
+.ax-spin::before { content: ""; position: absolute; inset: 0; border-radius: 50%; border: 2px solid rgba(var(--ax-accent-rgb), 0.18); border-top-color: var(--ax-accent); border-right-color: var(--ax-accent); animation: ax-spin 0.9s var(--ax-ease) infinite; }
+.ax-spin::after { content: ""; position: absolute; width: 4px; height: 4px; left: 50%; top: 50%; margin: -2px; border-radius: 50%; background: var(--ax-ink); animation: ax-orbit 1.8s linear infinite reverse, ax-bob 0.9s ease-in-out infinite; }
+.ax-spin.lg { --sz: 40px; }
+.ax-spin.lg::before { border-width: 3px; }
+.ax-spin.lg::after { width: 6px; height: 6px; margin: -3px; }
+@keyframes ax-spin { to { transform: rotate(360deg); } }
+@keyframes ax-orbit { from { transform: rotate(0deg) translateX(calc(var(--sz) * 0.22)); } to { transform: rotate(360deg) translateX(calc(var(--sz) * 0.22)); } }
+@keyframes ax-bob { 50% { opacity: 0.4; } }
+/* Panel-level loading: dims the content and centers a big spinner */
+.ax-loading { position: relative; }
+.ax-loading > *:not(.ax-spin-wrap) { opacity: 0.35; transition: opacity 0.2s; }
+.ax-spin-wrap { position: absolute; inset: 0; display: grid; place-items: center; gap: 8px; align-content: center; font: 11px var(--ax-font-mono); color: var(--ax-muted); text-transform: uppercase; letter-spacing: 0.12em; z-index: 2; }
+
+/* ── Main-feature hover effects (driven by ax-fx.js) ────────── */
+.ax-fx-layer { position: fixed; inset: 0; pointer-events: none; z-index: 40; overflow: visible; }
+.ax-fx-layer path, .ax-fx-layer circle, .ax-fx-layer rect { fill: none; }
+[data-fx] { transition: box-shadow 0.25s, transform 0.15s var(--ax-ease); }
+[data-fx]:hover { box-shadow: 0 0 0 1px var(--ax-accent), 0 0 22px rgba(var(--ax-accent-rgb), 0.45); transform: translateY(-1px); }
+[data-fx]:active { transform: translateY(1px); }
+
+@media (prefers-reduced-motion: reduce) {
+  .ax-spin::before, .ax-spin::after, .ax-status.live::before { animation-duration: 3s; }
+  [data-fx]:hover { transform: none; }
+}
+
+/* ── 3D viewport (ax-three.js) ──────────────────────────────── */
+.ax-viewport { position: relative; min-height: 360px; background:
+  radial-gradient(ellipse at 50% 40%, rgba(var(--ax-accent-rgb), 0.05), transparent 60%), var(--ax-panel); overflow: hidden; }
+.ax-viewport canvas { display: block; }
+.ax-3d-label { font: 500 10px var(--ax-font-mono); letter-spacing: 0.1em; text-transform: uppercase; color: var(--ax-muted); background: rgba(14, 15, 16, 0.7); padding: 2px 5px; white-space: nowrap; }
+[data-mode="light"] .ax-3d-label { background: rgba(255, 255, 255, 0.8); }
+.ax-viewport-hint { position: absolute; right: 12px; bottom: 10px; font: 10px var(--ax-font-mono); color: var(--ax-muted); letter-spacing: 0.08em; text-transform: uppercase; pointer-events: none; }
+
+/* ── Collage (ax-collage.js) ────────────────────────────────── */
+.ax-collage { perspective: 1600px; perspective-origin: 50% 30%; padding: 30px 70px 50px; overflow: hidden; }
+.ax-collage-wall { display: grid; grid-auto-flow: dense; gap: 10px; transform-style: preserve-3d; transition: transform 0.6s cubic-bezier(.2,.8,.3,1); }
+.ax-collage-tile { position: relative; margin: 0; overflow: visible; cursor: zoom-in; transform-style: preserve-3d;
+  transition: transform 0.35s var(--ax-ease); animation: ax-tile-in 0.7s cubic-bezier(.2,.8,.3,1) both; }
+.ax-collage-tile img { width: 100%; height: 100%; object-fit: cover; display: block; border: 1px solid var(--ax-border);
+  filter: grayscale(0.85) contrast(1.1) brightness(0.8); transition: filter 0.35s, box-shadow 0.35s; }
+.ax-collage-tile figcaption { position: absolute; left: 0; bottom: 0; right: 0; display: flex; gap: 8px; padding: 5px 7px;
+  font: 10px var(--ax-font-mono); letter-spacing: 0.06em; color: var(--ax-ink); background: linear-gradient(transparent, rgba(0,0,0,0.75));
+  opacity: 0; transform: translateY(4px); transition: opacity 0.25s, transform 0.25s; }
+.ax-collage-tile figcaption span { color: var(--ax-accent); }
+.ax-collage-tile::before { content: ""; position: absolute; z-index: 1; top: -3px; left: -3px; width: 12px; height: 12px;
+  border-top: 2px solid var(--ax-accent); border-left: 2px solid var(--ax-accent); opacity: 0; transition: opacity 0.2s; }
+.ax-collage-tile:hover { transform: translateZ(70px) scale(1.04); z-index: 2; }
+.ax-collage-tile:hover img { filter: none; box-shadow: 0 30px 40px -20px rgba(0,0,0,0.8), 0 0 0 1px var(--ax-accent); }
+.ax-collage-tile:hover figcaption, .ax-collage-tile:hover::before { opacity: 1; transform: none; }
+.ax-collage-wall:hover .ax-collage-tile:not(:hover) img { filter: grayscale(1) brightness(0.55); }
+@keyframes ax-tile-in { from { opacity: 0; transform: translateZ(-260px) rotateX(-20deg); } }
+
+.ax-lightbox { position: fixed; inset: 0; z-index: 60; display: grid; place-items: center; background: rgba(8, 8, 9, 0.88);
+  backdrop-filter: none; cursor: zoom-out; animation: ax-fade 0.18s ease-out; }
+.ax-lightbox.closing { animation: ax-fade 0.18s ease-in reverse forwards; }
+.ax-lightbox figure { margin: 0; max-width: 86vw; animation: ax-pop 0.3s var(--ax-ease); }
+.ax-lightbox img { max-width: 86vw; max-height: 78vh; display: block; border: 1px solid var(--ax-border); }
+.ax-lightbox figcaption { margin-top: 8px; font: 12px var(--ax-font-mono); color: #8a877e; }
+.ax-lightbox figcaption b { color: var(--ax-accent); font-weight: 500; }
+@keyframes ax-fade { from { opacity: 0; } }
+@keyframes ax-pop { from { transform: scale(0.94) translateY(8px); opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .ax-collage-tile, .ax-collage-wall { animation: none; transition: none; } }

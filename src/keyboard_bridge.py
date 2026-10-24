@@ -4570,6 +4570,14 @@ class KeyboardBridge(QObject):
     # below is a thin shell over `src.dictation`; the state machine and
     # the transport live there.
 
+    def _on_dictation_level(self, peak: float) -> None:
+        # The controller reports the raw peak (its silence auto-stop needs
+        # it); the bar draws the decibel-mapped version, so every QML
+        # consumer of `dictationLevel` reads the same usable scale.
+        from .dictation.audio import display_level
+
+        self.dictationLevelChanged.emit(display_level(peak))
+
     def _dictation_controller(self) -> DictationController:
         """Build the controller on first use, then reuse it.
 
@@ -4588,7 +4596,7 @@ class KeyboardBridge(QObject):
             )
             controller.stateChanged.connect(self.dictationStateChanged)
             controller.interimChanged.connect(self.dictationTranscriptChanged)
-            controller.levelChanged.connect(self.dictationLevelChanged)
+            controller.levelChanged.connect(self._on_dictation_level)
             controller.errorRaised.connect(self.dictationError)
             controller.finalReady.connect(self._insert_dictated_text)
             controller.draftReady.connect(self.dictationDraftReady)

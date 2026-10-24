@@ -365,17 +365,36 @@ def cleanup_ctl(qapp, monkeypatch, claude, history):
 
 
 class TestAccumulateMode:
-    def test_cleanup_holds_finals_back_and_shows_progress(self, cleanup_ctl):
+    def test_cleanup_holds_finals_back_and_shows_nothing_in_the_bar(self, cleanup_ctl):
+        """The owner's call (2026-10-24): a held-back run previews nothing.
+        The bar's own "Listening..." label and the level bars beside the mic
+        are the feedback; the text appears once, when it is typed."""
         spy = _Spy(cleanup_ctl)
         cleanup_ctl.start()
         _FakeStream.last.opened.emit()
         _FakeStream.last.final.emit("hello world")
         _FakeStream.last.interim.emit("how are")
         assert spy.finals == []
-        assert spy.interims[-1] == "hello world how are"
+        assert spy.interims == []
+        assert cleanup_ctl.interim == ""
         _FakeStream.last.final.emit("how are you")
         assert spy.finals == []
-        assert spy.interims[-1] == "hello world how are you"
+        assert spy.interims == []
+
+    def test_type_as_you_speak_off_previews_nothing_either(
+        self, qapp, monkeypatch, claude, history
+    ):
+        ctl = _make_controller(qapp, monkeypatch, claude, history, stream_inserts=False)
+        spy = _Spy(ctl)
+        ctl.start()
+        _FakeStream.last.opened.emit()
+        _FakeStream.last.interim.emit("hello wor")
+        _FakeStream.last.final.emit("hello world")
+        assert spy.interims == []
+        assert ctl.interim == ""
+        ctl.stop()
+        _FakeStream.last.closed.emit()
+        assert spy.finals == ["hello world"]
 
     def test_streaming_without_cleanup_still_types_each_phrase(
         self, qapp, monkeypatch, claude, history

@@ -917,6 +917,47 @@ class TestTheBridgeSettingsSurface:
         assert bridge._dictation is None
 
 
+class TestTheDisplayLevel:
+    """The raw peak is the wrong thing to draw; see ``audio.display_level``."""
+
+    def test_silence_is_zero_and_shouting_is_one(self):
+        from src.dictation.audio import DISPLAY_CEILING, SILENCE_PEAK, display_level
+
+        assert display_level(0.0) == 0.0
+        assert display_level(SILENCE_PEAK) == 0.0
+        assert display_level(SILENCE_PEAK / 2) == 0.0
+        assert display_level(DISPLAY_CEILING) == 1.0
+        assert display_level(1.0) == 1.0
+
+    def test_a_quiet_voice_still_fills_a_good_part_of_the_scale(self):
+        """The whole point: 0.1 of full scale is ordinary speech and used
+        to draw as almost nothing."""
+        from src.dictation.audio import display_level
+
+        assert 0.45 <= display_level(0.1) <= 0.65
+        assert 0.25 <= display_level(0.04) <= 0.4
+
+    def test_it_is_monotonic_and_within_bounds(self):
+        from src.dictation.audio import display_level
+
+        last = 0.0
+        for i in range(1, 200):
+            peak = i / 200
+            level = display_level(peak)
+            assert 0.0 <= level <= 1.0
+            assert level >= last
+            last = level
+
+    def test_the_bridge_forwards_the_display_level_not_the_peak(self, bridge: KeyboardBridge):
+        from src.dictation.audio import display_level
+
+        seen: List[float] = []
+        bridge.dictationLevelChanged.connect(seen.append)
+        bridge._dictation_controller().levelChanged.emit(0.1)
+        assert seen == [pytest.approx(display_level(0.1))]
+        assert seen[0] > 0.4  # the raw 0.1 would have been near-invisible
+
+
 class TestThePeakDetector:
     def test_silence_reads_as_silence(self):
         from src.dictation.audio import SILENCE_PEAK, _peak

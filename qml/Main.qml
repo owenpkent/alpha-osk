@@ -2562,8 +2562,12 @@ Window {
                 // before for every user who never turns this on: the pills
                 // are centred in `width - micReserve - clearCtxReserve`, so a
                 // reserve of 0 collapses the expression to the original one.
+                // While the mic hears speech the level bars sit beside it
+                // and the reserve grows by their width; the pills are hidden
+                // for the whole run, so only the transcript label moves.
                 property real micReserve: (root.suggestionsEnabled && root.dictationEnabled)
-                    ? predPillHeight + 16 : 0
+                    ? predPillHeight + 16 + (micLevelBars.visible ? micLevelBars.width + 8 : 0)
+                    : 0
                 Layout.preferredHeight: root.suggestionsEnabled ? predPillHeight + 4 : 0
                 Layout.bottomMargin: root.suggestionsEnabled ? 4 : 0
                 clip: true
@@ -2707,6 +2711,7 @@ Window {
                     anchors.left: parent.left
                     anchors.leftMargin: 8
                     anchors.verticalCenter: parent.verticalCenter
+                    spacing: 8
                     visible: root.suggestionsEnabled && root.dictationEnabled
 
                     Comp.BarButton {
@@ -2759,26 +2764,6 @@ Window {
                                          : qsTr("Dictate: click, speak, click again"))
                                       : qsTr("Add a Deepgram API key in Settings to dictate")
                         ToolTip.delay: 400
-
-                        // Live microphone level, drawn as a ring outside the
-                        // button.  This is the only feedback that the mic is
-                        // actually open and hearing something: everything else
-                        // on screen looks identical whether audio is arriving
-                        // or the device is muted at the OS.  Outside rather
-                        // than inside so it cannot fight the icon for contrast.
-                        Rectangle {
-                            anchors.centerIn: parent
-                            width: parent.width + 8 + 10 * root.dictationLevel
-                            height: width
-                            radius: width / 2
-                            color: "transparent"
-                            border.color: root.themeAccent
-                            border.width: 2
-                            opacity: micPill.listening ? 0.15 + 0.5 * root.dictationLevel : 0
-                            visible: opacity > 0
-                            Behavior on width { NumberAnimation { duration: 90 } }
-                            Behavior on opacity { NumberAnimation { duration: 90 } }
-                        }
 
                         // Feather's "mic", MIT, (c) 2013-2023 Cole Bemis.
                         // See THIRD_PARTY_NOTICES.md.  Verbatim from the 24x24
@@ -2844,6 +2829,42 @@ Window {
 
                         Behavior on color { ColorAnimation { duration: 100 } }
                     }
+
+                    // Live microphone level, drawn as four bars beside the
+                    // button (the owner picked this over a ring, a fill, ripples
+                    // and a whole-bar wash, 2026-10-24).  This is the only
+                    // feedback that the mic is open and hearing something:
+                    // everything else looks identical whether audio arrives or
+                    // the device is muted at the OS, and a held-back run shows
+                    // no transcript at all.  `root.dictationLevel` is already
+                    // the decibel-mapped level (`audio.display_level`, via the
+                    // bridge), not the raw peak that made the old ring move a
+                    // pixel.  Shown for any listening run, mic or Write: the
+                    // question "can it hear me" is the same for both.  Not a
+                    // scan target, so no targetId.
+                    Row {
+                        id: micLevelBars
+                        objectName: "dictationLevelBars"
+                        spacing: 3
+                        anchors.verticalCenter: parent.verticalCenter
+                        visible: root.dictationState === "listening"
+                        readonly property real maxBar: predBar.predPillHeight - 10
+                        Repeater {
+                            model: [0.55, 1.0, 0.8, 0.4]
+                            Rectangle {
+                                required property real modelData
+                                objectName: "dictationLevelBar"
+                                width: 4
+                                radius: 2
+                                anchors.verticalCenter: parent.verticalCenter
+                                color: root.themeAccent
+                                height: Math.round(4 + micLevelBars.maxBar * root.dictationLevel * modelData)
+                                // Matches the meter's 100 ms cadence: shorter
+                                // and the bars step, longer and they lag the voice.
+                                Behavior on height { NumberAnimation { duration: 90 } }
+                            }
+                        }
+                    }
                 }
 
                 // Live transcript, in the space the pills normally occupy.
@@ -2852,7 +2873,9 @@ Window {
                 // phrase leaves this and is typed into the app, so the text
                 // here stays short by construction rather than by truncation,
                 // and what is on screen is exactly what has *not* been typed
-                // yet.  It elides on the LEFT so the newest words are the ones
+                // yet.  A held-back run (Type As You Speak off, or cleanup on)
+                // shows nothing here but "Listening..." until it is typed; the
+                // level bars beside the mic are its feedback.  It elides on the LEFT so the newest words are the ones
                 // that survive, which is the opposite of every other elide in
                 // this file and is the whole point: while speaking, the tail is
                 // what you are checking.

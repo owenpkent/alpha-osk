@@ -393,10 +393,14 @@ class DictationController(QObject):
     def _on_interim(self, text: str) -> None:
         self._got_transcript = True
         self._restart_silence_timer()
-        # When finals are held back, the bar shows everything so far plus
-        # the phrase in flight, so the user sees progress for a run whose
-        # text has not been typed anywhere yet.
-        self._set_interim(self._joined(text) if self._accumulate else text)
+        # A held-back run shows nothing in the bar (the owner's call,
+        # 2026-10-24).  It used to show everything so far plus the phrase in
+        # flight; that read as "it is typing" when it was not, and the
+        # level bars beside the mic now carry "it hears you".  The bar's
+        # own "Listening..." label stands in while the interim is empty.
+        if self._accumulate:
+            return
+        self._set_interim(text)
 
     def _on_final(self, text: str) -> None:
         self._got_transcript = True
@@ -405,7 +409,6 @@ class DictationController(QObject):
         if phrase:
             self._run_text = self._joined(phrase)
         if self._accumulate:
-            self._set_interim(self._run_text)
             return
         # The interim for this phrase is now superseded.  Clearing it
         # before emitting the final keeps the bar from briefly showing the
