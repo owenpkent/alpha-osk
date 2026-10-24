@@ -543,6 +543,17 @@ HISTORY = [
         "seconds": 4.0,
         "hasAudio": False,
     },
+    {
+        # A run that failed before anything was transcribed: audio only.
+        "id": "00000000aaaaaaaa",
+        "created": "2026-10-08T08:00:00+00:00",
+        "purpose": "dictate",
+        "raw": "",
+        "result": "",
+        "cleaned": False,
+        "seconds": 3.0,
+        "hasAudio": True,
+    },
 ]
 
 
@@ -560,9 +571,9 @@ class TestTheHistoryList:
     def test_rows_render_from_the_list(self, qml_root):
         _, warnings, _, _, panel = self._open(qml_root)
         rows = _by_name(panel, "dictationHistoryRow")
-        assert len(rows) == 2
+        assert len(rows) == 3
         labels = [_by_name(r, "dictationHistoryLabel")[0].property("text") for r in rows]
-        assert labels == ["Dictated", "Written"]
+        assert labels == ["Dictated", "Written", "Dictated"]
         assert _by_name(panel, "dictationHistoryEmpty")[0].property("visible") is False
         assert _real_warnings(warnings) == []
 
@@ -586,6 +597,24 @@ class TestTheHistoryList:
         bridge.dictationPlaybackChanged.emit("")
         QCoreApplication.processEvents()
         assert with_audio.property("text") == "Play"
+
+    def test_an_audio_only_entry_says_so_and_offers_play_not_copy(self, qml_root):
+        root, _, bridge, _, panel = self._open(qml_root)
+        row = _by_name(panel, "dictationHistoryRow")[2]
+        text = _by_name(row, "dictationHistoryText")[0]
+        assert text.property("text").startswith("Not transcribed")
+        assert _by_name(row, "dictationHistoryPlay")[0].property("visible") is True
+        assert _by_name(row, "dictationHistoryCopy")[0].property("visible") is False
+        _configure(root, bridge, cleanup=True)
+        # Nothing to send to Anthropic either.
+        assert _by_name(row, "dictationHistoryReprocess")[0].property("visible") is False
+        # A transcribed row keeps its Copy.
+        assert (
+            _by_name(_by_name(panel, "dictationHistoryRow")[0], "dictationHistoryCopy")[0].property(
+                "visible"
+            )
+            is True
+        )
 
     def test_reprocess_needs_a_dictation_entry_a_key_and_cleanup_on(self, qml_root):
         root, _, bridge, _, panel = self._open(qml_root)

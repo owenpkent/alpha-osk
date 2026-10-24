@@ -42,8 +42,23 @@ DEEPGRAM_HOST = "wss://api.deepgram.com/v1/listen"
 #: waiting for the flushed final transcript.  Deepgram answers a
 #: ``CloseStream`` in well under a second; this is the ceiling before the
 #: socket is dropped anyway so a wedged server cannot pin the UI in
-#: "finishing".
-FLUSH_GRACE_MS = 2500
+#: "finishing".  Running out of it is reported through ``failed`` with
+#: :data:`FLUSH_TIMEOUT_MESSAGE` rather than as a quiet close, because the
+#: tail of the last phrase may be missing and the user should hear so.
+#: (MacroVox waits eight seconds here; a slow but healthy flush must not
+#: read as a failure, so this is generous without pinning the bar.)
+FLUSH_GRACE_MS = 5000
+
+#: How long the upgrade request may take before the run is called off.  A
+#: firewall that drops packets, or a proxy that never answers, would
+#: otherwise leave the button spinning in "connecting" with the mic open
+#: until the OS gave up, which can be a minute.
+CONNECT_TIMEOUT_MS = 10000
+
+FLUSH_TIMEOUT_MESSAGE = (
+    "The dictation service did not finish in time: the last phrase may be missing."
+)
+CONNECT_TIMEOUT_MESSAGE = "The dictation service did not respond in time: check your connection."
 
 
 class TranscriptionStream(QObject):
@@ -103,6 +118,7 @@ class DeepgramStream(TranscriptionStream):
         self._keyterms = keyterms or []
         self._socket: Any = None
         self._flush_timer: Any = None
+        self._connect_timer: Any = None
         self._finishing = False
         self._reported = False
 
@@ -153,6 +169,25 @@ class DeepgramStream(TranscriptionStream):
         socket.errorOccurred.connect(self._on_error)
         self._socket = socket
         socket.open(request)
+        self._connect_timer = self._single_shot(CONNECT_TIMEOUT_MS, self._on_connect_timeout)
+
+    def _single_shot(self, interval_ms: int, slot: Any) -> Any:
+        from PySide6.QtCore import QTimer
+
+        timer = QTimer(self)
+        timer.setSingleShot(True)
+        timer.setInterval(interval_ms)
+        timer.timeout.connect(slot)
+        timer.start()
+        return timer
+
+    @staticmethod
+    def _stop_timer(timer: Any) -> None:
+        if timer is not None:
+            try:
+                timer.stop()
+            except RuntimeError:
+                pass
 
     def send_audio(self, pcm: bytes) -> None:
         if self._socket is None or self._finishing:
@@ -180,21 +215,21 @@ class DeepgramStream(TranscriptionStream):
         except RuntimeError:  # pragma: no cover
             self.abort()
             return
-        from PySide6.QtCore import QTimer
+        self._flush_timer = self._single_shot(FLUSH_GRACE_MS, self._on_flush_timeout)
 
-        self._flush_timer = QTimer(self)
-        self._flush_timer.setSingleShot(True)
-        self._flush_timer.setInterval(FLUSH_GRACE_MS)
-        self._flush_timer.timeout.connect(self.abort)
-        self._flush_timer.start()
+    def _on_flush_timeout(self) -> None:
+        # Whatever finals arrived before now have already been emitted; what
+        # has not arrived is the tail.  Say so, then drop the socket.
+        self._fail(FLUSH_TIMEOUT_MESSAGE)
+
+    def _on_connect_timeout(self) -> None:
+        self._fail(CONNECT_TIMEOUT_MESSAGE)
 
     def abort(self) -> None:
-        timer, self._flush_timer = self._flush_timer, None
-        if timer is not None:
-            try:
-                timer.stop()
-            except RuntimeError:
-                pass
+        flush, self._flush_timer = self._flush_timer, None
+        connect, self._connect_timer = self._connect_timer, None
+        self._stop_timer(flush)
+        self._stop_timer(connect)
         socket, self._socket = self._socket, None
         if socket is not None:
             for signal, slot in (
@@ -222,6 +257,8 @@ class DeepgramStream(TranscriptionStream):
     # --- socket handlers -----------------------------------------------
 
     def _on_connected(self) -> None:
+        connect, self._connect_timer = self._connect_timer, None
+        self._stop_timer(connect)
         self.opened.emit()
 
     def _on_disconnected(self) -> None:
@@ -291,6 +328,11 @@ def _friendly_error(raw: str) -> str:
     refused = ("401", "403", "unauthor", "forbidden", "www-authenticate")
     if any(marker in lowered for marker in refused):
         return "Dictation was refused: check your API key in Settings."
+    # Qt's SslHandshakeFailedError reads "SSL handshake failed"; a proxy or
+    # an inspecting firewall is the usual cause.  ("handshake" alone is not
+    # a marker: Qt also says "processHandshake" for plain HTTP refusals.)
+    if "ssl" in lowered or "tls" in lowered or "certificate" in lowered:
+        return "Could not make a secure connection to the dictation service: check your connection."
     if "host" in lowered or "resolve" in lowered or "network" in lowered or "unreach" in lowered:
         return "Could not reach the dictation service: check your connection."
     if "timed out" in lowered or "timeout" in lowered:
