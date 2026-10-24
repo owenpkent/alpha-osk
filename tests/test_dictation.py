@@ -733,6 +733,14 @@ class TestTheBridgeSettingsSurface:
         bridge.setDictationApiKey("abcabcabc")
         assert bridge._dictation_config.api_key == "abcabcabc"
 
+    def test_two_halves_that_differ_in_one_character_are_kept(self, bridge: KeyboardBridge):
+        # Even length, so only the content comparison stands between this
+        # and a collapse.
+        key = "0123456789abcdef0123456789abcdef01234567"
+        near_miss = key + key[:-1] + "8"
+        bridge.setDictationApiKey(near_miss)
+        assert bridge._dictation_config.api_key == near_miss
+
     def test_an_unknown_model_is_refused(self, bridge: KeyboardBridge):
         before = bridge._dictation_config.model
         bridge.setDictationModel("gpt-nonsense")
