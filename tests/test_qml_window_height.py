@@ -503,6 +503,21 @@ class TestTheRestoreClampsAgainstTheSavedScreen:
         assert r["maxWidth"] - 120 <= r["width"] <= r["maxWidth"] < 3000
         assert r["height"] <= 1080 - SCREEN_SLACK
 
+    def test_a_window_saved_near_the_bottom_is_lifted_onto_the_screen(self, probe):
+        """Saved at y=1500 on the 4K monitor, 3000 wide: the window is about
+        1274 px tall, so its bottom would land near 2774. The position clamp
+        used to read `root.height` before the layout caught up (about 402 px),
+        judged 1500 + 402 to fit, and left the lower rows off the screen."""
+        r = probe(3000, 2000, 1500)
+        assert r["width"] == 3000
+        assert r["y"] + r["height"] <= 2160
+        assert r["y"] < 1500
+
+    def test_a_window_saved_with_room_below_keeps_its_position(self, probe):
+        """Pair: the same window saved where it fits is not moved."""
+        r = probe(3000, 2000, 100)
+        assert r["y"] == 100
+
     def test_the_same_width_on_the_small_screen_is_clamped(self, probe):
         r = probe(3000, 100, 100)
         # The inversion errs narrow by the `keySpacing` growth (documented in

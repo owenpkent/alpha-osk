@@ -471,16 +471,20 @@ Window {
                                                   appSettings.savedWindowY,
                                                   root.width,
                                                   root.modelHeight(root.keyH)))
+            // The position is clamped with the model's height for the same
+            // reason: with the stale one, a window saved near the bottom of
+            // the desktop came back with its lower rows off the screen.
             var restoredPos = root.clampedWindowPos(appSettings.savedWindowX,
                                                       appSettings.savedWindowY,
-                                                      root.width, root.height)
+                                                      root.width,
+                                                      root.modelHeight(root.keyH))
             root.x = restoredPos.x
             root.y = restoredPos.y
         } else {
             if (appSettings.savedWindowWidth > 0)
                 root.width = root.fitWidth(root.width)
             root.x = (Screen.width - root.width) / 2
-            root.y = Screen.height - root.height - 40
+            root.y = Screen.height - root.modelHeight(root.keyH) - 40
         }
         root._loaded = true
 
