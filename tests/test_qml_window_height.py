@@ -352,3 +352,105 @@ class TestAPanelToggleStopsAtTheScreen:
         root.setProperty("showNavigation", True)
         _relayout(root)
         assert root.property("width") == before + 220
+
+
+_TWO_SCREENS = {
+    "screens": [
+        {
+            "name": "primary",
+            "x": 0,
+            "y": 0,
+            "width": 1920,
+            "height": 1080,
+            "logicalDpi": 96,
+            "dpr": 1.0,
+        },
+        {
+            "name": "secondary",
+            "x": 1920,
+            "y": 0,
+            "width": 3840,
+            "height": 2160,
+            "logicalDpi": 96,
+            "dpr": 1.0,
+        },
+    ]
+}
+
+
+class TestTheRestoreClampsAgainstTheSavedScreen:
+    """The startup clamp uses the screen the saved position is on.
+
+    `Screen` is still the launch screen while `Component.onCompleted` runs,
+    so clamping before the position was restored cut a width saved on a 4K
+    secondary monitor to what the 1080p primary allows. Runs in a
+    subprocess because the offscreen platform fixes its screens before
+    `QGuiApplication` exists.
+    """
+
+    @pytest.fixture
+    def probe(self, tmp_path):
+        import json
+        import subprocess
+        import sys
+
+        cfg = tmp_path / "screens.json"
+        cfg.write_text(json.dumps(_TWO_SCREENS), encoding="utf-8")
+
+        def run(width: int, x: int, y: int, compact: bool = True) -> dict:
+            case = tmp_path / f"case-{width}-{x}-{y}"
+            case.mkdir()
+            # Every per-user location points into the throwaway case dir, so
+            # nothing of the real user's config or settings is read or written.
+            env = dict(os.environ)
+            for name in ("USERPROFILE", "HOME", "LOCALAPPDATA", "APPDATA", "XDG_CONFIG_HOME"):
+                env[name] = str(case)
+            env.pop("PYTHONPATH", None)
+            env["QT_QUICK_CONTROLS_STYLE"] = "Basic"
+            # Relative to cwd: the platform string is split on ":", which
+            # would cut an absolute Windows path at its drive letter.
+            env["QT_QPA_PLATFORM"] = f"offscreen:configfile={cfg.name}"
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    "-I",
+                    str(REPO_ROOT / "tests" / "qml_two_screen_probe.py"),
+                    str(case),
+                    str(width),
+                    str(x),
+                    str(y),
+                    "1" if compact else "0",
+                ],
+                env=env,
+                cwd=str(tmp_path),
+                capture_output=True,
+                text=True,
+                timeout=120,
+            )
+            assert proc.returncode == 0, proc.stdout + proc.stderr
+            result = json.loads(proc.stdout.strip().splitlines()[-1])
+            if result["screens"] != 2:
+                pytest.skip("the offscreen platform ignored the screens config file")
+            assert not result["warnings"], result["warnings"]
+            return result
+
+        return run
+
+    def test_a_width_saved_on_the_big_screen_is_kept(self, probe):
+        r = probe(3000, 2000, 100)
+        assert r["width"] == 3000
+        assert r["height"] <= 2160 - SCREEN_SLACK
+
+    def test_the_same_width_on_the_small_screen_is_clamped(self, probe):
+        r = probe(3000, 100, 100)
+        # The inversion errs narrow by the `keySpacing` growth (documented in
+        # LAYOUT_GEOMETRY.md), never wide.
+        assert r["maxWidth"] - 120 <= r["width"] <= r["maxWidth"] < 3000
+        assert r["height"] <= 1080 - SCREEN_SLACK
+
+    def test_an_oversized_width_is_clamped_to_the_saved_screen(self, probe):
+        small = probe(3000, 100, 100)
+        big = probe(6000, 2000, 100)
+        assert big["width"] > small["width"]
+        assert big["maxWidth"] - 120 <= big["width"] <= big["maxWidth"] < 6000
+        assert big["height"] <= 2160 - SCREEN_SLACK

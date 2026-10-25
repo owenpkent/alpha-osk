@@ -325,6 +325,17 @@ Rules:
   reads the row count, the function row and the pill bar; before they are
   known it would clamp against the wrong layout. No frame renders inside
   `Component.onCompleted`, so moving it costs no flash.
+- **It also runs after the saved position is restored, against the screen
+  that position is on.** `Screen` is still the launch screen until the
+  window has moved, and `onScreenChanged` only ever clamps down, so a
+  width saved on a 4K secondary monitor would be cut to what the primary
+  allows and stay cut. `screenAvailableHeightAt(x, y)` picks the screen
+  containing (or nearest to) the saved top-left plus a 20 px inset and is
+  passed to `fitWidth(w, availH)` / `maxWidthForScreen(availH)`, whose
+  parameter defaults to the current screen. The position clamp then runs
+  with the final size. `tests/test_qml_window_height.py::
+  TestTheRestoreClampsAgainstTheSavedScreen` runs two offscreen screens in
+  a subprocess (`tests/qml_two_screen_probe.py`).
 - **A new child of `outerLayout` goes into the model too.**
   `tests/test_qml_window_height.py::TestTheHeightModelMatchesTheLayout`
   compares `modelHeight(keyH)` with the real height under every row-count

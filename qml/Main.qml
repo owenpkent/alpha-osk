@@ -438,10 +438,6 @@ Window {
             if (root.showNavigation) w += 220
             if (root.showNumpad) w += 250
             root.width = root.fitWidth(w)
-        } else {
-            // A width dragged past the screen before the clamp existed is
-            // persisted; this is where it comes back to the widest fit.
-            root.width = root.fitWidth(root.width)
         }
 
         // Restore the saved position if we have one, else center
@@ -456,12 +452,26 @@ Window {
         // coordinates that collapsed to 0 the same way.
         if (appSettings.savedWindowX > -1000000
                 && appSettings.savedWindowY > -1000000) {
+            // A width dragged past the screen before the clamp existed is
+            // persisted; it comes back to the widest fit here. The height
+            // budget is that of the screen the saved position is on, not
+            // `Screen`, which is still the launch screen until the window
+            // has moved: a 3000 px width saved on a 4K secondary monitor
+            // would otherwise be cut to what the primary allows. The saved
+            // top-left plus a small inset is the point the window will
+            // occupy, and stays inside the screen it was saved on.
+            if (appSettings.savedWindowWidth > 0)
+                root.width = root.fitWidth(root.width,
+                    root.screenAvailableHeightAt(appSettings.savedWindowX + 20,
+                                                 appSettings.savedWindowY + 20))
             var restoredPos = root.clampedWindowPos(appSettings.savedWindowX,
                                                       appSettings.savedWindowY,
                                                       root.width, root.height)
             root.x = restoredPos.x
             root.y = restoredPos.y
         } else {
+            if (appSettings.savedWindowWidth > 0)
+                root.width = root.fitWidth(root.width)
             root.x = (Screen.width - root.width) / 2
             root.y = Screen.height - root.height - 40
         }
@@ -1129,16 +1139,43 @@ Window {
     // exposes the available height only for the whole virtual desktop, so
     // `Screen.height` caps it when the monitors are stacked.  The 40 px of
     // slack matches the width clamp in `onScreenChanged`.
-    function maxWidthForScreen() {
-        var availH = Math.min(Screen.height, Screen.desktopAvailableHeight) - 40
+    //
+    // `screenAvailableHeight` is optional: it defaults to the screen the
+    // window is on now, and the startup restore passes the available
+    // height of the screen the saved position is on (`Screen` is still the
+    // launch screen there, and `onScreenChanged` only ever clamps down, so
+    // a wrongly small answer would stick).
+    function screenAvailableHeightAt(px, py) {
+        var screens = Qt.application.screens
+        var best = null
+        var bestDist = Infinity
+        if (screens) {
+            for (var i = 0; i < screens.length; ++i) {
+                var s = screens[i]
+                // Distance to the screen's rectangle: 0 when the point is
+                // inside, else the nearest screen wins.
+                var dx = Math.max(s.virtualX - px, 0, px - (s.virtualX + s.width - 1))
+                var dy = Math.max(s.virtualY - py, 0, py - (s.virtualY + s.height - 1))
+                var d = dx * dx + dy * dy
+                if (d < bestDist) { bestDist = d; best = s }
+            }
+        }
+        if (!best)
+            return Math.min(Screen.height, Screen.desktopAvailableHeight)
+        return Math.min(best.height, best.desktopAvailableHeight)
+    }
+    function maxWidthForScreen(screenAvailableHeight) {
+        var availH = (screenAvailableHeight !== undefined
+                      ? screenAvailableHeight
+                      : Math.min(Screen.height, Screen.desktopAvailableHeight)) - 40
         var maxKeyH = (availH - fixedHeightPixels) / heightPerKeyH
         // `layoutFixedPixels` carries `keySpacing`, which grows with width,
         // so taking it at the current width errs towards a narrower
         // window, never a taller one.
         return Math.floor((maxKeyH / 0.89) * totalKeyUnits + layoutFixedPixels)
     }
-    function fitWidth(w) {
-        return Math.max(minimumWidth, Math.min(w, maxWidthForScreen()))
+    function fitWidth(w, screenAvailableHeight) {
+        return Math.max(minimumWidth, Math.min(w, maxWidthForScreen(screenAvailableHeight)))
     }
 
     // ===== Color Theme System =====
