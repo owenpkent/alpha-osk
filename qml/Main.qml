@@ -457,13 +457,15 @@ Window {
             // budget is that of the screen the saved position is on, not
             // `Screen`, which is still the launch screen until the window
             // has moved: a 3000 px width saved on a 4K secondary monitor
-            // would otherwise be cut to what the primary allows. The saved
-            // top-left plus a small inset is the point the window will
-            // occupy, and stays inside the screen it was saved on.
+            // would otherwise be cut to what the primary allows. The screen
+            // is the one that will hold most of the restored window, which
+            // is the one Qt assigns it (a top-left point disagreed with
+            // that when the window straddled two monitors).
             if (appSettings.savedWindowWidth > 0)
                 root.width = root.fitWidth(root.width,
-                    root.screenAvailableHeightAt(appSettings.savedWindowX + 20,
-                                                 appSettings.savedWindowY + 20))
+                    root.screenAvailableHeightFor(appSettings.savedWindowX,
+                                                  appSettings.savedWindowY,
+                                                  root.width, root.height))
             var restoredPos = root.clampedWindowPos(appSettings.savedWindowX,
                                                       appSettings.savedWindowY,
                                                       root.width, root.height)
@@ -1145,19 +1147,29 @@ Window {
     // height of the screen the saved position is on (`Screen` is still the
     // launch screen there, and `onScreenChanged` only ever clamps down, so
     // a wrongly small answer would stick).
-    function screenAvailableHeightAt(px, py) {
+    function screenAvailableHeightFor(x, y, w, h) {
+        // The screen Qt will assign the restored window: the one holding
+        // the largest share of its area (Windows' MonitorFromWindow and
+        // Qt's own QWindow::screen() both pick by overlap).  Picking by the
+        // top-left point disagreed with that on a window straddling two
+        // monitors, and clamped against the wrong one.  A window touching
+        // no screen at all takes the nearest.
         var screens = Qt.application.screens
         var best = null
+        var bestArea = 0
         var bestDist = Infinity
         if (screens) {
             for (var i = 0; i < screens.length; ++i) {
                 var s = screens[i]
-                // Distance to the screen's rectangle: 0 when the point is
-                // inside, else the nearest screen wins.
-                var dx = Math.max(s.virtualX - px, 0, px - (s.virtualX + s.width - 1))
-                var dy = Math.max(s.virtualY - py, 0, py - (s.virtualY + s.height - 1))
+                var ox = Math.min(x + w, s.virtualX + s.width) - Math.max(x, s.virtualX)
+                var oy = Math.min(y + h, s.virtualY + s.height) - Math.max(y, s.virtualY)
+                var area = Math.max(ox, 0) * Math.max(oy, 0)
+                var dx = Math.max(s.virtualX - x, 0, x - (s.virtualX + s.width - 1))
+                var dy = Math.max(s.virtualY - y, 0, y - (s.virtualY + s.height - 1))
                 var d = dx * dx + dy * dy
-                if (d < bestDist) { bestDist = d; best = s }
+                if (area > bestArea || (bestArea === 0 && area === 0 && d < bestDist)) {
+                    bestArea = area; bestDist = d; best = s
+                }
             }
         }
         if (!best)

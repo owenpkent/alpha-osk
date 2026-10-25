@@ -441,6 +441,24 @@ class TestTheRestoreClampsAgainstTheSavedScreen:
         assert r["width"] == 3000
         assert r["height"] <= 2160 - SCREEN_SLACK
 
+    def test_a_window_straddling_both_screens_follows_the_bigger_share(self, probe):
+        """Saved at x=1800 and 3000 wide, the window's top-left is on the
+        1080p primary but most of it is on the 4K secondary, which is the
+        screen Qt assigns it. The clamp must agree with Qt, not with the
+        corner (the review's case)."""
+        r = probe(3000, 1800, 100)
+        assert r["screen"] == "secondary"
+        assert r["width"] == 3000
+        assert r["height"] <= 2160 - SCREEN_SLACK
+
+    def test_a_window_with_its_bigger_share_on_the_small_screen_is_clamped(self, probe):
+        """Pair: mostly on the primary (x=200, 3000 wide puts 1720 px there),
+        so the primary's limit applies even though it reaches the secondary."""
+        r = probe(3000, 200, 100)
+        assert r["screen"] == "primary"
+        assert r["maxWidth"] - 120 <= r["width"] <= r["maxWidth"] < 3000
+        assert r["height"] <= 1080 - SCREEN_SLACK
+
     def test_the_same_width_on_the_small_screen_is_clamped(self, probe):
         r = probe(3000, 100, 100)
         # The inversion errs narrow by the `keySpacing` growth (documented in

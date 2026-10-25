@@ -329,8 +329,10 @@ Rules:
   that position is on.** `Screen` is still the launch screen until the
   window has moved, and `onScreenChanged` only ever clamps down, so a
   width saved on a 4K secondary monitor would be cut to what the primary
-  allows and stay cut. `screenAvailableHeightAt(x, y)` picks the screen
-  containing (or nearest to) the saved top-left plus a 20 px inset and is
+  allows and stay cut. `screenAvailableHeightFor(x, y, w, h)` picks the
+  screen holding the largest share of the restored window (the one Qt
+  assigns it; picking by the top-left corner clamped a window straddling
+  two monitors against the wrong one), nearest when none overlaps, and is
   passed to `fitWidth(w, availH)` / `maxWidthForScreen(availH)`, whose
   parameter defaults to the current screen. The position clamp then runs
   with the final size. `tests/test_qml_window_height.py::
