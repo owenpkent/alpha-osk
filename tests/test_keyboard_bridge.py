@@ -1386,6 +1386,20 @@ class TestPredictionWiring:
         assert bridge._prediction_count == 1
 
 
+class TestRevokeScanTarget:
+    """revokeScanTarget runs from QML on every prediction round and must
+    never raise into it."""
+
+    def test_none_is_ignored(self, bridge: KeyboardBridge):
+        bridge.revokeScanTarget(None)
+
+    def test_a_plain_qobject_does_not_raise(self, bridge: KeyboardBridge):
+        pytest.importorskip("PySide6.QtCore")
+        from PySide6.QtCore import QObject
+
+        bridge.revokeScanTarget(QObject())
+
+
 class TestPredictionCapitalizationLearning:
     """Selecting a prediction after typing a capital should teach
     the system that this word is canonically capitalized.  Without

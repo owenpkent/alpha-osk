@@ -184,7 +184,8 @@ def _pill_texts(root) -> list:
 
     def walk(item):
         for child in item.childItems():
-            if child.objectName() == "predictionPillText":
+            # Hidden slots of the fixed pool (issue #204) are not pills.
+            if child.objectName() == "predictionPillText" and child.isVisible():
                 out.append(child)
             walk(child)
 
