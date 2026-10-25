@@ -260,7 +260,8 @@ def _pill_texts(root) -> list:
 
     def walk(item):
         for child in item.childItems():
-            if child.objectName() == "predictionPillText":
+            # Hidden slots of the fixed pool (issue #204) are not pills.
+            if child.objectName() == "predictionPillText" and child.isVisible():
                 out.append(child)
             walk(child)
 
@@ -693,8 +694,11 @@ class TestThePillTooltipNeverAutoDetectsHtml:
 
         for pill in pills:
             ctx = QQmlEngine.contextForObject(pill)
+            # The tooltip is created lazily (issue #204): force the Loader
+            # on, as a hover over a truncated pill would, to inspect it.
+            QQmlExpression(ctx, pill, "predTipLoader.active = true").evaluate()
             is_plain, is_undefined = QQmlExpression(
-                ctx, pill, "predTip.contentItem.textFormat === Text.PlainText"
+                ctx, pill, "predTipLoader.item.contentItem.textFormat === Text.PlainText"
             ).evaluate()
             assert is_undefined is False, (
                 "predTip.contentItem could not be resolved -- the tooltip is "
@@ -706,3 +710,58 @@ class TestThePillTooltipNeverAutoDetectsHtml:
                 "imported pack word containing markup could auto-render as "
                 "HTML and beacon out on hover"
             )
+
+
+class TestThePillRowDoesNotLeakNativeMemory:
+    """Issue #204: the pill delegates were destroyed and recreated every
+    prediction round, and the native memory behind them (text, gradient,
+    tooltip, accessibility attachments) was not returned: about 4 MB per word
+    typed, 1.6 GB after a day. The row is now a fixed pool of delegates that
+    show or hide, and the tooltip is a Loader that exists only while shown.
+
+    Before the fix this test measured about 0.75 MB per round after warm-up;
+    after it, under 0.02 MB. The bound is generous (floored at
+    the noise of the allocator) yet still trips on the old behaviour by
+    7x.
+    """
+
+    ROUNDS = 150
+    WARMUP = 50
+    # MB per round.
+    BOUND_MB_PER_ROUND = 0.1
+
+    def test_rounds_of_predictions_do_not_grow_the_process(self, qml_root):
+        psutil = pytest.importorskip("psutil")
+        root, _, _ = qml_root
+        proc = psutil.Process()
+
+        def uss_mb() -> float:
+            info = proc.memory_full_info()
+            return getattr(info, "uss", getattr(info, "private", info.rss)) / (1024 * 1024)
+
+        vocab = [
+            "document", "documents", "help", "hello", "held", "world", "work", "word",
+            "the", "that", "this", "then", "there", "these", "people", "place",
+        ]  # fmt: skip
+
+        def one_round(i: int) -> None:
+            words = [
+                vocab[(i * 3 + k) % len(vocab)] + ("s" if i % 5 == 0 else "") for k in range(8)
+            ]
+            root.setProperty("predictions", words)
+            QCoreApplication.processEvents()
+            if i % 10 == 0:
+                root.grabWindow()
+
+        for i in range(self.WARMUP):
+            one_round(i)
+        base = uss_mb()
+        for i in range(self.WARMUP, self.ROUNDS):
+            one_round(i)
+        grown = uss_mb() - base
+
+        per_round = grown / (self.ROUNDS - self.WARMUP)
+        assert per_round < self.BOUND_MB_PER_ROUND, (
+            f"the process grew {grown:.1f} MB over {self.ROUNDS - self.WARMUP} prediction "
+            f"rounds ({per_round:.3f} MB/round)"
+        )

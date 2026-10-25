@@ -686,7 +686,15 @@ Window {
     // happens to produce the same words: "the bar was rebuilt" is the event a
     // stale selection has to be caught by, not "the text changed".
     property int predictionGeneration: 0
-    onPredictionsChanged: root.predictionGeneration += 1
+    // The words of the round `predictionGeneration` names, handed to the
+    // pill row as ONE new object per round (so it always notifies, even for
+    // identical words) and assigned AFTER the generation bump: the pill row
+    // reacts to this, so it always sees the new generation (issue #204).
+    property var predictionRound: ({ words: [] })
+    onPredictionsChanged: {
+        root.predictionGeneration += 1
+        root.predictionRound = { words: root.predictions }
+    }
     // Exists for `tests/test_qml_scan_targets.py`. PySide's Python tests
     // call the bridge slots directly and so never exercise QML's overload
     // resolution; a four-argument `pressKey` that failed to bind would fall
@@ -2993,7 +3001,7 @@ Window {
                     // and keeps the no-elide guarantee true once a mic button
                     // is taking space off the left.
                     property var fit: predRow.computeFit(
-                        root.predictions, root.width, predBar.predFontSize,
+                        root.predictionRound.words, root.width, predBar.predFontSize,
                         predBar.predHorizontalPad, predBar.predMinWidth,
                         predBar.predPillHeight, predRow.spacing,
                         predBar.clearCtxReserve + predBar.micReserve,
@@ -3106,7 +3114,28 @@ Window {
                         return out
                     }
 
+                    readonly property int poolSize: 10
+
+                    // Hand the round's words to the live bank.  Runs after the
+                    // generation bump (see root.predictionRound), so the bank
+                    // chosen here is the one the new round owns and the other
+                    // bank is never written: it stays a snapshot.  Also runs
+                    // on a resize, which can change how many words fit.
+                    onFitChanged: {
+                        var g = root.predictionGeneration
+                        var base = (g % 2) * predRow.poolSize
+                        var words = predRow.fit.words
+                        for (var i = 0; i < predRow.poolSize; i++) {
+                            var d = predRepeater.itemAt(base + i)
+                            if (!d)
+                                continue
+                            d.pillWord = i < words.length ? words[i] : ""
+                            d.pillGeneration = g
+                        }
+                    }
+
                     Repeater {
+                        id: predRepeater
                         // `study.suppressPredictions` blanks the row without
                         // touching predBar's height (see Layout.preferredHeight
                         // above, unchanged): the study's predictions-off
@@ -3123,19 +3152,44 @@ Window {
                         // compare equal, the pills are rebuilt, and an
                         // element from an earlier round is gone.  Do not
                         // strip this back to a plain word list.
-                        model: root.predictionsArePresent
-                               ? predRow.fit.words.map(function (w) {
-                                     return { word: w, generation: root.predictionGeneration }
-                                 })
-                               : []
+                        //
+                        // UPDATE (issue #204): the model is now a constant
+                        // pool, not a list rebuilt every round.  Destroying
+                        // and recreating a dozen delegates per prediction
+                        // round leaked native memory that was never returned
+                        // (about 0.5 MB per round, 1.6 GB after a day).  The
+                        // pool is built once and never rebuilt.  Do not go
+                        // back to a per-round model.
+                        //
+                        // Two banks of `poolSize` delegates take alternate
+                        // rounds (bank = generation % 2).  The stale-scan
+                        // guarantee no longer comes from destroying elements:
+                        // a round's pills live in one bank and are FROZEN
+                        // (word, generation, id) when the next round hides
+                        // them, so an element a scanner held across a round
+                        // is hidden, not Accessible, and refuses to Invoke.
+                        // Two rounds later the same element is a new live
+                        // pill with a new id (scanRevision moves each round).
+                        //
+                        // 10 is the ceiling of KeyboardBridge.setPredictionCount
+                        // (`max(1, min(10, count))`): the most pills a round
+                        // can show; `fit.words` never has more.
+                        model: 2 * predRow.poolSize
                         delegate: Rectangle {
-                            // One pill is one offer: the word and the round
-                            // it was offered in, fixed for the object's life.
-                            readonly property string pillWord: modelData.word
-                            readonly property int pillGeneration: modelData.generation
-                            width: index < predRow.fit.widths.length
-                                   ? predRow.fit.widths[index]
-                                   : predBar.predMinWidth
+                            id: pill
+                            readonly property int slot: index % predRow.poolSize
+                            readonly property int bank: Math.floor(index / predRow.poolSize)
+                            readonly property bool live: bank === root.predictionGeneration % 2
+                            // Plain properties written by predRow.onFitChanged
+                            // for the live bank only, so a hidden pill keeps
+                            // the word and generation of the round it showed.
+                            property string pillWord: ""
+                            property int pillGeneration: -1
+                            visible: live && pillWord !== "" && root.predictionsArePresent
+                            width: !visible ? 0
+                                   : (slot < predRow.fit.widths.length
+                                      ? predRow.fit.widths[slot]
+                                      : predBar.predMinWidth)
                             height: predBar.predPillHeight
                             radius: Math.max(4, predBar.predPillHeight * 0.22)
                             color: predMouse.containsMouse ? root.predPillHoverFill
@@ -3147,32 +3201,33 @@ Window {
 
                             // ===== Switch-scanning target =====
                             //
-                            // The stale-selection guarantee (an outdated scan
-                            // selection can never insert a word the user was
-                            // not looking at) rests on two things.  The model
-                            // above is rebuilt every round, so an element from
-                            // an earlier round is destroyed and a scanner
-                            // holding it gets ElementNotAvailable.  And the
-                            // Invoke goes through invokeScanPrediction, which
-                            // refuses a generation that is no longer live.
-                            // The id is the client's half: it lets a scanner
-                            // notice the change cheaply, and it is built from
-                            // this pill's own generation so it never changes
-                            // under a held element.
+                            // The id is built from this pill's own (frozen)
+                            // generation, so it never changes under a held
+                            // element.  The Invoke goes through
+                            // invokeScanPrediction, which refuses a dead
+                            // generation, and scanInvoke refuses a hidden
+                            // pill ("presence means activatable, rechecked
+                            // at activation", as KeyButton does).
                             //
                             // Named rather than inlined into the attached
                             // property, for the reason KeyButton's own block
                             // gives: an attached `Accessible.*` is unreadable
                             // from PySide, so anything expressed only there is
                             // untestable.
-                            property string scanTargetId: root.scanPredictionId(index, pillGeneration)
+                            property string scanTargetId: root.scanPredictionId(slot, pillGeneration)
                             function scanInvoke() {
+                                if (!pill.visible)
+                                    return false
                                 return root.invokeScanPrediction(pillWord, pillGeneration)
                             }
 
                             // Out of the tree while the keyboard is minimized,
                             // for the reason KeyButton's _scanWindowShown gives.
-                            readonly property bool scanIgnored: !root.scanWindowShown
+                            // A hidden pill (an idle bank's frozen snapshot, or an
+                            // empty slot) is out of the tree too, not merely invisible:
+                            // a scanner must see it as gone.
+                            readonly property bool scanIgnored:
+                                !root.scanWindowShown || !pill.visible
 
                             Accessible.role: Accessible.Button
                             Accessible.ignored: scanIgnored
@@ -3264,28 +3319,36 @@ Window {
                             // one. An <img> in it would make Qt fetch the URL
                             // on hover, from an app whose whole promise is
                             // that nothing leaves the machine.
-                            ToolTip {
-                                id: predTip
-                                visible: predMouse.containsMouse && predText.truncated
-                                delay: 400
-                                contentItem: Text {
-                                    text: pillWord
-                                    textFormat: Text.PlainText
-                                    // The flat theme properties, not
-                                    // root.theme.*: a Popup's contentItem is
-                                    // built in its own scope and the grouped
-                                    // object reads as undefined there, which
-                                    // the QML-warning gate catches as a
-                                    // TypeError on every pill.
-                                    color: root.themeTextColor
-                                    font.pixelSize: predBar.predFontSize
-                                    font.family: "Ubuntu, Noto Sans, sans-serif"
-                                }
-                                background: Rectangle {
-                                    color: root.themeKeyColor
-                                    border.color: root.themeBorder
-                                    border.width: 1
-                                    radius: 4
+                            //
+                            // Created only while it is needed (issue #204:
+                            // a ToolTip per pill was 43% of the per-word
+                            // native growth).
+                            Loader {
+                                id: predTipLoader
+                                active: predMouse.containsMouse && predText.truncated
+                                sourceComponent: ToolTip {
+                                    id: predTip
+                                    visible: true
+                                    delay: 400
+                                    contentItem: Text {
+                                        text: pill.pillWord
+                                        textFormat: Text.PlainText
+                                        // The flat theme properties, not
+                                        // root.theme.*: a Popup's contentItem is
+                                        // built in its own scope and the grouped
+                                        // object reads as undefined there, which
+                                        // the QML-warning gate catches as a
+                                        // TypeError on every pill.
+                                        color: root.themeTextColor
+                                        font.pixelSize: predBar.predFontSize
+                                        font.family: "Ubuntu, Noto Sans, sans-serif"
+                                    }
+                                    background: Rectangle {
+                                        color: root.themeKeyColor
+                                        border.color: root.themeBorder
+                                        border.width: 1
+                                        radius: 4
+                                    }
                                 }
                             }
 

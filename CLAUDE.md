@@ -329,7 +329,7 @@ Full write-up: `docs/architecture/MODIFIERS_AND_CASING.md` (section of the same 
 - **`_display_cased`**, in priority order: (1) Caps Lock on, all upper; (2) any uppercase in the typed prefix, mirror **every** position (fuzzy candidates included); (3) Shift held or `_pending_auto_cap` armed with nothing typed uppercase, capitalise the first letter. Every pill emit site routes through it.
 - `toggleCapsLock`, `toggleShift`, `releaseShift`, `lockModifier("shift")` re-query the engine (`_recase_visible_predictions`) rather than re-casing the stored list (it holds the displayed form).
 - **The bar drops low-ranked pills rather than eliding any**: `predRow.computeFit(...)` returns `{words, widths}`; **`predBar.predTextInset` is the single source of truth for horizontal padding** (never inline it); `clearCtxReserve` and `micReserve` are subtracted; the row is placed by explicit `x`, not `centerIn`.
-- Testing that bar: `findChildren` cannot see Repeater delegates (use `_pill_texts`, assert non-empty); never assert `contentWidth <= width` (`Text.truncated` is the honest signal); sweep widths (`test_every_pill_has_room_for_its_own_text`).
+- Testing that bar: `findChildren` cannot see Repeater delegates (use `_pill_texts`, assert non-empty; it counts visible delegates only, since the pool keeps hidden ones); never assert `contentWidth <= width` (`Text.truncated` is the honest signal); sweep widths (`test_every_pill_has_room_for_its_own_text`).
 
 ## Editing a Prediction (OSK-friendly edit popup)
 
@@ -614,7 +614,7 @@ Every visible key and pill is a UI Automation `Button` for external scanners (Sw
 - Anything that can change the target set feeds `Main.qml::scanRevision` (the `aosk.v1.revision` beacon). Compare, never parse.
 - **An Invoke carries no click position** (`pressFromPointer` false) and is a one-shot (`activateFromAssistiveClient`), never `_activate()`.
 - WindowPattern is safe because restore never takes the foreground (`QuietRestoreFilter`), a non-quit close minimizes while a shell close quits (`ShellCloseFilter`), and a minimized keyboard offers no targets. `surface_existing_instance` uses `SW_SHOWNOACTIVATE`, never `SetForegroundWindow`.
-- **Stale pills**: `invokeScanPrediction(word, generation)` refuses a dead generation; keep both halves.
+- **Stale pills**: the pill row is a fixed pool of two banks that alternate by round; the hidden bank is frozen, `Accessible.ignored` and refuses `scanInvoke`, and `invokeScanPrediction(word, generation)` still refuses a dead generation (keep both halves). Never rebuild the Repeater model per round (issue #204, native memory never returned).
 - Window AutomationId `alphaOsk.alphaOskKeyboard` (`_name_for_ui_automation`).
 - PySide cannot read attached `Accessible.*`: keep values in named properties, **never inline an expression into the `Accessible` block**.
 

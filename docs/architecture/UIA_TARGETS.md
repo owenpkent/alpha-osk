@@ -433,22 +433,27 @@ can never insert a word from a later round.
 It rests on two things on the keyboard's side, and neither depends on the
 client comparing anything first.
 
-1. **Every round rebuilds the pills.** Each entry in the pill row's model
-   carries the round's generation, so no two rounds compare equal and Qt's
-   `Repeater` destroys every pill from the previous round. A client still
-   holding one of those elements finds its `Invoke` fails, and nothing is
-   inserted. The error a client sees depends on the client, so do not match
-   on a specific one: a UIA3 client was seen to get
-   `UIA_E_ELEMENTNOTAVAILABLE`, and the managed `System.Windows.Automation`
-   client gets an `InvalidOperationException` reading "Unsupported Pattern".
+1. **Every round hides the previous round's pills.** The pill row is a
+   fixed pool of two banks of ten delegates (ten is the largest prediction
+   count), built once. Round N shows bank `N % 2`; the other bank is frozen
+   (word, generation and AutomationId unchanged), hidden, `Accessible.ignored`
+   and refuses `scanInvoke`. A client holding an element across one round
+   therefore finds it gone from the tree and its `Invoke` refused; two rounds
+   later the same element is a new live pill with a new id (the
+   `aosk.v1.revision` beacon moves every round). Destroying the delegates
+   instead was issue #204: about 0.5 MB of native memory per round that was
+   never returned. **Never go back to rebuilding the Repeater model per
+   round.** The error a client sees depends on the client, so do not match on
+   a specific one.
 2. **An Invoke carries its pill's generation, and a dead one is refused.**
    The pill hands its own generation to `invokeScanPrediction` in
    `Main.qml`, which inserts nothing unless that is still the live round.
    Part 1 should make this unreachable; it exists so that a later change
-   letting a pill survive a round fails closed instead of inserting.
+   letting a pill stay live across a round fails closed instead of inserting.
 
 **The first version of this guarantee was wrong, and the way it was wrong is
-worth knowing.** It claimed part 1 as free Qt behaviour: swap the model and
+worth knowing** (it relied on destroying delegates, since replaced by the
+banks above). It claimed part 1 as free Qt behaviour: swap the model and
 the delegates are rebuilt, identical words included. They are not.
 `QQuickRepeater::setModel` returns early when the new list compares equal to
 the old one, so a round of identical words kept the old pill objects. The
@@ -494,7 +499,7 @@ developer's running keyboard was never touched. None of those rows depend on
 | Declining the restore but not letting its own restore through | **Refuted**: the keyboard declined its own restore 409 times and never came back. Hence `_restoring` |
 | Adding `SWP_NOACTIVATE` to `WM_WINDOWPOSCHANGING` instead | **Refuted**: no effect; the activation on restore does not go through those flags |
 | `WindowPattern.Close` | Before: the process kept running with the keyboard hidden and absent from the tree. After: the keyboard minimizes and stays discoverable, and the application's own quit still exits |
-| An identical round rebuilds the pills | **Refuted** in the first version (the pills survived and a held one inserted); fixed by carrying the generation in the model, and held by `test_an_identical_round_destroys_the_pills_it_replaces` |
+| An identical round rebuilds the pills | **Refuted** in the first version (the pills survived and a held one inserted); now the two-bank pool hides the replaced pills (held by `test_an_identical_round_hides_the_pills_it_replaces`) |
 | The window's AutomationId | `alphaOsk.alphaOskKeyboard` with the application named. Unnamed it is the application's class name: `QApplication.` in the shipped keyboard, `QGuiApplication.` in the test harness |
 | The beacon moves on a state change | Confirmed |
 
@@ -546,7 +551,7 @@ is no UIA provider under `offscreen`. What it holds is the half that is ours
 and the half that will actually rot: that every visible key carries an
 identity, that identities are unique and well-formed, that names are
 speakable, that only real toggles claim a toggle state, that a new prediction
-round always yields new ids, that an identical round still destroys the
+round always yields new ids, that an identical round still hides the
 pills it replaces, that an Invoke from a dead generation inserts nothing,
 that a minimized keyboard offers no targets and inserts nothing, that a close
 minimizes while a quit still closes, and that the beacon moves.

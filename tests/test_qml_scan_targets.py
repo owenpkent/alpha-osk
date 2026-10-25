@@ -312,7 +312,8 @@ class TestPredictionPillsGetAFreshIdentity:
                 return
             for child in item.childItems():
                 tid = child.property("scanTargetId")
-                if tid and str(tid).startswith("aosk.v1.pred."):
+                # Hidden slots of the fixed pool (issue #204) are not targets.
+                if tid and str(tid).startswith("aosk.v1.pred.") and child.isVisible():
                     out.append(child)
                 walk(child)
 
@@ -374,45 +375,50 @@ class TestPredictionPillsGetAFreshIdentity:
             f"an identical round reused its ids: {first} vs {second}"
         )
 
-    def test_an_identical_round_destroys_the_pills_it_replaces(self, qml_root):
-        """The regression the external client found. Before the fix this
-        reused every pill, so a held element survived the round and stayed
-        invokable, and only a client that compared ids first was safe."""
+    def _held(self, root) -> list:
+        """Every pool delegate that currently shows a pill, as a scanner holding
+        its elements would see them. The returned items stay alive: the pool
+        is never rebuilt (issue #204)."""
+        return list(self._pills(root))
+
+    @staticmethod
+    def _invoke(root, bridge, pill) -> bool:
+        bridge._synth.reset_mock()
+        QMetaObject.invokeMethod(pill, "scanInvoke")
+        QCoreApplication.processEvents()
+        return bool(bridge._synth.method_calls)
+
+    def _round_hides_held_pills(self, qml_root, first, second):
         root, _, bridge = qml_root
-        bridge.predictionsChanged.emit(["hello", "help"])
+        bridge.predictionsChanged.emit(first)
         _settle(root)
-        old = self._pills(root)
-        assert old, "no prediction pills were exposed"
-        destroyed: list = []
-        for pill in old:
-            pill.destroyed.connect(lambda *_: destroyed.append(1))
+        held = self._held(root)
+        assert held, "no prediction pills were exposed"
+        assert all(p.isVisible() for p in held)
 
-        bridge.predictionsChanged.emit(["hello", "help"])
+        bridge.predictionsChanged.emit(second)
         _settle(root)
-        self._flush_deletes()
 
-        assert len(destroyed) == len(old), (
-            f"{len(old) - len(destroyed)} of {len(old)} pills survived an "
-            "identical round, so a scanner holding one could still invoke it"
-        )
+        # The held elements are hidden (so out of the UIA tree) and an
+        # Invoke on each is refused: nothing reaches the synthesiser.
+        for pill in held:
+            assert not pill.isVisible()
+            assert not self._invoke(root, bridge, pill), (
+                "a pill held across a round was still invokable"
+            )
+        assert self._typed(bridge) == []
         assert self._pills(root), "the new round exposed no pills at all"
 
-    def test_a_different_round_destroys_them_too(self, qml_root):
-        """The inverse, so the test above cannot pass by destroying pills
-        only when nothing changed."""
-        root, _, bridge = qml_root
-        bridge.predictionsChanged.emit(["hello", "help"])
-        _settle(root)
-        old = self._pills(root)
-        destroyed: list = []
-        for pill in old:
-            pill.destroyed.connect(lambda *_: destroyed.append(1))
+    def test_an_identical_round_hides_the_pills_it_replaces(self, qml_root):
+        """The regression the external client found (PR #114): a held element
+        survived an identical round and stayed invokable. The pool replaces
+        destruction with a hidden, refusing bank."""
+        self._round_hides_held_pills(qml_root, ["hello", "help"], ["hello", "help"])
 
-        bridge.predictionsChanged.emit(["world", "work"])
-        _settle(root)
-        self._flush_deletes()
-
-        assert old and len(destroyed) == len(old)
+    def test_a_different_round_hides_them_too(self, qml_root):
+        """The inverse, so the test above cannot pass by hiding pills only
+        when nothing changed."""
+        self._round_hides_held_pills(qml_root, ["hello", "help"], ["world", "work"])
 
     def test_an_invoke_from_a_round_that_is_gone_inserts_nothing(self, qml_root):
         """The second, independent half: the generation travels with the
@@ -453,19 +459,45 @@ class TestPredictionPillsGetAFreshIdentity:
 
         assert self._typed(bridge), "invoking a live pill inserted nothing"
 
-    def test_a_pills_id_is_fixed_for_its_lifetime(self, qml_root):
-        """The id is built from the pill's own generation, not the live one,
-        so it can never change under an element a scanner is holding."""
+    def test_a_pills_id_and_word_are_fixed_while_it_is_hidden(self, qml_root):
+        """A pill's id is built from its own generation and its word is
+        frozen when its round ends, so a hidden element still reports what it
+        showed; the live pill in the same slot carries the new generation."""
         root, _, bridge = qml_root
         bridge.predictionsChanged.emit(["hello", "help"])
         _settle(root)
         pill = self._pills(root)[0]
-        before = str(pill.property("scanTargetId"))
-        root.setProperty("predictionGeneration", int(root.property("predictionGeneration")) + 1)
-        # Read before the deferred delete lands, which is the window a held
-        # element could otherwise be read in.
-        QCoreApplication.processEvents()
-        assert str(pill.property("scanTargetId")) == before
+        before = (str(pill.property("scanTargetId")), str(pill.property("pillWord")))
+        old_gen = int(root.property("predictionGeneration"))
+
+        bridge.predictionsChanged.emit(["world", "work"])
+        _settle(root)
+
+        assert not pill.isVisible()
+        assert (str(pill.property("scanTargetId")), str(pill.property("pillWord"))) == before
+        live = self._pills(root)[0]
+        assert live is not pill
+        assert str(live.property("pillWord")) == "world"
+        assert str(live.property("scanTargetId")).endswith(
+            f".g{int(root.property('predictionGeneration'))}"
+        )
+        assert int(root.property("predictionGeneration")) != old_gen
+
+    def test_the_presented_pills_are_exactly_the_live_predictions(self, qml_root):
+        """The UIA-presented count equals the live predictions, and shrinking
+        the round hides the slots that lost a word."""
+        root, _, bridge = qml_root
+        bridge.predictionsChanged.emit(["hello", "help", "held", "hell", "he"])
+        _settle(root)
+        assert len(self._pills(root)) == 5
+        assert not any(p.property("scanIgnored") for p in self._pills(root))
+
+        bridge.predictionsChanged.emit(["hello", "help"])
+        _settle(root)
+        shown = self._pills(root)
+        assert len(shown) == 2
+        assert [str(p.property("pillWord")) for p in shown] == ["hello", "help"]
+        assert not any(p.property("scanIgnored") for p in shown)
 
 
 class TestTheRevisionBeacon:
