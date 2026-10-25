@@ -398,36 +398,47 @@ class TestPredictionPillsGetAFreshIdentity:
         QCoreApplication.processEvents()
 
     def _held_across(self, qml_root, first, rounds):
-        """Hold the native id of a live pill across rounds. Each round the id
-        taken before it must resolve to nothing, a fresh query must yield a
-        different id, and the pill must still work as a live target."""
+        """Hold the native id of a live pill across every one of `rounds`.
+
+        Every id taken so far must resolve to nothing after each later round
+        and press into nothing; the original is kept for the whole sequence
+        (the review's case: a pill reused two rounds on revived a held id).
+        Nothing is pressed between rounds, since a press inserts a word and
+        would itself start a round. The live-target control is
+        `test_a_live_pills_native_invoke_types`; here the current round's
+        target is pressed once at the end, so the negatives cannot pass
+        merely because activation is broken."""
         root, _, bridge = qml_root
         bridge.predictionsChanged.emit(first)
         _settle(root)
-        pill = self._pills(root)[0]
-        uid = self._held_id(pill)
-        # Control: the held id works while its offer is live.
-        self._press_held(bridge, uid)
-        assert self._typed(bridge), "a live pill's native Invoke inserted nothing"
+        taken = [self._held_id(self._pills(root)[0])]
 
         for n, words in enumerate(rounds, 1):
             bridge.predictionsChanged.emit(words)
             _settle(root)
-            assert QAccessible.accessibleInterface(uid) is None, (
-                f"the id held across {n} round(s) still resolves"
-            )
-            self._press_held(bridge, uid)
-            assert self._typed(bridge) == []
+            for held in taken:
+                assert QAccessible.accessibleInterface(held) is None, (
+                    f"an id held across {n} round(s) still resolves"
+                )
+                self._press_held(bridge, held)
+                assert self._typed(bridge) == [], "a held id inserted text"
             live = self._pills(root)
             assert live, "the new round exposed no pills at all"
             new_id = self._held_id(live[0])
-            assert new_id != uid
-            # The pooled pill is still a working target for the live round.
-            bridge._synth.reset_mock()
-            assert QMetaObject.invokeMethod(live[0], "scanInvoke")
-            QCoreApplication.processEvents()
-            assert self._typed(bridge), "the live pill stopped working"
-            uid = new_id
+            assert new_id not in taken, "a revoked id was minted again"
+            taken.append(new_id)
+
+        self._press_held(bridge, taken[-1])
+        assert self._typed(bridge), "the live round's native Invoke inserted nothing"
+
+    def test_a_live_pills_native_invoke_types(self, qml_root):
+        """Control for the held-id cases: resolving a LIVE pill's native id and
+        pressing it, as the Windows Invoke provider does, inserts the word."""
+        root, _, bridge = qml_root
+        bridge.predictionsChanged.emit(["hello", "help"])
+        _settle(root)
+        self._press_held(bridge, self._held_id(self._pills(root)[0]))
+        assert self._typed(bridge), "a live pill's native Invoke inserted nothing"
 
     def test_a_held_pill_is_dead_after_an_identical_round(self, qml_root):
         self._held_across(qml_root, ["hello", "help"], [["hello", "help"]])
