@@ -717,18 +717,20 @@ class TestThePillRowDoesNotLeakNativeMemory:
     prediction round, and the native memory behind them (text, gradient,
     tooltip, accessibility attachments) was not returned: about 4 MB per word
     typed, 1.6 GB after a day. The row is now a fixed pool of delegates that
-    show or hide, and the tooltip is a Loader that exists only while shown.
+    show or hide (their accessible id revoked each round), and the tooltip is
+    a Loader that exists only while shown.
 
     Before the fix this test measured about 0.75 MB per round after warm-up;
-    after it, under 0.02 MB. The bound is generous (floored at
-    the noise of the allocator) yet still trips on the old behaviour by
-    7x.
+    after it, 0.005 to 0.008 MB. The bound is 0.05 (5x the measured figure,
+    floored against allocator noise), so it trips on the old behaviour 15x
+    over. A per-offer proxy Item instead of the id revocation measured 0.056
+    here (0.32 MB per word in the full probe), which this bound also rejects.
     """
 
     ROUNDS = 150
     WARMUP = 50
     # MB per round.
-    BOUND_MB_PER_ROUND = 0.1
+    BOUND_MB_PER_ROUND = 0.05
 
     def test_rounds_of_predictions_do_not_grow_the_process(self, qml_root):
         psutil = pytest.importorskip("psutil")

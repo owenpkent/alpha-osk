@@ -2865,6 +2865,28 @@ class KeyboardBridge(QObject):
         self._predictions = []
         self.predictionsChanged.emit([])
 
+    @Slot(QObject)
+    def revokeScanTarget(self, item: QObject | None) -> None:
+        """Drop a pooled prediction pill's accessible id (issue #204).
+
+        A scanner's cached UIA provider holds only a QAccessible id and
+        resolves it on every call. Deleting the interface is what destroying
+        the pill used to do, without the native-memory churn of rebuilding the
+        delegates: the held id resolves to nothing, and the next query of the
+        same item mints a fresh id. Never raises into QML.
+        """
+        if item is None:
+            return
+        try:
+            # Lazy: QtGui pulls in the host's GL stack at import time.
+            from PySide6.QtGui import QAccessible
+
+            iface = QAccessible.queryAccessibleInterface(item)
+            if iface is not None:
+                QAccessible.deleteAccessibleInterface(QAccessible.uniqueId(iface))
+        except Exception:
+            _logger.debug("revokeScanTarget failed", exc_info=False)
+
     @Slot()
     def resetContext(self) -> None:
         """Full reset of typing state, for explicit user action only.

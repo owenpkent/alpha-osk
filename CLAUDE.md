@@ -614,7 +614,7 @@ Every visible key and pill is a UI Automation `Button` for external scanners (Sw
 - Anything that can change the target set feeds `Main.qml::scanRevision` (the `aosk.v1.revision` beacon). Compare, never parse.
 - **An Invoke carries no click position** (`pressFromPointer` false) and is a one-shot (`activateFromAssistiveClient`), never `_activate()`.
 - WindowPattern is safe because restore never takes the foreground (`QuietRestoreFilter`), a non-quit close minimizes while a shell close quits (`ShellCloseFilter`), and a minimized keyboard offers no targets. `surface_existing_instance` uses `SW_SHOWNOACTIVATE`, never `SetForegroundWindow`.
-- **Stale pills**: the pill row is a fixed pool of two banks that alternate by round; the hidden bank is frozen, `Accessible.ignored` and refuses `scanInvoke`, and `invokeScanPrediction(word, generation)` still refuses a dead generation (keep both halves). Never rebuild the Repeater model per round (issue #204, native memory never returned).
+- **Stale pills**: the pill delegates are a fixed pool, and each round `predRow.onFitChanged` calls `keyboard.revokeScanTarget(pill)` before rewriting a slot, deleting its `QAccessible` id so a held UIA provider resolves to nothing; `invokeScanPrediction(word, generation)` still refuses a dead generation (keep both halves). Never rebuild the Repeater model per round (issue #204), and do not replace the revoke with banks (reuse revives a held provider, PR #217) or a per-offer proxy Item (0.32 MB/word).
 - Window AutomationId `alphaOsk.alphaOskKeyboard` (`_name_for_ui_automation`).
 - PySide cannot read attached `Accessible.*`: keep values in named properties, **never inline an expression into the `Accessible` block**.
 

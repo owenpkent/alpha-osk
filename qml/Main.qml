@@ -3116,19 +3116,22 @@ Window {
 
                     readonly property int poolSize: 10
 
-                    // Hand the round's words to the live bank.  Runs after the
-                    // generation bump (see root.predictionRound), so the bank
-                    // chosen here is the one the new round owns and the other
-                    // bank is never written: it stays a snapshot.  Also runs
-                    // on a resize, which can change how many words fit.
+                    // Hand the round's words to the pool.  Runs after the
+                    // generation bump (see root.predictionRound), so the
+                    // generation read here is the new round's.  Also runs on
+                    // a resize, which can change how many words fit.
+                    //
+                    // The order per slot is the contract: revoke the pill's
+                    // accessible id FIRST (that invalidates any provider a
+                    // scanner holds), then change the word and generation.
                     onFitChanged: {
                         var g = root.predictionGeneration
-                        var base = (g % 2) * predRow.poolSize
                         var words = predRow.fit.words
                         for (var i = 0; i < predRow.poolSize; i++) {
-                            var d = predRepeater.itemAt(base + i)
+                            var d = predRepeater.itemAt(i)
                             if (!d)
                                 continue
+                            keyboard.revokeScanTarget(d)
                             d.pillWord = i < words.length ? words[i] : ""
                             d.pillGeneration = g
                         }
@@ -3161,31 +3164,37 @@ Window {
                         // pool is built once and never rebuilt.  Do not go
                         // back to a per-round model.
                         //
-                        // Two banks of `poolSize` delegates take alternate
-                        // rounds (bank = generation % 2).  The stale-scan
-                        // guarantee no longer comes from destroying elements:
-                        // a round's pills live in one bank and are FROZEN
-                        // (word, generation, id) when the next round hides
-                        // them, so an element a scanner held across a round
-                        // is hidden, not Accessible, and refuses to Invoke.
-                        // Two rounds later the same element is a new live
-                        // pill with a new id (scanRevision moves each round).
+                        // The pill is pooled, and so is its accessible object,
+                        // but a scanner's hold on it is revoked every round:
+                        // onFitChanged calls keyboard.revokeScanTarget(pill)
+                        // BEFORE rewriting the slot, which deletes the pill's
+                        // QAccessible interface and so its id.  A UIA provider
+                        // resolves that id on every call, so a held one gets
+                        // ElementNotAvailable while the QQuickItem lives on
+                        // and the next query mints a fresh id.
+                        //
+                        // Two alternatives were tried and rejected.  A
+                        // per-offer proxy Item (Loader), destroyed each round,
+                        // costs about 5 KB of native memory per created Item
+                        // with an Accessible attachment, never freed: 0.32
+                        // MB/word.  Two alternating banks of pooled pills
+                        // revive a held provider when a bank is reused two
+                        // rounds later, because Qt resolves the cached id to
+                        // the still-living item and Invoke typed the
+                        // replacement word (PR #217 review): any reuse of the
+                        // same QObject has that flaw unless its id is revoked.
                         //
                         // 10 is the ceiling of KeyboardBridge.setPredictionCount
                         // (`max(1, min(10, count))`): the most pills a round
                         // can show; `fit.words` never has more.
-                        model: 2 * predRow.poolSize
+                        model: predRow.poolSize
                         delegate: Rectangle {
                             id: pill
-                            readonly property int slot: index % predRow.poolSize
-                            readonly property int bank: Math.floor(index / predRow.poolSize)
-                            readonly property bool live: bank === root.predictionGeneration % 2
-                            // Plain properties written by predRow.onFitChanged
-                            // for the live bank only, so a hidden pill keeps
-                            // the word and generation of the round it showed.
+                            readonly property int slot: index
+                            // Written by predRow.onFitChanged.
                             property string pillWord: ""
                             property int pillGeneration: -1
-                            visible: live && pillWord !== "" && root.predictionsArePresent
+                            visible: pillWord !== "" && root.predictionsArePresent
                             width: !visible ? 0
                                    : (slot < predRow.fit.widths.length
                                       ? predRow.fit.widths[slot]
@@ -3201,13 +3210,13 @@ Window {
 
                             // ===== Switch-scanning target =====
                             //
-                            // The id is built from this pill's own (frozen)
-                            // generation, so it never changes under a held
-                            // element.  The Invoke goes through
-                            // invokeScanPrediction, which refuses a dead
-                            // generation, and scanInvoke refuses a hidden
-                            // pill ("presence means activatable, rechecked
-                            // at activation", as KeyButton does).
+                            // The id carries the generation this slot was last
+                            // written for, and the interface is revoked before
+                            // every rewrite (see above).  The Invoke goes
+                            // through invokeScanPrediction, which refuses a
+                            // dead generation, and scanInvoke refuses a hidden
+                            // pill ("presence means activatable, rechecked at
+                            // activation", as KeyButton does).
                             //
                             // Named rather than inlined into the attached
                             // property, for the reason KeyButton's own block
@@ -3222,10 +3231,8 @@ Window {
                             }
 
                             // Out of the tree while the keyboard is minimized,
-                            // for the reason KeyButton's _scanWindowShown gives.
-                            // A hidden pill (an idle bank's frozen snapshot, or an
-                            // empty slot) is out of the tree too, not merely invisible:
-                            // a scanner must see it as gone.
+                            // for the reason KeyButton's _scanWindowShown gives,
+                            // and while the slot is empty.
                             readonly property bool scanIgnored:
                                 !root.scanWindowShown || !pill.visible
 

@@ -42,7 +42,11 @@ try:
         QSettings,
         QUrl,
     )
-    from PySide6.QtGui import QGuiApplication  # noqa: E402
+    from PySide6.QtGui import (  # noqa: E402
+        QAccessible,
+        QAccessibleActionInterface,
+        QGuiApplication,
+    )
     from PySide6.QtQml import QQmlApplicationEngine  # noqa: E402
 
     # Imported for the side effect: without QQuickItem somewhere in the
@@ -293,16 +297,16 @@ class TestOnlyRealTogglesReportAToggleState:
 
 class TestPredictionPillsGetAFreshIdentity:
     """The stale-selection guarantee: an outdated scan selection can never
-    insert a word. It rests on two things, and each is tested on its own. The
-    pills are rebuilt every round, so an element a scanner is holding from an
-    earlier round is destroyed; and an Invoke carries its pill's generation,
-    which is refused once that round is gone.
+    insert a word. The pill delegates are pooled (issue #204), and each round
+    revokes the pill's accessible id (`keyboard.revokeScanTarget`), so a UIA
+    provider a scanner holds resolves to nothing, as if the pill had been
+    destroyed. An Invoke also carries its generation, refused once that round
+    is gone.
 
-    The rebuild was first claimed as free Qt behaviour, and it was not:
-    Repeater.setModel returns early when the new list compares equal to the
-    old one, so a round of identical words kept the old pill objects, and the
-    external test client (OwenMcGirr/alpha-osk-scan-lab, on PR #114) invoked a
-    held one and got a keystroke. The identical round is the case to test."""
+    Reusing the object without revoking (two banks) revived held providers
+    (PR #217 review), so the regressions below hold the NATIVE accessibility
+    id across two rounds and invoke it through the action interface, as a UIA
+    client would. The identical-word round is the case that bit PR #114."""
 
     def _pills(self, root) -> list:
         out: list = []
@@ -375,50 +379,105 @@ class TestPredictionPillsGetAFreshIdentity:
             f"an identical round reused its ids: {first} vs {second}"
         )
 
-    def _held(self, root) -> list:
-        """Every pool delegate that currently shows a pill, as a scanner holding
-        its elements would see them. The returned items stay alive: the pool
-        is never rebuilt (issue #204)."""
-        return list(self._pills(root))
-
     @staticmethod
-    def _invoke(root, bridge, pill) -> bool:
-        bridge._synth.reset_mock()
-        QMetaObject.invokeMethod(pill, "scanInvoke")
-        QCoreApplication.processEvents()
-        return bool(bridge._synth.method_calls)
+    def _held_id(pill) -> int:
+        """The native accessibility id of a live pill proxy (what a UIA client
+        caches), taken without keeping the QML item."""
+        iface = QAccessible.queryAccessibleInterface(pill)
+        assert iface is not None, "a live pill has no accessible interface"
+        return QAccessible.uniqueId(iface)
 
-    def _round_hides_held_pills(self, qml_root, first, second):
+    def _press_held(self, bridge, uid: int) -> None:
+        """Resolve a cached id and press it, like the Windows Invoke provider."""
+        bridge._synth.reset_mock()
+        iface = QAccessible.accessibleInterface(uid)
+        if iface is not None:
+            actions = iface.actionInterface()
+            if actions is not None:
+                actions.doAction(QAccessibleActionInterface.pressAction())
+        QCoreApplication.processEvents()
+
+    def _held_across(self, qml_root, first, rounds):
+        """Hold the native id of a live pill across rounds. Each round the id
+        taken before it must resolve to nothing, a fresh query must yield a
+        different id, and the pill must still work as a live target."""
         root, _, bridge = qml_root
         bridge.predictionsChanged.emit(first)
         _settle(root)
-        held = self._held(root)
-        assert held, "no prediction pills were exposed"
-        assert all(p.isVisible() for p in held)
+        pill = self._pills(root)[0]
+        uid = self._held_id(pill)
+        # Control: the held id works while its offer is live.
+        self._press_held(bridge, uid)
+        assert self._typed(bridge), "a live pill's native Invoke inserted nothing"
 
-        bridge.predictionsChanged.emit(second)
-        _settle(root)
-
-        # The held elements are hidden (so out of the UIA tree) and an
-        # Invoke on each is refused: nothing reaches the synthesiser.
-        for pill in held:
-            assert not pill.isVisible()
-            assert not self._invoke(root, bridge, pill), (
-                "a pill held across a round was still invokable"
+        for n, words in enumerate(rounds, 1):
+            bridge.predictionsChanged.emit(words)
+            _settle(root)
+            assert QAccessible.accessibleInterface(uid) is None, (
+                f"the id held across {n} round(s) still resolves"
             )
-        assert self._typed(bridge) == []
-        assert self._pills(root), "the new round exposed no pills at all"
+            self._press_held(bridge, uid)
+            assert self._typed(bridge) == []
+            live = self._pills(root)
+            assert live, "the new round exposed no pills at all"
+            new_id = self._held_id(live[0])
+            assert new_id != uid
+            # The pooled pill is still a working target for the live round.
+            bridge._synth.reset_mock()
+            assert QMetaObject.invokeMethod(live[0], "scanInvoke")
+            QCoreApplication.processEvents()
+            assert self._typed(bridge), "the live pill stopped working"
+            uid = new_id
 
-    def test_an_identical_round_hides_the_pills_it_replaces(self, qml_root):
-        """The regression the external client found (PR #114): a held element
-        survived an identical round and stayed invokable. The pool replaces
-        destruction with a hidden, refusing bank."""
-        self._round_hides_held_pills(qml_root, ["hello", "help"], ["hello", "help"])
+    def test_a_held_pill_is_dead_after_an_identical_round(self, qml_root):
+        self._held_across(qml_root, ["hello", "help"], [["hello", "help"]])
 
-    def test_a_different_round_hides_them_too(self, qml_root):
-        """The inverse, so the test above cannot pass by hiding pills only
-        when nothing changed."""
-        self._round_hides_held_pills(qml_root, ["hello", "help"], ["world", "work"])
+    def test_a_held_pill_is_dead_after_a_different_round(self, qml_root):
+        self._held_across(qml_root, ["hello", "help"], [["world", "work"]])
+
+    def test_a_held_pill_stays_dead_two_rounds_later_identical(self, qml_root):
+        """The reviewer's case (PR #217): reuse of the same object revived it."""
+        self._held_across(qml_root, ["hello", "help"], [["hello", "help"], ["hello", "help"]])
+
+    def test_a_held_pill_stays_dead_two_rounds_later_different(self, qml_root):
+        self._held_across(qml_root, ["hello", "help"], [["world", "work"], ["there", "these"]])
+
+    def test_a_pills_id_and_word_are_fixed_for_its_life(self, qml_root):
+        """While its offer is live a pill's id is stable; the next round's pill
+        in the same slot carries the new generation."""
+        root, _, bridge = qml_root
+        bridge.predictionsChanged.emit(["hello", "help"])
+        _settle(root)
+        pill = self._pills(root)[0]
+        gen = int(root.property("predictionGeneration"))
+        assert str(pill.property("pillWord")) == "hello"
+        assert str(pill.property("scanTargetId")) == f"aosk.v1.pred.0.g{gen}"
+        QCoreApplication.processEvents()
+        assert str(pill.property("scanTargetId")) == f"aosk.v1.pred.0.g{gen}"
+
+        bridge.predictionsChanged.emit(["world", "work"])
+        _settle(root)
+        live = self._pills(root)[0]
+        assert str(live.property("pillWord")) == "world"
+        assert str(live.property("scanTargetId")).endswith(
+            f".g{int(root.property('predictionGeneration'))}"
+        )
+
+    def test_the_presented_pills_are_exactly_the_live_predictions(self, qml_root):
+        """The UIA-presented count equals the live predictions, and shrinking
+        the round removes the proxies of the slots that lost a word."""
+        root, _, bridge = qml_root
+        bridge.predictionsChanged.emit(["hello", "help", "held", "hell", "he"])
+        _settle(root)
+        assert len(self._pills(root)) == 5
+        assert not any(p.property("scanIgnored") for p in self._pills(root))
+
+        bridge.predictionsChanged.emit(["hello", "help"])
+        _settle(root)
+        shown = self._pills(root)
+        assert len(shown) == 2
+        assert [str(p.property("pillWord")) for p in shown] == ["hello", "help"]
+        assert not any(p.property("scanIgnored") for p in shown)
 
     def test_an_invoke_from_a_round_that_is_gone_inserts_nothing(self, qml_root):
         """The second, independent half: the generation travels with the
@@ -458,46 +517,6 @@ class TestPredictionPillsGetAFreshIdentity:
         QCoreApplication.processEvents()
 
         assert self._typed(bridge), "invoking a live pill inserted nothing"
-
-    def test_a_pills_id_and_word_are_fixed_while_it_is_hidden(self, qml_root):
-        """A pill's id is built from its own generation and its word is
-        frozen when its round ends, so a hidden element still reports what it
-        showed; the live pill in the same slot carries the new generation."""
-        root, _, bridge = qml_root
-        bridge.predictionsChanged.emit(["hello", "help"])
-        _settle(root)
-        pill = self._pills(root)[0]
-        before = (str(pill.property("scanTargetId")), str(pill.property("pillWord")))
-        old_gen = int(root.property("predictionGeneration"))
-
-        bridge.predictionsChanged.emit(["world", "work"])
-        _settle(root)
-
-        assert not pill.isVisible()
-        assert (str(pill.property("scanTargetId")), str(pill.property("pillWord"))) == before
-        live = self._pills(root)[0]
-        assert live is not pill
-        assert str(live.property("pillWord")) == "world"
-        assert str(live.property("scanTargetId")).endswith(
-            f".g{int(root.property('predictionGeneration'))}"
-        )
-        assert int(root.property("predictionGeneration")) != old_gen
-
-    def test_the_presented_pills_are_exactly_the_live_predictions(self, qml_root):
-        """The UIA-presented count equals the live predictions, and shrinking
-        the round hides the slots that lost a word."""
-        root, _, bridge = qml_root
-        bridge.predictionsChanged.emit(["hello", "help", "held", "hell", "he"])
-        _settle(root)
-        assert len(self._pills(root)) == 5
-        assert not any(p.property("scanIgnored") for p in self._pills(root))
-
-        bridge.predictionsChanged.emit(["hello", "help"])
-        _settle(root)
-        shown = self._pills(root)
-        assert len(shown) == 2
-        assert [str(p.property("pillWord")) for p in shown] == ["hello", "help"]
-        assert not any(p.property("scanIgnored") for p in shown)
 
 
 class TestTheRevisionBeacon:
