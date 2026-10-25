@@ -4,6 +4,7 @@ The offscreen platform picks its screens before ``QGuiApplication`` exists,
 and the test session shares one app, so the case runs in its own process.
 
 Usage: qml_two_screen_probe.py <settings_dir> <width> <x> <y> <compact 0|1>
+(width 0: a fresh install, nothing saved)
 Prints one JSON object on stdout.
 """
 
@@ -40,15 +41,18 @@ def main() -> int:
     # would write the registry. The QML `Settings {}` uses the default one.
     settings = QSettings(QSettings.Format.IniFormat, QSettings.Scope.UserScope, TEST_ORG, TEST_APP)
     settings.clear()
-    for key, value in {
-        "savedAutoCheckUpdates": False,
-        "savedShowNavigation": False,
-        "savedShowNumpad": False,
-        "savedCompactView": compact == "1",
-        "savedWindowWidth": int(width),
-        "savedWindowX": int(x),
-        "savedWindowY": int(y),
-    }.items():
+    saved: dict[str, object] = {"savedAutoCheckUpdates": False}
+    # A width of 0 is a fresh install: no saved geometry, default panels.
+    if int(width) > 0:
+        saved.update(
+            savedShowNavigation=False,
+            savedShowNumpad=False,
+            savedCompactView=compact == "1",
+            savedWindowWidth=int(width),
+            savedWindowX=int(x),
+            savedWindowY=int(y),
+        )
+    for key, value in saved.items():
         settings.setValue(f"ui/{key}", value)
     settings.sync()
 

@@ -470,21 +470,23 @@ Window {
                     root.screenAvailableHeightFor(appSettings.savedWindowX,
                                                   appSettings.savedWindowY,
                                                   root.width,
-                                                  root.modelHeight(root.keyH)))
+                                                  root.modelHeight(root.keyHFor(root.width))))
             // The position is clamped with the model's height for the same
             // reason: with the stale one, a window saved near the bottom of
-            // the desktop came back with its lower rows off the screen.
+            // the desktop came back with its lower rows off the screen. The
+            // model takes `keyHFor(root.width)`, not `keyH`, which has not
+            // caught up with this block's width assignments either.
             var restoredPos = root.clampedWindowPos(appSettings.savedWindowX,
                                                       appSettings.savedWindowY,
                                                       root.width,
-                                                      root.modelHeight(root.keyH))
+                                                      root.modelHeight(root.keyHFor(root.width)))
             root.x = restoredPos.x
             root.y = restoredPos.y
         } else {
             if (appSettings.savedWindowWidth > 0)
                 root.width = root.fitWidth(root.width)
             root.x = (Screen.width - root.width) / 2
-            root.y = Screen.height - root.modelHeight(root.keyH) - 40
+            root.y = Screen.height - root.modelHeight(root.keyHFor(root.width)) - 40
         }
         root._loaded = true
 
@@ -975,7 +977,8 @@ Window {
     // inset already guarantees the caps never touch.  Wider gaps just
     // shrink the click targets, which is the wrong trade on a
     // mouse-driven OSK.
-    property real keySpacing: Math.max(1, Math.floor(root.width * 0.0018))
+    property real keySpacing: keySpacingFor(root.width)
+    function keySpacingFor(w) { return Math.max(1, Math.floor(w * 0.0018)) }
 
     // The vertical gap between two stacked keyboard rows.  A property
     // rather than a literal on the ColumnLayout because `keyHitMarginV`
@@ -1049,17 +1052,28 @@ Window {
 
     // Fixed-pixel overhead: margins(8×2=16) + widest-row gaps(N-1 × keySpacing)
     // + per-panel: separator(1) + 2 inner grid gaps + 2×RowLayout spacing(6)
-    property real layoutFixedPixels: 16 + _widestRow.gaps * keySpacing
-        + (showNavigation ? 1 + 2 * keySpacing + 12 : 0)
-        + (showNumpad ? 1 + 3 * keySpacing + 12 : 0)
+    property real layoutFixedPixels: layoutFixedPixelsFor(keySpacing)
+    function layoutFixedPixelsFor(spacing) {
+        return 16 + _widestRow.gaps * spacing
+            + (showNavigation ? 1 + 2 * spacing + 12 : 0)
+            + (showNumpad ? 1 + 3 * spacing + 12 : 0)
+    }
 
-    property real keyW: Math.max(30, (root.width - layoutFixedPixels) / totalKeyUnits)
+    property real keyW: keyWFor(root.width)
     // keyH simply tracks keyW at the keycap aspect ratio.  This works
     // because the window's `height` is bound to `outerLayout.implicitHeight + 80`
     // — i.e. the window auto-sizes to whatever the content needs.  The
     // user only resizes width (the resize handles are SizeHorCursor),
     // and height follows.  No height-budget arithmetic needed.
-    property real keyH: Math.max(34, keyW * 0.89)
+    property real keyH: keyHFor(root.width)
+    // The same sizes for a width given outright.  The startup placement
+    // needs them: a `root.width` assigned in `Component.onCompleted` reads
+    // back at once, but the bindings above still hold the old width's
+    // values there, so `keyH` was the default 940 px window's.
+    function keyWFor(w) {
+        return Math.max(30, (w - layoutFixedPixelsFor(keySpacingFor(w))) / totalKeyUnits)
+    }
+    function keyHFor(w) { return Math.max(34, keyWFor(w) * 0.89) }
 
     // ===== Section heights: the three sections share one =====
     //

@@ -378,6 +378,20 @@ _STACKED_SCREENS = {
     ]
 }
 
+_ONE_SCREEN = {
+    "screens": [
+        {
+            "name": "primary",
+            "x": 0,
+            "y": 0,
+            "width": 1920,
+            "height": 1080,
+            "logicalDpi": 96,
+            "dpr": 1.0,
+        },
+    ]
+}
+
 _TWO_SCREENS = {
     "screens": [
         {
@@ -453,7 +467,7 @@ class TestTheRestoreClampsAgainstTheSavedScreen:
             )
             assert proc.returncode == 0, proc.stdout + proc.stderr
             result = json.loads(proc.stdout.strip().splitlines()[-1])
-            if result["screens"] != 2:
+            if result["screens"] != len(screens["screens"]):
                 pytest.skip("the offscreen platform ignored the screens config file")
             assert not result["warnings"], result["warnings"]
             return result
@@ -517,6 +531,16 @@ class TestTheRestoreClampsAgainstTheSavedScreen:
         """Pair: the same window saved where it fits is not moved."""
         r = probe(3000, 2000, 100)
         assert r["y"] == 100
+
+    def test_a_fresh_install_sits_above_the_taskbar_slack(self, probe):
+        """No saved geometry, default panels (navigation on): the default
+        width is assigned in `Component.onCompleted` and the placement runs
+        before `keyH` has caught up with it. Placed with the stale `keyH`
+        the window's bottom landed at 1093, below the screen."""
+        r = probe(0, 0, 0, screens=_ONE_SCREEN)
+        assert r["width"] > 940, "the navigation panel's width was not added"
+        # The model is good to a pixel per key-high row.
+        assert abs(r["y"] + r["height"] - (1080 - 40)) <= 8
 
     def test_the_same_width_on_the_small_screen_is_clamped(self, probe):
         r = probe(3000, 100, 100)

@@ -338,10 +338,14 @@ Rules:
   height put a window on stacked monitors mostly on the wrong one. The
   result is passed to `fitWidth(w, availH)` / `maxWidthForScreen(availH)`, whose
   parameter defaults to the current screen. The position clamp then runs
-  with the final width and, for the same reason, `modelHeight(keyH)` as the
+  with the final width and, for the same reason, the model height as the
   height (as does the fresh-install placement above the taskbar): with
   `root.height` a window saved near the bottom of the desktop came back
-  with its lower rows off the screen. `tests/test_qml_window_height.py::
+  with its lower rows off the screen. Every model height in that block is
+  `modelHeight(keyHFor(root.width))`, never `keyH`: a width assigned in
+  `Component.onCompleted` reads back at once, but the width-derived
+  bindings still hold the old width's values there (the fresh-install
+  window landed 13 px below a 1080p screen). `tests/test_qml_window_height.py::
   TestTheRestoreClampsAgainstTheSavedScreen` runs two offscreen screens in
   a subprocess (`tests/qml_two_screen_probe.py`).
 - **A new child of `outerLayout` goes into the model too.**
