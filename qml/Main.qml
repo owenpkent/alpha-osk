@@ -360,6 +360,10 @@ Window {
         // and an imperative assignment here would break that binding,
         // which is exactly the bug that produced empty vertical bands
         // and bottom-row clipping in earlier versions.
+        // The clamp in `fitWidth` inverts the layout, so the restore itself
+        // waits until the rows, the function row and the pill bar are
+        // known (after `applyLayout()` below); no frame renders inside this
+        // handler, so there is still no flash.
         if (appSettings.savedWindowWidth > 0)
             root.width = Math.max(root.minimumWidth, appSettings.savedWindowWidth)
         root._geometryRestored = true
@@ -433,7 +437,7 @@ Window {
             var w = 940
             if (root.showNavigation) w += 220
             if (root.showNumpad) w += 250
-            root.width = w
+            root.width = root.fitWidth(w)
         }
 
         // Restore the saved position if we have one, else center
@@ -448,12 +452,33 @@ Window {
         // coordinates that collapsed to 0 the same way.
         if (appSettings.savedWindowX > -1000000
                 && appSettings.savedWindowY > -1000000) {
+            // A width dragged past the screen before the clamp existed is
+            // persisted; it comes back to the widest fit here. The height
+            // budget is that of the screen the saved position is on, not
+            // `Screen`, which is still the launch screen until the window
+            // has moved: a 3000 px width saved on a 4K secondary monitor
+            // would otherwise be cut to what the primary allows. The screen
+            // is the one that will hold most of the restored window, which
+            // is the one Qt assigns it (a top-left point disagreed with
+            // that when the window straddled two monitors). The height of
+            // that rectangle is the model's, not `root.height`: no layout
+            // pass has run since the width changed, so `root.height` is
+            // still the default window's, which on stacked monitors put
+            // the rectangle's larger share on the wrong screen.
+            if (appSettings.savedWindowWidth > 0)
+                root.width = root.fitWidth(root.width,
+                    root.screenAvailableHeightFor(appSettings.savedWindowX,
+                                                  appSettings.savedWindowY,
+                                                  root.width,
+                                                  root.modelHeight(root.keyH)))
             var restoredPos = root.clampedWindowPos(appSettings.savedWindowX,
                                                       appSettings.savedWindowY,
                                                       root.width, root.height)
             root.x = restoredPos.x
             root.y = restoredPos.y
         } else {
+            if (appSettings.savedWindowWidth > 0)
+                root.width = root.fitWidth(root.width)
             root.x = (Screen.width - root.width) / 2
             root.y = Screen.height - root.height - 40
         }
@@ -487,11 +512,11 @@ Window {
     // silently threw away the user's real panel choice, so leaving compact
     // could never bring the panels back.
     onShowNavigationChanged: {
-        if (_loaded) root.width += showNavigation ? 220 : -220
+        if (_loaded) root.width = root.fitWidth(root.width + (showNavigation ? 220 : -220))
         if (!compactView) appSettings.savedShowNavigation = showNavigation
     }
     onShowNumpadChanged: {
-        if (_loaded) root.width += showNumpad ? 250 : -250
+        if (_loaded) root.width = root.fitWidth(root.width + (showNumpad ? 250 : -250))
         if (!compactView) appSettings.savedShowNumpad = showNumpad
     }
 
@@ -525,7 +550,7 @@ Window {
         applyLayout()
         Qt.callLater(function() {
             var target = Math.round(keyWBefore * root.totalKeyUnits + root.layoutFixedPixels)
-            root.width = Math.max(root.minimumWidth, target)
+            root.width = root.fitWidth(target)
         })
     }
 
@@ -1091,11 +1116,93 @@ Window {
     // different scale factor it can mis-size the window.  Clamp to the new
     // screen's available width so the keyboard never bloats off-screen.
     onScreenChanged: {
-        var maxW = Screen.desktopAvailableWidth - 40
-        if (root.width > maxW) root.width = maxW
-        if (root.width < root.minimumWidth) root.width = root.minimumWidth
+        root.width = root.fitWidth(Math.min(root.width, Screen.desktopAvailableWidth - 40))
     }
-    
+
+    // ===== The window must not outgrow the screen (issue #131) =====
+    // Height is content-bound (`outerLayout.implicitHeight + 80`) and the
+    // keys scale with width, so a wide enough window puts the bottom rows,
+    // the space bar and the resize handle below the display.  Nothing may
+    // bound the height directly: a width<->height handler pair is the
+    // mutual recursion `tests/test_qml_ui_state_fuzz.py` exists to catch,
+    // and the proportional shrink it allows converges asymptotically (the
+    // issue has the numbers).  Instead the layout is inverted in closed
+    // form.  For a given panel configuration the window height is affine
+    // in `keyH`,
+    //     height = heightPerKeyH * keyH + fixedHeightPixels,
+    // so the widest window that fits is one assignment, computed only where
+    // width is set by hand (`fitWidth`), never from a geometry handler.
+    //
+    // The model mirrors `outerLayout`: the one function row that can show,
+    // then five key-high rows (full size: the layout's own five, the number
+    // row 4 px shorter; compact: four plus `NumberRow`), separated by
+    // `rowSpacing`, under a pill bar of `predPillHeight + 4` with a 4 px
+    // bottom margin, inside the 80 px of chrome.  Each `Row` ceils its
+    // height up to a pixel above its keys, so a pixel per row is added.
+    // `tests/test_qml_window_height.py` checks the model against the real
+    // layout; a new child of `outerLayout` must be added here too.
+    readonly property int keyHighRows: 5 + ((showFunctionRow || showExtraFunctionRow) ? 1 : 0)
+    readonly property real heightPerKeyH: keyHighRows + (suggestionsEnabled ? 0.86 : 0)
+    readonly property real fixedHeightPixels: 80 + rowSpacing * (keyHighRows - 1)
+                                              + (suggestionsEnabled ? 8 : 0)
+                                              - (showNumberRow ? 0 : 4)
+                                              + keyHighRows
+    function modelHeight(forKeyH) {
+        return heightPerKeyH * forKeyH + fixedHeightPixels
+    }
+    // The screen the window is on, less a taskbar: the attached `Screen`
+    // exposes the available height only for the whole virtual desktop, so
+    // `Screen.height` caps it when the monitors are stacked.  The 40 px of
+    // slack matches the width clamp in `onScreenChanged`.
+    //
+    // `screenAvailableHeight` is optional: it defaults to the screen the
+    // window is on now, and the startup restore passes the available
+    // height of the screen the saved position is on (`Screen` is still the
+    // launch screen there, and `onScreenChanged` only ever clamps down, so
+    // a wrongly small answer would stick).
+    function screenAvailableHeightFor(x, y, w, h) {
+        // The screen Qt will assign the restored window: the one holding
+        // the largest share of its area (Windows' MonitorFromWindow and
+        // Qt's own QWindow::screen() both pick by overlap).  Picking by the
+        // top-left point disagreed with that on a window straddling two
+        // monitors, and clamped against the wrong one.  A window touching
+        // no screen at all takes the nearest.
+        var screens = Qt.application.screens
+        var best = null
+        var bestArea = 0
+        var bestDist = Infinity
+        if (screens) {
+            for (var i = 0; i < screens.length; ++i) {
+                var s = screens[i]
+                var ox = Math.min(x + w, s.virtualX + s.width) - Math.max(x, s.virtualX)
+                var oy = Math.min(y + h, s.virtualY + s.height) - Math.max(y, s.virtualY)
+                var area = Math.max(ox, 0) * Math.max(oy, 0)
+                var dx = Math.max(s.virtualX - x, 0, x - (s.virtualX + s.width - 1))
+                var dy = Math.max(s.virtualY - y, 0, y - (s.virtualY + s.height - 1))
+                var d = dx * dx + dy * dy
+                if (area > bestArea || (bestArea === 0 && area === 0 && d < bestDist)) {
+                    bestArea = area; bestDist = d; best = s
+                }
+            }
+        }
+        if (!best)
+            return Math.min(Screen.height, Screen.desktopAvailableHeight)
+        return Math.min(best.height, best.desktopAvailableHeight)
+    }
+    function maxWidthForScreen(screenAvailableHeight) {
+        var availH = (screenAvailableHeight !== undefined
+                      ? screenAvailableHeight
+                      : Math.min(Screen.height, Screen.desktopAvailableHeight)) - 40
+        var maxKeyH = (availH - fixedHeightPixels) / heightPerKeyH
+        // `layoutFixedPixels` carries `keySpacing`, which grows with width,
+        // so taking it at the current width errs towards a narrower
+        // window, never a taller one.
+        return Math.floor((maxKeyH / 0.89) * totalKeyUnits + layoutFixedPixels)
+    }
+    function fitWidth(w, screenAvailableHeight) {
+        return Math.max(minimumWidth, Math.min(w, maxWidthForScreen(screenAvailableHeight)))
+    }
+
     // ===== Color Theme System =====
     property string currentTheme: "dark"
 
@@ -5858,7 +5965,7 @@ Window {
                 if (pressed) {
                     var global = mapToGlobal(mouse.x, mouse.y)
                     var dw = global.x - startX
-                    var newW = Math.max(root.minimumWidth, startW - dw)
+                    var newW = root.fitWidth(startW - dw)
                     root.x = startWinX + (startW - newW)
                     root.width = newW
                 }
@@ -5899,7 +6006,7 @@ Window {
                 if (pressed) {
                     var global = mapToGlobal(mouse.x, mouse.y)
                     var dw = global.x - startX
-                    root.width = Math.max(root.minimumWidth, startW + dw)
+                    root.width = root.fitWidth(startW + dw)
                 }
             }
 

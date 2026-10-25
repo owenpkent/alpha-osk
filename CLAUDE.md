@@ -576,6 +576,14 @@ Full write-up: `docs/architecture/LAYOUT_GEOMETRY.md` (section of the same name)
 - **A headless test that toggles a row must force a frame before measuring** (`_relayout` calls `grabWindow`).
 - Test: `tests/test_qml_key_colors.py::TestTheSectionsShareOneHeight`.
 
+## The window cannot outgrow the screen
+
+Full write-up: `docs/architecture/LAYOUT_GEOMETRY.md` (section of the same name). Read it before changing this area.
+
+- Height stays content-bound; the width is what gets clamped. `Main.qml::maxWidthForScreen()` inverts the affine model `heightPerKeyH * keyH + fixedHeightPixels` (`keyHighRows` counts the key-high rows), and `fitWidth(w)` is applied **only where the width is set by hand** (resize handles, startup restore, panel and compact toggles, `onScreenChanged`), never from `onWidthChanged` / `onHeightChanged`.
+- **A new child of `outerLayout` must be added to the model**; `tests/test_qml_window_height.py` compares the model with the real height under every row-count configuration.
+- The startup restore clamps after `applyLayout()` **and after the saved position is restored**, against the screen holding most of the restored window (`screenAvailableHeightFor(x, y, w, h)`, by overlap, as Qt assigns screens, with `h` the model height since `root.height` is stale there; passed to `fitWidth(w, availH)`), not `Screen`, which is still the launch screen there. Headless height measurements need a real 250 ms wait: the pill bar's hide `Behavior` runs on the wall clock.
+
 ## Key Colours by role
 
 Full write-up: `docs/architecture/KEY_COLOURS.md` (section of the same name). Read it before changing this area.
