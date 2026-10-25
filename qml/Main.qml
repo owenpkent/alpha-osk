@@ -360,6 +360,10 @@ Window {
         // and an imperative assignment here would break that binding,
         // which is exactly the bug that produced empty vertical bands
         // and bottom-row clipping in earlier versions.
+        // The clamp in `fitWidth` inverts the layout, so the restore itself
+        // waits until the rows, the function row and the pill bar are
+        // known (after `applyLayout()` below); no frame renders inside this
+        // handler, so there is still no flash.
         if (appSettings.savedWindowWidth > 0)
             root.width = Math.max(root.minimumWidth, appSettings.savedWindowWidth)
         root._geometryRestored = true
@@ -433,7 +437,11 @@ Window {
             var w = 940
             if (root.showNavigation) w += 220
             if (root.showNumpad) w += 250
-            root.width = w
+            root.width = root.fitWidth(w)
+        } else {
+            // A width dragged past the screen before the clamp existed is
+            // persisted; this is where it comes back to the widest fit.
+            root.width = root.fitWidth(root.width)
         }
 
         // Restore the saved position if we have one, else center
@@ -487,11 +495,11 @@ Window {
     // silently threw away the user's real panel choice, so leaving compact
     // could never bring the panels back.
     onShowNavigationChanged: {
-        if (_loaded) root.width += showNavigation ? 220 : -220
+        if (_loaded) root.width = root.fitWidth(root.width + (showNavigation ? 220 : -220))
         if (!compactView) appSettings.savedShowNavigation = showNavigation
     }
     onShowNumpadChanged: {
-        if (_loaded) root.width += showNumpad ? 250 : -250
+        if (_loaded) root.width = root.fitWidth(root.width + (showNumpad ? 250 : -250))
         if (!compactView) appSettings.savedShowNumpad = showNumpad
     }
 
@@ -525,7 +533,7 @@ Window {
         applyLayout()
         Qt.callLater(function() {
             var target = Math.round(keyWBefore * root.totalKeyUnits + root.layoutFixedPixels)
-            root.width = Math.max(root.minimumWidth, target)
+            root.width = root.fitWidth(target)
         })
     }
 
@@ -1083,11 +1091,56 @@ Window {
     // different scale factor it can mis-size the window.  Clamp to the new
     // screen's available width so the keyboard never bloats off-screen.
     onScreenChanged: {
-        var maxW = Screen.desktopAvailableWidth - 40
-        if (root.width > maxW) root.width = maxW
-        if (root.width < root.minimumWidth) root.width = root.minimumWidth
+        root.width = root.fitWidth(Math.min(root.width, Screen.desktopAvailableWidth - 40))
     }
-    
+
+    // ===== The window must not outgrow the screen (issue #131) =====
+    // Height is content-bound (`outerLayout.implicitHeight + 80`) and the
+    // keys scale with width, so a wide enough window puts the bottom rows,
+    // the space bar and the resize handle below the display.  Nothing may
+    // bound the height directly: a width<->height handler pair is the
+    // mutual recursion `tests/test_qml_ui_state_fuzz.py` exists to catch,
+    // and the proportional shrink it allows converges asymptotically (the
+    // issue has the numbers).  Instead the layout is inverted in closed
+    // form.  For a given panel configuration the window height is affine
+    // in `keyH`,
+    //     height = heightPerKeyH * keyH + fixedHeightPixels,
+    // so the widest window that fits is one assignment, computed only where
+    // width is set by hand (`fitWidth`), never from a geometry handler.
+    //
+    // The model mirrors `outerLayout`: the one function row that can show,
+    // then five key-high rows (full size: the layout's own five, the number
+    // row 4 px shorter; compact: four plus `NumberRow`), separated by
+    // `rowSpacing`, under a pill bar of `predPillHeight + 4` with a 4 px
+    // bottom margin, inside the 80 px of chrome.  Each `Row` ceils its
+    // height up to a pixel above its keys, so a pixel per row is added.
+    // `tests/test_qml_window_height.py` checks the model against the real
+    // layout; a new child of `outerLayout` must be added here too.
+    readonly property int keyHighRows: 5 + ((showFunctionRow || showExtraFunctionRow) ? 1 : 0)
+    readonly property real heightPerKeyH: keyHighRows + (suggestionsEnabled ? 0.86 : 0)
+    readonly property real fixedHeightPixels: 80 + rowSpacing * (keyHighRows - 1)
+                                              + (suggestionsEnabled ? 8 : 0)
+                                              - (showNumberRow ? 0 : 4)
+                                              + keyHighRows
+    function modelHeight(forKeyH) {
+        return heightPerKeyH * forKeyH + fixedHeightPixels
+    }
+    // The screen the window is on, less a taskbar: the attached `Screen`
+    // exposes the available height only for the whole virtual desktop, so
+    // `Screen.height` caps it when the monitors are stacked.  The 40 px of
+    // slack matches the width clamp in `onScreenChanged`.
+    function maxWidthForScreen() {
+        var availH = Math.min(Screen.height, Screen.desktopAvailableHeight) - 40
+        var maxKeyH = (availH - fixedHeightPixels) / heightPerKeyH
+        // `layoutFixedPixels` carries `keySpacing`, which grows with width,
+        // so taking it at the current width errs towards a narrower
+        // window, never a taller one.
+        return Math.floor((maxKeyH / 0.89) * totalKeyUnits + layoutFixedPixels)
+    }
+    function fitWidth(w) {
+        return Math.max(minimumWidth, Math.min(w, maxWidthForScreen()))
+    }
+
     // ===== Color Theme System =====
     property string currentTheme: "dark"
 
@@ -5788,7 +5841,7 @@ Window {
                 if (pressed) {
                     var global = mapToGlobal(mouse.x, mouse.y)
                     var dw = global.x - startX
-                    var newW = Math.max(root.minimumWidth, startW - dw)
+                    var newW = root.fitWidth(startW - dw)
                     root.x = startWinX + (startW - newW)
                     root.width = newW
                 }
@@ -5829,7 +5882,7 @@ Window {
                 if (pressed) {
                     var global = mapToGlobal(mouse.x, mouse.y)
                     var dw = global.x - startX
-                    root.width = Math.max(root.minimumWidth, startW + dw)
+                    root.width = root.fitWidth(startW + dw)
                 }
             }
 

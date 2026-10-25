@@ -287,3 +287,61 @@ board *before* its own toggle had taken effect, and passed against the 6
 px ragged edge above. The live app is unaffected, since it renders frames
 continuously; only a headless test can measure a layout that has not
 happened yet. The test now also asserts the grid's span actually moved.
+
+## The window cannot outgrow the screen
+
+Issue #131. The window's height is content-bound (`height:
+outerLayout.implicitHeight + 80`) and the keys scale with the width, so
+nothing used to stop a wide enough window from putting the bottom rows,
+the space bar and the resize handle below the display. Measured on a
+5120x1440 display, compact view was over by ~700 px at full width.
+
+The fix is a closed-form inversion of the layout, not a height handler.
+For a given panel configuration the window height is affine in `keyH`:
+
+    height = heightPerKeyH * keyH + fixedHeightPixels
+
+`Main.qml::keyHighRows` counts the key-high rows (the one function row
+that can show, plus five: full size has the layout's own five, with the
+number row 4 px shorter; compact has four plus `NumberRow`),
+`heightPerKeyH` adds the pill bar's 0.86, and `fixedHeightPixels` is the
+chrome (80), the `rowSpacing` gaps, the pill bar's 8 px and a pixel per
+row for the `Row` ceil. `maxWidthForScreen()` solves that for the screen's
+available height (less the same 40 px of slack the width clamp in
+`onScreenChanged` keeps) and `fitWidth(w)` clamps between it and
+`minimumWidth`.
+
+Rules:
+
+- **`fitWidth` is applied only where the width is set by hand**: the two
+  resize handles, the startup restore, the fresh-install default, the
+  panel toggles, the compact toggle and `onScreenChanged`. Never from
+  `onWidthChanged` or an `onHeightChanged`: a width<->height handler pair
+  is the mutual recursion `tests/test_qml_ui_state_fuzz.py` guards, and
+  the proportional shrink such a net allows converges asymptotically (the
+  issue has the numbers: it settled at 1969, 1941, 1903 or 1861 px by
+  drag start, once one pixel over).
+- **The startup restore clamps after `applyLayout()`**, because the model
+  reads the row count, the function row and the pill bar; before they are
+  known it would clamp against the wrong layout. No frame renders inside
+  `Component.onCompleted`, so moving it costs no flash.
+- **A new child of `outerLayout` goes into the model too.**
+  `tests/test_qml_window_height.py::TestTheHeightModelMatchesTheLayout`
+  compares `modelHeight(keyH)` with the real height under every row-count
+  configuration, with a pixel per row of tolerance: a forgotten child is
+  off by a whole `keyH` and fails every width.
+- `layoutFixedPixels` carries `keySpacing`, which grows with width, so the
+  inversion takes it at the current width and errs narrow, never wide
+  (from a 20000 px persisted width it lands ~24 px short of the exact fit;
+  from a drag start it is exact to the pixel).
+- The screen's available height is `Math.min(Screen.height,
+  Screen.desktopAvailableHeight)`: the attached `Screen` exposes the
+  available height only for the whole virtual desktop, so `Screen.height`
+  caps it when monitors are stacked.
+
+Why the issue's own measurements disagreed with each other: the pill bar
+hides through a 150 ms `Behavior`, which runs on the wall clock. A
+settings-driven hide at load is still mid-flight when a zero-time event
+loop measures, so the height read a partly collapsed bar, by an amount
+that depended on how long the process had taken to get there. With a real
+250 ms wait before the forced frame the numbers are stable to the pixel.
