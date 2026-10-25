@@ -460,12 +460,17 @@ Window {
             // would otherwise be cut to what the primary allows. The screen
             // is the one that will hold most of the restored window, which
             // is the one Qt assigns it (a top-left point disagreed with
-            // that when the window straddled two monitors).
+            // that when the window straddled two monitors). The height of
+            // that rectangle is the model's, not `root.height`: no layout
+            // pass has run since the width changed, so `root.height` is
+            // still the default window's, which on stacked monitors put
+            // the rectangle's larger share on the wrong screen.
             if (appSettings.savedWindowWidth > 0)
                 root.width = root.fitWidth(root.width,
                     root.screenAvailableHeightFor(appSettings.savedWindowX,
                                                   appSettings.savedWindowY,
-                                                  root.width, root.height))
+                                                  root.width,
+                                                  root.modelHeight(root.keyH)))
             var restoredPos = root.clampedWindowPos(appSettings.savedWindowX,
                                                       appSettings.savedWindowY,
                                                       root.width, root.height)

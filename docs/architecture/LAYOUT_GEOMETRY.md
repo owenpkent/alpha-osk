@@ -332,8 +332,11 @@ Rules:
   allows and stay cut. `screenAvailableHeightFor(x, y, w, h)` picks the
   screen holding the largest share of the restored window (the one Qt
   assigns it; picking by the top-left corner clamped a window straddling
-  two monitors against the wrong one), nearest when none overlaps, and is
-  passed to `fitWidth(w, availH)` / `maxWidthForScreen(availH)`, whose
+  two monitors against the wrong one), nearest when none overlaps. The
+  rectangle's height is `modelHeight(keyH)`, never `root.height`: no
+  layout pass has run since the width was restored, and the stale default
+  height put a window on stacked monitors mostly on the wrong one. The
+  result is passed to `fitWidth(w, availH)` / `maxWidthForScreen(availH)`, whose
   parameter defaults to the current screen. The position clamp then runs
   with the final size. `tests/test_qml_window_height.py::
   TestTheRestoreClampsAgainstTheSavedScreen` runs two offscreen screens in

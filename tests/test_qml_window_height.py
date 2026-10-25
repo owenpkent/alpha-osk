@@ -354,6 +354,30 @@ class TestAPanelToggleStopsAtTheScreen:
         assert root.property("width") == before + 220
 
 
+# The same two monitors, the 4K one directly below the 1080p one.
+_STACKED_SCREENS = {
+    "screens": [
+        {
+            "name": "primary",
+            "x": 0,
+            "y": 0,
+            "width": 1920,
+            "height": 1080,
+            "logicalDpi": 96,
+            "dpr": 1.0,
+        },
+        {
+            "name": "secondary",
+            "x": 0,
+            "y": 1080,
+            "width": 3840,
+            "height": 2160,
+            "logicalDpi": 96,
+            "dpr": 1.0,
+        },
+    ]
+}
+
 _TWO_SCREENS = {
     "screens": [
         {
@@ -394,11 +418,11 @@ class TestTheRestoreClampsAgainstTheSavedScreen:
         import subprocess
         import sys
 
-        cfg = tmp_path / "screens.json"
-        cfg.write_text(json.dumps(_TWO_SCREENS), encoding="utf-8")
-
-        def run(width: int, x: int, y: int, compact: bool = True) -> dict:
-            case = tmp_path / f"case-{width}-{x}-{y}"
+        def run(width: int, x: int, y: int, compact: bool = True, screens=None) -> dict:
+            screens = screens or _TWO_SCREENS
+            cfg = tmp_path / f"screens-{id(screens)}.json"
+            cfg.write_text(json.dumps(screens), encoding="utf-8")
+            case = tmp_path / f"case-{width}-{x}-{y}-{id(screens)}"
             case.mkdir()
             # Every per-user location points into the throwaway case dir, so
             # nothing of the real user's config or settings is read or written.
@@ -455,6 +479,26 @@ class TestTheRestoreClampsAgainstTheSavedScreen:
         """Pair: mostly on the primary (x=200, 3000 wide puts 1720 px there),
         so the primary's limit applies even though it reaches the secondary."""
         r = probe(3000, 200, 100)
+        assert r["screen"] == "primary"
+        assert r["maxWidth"] - 120 <= r["width"] <= r["maxWidth"] < 3000
+        assert r["height"] <= 1080 - SCREEN_SLACK
+
+    def test_stacked_monitors_use_the_restored_height_not_the_stale_one(self, probe):
+        """The review's stacked case: saved at (840, 700), 3000 wide, the
+        window's real 1274 px height puts most of it on the 4K monitor
+        below. `root.height` has not caught up with the restored width when
+        the screen is chosen, so the model's height is what the overlap
+        reads; with the stale 402 px height the primary won and cut the
+        width to 2368."""
+        r = probe(3000, 840, 700, screens=_STACKED_SCREENS)
+        assert r["screen"] == "secondary"
+        assert r["width"] == 3000
+        assert r["height"] <= 2160 - SCREEN_SLACK
+
+    def test_stacked_monitors_still_clamp_a_window_on_the_top_one(self, probe):
+        """Pair: saved at the top of the 1080p monitor, the window is mostly
+        on it and clamps to its limit."""
+        r = probe(3000, 100, 50, screens=_STACKED_SCREENS)
         assert r["screen"] == "primary"
         assert r["maxWidth"] - 120 <= r["width"] <= r["maxWidth"] < 3000
         assert r["height"] <= 1080 - SCREEN_SLACK
