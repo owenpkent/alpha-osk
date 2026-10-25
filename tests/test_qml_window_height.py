@@ -43,7 +43,7 @@ pytest.importorskip("PySide6")
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 try:
-    from PySide6.QtCore import QCoreApplication, QSettings, QUrl  # noqa: E402
+    from PySide6.QtCore import QCoreApplication, QPoint, QSettings, Qt, QUrl  # noqa: E402
     from PySide6.QtGui import QGuiApplication  # noqa: E402
     from PySide6.QtQml import QQmlApplicationEngine, QQmlExpression  # noqa: E402
     from PySide6.QtQuick import QQuickWindow  # noqa: E402,F401
@@ -269,3 +269,86 @@ class TestAPersistedWidthIsClampedOnRestore:
         """Pair: the clamp does not touch a width that fits."""
         engine, root = load_main(savedCompactView=True, savedWindowWidth=900)
         assert root.property("width") == 900
+
+
+def _handle_drag(root, handle: str, dx: int) -> None:
+    """Press on a resize handle, travel `dx` px horizontally, release.
+
+    The handles sit under the title bar on the window's two edges, 8 px
+    wide; the press lands 4 px in from the edge, half way down.
+    """
+    width = int(root.property("width"))
+    height = int(root.property("height"))
+    x = 4 if handle == "left" else width - 4
+    window_x = int(root.property("x"))
+    start = QPoint(x, height // 2)
+    QTest.mousePress(root, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, start)
+    QTest.mouseMove(root, QPoint(x + dx, height // 2))
+    _settle()
+    # The release carries a position too, and the left handle has just
+    # moved the window: expressed in the window's new coordinates, the same
+    # desktop point is `moved` further along, or the release reads as a
+    # second drag of the same distance.
+    moved = int(root.property("x")) - window_x
+    end = QPoint(x + dx - moved, height // 2)
+    QTest.mouseRelease(root, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, end)
+    _settle()
+
+
+class TestTheResizeHandleStopsAtTheScreen:
+    """The clamp lives in the handles' own handlers; this is the user's path."""
+
+    @pytest.mark.parametrize("handle", ["left", "right"])
+    def test_a_drag_past_the_limit_stops_at_it(self, load_main, handle):
+        engine, root = _configure(load_main, True, False, True)
+        root.setProperty("width", root.property("minimumWidth"))
+        _relayout(root)
+        max_w = _call(engine, root, "maxWidthForScreen()")
+        travel = int(max_w - root.property("width")) + 600
+        _handle_drag(root, handle, -travel if handle == "left" else travel)
+        # The handler took `keySpacing` at the drag's start width, so it
+        # lands at or a little short of the limit as re-read at the end.
+        limit = _call(engine, root, "maxWidthForScreen()")
+        assert limit - 40 <= root.property("width") <= limit
+        _relayout(root)
+        assert root.property("height") <= _available_height(root)
+
+    @pytest.mark.parametrize("handle", ["left", "right"])
+    def test_a_drag_short_of_the_limit_is_honoured(self, load_main, handle):
+        """Pair: the clamp bites at the limit, not before it."""
+        _engine, root = _configure(load_main, True, False, True)
+        root.setProperty("width", root.property("minimumWidth"))
+        _relayout(root)
+        before = root.property("width")
+        _handle_drag(root, handle, -50 if handle == "left" else 50)
+        assert root.property("width") == before + 50
+
+
+class TestAPanelToggleStopsAtTheScreen:
+    """Turning a side panel on adds a fixed width; near the limit it clamps."""
+
+    def test_a_panel_near_the_limit_is_clamped(self, load_main):
+        engine, root = _configure(load_main, False, False, True)
+        root.setProperty("width", _call(engine, root, "maxWidthForScreen()") - 100)
+        _relayout(root)
+        before = root.property("width")
+        root.setProperty("showNavigation", True)
+        _relayout(root)
+        # The handler runs before `totalKeyUnits` has picked the panel up,
+        # so it clamps against the narrower limit without it: conservative,
+        # which is the right side to err on. Turning a panel on must never
+        # shrink the window, and the 220 px must not all arrive.
+        after = root.property("width")
+        assert before <= after < before + 220
+        assert after <= _call(engine, root, "maxWidthForScreen()")
+        assert root.property("height") <= _available_height(root)
+
+    def test_a_panel_with_room_adds_its_full_width(self, load_main):
+        """Pair: with room to spare the panel still adds its 220 px."""
+        _engine, root = _configure(load_main, False, False, True)
+        root.setProperty("width", root.property("minimumWidth"))
+        _relayout(root)
+        before = root.property("width")
+        root.setProperty("showNavigation", True)
+        _relayout(root)
+        assert root.property("width") == before + 220
