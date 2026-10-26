@@ -114,7 +114,7 @@ target that moved, not as a fault).
 ## The bar
 
 The suggestion bar's five buttons are targets, so a switch user can reach
-dictation, Write with AI, Symbols, Snippets and the clear-context ring. They
+dictation, Write with AI, Symbols, Snippets and the dictation history. They
 are `Button`s with the id `aosk.v1.bar.0.<index>`. `row` is always `0` (the
 bar is one row); **`index` is fixed per function, not per position**:
 
@@ -124,7 +124,8 @@ bar is one row); **`index` is fixed per function, not per position**:
 | 1 | Write with AI | `Write with AI` | Dictation and writing are enabled and both API keys are stored |
 | 2 | Symbols and emoji | `Symbols and emoji` | Always |
 | 3 | Snippets | `Snippets` | Always |
-| 4 | Clear suggestion context | `Clear suggestion context` | Suggestions are on (the ring has no twin) |
+| 4 | *Retired* | | Was the clear-context button, removed 2026-10-26. Never reused: nothing publishes `bar.0.4` |
+| 5 | Dictation history | `Dictation history` | Dictation is enabled (the setting), same rule as the mic |
 
 **Stable indices.** A hidden control is simply absent; its index is not
 reused and no other id moves. `bar.0.3` is Snippets whether or not the mic and
@@ -133,7 +134,7 @@ number, existing ones are never renumbered, and a change to either is a
 version bump.
 
 **Title-bar twins carry their bar counterpart's id.** With suggestions off the
-bar collapses to zero height, and the mic, pen, Symbols and Snippets
+bar collapses to zero height, and the mic, history, pen, Symbols and Snippets
 controls reappear in the title bar. Each twin publishes the same id as its bar
 copy. The contract allows this because an id names a function, a bar copy and
 its twin are never visible together (`suggestionsEnabled` decides which one
@@ -142,7 +143,7 @@ scanner that re-snapshots on a revision change sees the id move location and
 never two elements with one id. A distinct section would have made the same
 function two targets a scanner must be taught are one, and would have changed
 the id the user's saved scan order refers to when they toggle a setting.
-The clear-context ring has no twin and is absent with suggestions off.
+Every bar function has a twin.
 
 **State.** The mic and the pen are genuine start/stop controls and expose
 `TogglePattern`: the mic is `On` while a dictation run that the pen did not
@@ -166,10 +167,13 @@ does by state:
 - Pen: the same, with `write` as the purpose; refused with a toast if privacy
   mode or a missing key forbids it.
 - Symbols / Snippets: open the window, or close it if it is already open.
-- Clear: resets the typing context and flashes the confirmation toast.
+- History: opens Settings on the Dictation page, scrolled to its History
+  section (the same as a click; it does not toggle).
 
 Everything above that can change the target set feeds the beacon: which of the
-mic and pen exist, and the two toggle states.
+mic, history and pen exist, and the two toggle states. So does a finished
+dictation's text showing in the bar, which removes the pills like a run does
+(`predictionsArePresent` includes `!dictationResultShown`).
 
 ## The draft
 

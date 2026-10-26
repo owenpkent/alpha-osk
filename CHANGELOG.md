@@ -4,6 +4,21 @@ All notable changes to Alpha-OSK are documented in this file.
 
 ## [Unreleased]
 
+### Added
+- **How I Speak** (*Settings > Dictation > AI cleanup*): describe your own speech (names, slurred sounds, phrases you repeat) and Claude uses it to read the transcript, in AI cleanup, Reprocess and Write with AI. It is sent to Anthropic with each of those requests.
+- **Choose how much dictation history to keep.** *Settings > Dictation > History* offers 50, 100, 200 or 500 MB, or No limit, and shows how much is in use. The oldest runs go first; the 20-run cap is gone (the ceiling is now 5000 runs).
+- **Ten more dictation languages:** Korean, Chinese (Mandarin), Russian, Ukrainian, Polish, Turkish, Swedish, Danish, Norwegian and Finnish.
+- **A History button beside the microphone** opens Settings on the Dictation page, scrolled to your saved runs. It has a title-bar copy for when suggestions are off.
+- **Dictation can stop typing into the app.** *Settings > Dictation > Type Into the App*, on by default. Off, a run's words only show in the bar, go to the clipboard and are kept in History.
+- **Open Folder in Dictation History** opens the folder that holds the saved runs and their recordings.
+- **A finished dictation shows in the bar and is copied to the clipboard.** When a dictation run ends, its whole text shows where the suggestions are, with a "Copied" badge, until your next key or 8 seconds. Copying is on by default (*Settings > Dictation > Copy Finished Dictation*) and is skipped in privacy mode. Windows clipboard history may keep what is copied.
+
+### Changed
+- **No dictation run previews its words while you speak.** The bar shows "Listening..." and the level bars for every run; the words appear once, when the run is done.
+
+### Removed
+- **The clear-context button is gone** from the suggestion bar. Suggestions still reset on their own when you change window, field, caret position, or press Tab or a navigation key. Switch-scanner id `aosk.v1.bar.0.4` is retired.
+
 ## [1.9.2] (2026-10-25)
 
 ### Added

@@ -5,11 +5,12 @@ harness as `test_qml_compact_view.py`: load the real `qml/Main.qml` under the
 offscreen platform plugin against a real `KeyboardBridge` and inspect the
 live objects.
 
-The invariant under test for the bar is that the clear-context (circle-arrow)
-button owns a strip at the right edge that the pill row may never enter. The
-`clearCtxReserve` property existed but was never subtracted from anything, so
-the row was sized and centred against the full window width and the
-right-hand pill rendered *underneath* the button.
+The invariant under test for the bar is that the buttons parked at its right
+edge (Write with AI, Symbols, Snippets) own a strip the pill row may never
+enter. The reserve property (`rightButtonsReserve`, once `clearCtxReserve`)
+existed but was never subtracted from anything, so the row was sized and
+centred against the full window width and the right-hand pill rendered
+*underneath* the rightmost button.
 """
 
 from __future__ import annotations
@@ -177,6 +178,14 @@ def _child(root, name: str) -> QObject:
     return obj
 
 
+def _evaluate(obj, expression: str):
+    """Evaluate a QML expression in `obj`'s context (`predBar` has no objectName)."""
+    ctx = QQmlEngine.contextForObject(obj)
+    value, is_undefined = QQmlExpression(ctx, obj, expression).evaluate()
+    assert is_undefined is False, f"QML expression {expression!r} evaluated to undefined"
+    return value
+
+
 # Bound on the wait in _show. Pump until the pills exist rather than
 # asserting after a single pass, which saw an empty pill row perhaps 40% of
 # the time at a different window width each run (issue #16).
@@ -225,7 +234,7 @@ def _show(root, predictions: list[str]):
         QCoreApplication.processEvents()
         if _pill_count(root):
             break
-    return _child(root, "predictionRow"), _child(root, "clearContextButton")
+    return _child(root, "predictionRow"), _child(root, "snippetsBarButton")
 
 
 def _unwrap(value):
@@ -320,21 +329,28 @@ def _scene_left(item) -> float:
     return item.mapToScene(item.boundingRect().topLeft()).x()
 
 
-def _first_button_left(root, clear_button) -> float:
+def _first_button_left(root, _button=None) -> float:
     """The left edge of the leftmost button parked at the bar's right end.
 
-    There are two now, Snippets then clear-context, so the strip the pills
-    must stay out of starts at the Snippets one. Written as a min rather
-    than by naming it, so adding a third button cannot quietly make this
-    measure the wrong edge.
+    Write with AI (when available), Symbols and Snippets live there, so the
+    strip the pills must stay out of starts at the leftmost visible one.
+    Written as a min over the visible ones rather than by naming one, so a
+    button appearing or going cannot quietly make this measure the wrong edge.
     """
-    return min(_scene_left(clear_button), _scene_left(_child(root, "snippetsBarButton")))
+    names = ("writeWithAiBarButton", "symbolsBarButton", "snippetsBarButton")
+    lefts = [
+        _scene_left(button)
+        for button in (_child(root, name) for name in names)
+        if button.property("visible")
+    ]
+    assert lefts, "no button is parked at the right end"
+    return min(lefts)
 
 
-class TestClearButtonNeverCoversPills:
+class TestRightButtonsNeverCoverPills:
     """The buttons parked at the right end own a strip the pills may not
-    enter. There are two of them now (Snippets, then clear-context), so
-    the leftmost is the one the row must stay clear of."""
+    enter, so the leftmost visible one is the one the row must stay clear
+    of."""
 
     @pytest.mark.parametrize(
         "predictions",
@@ -382,115 +398,40 @@ class TestClearButtonNeverCoversPills:
         assert widths[-1] > widths[0] * 1.5
 
 
-class TestTheClearButtonIcon:
-    """The circle-arrow must be drawn, and must sit in the middle.
+class TestTheClearContextButtonIsGone:
+    """Removed 2026-10-26 (owner's call): the automatic context resets
+    (focus, caret, click, Tab, nav keys) cover what it was for.  Its scan
+    index 4 is retired, never reused."""
 
-    It used to be the glyph "⟲" in a `Text` with `anchors.centerIn`,
-    which centres the text *item* and not the ink inside it.  A glyph's
-    ink is rarely centred in its em box, so the ring the eye actually
-    reads sat down and right of the button while the glyph's tail stuck
-    out to the left.  It is now Feather's `rotate-ccw`, drawn from its
-    published path data through the Canvas that was already there.
-
-    **The obvious measurement is a trap, and so was the clever one.**
-    The ink bounding box was centred in the glyph version too, to within
-    half a pixel, because the tail hanging off one side cancelled the
-    ring being pushed to the other -- so a bbox assertion alone would
-    have passed against the bug it was written for.  This class briefly
-    used a radial-spread metric instead (glyph 0.29, hand-drawn arc
-    0.09, bar at 0.15), which did separate them.  That metric is gone
-    because it no longer measures *us*: Feather puts the arrow outside
-    the ring deliberately, which scores 0.147 against a 0.15 bar.  A
-    test passing by three thousandths is not a test, and tightening the
-    icon to satisfy it would mean redrawing a designer's composition to
-    fit an assertion.
-
-    What is left is the pair that is honest about what the code
-    guarantees: the icon is *drawn* rather than typeset, which is what
-    caught the original bug, and it is grossly centred, which catches a
-    dropped or wrong transform.  The one-unit optical correction in
-    `inkOffsetX` is deliberately *not* pinned here: it is a sub-pixel
-    nicety at this size, and asserting it across renderers would buy a
-    flake rather than a guard.
-    """
-
-    # Generous on purpose: a dropped translate puts the icon a third of
-    # the button away, which is what this is for. Anything tighter is
-    # measuring the antialiaser.
-    _MAX_CENTRE_OFFSET_PX = 3.0
-
-    def _button_pixels(self, root):
-        button = _child(root, "clearContextButton")
-        assert button.property("visible"), "the clear-context button is hidden"
-        QCoreApplication.processEvents()
-
-        top_left = button.mapToScene(button.boundingRect().topLeft())
-        size = round(button.property("width"))
-        shot = root.grabWindow()
-        if shot.isNull():  # pragma: no cover - depends on the Qt renderer
-            pytest.skip("this Qt build cannot grab an offscreen window")
-        return button, shot.copy(round(top_left.x()), round(top_left.y()), size, size)
-
-    def _ink(self, crop):
-        """Every lit pixel of the icon, as (x, y)."""
-        lit = []
-        for y in range(crop.height()):
-            for x in range(crop.width()):
-                colour = crop.pixelColor(x, y)
-                luminance = 0.299 * colour.red() + 0.587 * colour.green() + 0.114 * colour.blue()
-                if luminance > 110:  # the icon, not the circle's own fill
-                    lit.append((x, y))
-        return lit
-
-    def test_the_icon_is_centred_on_the_button(self, qml_root):
+    def test_there_is_no_clear_button(self, qml_root):
         root, _, _ = qml_root
-        _, crop = self._button_pixels(root)
-        lit = self._ink(crop)
+        assert root.findChild(QObject, "clearContextButton") is None
 
-        # Inverse first: "draw nothing" satisfies every centring bound
-        # ever written, so the test has to insist there is an icon at all.
-        assert len(lit) > 40, f"the button has almost no icon on it ({len(lit)} px)"
-
-        xs = [x for x, _ in lit]
-        ys = [y for _, y in lit]
-        centre = (crop.width() - 1) / 2
-        offset_x = (min(xs) + max(xs)) / 2 - centre
-        offset_y = (min(ys) + max(ys)) / 2 - centre
-        assert abs(offset_x) <= self._MAX_CENTRE_OFFSET_PX, (
-            f"the icon sits {offset_x:+.1f}px off centre horizontally"
-        )
-        assert abs(offset_y) <= self._MAX_CENTRE_OFFSET_PX, (
-            f"the icon sits {offset_y:+.1f}px off centre vertically"
-        )
-
-    def test_it_fills_a_sensible_share_of_the_button(self, qml_root):
-        """Catches a broken scale, which centring alone would not notice."""
+    def test_the_reserve_counts_only_buttons_that_exist(self, qml_root):
+        """Symbols and Snippets, plus Write when it is available."""
         root, _, _ = qml_root
-        _, crop = self._button_pixels(root)
-        lit = self._ink(crop)
-        span = max(
-            max(x for x, _ in lit) - min(x for x, _ in lit),
-            max(y for _, y in lit) - min(y for _, y in lit),
-        )
-        assert 0.45 <= span / crop.width() <= 0.95, (
-            f"the icon spans {span / crop.width():.0%} of the button"
-        )
+        row = _child(root, "predictionRow")
+        assert _evaluate(row, "predBar.predButtonCount") == 2
+        pill = _evaluate(row, "predBar.predPillHeight")
+        gap = _evaluate(row, "predBar.predButtonGap")
+        assert _evaluate(row, "predBar.rightButtonsReserve") == 2 * pill + gap + 16
 
-    def test_it_is_drawn_rather_than_typeset(self, qml_root):
-        """States the fix, so a future "just use a glyph" reads as a change.
-
-        Same reasoning as the padlock badge that was removed from the
-        keycaps: any glyph small enough to fit is at the mercy of
-        whatever font the host resolves it through.
-        """
+    def test_no_bar_control_claims_the_retired_index(self, qml_root):
         root, _, _ = qml_root
-        button = _child(root, "clearContextButton")
-        glyphs = [
-            child
-            for child in button.findChildren(QQuickItem)
-            if child.property("text") not in (None, "")
-        ]
-        assert glyphs == [], f"the icon is a text glyph again: {glyphs}"
+        retired = "aosk.v1.bar.0.4"
+        for name in (
+            "dictationMicButton",
+            "writeWithAiBarButton",
+            "symbolsBarButton",
+            "snippetsBarButton",
+            "dictationHistoryBarButton",
+            "dictationTitleBarButton",
+            "writeWithAiTitleBarButton",
+            "symbolsTitleBarButton",
+            "snippetsTitleBarButton",
+            "dictationHistoryTitleBarButton",
+        ):
+            assert _child(root, name).property("targetId") != retired, name
 
 
 @pytest.mark.usefixtures("requires_real_font")

@@ -1,9 +1,10 @@
 # Dictation
 
 Voice input. Click the microphone at the left end of the suggestion bar,
-speak, click again. The live transcript renders in the suggestion bar
-itself, and each finished phrase is typed into whatever app holds OS
-focus, through the same verbatim-insert path a snippet uses.
+speak, click again. While you speak the bar shows its state and the level
+bars (no words), each finished phrase is typed into whatever app holds OS
+focus through the same verbatim-insert path a snippet uses, and when the run
+ends its whole text shows in the bar with a "Copied" badge.
 
 Off by default, and inert until the user supplies a Deepgram API key.
 
@@ -18,8 +19,9 @@ mic click
     -> DictationController.start()
       -> MicrophoneCapture  (QAudioSource -> 16 kHz mono s16 PCM)
       -> DeepgramStream     (QWebSocket -> wss://api.deepgram.com/v1/listen)
-    <- interim  -> dictationTranscriptChanged -> suggestion bar
     <- is_final -> KeyboardBridge._insert_dictated_text() -> _send_literal_text()
+    <- runFinished(text) -> KeyboardBridge._on_dictation_run_finished()
+         -> clipboard (auto-copy) + dictationResultText -> suggestion bar
 ```
 
 ## Why it is built entirely on Qt
@@ -63,7 +65,7 @@ than merely cheaper:
 | `src/dictation/history.py` | `DictationHistory`, the local store of past runs |
 | `src/dictation/controller.py` | The state machine, silence and duration timers, the Claude passes |
 | `src/keyboard_bridge.py` | Slots, signals, and `_insert_dictated_text` |
-| `qml/Main.qml` | Mic button, transcript banner, error toast, settings wiring |
+| `qml/Main.qml` | Mic button, History button, dictation banner, error toast, settings wiring |
 | `qml/components/UnifiedSettingsPanel.qml` | The Dictation category |
 | `tests/test_dictation.py` | The controller, config and bridge |
 | `tests/test_dictation_claude.py`, `tests/test_dictation_history.py` | The Claude client and the history store |
@@ -150,6 +152,19 @@ optional style profile (`writing_style`, up to 2000 characters, newlines
 kept and other control characters stripped) rides in `<style_profile>`
 delimiters and describes the user's voice.
 
+**How I Speak** (`speech_notes`, up to `MAX_SPEECH_NOTES_LEN` = 1000
+characters, cleaned like the style profile) describes how the *speaker
+sounds*: names, slurred sounds, repeated phrases. `prompts._speech_notes_lines`
+adds it, in `<speech_notes>` delimiters framed as background that cannot
+change the rules, to the cleanup prompt and the writing prompt (both read
+spoken words); Reprocess goes through `_send_cleanup`, so it gets it too.
+An empty note adds nothing, so the prompt is byte-identical to before.
+The cap is half the style cap because it rides on every cleanup run, the
+most frequent request. It is prose about the user: the config `repr` shows
+its length only and nothing logs it. The Settings field is the same
+paste-and-save TextArea as the style field (Settings is an ordinary window
+that can hold focus, so it uses no edit session).
+
 Only the writing model sends the server-side fallback beta header and
 `"fallbacks": "default"`, so Anthropic retries a spurious refusal on
 another model rather than handing the user a "declined" they cannot easily
@@ -215,15 +230,24 @@ message, which can quote the input.
 
 ## History
 
-The last 20 runs (`history_enabled`, **on** by default) are kept in
+The most recent runs that fit the user's budget (`history_enabled`, **on** by default) are kept in
 `<config>/dictation_history/`: an `index.json` plus one 16 kHz mono WAV per
 run, so a run can be played back, copied, reprocessed through cleanup or
 deleted. It exists because a held-back run and a failed cleanup are exactly
 when the user wants the original words back. It is local and nothing in it
 is sent anywhere on its own; the one outbound path is Reprocess, below.
 
-Caps and validation (`history.py`): 20 entries, 200 MB of audio in total,
-a 2 MB index checked by `stat()` before it is opened, 20 000 characters per
+Caps and validation (`history.py`): the budget `history_limit_mb` (50, 100,
+200, 500, or 0 for No limit; anything else loads as the default 200, which is
+the old fixed audio cap) covers the WAVs **plus the index** and the oldest
+runs go first, the newest never by its own size alone; `usage_bytes()` feeds
+the Settings line ("Using 34 MB of 200 MB", "Using 34 MB" under No limit).
+Lowering the limit prunes at once (`set_limit_bytes`). 0 turns byte pruning
+off, leaving only the entry ceiling `MAX_ENTRIES` = 5000, which drops the
+oldest. A 16 MB index checked by `stat()` before it is opened (sized so a
+ceiling-sized index of ordinary runs loads; pruning also keeps the saved
+index under it, so non-ASCII-heavy stores shed the oldest rather than write
+an index the loader would refuse), 20 000 characters per
 text field. Ids are `secrets.token_hex(8)` and validated against
 `^[0-9a-f]{16}$` on load; **the WAV path is always derived from the
 validated id, never read from the index**, so a hand-edited index cannot
@@ -232,6 +256,23 @@ a WAV with no entry is deleted on load, but only if its name is exactly
 `<valid-id>.wav`. The store never raises on an I/O failure (it logs without
 content and reports False). A cancelled run is not recorded; a run whose
 cleanup failed is, with `cleaned` false.
+
+**Cost scales with the store, so the hot paths avoid it.** Each entry records its
+WAV size (`audio_bytes`, validated like the other fields; a legacy entry is
+stat-ed once on load), so pruning and `usage_bytes()` never stat thousands of
+files, and each entry's encoded length is cached, so the index size is a sum.
+The index is written compact. A 5000-run store with half the runs holding audio
+went from roughly 0.3 to 1 s per `add()` under a 200 MB budget (and 0.09 s under
+No limit) to roughly 0.03 to 0.08 s. `_record` also runs *after* the run is delivered and
+announced (`runFinished`), so typing and the bar never wait on the disk; the
+Write with AI branches still record first, because the failure message depends
+on whether the entry was kept. On the QML side the list is **lazy and paged**:
+`refreshDictationHistory()` fetches only while Settings is open on the Dictation
+page (`dictationHistoryLive`), drops the model when it is not, and asks
+`getDictationHistoryPage(count)` for the newest 20, with *Show 20 more* growing
+it (`getDictationHistoryCount()` feeds the label). A finished run with Settings
+closed therefore builds no delegates. Tests:
+`tests/test_qml_dictation_ai.py::TestTheHistoryIsLazyAndPaged`.
 
 `reprocess(entry_id)` re-runs cleanup over an entry's raw text, updates the
 entry in place and emits `historyChanged`. It is refused while a live run
@@ -253,51 +294,93 @@ path.
 recordings of the user's voice, and the archive is a file that gets carried
 and handed around. Do not add it to `data_export`'s allow-list.
 
-## The transcript occupies the suggestion bar
+## The dictation banner occupies the suggestion bar
 
-Only the phrase **currently being spoken** is shown. A finalised phrase
-leaves the banner and is typed into the app, so what is on screen is
-exactly what has *not* been typed yet, and it stays short by construction
-rather than by truncation.
+**No run previews words** (the owner's call, 2026-10-26, which finished what
+2026-10-24 started for held-back runs). While a run is under way the banner
+(`dictationBanner`) shows only the state label ("Connecting...",
+"Listening...", "Say what to write...", "Finishing...", "Writing..." or
+"Polishing...") and the level bars beside the mic carry "it hears you". The
+controller still computes its interim phrase (`interimChanged`, used by its
+own tests), but the bridge no longer forwards it and QML has no property for
+it. Nothing on screen says "it is typing" until it is typed.
 
-It elides on the **left**, which is the opposite of every other elide in
-`Main.qml` and is the whole point: while speaking, the tail is what you
-are checking.
+The pills are hidden for the duration (`predRow.visible` and the Repeater's
+model, through `predictionsArePresent`, both gate on `!root.dictationActive`).
+They cannot share the row, and a pill during dictation would be about a prefix
+the user is no longer typing.
 
-The pills are hidden for the duration (`predRow.visible` and the
-Repeater's model both gate on `!root.dictationActive`). They cannot share
-the row, and a pill during dictation would be about a prefix the user is
-no longer typing.
+### The finished text, and auto-copy
 
-**A held-back run shows nothing here** (the owner's call, 2026-10-24).
-With Type As You Speak off, or cleanup on, `_on_interim` and `_on_final`
-set no interim at all, so the banner shows its own "Listening..." label
-until the run is typed in one go. It used to show everything heard so far
-plus the phrase in flight, which read as "it is typing" when it was not.
-The level bars beside the mic (next section) carry "it hears you" instead.
-The same holds while Claude has the text: `_begin_polish` clears the
-interim rather than showing the raw run, so the banner reads
-"Polishing..." or "Writing..." until the cleaned text is typed or the
-draft preview opens (the review of #212 caught the raw text reappearing
-there). Guard: `tests/test_dictation_ai.py::TestAccumulateMode`, through
-`stop()` and the provider's `closed` for both cleanup and Write with AI.
+When a *dictate* run has been delivered, the banner shows that run's **whole
+text** where the pills are, elided on the **left** (the opposite of every other
+elide in `Main.qml`, on purpose: the tail is what you check), followed by a
+small "Copied" badge. The text is `textFormat: Text.PlainText` (it is whatever
+two recognisers returned). The badge is drawn in the theme's key colour under
+the theme's text colour, the pairing the pills use, so it clears 4.5:1 on all
+nine themes, and it shows **only if the clipboard call reported success**.
+
+It stays until the first of: the next keystroke from the OSK, 8 seconds, a new
+run starting, or privacy mode turning on. Then the pills return. The pills are
+hidden meanwhile (`predictionsArePresent` includes `!dictationResultShown`, and
+that property feeds `scanRevision`, so a scanner's target map follows).
+
+- **Where it is decided.** `DictationController.runFinished(str)` is emitted
+  once, by `_emit_run_finished`, in exactly the dictate finish paths:
+  a streamed run's end and a held-back run's insert (`_finish_run`), AI
+  cleanup's result (`_on_polished`), and a failed cleanup's raw words
+  (`_on_polish_failed`), always **after** `finalReady`. Never for a Write with
+  AI run (its draft preview already has Copy), a cancel, or an empty run.
+- **The bridge** (`_on_dictation_run_finished`) copies with
+  `_copy_to_clipboard` when `auto_copy` is on, stores
+  `dictationResultText` / `dictationResultCopied` (one notify signal,
+  `dictationResultChanged`) and starts the 8 s timer. In privacy mode it does
+  neither: the words were typed, but they must not reach the clipboard or the
+  bar. Nothing logs the text.
+- **The keystroke hook is `_release_sticky_modifiers`.** Every keystroke path
+  already calls it (the char path, special keys, the edit-mode intercept,
+  pills, glyphs, snippets, and a UIA Invoke, which goes through the same
+  slots), so a second hook would only have been able to drift. It calls
+  `_clear_dictation_result()`, the one place the result is cleared (key, timer,
+  new run via `stateChanged`, privacy mode). The dictation insert itself also
+  passes through it, which is why `runFinished` is emitted after the insert.
+- **Auto-copy is `DictationConfig.auto_copy`** (`dictation.json`, default
+  **on**, absent in an old file reads as on), set from Settings -> Dictation
+  -> "Copy Finished Dictation" through `setDictationAutoCopy`. It lives with the
+  other dictation toggles rather than in `appSettings` because the whole record
+  is one file. It puts dictated words on the **system clipboard**, where
+  Windows clipboard history may keep them (disclosed in `docs/PRIVACY.md`).
+
+Guards: `tests/test_dictation_ai.py::TestRunFinished`,
+`::TestTheBridgeAutoCopies`, `tests/test_qml_dictation.py::TestNoRunPreviewsWords`,
+`::TestTheFinishedTextReplacesThePills`, `::TestTheFinishedTextElidesFromTheLeft`.
 
 ## The mic button, and the left edge
 
-It sits at the **left** end of the bar for the same reason the snippets
-bookmark was put to the left of the clear-context ring: the ring is
-pressed from muscle memory and must not move, and a third control in that
-right-hand `Row` would push it. The left end is the only edge of the bar
-with nothing on it, so this costs no existing target its position.
+It sits at the **left** end of the bar: the buttons on the right are pressed
+from muscle memory and must not move, and the left end is the only edge of the
+bar with nothing on it, so this costs no existing target its position.
 
-`predBar.micReserve` mirrors `clearCtxReserve` and is **zero unless
+**The History button** (`dictationHistoryBarButton`, Feather `clock`, index 5)
+sits right after the mic and before the level bars, visible exactly when the
+mic is. It opens Settings on the Dictation page scrolled to its History section
+(`Main.qml::openDictationHistory` sets `settingsReturnView = "dictation"` and
+`settingsScrollToHistory`; the settings window's `onVisibleChanged` consumes
+them and calls `UnifiedSettingsPanel.showDictationHistory()`, which re-applies
+the scroll as the page lays out because a Flickable that has just changed view
+is clamped to the top until its first frame; an already-open window is moved
+directly). Its title-bar twin is `dictationHistoryTitleBarButton`, with the
+mic twin's id and visibility rule.
+
+`predBar.micReserve` mirrors `rightButtonsReserve` and is **zero unless
 dictation is switched on**, which is load-bearing rather than an
 optimisation: `predRow.x` centres the pills in
-`width - micReserve - clearCtxReserve`, so a reserve of 0 collapses that
+`width - micReserve - rightButtonsReserve`, so a reserve of 0 collapses that
 expression back to exactly the single-reserve one it grew from. A user
-who never turns dictation on gets byte-identical bar geometry.
+who never turns dictation on gets byte-identical bar geometry. With it on,
+the reserve is two pills plus 24 px (margins and the gap between them).
 
-`computeFit` is passed `clearCtxReserve + micReserve` as its single
+`computeFit` is passed `rightButtonsReserve + micReserve` as its single
 `reserve` argument rather than gaining a tenth parameter. The fitter has
 no notion of *which side* a reserve sits on; it only needs to know how
 much of the bar the pills may not have. Keeping the signature keeps the
@@ -308,8 +391,7 @@ is what `tests/test_qml_prediction_bar.py` is asserting.
 when `suggestionsEnabled` is false. The suggestion bar collapses to zero
 height with that setting, taking everything in it, and an unrelated
 setting must not be able to remove the only way into a feature. This is
-the precedent `snippetsTitleBarButton` set, and the hole the
-clear-context button still has.
+the precedent `snippetsTitleBarButton` set.
 
 **The level bars are the only sign the mic hears you.** Four bars sit
 beside the mic (`micLevelBars`, in `predBarMicRow`), visible only while
@@ -318,8 +400,8 @@ owner picked them over a louder ring, a bottom fill, ripples and a
 whole-bar wash (`docs/roadmap/dictation-speaking-indicator.html` shows
 all five side by side; chosen 2026-10-24). They widen `micReserve` by
 their width plus 8 px while shown; the pills are hidden for the whole run,
-so only the transcript label moves, and the reserve returns to exactly
-`predPillHeight + 16` at idle.
+so only the state label moves, and the reserve returns to exactly
+`2 * predPillHeight + 24` at idle.
 
 They replace a ring that nobody ever saw move, and the reason was not the
 ring: it was fed the **raw peak**. Speech into a desktop mic peaks at
@@ -561,7 +643,7 @@ Signals (QML binds these in `Main.qml`'s `Connections { target: keyboard }`):
 | Signal | Carries |
 |--------|---------|
 | `dictationStateChanged(str)` | `idle` / `connecting` / `listening` / `finishing` / `polishing` |
-| `dictationTranscriptChanged(str)` | the in-flight phrase, empty when there is none |
+| `dictationResultChanged()` | the finished run's text (`dictationResultText`) or its copied flag (`dictationResultCopied`) changed; both properties are empty/false when nothing is on show |
 | `dictationLevelChanged(float)` | mic level, 0.0 to 1.0, decibel-mapped by `audio.display_level` (not the raw peak), for the level bars |
 | `dictationError(str)` | a user-facing sentence; always paired with a return to idle |
 | `dictationDraftReady(str)` | a Write with AI draft, for the preview popup; never typed on its own |
@@ -578,6 +660,7 @@ Slots:
 | `setDictationApiKey(str) -> bool` | **Honour the bool.** The store can refuse the write, and a green "Saved" over a key that never landed sends the user away believing dictation is set up. |
 | `clearDictationApiKey() -> bool` | Cancels any live run too. |
 | `setDictationEnabled(bool)` | Cancels a live run when switching off, the failure `setSnippetDetection(False)` learned. |
+| `setDictationSpeechNotes(str) -> bool`, `setDictationHistoryLimit(int) -> bool`, `getDictationHistoryUsageBytes() -> float` | How I Speak; the history budget in MB (0 = No limit, anything else off the list becomes 200 and prunes now); bytes in use, never a path. |
 | `setDictationModel/Language/Device(str)` | Model and language are validated against the allow-lists in `config.py`; an unknown value is ignored rather than stored. |
 | `setDictationMaxSeconds(int)` / `setDictationSilenceSeconds(int)` | Clamped to the ranges in `config.py`. |
 | `setDictationStreamInserts(bool)` | Off holds a run back and inserts it once, raw (or cleaned, if cleanup is on). |
@@ -587,6 +670,7 @@ Slots:
 | `setDictationCleanupEnabled(bool)` / `setDictationNumberFormat(str)` | The number format is allow-listed. |
 | `setDictationWritingEnabled(bool)` / `setDictationWritingStyle(str) -> bool` | |
 | `setDictationHistoryEnabled(bool)` and the history slots | See *History*. |
+| `setDictationAutoCopy(bool)` | Whether a finished dictate run is put on the clipboard. Default on. See *The finished text, and auto-copy*. |
 | `setDictationKeyterms(str)` | Newline-separated; deduplicated, flattened and bounded on the way in. |
 
 Every setter persists immediately, the same way `SnippetStore` does, so there is no on-quit save path to wire up.
@@ -607,8 +691,8 @@ Every setter persists immediately, the same way `SnippetStore` does, so there is
   character at a time. Dropping the phrase beats typing it into the app
   behind the popup, which is not where the user is looking.
 - **Held-back runs show nothing in the target app until they end.** The
-  suggestion bar shows only "Listening..." and the level bars (the running
-  transcript preview was removed at the owner's request, 2026-10-24), and
+  suggestion bar shows only "Listening..." and the level bars (no run previews
+  its words, at the owner's request, 2026-10-24 and 2026-10-26), and
   a long run with cleanup on types nothing until the user stops and Claude
   answers (up to the 20 s timeout). That is the price of the single coherent insert (see
   *AI cleanup*); `stream_inserts` on with cleanup off keeps phrase by
@@ -669,10 +753,10 @@ Moved verbatim from `CLAUDE.md` on 2026-09-20, which keeps a summary of the load
 
 ## Dictation (voice input)
 
-Click the mic at the **left end of the suggestion bar**, speak, click again. The live transcript renders in the bar itself; each finalised phrase is typed into the focused app through the verbatim-insert path. Off by default and inert without a Deepgram API key. Full write-up: `docs/architecture/DICTATION.md`. Code: `src/dictation/` (`config` / `audio` / `providers` / `controller`), `KeyboardBridge._insert_dictated_text` + the `setDictation*` slots, `qml/Main.qml` (mic button, transcript banner, `dictationErrorToast`), the Dictation category in `UnifiedSettingsPanel.qml`.
+Click the mic at the **left end of the suggestion bar**, speak, click again. No run previews words (owner's call, 2026-10-26): the bar shows the state and the level bars, each finalised phrase is typed into the focused app through the verbatim-insert path, and the finished run's text then shows in the bar with a "Copied" badge until the next key or 8 s, auto-copied to the clipboard (`auto_copy`, default on). Off by default and inert without a Deepgram API key. Full write-up: `docs/architecture/DICTATION.md`. Code: `src/dictation/` (`config` / `audio` / `providers` / `controller`), `KeyboardBridge._insert_dictated_text` + the `setDictation*` slots, `qml/Main.qml` (mic button, transcript banner, `dictationErrorToast`), the Dictation category in `UnifiedSettingsPanel.qml`.
 
 - **Built entirely on Qt, and that is a constraint rather than a coincidence: zero new Python dependencies.** `QAudioSource` (QtMultimedia) captures and **resamples for us**, so the recogniser always sees 16 kHz mono signed-16-bit PCM whatever the device natively runs at, and `QWebSocket` (QtWebSockets) speaks to the provider on the Qt event loop, so there is no worker thread, no asyncio, and no queue between the audio callback and the socket. Both already ship in the PySide6 wheel the build bundles. `sounddevice` would drag PortAudio in as a binary for PyInstaller to carry and the EV cert to sign; MacroVox sends the device's native rate and declares it, which works but makes every recogniser parameter a variable. Don't "simplify" either back.
-- **`predBar.micReserve` must stay 0 whenever the mic is not on screen.** `predRow.x` centres the pills in `width - micReserve - clearCtxReserve`, so a zero reserve collapses that expression back to exactly the single-reserve one it grew from, and a user who never enables dictation gets byte-identical bar geometry. `computeFit` is passed `clearCtxReserve + micReserve` as its existing single `reserve` argument rather than gaining a tenth parameter: the fitter has no notion of which *side* a reserve sits on, only how much of the bar the pills may not have.
+- **`predBar.micReserve` must stay 0 whenever the mic is not on screen.** `predRow.x` centres the pills in `width - micReserve - rightButtonsReserve`, so a zero reserve collapses that expression back to exactly the single-reserve one it grew from, and a user who never enables dictation gets byte-identical bar geometry. `computeFit` is passed `rightButtonsReserve + micReserve` as its existing single `reserve` argument rather than gaining a tenth parameter: the fitter has no notion of which *side* a reserve sits on, only how much of the bar the pills may not have.
 - **There is a title-bar mirror** (`dictationTitleBarButton`), visible only when `suggestionsEnabled` is false, for the reason `snippetsTitleBarButton` exists: the bar collapses to zero height with that setting, and an unrelated setting must not remove the only way into a feature. Both mic icons are Feather's `mic` through `StrokeIcon`, never a glyph.
 - **The mic's busy pulse drives a `pulse` property, never `opacity` directly.** `SequentialAnimation on <property>` takes ownership of what it animates and never hands it back, so animating `opacity` destroyed the `ready ? 1.0 : 0.45` binding on the first connect and left the button parked wherever the loop was, which for half of each cycle is nearly transparent. A property with no binding of its own is what an animation can own safely; `opacity` multiplies it in and `onRunningChanged` resets it. Applies to any future animation on a bound property.
 - **Insertion opens with `_begin_verbatim_insert()`, the same verbatim-insert prologue every other insert path calls**: `_release_sticky_modifiers()` **before** the send, a deferred auto-space settled with `prose=True`, `_consume_auto_cap()` (a dictated phrase is the next thing typed, so it takes the capital), then the send itself inside `_without_held_modifiers()` via `_send_literal_text` (so a right-click lock survives), and **the insert itself never gated on privacy mode**. It does not go the extra step through `_commit_verbatim_insert` (as `insertSnippet` / `insertGlyph` do), because its tail differs: it mirrors the insert into `_context_buffer` / `_sentence_buffer` and decides a leading space, both dictation-specific. One space is prepended between phrases, decided from what is on screen (`_context_buffer + _current_word`) rather than from a "have I inserted yet" flag, because Deepgram returns phrases with no surrounding whitespace.
@@ -684,3 +768,11 @@ Click the mic at the **left end of the suggestion bar**, speak, click again. The
 - **No automatic reconnect, on purpose.** Audio spoken during a gap is gone, so a silent reconnect yields a transcript with an invisible hole: words the user said, believes they said, and cannot see. A drop ends the run and says so. Errors are mapped to sentences naming a next step (`_friendly_error`); nobody can act on `QAbstractSocket::RemoteHostClosedError`.
 - **Nothing in `src/dictation/` logs transcript content**, same rule as the rest of the keystroke path.
 - Deepgram parameters were taken from MacroVox's production set: `model`/`punctuate`/`smart_format`/`interim_results`, with **`keyterm`** for custom vocabulary (nova-3 rejects the legacy `keywords`).
+
+## Typing into the app is optional
+
+`DictationConfig.type_into_app` (default on, *Settings -> Dictation -> Type Into the App*). Off, `start()` forces `_accumulate` and the controller's `_deliver` skips `finalReady` for every dictate finish path, so nothing is typed; `runFinished` still fires, so the run's text reaches the bar, the clipboard (with `auto_copy`) and History. Like `_accumulate` and `_polish`, it is decided once at `start()` (`_type_into_app`): switching it mid-run never splits a run. A failed cleanup then says "Kept as spoken." rather than "Inserted as spoken." Type As You Speak is disabled in Settings while it is off. Write with AI is unaffected: its draft is only ever inserted from the preview. Tests: `tests/test_dictation_ai.py::TestTypeIntoAppOff`.
+
+## Opening the history folder
+
+History's *Open Folder* calls `openDictationHistoryFolder()`, which creates `<config>/dictation_history/` if needed and opens it with `QDesktopServices`. QML never sees the path: the slot returns only whether it opened, and a failure shows a toast.

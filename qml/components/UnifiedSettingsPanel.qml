@@ -130,6 +130,7 @@ Item {
     property int dictationSilenceSeconds: 4
     property string dictationKeyterms: ""
     property bool dictationStreamInserts: true
+    property bool dictationTypeIntoApp: true
     // AI cleanup / Write with AI / history (Anthropic-backed).  Same
     // arrangement: the parent pulls them from the bridge and hands them down;
     // the key itself is never here, only whether one is stored and a mask.
@@ -140,8 +141,16 @@ Item {
     property var dictationNumberFormats: []      // [{id, label}]
     property bool dictationWritingEnabled: false
     property string dictationWritingStyle: ""
+    property string dictationSpeechNotes: ""
+    property int dictationHistoryLimitMb: 200    // 0 = no limit
+    property var dictationHistoryLimits: []      // MB choices, 0 last, see getDictationSettings()
+    property double dictationHistoryUsageBytes: 0
     property bool dictationHistoryEnabled: true
-    property var dictationHistory: []            // newest first, see getDictationHistory()
+    property bool dictationAutoCopy: true
+    property var dictationHistory: []            // newest page first, see getDictationHistoryPage()
+    property int dictationHistoryCount: 0        // all saved runs, not just the page
+    readonly property int dictationHistoryPageSize: 20
+    property int dictationHistoryShown: 20       // how many the page asks for
     property string dictationPlayingId: ""       // "" = nothing playing
     // Id of the history entry whose Delete / "Clear all" is awaiting its
     // second tap.  "" = none, "*" = Clear all.
@@ -154,6 +163,35 @@ Item {
     property string currentView: "home"
 
     function resetToHome() { currentView = "home" }
+
+    // Open the Dictation page with its History section at the top of the
+    // view.  The scroll waits a tick: switching view resets the Flickable to
+    // the top, and the section's position is only known once the page has
+    // laid out.
+    function showDictationHistory() {
+        currentView = "dictation"
+        historyScrollPending = true
+        historyScrollTimer.restart()
+        Qt.callLater(unifiedSettings._scrollToHistory)
+    }
+    // Set while a scroll to History is owed.  The Flickable's content is not
+    // laid out when the view switches (a hidden window lays out on its first
+    // frame), so a single scroll lands on a short page and is clamped to 0.
+    // The scroll is re-applied as the page grows, then given up on, so a
+    // later layout change never drags the user back.
+    property bool historyScrollPending: false
+    function _scrollToHistory() {
+        if (!historyScrollPending)
+            return
+        var y = dictationHistorySection.mapToItem(contentColumn, 0, 0).y
+        var maxY = Math.max(0, flickArea.contentHeight - flickArea.height)
+        flickArea.contentY = Math.max(0, Math.min(y, maxY))
+    }
+    Timer {
+        id: historyScrollTimer
+        interval: 500
+        onTriggered: unifiedSettings.historyScrollPending = false
+    }
 
     // The two halves of the key list.  A function rather than two
     // properties so the split is stated once; the binding that calls it
@@ -410,6 +448,7 @@ Item {
             // -- Scrollable content --
             Flickable {
                 id: flickArea
+                objectName: "settingsFlickable"
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 contentWidth: width
@@ -424,6 +463,13 @@ Item {
                 Connections {
                     target: unifiedSettings
                     function onCurrentViewChanged() { flickArea.contentY = 0 }
+                }
+
+                // The other half of showDictationHistory(): follow the page
+                // as it lays out.
+                Connections {
+                    target: flickArea
+                    function onContentHeightChanged() { unifiedSettings._scrollToHistory() }
                 }
 
                 ScrollBar.vertical: ScrollBar {
@@ -2653,12 +2699,32 @@ Item {
                                 }
 
                                 SettingsToggle {
+                                    objectName: "dictationTypeIntoAppToggle"
+                                    Layout.fillWidth: true
+                                    text: "Type Into the App"
+                                    description: "Off: the words only show in the bar, go to the clipboard and History"
+                                    enabled: unifiedSettings.dictationEnabled
+                                    checked: unifiedSettings.dictationTypeIntoApp
+                                    onToggled: function(c) { unifiedSettings.settingChanged("dictationTypeIntoApp", c) }
+                                }
+
+                                SettingsToggle {
                                     Layout.fillWidth: true
                                     text: "Type As You Speak"
                                     description: "Insert each phrase as it is recognised, instead of all at once when you stop"
-                                    enabled: unifiedSettings.dictationEnabled
+                                    enabled: unifiedSettings.dictationEnabled && unifiedSettings.dictationTypeIntoApp
                                     checked: unifiedSettings.dictationStreamInserts
                                     onToggled: function(c) { unifiedSettings.settingChanged("dictationStreamInserts", c) }
+                                }
+
+                                SettingsToggle {
+                                    objectName: "dictationAutoCopyToggle"
+                                    Layout.fillWidth: true
+                                    text: "Copy Finished Dictation"
+                                    description: "Put each finished dictation on the clipboard. Windows clipboard history may keep it"
+                                    enabled: unifiedSettings.dictationEnabled
+                                    checked: unifiedSettings.dictationAutoCopy
+                                    onToggled: function(c) { unifiedSettings.settingChanged("dictationAutoCopy", c) }
                                 }
                             }
                         }
@@ -3305,6 +3371,78 @@ Item {
                                         }
                                     }
                                 }
+
+                                Text {
+                                    text: "How I Speak"
+                                    textFormat: Text.PlainText
+                                    color: "#c0c0c0"
+                                    font.pixelSize: 12
+                                    Layout.topMargin: 4
+                                }
+
+                                Text {
+                                    Layout.fillWidth: true
+                                    text: "Words or habits Claude should know when cleaning up, like names, slurred sounds, or phrases you repeat. Sent to Anthropic with each cleanup or Write with AI request."
+                                    textFormat: Text.PlainText
+                                    color: "#888"
+                                    font.pixelSize: 10
+                                    wrapMode: Text.WordWrap
+                                }
+
+                                ScrollView {
+                                    Layout.fillWidth: true
+                                    Layout.preferredHeight: 80
+                                    clip: true
+
+                                    TextArea {
+                                        id: dictationSpeechNotesField
+                                        objectName: "dictationSpeechNotesField"
+                                        text: unifiedSettings.dictationSpeechNotes
+                                        wrapMode: TextArea.Wrap
+                                        selectByMouse: true
+                                        color: "#f0f0f0"
+                                        font.pixelSize: 12
+                                        selectionColor: "#4a9eff"
+                                        selectedTextColor: "#fff"
+                                        leftPadding: 8
+                                        rightPadding: 8
+                                        topPadding: 6
+                                        bottomPadding: 6
+
+                                        background: Rectangle {
+                                            color: "#1a1a2a"
+                                            radius: 6
+                                            border.color: dictationSpeechNotesField.activeFocus ? "#4a9eff" : "#444"
+                                            border.width: 1
+                                        }
+                                    }
+                                }
+
+                                Flow {
+                                    Layout.fillWidth: true
+                                    spacing: 6
+
+                                    SettingsButton {
+                                        objectName: "dictationSpeechNotesPasteButton"
+                                        text: "Paste and Save"
+                                        tone: "go"
+                                        onClicked: {
+                                            dictationSpeechNotesField.paste()
+                                            unifiedSettings.settingChanged("dictationSpeechNotes", dictationSpeechNotesField.text)
+                                        }
+                                    }
+                                    SettingsButton {
+                                        text: "Save"
+                                        onClicked: unifiedSettings.settingChanged("dictationSpeechNotes", dictationSpeechNotesField.text)
+                                    }
+                                    SettingsButton {
+                                        text: "Clear"
+                                        onClicked: {
+                                            dictationSpeechNotesField.text = ""
+                                            unifiedSettings.settingChanged("dictationSpeechNotes", "")
+                                        }
+                                    }
+                                }
                             }
                         }
 
@@ -3397,6 +3535,8 @@ Item {
 
                         // -- History --
                         SettingsSection {
+                            id: dictationHistorySection
+                            objectName: "dictationHistorySection"
                             title: "History"
                             Layout.fillWidth: true
 
@@ -3408,16 +3548,72 @@ Item {
                                     objectName: "dictationHistoryToggle"
                                     Layout.fillWidth: true
                                     text: "Keep dictation history"
-                                    description: "Saves the last 20 dictations and their audio on this computer only"
+                                    description: "Saves your recent dictations and their audio on this computer only, up to the limit below"
                                     enabled: unifiedSettings.dictationEnabled
                                     checked: unifiedSettings.dictationHistoryEnabled
                                     onToggled: function(c) { unifiedSettings.settingChanged("dictationHistoryEnabled", c) }
                                 }
 
                                 Text {
+                                    text: "Storage limit"
+                                    textFormat: Text.PlainText
+                                    color: "#c0c0c0"
+                                    font.pixelSize: 12
+                                }
+
+                                Flow {
+                                    objectName: "dictationHistoryLimitFlow"
+                                    Layout.fillWidth: true
+                                    spacing: 6
+
+                                    Repeater {
+                                        model: unifiedSettings.dictationHistoryLimits
+                                        delegate: Rectangle {
+                                            property bool isCurrent: unifiedSettings.dictationHistoryLimitMb === modelData
+                                            width: Math.max(72, histLimitLabel.implicitWidth + 28)
+                                            height: 38
+                                            radius: 6
+                                            color: isCurrent ? "#2a4a6a" : (histLimitArea.containsMouse ? "#3a3a3a" : "#2a2a2a")
+                                            border.color: isCurrent ? "#4a9eff" : "#444"
+                                            border.width: 1
+                                            Text {
+                                                id: histLimitLabel
+                                                anchors.centerIn: parent
+                                                text: modelData === 0 ? "No limit" : modelData + " MB"
+                                                textFormat: Text.PlainText
+                                                color: isCurrent ? "#fff" : "#ccc"
+                                                font.pixelSize: 13
+                                            }
+                                            MouseArea {
+                                                id: histLimitArea
+                                                anchors.fill: parent
+                                                hoverEnabled: true
+                                                cursorShape: Qt.PointingHandCursor
+                                                onClicked: unifiedSettings.settingChanged("dictationHistoryLimit", modelData)
+                                            }
+                                        }
+                                    }
+                                }
+
+                                Text {
+                                    objectName: "dictationHistoryUsage"
+                                    Layout.fillWidth: true
+                                    text: {
+                                        var used = Math.max(0, Math.round(unifiedSettings.dictationHistoryUsageBytes / 1048576))
+                                        return unifiedSettings.dictationHistoryLimitMb === 0
+                                            ? "Using " + used + " MB."
+                                            : "Using " + used + " MB of " + unifiedSettings.dictationHistoryLimitMb + " MB. The oldest are deleted first."
+                                    }
+                                    textFormat: Text.PlainText
+                                    color: "#888"
+                                    font.pixelSize: 11
+                                    wrapMode: Text.WordWrap
+                                }
+
+                                Text {
                                     objectName: "dictationHistoryEmpty"
                                     Layout.fillWidth: true
-                                    visible: unifiedSettings.dictationHistory.length === 0
+                                    visible: unifiedSettings.dictationHistoryCount === 0
                                     text: "Nothing saved yet."
                                     textFormat: Text.PlainText
                                     color: "#888"
@@ -3555,14 +3751,34 @@ Item {
                                     }
                                 }
 
-                                // Two-step, like Snippets delete: the first tap
-                                // asks, the second does it.
+                                SettingsButton {
+                                    objectName: "dictationHistoryShowMore"
+                                    visible: unifiedSettings.dictationHistoryCount
+                                             > unifiedSettings.dictationHistory.length
+                                    text: {
+                                        var left = unifiedSettings.dictationHistoryCount
+                                                   - unifiedSettings.dictationHistory.length
+                                        return "Show " + Math.min(unifiedSettings.dictationHistoryPageSize, left)
+                                               + " more (" + left + " left)"
+                                    }
+                                    onClicked: unifiedSettings.settingChanged("dictationHistoryMore", true)
+                                }
+
+                                // Clear all is two-step, like Snippets delete:
+                                // the first tap asks, the second does it.
                                 Flow {
                                     Layout.fillWidth: true
                                     spacing: 6
-                                    visible: unifiedSettings.dictationHistory.length > 0
 
+                                    // The folder holds the WAV recordings too,
+                                    // so a run can be kept or shared as a file.
                                     SettingsButton {
+                                        objectName: "dictationHistoryOpenFolder"
+                                        text: "Open Folder"
+                                        onClicked: unifiedSettings.settingChanged("dictationHistoryOpenFolder", true)
+                                    }
+                                    SettingsButton {
+                                        visible: unifiedSettings.dictationHistoryCount > 0
                                         objectName: "dictationHistoryClearAll"
                                         text: unifiedSettings.dictationHistoryConfirm === "*"
                                               ? "Yes, delete everything" : "Clear all"

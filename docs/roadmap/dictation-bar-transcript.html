@@ -1,0 +1,281 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dictation bar mockup</title>
+<link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&family=Roboto+Condensed:wght@500;700&family=Roboto+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="alex-style/tokens.css">
+<style>
+  /* Replica of the suggestion bar, Dark theme values from Main.qml::themeData
+     ("dark"): background #1a1a1a, key #3a3a3a, text #e0e0e0, accent #4a9eff.
+     Pill height 36 px (predPillHeight). Mic row on the left (predBarMicRow),
+     button cluster on the right (predBarButtons: write, symbols, snippets, clear). */
+  .bar {
+    position: relative; display: flex; align-items: center; gap: 8px;
+    height: 56px; padding: 0 8px; background: #1a1a1a; border: 1px solid #505050;
+    font: 14px var(--ax-font); color: #e0e0e0; overflow: hidden;
+  }
+  .round {
+    width: 36px; height: 36px; border-radius: 50%; flex: none; display: grid; place-items: center;
+    background: #3a3a3a; border: 1px solid #505050; position: relative;
+  }
+  .round.on { background: #4a9eff; border-color: #4a9eff; }
+  .round svg { width: 19px; height: 19px; stroke: #e0e0e0; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+  .round.on svg { stroke: #0b1a2e; }
+  .round.new { outline: 2px dashed #ffb84a; outline-offset: 3px; }
+  .bars { display: none; align-items: center; gap: 3px; height: 36px; }
+  .bars.show { display: flex; }
+  .bars i { display: block; width: 4px; min-height: 4px; background: #4a9eff; border-radius: 2px; transition: height 90ms linear; }
+  .mid { flex: 1; min-width: 0; height: 36px; display: flex; align-items: center; justify-content: center; gap: 8px; }
+  .pill { height: 36px; padding: 0 14px; display: flex; align-items: center; background: #3a3a3a; border-radius: 18px; white-space: nowrap; }
+  .transcript { width: 100%; height: 36px; display: flex; align-items: center; padding: 0 12px; white-space: nowrap; overflow: hidden; }
+  .transcript.raw-dim { color: #9a9a9a; font-style: italic; }
+  .transcript .tag { flex: none; margin-right: 10px; font: 500 11px var(--ax-font); font-style: normal; color: #1a1a1a; background: #9a9a9a; border-radius: 4px; padding: 2px 6px; }
+  .transcript .label { color: #9a9a9a; }
+  .transcript.accent { color: #4a9eff; }
+  .transcript.underline span.words { text-decoration: underline dotted #9a9a9a 2px; text-underline-offset: 5px; }
+  .transcript.box { border: 1.5px dashed #6a6a6a; border-radius: 18px; }
+  .transcript .lead { flex: none; width: 16px; height: 16px; margin-right: 8px; stroke: #9a9a9a; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+  .transcript .live { color: #8a8a8a; }
+  .right { display: flex; gap: 6px; }
+  .toast {
+    position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+    display: flex; align-items: center; gap: 8px; height: 32px; padding: 0 14px; border-radius: 16px;
+    background: #2f6f3a; color: #fff; font-weight: 500; opacity: 0; transition: opacity 200ms; pointer-events: none;
+  }
+  .toast svg { width: 16px; height: 16px; stroke: #fff; fill: none; stroke-width: 2.5; stroke-linecap: round; stroke-linejoin: round; }
+  .toast.show { opacity: 1; }
+  .option { display: grid; grid-template-columns: 48px 1fr; gap: 8px 16px; align-items: start; }
+  .option .letter { font: 700 28px/1 var(--ax-font-title); color: var(--ax-accent); padding-top: 2px; }
+  .option .bar { margin-top: 10px; }
+  .state { margin-top: 6px; font: 12px var(--ax-font-mono, monospace); color: var(--ax-muted, #888); }
+  .controls { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+</style>
+</head>
+<body class="ax">
+<div class="ax-page">
+  <div class="ax-mast">
+    <div>
+      <h1>Dictation bar mockup</h1>
+      <div class="ax-meta">Transcript in the bar, auto-copy, and a History button by the mic. Suggestion bar, Dark theme. Open this file locally. <span class="ax-status good">Decided</span> H, the text when done, plus the "Copied" badge; History beside the mic; the clear-context button removed (2026-10-26). Hover a button for its name; only the clock is new.</div>
+    </div>
+    <div class="controls">
+      <button class="ax-btn primary" id="replay">Replay the run</button>
+      <label class="ax-label"><input type="checkbox" id="held" checked> Words wait (AI cleanup on, or Type As You Speak off)</label>
+    </div>
+  </div>
+
+  <section class="ax-panel" style="margin-top: 16px">
+    <h2>What changes</h2>
+    <p class="ax-muted"><b>Transcript.</b> A normal run already shows its words in the bar, cut from the front so the newest words stay visible. A run that AI cleanup or Write with AI holds back shows only "Listening..." today (your call on 2026-10-24). The same holds when Type As You Speak is off. This change shows those waiting words too, then "Polishing..." while Claude works (cleanup only). The options below differ only in how words that are not typed yet look.</p>
+    <p class="ax-muted"><b>History button</b> (dashed outline, new): a clock beside the mic. It opens Settings straight on Dictation, scrolled to History. It appears whenever the mic does. Switch scanners reach it at the next free index (<span class="ax-mono">aosk.v1.bar.0.5</span>), and it has a title-bar copy for when suggestions are off.</p>
+    <p class="ax-muted"><b>Auto-copy:</b> when a run ends, its whole text goes on the clipboard, so dictation that landed in the wrong window is one Ctrl+V away. That is the cleaned text after AI cleanup and the raw words if cleanup fails. A Write with AI draft is not auto-copied, since its preview already has Copy. Auto-copy is on by default, with a switch in Settings, Dictation.</p>
+  </section>
+
+  <section class="ax-panel" style="margin-top: 8px">
+    <h2>How words that are not typed yet look</h2>
+    <p class="ax-muted">Each style applies only while the words wait (the box above is ticked). Words that are already typed show as plain text in every option, except F, which works on every run. Untick the box to compare.</p>
+    <div class="ax-grid" style="grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 12px">
+      <div class="option ax-tile"><div class="letter">A</div><div>
+        <h2>Plain</h2>
+        <div class="ax-muted">Like a normal run. One look for everything.</div>
+        <div class="bar" data-style="plain"></div><div class="state"></div></div></div>
+      <div class="option ax-tile"><div class="letter">B</div><div>
+        <h2>Dimmed, "Draft" tag</h2>
+        <div class="ax-muted">Grey italic behind a small tag. The clearest "not final" signal, but the hardest to read.</div>
+        <div class="bar" data-style="dim"></div><div class="state"></div></div></div>
+      <div class="option ax-tile"><div class="letter">C</div><div>
+        <h2>Accent colour</h2>
+        <div class="ax-muted">Full-strength text in the theme accent, matching the lit mic. Easy to read, but colour is the only cue.</div>
+        <div class="bar" data-style="accent"></div><div class="state"></div></div></div>
+      <div class="option ax-tile"><div class="letter">D</div><div>
+        <h2>Dotted underline</h2>
+        <div class="ax-muted">Plain text with a dotted underline, the way Windows marks text you are still composing (Chinese, Japanese input).</div>
+        <div class="bar" data-style="underline"></div><div class="state"></div></div></div>
+      <div class="option ax-tile"><div class="letter">E</div><div>
+        <h2>Dashed box</h2>
+        <div class="ax-muted">Plain text inside a dashed pill-shaped outline: "held here, not sent". Easy to read, and the box is visible from the side of your eye.</div>
+        <div class="bar" data-style="box"></div><div class="state"></div></div></div>
+      <div class="option ax-tile"><div class="letter">F</div><div>
+        <h2>Pencil icon</h2>
+        <div class="ax-muted">Plain text after a small pencil, meaning "still being written". The cue sits in one place at the start of the line.</div>
+        <div class="bar" data-style="icon"></div><div class="state"></div></div></div>
+      <div class="option ax-tile" style="grid-column: 1 / -1"><div class="letter">G</div><div>
+        <h2>Settled words plain, the words still being heard grey (every run)</h2>
+        <div class="ax-muted">The speech service sends rough words first, then settled ones. G shows the rough words in grey until they settle. It shows what is still changing as you speak, not whether the words are typed yet. Can be combined with C, D, E or F.</div>
+        <div class="bar" data-style="twotone"></div><div class="state"></div></div></div>
+    </div>
+  </section>
+
+  <section class="ax-panel" style="margin-top: 8px">
+    <h2>Or: no live preview</h2>
+    <p class="ax-muted">These skip the styles above. The words show (if at all) only once the run has ended, already typed and already on the clipboard.</p>
+    <div class="ax-grid" style="grid-template-columns: 1fr; gap: 16px; margin-top: 12px">
+      <div class="option ax-tile"><div class="letter">H</div><div>
+        <h2>Show the text when done</h2>
+        <div class="ax-muted">While you speak: "Listening..." and the level bars, as today. When the run ends, the finished text sits where the pills are, next to the "Copied" badge, until your next key or 8 seconds. You check it once, after it is final.</div>
+        <div class="bar" data-style="plain" data-mode="after"></div><div class="state"></div></div></div>
+      <div class="option ax-tile"><div class="letter">I</div><div>
+        <h2>Badge only</h2>
+        <div class="ax-muted">No text ever. "Listening..." while you speak, then the "Copied" badge, then the pills.</div>
+        <div class="bar" data-style="plain" data-mode="badge"></div><div class="state"></div></div></div>
+      <div class="option ax-tile"><div class="letter">J</div><div>
+        <h2>Live, and kept when done</h2>
+        <div class="ax-muted">The words show live as you speak (plain here; any style above), and the finished text stays after the run, as in H.</div>
+        <div class="bar" data-style="plain" data-mode="both"></div><div class="state"></div></div></div>
+    </div>
+  </section>
+
+  <section class="ax-panel" style="margin-top: 8px">
+    <h2>When the run ends <span class="ax-status good">Decided</span></h2>
+    <p class="ax-muted">A green "Copied" badge on the bar for 1.5 seconds, as in every bar above (2026-10-26).</p>
+  </section>
+</div>
+
+<script>
+(function () {
+  const ICON = {
+    mic: '<path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><path d="M12 19L12 23"/><path d="M8 23L16 23"/>',
+    clock: '<circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>',
+    write: '<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/>',
+    alpha: '<path d="M18 6c-2 9-4 12-7 12a5 5 0 0 1 0-10c3 0 5 3 7 12"/>',
+    snip: '<rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>',
+    clear: '<polyline points="1 4 1 10 7 10"/><path d="M3.5 15a9 9 0 1 0 2.1-9.4L1 10"/>',
+    check: '<polyline points="20 6 9 17 4 12"/>'
+  };
+  const svg = (k) => '<svg viewBox="0 0 24 24">' + ICON[k] + '</svg>';
+  const SPEECH = "so I think we should move the meeting to Thursday afternoon because half the team is out on Wednesday and we still need the numbers from finance before anyone can decide anything".split(" ");
+  const PILLS = ["the", "and", "to", "I", "that"];
+  const ctx = document.createElement("canvas").getContext("2d");
+
+  const bars = [...document.querySelectorAll(".bar[data-style]")].map((el) => {
+    el.innerHTML =
+      '<div class="round mic" title="Dictate">' + svg("mic") + '</div>' +
+      '<div class="round new" title="Dictation History">' + svg("clock") + '</div>' +
+      '<div class="bars"><i></i><i></i><i></i><i></i></div>' +
+      '<div class="mid"></div>' +
+      '<div class="right"><div class="round" title="Write with AI">' + svg("write") + '</div><div class="round" title="Symbols and Emoji">' + svg("alpha") + '</div><div class="round" title="Snippets">' + svg("snip") + '</div></div>' +
+      '<div class="toast">' + svg("check") + 'Copied</div>';
+    return { el, style: el.dataset.style, mode: el.dataset.mode || "live", mid: el.querySelector(".mid"), mic: el.querySelector(".mic"),
+             meter: el.querySelector(".bars"), toast: el.querySelector(".toast"),
+             state: el.parentElement.querySelector(".state") };
+  });
+
+  // Elide from the left, like Text.ElideLeft in dictationTranscriptText.
+  function elideLeft(text, px, font) {
+    ctx.font = font;
+    if (ctx.measureText(text).width <= px) return text;
+    let lo = 0, hi = text.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (ctx.measureText("…" + text.slice(mid)).width <= px) hi = mid; else lo = mid + 1;
+    }
+    return "…" + text.slice(lo);
+  }
+
+  function render(b, phase, words) {
+    const held = document.getElementById("held").checked;
+    b.mic.classList.toggle("on", phase === "listening" || phase === "polishing");
+    b.meter.classList.toggle("show", phase === "listening");
+    b.state.textContent = "state: " + phase + (held ? " (held back for cleanup)" : " (streamed)");
+    if (phase === "idle") {
+      b.mid.innerHTML = PILLS.map((w) => '<div class="pill">' + w + '</div>').join("");
+      return;
+    }
+    const div = document.createElement("div");
+    div.className = "transcript";
+    if (phase === "listening" && (b.mode === "after" || b.mode === "badge")) words = [];
+    if (phase === "done") {
+      const span = document.createElement("span");
+      span.textContent = elideLeft(words.join(" "), b.mid.clientWidth - 24 - 110, "14px Roboto, sans-serif");
+      div.appendChild(span);
+      div.insertAdjacentHTML("beforeend", '<span class="toast show" style="position:static;transform:none;margin-left:12px;flex:none">' + svg("check") + 'Copied</span>');
+      b.mid.replaceChildren(div);
+      return;
+    }
+    if (phase === "polishing") {
+      div.innerHTML = '<span class="label">Polishing...</span>';
+    } else if (!words.length) {
+      div.innerHTML = '<span class="label">Listening...</span>';
+    } else {
+      const s = held ? b.style : (b.style === "twotone" ? "twotone" : "plain");
+      let room = b.mid.clientWidth - 24;
+      if (s === "dim") {
+        div.classList.add("raw-dim");
+        const tag = document.createElement("span");
+        tag.className = "tag"; tag.textContent = "Draft";
+        div.appendChild(tag);
+        room -= 52;
+      } else if (s === "icon") {
+        div.insertAdjacentHTML("beforeend", '<svg class="lead" viewBox="0 0 24 24">' + ICON.write + '</svg>');
+        room -= 24;
+      } else if (s === "accent" || s === "underline" || s === "box") {
+        div.classList.add(s);
+      }
+      const font = (s === "dim" ? "italic " : "") + "14px Roboto, sans-serif";
+      const span = document.createElement("span");
+      span.className = "words";
+      if (s === "twotone") {
+        // The last two words stand in for the interim (not yet settled) phrase.
+        const live = words.slice(-2).join(" ");
+        const shown = elideLeft(words.join(" "), room, font);
+        const cut = shown.length - live.length;
+        span.textContent = shown.slice(0, Math.max(0, cut));
+        const tail = document.createElement("span");
+        tail.className = "live"; tail.textContent = shown.slice(Math.max(0, cut));
+        span.appendChild(tail);
+      } else {
+        span.textContent = elideLeft(words.join(" "), room, font);
+      }
+      div.appendChild(span);
+    }
+    b.mid.replaceChildren(div);
+  }
+
+  let timers = [];
+  function run() {
+    timers.forEach(clearTimeout); timers.forEach(clearInterval); timers = [];
+    const held = document.getElementById("held").checked;
+    let t = 0;
+    bars.forEach((b) => render(b, "idle", []));
+    t += 1200;
+    timers.push(setTimeout(() => {
+      bars.forEach((b) => render(b, "listening", []));
+      const meter = setInterval(() => bars.forEach((b) => b.meter.querySelectorAll("i").forEach((i) => {
+        i.style.height = (6 + Math.random() * 26) + "px";
+      })), 100);
+      timers.push(meter);
+      SPEECH.forEach((_, n) => timers.push(setTimeout(() => {
+        bars.forEach((b) => render(b, "listening", SPEECH.slice(0, n + 1)));
+      }, 600 + n * 220)));
+      const spoken = 600 + SPEECH.length * 220 + 800;
+      timers.push(setTimeout(() => {
+        clearInterval(meter);
+        const end = () => {
+          bars.forEach((b) => {
+            if (b.mode === "after" || b.mode === "both") {
+              render(b, "done", SPEECH);
+              timers.push(setTimeout(() => render(b, "idle", []), 8000));
+              return;
+            }
+            render(b, "idle", []);
+            b.toast.classList.add("show");
+            timers.push(setTimeout(() => b.toast.classList.remove("show"), 1500));
+          });
+        };
+        if (held) {
+          bars.forEach((b) => render(b, "polishing", []));
+          timers.push(setTimeout(end, 1800));
+        } else end();
+      }, spoken));
+    }, t));
+  }
+  document.getElementById("replay").addEventListener("click", run);
+  document.getElementById("held").addEventListener("change", run);
+  window.addEventListener("resize", run);
+  run();
+})();
+</script>
+</body>
+</html>

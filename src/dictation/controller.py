@@ -107,6 +107,11 @@ class DictationController(QObject):
     interimChanged = Signal(str)
     #: A phrase the provider will not revise.  The bridge types this.
     finalReady = Signal(str)
+    #: The whole text of a finished *dictate* run, once it has been handed to
+    #: :attr:`finalReady` (or was typed phrase by phrase).  Emitted exactly
+    #: once per such run: never for Write with AI, never for a cancel.  The
+    #: bridge copies it and shows it in the bar.
+    runFinished = Signal(str)
     #: Mic level, 0.0 to 1.0, for the button's live indicator.
     levelChanged = Signal(float)
     #: A user-facing sentence.  Always paired with a return to IDLE.
@@ -144,6 +149,9 @@ class DictationController(QObject):
         #: write).  Decided with `_accumulate`, read with it, never the
         #: live config.
         self._polish = False
+        #: Whether a dictate run's words are typed (`finalReady`) at all.
+        #: Decided at `start` like `_accumulate`, which it forces on.
+        self._type_into_app = True
         self._record_history = False
         self._pcm = bytearray()
         self._pcm_cap = 0
@@ -242,7 +250,10 @@ class DictationController(QObject):
         # whole run to Claude and typed the result on top of the phrases
         # already on screen.
         self._polish = self._purpose == "write" or self._config.cleanup_ready
-        self._accumulate = self._polish or not self._config.stream_inserts
+        self._type_into_app = self._config.type_into_app
+        self._accumulate = (
+            self._polish or not self._config.stream_inserts or not self._type_into_app
+        )
         self._record_history = self._config.history_enabled
         self._run_text = ""
         self._pcm = bytearray()
@@ -393,11 +404,11 @@ class DictationController(QObject):
     def _on_interim(self, text: str) -> None:
         self._got_transcript = True
         self._restart_silence_timer()
-        # A held-back run shows nothing in the bar (the owner's call,
-        # 2026-10-24).  It used to show everything so far plus the phrase in
-        # flight; that read as "it is typing" when it was not, and the
-        # level bars beside the mic now carry "it hears you".  The bar's
-        # own "Listening..." label stands in while the interim is empty.
+        # A held-back run publishes no interim (the owner's call,
+        # 2026-10-24: it read as "it is typing" when it was not).  The bar
+        # renders no interim for any run since 2026-10-26, so this signal
+        # has no consumer outside the tests; the finished text arrives
+        # through `runFinished` instead.
         if self._accumulate:
             return
         self._set_interim(text)
@@ -510,9 +521,12 @@ class DictationController(QObject):
         # a held-back run is delivered whole, raw, now.
         self._set_interim("")
         self._set_state(DictationState.IDLE)
-        self._record("dictate", text, text, cleaned=False)
+        # Typing and the bar come first: the record is a disk write that
+        # grows with the history, and the words must not wait on it.
         if self._accumulate:
-            self.finalReady.emit(text)
+            self._deliver(text)
+        self._emit_run_finished(text)
+        self._record("dictate", text, text, cleaned=False)
         self._clear_run()
 
     # --- Claude passes ----------------------------------------------------
@@ -534,7 +548,9 @@ class DictationController(QObject):
         max_tokens = min(_CLEANUP_MAX_TOKENS, _CLEANUP_TOKEN_FLOOR + len(raw) // 2)
         request: ClaudeRequest = self._client().send(
             CLEANUP_MODEL,
-            prompts.cleanup_system_prompt(self._config.language, self._config.number_format),
+            prompts.cleanup_system_prompt(
+                self._config.language, self._config.number_format, self._config.speech_notes
+            ),
             prompts.cleanup_user_message(raw),
             api_key=self._config.anthropic_key,
             max_tokens=max_tokens,
@@ -558,7 +574,9 @@ class DictationController(QObject):
         if self._purpose == "write":
             request = self._client().send(
                 WRITING_MODEL,
-                prompts.writing_system_prompt(self._config.writing_style),
+                prompts.writing_system_prompt(
+                    self._config.writing_style, self._config.speech_notes
+                ),
                 prompts.writing_user_message(text),
                 api_key=self._config.anthropic_key,
                 max_tokens=_WRITING_MAX_TOKENS,
@@ -570,6 +588,16 @@ class DictationController(QObject):
         self._request = request
         request.succeeded.connect(lambda result: self._on_polished(request, text, result))
         request.failed.connect(lambda reason: self._on_polish_failed(request, text, reason))
+
+    def _deliver(self, text: str) -> None:
+        """Type a held-back dictate run, unless typing into the app is off."""
+        if self._type_into_app:
+            self.finalReady.emit(text)
+
+    def _emit_run_finished(self, text: str) -> None:
+        """Announce the delivered text of a dictate run (never a write run)."""
+        if self._purpose == "dictate" and text.strip():
+            self.runFinished.emit(text)
 
     def _take_request(self, request: ClaudeRequest) -> bool:
         """Whether *request* is still the live one (a cancel clears it)."""
@@ -584,12 +612,16 @@ class DictationController(QObject):
         purpose = self._purpose
         self._set_interim("")
         self._set_state(DictationState.IDLE)
-        self._record(purpose, raw, result, cleaned=True)
-        self._clear_run()
         if purpose == "write":
+            self._record(purpose, raw, result, cleaned=True)
+            self._clear_run()
             self.draftReady.emit(result)
         else:
-            self.finalReady.emit(result)
+            # Insert first, record after (see `_finish_run`).
+            self._deliver(result)
+            self._emit_run_finished(result)
+            self._record(purpose, raw, result, cleaned=True)
+            self._clear_run()
 
     def _on_polish_failed(self, request: ClaudeRequest, raw: str, reason: str) -> None:
         if not self._take_request(request):
@@ -599,6 +631,14 @@ class DictationController(QObject):
         self._set_state(DictationState.IDLE)
         # Recorded even on failure: for a write the spoken request is the
         # only copy, and for a dictation it is the raw words.
+        if purpose != "write":
+            self._deliver(raw)
+            self._emit_run_finished(raw)
+            self._record(purpose, raw, raw, cleaned=False)
+            self._clear_run()
+            done = "Inserted as spoken." if self._type_into_app else "Kept as spoken."
+            self.errorRaised.emit(f"AI cleanup failed ({_reason(reason)}). {done}")
+            return
         kept = self._record(purpose, raw, raw, cleaned=False)
         self._clear_run()
         if purpose == "write":
@@ -618,9 +658,6 @@ class DictationController(QObject):
                     f"Write with AI failed ({_reason(reason)}). "
                     "Your spoken request is shown so you can copy it."
                 )
-        else:
-            self.finalReady.emit(raw)
-            self.errorRaised.emit(f"AI cleanup failed ({_reason(reason)}). Inserted as spoken.")
 
     def reprocess(self, entry_id: str) -> bool:
         """Re-run cleanup over a history entry's raw text.
@@ -678,9 +715,9 @@ class DictationController(QObject):
         if not self._record_history:
             return False
         seconds = max(0.0, time.monotonic() - self._run_started)
-        entry_id = self._history_store().add(
-            purpose, raw, result, cleaned, seconds, bytes(self._pcm) or None
-        )
+        store = self._history_store()
+        store.limit_bytes = self._config.history_limit_mb << 20
+        entry_id = store.add(purpose, raw, result, cleaned, seconds, bytes(self._pcm) or None)
         if entry_id:
             self.historyChanged.emit()
         return bool(entry_id)

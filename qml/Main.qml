@@ -757,12 +757,15 @@ Window {
     // control whichever of its siblings is hidden (a hidden control is absent,
     // its index is not reused), and a twin carries its bar counterpart's id
     // because the two are never visible together.  Row is always 0.  Indices
-    // are part of the contract: append, never renumber.
+    // are part of the contract: append, never renumber.  Index 4 was the
+    // clear-context button, removed 2026-10-26: it is retired, never reused,
+    // so a scanner that remembered `aosk.v1.bar.0.4` finds nothing rather
+    // than a different control.
     readonly property int barIndexMic: 0
     readonly property int barIndexWrite: 1
     readonly property int barIndexSymbols: 2
     readonly property int barIndexSnippets: 3
-    readonly property int barIndexClear: 4
+    readonly property int barIndexHistory: 5
     function scanBarId(idx) {
         return root.scanTargetId("bar", 0, idx)
     }
@@ -785,9 +788,18 @@ Window {
         // Refused (privacy, a missing key): nothing started.
         if (root.dictationState === "idle") root.writeRunPending = false
     }
-    function clearSuggestionContext() {
-        if (keyboard) keyboard.resetContext()
-        contextClearedToast.flash()
+    // Settings on the Dictation page, scrolled to its History section.  The
+    // return view and the scroll request ride the same hand-off the function
+    // keys use; an already-open settings window has nothing to consume them,
+    // so it is moved directly.
+    function openDictationHistory() {
+        if (root.showSettings && typeof settingsPanel !== "undefined" && settingsPanel) {
+            settingsPanel.showDictationHistory()
+            return
+        }
+        root.settingsReturnView = "dictation"
+        root.settingsScrollToHistory = true
+        root.showSettings = true
     }
 
     // One cheap thing for a scanner to poll.  Everything that can move a
@@ -816,7 +828,8 @@ Window {
     // pills that were no longer on screen.  One property, both readers.
     readonly property bool predictionsArePresent:
         root.suggestionsEnabled && !root.privacyMode
-        && !root.dictationActive && !study.suppressPredictions
+        && !root.dictationActive && !root.dictationResultShown
+        && !study.suppressPredictions
         && root.predictionStatus === "ready"
     readonly property string scanRevision: [
         root.predictionGeneration,
@@ -944,7 +957,16 @@ Window {
     property bool dictationConfigured: false
     property string dictationState: "idle"
     readonly property bool dictationActive: root.dictationState !== "idle"
-    property string dictationTranscript: ""
+    // The finished text of the last dictate run, and whether it reached the
+    // clipboard.  The bridge owns both (it clears them on the next key, after
+    // 8 s, on a new run and in privacy mode); QML only draws them.
+    readonly property string dictationResultText: keyboard ? keyboard.dictationResultText : ""
+    readonly property bool dictationResultCopied: keyboard ? keyboard.dictationResultCopied : false
+    // The result takes the pills' place.  Never alongside a live run or
+    // privacy mode, and only where the bar itself is on screen.
+    readonly property bool dictationResultShown:
+        root.suggestionsEnabled && !root.privacyMode && !root.dictationActive
+        && root.dictationResultText !== ""
     property real dictationLevel: 0.0
     // Write with AI.  `writingConfigured` is pulled from the bridge by
     // refreshDictation(): the setting is on AND both keys are stored.  The
@@ -1305,6 +1327,7 @@ Window {
         settingsPanel.dictationSilenceSeconds = d.silenceSeconds
         settingsPanel.dictationKeyterms = d.keyterms
         settingsPanel.dictationStreamInserts = d.streamInserts
+        settingsPanel.dictationTypeIntoApp = d.typeIntoApp
         settingsPanel.dictationHasAnthropicKey = d.hasAnthropicKey
         settingsPanel.dictationMaskedAnthropicKey = d.maskedAnthropicKey
         settingsPanel.dictationCleanupEnabled = d.cleanupEnabled
@@ -1312,18 +1335,38 @@ Window {
         settingsPanel.dictationNumberFormats = d.numberFormats
         settingsPanel.dictationWritingEnabled = d.writingEnabled
         settingsPanel.dictationWritingStyle = d.writingStyle
+        settingsPanel.dictationSpeechNotes = d.speechNotes
+        settingsPanel.dictationHistoryLimitMb = d.historyLimitMb
+        settingsPanel.dictationHistoryLimits = d.historyLimits
         settingsPanel.dictationHistoryEnabled = d.historyEnabled
+        settingsPanel.dictationAutoCopy = d.autoCopy
         root.refreshDictationHistory()
     }
 
     // The history list is read on its own, and again whenever the bridge says
-    // it changed, rather than with the rest of the record: it can grow while
-    // the settings window is closed (a dictation finishes), and re-reading
-    // 20 small entries is cheap.
+    // it changed, but only while someone can see it (Settings open on the
+    // Dictation page).  The store holds up to 5000 runs and a run finishing
+    // emits a change; building a delegate per entry on every finish stalled
+    // the UI thread for seconds.  Hidden, the model is dropped, and opening
+    // the page reads it afresh.  Only the newest `dictationHistoryShown` are
+    // fetched; "Show more" grows that.
+    readonly property bool dictationHistoryLive:
+        root.showSettings && typeof settingsPanel !== "undefined" && settingsPanel !== null
+        && settingsPanel.currentView === "dictation"
+    onDictationHistoryLiveChanged: root.refreshDictationHistory()
+
     function refreshDictationHistory() {
         if (!keyboard || typeof settingsPanel === "undefined" || !settingsPanel)
             return
-        settingsPanel.dictationHistory = keyboard.getDictationHistory()
+        if (!root.dictationHistoryLive) {
+            if (settingsPanel.dictationHistory.length > 0)
+                settingsPanel.dictationHistory = []
+            settingsPanel.dictationHistoryShown = settingsPanel.dictationHistoryPageSize
+            return
+        }
+        settingsPanel.dictationHistory = keyboard.getDictationHistoryPage(settingsPanel.dictationHistoryShown)
+        settingsPanel.dictationHistoryCount = keyboard.getDictationHistoryCount()
+        settingsPanel.dictationHistoryUsageBytes = keyboard.getDictationHistoryUsageBytes()
         settingsPanel.dictationHistoryConfirm = ""
     }
 
@@ -1409,6 +1452,9 @@ Window {
     // than dumping the user at the home grid: losing your place in a list
     // of twenty-four is not the same as re-opening a menu.
     property string settingsReturnView: ""
+    // Set with settingsReturnView = "dictation" by the History button: the
+    // window's onVisibleChanged scrolls the page to its History section.
+    property bool settingsScrollToHistory: false
 
     function editKeyFromSettings(keyId) {
         root.settingsReturnView = "fkeys"
@@ -1790,13 +1836,11 @@ Window {
             if (typeof settingsPanel !== "undefined" && settingsPanel)
                 settingsPanel.dictationPlayingId = playingId
         }
-        function onDictationTranscriptChanged(text) { root.dictationTranscript = text }
         function onDictationLevelChanged(level) { root.dictationLevel = level }
         function onDictationError(message) {
             // The mic is in the suggestion bar, so a failure has to be
             // reported somewhere the user is already looking rather than
             // in a dialog they have to travel to and dismiss.
-            root.dictationTranscript = ""
             dictationErrorToast.flash(message)
         }
 
@@ -2304,8 +2348,8 @@ Window {
                     }
                 }
 
-                // Snippets, the fallback copy.  The button now lives beside
-                // the clear-context ring in the suggestion bar, which is a
+                // Snippets, the fallback copy.  The button now lives in
+                // the suggestion bar, which is a
                 // far bigger target than a 28x24 patch of title bar, and this
                 // one is hidden whenever that one is showing.
                 //
@@ -2313,9 +2357,7 @@ Window {
                 // height when suggestions are switched off, taking everything
                 // in it with it, and Snippets is a feature rather than a
                 // suggestion-adjacent control, so losing the only way in
-                // because of an unrelated setting is not acceptable.  The
-                // clear-context button has always had that hole; this one
-                // does not get to inherit it.
+                // because of an unrelated setting is not acceptable.
                 Comp.BarButton {
                     id: symbolsTwin
                     objectName: "symbolsTitleBarButton"
@@ -2492,9 +2534,44 @@ Window {
                     }
                 }
 
-                // (Clear-context button moved into the prediction bar below —
-                // it's a bigger, easier target parked at the right end of the
-                // suggestion pills. See `clearCtxPill` in predBar.)
+                // Dictation history, the fallback copy: the bar is gone with
+                // suggestions off.  Same id as the bar button, same rule as
+                // the mic twin (never visible together).
+                Comp.BarButton {
+                    id: historyTwin
+                    objectName: "dictationHistoryTitleBarButton"
+                    targetId: root.scanBarId(root.barIndexHistory)
+                    scanName: qsTr("Dictation history")
+                    onActivated: root.openDictationHistory()
+                    visible: !root.suggestionsEnabled && root.dictationEnabled
+                    width: visible ? 28 : 0
+                    height: 24
+                    radius: 4
+                    color: historyTitleBtn.containsMouse ? "#444" : "transparent"
+
+                    ToolTip.visible: historyTitleBtn.containsMouse
+                    ToolTip.text: qsTr("Dictation history")
+                    ToolTip.delay: 400
+
+                    Comp.StrokeIcon {
+                        anchors.centerIn: parent
+                        width: 16
+                        height: 16
+                        paths: [
+                            "M12 2a10 10 0 1 0 0 20a10 10 0 1 0 0-20z",
+                            "M12 6 L12 12 L16 14"
+                        ]
+                        ink: "#999"
+                    }
+
+                    MouseArea {
+                        id: historyTitleBtn
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: historyTwin.activated()
+                    }
+                }
 
                 // Settings button (gear icon) - opens unified settings
                 Rectangle {
@@ -2665,12 +2742,12 @@ Window {
                 // rescued them and they elided — the exact bug the fitter was
                 // written to prevent.
                 property real predTextInset: Math.max(6, predHorizontalPad * 0.28)
-                // Right-edge zone owned by the clear-context button (its own
-                // width + the 8 px right margin + an 8 px gap).  The pill row
+                // Right-edge zone owned by the button cluster (their own
+                // widths + the 8 px right margin + an 8 px gap).  The pill row
                 // is both *sized* and *centred* inside the space left over, so
-                // a pill can never slide under the button, which used to
+                // a pill can never slide under a button, which used to
                 // happen with four long words, hiding the last one behind the
-                // ⟲.  Reserved on the right only: taking the same bite out of
+                // rightmost.  Reserved on the right only: taking the same bite out of
                 // the left as well would centre the row in the window but cost
                 // twice the width, and long words would start eliding sooner.
                 // Gap between the two buttons parked at the right end.
@@ -2679,27 +2756,28 @@ Window {
                 // number rather than a hardcoded reserve below, because the
                 // reserve went from one button to two to three and each time
                 // it was the formula that had to be re-derived by hand.
-                property int predButtonCount: 3 + (root.writeAvailable ? 1 : 0)
+                property int predButtonCount: 2 + (root.writeAvailable ? 1 : 0)
                 // Width the pills must keep clear so the row can never render
                 // underneath the buttons.  Derived from the same numbers the
                 // Row is laid out from, because a reserve that is merely
                 // *near* the truth puts a pill under a control, which is the
                 // bug this property exists to prevent.
-                property real clearCtxReserve: root.suggestionsEnabled
+                property real rightButtonsReserve: root.suggestionsEnabled
                     ? predPillHeight * predButtonCount
                       + predButtonGap * (predButtonCount - 1) + 16 : 0
-                // The mirror of clearCtxReserve for the microphone parked at
-                // the left end (8 px left margin + the button + 8 px
-                // clearance).  Zero unless dictation is actually switched on,
-                // which is what keeps the row's geometry byte-identical to
-                // before for every user who never turns this on: the pills
-                // are centred in `width - micReserve - clearCtxReserve`, so a
-                // reserve of 0 collapses the expression to the original one.
-                // While the mic hears speech the level bars sit beside it
+                // The mirror of rightButtonsReserve for the microphone and the
+                // History button beside it, parked at the left end (8 px left
+                // margin + two buttons + their 8 px gap + 8 px clearance).
+                // Zero unless dictation is actually switched on, which is
+                // what keeps the row's geometry byte-identical to before for
+                // every user who never turns this on: the pills are centred
+                // in `width - micReserve - rightButtonsReserve`, so a reserve
+                // of 0 collapses the expression to the original one.
+                // While the mic hears speech the level bars sit beside them
                 // and the reserve grows by their width; the pills are hidden
-                // for the whole run, so only the transcript label moves.
+                // for the whole run, so only the state label moves.
                 property real micReserve: (root.suggestionsEnabled && root.dictationEnabled)
-                    ? predPillHeight + 16 + (micLevelBars.visible ? micLevelBars.width + 8 : 0)
+                    ? predPillHeight * 2 + 24 + (micLevelBars.visible ? micLevelBars.width + 8 : 0)
                     : 0
                 Layout.preferredHeight: root.suggestionsEnabled ? predPillHeight + 4 : 0
                 Layout.bottomMargin: root.suggestionsEnabled ? 4 : 0
@@ -2711,10 +2789,11 @@ Window {
                 Item {
                     objectName: "predictionStartupStatus"
                     x: predBar.micReserve + 8
-                    width: Math.max(0, predBar.width - predBar.micReserve - predBar.clearCtxReserve - 16)
+                    width: Math.max(0, predBar.width - predBar.micReserve - predBar.rightButtonsReserve - 16)
                     height: parent.height
                     visible: root.suggestionsEnabled && !root.privacyMode
-                             && !root.dictationActive && !study.suppressPredictions
+                             && !root.dictationActive && !root.dictationResultShown
+                             && !study.suppressPredictions
                              && root.predictionStatus !== "ready"
 
                     RowLayout {
@@ -2829,12 +2908,11 @@ Window {
 
                 // Dictation microphone.
                 //
-                // It sits at the LEFT end rather than joining the pair on the
-                // right for the reason the snippets button was put left of the
-                // ⟲ ring: the ring is pressed from muscle memory and must not
-                // move, and a third control in that Row would push it.  The
-                // left end is also the only edge of the bar with nothing on
-                // it, so this costs no existing target its position.
+                // It sits at the LEFT end rather than joining the cluster on the
+                // right: buttons there are pressed from muscle memory and must
+                // not move.  The left end is also the only edge of the bar
+                // with nothing on it, so this costs no existing target its
+                // position.
                 //
                 // Its own Row, mirroring predBarButtons, so `micReserve` is
                 // the width of a thing that exists rather than a number kept
@@ -2963,6 +3041,54 @@ Window {
                         Behavior on color { ColorAnimation { duration: 100 } }
                     }
 
+                    // Dictation history: one click from the mic to the saved
+                    // runs, so a lost sentence is a short trip away.  Present
+                    // exactly when the mic is (same row, same visibility), so
+                    // `micReserve` counts it unconditionally.  Opens Settings
+                    // on the Dictation page scrolled to History.
+                    Comp.BarButton {
+                        id: historyPill
+                        objectName: "dictationHistoryBarButton"
+                        targetId: root.scanBarId(root.barIndexHistory)
+                        scanName: qsTr("Dictation history")
+                        onActivated: root.openDictationHistory()
+                        width: predBar.predPillHeight
+                        height: predBar.predPillHeight
+                        radius: width / 2
+                        color: historyBtn.containsMouse ? Qt.lighter(root.themeKeyColor, 1.3)
+                                                        : Qt.rgba(0, 0, 0, 0.18)
+                        border.color: historyBtn.containsMouse ? root.themeAccent
+                                                               : Qt.rgba(1, 1, 1, 0.18)
+                        border.width: 1
+
+                        ToolTip.visible: historyBtn.containsMouse
+                        ToolTip.text: qsTr("Dictation history")
+                        ToolTip.delay: 400
+
+                        // Feather's "clock", MIT, (c) 2013-2023 Cole Bemis.
+                        // See THIRD_PARTY_NOTICES.md.  The circle and polyline
+                        // are written as equivalent paths; centred in its box.
+                        Comp.StrokeIcon {
+                            anchors.fill: parent
+                            paths: [
+                                "M12 2a10 10 0 1 0 0 20a10 10 0 1 0 0-20z",
+                                "M12 6 L12 12 L16 14"
+                            ]
+                            boxFraction: 0.58
+                            ink: historyBtn.containsMouse ? root.themeTextColor : "#bbb"
+                        }
+
+                        MouseArea {
+                            id: historyBtn
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: historyPill.activated()
+                        }
+
+                        Behavior on color { ColorAnimation { duration: 100 } }
+                    }
+
                     // Live microphone level, drawn as four bars beside the
                     // button (the owner picked this over a ring, a fill, ripples
                     // and a whole-bar wash, 2026-10-24).  This is the only
@@ -3000,46 +3126,49 @@ Window {
                     }
                 }
 
-                // Live transcript, in the space the pills normally occupy.
+                // The dictation banner, in the space the pills normally occupy.
                 //
-                // Only the phrase currently being spoken is shown: a finalised
-                // phrase leaves this and is typed into the app, so the text
-                // here stays short by construction rather than by truncation,
-                // and what is on screen is exactly what has *not* been typed
-                // yet.  A held-back run (Type As You Speak off, or cleanup on)
-                // shows nothing here but "Listening..." until it is typed; the
-                // level bars beside the mic are its feedback.  It elides on the LEFT so the newest words are the ones
-                // that survive, which is the opposite of every other elide in
-                // this file and is the whole point: while speaking, the tail is
-                // what you are checking.
+                // While a run is under way it shows only the state ("Listening...",
+                // "Polishing...") and the level bars beside the mic say it hears
+                // you: no run previews words (owner's call, 2026-10-26).  When a
+                // dictate run has been delivered it shows that run's whole text
+                // plus a "Copied" badge, until the next key or 8 s (the bridge
+                // clears it).  It elides on the LEFT so the newest words are the
+                // ones that survive, the opposite of every other elide in this
+                // file, because the tail is what you are checking.
                 Item {
                     id: dictationBanner
-                    objectName: "dictationTranscript"
+                    objectName: "dictationBanner"
                     anchors.verticalCenter: parent.verticalCenter
                     x: predBar.micReserve
-                    width: Math.max(0, predBar.width - predBar.micReserve - predBar.clearCtxReserve)
+                    width: Math.max(0, predBar.width - predBar.micReserve - predBar.rightButtonsReserve)
                     height: predBar.predPillHeight
-                    visible: root.suggestionsEnabled && root.dictationActive && !root.privacyMode
+                    visible: root.suggestionsEnabled && !root.privacyMode
+                             && (root.dictationActive || root.dictationResultShown)
 
                     Text {
-                        objectName: "dictationTranscriptText"
-                        anchors.fill: parent
+                        objectName: "dictationBannerText"
+                        anchors.left: parent.left
+                        anchors.right: dictationCopiedBadge.visible ? dictationCopiedBadge.left
+                                                                    : parent.right
+                        anchors.top: parent.top
+                        anchors.bottom: parent.bottom
                         anchors.leftMargin: 10
                         anchors.rightMargin: 10
                         verticalAlignment: Text.AlignVCenter
-                        horizontalAlignment: root.dictationTranscript ? Text.AlignLeft
-                                                                      : Text.AlignHCenter
+                        horizontalAlignment: root.dictationResultShown ? Text.AlignLeft
+                                                                       : Text.AlignHCenter
                         elide: Text.ElideLeft
-                        // Transcript text is whatever the user said, so it is
-                        // exactly as untrusted as anything else displayed here:
-                        // AutoText would sniff it for markup.
+                        // Whatever the user said is exactly as untrusted as
+                        // anything else displayed here: AutoText would sniff
+                        // it for markup.
                         textFormat: Text.PlainText
                         font.pixelSize: predBar.predFontSize
-                        font.italic: !root.dictationTranscript
-                        color: root.dictationTranscript ? root.themeTextColor
-                                                        : Qt.rgba(1, 1, 1, 0.55)
-                        text: root.dictationTranscript !== ""
-                              ? root.dictationTranscript
+                        font.italic: !root.dictationResultShown
+                        color: root.dictationResultShown ? root.themeTextColor
+                                                         : Qt.rgba(1, 1, 1, 0.55)
+                        text: root.dictationResultShown
+                              ? root.dictationResultText
                               : (root.dictationState === "connecting" ? qsTr("Connecting...")
                                  : (root.dictationState === "finishing" ? qsTr("Finishing...")
                                     : (root.dictationState === "polishing"
@@ -3047,28 +3176,71 @@ Window {
                                        : (root.writeRunPending ? qsTr("Say what to write...")
                                                                : qsTr("Listening...")))))
                     }
+
+                    // Shown only when the clipboard call reported success.
+                    // Theme key colour under theme text: the same pairing the
+                    // pills use, so it clears 4.5:1 on every theme.
+                    Rectangle {
+                        id: dictationCopiedBadge
+                        objectName: "dictationCopiedBadge"
+                        visible: root.dictationResultShown && root.dictationResultCopied
+                        anchors.right: parent.right
+                        anchors.rightMargin: 6
+                        anchors.verticalCenter: parent.verticalCenter
+                        height: predBar.predPillHeight - 8
+                        width: badgeRow.implicitWidth + 20
+                        radius: height / 2
+                        color: root.themeKeyColor
+                        border.color: root.themeAccent
+                        border.width: 1
+
+                        Row {
+                            id: badgeRow
+                            anchors.centerIn: parent
+                            spacing: 6
+
+                            // Feather's "check", MIT, (c) 2013-2023 Cole Bemis.
+                            // See THIRD_PARTY_NOTICES.md.
+                            Comp.StrokeIcon {
+                                anchors.verticalCenter: parent.verticalCenter
+                                width: 14
+                                height: 14
+                                paths: ["M20 6 L9 17 L4 12"]
+                                ink: root.themeTextColor
+                            }
+                            Text {
+                                anchors.verticalCenter: parent.verticalCenter
+                                text: qsTr("Copied")
+                                textFormat: Text.PlainText
+                                font.pixelSize: predBar.predFontSize - 2
+                                color: root.themeTextColor
+                            }
+                        }
+                    }
                 }
 
                 Row {
                     id: predRow
                     // Named so tests/test_qml_prediction_bar.py can assert the
-                    // row never overlaps clearContextButton.
+                    // row never overlaps the right-hand buttons.
                     objectName: "predictionRow"
                     anchors.verticalCenter: parent.verticalCenter
                     // Centred in the bar minus the button zones at each end,
                     // floored at the 8 px margin.  Not anchors.centerIn: that
                     // centres on the full bar and pushes the right-hand pill
-                    // under the ⟲ button.  `micReserve` is 0 whenever the mic
+                    // under a button.  `micReserve` is 0 whenever the mic
                     // is not on screen, which collapses this back to exactly
                     // the single-reserve expression it grew from.
                     x: predBar.micReserve + Math.max(
                         8, (predBar.width - predBar.micReserve
-                            - predBar.clearCtxReserve - width) / 2)
+                            - predBar.rightButtonsReserve - width) / 2)
                     spacing: 8
-                    // A live transcript takes the whole bar: the pills would
-                    // be about a prefix the user is no longer typing, and the
-                    // two cannot share the row.
-                    visible: root.suggestionsEnabled && !root.privacyMode && !root.dictationActive
+                    // The dictation banner takes the whole bar, during a run and
+                    // while its finished text shows: the pills would be about a
+                    // prefix the user is no longer typing, and the two cannot
+                    // share the row.
+                    visible: root.suggestionsEnabled && !root.privacyMode
+                             && !root.dictationActive && !root.dictationResultShown
 
                     // Measures word widths in the same font the pills render
                     // so the fair-share allocation below can size every pill
@@ -3120,7 +3292,7 @@ Window {
                     // binding reads predictions, window width and pill geometry
                     // so it re-evaluates whenever any of them change.
                     // `reserve` is the total width both ends own, not just the
-                    // ⟲ end: the fitter has no notion of which side a reserve
+                    // right-hand end: the fitter has no notion of which side a reserve
                     // sits on, it only needs to know how much of the bar the
                     // pills may not have.  Passing the sum keeps the signature
                     // and keeps the no-elide guarantee true once a mic button
@@ -3129,7 +3301,7 @@ Window {
                         root.predictionRound.words, root.width, predBar.predFontSize,
                         predBar.predHorizontalPad, predBar.predMinWidth,
                         predBar.predPillHeight, predRow.spacing,
-                        predBar.clearCtxReserve + predBar.micReserve,
+                        predBar.rightButtonsReserve + predBar.micReserve,
                         predBar.predTextInset)
 
                     // Kept as the name the width tests read.
@@ -3148,7 +3320,7 @@ Window {
                     //     fair, so a short word can't hog room a long one
                     //     needs. This is the property that stops "I"/"the" in
                     //     half-empty pills beside a clipped long word.
-                    //  3. `reserve` keeps the row clear of the ⟲ button.
+                    //  3. `reserve` keeps the row clear of the buttons.
                     //     Without it the row is sized to the whole window and
                     //     the right-hand pill renders underneath it.
                     //
@@ -3199,7 +3371,7 @@ Window {
 
                         if (slack <= 0) {
                             // One word wider than the entire bar: clamp it so
-                            // it can't slide under the ⟲, and let it elide.
+                            // it can't slide under a button, and let it elide.
                             if (count === 1)
                                 widths[0] = Math.max(pillH * 1.4, avail)
                             return out
@@ -3492,22 +3664,15 @@ Window {
 
                 }
 
-                // Clear-context button parked at the right end of the
-                // suggestion bar: a big, easy target that wipes the prediction
-                // context buffers (current word, sentence buffer, sliding
-                // 200-char context) so the next pill is computed from scratch.
-                // App-switch clears context automatically, but the
-                // foreground-window poll misses things like browser tab changes
-                // or a focus change to a child window with the same hwnd, so
-                // this is the manual escape hatch. Hidden when suggestions are
-                // off (the bar collapses to zero height anyway).
-                // Both bar buttons live in one Row anchored to the right, so
-                // the reserve `computeFit` subtracts is the width of a thing
-                // that exists rather than a number kept in step by hand.
-                // Snippets sits to the LEFT of the clear-context ring, which
-                // leaves the ring exactly where it has always been: it is
-                // pressed by muscle memory, and the new control should be the
-                // one that has to be found.
+                // Write with AI, Symbols and Snippets, parked at the right end
+                // of the suggestion bar: big, easy targets (the full pill
+                // height).  Hidden when suggestions are off (the bar collapses
+                // to zero height anyway; the title bar carries twins).
+                // They live in one Row anchored to the right, so the reserve
+                // `computeFit` subtracts is the width of a thing that exists
+                // rather than a number kept in step by hand.  Snippets is the
+                // rightmost; a new control goes first in the Row, so the ones
+                // pressed from muscle memory keep their places.
                 Row {
                     id: predBarButtons
                     anchors.right: parent.right
@@ -3676,81 +3841,6 @@ Window {
                     }
 
                     Behavior on color { ColorAnimation { duration: 100 } }
-                }
-
-                Comp.BarButton {
-                    id: clearCtxPill
-                    objectName: "clearContextButton"
-                    targetId: root.scanBarId(root.barIndexClear)
-                    scanName: qsTr("Clear suggestion context")
-                    onActivated: root.clearSuggestionContext()
-                    width: predBar.predPillHeight
-                    height: predBar.predPillHeight
-                    radius: width / 2
-                    color: clearCtxBtn.containsMouse ? Qt.lighter(root.themeKeyColor, 1.3)
-                                                     : Qt.rgba(0, 0, 0, 0.18)
-                    border.color: clearCtxBtn.containsMouse ? root.themeAccent
-                                                            : Qt.rgba(1, 1, 1, 0.18)
-                    border.width: 1
-
-                    ToolTip.visible: clearCtxBtn.containsMouse
-                    ToolTip.text: qsTr("Clear suggestion context")
-                    ToolTip.delay: 400
-
-                    // Feather's "rotate-ccw", drawn from its published
-                    // path data rather than typeset as a glyph.
-                    //
-                    // The glyph it replaces was "⟲" in a Text with
-                    // anchors.centerIn, which centres the text *item* while
-                    // the ink inside it sits wherever the font puts it: the
-                    // ring the eye reads sat down-and-right of the circle it
-                    // lives on, with the glyph's tail hanging out to the
-                    // left.  Same lesson as the padlock badge that came off
-                    // the keycaps -- any glyph small enough to be an icon is
-                    // at the mercy of the host font.
-                    //
-                    // Drawn on a Canvas via ctx.path, which takes SVG path
-                    // data directly.  That is deliberate: QtQuick.Shapes or
-                    // QtSvg would render it just as well and would each add
-                    // a QML module the frozen build has to carry, where a
-                    // missing module does not degrade -- it fails Main.qml
-                    // and ships as a blank keyboard.
-                    //
-                    // Feather rotate-ccw, MIT, (c) 2013-2023 Cole Bemis.
-                    // See THIRD_PARTY_NOTICES.md.  Verbatim from the 24x24
-                    // source, with the polyline written as an equivalent
-                    // path; keep them that way so the icon can be diffed
-                    // against upstream.
-                    //
-                    // Drawn through the shared StrokeIcon rather than a
-                    // Canvas of its own.  That component was written for the
-                    // snippets window as a generalisation of exactly this
-                    // routine and then this copy was left behind, so the
-                    // invalidation bug StrokeIcon's own comment records
-                    // could have happened twice.
-                    Comp.StrokeIcon {
-                        anchors.fill: parent
-                        paths: ["M1 4 L1 10 L7 10",
-                                "M3.51 15a9 9 0 1 0 2.13-9.36L1 10"]
-                        boxFraction: 0.70
-                        // The composition is not centred in its own viewBox:
-                        // the corner arrow sits outside the ring at the top
-                        // left, which puts the ink's centre one unit to the
-                        // left of the box's.  Measured, not guessed.
-                        inkOffsetX: 1
-                        ink: clearCtxBtn.containsMouse ? root.themeTextColor : "#bbb"
-                    }
-
-                    MouseArea {
-                        id: clearCtxBtn
-                        anchors.fill: parent
-                        hoverEnabled: true
-                        cursorShape: Qt.PointingHandCursor
-                        onClicked: clearCtxPill.activated()
-                    }
-
-                    Behavior on color { ColorAnimation { duration: 100 } }
-                    Behavior on border.color { ColorAnimation { duration: 100 } }
                 }
                 }
 
@@ -4389,7 +4479,7 @@ Window {
             // start.  Word-only, no icons: every glyph small enough to sit in
             // a menu row is at the mercy of the host emoji font, which on
             // Windows renders in colour and ignores the ink it is given (see
-            // the lock badge and the clear-context ring).
+            // the lock badge).
             readonly property var actions: [
                 { action: "move", label: qsTr("Move"), gapAbove: false, destructive: false },
                 { action: "minimize", label: qsTr("Minimize"), gapAbove: false, destructive: false },
@@ -5267,56 +5357,6 @@ Window {
             }
         }
 
-        // "Context cleared" confirmation toast, fired from the title-bar
-        // ⟲ button.  Mirrors editSavedToast's pattern: non-modal, centered
-        // near the top, auto-closes after a short dwell.
-        Popup {
-            id: contextClearedToast
-            parent: Overlay.overlay
-            x: (root.width - width) / 2
-            y: 36
-            width: 150
-            height: 32
-            modal: false
-            dim: false
-            closePolicy: Popup.NoAutoClose
-
-            background: Rectangle {
-                color: "#1e2e3e"
-                border.color: "#4a8"
-                border.width: 1
-                radius: 8
-            }
-
-            contentItem: Row {
-                spacing: 6
-                Text {
-                    text: "⟲"
-                    color: "#6cf"
-                    font.pixelSize: 14
-                    font.weight: Font.Bold
-                    anchors.verticalCenter: parent.verticalCenter
-                }
-                Text {
-                    text: "Context cleared"
-                    color: "#cef"
-                    font.pixelSize: 13
-                    anchors.verticalCenter: parent.verticalCenter
-                }
-            }
-
-            Timer {
-                id: contextClearedToastTimer
-                interval: 1400
-                onTriggered: contextClearedToast.close()
-            }
-
-            function flash() {
-                open()
-                contextClearedToastTimer.restart()
-            }
-        }
-
         // "Save this to Snippets?" offer, raised by the bridge when a
         // just-typed email / phone / address looks worth keeping.
         //
@@ -6075,6 +6115,10 @@ Window {
                     if (root.settingsReturnView !== "") {
                         settingsPanel.currentView = root.settingsReturnView
                         root.settingsReturnView = ""
+                        if (root.settingsScrollToHistory) {
+                            root.settingsScrollToHistory = false
+                            settingsPanel.showDictationHistory()
+                        }
                     } else {
                         settingsPanel.resetToHome()
                     }
@@ -6261,6 +6305,19 @@ Window {
                             dictationErrorToast.flash(qsTr("Could not save that style"))
                         }
                     }
+                } else if (setting === "dictationSpeechNotes") {
+                    if (keyboard) {
+                        if (keyboard.setDictationSpeechNotes(value)) {
+                            editSavedToast.flash()
+                            root.refreshDictation(true)
+                        } else {
+                            dictationErrorToast.flash(qsTr("Could not save that note"))
+                        }
+                    }
+                } else if (setting === "dictationHistoryLimit") {
+                    if (keyboard) { keyboard.setDictationHistoryLimit(value); root.refreshDictation(true) }
+                } else if (setting === "dictationAutoCopy") {
+                    if (keyboard) { keyboard.setDictationAutoCopy(value); root.refreshDictation(true) }
                 } else if (setting === "dictationHistoryEnabled") {
                     if (keyboard) { keyboard.setDictationHistoryEnabled(value); root.refreshDictation(true) }
                 } else if (setting === "dictationHistoryPlay") {
@@ -6276,10 +6333,17 @@ Window {
                 } else if (setting === "dictationHistoryReprocess") {
                     if (keyboard && !keyboard.reprocessDictationHistory(value))
                         dictationErrorToast.flash(qsTr("Could not reprocess that entry"))
+                } else if (setting === "dictationHistoryMore") {
+                    settingsPanel.dictationHistoryShown += settingsPanel.dictationHistoryPageSize
+                    root.refreshDictationHistory()
                 } else if (setting === "dictationHistoryDelete") {
                     if (keyboard) keyboard.deleteDictationHistory(value)
                 } else if (setting === "dictationHistoryClear") {
                     if (keyboard) keyboard.clearDictationHistory()
+                } else if (setting === "dictationHistoryOpenFolder") {
+                    // Silent on success: the folder opening is its own feedback.
+                    if (keyboard && !keyboard.openDictationHistoryFolder())
+                        dictationErrorToast.flash(qsTr("Could not open the history folder"))
                 } else if (setting === "dictationModel") {
                     if (keyboard) { keyboard.setDictationModel(value); root.refreshDictation(true) }
                 } else if (setting === "dictationLanguage") {
@@ -6296,6 +6360,11 @@ Window {
                 } else if (setting === "dictationStreamInserts") {
                     if (keyboard) {
                         keyboard.setDictationStreamInserts(value)
+                        root.refreshDictation(true)
+                    }
+                } else if (setting === "dictationTypeIntoApp") {
+                    if (keyboard) {
+                        keyboard.setDictationTypeIntoApp(value)
                         root.refreshDictation(true)
                     }
                 } else if (setting === "dictationKeyterms") {

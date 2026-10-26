@@ -122,7 +122,8 @@ one button to two to three and each time the formula was re-derived by hand;
 the reserve is what stops a prediction pill rendering underneath a control,
 so a reserve that is merely near the truth is the bug the property exists to
 prevent. The new button is the **first** child of the right-anchored Row, so
-Snippets and the clear-context ring do not move.
+Snippets does not move. (The clear-context ring that sat to its right was
+removed 2026-10-26; the Row now holds Write, Symbols and Snippets.)
 
 Guarded by `tests/test_qml_symbols.py`, `tests/test_glyphs.py`, and
 `tests/test_keyboard_bridge.py::TestTypingAGlyphFromThePicker`.

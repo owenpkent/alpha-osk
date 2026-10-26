@@ -68,6 +68,15 @@ MODELS: tuple[tuple[str, str], ...] = (
     ("nova-2", "Nova 2, previous generation"),
 )
 
+#: Checked 2026-10-26 against
+#: https://developers.deepgram.com/docs/models-languages-overview and
+#: https://developers.deepgram.com/docs/language.  Those pages give one
+#: language table per model and do not split streaming from pre-recorded
+#: (the feature header reads "Pre-recorded Streaming"), so a language is
+#: listed only if both `MODELS` entries offer it, which means a saved
+#: model/language pair can never mismatch.  Left out: Arabic (Nova-3 only,
+#: not listed for Nova-2) and Traditional Chinese (`zh-TW`, Nova-3 is
+#: monolingual only).  `zh` is Mandarin, Simplified.
 LANGUAGES: tuple[tuple[str, str], ...] = (
     ("en", "English"),
     ("en-GB", "English (UK)"),
@@ -79,6 +88,16 @@ LANGUAGES: tuple[tuple[str, str], ...] = (
     ("nl", "Dutch"),
     ("hi", "Hindi"),
     ("ja", "Japanese"),
+    ("ko", "Korean"),
+    ("zh", "Chinese (Mandarin)"),
+    ("ru", "Russian"),
+    ("uk", "Ukrainian"),
+    ("pl", "Polish"),
+    ("tr", "Turkish"),
+    ("sv", "Swedish"),
+    ("da", "Danish"),
+    ("no", "Norwegian"),
+    ("fi", "Finnish"),
     ("multi", "Multilingual"),
 )
 
@@ -94,6 +113,19 @@ NUMBER_FORMATS: tuple[tuple[str, str], ...] = (
 #: with AI" request.  A paragraph or two; the cap keeps a pasted document
 #: out of every request (and out of the bill).
 MAX_STYLE_LEN = 2000
+
+#: How the user speaks (names, slurred sounds, repeated phrases), sent with
+#: every cleanup and Write with AI request.  Shorter than the style cap: it
+#: is a list of habits, not a voice, and it rides on every cleanup run, the
+#: most frequent request, so each extra character is paid for often.
+MAX_SPEECH_NOTES_LEN = 1000
+
+#: Storage budgets for dictation history, in megabytes; 0 is "No limit"
+#: (only the entry ceiling in `history.py` then bounds it).  200 is the default
+#: because it is the fixed audio cap the store had before the choice existed,
+#: so nobody's history changes size on upgrade.
+HISTORY_LIMITS_MB: tuple[int, ...] = (50, 100, 200, 500, 0)
+DEFAULT_HISTORY_LIMIT_MB = 200
 
 #: Wall-clock ceiling on one dictation run, in seconds.  Not a silence
 #: detector: it is the backstop for a microphone left live by a click that
@@ -227,6 +259,21 @@ def _clean_style(raw: Any) -> str:
     return kept.strip()[:MAX_STYLE_LEN]
 
 
+def _clean_speech_notes(raw: Any) -> str:
+    """Speech notes with control characters removed, newlines kept."""
+    if not isinstance(raw, str):
+        return ""
+    kept = "".join(ch for ch in raw if ch == chr(10) or ch.isprintable())
+    return kept.strip()[:MAX_SPEECH_NOTES_LEN]
+
+
+def clean_history_limit(raw: Any) -> int:
+    """A history budget in MB: one of the offered choices, else the default."""
+    if isinstance(raw, bool) or not isinstance(raw, int) or raw not in HISTORY_LIMITS_MB:
+        return DEFAULT_HISTORY_LIMIT_MB
+    return raw
+
+
 def clean_pasted_key(raw: str) -> str:
     """A pasted key with its whitespace removed and a double paste undone.
 
@@ -310,6 +357,11 @@ class DictationConfig:
     #: When off, the transcript accumulates in the suggestion bar and is
     #: inserted in one go when the user stops.
     stream_inserts: bool = True
+    #: Type the words into the focused app at all.  Off, a run is held
+    #: back and goes only to the bar, the clipboard (with `auto_copy`)
+    #: and history: for an app that mangles synthesized keys, or when
+    #: the words are meant for somewhere else.
+    type_into_app: bool = True
     #: Anthropic key for AI cleanup and Write with AI.  Same handling as
     #: ``api_key`` (clear in memory, DPAPI on disk, never logged), and it
     #: is a separate credential for a separate third party, so it has its
@@ -322,9 +374,17 @@ class DictationConfig:
     writing_enabled: bool = False
     #: The user's own description of their voice, for Write with AI.
     writing_style: str = ""
+    #: How the user speaks, for cleanup and Write with AI.
+    speech_notes: str = ""
+    #: Megabytes of history (recordings plus index) kept; oldest go first.
+    history_limit_mb: int = DEFAULT_HISTORY_LIMIT_MB
     #: Keep the last few runs (text and audio) so a lost sentence can be
     #: copied back out.  On by default: the point is recovery.
     history_enabled: bool = True
+    #: Put each finished dictation on the system clipboard, so the words are
+    #: one paste away when the app that was focused swallowed them.  On by
+    #: default; the bar shows a "Copied" badge only when the copy worked.
+    auto_copy: bool = True
 
     # Hand-written rather than dataclass-generated.  A generated repr puts
     # the key into every log line, f-string and traceback that formats this
@@ -339,9 +399,9 @@ class DictationConfig:
         for f in dataclass_fields(self):
             if f.name in ("api_key", "anthropic_key"):
                 parts.append(f"{f.name}={'<set>' if getattr(self, f.name) else '<unset>'}")
-            elif f.name == "writing_style":
-                # Prose about the user's voice; length only, like a transcript.
-                parts.append(f"writing_style=<{len(self.writing_style)} chars>")
+            elif f.name in ("writing_style", "speech_notes"):
+                # Prose about the user; length only, like a transcript.
+                parts.append(f"{f.name}=<{len(getattr(self, f.name))} chars>")
             else:
                 parts.append(f"{f.name}={getattr(self, f.name)!r}")
         return f"{type(self).__name__}({', '.join(parts)})"
@@ -420,6 +480,7 @@ class DictationConfig:
         )
         cfg.keyterms = _clean_keyterms(data.get("keyterms"))
         cfg.stream_inserts = bool(data.get("stream_inserts", True))
+        cfg.type_into_app = bool(data.get("type_into_app", True))
         cfg.cleanup_enabled = bool(data.get("cleanup_enabled", False))
         number_format = data.get("number_format")
         cfg.number_format = (
@@ -429,7 +490,10 @@ class DictationConfig:
         )
         cfg.writing_enabled = bool(data.get("writing_enabled", False))
         cfg.writing_style = _clean_style(data.get("writing_style"))
+        cfg.speech_notes = _clean_speech_notes(data.get("speech_notes"))
+        cfg.history_limit_mb = clean_history_limit(data.get("history_limit_mb"))
         cfg.history_enabled = bool(data.get("history_enabled", True))
+        cfg.auto_copy = bool(data.get("auto_copy", True))
         return cfg
 
     def save(self, path: Path | None = None) -> bool:
@@ -445,6 +509,7 @@ class DictationConfig:
             "silence_seconds": self.silence_seconds,
             "keyterms": self.keyterms[:MAX_KEYTERMS],
             "stream_inserts": self.stream_inserts,
+            "type_into_app": self.type_into_app,
         }
         payload.update(
             {
@@ -452,7 +517,10 @@ class DictationConfig:
                 "number_format": self.number_format,
                 "writing_enabled": self.writing_enabled,
                 "writing_style": self.writing_style[:MAX_STYLE_LEN],
+                "speech_notes": self.speech_notes[:MAX_SPEECH_NOTES_LEN],
+                "history_limit_mb": self.history_limit_mb,
                 "history_enabled": self.history_enabled,
+                "auto_copy": self.auto_copy,
             }
         )
         _store_secret(payload, "api_key", "key_protected", self.api_key)

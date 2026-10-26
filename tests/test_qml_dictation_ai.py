@@ -38,6 +38,7 @@ from tests.qt_settings_scope import TEST_APP, TEST_ORG  # noqa: E402
 from tests.test_qml_dictation import QML_MAIN  # noqa: E402
 from tests.test_qml_settings_panel import (  # noqa: E402
     OVERFLOW_TOLERANCE_PX,
+    SETTINGS_WINDOW_TITLE,
     _find_settings_panel,
     _max_right_edge,
     _open_settings_window,
@@ -71,8 +72,12 @@ class FakeHistory:
     def __init__(self, entries):
         self._entries = list(entries)
 
-    def entries(self):
-        return list(self._entries)
+    def entries(self, limit=None):
+        self.page_reads = getattr(self, "page_reads", 0) + 1
+        return list(self._entries[: None if limit is None else limit])
+
+    def count(self):
+        return len(self._entries)
 
     def delete(self, entry_id):
         self.deleted = getattr(self, "deleted", [])
@@ -82,6 +87,9 @@ class FakeHistory:
 
     def get(self, entry_id):
         return next((e for e in self._entries if e["id"] == entry_id), None)
+
+    def usage_bytes(self):
+        return 0
 
 
 @pytest.fixture
@@ -214,21 +222,21 @@ class TestTheWriteButtonSitsInTheBar:
         root, _, bridge = qml_root
         row = _child(root, "predictionRow")
         base = _evaluate(row, "predBar.predButtonCount")
-        reserve_before = _evaluate(row, "predBar.clearCtxReserve")
+        reserve_before = _evaluate(row, "predBar.rightButtonsReserve")
         _configure(root, bridge)
         assert _evaluate(row, "predBar.predButtonCount") == base + 1
-        assert _evaluate(row, "predBar.clearCtxReserve") > reserve_before
+        assert _evaluate(row, "predBar.rightButtonsReserve") > reserve_before
 
     def test_the_button_is_inside_the_right_hand_row_and_first(self, qml_root):
         root, _, bridge = qml_root
         _configure(root, bridge)
         write = _child(root, "writeWithAiBarButton")
         symbols = _child(root, "symbolsBarButton")
-        clear = _child(root, "clearContextButton")
+        snippets = _child(root, "snippetsBarButton")
         scene = root.property("contentItem")
         w = write.mapToItem(scene, 0, 0).x()
         assert w + write.width() <= symbols.mapToItem(scene, 0, 0).x() + 1
-        assert w < clear.mapToItem(scene, 0, 0).x()
+        assert w < snippets.mapToItem(scene, 0, 0).x()
 
 
 class TestTheTitleBarTwin:
@@ -696,3 +704,113 @@ class TestTheHistoryList:
         worst = _max_right_edge(panel, window.property("contentItem"))
         assert worst <= window.width() + SETTINGS_WIDTH_SLACK
         assert _real_warnings(warnings) == []
+
+
+def _many(n: int) -> list[dict]:
+    return [
+        {
+            "id": f"{i:016x}",
+            "created": "2026-10-20T10:00:00+00:00",
+            "purpose": "dictate",
+            "raw": f"raw {i}",
+            "result": f"result {i}",
+            "cleaned": False,
+            "seconds": 1.0,
+            "hasAudio": False,
+        }
+        for i in range(n)
+    ]
+
+
+class TestTheHistoryIsLazyAndPaged:
+    """A large store must cost nothing while Settings is closed, and only a
+    page of delegates while it is open (review of #221: 5000 entries stalled
+    the UI thread for seconds on every finished run)."""
+
+    def _setup(self, qml_root, n=300):
+        root, warnings, bridge = qml_root
+        _configure(root, bridge)
+        store = FakeHistory(_many(n))
+        bridge._dictation_history = store
+        store.page_reads = 0
+        return root, warnings, bridge, store
+
+    def test_a_change_with_settings_closed_reads_and_builds_nothing(self, qml_root):
+        root, warnings, bridge, store = self._setup(qml_root)
+        bridge.dictationHistoryChanged.emit()
+        QCoreApplication.processEvents()
+        _call(root, "root.refreshDictation(false)")
+        assert store.page_reads == 0
+        assert _evaluate(root, "settingsPanel.dictationHistory.length") == 0
+        assert _real_warnings(warnings) == []
+
+    def test_closing_settings_drops_the_delegates(self, qml_root):
+        root, _, _, _ = self._setup(qml_root)
+        window, panel = _dictation_panel(root)
+        _settle_view(window, panel, "dictation")
+        assert len(_by_name(panel, "dictationHistoryRow")) == 20
+        root.setProperty("showSettings", False)
+        _wait_ms(150)
+        assert _by_name(panel, "dictationHistoryRow") == []
+        assert _evaluate(root, "settingsPanel.dictationHistory.length") == 0
+
+    def test_opening_the_page_shows_one_page_and_show_more_grows_it(self, qml_root):
+        root, warnings, _, _ = self._setup(qml_root)
+        window, panel = _dictation_panel(root)
+        _settle_view(window, panel, "dictation")
+        assert len(_by_name(panel, "dictationHistoryRow")) == 20
+        more = _by_name(panel, "dictationHistoryShowMore")[0]
+        assert more.property("visible") is True
+        assert more.property("text") == "Show 20 more (280 left)"
+        _call(more, "clicked()")
+        _wait_ms(150)
+        assert len(_by_name(panel, "dictationHistoryRow")) == 40
+        assert more.property("text") == "Show 20 more (260 left)"
+        assert _real_warnings(warnings) == []
+
+    def test_the_button_hides_when_everything_shows(self, qml_root):
+        root, _, _, _ = self._setup(qml_root, n=25)
+        window, panel = _dictation_panel(root)
+        _settle_view(window, panel, "dictation")
+        more = _by_name(panel, "dictationHistoryShowMore")[0]
+        assert more.property("text") == "Show 5 more (5 left)"
+        _call(more, "clicked()")
+        _wait_ms(150)
+        assert len(_by_name(panel, "dictationHistoryRow")) == 25
+        assert more.property("visible") is False
+
+    def test_a_row_action_still_works_by_id_past_the_first_page(self, qml_root):
+        root, _, _, store = self._setup(qml_root)
+        window, panel = _dictation_panel(root)
+        _settle_view(window, panel, "dictation")
+        _call(_by_name(panel, "dictationHistoryShowMore")[0], "clicked()")
+        _wait_ms(150)
+        row = _by_name(panel, "dictationHistoryRow")[25]
+        button = _by_name(row, "dictationHistoryDelete")[0]
+        _call(button, "clicked()")
+        QCoreApplication.processEvents()
+        _call(button, "clicked()")
+        QCoreApplication.processEvents()
+        assert store.deleted == [f"{25:016x}"]
+        # The page size survives the refresh the delete causes.
+        _wait_ms(150)
+        assert len(_by_name(panel, "dictationHistoryRow")) == 40
+
+    def test_the_history_bar_button_lands_on_history_with_rows(self, qml_root):
+        root, _, _, _ = self._setup(qml_root)
+        _call(root, "root.openDictationHistory()")
+        _wait_ms(300)
+        window = next(w for w in QGuiApplication.allWindows() if w.title() == SETTINGS_WINDOW_TITLE)
+        panel = _find_settings_panel(window.property("contentItem"))
+        assert panel.property("currentView") == "dictation"
+        assert len(_by_name(panel, "dictationHistoryRow")) == 20
+
+    def test_a_change_while_open_refreshes_the_page(self, qml_root):
+        root, _, bridge, store = self._setup(qml_root, n=3)
+        window, panel = _dictation_panel(root)
+        _settle_view(window, panel, "dictation")
+        assert len(_by_name(panel, "dictationHistoryRow")) == 3
+        store._entries = _many(5)
+        bridge.dictationHistoryChanged.emit()
+        _wait_ms(150)
+        assert len(_by_name(panel, "dictationHistoryRow")) == 5
