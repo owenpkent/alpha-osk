@@ -4,6 +4,8 @@ All notable changes to Alpha-OSK are documented in this file.
 
 ## [Unreleased]
 
+## [1.9.3] (2026-10-26)
+
 ### Added
 - **How I Speak** (*Settings > Dictation > AI cleanup*): describe your own speech (names, slurred sounds, phrases you repeat) and Claude uses it to read the transcript, in AI cleanup, Reprocess and Write with AI. It is sent to Anthropic with each of those requests.
 - **Choose how much dictation history to keep.** *Settings > Dictation > History* offers 50, 100, 200 or 500 MB, or No limit, and shows how much is in use. The oldest runs go first; the 20-run cap is gone (the ceiling is now 5000 runs).
