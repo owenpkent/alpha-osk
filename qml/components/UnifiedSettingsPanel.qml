@@ -130,6 +130,7 @@ Item {
     property int dictationSilenceSeconds: 4
     property string dictationKeyterms: ""
     property bool dictationStreamInserts: true
+    property bool dictationTypeIntoApp: true
     // AI cleanup / Write with AI / history (Anthropic-backed).  Same
     // arrangement: the parent pulls them from the bridge and hands them down;
     // the key itself is never here, only whether one is stored and a mask.
@@ -2691,10 +2692,20 @@ Item {
                                 }
 
                                 SettingsToggle {
+                                    objectName: "dictationTypeIntoAppToggle"
+                                    Layout.fillWidth: true
+                                    text: "Type Into the App"
+                                    description: "Off: the words only show in the bar, go to the clipboard and History"
+                                    enabled: unifiedSettings.dictationEnabled
+                                    checked: unifiedSettings.dictationTypeIntoApp
+                                    onToggled: function(c) { unifiedSettings.settingChanged("dictationTypeIntoApp", c) }
+                                }
+
+                                SettingsToggle {
                                     Layout.fillWidth: true
                                     text: "Type As You Speak"
                                     description: "Insert each phrase as it is recognised, instead of all at once when you stop"
-                                    enabled: unifiedSettings.dictationEnabled
+                                    enabled: unifiedSettings.dictationEnabled && unifiedSettings.dictationTypeIntoApp
                                     checked: unifiedSettings.dictationStreamInserts
                                     onToggled: function(c) { unifiedSettings.settingChanged("dictationStreamInserts", c) }
                                 }
@@ -3605,14 +3616,21 @@ Item {
                                     }
                                 }
 
-                                // Two-step, like Snippets delete: the first tap
-                                // asks, the second does it.
+                                // Clear all is two-step, like Snippets delete:
+                                // the first tap asks, the second does it.
                                 Flow {
                                     Layout.fillWidth: true
                                     spacing: 6
-                                    visible: unifiedSettings.dictationHistory.length > 0
 
+                                    // The folder holds the WAV recordings too,
+                                    // so a run can be kept or shared as a file.
                                     SettingsButton {
+                                        objectName: "dictationHistoryOpenFolder"
+                                        text: "Open Folder"
+                                        onClicked: unifiedSettings.settingChanged("dictationHistoryOpenFolder", true)
+                                    }
+                                    SettingsButton {
+                                        visible: unifiedSettings.dictationHistory.length > 0
                                         objectName: "dictationHistoryClearAll"
                                         text: unifiedSettings.dictationHistoryConfirm === "*"
                                               ? "Yes, delete everything" : "Clear all"

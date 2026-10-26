@@ -6,6 +6,8 @@ All notable changes to Alpha-OSK are documented in this file.
 
 ### Added
 - **A History button beside the microphone** opens Settings on the Dictation page, scrolled to your saved runs. It has a title-bar copy for when suggestions are off.
+- **Dictation can stop typing into the app.** *Settings > Dictation > Type Into the App*, on by default. Off, a run's words only show in the bar, go to the clipboard and are kept in History.
+- **Open Folder in Dictation History** opens the folder that holds the saved runs and their recordings.
 - **A finished dictation shows in the bar and is copied to the clipboard.** When a dictation run ends, its whole text shows where the suggestions are, with a "Copied" badge, until your next key or 8 seconds. Copying is on by default (*Settings > Dictation > Copy Finished Dictation*) and is skipped in privacy mode. Windows clipboard history may keep what is copied.
 
 ### Changed

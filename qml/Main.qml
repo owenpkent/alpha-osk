@@ -1327,6 +1327,7 @@ Window {
         settingsPanel.dictationSilenceSeconds = d.silenceSeconds
         settingsPanel.dictationKeyterms = d.keyterms
         settingsPanel.dictationStreamInserts = d.streamInserts
+        settingsPanel.dictationTypeIntoApp = d.typeIntoApp
         settingsPanel.dictationHasAnthropicKey = d.hasAnthropicKey
         settingsPanel.dictationMaskedAnthropicKey = d.maskedAnthropicKey
         settingsPanel.dictationCleanupEnabled = d.cleanupEnabled
@@ -6306,6 +6307,10 @@ Window {
                     if (keyboard) keyboard.deleteDictationHistory(value)
                 } else if (setting === "dictationHistoryClear") {
                     if (keyboard) keyboard.clearDictationHistory()
+                } else if (setting === "dictationHistoryOpenFolder") {
+                    // Silent on success: the folder opening is its own feedback.
+                    if (keyboard && !keyboard.openDictationHistoryFolder())
+                        dictationErrorToast.flash(qsTr("Could not open the history folder"))
                 } else if (setting === "dictationModel") {
                     if (keyboard) { keyboard.setDictationModel(value); root.refreshDictation(true) }
                 } else if (setting === "dictationLanguage") {
@@ -6322,6 +6327,11 @@ Window {
                 } else if (setting === "dictationStreamInserts") {
                     if (keyboard) {
                         keyboard.setDictationStreamInserts(value)
+                        root.refreshDictation(true)
+                    }
+                } else if (setting === "dictationTypeIntoApp") {
+                    if (keyboard) {
+                        keyboard.setDictationTypeIntoApp(value)
                         root.refreshDictation(true)
                     }
                 } else if (setting === "dictationKeyterms") {

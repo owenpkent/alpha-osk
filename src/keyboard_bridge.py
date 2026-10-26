@@ -4869,6 +4869,7 @@ class KeyboardBridge(QObject):
             "silenceSeconds": cfg.silence_seconds,
             "keyterms": "\n".join(cfg.keyterms),
             "streamInserts": cfg.stream_inserts,
+            "typeIntoApp": cfg.type_into_app,
             "hasAnthropicKey": cfg.has_anthropic_key,
             "maskedAnthropicKey": cfg.masked_anthropic_key(),
             "cleanupEnabled": cfg.cleanup_enabled,
@@ -5072,6 +5073,23 @@ class KeyboardBridge(QObject):
         self._history_store().clear()
         self.dictationHistoryChanged.emit()
 
+    @Slot(result=bool)
+    def openDictationHistoryFolder(self) -> bool:
+        """Open the history folder (index plus WAV files) in the file manager.
+
+        Lazy imports for the same reason `openLogFolder` has them.
+        """
+        try:
+            from PySide6.QtCore import QUrl
+            from PySide6.QtGui import QDesktopServices
+        except ImportError:  # no GUI stack on this host
+            return False
+        try:
+            folder = str(self._history_store().directory())
+        except OSError:
+            return False
+        return bool(QDesktopServices.openUrl(QUrl.fromLocalFile(folder)))
+
     def _ensure_player(self) -> Any:
         """The playback pair, built on first Play.
 
@@ -5132,6 +5150,11 @@ class KeyboardBridge(QObject):
     @Slot(bool)
     def setDictationStreamInserts(self, stream: bool) -> None:
         self._dictation_config.stream_inserts = bool(stream)
+        self._dictation_config.save()
+
+    @Slot(bool)
+    def setDictationTypeIntoApp(self, enabled: bool) -> None:
+        self._dictation_config.type_into_app = bool(enabled)
         self._dictation_config.save()
 
     @Slot(str)

@@ -728,3 +728,11 @@ Click the mic at the **left end of the suggestion bar**, speak, click again. No 
 - **No automatic reconnect, on purpose.** Audio spoken during a gap is gone, so a silent reconnect yields a transcript with an invisible hole: words the user said, believes they said, and cannot see. A drop ends the run and says so. Errors are mapped to sentences naming a next step (`_friendly_error`); nobody can act on `QAbstractSocket::RemoteHostClosedError`.
 - **Nothing in `src/dictation/` logs transcript content**, same rule as the rest of the keystroke path.
 - Deepgram parameters were taken from MacroVox's production set: `model`/`punctuate`/`smart_format`/`interim_results`, with **`keyterm`** for custom vocabulary (nova-3 rejects the legacy `keywords`).
+
+## Typing into the app is optional
+
+`DictationConfig.type_into_app` (default on, *Settings -> Dictation -> Type Into the App*). Off, `start()` forces `_accumulate` and the controller's `_deliver` skips `finalReady` for every dictate finish path, so nothing is typed; `runFinished` still fires, so the run's text reaches the bar, the clipboard (with `auto_copy`) and History. Like `_accumulate` and `_polish`, it is decided once at `start()` (`_type_into_app`): switching it mid-run never splits a run. A failed cleanup then says "Kept as spoken." rather than "Inserted as spoken." Type As You Speak is disabled in Settings while it is off. Write with AI is unaffected: its draft is only ever inserted from the preview. Tests: `tests/test_dictation_ai.py::TestTypeIntoAppOff`.
+
+## Opening the history folder
+
+History's *Open Folder* calls `openDictationHistoryFolder()`, which creates `<config>/dictation_history/` if needed and opens it with `QDesktopServices`. QML never sees the path: the slot returns only whether it opened, and a failure shows a toast.

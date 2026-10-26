@@ -115,6 +115,12 @@ class DictationHistory:
     def _dir(self) -> Path:
         return self._explicit_dir if self._explicit_dir is not None else _root()
 
+    def directory(self) -> Path:
+        """The history folder, created if absent so it can be opened."""
+        directory = self._dir()
+        directory.mkdir(parents=True, exist_ok=True)
+        return directory
+
     def _index_path(self) -> Path:
         return self._dir() / "index.json"
 

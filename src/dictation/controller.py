@@ -149,6 +149,9 @@ class DictationController(QObject):
         #: write).  Decided with `_accumulate`, read with it, never the
         #: live config.
         self._polish = False
+        #: Whether a dictate run's words are typed (`finalReady`) at all.
+        #: Decided at `start` like `_accumulate`, which it forces on.
+        self._type_into_app = True
         self._record_history = False
         self._pcm = bytearray()
         self._pcm_cap = 0
@@ -247,7 +250,10 @@ class DictationController(QObject):
         # whole run to Claude and typed the result on top of the phrases
         # already on screen.
         self._polish = self._purpose == "write" or self._config.cleanup_ready
-        self._accumulate = self._polish or not self._config.stream_inserts
+        self._type_into_app = self._config.type_into_app
+        self._accumulate = (
+            self._polish or not self._config.stream_inserts or not self._type_into_app
+        )
         self._record_history = self._config.history_enabled
         self._run_text = ""
         self._pcm = bytearray()
@@ -517,7 +523,7 @@ class DictationController(QObject):
         self._set_state(DictationState.IDLE)
         self._record("dictate", text, text, cleaned=False)
         if self._accumulate:
-            self.finalReady.emit(text)
+            self._deliver(text)
         self._emit_run_finished(text)
         self._clear_run()
 
@@ -577,6 +583,11 @@ class DictationController(QObject):
         request.succeeded.connect(lambda result: self._on_polished(request, text, result))
         request.failed.connect(lambda reason: self._on_polish_failed(request, text, reason))
 
+    def _deliver(self, text: str) -> None:
+        """Type a held-back dictate run, unless typing into the app is off."""
+        if self._type_into_app:
+            self.finalReady.emit(text)
+
     def _emit_run_finished(self, text: str) -> None:
         """Announce the delivered text of a dictate run (never a write run)."""
         if self._purpose == "dictate" and text.strip():
@@ -600,7 +611,7 @@ class DictationController(QObject):
         if purpose == "write":
             self.draftReady.emit(result)
         else:
-            self.finalReady.emit(result)
+            self._deliver(result)
             self._emit_run_finished(result)
 
     def _on_polish_failed(self, request: ClaudeRequest, raw: str, reason: str) -> None:
@@ -631,9 +642,10 @@ class DictationController(QObject):
                     "Your spoken request is shown so you can copy it."
                 )
         else:
-            self.finalReady.emit(raw)
+            self._deliver(raw)
             self._emit_run_finished(raw)
-            self.errorRaised.emit(f"AI cleanup failed ({_reason(reason)}). Inserted as spoken.")
+            done = "Inserted as spoken." if self._type_into_app else "Kept as spoken."
+            self.errorRaised.emit(f"AI cleanup failed ({_reason(reason)}). {done}")
 
     def reprocess(self, entry_id: str) -> bool:
         """Re-run cleanup over a history entry's raw text.

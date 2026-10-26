@@ -310,6 +310,11 @@ class DictationConfig:
     #: When off, the transcript accumulates in the suggestion bar and is
     #: inserted in one go when the user stops.
     stream_inserts: bool = True
+    #: Type the words into the focused app at all.  Off, a run is held
+    #: back and goes only to the bar, the clipboard (with `auto_copy`)
+    #: and history: for an app that mangles synthesized keys, or when
+    #: the words are meant for somewhere else.
+    type_into_app: bool = True
     #: Anthropic key for AI cleanup and Write with AI.  Same handling as
     #: ``api_key`` (clear in memory, DPAPI on disk, never logged), and it
     #: is a separate credential for a separate third party, so it has its
@@ -424,6 +429,7 @@ class DictationConfig:
         )
         cfg.keyterms = _clean_keyterms(data.get("keyterms"))
         cfg.stream_inserts = bool(data.get("stream_inserts", True))
+        cfg.type_into_app = bool(data.get("type_into_app", True))
         cfg.cleanup_enabled = bool(data.get("cleanup_enabled", False))
         number_format = data.get("number_format")
         cfg.number_format = (
@@ -450,6 +456,7 @@ class DictationConfig:
             "silence_seconds": self.silence_seconds,
             "keyterms": self.keyterms[:MAX_KEYTERMS],
             "stream_inserts": self.stream_inserts,
+            "type_into_app": self.type_into_app,
         }
         payload.update(
             {

@@ -1154,6 +1154,33 @@ class TestBridgeHistory:
         assert bridge.copyDictationHistory("0" * 16) is False
         assert bridge.copyDictationHistory("../x") is False
 
+    def test_open_folder_opens_the_history_folder_even_before_the_first_run(
+        self, bridge: KeyboardBridge, tmp_path, monkeypatch
+    ):
+        opened: List[str] = []
+
+        class _FakeDesktopServices:
+            @staticmethod
+            def openUrl(url) -> bool:
+                opened.append(url.toLocalFile())
+                return True
+
+        monkeypatch.setattr("PySide6.QtGui.QDesktopServices", _FakeDesktopServices, raising=True)
+        folder = tmp_path / "bridge-history"
+        assert not folder.exists()
+        assert bridge.openDictationHistoryFolder() is True
+        assert folder.is_dir()
+        assert opened == [str(folder).replace("\\", "/")]
+
+    def test_open_folder_reports_a_failure(self, bridge: KeyboardBridge, monkeypatch):
+        class _FakeDesktopServices:
+            @staticmethod
+            def openUrl(url) -> bool:
+                return False
+
+        monkeypatch.setattr("PySide6.QtGui.QDesktopServices", _FakeDesktopServices, raising=True)
+        assert bridge.openDictationHistoryFolder() is False
+
     def test_delete_and_clear_signal_the_change(self, bridge: KeyboardBridge):
         changes: List[int] = []
         bridge.dictationHistoryChanged.connect(lambda: changes.append(1))
@@ -1231,6 +1258,74 @@ class TestBridgeHistory:
         bridge.playDictationHistory(self._seed(bridge))
         bridge.shutdown()
         assert player.stopped >= 1 and bridge._playing_id == ""
+
+
+class TestTypeIntoAppOff:
+    """With typing off, a dictate run types nothing, but still reaches the bar
+    and clipboard (`runFinished`) and history."""
+
+    def test_old_files_type_into_the_app(self, cfg_path: Path):
+        cfg_path.write_text(json.dumps({"enabled": True}), encoding="utf-8")
+        assert DictationConfig.load(cfg_path).type_into_app is True
+
+    def test_the_setting_round_trips_off(self, cfg_path: Path):
+        DictationConfig(type_into_app=False).save(cfg_path)
+        assert DictationConfig.load(cfg_path).type_into_app is False
+
+    def test_a_run_types_nothing_and_is_still_announced(self, qapp, monkeypatch, claude, history):
+        ctl = _make_controller(qapp, monkeypatch, claude, history, type_into_app=False)
+        spy = _Spy(ctl)
+        _speak(ctl, "first part", "second part")
+        assert spy.finals == []
+        assert spy.runs == ["first part second part"]
+        assert history.entries()[0]["result"] == "first part second part"
+
+    def test_a_cleaned_run_types_nothing(self, qapp, monkeypatch, claude, history):
+        ctl = _make_controller(
+            qapp,
+            monkeypatch,
+            claude,
+            history,
+            anthropic_key=ANTHROPIC,
+            cleanup_enabled=True,
+            type_into_app=False,
+        )
+        spy = _Spy(ctl)
+        _speak(ctl, "hello wurld")
+        claude.last.succeeded.emit("Hello world.")
+        assert spy.finals == []
+        assert spy.runs == ["Hello world."]
+
+    def test_a_failed_cleanup_says_kept_not_inserted(self, qapp, monkeypatch, claude, history):
+        ctl = _make_controller(
+            qapp,
+            monkeypatch,
+            claude,
+            history,
+            anthropic_key=ANTHROPIC,
+            cleanup_enabled=True,
+            type_into_app=False,
+        )
+        spy = _Spy(ctl)
+        _speak(ctl, "hello wurld")
+        claude.last.failed.emit("Claude is busy, try again.")
+        assert spy.finals == []
+        assert spy.runs == ["hello wurld"]
+        assert spy.errors and spy.errors[-1].endswith("Kept as spoken.")
+
+    def test_switching_it_off_mid_run_does_not_change_that_run(
+        self, qapp, monkeypatch, claude, history
+    ):
+        ctl = _make_controller(qapp, monkeypatch, claude, history)
+        spy = _Spy(ctl)
+        ctl.start()
+        _FakeStream.last.opened.emit()
+        _FakeStream.last.final.emit("typed already")
+        ctl._config.type_into_app = False
+        _FakeStream.last.final.emit("and this")
+        ctl.stop()
+        _FakeStream.last.closed.emit()
+        assert spy.finals == ["typed already", "and this"]
 
 
 class TestRunFinished:
