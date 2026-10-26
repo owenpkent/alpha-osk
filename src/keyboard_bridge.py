@@ -685,11 +685,10 @@ class KeyboardBridge(QObject):
     # "connecting", "finishing" and "polishing" all need to look busy
     # without looking like they are recording.
     dictationStateChanged = Signal(str)
-    # The revisable text for the phrase being spoken right now, shown
-    # live in the suggestion bar.  Empty whenever nothing is in flight.
-    # Finalised phrases leave this and are typed into the focused app,
-    # so it stays short by construction rather than by truncation.
-    dictationTranscriptChanged = Signal(str)
+    # The finished text of the last dictate run, or "" when none is on
+    # show (or the copy flag moved).  QML renders it in the bar where the
+    # pills are; no run previews words while it is being spoken.
+    dictationResultChanged = Signal()
     # Mic peak level, 0.0-1.0, for the button's live ring.  This is the
     # only feedback that the microphone is actually open.
     dictationLevelChanged = Signal(float)
@@ -2579,6 +2578,11 @@ class KeyboardBridge(QObject):
         copy: that hand-copying is exactly the drift this method exists
         to end.
         """
+        # Also the "a key was pressed" signal for the bar: a finished
+        # dictation's text yields to the pills on the next keystroke, and
+        # this is the one place every keystroke path (UIA Invoke included)
+        # already passes through.
+        self._clear_dictation_result()
         for name in names:
             if name in keep:
                 continue
@@ -2891,7 +2895,8 @@ class KeyboardBridge(QObject):
     def resetContext(self) -> None:
         """Full reset of typing state, for explicit user action only.
 
-        The clear-context ring.  It **delegates** rather than clearing
+        Formerly the clear-context button's slot (the button was removed
+        2026-10-26; tests still drive it).  It **delegates** rather than clearing
         the same fields itself, because the hand-written copy is exactly
         the parallel-blocks drift this file warns about for sticky
         modifiers, and it had already drifted in both directions: this
@@ -4617,7 +4622,8 @@ class KeyboardBridge(QObject):
                 history=self._history_store(),
             )
             controller.stateChanged.connect(self.dictationStateChanged)
-            controller.interimChanged.connect(self.dictationTranscriptChanged)
+            controller.stateChanged.connect(self._on_dictation_state)
+            controller.runFinished.connect(self._on_dictation_run_finished)
             controller.levelChanged.connect(self._on_dictation_level)
             controller.errorRaised.connect(self.dictationError)
             controller.finalReady.connect(self._insert_dictated_text)
@@ -4625,6 +4631,70 @@ class KeyboardBridge(QObject):
             controller.historyChanged.connect(self.dictationHistoryChanged)
             self._dictation = controller
         return self._dictation
+
+    # How long a finished run's text stays in the bar if no key comes first.
+    _DICTATION_RESULT_MS = 8000
+    # Class-level defaults, so a bridge built without __init__ (tests) and
+    # `_release_sticky_modifiers`, which runs on every keystroke, never meet
+    # a missing attribute.
+    _dictation_result_text = ""
+    _dictation_result_copied = False
+    _dictation_result_timer: Optional[QTimer] = None
+
+    def _get_dictation_result_text(self) -> str:
+        return self._dictation_result_text
+
+    def _get_dictation_result_copied(self) -> bool:
+        return self._dictation_result_copied
+
+    dictationResultText = Property(str, _get_dictation_result_text, notify=dictationResultChanged)
+    dictationResultCopied = Property(
+        bool, _get_dictation_result_copied, notify=dictationResultChanged
+    )
+
+    def _on_dictation_state(self, state: str) -> None:
+        # A new run supersedes the last one's text.
+        if state != "idle":
+            self._clear_dictation_result()
+
+    def _on_dictation_run_finished(self, text: str) -> None:
+        """Copy a finished dictate run and put its text in the bar.
+
+        Skipped in privacy mode: the words were typed (the user asked for
+        them) but they must not land on the clipboard or in the bar.  The
+        badge is true or absent: `copied` is the clipboard call's own result.
+        Nothing here logs the text.
+        """
+        if self._privacy_mode or not text.strip():
+            return
+        copied = self._dictation_config.auto_copy and self._copy_to_clipboard(text)
+        self._dictation_result_text = text
+        self._dictation_result_copied = copied
+        self.dictationResultChanged.emit()
+        timer = self._dictation_result_timer
+        if timer is None:
+            timer = QTimer(self)
+            timer.setSingleShot(True)
+            timer.setInterval(self._DICTATION_RESULT_MS)
+            timer.timeout.connect(self._clear_dictation_result)
+            self._dictation_result_timer = timer
+        timer.start()
+
+    def _clear_dictation_result(self) -> None:
+        """Take the finished text off the bar.  The one place it is cleared:
+        a key, the timeout, a new run and privacy mode all land here."""
+        if not self._dictation_result_text:
+            return
+        self._dictation_result_text = ""
+        self._dictation_result_copied = False
+        if self._dictation_result_timer is not None:
+            self._dictation_result_timer.stop()
+        self.dictationResultChanged.emit()
+
+    @Slot(bool)
+    def setDictationAutoCopy(self, enabled: bool) -> None:
+        self._dictation_config.auto_copy = bool(enabled)
+        self._dictation_config.save()
 
     def _history_store(self) -> DictationHistory:
         if self._dictation_history is None:
@@ -4809,6 +4879,7 @@ class KeyboardBridge(QObject):
             "writingEnabled": cfg.writing_enabled,
             "writingStyle": cfg.writing_style,
             "historyEnabled": cfg.history_enabled,
+            "autoCopy": cfg.auto_copy,
             "models": [{"id": m, "label": label} for m, label in dictation_config.MODELS],
             "languages": [{"id": c, "label": label} for c, label in dictation_config.LANGUAGES],
         }
@@ -5907,6 +5978,7 @@ class KeyboardBridge(QObject):
     def _enter_privacy_mode(self) -> None:
         """Scrub all buffers to prevent sensitive data from leaking to the model."""
         self._reset_typing_context()
+        self._clear_dictation_result()
         # A live dictation run is cancelled, not stopped: `cancel` drops
         # whatever the provider still owes us, so a run that was under way
         # when the caret landed on a password field cannot deliver one

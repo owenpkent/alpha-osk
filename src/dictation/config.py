@@ -325,6 +325,10 @@ class DictationConfig:
     #: Keep the last few runs (text and audio) so a lost sentence can be
     #: copied back out.  On by default: the point is recovery.
     history_enabled: bool = True
+    #: Put each finished dictation on the system clipboard, so the words are
+    #: one paste away when the app that was focused swallowed them.  On by
+    #: default; the bar shows a "Copied" badge only when the copy worked.
+    auto_copy: bool = True
 
     # Hand-written rather than dataclass-generated.  A generated repr puts
     # the key into every log line, f-string and traceback that formats this
@@ -430,6 +434,7 @@ class DictationConfig:
         cfg.writing_enabled = bool(data.get("writing_enabled", False))
         cfg.writing_style = _clean_style(data.get("writing_style"))
         cfg.history_enabled = bool(data.get("history_enabled", True))
+        cfg.auto_copy = bool(data.get("auto_copy", True))
         return cfg
 
     def save(self, path: Path | None = None) -> bool:
@@ -453,6 +458,7 @@ class DictationConfig:
                 "writing_enabled": self.writing_enabled,
                 "writing_style": self.writing_style[:MAX_STYLE_LEN],
                 "history_enabled": self.history_enabled,
+                "auto_copy": self.auto_copy,
             }
         )
         _store_secret(payload, "api_key", "key_protected", self.api_key)

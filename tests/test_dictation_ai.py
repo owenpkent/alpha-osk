@@ -68,6 +68,11 @@ class TestConfigAdditions:
         assert cfg.cleanup_enabled is False and cfg.number_format == "smart"
         assert cfg.writing_enabled is False and cfg.writing_style == ""
         assert cfg.history_enabled is True
+        assert cfg.auto_copy is True
+
+    def test_auto_copy_round_trips_off(self, cfg_path: Path):
+        DictationConfig(auto_copy=False).save(cfg_path)
+        assert DictationConfig.load(cfg_path).auto_copy is False
 
     def test_round_trip(self, cfg_path: Path):
         DictationConfig(
@@ -196,12 +201,14 @@ class _Spy:
         self.errors: List[str] = []
         self.states: List[str] = []
         self.interims: List[str] = []
+        self.runs: List[str] = []
         self.history_changes = 0
         ctl.finalReady.connect(self.finals.append)
         ctl.draftReady.connect(self.drafts.append)
         ctl.errorRaised.connect(self.errors.append)
         ctl.stateChanged.connect(self.states.append)
         ctl.interimChanged.connect(self.interims.append)
+        ctl.runFinished.connect(self.runs.append)
         ctl.historyChanged.connect(self._bump)
 
     def _bump(self) -> None:
@@ -915,6 +922,7 @@ class TestBridgeSettings:
             "writingEnabled",
             "writingStyle",
             "historyEnabled",
+            "autoCopy",
         ):
             assert key in data
         assert data["numberFormats"] == [
@@ -938,7 +946,9 @@ class TestBridgeSettings:
         bridge.setDictationWritingEnabled(True)
         assert bridge.setDictationWritingStyle("Plain\x00 and warm") is True
         bridge.setDictationHistoryEnabled(False)
+        bridge.setDictationAutoCopy(False)
         again = DictationConfig.load()
+        assert again.auto_copy is False
         assert again.anthropic_key == ANTHROPIC and again.cleanup_enabled is True
         assert again.number_format == "words" and again.writing_enabled is True
         assert again.writing_style == "Plain and warm" and again.history_enabled is False
@@ -1221,3 +1231,164 @@ class TestBridgeHistory:
         bridge.playDictationHistory(self._seed(bridge))
         bridge.shutdown()
         assert player.stopped >= 1 and bridge._playing_id == ""
+
+
+class TestRunFinished:
+    """`runFinished` carries the delivered text of a *dictate* run, once, after
+    the words were handed over; never for Write with AI, never for a cancel."""
+
+    @pytest.fixture
+    def writer(self, qapp, monkeypatch, claude, history):
+        return _make_controller(
+            qapp,
+            monkeypatch,
+            claude,
+            history,
+            anthropic_key=ANTHROPIC,
+            writing_enabled=True,
+        )
+
+    def test_a_streamed_run_announces_its_whole_text_once(self, qapp, monkeypatch, claude, history):
+        ctl = _make_controller(qapp, monkeypatch, claude, history)
+        spy = _Spy(ctl)
+        _speak(ctl, "first part", "second part")
+        assert spy.finals == ["first part", "second part"]
+        assert spy.runs == ["first part second part"]
+
+    def test_a_held_back_run_announces_after_the_insert(self, qapp, monkeypatch, claude, history):
+        ctl = _make_controller(qapp, monkeypatch, claude, history, stream_inserts=False)
+        order: List[str] = []
+        ctl.finalReady.connect(lambda _t: order.append("final"))
+        ctl.runFinished.connect(lambda _t: order.append("run"))
+        spy = _Spy(ctl)
+        _speak(ctl, "first part", "second part")
+        assert spy.runs == ["first part second part"]
+        assert order == ["final", "run"]
+
+    def test_a_cleaned_run_announces_the_cleaned_text(self, cleanup_ctl, claude):
+        spy = _Spy(cleanup_ctl)
+        _speak(cleanup_ctl, "hello wurld")
+        assert spy.runs == []  # Claude still has it
+        claude.last.succeeded.emit("Hello world.")
+        assert spy.finals == ["Hello world."]
+        assert spy.runs == ["Hello world."]
+
+    def test_a_failed_cleanup_announces_the_raw_words_that_were_inserted(self, cleanup_ctl, claude):
+        spy = _Spy(cleanup_ctl)
+        _speak(cleanup_ctl, "hello wurld")
+        claude.last.failed.emit("Claude is busy, try again.")
+        assert spy.finals == ["hello wurld"]
+        assert spy.runs == ["hello wurld"]
+
+    def test_a_dropped_stream_with_words_still_announces(self, qapp, monkeypatch, claude, history):
+        ctl = _make_controller(qapp, monkeypatch, claude, history)
+        spy = _Spy(ctl)
+        ctl.start()
+        _FakeStream.last.opened.emit()
+        _FakeStream.last.final.emit("said before the drop")
+        _FakeStream.last.failed.emit("Connection lost.")
+        assert spy.runs == ["said before the drop"]
+
+    def test_write_runs_never_announce(self, writer, claude):
+        spy = _Spy(writer)
+        _speak(writer, "write a note to Alex", purpose="write")
+        claude.last.succeeded.emit("Hi Alex.")
+        assert spy.drafts == ["Hi Alex."]
+        assert spy.runs == []
+
+    def test_a_failed_write_never_announces_either(self, writer, claude):
+        spy = _Spy(writer)
+        _speak(writer, "write a note to Alex", purpose="write")
+        claude.last.failed.emit("Claude declined this request.")
+        assert spy.runs == []
+
+    def test_a_cancel_announces_nothing(self, qapp, monkeypatch, claude, history):
+        ctl = _make_controller(qapp, monkeypatch, claude, history, stream_inserts=False)
+        spy = _Spy(ctl)
+        ctl.start()
+        _FakeStream.last.opened.emit()
+        _FakeStream.last.final.emit("never delivered")
+        ctl.cancel()
+        assert spy.runs == [] and spy.finals == []
+
+    def test_a_run_with_nothing_said_announces_nothing(self, qapp, monkeypatch, claude, history):
+        ctl = _make_controller(qapp, monkeypatch, claude, history)
+        spy = _Spy(ctl)
+        _speak(ctl)
+        assert spy.runs == []
+
+
+class TestTheBridgeAutoCopies:
+    """The bridge copies a finished run when the setting is on and exposes the
+    text, and whether the copy worked, until the next key."""
+
+    def _wire(self, bridge: KeyboardBridge, monkeypatch, *, copy_ok: bool = True):
+        copied: List[str] = []
+
+        def fake_copy(text: str) -> bool:
+            copied.append(text)
+            return copy_ok
+
+        monkeypatch.setattr(bridge, "_copy_to_clipboard", fake_copy)
+        monkeypatch.setattr("src.dictation.controller.DeepgramStream", _FakeStream)
+        bridge._dictation_config.enabled = True
+        bridge._dictation_config.api_key = "k" * 40
+        ctl = bridge._dictation_controller()
+        monkeypatch.setattr(ctl._capture, "start", lambda device="": True)
+        monkeypatch.setattr(ctl._capture, "stop", lambda: None)
+        return ctl, copied
+
+    def test_a_finished_run_is_copied_and_shown(self, bridge: KeyboardBridge, monkeypatch):
+        ctl, copied = self._wire(bridge, monkeypatch)
+        bridge._dictation_config.auto_copy = True
+        _speak(ctl, "hello world")
+        assert copied == ["hello world"]
+        assert bridge.dictationResultText == "hello world"
+        assert bridge.dictationResultCopied is True
+
+    def test_auto_copy_off_still_shows_but_never_touches_the_clipboard(
+        self, bridge: KeyboardBridge, monkeypatch
+    ):
+        ctl, copied = self._wire(bridge, monkeypatch)
+        bridge._dictation_config.auto_copy = False
+        _speak(ctl, "hello world")
+        assert copied == []
+        assert bridge.dictationResultText == "hello world"
+        assert bridge.dictationResultCopied is False
+
+    def test_a_failed_copy_is_not_reported_as_copied(self, bridge: KeyboardBridge, monkeypatch):
+        ctl, _ = self._wire(bridge, monkeypatch, copy_ok=False)
+        bridge._dictation_config.auto_copy = True
+        _speak(ctl, "hello world")
+        assert bridge.dictationResultText == "hello world"
+        assert bridge.dictationResultCopied is False
+
+    def test_a_write_run_is_not_copied_or_shown(self, bridge: KeyboardBridge, monkeypatch, claude):
+        ctl, copied = self._wire(bridge, monkeypatch)
+        bridge.setDictationAnthropicKey(ANTHROPIC)
+        bridge._dictation_config.writing_enabled = True
+        _speak(ctl, "write a note", purpose="write")
+        claude.last.succeeded.emit("Hi.")
+        assert copied == []
+        assert bridge.dictationResultText == ""
+
+    def test_a_key_clears_it_and_a_new_run_clears_it(self, bridge: KeyboardBridge, monkeypatch):
+        ctl, _ = self._wire(bridge, monkeypatch)
+        _speak(ctl, "hello world")
+        assert bridge.dictationResultText != ""
+        bridge.pressKey("a")
+        assert bridge.dictationResultText == ""
+
+        _speak(ctl, "again")
+        assert bridge.dictationResultText == "again"
+        ctl.start()
+        assert bridge.dictationResultText == ""
+        ctl.cancel()
+
+    def test_the_text_never_reaches_the_log(self, bridge: KeyboardBridge, monkeypatch, caplog):
+        import logging
+
+        ctl, _ = self._wire(bridge, monkeypatch)
+        with caplog.at_level(logging.DEBUG):
+            _speak(ctl, "a very private sentence")
+        assert "private" not in caplog.text

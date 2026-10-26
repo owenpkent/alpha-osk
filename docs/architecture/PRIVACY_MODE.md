@@ -31,7 +31,7 @@ Six signals reset the typing context, each catching what the others cannot: (1) 
 - **The tail of an interrupted word is never learned** (`_word_prefix_lost`, `_take_lost_prefix`). Tests for it must type the word three times.
 - Own-window clicks are filtered by process id, not geometry. It polls rather than hooking, and reads **only the high bit** of `GetAsyncKeyState` (the low bit is system-wide and the read clears it for other assistive tools).
 - Tab does not learn the word in progress (it is the accept-completion key). Delete and Escape are excluded from the nav-key reset. A held arrow resets once.
-- `resetContext` (the clear-context ring) delegates to `_reset_typing_context`.
+- `resetContext` (the slot behind the removed clear-context button) delegates to `_reset_typing_context`.
 - Tests: `TestTabClearsContext`, `TestCursorMotionClearsContext`, `TestOutsideClickClearsContext`, `TestAnOutsideClickThatMovesNoCaretIsLeftAlone`, `TestCaretMoveClearsContext`, `TestAnInterruptedWordIsNotLearned`, `tests/test_pointer.py`.
 
 ### Key files

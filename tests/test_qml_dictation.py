@@ -10,7 +10,7 @@ the live objects.
 The property the whole feature rests on is that `predBar.micReserve` is
 **zero unless dictation is switched on** (see `docs/architecture/DICTATION.md`,
 "The mic button, and the left edge"). `predRow.x` centres the pills in
-`width - micReserve - clearCtxReserve`, so a reserve of 0 has to collapse
+`width - micReserve - rightButtonsReserve`, so a reserve of 0 has to collapse
 that expression back to exactly the single-reserve one it grew from, which
 is what keeps the bar byte-identical for every user who never turns this on.
 
@@ -55,6 +55,7 @@ try:
     from PySide6.QtCore import (  # noqa: E402
         QCoreApplication,
         QEventLoop,
+        QMetaObject,
         QObject,
         QSettings,
         QTimer,
@@ -199,7 +200,7 @@ def _evaluate(obj, expression: str):
     """Evaluate a QML expression in `obj`'s own context, returning the value.
 
     Two things need this. `predBar` has no objectName, so the only way to
-    read `micReserve` / `clearCtxReserve` is to resolve the id from a sibling
+    read `micReserve` / `rightButtonsReserve` is to resolve the id from a sibling
     that shares its context. And `QObject.property("elide")` raises
     "Can't find converter for 'QQuickText::TextFormat'" for QML's internal
     enums, which comparing against the constant in JS sidesteps entirely: the
@@ -237,15 +238,32 @@ def _scene_right(item) -> float:
 def _right_hand_buttons_left(root) -> float:
     """The left edge of the leftmost control parked at the bar's right end.
 
-    Two live there, Snippets then clear-context, so the strip the pills and
-    the transcript must both stay out of starts at the Snippets one. Written
-    as a min rather than by naming one, so adding a third button cannot
-    quietly make this measure the wrong edge.
+    Write with AI (when available), Symbols and Snippets live there, so the
+    strip the pills and the banner must both stay out of starts at the
+    leftmost visible one. Written as a min over the visible ones rather than
+    by naming one, so a button appearing or going cannot quietly make this
+    measure the wrong edge.
     """
-    return min(
-        _scene_left(_child(root, "clearContextButton")),
-        _scene_left(_child(root, "snippetsBarButton")),
-    )
+    names = ("writeWithAiBarButton", "symbolsBarButton", "snippetsBarButton")
+    lefts = [
+        _scene_left(button)
+        for button in (_child(root, name) for name in names)
+        if button.property("visible")
+    ]
+    assert lefts, "no button is parked at the right end"
+    return min(lefts)
+
+
+def _finish_a_run(root, bridge, text: str, *, copied: bool = True) -> None:
+    """Deliver a finished dictate run the way the controller's signal does.
+
+    The clipboard is stubbed so the suite never touches the real one; the
+    stub's return value is the "did the copy work" answer the badge follows.
+    """
+    bridge._dictation_config.auto_copy = True
+    bridge._copy_to_clipboard = lambda _text: copied  # type: ignore[method-assign]
+    bridge._on_dictation_run_finished(text)
+    QCoreApplication.processEvents()
 
 
 # Bound on the wait in `_show`. Pump until the pills exist rather than
@@ -351,7 +369,7 @@ class TestTheMicCostsNothingWhileDictationIsOff:
 
     `docs/architecture/DICTATION.md` calls this load-bearing rather than an
     optimisation: `predRow.x` centres in `width - micReserve -
-    clearCtxReserve`, so a zero reserve has to collapse that expression back
+    rightButtonsReserve`, so a zero reserve has to collapse that expression back
     to the single-reserve one it grew from, exactly.
     """
 
@@ -374,7 +392,7 @@ class TestTheMicCostsNothingWhileDictationIsOff:
 
         before_the_mic = _bar(
             root,
-            "Math.max(8, (predBar.width - predBar.clearCtxReserve - predRow.width) / 2)",
+            "Math.max(8, (predBar.width - predBar.rightButtonsReserve - predRow.width) / 2)",
         )
         assert row.property("x") == pytest.approx(before_the_mic)
 
@@ -389,7 +407,7 @@ class TestTheMicCostsNothingWhileDictationIsOff:
         assert _bar(root, "predBar.micReserve") == 0
         before_the_mic = _bar(
             root,
-            "Math.max(8, (predBar.width - predBar.clearCtxReserve - predRow.width) / 2)",
+            "Math.max(8, (predBar.width - predBar.rightButtonsReserve - predRow.width) / 2)",
         )
         assert row.property("x") == pytest.approx(before_the_mic)
 
@@ -398,13 +416,14 @@ class TestTheMicCostsNothingWhileDictationIsOff:
         root, _, _ = qml_root
         _show(root, ["hello"])
         assert _child(root, "dictationMicButton").property("visible") is False
-        assert _child(root, "dictationTranscript").property("visible") is False
+        assert _child(root, "dictationHistoryBarButton").property("visible") is False
+        assert _child(root, "dictationBanner").property("visible") is False
 
 
 class TestTheLevelBarsSayTheMicHearsYou:
     """Four bars beside the mic, visible only while listening, fed the
     decibel-mapped level.  They widen `micReserve` while shown, and the
-    pills are hidden for the whole run, so only the transcript label moves."""
+    pills are hidden for the whole run, so only the state label moves."""
 
     def _bars(self, root):
         row = _child(root, "dictationLevelBars")
@@ -416,7 +435,8 @@ class TestTheLevelBarsSayTheMicHearsYou:
         row, _ = self._bars(root)
         assert row.property("visible") is False
         base = _bar(root, "predBar.micReserve")
-        assert base == _bar(root, "predBar.predPillHeight") + 16
+        # The mic and the History button beside it, a gap, and the margins.
+        assert base == _bar(root, "predBar.predPillHeight") * 2 + 24
         root.setProperty("dictationState", "connecting")
         QCoreApplication.processEvents()
         assert row.property("visible") is False
@@ -450,7 +470,7 @@ class TestTheLevelBarsSayTheMicHearsYou:
         QCoreApplication.processEvents()
         row, _ = self._bars(root)
         assert _bar(root, "predBar.micReserve") == base + row.property("width") + 8
-        label = _child(root, "dictationTranscript")
+        label = _child(root, "dictationBanner")
         assert label.property("x") >= _bar(root, "predBar.micReserve")
         root.setProperty("dictationState", "idle")
         QCoreApplication.processEvents()
@@ -467,7 +487,7 @@ class TestTheLevelBarsSayTheMicHearsYou:
 
 
 class TestTurningDictationOnShiftsThePillsClear:
-    """The mirror of TestClearButtonNeverCoversPills at the other end of the
+    """The mirror of TestRightButtonsNeverCoverPills at the other end of the
     bar: a control parked at an edge owns a strip the pill row may not enter,
     or the outermost pill renders underneath a button."""
 
@@ -561,11 +581,11 @@ class TestNoPillElidesOnceTheMicTakesSpace:
         assert _scene_right(row) <= _right_hand_buttons_left(root)
 
 
-class TestTheTranscriptReplacesThePills:
+class TestTheBannerReplacesThePills:
     """The two cannot share the row, and a pill shown during a run would be
     about a prefix the user is no longer typing."""
 
-    def test_idle_shows_pills_and_no_transcript(self, qml_root):
+    def test_idle_shows_pills_and_no_banner(self, qml_root):
         """The inverse half: a banner that never hides is worse than no banner."""
         root, _, _ = qml_root
         _turn_dictation_on(root)
@@ -573,10 +593,10 @@ class TestTheTranscriptReplacesThePills:
 
         assert root.property("dictationState") == "idle"
         assert row.property("visible") is True
-        assert _child(root, "dictationTranscript").property("visible") is False
+        assert _child(root, "dictationBanner").property("visible") is False
         assert _pill_count(root) > 0
 
-    def test_listening_shows_the_transcript_and_no_pills(self, qml_root):
+    def test_listening_shows_the_banner_and_no_pills(self, qml_root):
         root, _, _ = qml_root
         _turn_dictation_on(root)
         row = _show(root, CROWDED)
@@ -585,7 +605,7 @@ class TestTheTranscriptReplacesThePills:
         root.setProperty("dictationState", "listening")
         QCoreApplication.processEvents()
 
-        assert _child(root, "dictationTranscript").property("visible") is True
+        assert _child(root, "dictationBanner").property("visible") is True
         assert row.property("visible") is False
         assert _pill_count(root) == 0, "the Repeater still built pills during a run"
 
@@ -601,156 +621,324 @@ class TestTheTranscriptReplacesThePills:
         _show(root, CROWDED)
 
         assert row.property("visible") is True
-        assert _child(root, "dictationTranscript").property("visible") is False
+        assert _child(root, "dictationBanner").property("visible") is False
         assert _pill_count(root) > 0
 
 
-class TestTheTranscriptStaysInsideTheBar:
-    """The banner spans the space the pills normally occupy, which means it
-    inherits their obligation to both edges: the mic on the left and the
-    Snippets / clear-context pair on the right."""
+class TestNoRunPreviewsWords:
+    """The owner's call, 2026-10-26: while a run is under way the bar shows
+    its state and the level bars, never what is being recognised."""
 
-    LONG = (
-        "this is a long spoken phrase that has not been typed into the "
-        "application yet and would happily run off both ends of the bar"
-    )
-
-    def test_it_never_overlaps_either_end(self, qml_root):
-        root, _, _ = qml_root
+    @pytest.mark.parametrize("held_back", [False, True], ids=["streamed", "held-back"])
+    def test_an_interim_phrase_never_reaches_the_bar(self, qml_root, held_back):
+        root, _, bridge = qml_root
         _turn_dictation_on(root)
-        root.setProperty("dictationTranscript", self.LONG)
+        bridge._dictation_config.stream_inserts = not held_back
+        controller = bridge._dictation_controller()
         root.setProperty("dictationState", "listening")
+        controller.interimChanged.emit("my secret sentence")
         QCoreApplication.processEvents()
 
-        banner = _child(root, "dictationTranscript")
+        text = _child(root, "dictationBannerText").property("text")
+        assert "secret" not in text
+        assert text == "Listening..."
+
+    def test_the_old_transcript_surface_is_gone(self, qml_root):
+        root, _, bridge = qml_root
+        assert not hasattr(bridge, "dictationTranscriptChanged")
+        assert root.property("dictationTranscript") is None
+
+
+class TestTheFinishedTextReplacesThePills:
+    """A delivered dictate run shows its whole text where the pills were, with
+    a Copied badge, until the next key, 8 s, a new run or privacy mode."""
+
+    def test_the_text_shows_and_the_pills_step_aside(self, qml_root):
+        root, _, bridge = qml_root
+        _turn_dictation_on(root)
+        row = _show(root, CROWDED)
+        assert _pill_count(root) > 0
+
+        _finish_a_run(root, bridge, "send the report on friday")
+
+        assert _child(root, "dictationBanner").property("visible") is True
+        assert _child(root, "dictationBannerText").property("text") == "send the report on friday"
+        assert row.property("visible") is False
+        assert _pill_count(root) == 0
+        assert root.property("predictionsArePresent") is False
+
+    def test_the_result_is_part_of_the_scan_beacon(self, qml_root):
+        """Pills leaving the target set must move `aosk.v1.revision`."""
+        root, _, bridge = qml_root
+        _turn_dictation_on(root)
+        _show(root, ["hello"])
+        before = root.property("scanRevision")
+        _finish_a_run(root, bridge, "hello there")
+        assert root.property("scanRevision") != before
+
+    def test_the_badge_follows_the_clipboard_result(self, qml_root):
+        root, _, bridge = qml_root
+        _turn_dictation_on(root)
+        _finish_a_run(root, bridge, "hello there", copied=True)
+        assert _child(root, "dictationCopiedBadge").property("visible") is True
+
+    def test_no_badge_when_the_copy_failed(self, qml_root):
+        root, _, bridge = qml_root
+        _turn_dictation_on(root)
+        _finish_a_run(root, bridge, "hello there", copied=False)
+        assert _child(root, "dictationBanner").property("visible") is True
+        assert _child(root, "dictationCopiedBadge").property("visible") is False
+
+    def test_no_badge_and_no_copy_when_auto_copy_is_off(self, qml_root):
+        root, _, bridge = qml_root
+        _turn_dictation_on(root)
+        calls: list[str] = []
+        bridge._copy_to_clipboard = lambda text: calls.append(text) or True  # type: ignore[method-assign]
+        bridge._dictation_config.auto_copy = False
+        bridge._on_dictation_run_finished("hello there")
+        QCoreApplication.processEvents()
+        assert calls == []
+        assert _child(root, "dictationBannerText").property("text") == "hello there"
+        assert _child(root, "dictationCopiedBadge").property("visible") is False
+
+    def test_the_text_is_copied_exactly_once(self, qml_root):
+        root, _, bridge = qml_root
+        _turn_dictation_on(root)
+        calls: list[str] = []
+        bridge._copy_to_clipboard = lambda text: calls.append(text) or True  # type: ignore[method-assign]
+        bridge._dictation_config.auto_copy = True
+        bridge._on_dictation_run_finished("hello there")
+        assert calls == ["hello there"]
+
+    def test_the_next_keystroke_brings_the_pills_back(self, qml_root):
+        root, _, bridge = qml_root
+        _turn_dictation_on(root)
+        row = _show(root, CROWDED)
+        _finish_a_run(root, bridge, "hello there")
+        assert row.property("visible") is False
+
+        bridge.pressKey("a")
+        _show(root, CROWDED)
+
+        assert _child(root, "dictationBanner").property("visible") is False
+        assert row.property("visible") is True
+        assert _pill_count(root) > 0
+
+    def test_a_scanner_invoke_of_a_special_key_clears_it_too(self, qml_root):
+        """Every keystroke path funnels through the sticky release."""
+        root, _, bridge = qml_root
+        _turn_dictation_on(root)
+        _finish_a_run(root, bridge, "hello there")
+        bridge.pressSpecialKey("backspace")
+        QCoreApplication.processEvents()
+        assert _child(root, "dictationBanner").property("visible") is False
+
+    def test_it_times_out(self, qml_root):
+        root, _, bridge = qml_root
+        _turn_dictation_on(root)
+        assert bridge._DICTATION_RESULT_MS == 8000
+        bridge._DICTATION_RESULT_MS = 30
+        _finish_a_run(root, bridge, "hello there")
+        assert _child(root, "dictationBanner").property("visible") is True
+        _wait_ms(120)
+        assert _child(root, "dictationBanner").property("visible") is False
+
+    def test_a_new_run_clears_it(self, qml_root):
+        root, _, bridge = qml_root
+        _turn_dictation_on(root)
+        controller = bridge._dictation_controller()
+        _finish_a_run(root, bridge, "hello there")
+        controller.stateChanged.emit("connecting")
+        root.setProperty("dictationState", "connecting")
+        QCoreApplication.processEvents()
+        root.setProperty("dictationState", "idle")
+        QCoreApplication.processEvents()
+        assert _child(root, "dictationBanner").property("visible") is False
+
+    def test_privacy_mode_takes_it_away(self, qml_root):
+        root, _, bridge = qml_root
+        _turn_dictation_on(root)
+        _finish_a_run(root, bridge, "my password is hunter2")
+        bridge.setPrivacyMode(True)
+        QCoreApplication.processEvents()
+        assert _child(root, "dictationBanner").property("visible") is False
+        assert bridge.dictationResultText == ""
+
+    def test_a_run_finishing_in_privacy_mode_shows_and_copies_nothing(self, qml_root):
+        root, _, bridge = qml_root
+        _turn_dictation_on(root)
+        calls: list[str] = []
+        bridge._copy_to_clipboard = lambda text: calls.append(text) or True  # type: ignore[method-assign]
+        bridge.setPrivacyMode(True)
+        bridge._on_dictation_run_finished("my password is hunter2")
+        QCoreApplication.processEvents()
+        assert calls == []
+        assert bridge.dictationResultText == ""
+        assert _child(root, "dictationBanner").property("visible") is False
+
+    def test_it_stays_off_while_suggestions_are_off(self, qml_root):
+        root, _, bridge = qml_root
+        _turn_dictation_on(root)
+        root.setProperty("suggestionsEnabled", False)
+        _finish_a_run(root, bridge, "hello there")
+        assert _child(root, "dictationBanner").property("visible") is False
+
+
+class TestTheBannerStaysInsideTheBar:
+    """The banner spans the space the pills normally occupy, which means it
+    inherits their obligation to both edges: the mic and History on the left
+    and the Write / Symbols / Snippets buttons on the right."""
+
+    LONG = (
+        "this is a long spoken phrase that has already been typed into the "
+        "application and would happily run off both ends of the bar"
+    )
+
+    def _show_long(self, root, bridge):
+        _turn_dictation_on(root)
+        _finish_a_run(root, bridge, self.LONG)
+        return _child(root, "dictationBanner")
+
+    def test_it_never_overlaps_either_end(self, qml_root):
+        root, _, bridge = qml_root
+        banner = self._show_long(root, bridge)
         assert banner.property("visible") is True
         assert banner.property("width") > 0, "a zero-width banner clears everything"
 
-        mic_right = _scene_right(_child(root, "dictationMicButton"))
-        assert _scene_left(banner) >= mic_right
+        history_right = _scene_right(_child(root, "dictationHistoryBarButton"))
+        assert _scene_left(banner) >= history_right
         assert _scene_right(banner) <= _right_hand_buttons_left(root)
 
     def test_it_holds_in_the_narrowest_window(self, qml_root):
         """Both reserves bite hardest where there is least bar to divide."""
-        root, _, _ = qml_root
-        _turn_dictation_on(root)
-        root.setProperty("dictationTranscript", self.LONG)
-        root.setProperty("dictationState", "listening")
+        root, _, bridge = qml_root
+        banner = self._show_long(root, bridge)
         root.setProperty("width", root.property("minimumWidth"))
         QCoreApplication.processEvents()
 
-        banner = _child(root, "dictationTranscript")
-        assert _scene_left(banner) >= _scene_right(_child(root, "dictationMicButton"))
+        assert _scene_left(banner) >= _scene_right(_child(root, "dictationHistoryBarButton"))
         assert _scene_right(banner) <= _right_hand_buttons_left(root)
 
+    def test_the_badge_and_the_text_do_not_overlap(self, qml_root):
+        root, _, bridge = qml_root
+        banner = self._show_long(root, bridge)
+        text = _child(root, "dictationBannerText")
+        badge = _child(root, "dictationCopiedBadge")
+        assert badge.property("visible") is True
+        assert _scene_right(text) <= _scene_left(badge)
+        assert _scene_right(badge) <= _scene_right(banner)
 
-class TestTheTranscriptElidesFromTheLeft:
-    """While speaking, the tail is what the user is checking, so the newest
-    words are the ones that must survive. This is the opposite of every other
-    elide in Main.qml, which makes it the one most likely to be "corrected"
-    back to the default by someone tidying up."""
-
-    def test_the_elide_mode_is_left(self, qml_root):
+    def test_the_history_button_is_clear_of_the_mic_and_the_level_bars(self, qml_root):
         root, _, _ = qml_root
         _turn_dictation_on(root)
-        root.setProperty("dictationTranscript", TestTheTranscriptStaysInsideTheBar.LONG)
         root.setProperty("dictationState", "listening")
         QCoreApplication.processEvents()
+        mic = _child(root, "dictationMicButton")
+        history = _child(root, "dictationHistoryBarButton")
+        bars = _child(root, "dictationLevelBars")
+        assert _scene_left(history) >= _scene_right(mic)
+        assert _scene_left(bars) >= _scene_right(history)
 
-        text = _child(root, "dictationTranscriptText")
+
+class TestTheFinishedTextElidesFromTheLeft:
+    """The tail is what the user is checking, so the newest words are the ones
+    that must survive. This is the opposite of every other elide in Main.qml,
+    which makes it the one most likely to be "corrected" back to the default
+    by someone tidying up."""
+
+    def test_the_elide_mode_is_left(self, qml_root):
+        root, _, bridge = qml_root
+        _turn_dictation_on(root)
+        _finish_a_run(root, bridge, TestTheBannerStaysInsideTheBar.LONG)
+
+        text = _child(root, "dictationBannerText")
         assert _evaluate(text, "elide === Text.ElideLeft") is True, (
-            "the transcript elides from somewhere other than the left, so the "
+            "the result elides from somewhere other than the left, so the "
             "words the user just said are the ones being thrown away"
         )
 
-    def test_the_tail_is_what_survives_a_long_phrase(self, qml_root):
-        """States the consequence, not the enum, so an equivalent break shows.
-
-        Asserted on `truncated` rather than on `contentWidth <= width`: once
+    def test_a_long_run_actually_elides(self, qml_root):
+        """Asserted on `truncated` rather than on `contentWidth <= width`: once
         a Text elides, contentWidth measures the shortened string, so that
-        comparison fits by construction and can never fail.
-        """
-        root, _, _ = qml_root
+        comparison fits by construction and can never fail."""
+        root, _, bridge = qml_root
         _turn_dictation_on(root)
         root.setProperty("width", root.property("minimumWidth"))
-        root.setProperty("dictationTranscript", TestTheTranscriptStaysInsideTheBar.LONG * 3)
-        root.setProperty("dictationState", "listening")
-        QCoreApplication.processEvents()
+        _finish_a_run(root, bridge, TestTheBannerStaysInsideTheBar.LONG * 3)
 
-        text = _child(root, "dictationTranscriptText")
+        text = _child(root, "dictationBannerText")
         assert text.property("truncated") is True, (
-            "the phrase was not long enough to elide here, so this test is "
+            "the text was not long enough to elide here, so this test is "
             "not exercising the elide at all"
         )
         assert _evaluate(text, "elide === Text.ElideLeft") is True
 
 
-class TestTheTranscriptNeverAutoDetectsHtml:
-    """The transcript is whatever the user said, arriving from a third-party
-    recogniser, so it is exactly as untrusted as an imported pack's word
-    list. QML's `Text` defaults to `Text.AutoText`, which sniffs the string
-    for markup, so an `<img src=...>` in a transcript could fire an outbound
-    request purely from being displayed."""
+class TestTheBannerNeverAutoDetectsHtml:
+    """What the user said arrives from a third-party recogniser (and, with AI
+    cleanup, a second one), so it is exactly as untrusted as an imported pack's
+    word list. QML's `Text` defaults to `Text.AutoText`, which sniffs the
+    string for markup, so an `<img src=...>` could fire an outbound request
+    purely from being displayed."""
 
-    def test_the_text_format_is_plain(self, qml_root):
-        root, _, _ = qml_root
+    def test_the_text_format_is_plain_for_the_result(self, qml_root):
+        root, _, bridge = qml_root
         _turn_dictation_on(root)
-        root.setProperty("dictationTranscript", "<img src='http://example.invalid/x'>")
-        root.setProperty("dictationState", "listening")
-        QCoreApplication.processEvents()
+        _finish_a_run(root, bridge, "<img src='http://example.invalid/x'>")
 
-        text = _child(root, "dictationTranscriptText")
+        text = _child(root, "dictationBannerText")
         # QObject.property("textFormat") raises "Can't find converter for
         # 'QQuickText::TextFormat'": PySide6 has no converter for that
         # internal enum, so compare against the QML constant in JS instead.
         assert _evaluate(text, "textFormat === Text.PlainText") is True, (
-            "the transcript is not forced to Text.PlainText - markup in a "
+            "the banner is not forced to Text.PlainText - markup in a "
             "recognised phrase could auto-render as HTML"
         )
+        assert text.property("text") == "<img src='http://example.invalid/x'>"
+
+    def test_the_badge_label_is_plain_too(self, qml_root):
+        root, _, bridge = qml_root
+        _turn_dictation_on(root)
+        _finish_a_run(root, bridge, "hello there")
+        badge = _child(root, "dictationCopiedBadge")
+        labels = [
+            c for c in badge.findChildren(QObject) if c.metaObject().className() == "QQuickText"
+        ]
+        assert labels, "the badge has no label"
+        for label in labels:
+            assert _evaluate(label, "textFormat === Text.PlainText") is True
 
 
 class TestTheBarIsNeverBlankDuringARun:
-    """The banner has taken the pills' place by the time the first word is
-    recognised, so with nothing to show yet it has to say what is happening
-    or the bar reads as broken."""
+    """The banner has taken the pills' place by the time the run starts, so it
+    has to say what is happening or the bar reads as broken."""
 
-    def _placeholder_for(self, root, state: str) -> str:
-        root.setProperty("dictationTranscript", "")
+    def _label_for(self, root, state: str) -> str:
         root.setProperty("dictationState", state)
         QCoreApplication.processEvents()
-        return _child(root, "dictationTranscriptText").property("text")
+        return _child(root, "dictationBannerText").property("text")
 
-    def test_listening_with_nothing_said_yet_still_shows_something(self, qml_root):
+    def test_every_state_says_something(self, qml_root):
         root, _, _ = qml_root
         _turn_dictation_on(root)
-        assert self._placeholder_for(root, "listening").strip() != ""
+        for state in ("connecting", "listening", "finishing", "polishing"):
+            assert self._label_for(root, state).strip() != "", state
 
     def test_connecting_and_listening_do_not_read_the_same(self, qml_root):
         """Connecting must look busy without looking like recording, or the
         user clicks again and starts a second run."""
         root, _, _ = qml_root
         _turn_dictation_on(root)
-        connecting = self._placeholder_for(root, "connecting")
-        listening = self._placeholder_for(root, "listening")
-        assert connecting.strip() != ""
+        connecting = self._label_for(root, "connecting")
+        listening = self._label_for(root, "listening")
         assert connecting != listening
-
-    def test_a_real_phrase_replaces_the_placeholder(self, qml_root):
-        """The inverse: a placeholder that never gets out of the way is worse."""
-        root, _, _ = qml_root
-        _turn_dictation_on(root)
-        self._placeholder_for(root, "listening")
-        root.setProperty("dictationTranscript", "hello world")
-        QCoreApplication.processEvents()
-        assert _child(root, "dictationTranscriptText").property("text") == "hello world"
 
 
 class TestTheTitleBarMirrorCoversTheCollapsedBar:
     """The suggestion bar collapses to zero height when suggestions are
     switched off, taking everything in it. An unrelated setting must not be
     able to remove the only way into a feature, which is the precedent
-    `snippetsTitleBarButton` set and the hole the clear-context button
-    still has."""
+    `snippetsTitleBarButton` set."""
 
     def test_the_mirror_appears_when_the_bar_collapses(self, qml_root):
         root, _, _ = qml_root
@@ -863,25 +1051,24 @@ class TestTheMicGreysRatherThanLying:
         assert mirror.property("opacity") < 0.75
 
 
-class TestPrivacyModeTakesTheTranscriptWithIt:
+class TestPrivacyModeTakesTheBannerWithIt:
     """Privacy mode has to mean "stop doing this", not "stop starting new
     ones". The Python side cancels the run rather than stopping it, and the
-    banner must not go on rendering what was being said next to the
-    "Learning paused" indicator that replaced the pills."""
+    banner must not go on showing next to the "Learning paused" indicator that
+    replaced the pills."""
 
-    def test_the_transcript_is_hidden_in_privacy_mode(self, qml_root):
+    def test_the_banner_is_hidden_in_privacy_mode(self, qml_root):
         root, _, bridge = qml_root
         _turn_dictation_on(root)
-        root.setProperty("dictationTranscript", "my password is")
         root.setProperty("dictationState", "listening")
         QCoreApplication.processEvents()
-        assert _child(root, "dictationTranscript").property("visible") is True
+        assert _child(root, "dictationBanner").property("visible") is True
 
         bridge.setPrivacyMode(True)
         QCoreApplication.processEvents()
 
         assert root.property("privacyMode") is True
-        assert _child(root, "dictationTranscript").property("visible") is False
+        assert _child(root, "dictationBanner").property("visible") is False
 
     def test_the_pills_stay_hidden_too(self, qml_root):
         """Neither surface may fill the gap the other left."""
@@ -893,3 +1080,42 @@ class TestPrivacyModeTakesTheTranscriptWithIt:
 
         assert _child(root, "predictionRow").property("visible") is False
         assert _pill_count(root) == 0
+
+
+class TestTheHistoryButtonOpensSettingsAtHistory:
+    """One click from the bar to the saved runs: Settings on the Dictation
+    page with its History section scrolled into view."""
+
+    def _open(self, root, *, already_open: bool):
+        _turn_dictation_on(root)
+        if already_open:
+            root.setProperty("showSettings", True)
+            _wait_ms(100)
+        QMetaObject.invokeMethod(root, "openDictationHistory")
+        _wait_ms(150)
+        return _child(root, "settingsPanel"), _child(root, "settingsFlickable")
+
+    @pytest.mark.parametrize("already_open", [False, True], ids=["closed", "open"])
+    def test_the_history_section_is_scrolled_into_view(self, qml_root, already_open):
+        root, warnings, _ = qml_root
+        panel, flick = self._open(root, already_open=already_open)
+        section = _child(root, "dictationHistorySection")
+
+        assert root.property("showSettings") is True
+        assert panel.property("currentView") == "dictation"
+        top = section.mapToScene(section.boundingRect().topLeft()).y()
+        view_top = flick.mapToScene(flick.boundingRect().topLeft()).y()
+        view_bottom = view_top + flick.property("height")
+        assert view_top - 1 <= top < view_bottom, (
+            f"History starts at {top}px but the visible page is {view_top}..{view_bottom}px"
+        )
+        assert _real_warnings(warnings) == []
+
+    def test_an_ordinary_open_still_lands_on_home(self, qml_root):
+        root, _, _ = qml_root
+        self._open(root, already_open=False)
+        root.setProperty("showSettings", False)
+        _wait_ms(100)
+        root.setProperty("showSettings", True)
+        _wait_ms(100)
+        assert _child(root, "settingsPanel").property("currentView") == "home"

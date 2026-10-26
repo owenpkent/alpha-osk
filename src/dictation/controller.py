@@ -107,6 +107,11 @@ class DictationController(QObject):
     interimChanged = Signal(str)
     #: A phrase the provider will not revise.  The bridge types this.
     finalReady = Signal(str)
+    #: The whole text of a finished *dictate* run, once it has been handed to
+    #: :attr:`finalReady` (or was typed phrase by phrase).  Emitted exactly
+    #: once per such run: never for Write with AI, never for a cancel.  The
+    #: bridge copies it and shows it in the bar.
+    runFinished = Signal(str)
     #: Mic level, 0.0 to 1.0, for the button's live indicator.
     levelChanged = Signal(float)
     #: A user-facing sentence.  Always paired with a return to IDLE.
@@ -393,11 +398,11 @@ class DictationController(QObject):
     def _on_interim(self, text: str) -> None:
         self._got_transcript = True
         self._restart_silence_timer()
-        # A held-back run shows nothing in the bar (the owner's call,
-        # 2026-10-24).  It used to show everything so far plus the phrase in
-        # flight; that read as "it is typing" when it was not, and the
-        # level bars beside the mic now carry "it hears you".  The bar's
-        # own "Listening..." label stands in while the interim is empty.
+        # A held-back run publishes no interim (the owner's call,
+        # 2026-10-24: it read as "it is typing" when it was not).  The bar
+        # renders no interim for any run since 2026-10-26, so this signal
+        # has no consumer outside the tests; the finished text arrives
+        # through `runFinished` instead.
         if self._accumulate:
             return
         self._set_interim(text)
@@ -513,6 +518,7 @@ class DictationController(QObject):
         self._record("dictate", text, text, cleaned=False)
         if self._accumulate:
             self.finalReady.emit(text)
+        self._emit_run_finished(text)
         self._clear_run()
 
     # --- Claude passes ----------------------------------------------------
@@ -571,6 +577,11 @@ class DictationController(QObject):
         request.succeeded.connect(lambda result: self._on_polished(request, text, result))
         request.failed.connect(lambda reason: self._on_polish_failed(request, text, reason))
 
+    def _emit_run_finished(self, text: str) -> None:
+        """Announce the delivered text of a dictate run (never a write run)."""
+        if self._purpose == "dictate" and text.strip():
+            self.runFinished.emit(text)
+
     def _take_request(self, request: ClaudeRequest) -> bool:
         """Whether *request* is still the live one (a cancel clears it)."""
         if self._request is not request:
@@ -590,6 +601,7 @@ class DictationController(QObject):
             self.draftReady.emit(result)
         else:
             self.finalReady.emit(result)
+            self._emit_run_finished(result)
 
     def _on_polish_failed(self, request: ClaudeRequest, raw: str, reason: str) -> None:
         if not self._take_request(request):
@@ -620,6 +632,7 @@ class DictationController(QObject):
                 )
         else:
             self.finalReady.emit(raw)
+            self._emit_run_finished(raw)
             self.errorRaised.emit(f"AI cleanup failed ({_reason(reason)}). Inserted as spoken.")
 
     def reprocess(self, entry_id: str) -> bool:

@@ -214,21 +214,21 @@ class TestTheWriteButtonSitsInTheBar:
         root, _, bridge = qml_root
         row = _child(root, "predictionRow")
         base = _evaluate(row, "predBar.predButtonCount")
-        reserve_before = _evaluate(row, "predBar.clearCtxReserve")
+        reserve_before = _evaluate(row, "predBar.rightButtonsReserve")
         _configure(root, bridge)
         assert _evaluate(row, "predBar.predButtonCount") == base + 1
-        assert _evaluate(row, "predBar.clearCtxReserve") > reserve_before
+        assert _evaluate(row, "predBar.rightButtonsReserve") > reserve_before
 
     def test_the_button_is_inside_the_right_hand_row_and_first(self, qml_root):
         root, _, bridge = qml_root
         _configure(root, bridge)
         write = _child(root, "writeWithAiBarButton")
         symbols = _child(root, "symbolsBarButton")
-        clear = _child(root, "clearContextButton")
+        snippets = _child(root, "snippetsBarButton")
         scene = root.property("contentItem")
         w = write.mapToItem(scene, 0, 0).x()
         assert w + write.width() <= symbols.mapToItem(scene, 0, 0).x() + 1
-        assert w < clear.mapToItem(scene, 0, 0).x()
+        assert w < snippets.mapToItem(scene, 0, 0).x()
 
 
 class TestTheTitleBarTwin:

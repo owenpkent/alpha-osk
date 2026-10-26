@@ -423,6 +423,7 @@ _DICTATION_BASE = {
     "writing_enabled": True,
     "writing_style": "warm",
     "history_enabled": True,
+    "auto_copy": True,
 }
 
 

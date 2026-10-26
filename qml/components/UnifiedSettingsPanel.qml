@@ -141,6 +141,7 @@ Item {
     property bool dictationWritingEnabled: false
     property string dictationWritingStyle: ""
     property bool dictationHistoryEnabled: true
+    property bool dictationAutoCopy: true
     property var dictationHistory: []            // newest first, see getDictationHistory()
     property string dictationPlayingId: ""       // "" = nothing playing
     // Id of the history entry whose Delete / "Clear all" is awaiting its
@@ -154,6 +155,35 @@ Item {
     property string currentView: "home"
 
     function resetToHome() { currentView = "home" }
+
+    // Open the Dictation page with its History section at the top of the
+    // view.  The scroll waits a tick: switching view resets the Flickable to
+    // the top, and the section's position is only known once the page has
+    // laid out.
+    function showDictationHistory() {
+        currentView = "dictation"
+        historyScrollPending = true
+        historyScrollTimer.restart()
+        Qt.callLater(unifiedSettings._scrollToHistory)
+    }
+    // Set while a scroll to History is owed.  The Flickable's content is not
+    // laid out when the view switches (a hidden window lays out on its first
+    // frame), so a single scroll lands on a short page and is clamped to 0.
+    // The scroll is re-applied as the page grows, then given up on, so a
+    // later layout change never drags the user back.
+    property bool historyScrollPending: false
+    function _scrollToHistory() {
+        if (!historyScrollPending)
+            return
+        var y = dictationHistorySection.mapToItem(contentColumn, 0, 0).y
+        var maxY = Math.max(0, flickArea.contentHeight - flickArea.height)
+        flickArea.contentY = Math.max(0, Math.min(y, maxY))
+    }
+    Timer {
+        id: historyScrollTimer
+        interval: 500
+        onTriggered: unifiedSettings.historyScrollPending = false
+    }
 
     // The two halves of the key list.  A function rather than two
     // properties so the split is stated once; the binding that calls it
@@ -410,6 +440,7 @@ Item {
             // -- Scrollable content --
             Flickable {
                 id: flickArea
+                objectName: "settingsFlickable"
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 contentWidth: width
@@ -424,6 +455,13 @@ Item {
                 Connections {
                     target: unifiedSettings
                     function onCurrentViewChanged() { flickArea.contentY = 0 }
+                }
+
+                // The other half of showDictationHistory(): follow the page
+                // as it lays out.
+                Connections {
+                    target: flickArea
+                    function onContentHeightChanged() { unifiedSettings._scrollToHistory() }
                 }
 
                 ScrollBar.vertical: ScrollBar {
@@ -2660,6 +2698,16 @@ Item {
                                     checked: unifiedSettings.dictationStreamInserts
                                     onToggled: function(c) { unifiedSettings.settingChanged("dictationStreamInserts", c) }
                                 }
+
+                                SettingsToggle {
+                                    objectName: "dictationAutoCopyToggle"
+                                    Layout.fillWidth: true
+                                    text: "Copy Finished Dictation"
+                                    description: "Put each finished dictation on the clipboard. Windows clipboard history may keep it"
+                                    enabled: unifiedSettings.dictationEnabled
+                                    checked: unifiedSettings.dictationAutoCopy
+                                    onToggled: function(c) { unifiedSettings.settingChanged("dictationAutoCopy", c) }
+                                }
                             }
                         }
 
@@ -3397,6 +3445,8 @@ Item {
 
                         // -- History --
                         SettingsSection {
+                            id: dictationHistorySection
+                            objectName: "dictationHistorySection"
                             title: "History"
                             Layout.fillWidth: true
 
