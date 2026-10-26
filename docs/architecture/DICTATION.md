@@ -102,7 +102,7 @@ looking like recording**, or the user clicks again and starts a second run.
 Deepgram a `CloseStream`, because the final fragment for the last thing
 said arrives *after* that message. Closing on stop would throw away the
 tail of the user's sentence, which is the part they are most likely to be
-watching for. `FLUSH_GRACE_MS` (2.5 s) is the ceiling, so a wedged server
+watching for. `FLUSH_GRACE_MS` (5 s) is the ceiling, so a wedged server
 cannot pin the UI in `finishing`.
 
 ## AI cleanup
@@ -600,7 +600,12 @@ Every setter persists immediately, the same way `SnippetStore` does, so there is
   OSK would need the edit-session plumbing the snippets editor uses. That
   is still not wired, but it is mitigated: the key fields have large Paste
   and Save buttons, so the whole path is two clicks and no typing. (Nobody
-  types 40 hex characters by hand, least of all here.)
+  types 40 hex characters by hand, least of all here.) Paste and Save
+  clears the field first (`TextField.paste()` inserts at the caret, so a
+  second tap used to save the key twice), and both key setters collapse an
+  exact doubled paste as a backstop. Qt's wording for a Deepgram 401
+  ("Unsupported WWW-Authenticate challenges") maps to the check-your-key
+  message in `_friendly_error`.
 - **Dictation is a no-op while an edit popup is open.** Routing a phrase
   into the snippets editor or the prediction-edit field would need an
   "insert this string" edit signal; both surfaces currently take one

@@ -442,7 +442,10 @@ Three things about it are load-bearing:
 - **`load()` merges `capitalization` *before* the fragment strip.** It
   used to merge after, and the strip asks `_is_plausible_word`, so every
   learned acronym would have been deleted on the way back in and the
-  model could never hold one across a restart.
+  model could never hold one across a restart. The merge keeps only
+  entries with a non-empty string key and value: a `NaN` or other
+  non-string value used to load and then make the next save raise in
+  `json.dump`.
 - **The next-word gate consults it too** (`HybridPredictor._next_word_allowed`,
   which both merge sites now call). Letting `pr` into the vocabulary is
   not enough on its own: `_short_word_allowed` would still drop it for
