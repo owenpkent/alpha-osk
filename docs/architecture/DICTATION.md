@@ -152,6 +152,19 @@ optional style profile (`writing_style`, up to 2000 characters, newlines
 kept and other control characters stripped) rides in `<style_profile>`
 delimiters and describes the user's voice.
 
+**How I Speak** (`speech_notes`, up to `MAX_SPEECH_NOTES_LEN` = 1000
+characters, cleaned like the style profile) describes how the *speaker
+sounds*: names, slurred sounds, repeated phrases. `prompts._speech_notes_lines`
+adds it, in `<speech_notes>` delimiters framed as background that cannot
+change the rules, to the cleanup prompt and the writing prompt (both read
+spoken words); Reprocess goes through `_send_cleanup`, so it gets it too.
+An empty note adds nothing, so the prompt is byte-identical to before.
+The cap is half the style cap because it rides on every cleanup run, the
+most frequent request. It is prose about the user: the config `repr` shows
+its length only and nothing logs it. The Settings field is the same
+paste-and-save TextArea as the style field (Settings is an ordinary window
+that can hold focus, so it uses no edit session).
+
 Only the writing model sends the server-side fallback beta header and
 `"fallbacks": "default"`, so Anthropic retries a spurious refusal on
 another model rather than handing the user a "declined" they cannot easily
@@ -217,15 +230,24 @@ message, which can quote the input.
 
 ## History
 
-The last 20 runs (`history_enabled`, **on** by default) are kept in
+The most recent runs that fit the user's budget (`history_enabled`, **on** by default) are kept in
 `<config>/dictation_history/`: an `index.json` plus one 16 kHz mono WAV per
 run, so a run can be played back, copied, reprocessed through cleanup or
 deleted. It exists because a held-back run and a failed cleanup are exactly
 when the user wants the original words back. It is local and nothing in it
 is sent anywhere on its own; the one outbound path is Reprocess, below.
 
-Caps and validation (`history.py`): 20 entries, 200 MB of audio in total,
-a 2 MB index checked by `stat()` before it is opened, 20 000 characters per
+Caps and validation (`history.py`): the budget `history_limit_mb` (50, 100,
+200, 500, or 0 for No limit; anything else loads as the default 200, which is
+the old fixed audio cap) covers the WAVs **plus the index** and the oldest
+runs go first, the newest never by its own size alone; `usage_bytes()` feeds
+the Settings line ("Using 34 MB of 200 MB", "Using 34 MB" under No limit).
+Lowering the limit prunes at once (`set_limit_bytes`). 0 turns byte pruning
+off, leaving only the entry ceiling `MAX_ENTRIES` = 5000, which drops the
+oldest. A 16 MB index checked by `stat()` before it is opened (sized so a
+ceiling-sized index of ordinary runs loads; pruning also keeps the saved
+index under it, so non-ASCII-heavy stores shed the oldest rather than write
+an index the loader would refuse), 20 000 characters per
 text field. Ids are `secrets.token_hex(8)` and validated against
 `^[0-9a-f]{16}$` on load; **the WAV path is always derived from the
 validated id, never read from the index**, so a hand-edited index cannot
@@ -621,6 +643,7 @@ Slots:
 | `setDictationApiKey(str) -> bool` | **Honour the bool.** The store can refuse the write, and a green "Saved" over a key that never landed sends the user away believing dictation is set up. |
 | `clearDictationApiKey() -> bool` | Cancels any live run too. |
 | `setDictationEnabled(bool)` | Cancels a live run when switching off, the failure `setSnippetDetection(False)` learned. |
+| `setDictationSpeechNotes(str) -> bool`, `setDictationHistoryLimit(int) -> bool`, `getDictationHistoryUsageBytes() -> float` | How I Speak; the history budget in MB (0 = No limit, anything else off the list becomes 200 and prunes now); bytes in use, never a path. |
 | `setDictationModel/Language/Device(str)` | Model and language are validated against the allow-lists in `config.py`; an unknown value is ignored rather than stored. |
 | `setDictationMaxSeconds(int)` / `setDictationSilenceSeconds(int)` | Clamped to the ranges in `config.py`. |
 | `setDictationStreamInserts(bool)` | Off holds a run back and inserts it once, raw (or cleaned, if cleanup is on). |

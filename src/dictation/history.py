@@ -41,14 +41,21 @@ from pathlib import Path
 from typing import Any
 
 from ..atomic_write import atomic_write_json
+from .config import DEFAULT_HISTORY_LIMIT_MB
 
 _logger = logging.getLogger(__name__)
 
 SCHEMA_VERSION = 1
 
-MAX_ENTRIES = 20
-MAX_AUDIO_BYTES_TOTAL = 200 * 1024 * 1024
-MAX_INDEX_BYTES = 2 * 1024 * 1024
+#: A ceiling, not the working limit: the user's megabyte budget decides
+#: how many runs are kept, and under "No limit" (0) this alone bounds the
+#: store.  The oldest run goes when it is reached.
+MAX_ENTRIES = 5000
+#: Sized for `MAX_ENTRIES` ordinary runs (a few KB each once escaped and
+#: indented).  Pruning still keeps the saved index under it, so a store of
+#: huge non-ASCII runs sheds the oldest rather than saving an index the
+#: loader would refuse.
+MAX_INDEX_BYTES = 16 * 1024 * 1024
 MAX_TEXT_CHARS = 20_000
 MAX_SECONDS = 3600.0
 
@@ -106,8 +113,13 @@ def _clean_entry(raw: Any) -> dict[str, Any] | None:
 class DictationHistory:
     """The on-disk history.  Newest entry first in memory and on disk."""
 
-    def __init__(self, directory: Path | None = None) -> None:
+    def __init__(
+        self, directory: Path | None = None, limit_bytes: int = DEFAULT_HISTORY_LIMIT_MB << 20
+    ) -> None:
         self._explicit_dir = directory
+        #: Total bytes the WAVs plus the index may use; oldest runs go first.
+        #: 0 means no byte limit.
+        self.limit_bytes = limit_bytes
         self._entries: list[dict[str, Any]] | None = None
 
     # --- paths ----------------------------------------------------------
@@ -237,20 +249,46 @@ class DictationHistory:
                 pass
         return total
 
+    def usage_bytes(self) -> int:
+        """Bytes the history occupies: every recording plus the index."""
+        self._load()
+        return self._audio_bytes() + self._encoded_bytes()
+
+    def set_limit_bytes(self, limit_bytes: int) -> None:
+        """Change the budget and prune to it now, so a lower limit frees space."""
+        self.limit_bytes = limit_bytes
+        self._prune()
+        self._save()
+
     def _prune(self) -> None:
         entries = self._load()
         while len(entries) > MAX_ENTRIES:
             self._drop(entries.pop())
-        # Oldest entries go first when the disk budget is exceeded.  The
-        # newest is never evicted by its own size alone.
-        while len(entries) > 1 and self._audio_bytes() > MAX_AUDIO_BYTES_TOTAL:
-            self._drop(entries.pop())
+        # Oldest entries go first when the budget is exceeded.  The newest
+        # is never evicted by its own size alone: a single long run over
+        # the limit is still the one the user most needs back.  Sizes are
+        # measured once and subtracted as entries go, because re-measuring
+        # per drop is quadratic and this runs on the UI thread.
+        if self.limit_bytes > 0 and len(entries) > 1:
+            sizes = []
+            for entry in entries:
+                try:
+                    sizes.append(self._wav_path(entry["id"]).stat().st_size)
+                except OSError:
+                    sizes.append(0)
+            each = [len(json.dumps(e, indent=2, ensure_ascii=True)) + 4 for e in entries]
+            total = sum(sizes) + self._encoded_bytes()
+            while len(entries) > 1 and total > self.limit_bytes:
+                self._drop(entries.pop())
+                total -= sizes.pop() + each.pop()
         # The index has a byte cap of its own, and `_load` refuses a file
-        # over it unread.  Each entry's text is capped, but twenty entries
-        # of non-ASCII text at the cap encode past the index cap, and a
-        # saved index the loader rejects reads back as nothing.
+        # over it unread.  Each entry's text is capped, but thousands of
+        # entries of non-ASCII text at the cap encode past the index cap,
+        # and a saved index the loader rejects reads back as nothing.
         while len(entries) > 1 and self._encoded_bytes() > MAX_INDEX_BYTES:
-            self._drop(entries.pop())
+            for _ in range(max(1, len(entries) // 20)):
+                if len(entries) > 1:
+                    self._drop(entries.pop())
 
     def _drop(self, entry: dict[str, Any]) -> None:
         self._unlink(self._wav_path(entry["id"]))

@@ -26,7 +26,7 @@ from PySide6.QtCore import QObject, Signal
 
 from src.dictation import config as dictation_config
 from src.dictation.claude import CLEANUP_MODEL, WRITING_MODEL
-from src.dictation.config import MAX_STYLE_LEN, DictationConfig
+from src.dictation.config import MAX_SPEECH_NOTES_LEN, MAX_STYLE_LEN, DictationConfig
 from src.dictation.controller import DictationController, DictationState
 from src.dictation.history import DictationHistory
 from src.keyboard_bridge import KeyboardBridge
@@ -1487,3 +1487,151 @@ class TestTheBridgeAutoCopies:
         with caplog.at_level(logging.DEBUG):
             _speak(ctl, "a very private sentence")
         assert "private" not in caplog.text
+
+
+class TestSpeechNotes:
+    def test_old_files_have_none(self, cfg_path: Path):
+        cfg_path.write_text(json.dumps({"enabled": True}), encoding="utf-8")
+        assert DictationConfig.load(cfg_path).speech_notes == ""
+
+    def test_round_trip_cleaned_and_capped(self, cfg_path: Path):
+        DictationConfig(speech_notes="  I say \x00Owen\nsoft r  ").save(cfg_path)
+        assert DictationConfig.load(cfg_path).speech_notes == "I say Owen\nsoft r"
+        data = json.loads(cfg_path.read_text(encoding="utf-8"))
+        data["speech_notes"] = "x" * (MAX_SPEECH_NOTES_LEN + 500)
+        cfg_path.write_text(json.dumps(data), encoding="utf-8")
+        assert len(DictationConfig.load(cfg_path).speech_notes) == MAX_SPEECH_NOTES_LEN
+        data["speech_notes"] = 5
+        cfg_path.write_text(json.dumps(data), encoding="utf-8")
+        assert DictationConfig.load(cfg_path).speech_notes == ""
+
+    def test_the_repr_shows_a_length_only(self):
+        assert "slurred" not in repr(DictationConfig(speech_notes="slurred s"))
+
+    def test_an_empty_note_leaves_both_prompts_unchanged(self):
+        from src.dictation import prompts
+
+        plain = prompts.cleanup_system_prompt("en", "smart")
+        assert prompts.cleanup_system_prompt("en", "smart", "  \n ") == plain
+        assert "speech_notes" not in plain
+        writing = prompts.writing_system_prompt("Warm.")
+        assert prompts.writing_system_prompt("Warm.", "") == writing
+        assert "speech_notes" not in writing
+
+    def test_a_note_is_framed_as_data_before_the_reply_rule(self):
+        from src.dictation import prompts
+
+        prompt = prompts.cleanup_system_prompt("en", "smart", "I say Owen as Oh-wen.")
+        assert "<speech_notes>\nI say Owen as Oh-wen.\n</speech_notes>" in prompt
+        assert "not instructions" in prompt
+        assert prompt.index("</speech_notes>") < prompt.index("Reply with only")
+        assert "<speech_notes>" in prompts.writing_system_prompt("", "I say Owen as Oh-wen.")
+
+    def test_cleanup_write_and_reprocess_all_carry_it(self, qapp, monkeypatch, claude, history):
+        ctl = _make_controller(
+            qapp,
+            monkeypatch,
+            claude,
+            history,
+            anthropic_key=ANTHROPIC,
+            cleanup_enabled=True,
+            writing_enabled=True,
+            speech_notes="drops the t in just",
+        )
+        _speak(ctl, "hello")
+        assert "drops the t in just" in claude.calls[-1]["system"]
+        claude.last.succeeded.emit("Hello.")
+        _speak(ctl, "write a note", purpose="write")
+        assert claude.calls[-1]["model"] == WRITING_MODEL
+        assert "drops the t in just" in claude.calls[-1]["system"]
+        claude.last.succeeded.emit("A note.")
+        entry_id = history.add("dictate", "raw um", "raw um", False, 1.0, None)
+        assert ctl.reprocess(entry_id) is True
+        assert claude.calls[-1]["model"] == CLEANUP_MODEL
+        assert "drops the t in just" in claude.calls[-1]["system"]
+
+    def test_the_bridge_saves_and_reports_it(self, bridge: KeyboardBridge):
+        assert bridge.setDictationSpeechNotes("soft r\x00") is True
+        assert bridge.getDictationSettings()["speechNotes"] == "soft r"
+        assert DictationConfig.load().speech_notes == "soft r"
+
+
+class TestHistoryLimit:
+    def test_choices_and_default(self):
+        assert dictation_config.HISTORY_LIMITS_MB == (50, 100, 200, 500, 0)
+        assert DictationConfig().history_limit_mb == 200
+
+    @pytest.mark.parametrize("bad", [None, "100", 75, -1, True, 1.5, 10**9, []])
+    def test_values_outside_the_choices_load_as_the_default(self, cfg_path: Path, bad):
+        cfg_path.write_text(json.dumps({"history_limit_mb": bad}), encoding="utf-8")
+        assert DictationConfig.load(cfg_path).history_limit_mb == 200
+
+    @pytest.mark.parametrize("good", [50, 100, 200, 500, 0])
+    def test_each_choice_round_trips(self, cfg_path: Path, good):
+        DictationConfig(history_limit_mb=good).save(cfg_path)
+        assert DictationConfig.load(cfg_path).history_limit_mb == good
+
+    def test_the_bridge_reports_choices_and_usage(self, bridge: KeyboardBridge):
+        data = bridge.getDictationSettings()
+        assert data["historyLimitMb"] == 200 and data["historyLimits"] == [50, 100, 200, 500, 0]
+        assert bridge.getDictationHistoryUsageBytes() >= 0
+
+    def test_choosing_a_limit_applies_it_and_prunes_the_oldest(self, bridge: KeyboardBridge):
+        store = bridge._history_store()
+        pcm = b"\x01\x00" * 16000 * 30
+        store.limit_bytes = 0
+        for i in range(4):
+            store.add("dictate", f"r{i}", f"x{i}", False, 1.0, pcm)
+        assert bridge.getDictationHistoryUsageBytes() > 4 * len(pcm)
+        seen: list[int] = []
+        bridge.dictationHistoryChanged.connect(lambda: seen.append(1))
+        # 50 MB holds four 0.96 MB recordings, so nothing is dropped.
+        assert bridge.setDictationHistoryLimit(50) is True
+        assert bridge._dictation_config.history_limit_mb == 50
+        assert store.limit_bytes == 50 << 20
+        assert len(store.entries()) == 4 and seen == []
+        store.set_limit_bytes(len(pcm) + 500)
+        assert len(store.entries()) == 1
+
+    def test_no_limit_is_stored_and_disables_pruning(self, bridge: KeyboardBridge):
+        assert bridge.setDictationHistoryLimit(0) is True
+        assert bridge._dictation_config.history_limit_mb == 0
+        assert bridge._history_store().limit_bytes == 0
+        assert bridge.setDictationHistoryLimit(77) is True
+        assert bridge._dictation_config.history_limit_mb == 200
+
+    def test_a_new_store_takes_the_saved_limit(self, bridge: KeyboardBridge):
+        bridge._dictation_history = None
+        bridge._dictation_config.history_limit_mb = 100
+        assert bridge._history_store().limit_bytes == 100 << 20
+
+    def test_a_run_is_recorded_under_the_configured_limit(self, qapp, monkeypatch, claude, history):
+        ctl = _make_controller(qapp, monkeypatch, claude, history, history_limit_mb=0)
+        _speak(ctl, "hello there")
+        assert history.limit_bytes == 0
+
+
+class TestMoreLanguages:
+    ADDED = ("ko", "zh", "ru", "uk", "pl", "tr", "sv", "da", "no", "fi")
+
+    def test_the_added_languages_are_offered_once_each(self):
+        codes = [c for c, _ in dictation_config.LANGUAGES]
+        assert len(codes) == len(set(codes))
+        for code in self.ADDED:
+            assert code in codes
+        assert codes[-1] == "multi" and codes[:2] == ["en", "en-GB"]
+
+    def test_arabic_is_left_out_because_nova_2_lacks_it(self):
+        assert "ar" not in {c for c, _ in dictation_config.LANGUAGES}
+
+    @pytest.mark.parametrize("code", ADDED)
+    def test_a_saved_language_loads_and_unknown_ones_fall_back(self, cfg_path: Path, code):
+        cfg_path.write_text(json.dumps({"language": code}), encoding="utf-8")
+        assert DictationConfig.load(cfg_path).language == code
+        cfg_path.write_text(json.dumps({"language": "xx"}), encoding="utf-8")
+        assert DictationConfig.load(cfg_path).language == "en"
+
+    def test_the_cleanup_prompt_names_the_language(self):
+        from src.dictation import prompts
+
+        assert "Korean" in prompts.cleanup_system_prompt("ko", "smart")

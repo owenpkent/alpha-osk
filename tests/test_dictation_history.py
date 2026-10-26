@@ -86,32 +86,60 @@ class TestTheWav:
 
 
 class TestPruning:
-    def test_past_the_entry_cap_the_oldest_go_with_their_audio(
-        self, store: DictationHistory, tmp_path: Path
+    def test_past_the_entry_ceiling_the_oldest_go_with_their_audio(
+        self, store: DictationHistory, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ):
-        ids = _add(store, hist.MAX_ENTRIES + 3)
+        monkeypatch.setattr(hist, "MAX_ENTRIES", 5)
+        ids = _add(store, 8)
         entries = store.entries()
-        assert len(entries) == hist.MAX_ENTRIES
+        assert len(entries) == 5
         assert [e["id"] for e in entries] == list(reversed(ids[3:]))
         for old in ids[:3]:
             assert not (tmp_path / "h" / f"{old}.wav").exists()
 
-    def test_past_the_byte_cap_the_oldest_go_first(
-        self, store: DictationHistory, monkeypatch: pytest.MonkeyPatch
-    ):
-        monkeypatch.setattr(hist, "MAX_AUDIO_BYTES_TOTAL", 3 * (len(PCM) + 100))
+    def test_past_the_byte_limit_the_oldest_go_first(self, tmp_path: Path):
+        probe = DictationHistory(tmp_path / "probe")
+        _add(probe)
+        one = probe.usage_bytes()
+        store = DictationHistory(tmp_path / "h", limit_bytes=3 * one + one // 2)
         ids = _add(store, 6)
         kept = [e["id"] for e in store.entries()]
         assert kept[0] == ids[-1]
-        assert len(kept) < 6 and set(kept) <= set(ids)
+        assert 1 < len(kept) < 6 and set(kept) <= set(ids)
         assert kept == list(reversed(ids[-len(kept) :]))
+        assert store.usage_bytes() <= store.limit_bytes
 
-    def test_the_newest_entry_survives_even_alone_over_the_cap(
-        self, store: DictationHistory, monkeypatch: pytest.MonkeyPatch
-    ):
-        monkeypatch.setattr(hist, "MAX_AUDIO_BYTES_TOTAL", 10)
+    def test_the_newest_entry_survives_even_alone_over_the_limit(self, tmp_path: Path):
+        store = DictationHistory(tmp_path / "h", limit_bytes=10)
         (entry_id,) = _add(store)
         assert [e["id"] for e in store.entries()] == [entry_id]
+
+    def test_lowering_the_limit_prunes_at_once(self, tmp_path: Path):
+        store = DictationHistory(tmp_path / "h", limit_bytes=10**9)
+        ids = _add(store, 6)
+        assert len(store.entries()) == 6
+        store.set_limit_bytes(store.usage_bytes() // 2)
+        kept = [e["id"] for e in DictationHistory(tmp_path / "h").entries()]
+        assert 1 <= len(kept) < 6 and kept[0] == ids[-1]
+        for gone in ids[: 6 - len(kept)]:
+            assert not (tmp_path / "h" / f"{gone}.wav").exists()
+
+    def test_a_limit_of_zero_means_no_byte_pruning(self, tmp_path: Path):
+        store = DictationHistory(tmp_path / "h", limit_bytes=0)
+        ids = _add(store, 12)
+        assert [e["id"] for e in store.entries()] == list(reversed(ids))
+        store.set_limit_bytes(0)
+        assert len(store.entries()) == 12
+
+    def test_usage_counts_recordings_and_the_index(self, store: DictationHistory, tmp_path: Path):
+        _add(store, 2)
+        wavs = sum(f.stat().st_size for f in (tmp_path / "h").glob("*.wav"))
+        index = (tmp_path / "h" / "index.json").stat().st_size
+        # The index is measured by re-encoding, which can differ by a few bytes.
+        assert abs(store.usage_bytes() - (wavs + index)) <= 64
+
+    def test_the_default_limit_is_two_hundred_megabytes(self, store: DictationHistory):
+        assert store.limit_bytes == 200 * 1024 * 1024
 
     def test_the_saved_index_always_fits_the_loader(
         self, store: DictationHistory, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -306,3 +334,22 @@ class TestNotInTheBackupArchive:
         with zipfile.ZipFile(archive) as zf:
             assert not [n for n in zf.namelist() if "dictation_history" in n]
             assert b"private words" not in b"".join(zf.read(n) for n in zf.namelist())
+
+
+class TestTheEntryCeiling:
+    def test_a_full_ceiling_sized_index_loads(self, tmp_path: Path):
+        # Roughly a thousand characters each way: well past a typical run.
+        text = "word " * 200
+        entries = [{**_good(f"{i:016x}"), "raw": text, "result": text} for i in range(5000)]
+        _index(tmp_path / "h", {"entries": entries})
+        size = (tmp_path / "h" / "index.json").stat().st_size
+        assert hist.MAX_ENTRIES == 5000 and size <= hist.MAX_INDEX_BYTES
+        assert len(DictationHistory(tmp_path / "h").entries()) == 5000
+
+    def test_with_no_limit_the_ceiling_drops_the_oldest(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        monkeypatch.setattr(hist, "MAX_ENTRIES", 4)
+        store = DictationHistory(tmp_path / "h", limit_bytes=0)
+        ids = _add(store, 7)
+        assert [e["id"] for e in store.entries()] == list(reversed(ids[3:]))

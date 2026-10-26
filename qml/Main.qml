@@ -1335,6 +1335,9 @@ Window {
         settingsPanel.dictationNumberFormats = d.numberFormats
         settingsPanel.dictationWritingEnabled = d.writingEnabled
         settingsPanel.dictationWritingStyle = d.writingStyle
+        settingsPanel.dictationSpeechNotes = d.speechNotes
+        settingsPanel.dictationHistoryLimitMb = d.historyLimitMb
+        settingsPanel.dictationHistoryLimits = d.historyLimits
         settingsPanel.dictationHistoryEnabled = d.historyEnabled
         settingsPanel.dictationAutoCopy = d.autoCopy
         root.refreshDictationHistory()
@@ -1348,6 +1351,7 @@ Window {
         if (!keyboard || typeof settingsPanel === "undefined" || !settingsPanel)
             return
         settingsPanel.dictationHistory = keyboard.getDictationHistory()
+        settingsPanel.dictationHistoryUsageBytes = keyboard.getDictationHistoryUsageBytes()
         settingsPanel.dictationHistoryConfirm = ""
     }
 
@@ -6286,6 +6290,17 @@ Window {
                             dictationErrorToast.flash(qsTr("Could not save that style"))
                         }
                     }
+                } else if (setting === "dictationSpeechNotes") {
+                    if (keyboard) {
+                        if (keyboard.setDictationSpeechNotes(value)) {
+                            editSavedToast.flash()
+                            root.refreshDictation(true)
+                        } else {
+                            dictationErrorToast.flash(qsTr("Could not save that note"))
+                        }
+                    }
+                } else if (setting === "dictationHistoryLimit") {
+                    if (keyboard) { keyboard.setDictationHistoryLimit(value); root.refreshDictation(true) }
                 } else if (setting === "dictationAutoCopy") {
                     if (keyboard) { keyboard.setDictationAutoCopy(value); root.refreshDictation(true) }
                 } else if (setting === "dictationHistoryEnabled") {

@@ -546,7 +546,9 @@ class DictationController(QObject):
         max_tokens = min(_CLEANUP_MAX_TOKENS, _CLEANUP_TOKEN_FLOOR + len(raw) // 2)
         request: ClaudeRequest = self._client().send(
             CLEANUP_MODEL,
-            prompts.cleanup_system_prompt(self._config.language, self._config.number_format),
+            prompts.cleanup_system_prompt(
+                self._config.language, self._config.number_format, self._config.speech_notes
+            ),
             prompts.cleanup_user_message(raw),
             api_key=self._config.anthropic_key,
             max_tokens=max_tokens,
@@ -570,7 +572,9 @@ class DictationController(QObject):
         if self._purpose == "write":
             request = self._client().send(
                 WRITING_MODEL,
-                prompts.writing_system_prompt(self._config.writing_style),
+                prompts.writing_system_prompt(
+                    self._config.writing_style, self._config.speech_notes
+                ),
                 prompts.writing_user_message(text),
                 api_key=self._config.anthropic_key,
                 max_tokens=_WRITING_MAX_TOKENS,
@@ -703,9 +707,9 @@ class DictationController(QObject):
         if not self._record_history:
             return False
         seconds = max(0.0, time.monotonic() - self._run_started)
-        entry_id = self._history_store().add(
-            purpose, raw, result, cleaned, seconds, bytes(self._pcm) or None
-        )
+        store = self._history_store()
+        store.limit_bytes = self._config.history_limit_mb << 20
+        entry_id = store.add(purpose, raw, result, cleaned, seconds, bytes(self._pcm) or None)
         if entry_id:
             self.historyChanged.emit()
         return bool(entry_id)

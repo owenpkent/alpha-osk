@@ -2995,7 +2995,7 @@ class KeyboardBridge(QObject):
         """
         return glyph_categories()
 
-    @Slot(result=int)
+    @Slot(result=float)
     def getRecentGlyphLimit(self) -> int:
         """How many recently-tapped glyphs the picker keeps.
 
@@ -4698,7 +4698,9 @@ class KeyboardBridge(QObject):
 
     def _history_store(self) -> DictationHistory:
         if self._dictation_history is None:
-            self._dictation_history = DictationHistory()
+            self._dictation_history = DictationHistory(
+                limit_bytes=self._dictation_config.history_limit_mb << 20
+            )
         return self._dictation_history
 
     def _insert_dictated_text(self, text: str) -> None:
@@ -4879,7 +4881,10 @@ class KeyboardBridge(QObject):
             ],
             "writingEnabled": cfg.writing_enabled,
             "writingStyle": cfg.writing_style,
+            "speechNotes": cfg.speech_notes,
             "historyEnabled": cfg.history_enabled,
+            "historyLimitMb": cfg.history_limit_mb,
+            "historyLimits": list(dictation_config.HISTORY_LIMITS_MB),
             "autoCopy": cfg.auto_copy,
             "models": [{"id": m, "label": label} for m, label in dictation_config.MODELS],
             "languages": [{"id": c, "label": label} for c, label in dictation_config.LANGUAGES],
@@ -5026,6 +5031,32 @@ class KeyboardBridge(QObject):
 
         self._dictation_config.writing_style = _clean_style(style)
         return self._dictation_config.save()
+
+    @Slot(str, result=bool)
+    def setDictationSpeechNotes(self, notes: str) -> bool:
+        from .dictation.config import _clean_speech_notes
+
+        self._dictation_config.speech_notes = _clean_speech_notes(notes)
+        return self._dictation_config.save()
+
+    @Slot(int, result=bool)
+    def setDictationHistoryLimit(self, megabytes: int) -> bool:
+        """Set the history budget (0 = no limit); a lower one prunes at once."""
+        from .dictation.config import clean_history_limit
+
+        limit = clean_history_limit(megabytes)
+        self._dictation_config.history_limit_mb = limit
+        store = self._history_store()
+        before = len(store.entries())
+        store.set_limit_bytes(limit << 20)
+        if len(store.entries()) != before:
+            self.dictationHistoryChanged.emit()
+        return self._dictation_config.save()
+
+    @Slot(result=float)
+    def getDictationHistoryUsageBytes(self) -> float:
+        """Bytes the history uses on disk (recordings plus index), never a path."""
+        return float(self._history_store().usage_bytes())
 
     @Slot(bool)
     def setDictationHistoryEnabled(self, enabled: bool) -> None:

@@ -5,6 +5,9 @@ All notable changes to Alpha-OSK are documented in this file.
 ## [Unreleased]
 
 ### Added
+- **How I Speak** (*Settings > Dictation > AI cleanup*): describe your own speech (names, slurred sounds, phrases you repeat) and Claude uses it to read the transcript, in AI cleanup, Reprocess and Write with AI. It is sent to Anthropic with each of those requests.
+- **Choose how much dictation history to keep.** *Settings > Dictation > History* offers 50, 100, 200 or 500 MB, or No limit, and shows how much is in use. The oldest runs go first; the 20-run cap is gone (the ceiling is now 5000 runs).
+- **Ten more dictation languages:** Korean, Chinese (Mandarin), Russian, Ukrainian, Polish, Turkish, Swedish, Danish, Norwegian and Finnish.
 - **A History button beside the microphone** opens Settings on the Dictation page, scrolled to your saved runs. It has a title-bar copy for when suggestions are off.
 - **Dictation can stop typing into the app.** *Settings > Dictation > Type Into the App*, on by default. Off, a run's words only show in the bar, go to the clipboard and are kept in History.
 - **Open Folder in Dictation History** opens the folder that holds the saved runs and their recordings.

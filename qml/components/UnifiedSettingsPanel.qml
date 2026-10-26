@@ -141,6 +141,10 @@ Item {
     property var dictationNumberFormats: []      // [{id, label}]
     property bool dictationWritingEnabled: false
     property string dictationWritingStyle: ""
+    property string dictationSpeechNotes: ""
+    property int dictationHistoryLimitMb: 200    // 0 = no limit
+    property var dictationHistoryLimits: []      // MB choices, 0 last, see getDictationSettings()
+    property double dictationHistoryUsageBytes: 0
     property bool dictationHistoryEnabled: true
     property bool dictationAutoCopy: true
     property var dictationHistory: []            // newest first, see getDictationHistory()
@@ -3364,6 +3368,78 @@ Item {
                                         }
                                     }
                                 }
+
+                                Text {
+                                    text: "How I Speak"
+                                    textFormat: Text.PlainText
+                                    color: "#c0c0c0"
+                                    font.pixelSize: 12
+                                    Layout.topMargin: 4
+                                }
+
+                                Text {
+                                    Layout.fillWidth: true
+                                    text: "Words or habits Claude should know when cleaning up, like names, slurred sounds, or phrases you repeat. Sent to Anthropic with each cleanup or Write with AI request."
+                                    textFormat: Text.PlainText
+                                    color: "#888"
+                                    font.pixelSize: 10
+                                    wrapMode: Text.WordWrap
+                                }
+
+                                ScrollView {
+                                    Layout.fillWidth: true
+                                    Layout.preferredHeight: 80
+                                    clip: true
+
+                                    TextArea {
+                                        id: dictationSpeechNotesField
+                                        objectName: "dictationSpeechNotesField"
+                                        text: unifiedSettings.dictationSpeechNotes
+                                        wrapMode: TextArea.Wrap
+                                        selectByMouse: true
+                                        color: "#f0f0f0"
+                                        font.pixelSize: 12
+                                        selectionColor: "#4a9eff"
+                                        selectedTextColor: "#fff"
+                                        leftPadding: 8
+                                        rightPadding: 8
+                                        topPadding: 6
+                                        bottomPadding: 6
+
+                                        background: Rectangle {
+                                            color: "#1a1a2a"
+                                            radius: 6
+                                            border.color: dictationSpeechNotesField.activeFocus ? "#4a9eff" : "#444"
+                                            border.width: 1
+                                        }
+                                    }
+                                }
+
+                                Flow {
+                                    Layout.fillWidth: true
+                                    spacing: 6
+
+                                    SettingsButton {
+                                        objectName: "dictationSpeechNotesPasteButton"
+                                        text: "Paste and Save"
+                                        tone: "go"
+                                        onClicked: {
+                                            dictationSpeechNotesField.paste()
+                                            unifiedSettings.settingChanged("dictationSpeechNotes", dictationSpeechNotesField.text)
+                                        }
+                                    }
+                                    SettingsButton {
+                                        text: "Save"
+                                        onClicked: unifiedSettings.settingChanged("dictationSpeechNotes", dictationSpeechNotesField.text)
+                                    }
+                                    SettingsButton {
+                                        text: "Clear"
+                                        onClicked: {
+                                            dictationSpeechNotesField.text = ""
+                                            unifiedSettings.settingChanged("dictationSpeechNotes", "")
+                                        }
+                                    }
+                                }
                             }
                         }
 
@@ -3469,10 +3545,66 @@ Item {
                                     objectName: "dictationHistoryToggle"
                                     Layout.fillWidth: true
                                     text: "Keep dictation history"
-                                    description: "Saves the last 20 dictations and their audio on this computer only"
+                                    description: "Saves your recent dictations and their audio on this computer only, up to the limit below"
                                     enabled: unifiedSettings.dictationEnabled
                                     checked: unifiedSettings.dictationHistoryEnabled
                                     onToggled: function(c) { unifiedSettings.settingChanged("dictationHistoryEnabled", c) }
+                                }
+
+                                Text {
+                                    text: "Storage limit"
+                                    textFormat: Text.PlainText
+                                    color: "#c0c0c0"
+                                    font.pixelSize: 12
+                                }
+
+                                Flow {
+                                    objectName: "dictationHistoryLimitFlow"
+                                    Layout.fillWidth: true
+                                    spacing: 6
+
+                                    Repeater {
+                                        model: unifiedSettings.dictationHistoryLimits
+                                        delegate: Rectangle {
+                                            property bool isCurrent: unifiedSettings.dictationHistoryLimitMb === modelData
+                                            width: Math.max(72, histLimitLabel.implicitWidth + 28)
+                                            height: 38
+                                            radius: 6
+                                            color: isCurrent ? "#2a4a6a" : (histLimitArea.containsMouse ? "#3a3a3a" : "#2a2a2a")
+                                            border.color: isCurrent ? "#4a9eff" : "#444"
+                                            border.width: 1
+                                            Text {
+                                                id: histLimitLabel
+                                                anchors.centerIn: parent
+                                                text: modelData === 0 ? "No limit" : modelData + " MB"
+                                                textFormat: Text.PlainText
+                                                color: isCurrent ? "#fff" : "#ccc"
+                                                font.pixelSize: 13
+                                            }
+                                            MouseArea {
+                                                id: histLimitArea
+                                                anchors.fill: parent
+                                                hoverEnabled: true
+                                                cursorShape: Qt.PointingHandCursor
+                                                onClicked: unifiedSettings.settingChanged("dictationHistoryLimit", modelData)
+                                            }
+                                        }
+                                    }
+                                }
+
+                                Text {
+                                    objectName: "dictationHistoryUsage"
+                                    Layout.fillWidth: true
+                                    text: {
+                                        var used = Math.max(0, Math.round(unifiedSettings.dictationHistoryUsageBytes / 1048576))
+                                        return unifiedSettings.dictationHistoryLimitMb === 0
+                                            ? "Using " + used + " MB."
+                                            : "Using " + used + " MB of " + unifiedSettings.dictationHistoryLimitMb + " MB. The oldest are deleted first."
+                                    }
+                                    textFormat: Text.PlainText
+                                    color: "#888"
+                                    font.pixelSize: 11
+                                    wrapMode: Text.WordWrap
                                 }
 
                                 Text {

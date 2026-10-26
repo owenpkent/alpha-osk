@@ -83,6 +83,9 @@ class FakeHistory:
     def get(self, entry_id):
         return next((e for e in self._entries if e["id"] == entry_id), None)
 
+    def usage_bytes(self):
+        return 0
+
 
 @pytest.fixture
 def qml_root(qapp):
