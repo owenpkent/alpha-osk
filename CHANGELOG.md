@@ -4,7 +4,7 @@ All notable changes to Alpha-OSK are documented in this file.
 
 ## [Unreleased]
 
-## [1.10.0] (2026-10-25)
+## [1.9.2] (2026-10-25)
 
 ### Added
 - **Level bars beside the microphone show that dictation hears you.** Four small bars next to the mic move with your voice while it is listening. The old ring around the mic was meant to do this but barely moved, because ordinary speech into a desktop microphone is quiet compared with the loudest sound it can record; the bars are scaled to how loud speech really is.
