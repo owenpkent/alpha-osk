@@ -147,7 +147,10 @@ Item {
     property double dictationHistoryUsageBytes: 0
     property bool dictationHistoryEnabled: true
     property bool dictationAutoCopy: true
-    property var dictationHistory: []            // newest first, see getDictationHistory()
+    property var dictationHistory: []            // newest page first, see getDictationHistoryPage()
+    property int dictationHistoryCount: 0        // all saved runs, not just the page
+    readonly property int dictationHistoryPageSize: 20
+    property int dictationHistoryShown: 20       // how many the page asks for
     property string dictationPlayingId: ""       // "" = nothing playing
     // Id of the history entry whose Delete / "Clear all" is awaiting its
     // second tap.  "" = none, "*" = Clear all.
@@ -3610,7 +3613,7 @@ Item {
                                 Text {
                                     objectName: "dictationHistoryEmpty"
                                     Layout.fillWidth: true
-                                    visible: unifiedSettings.dictationHistory.length === 0
+                                    visible: unifiedSettings.dictationHistoryCount === 0
                                     text: "Nothing saved yet."
                                     textFormat: Text.PlainText
                                     color: "#888"
@@ -3748,6 +3751,19 @@ Item {
                                     }
                                 }
 
+                                SettingsButton {
+                                    objectName: "dictationHistoryShowMore"
+                                    visible: unifiedSettings.dictationHistoryCount
+                                             > unifiedSettings.dictationHistory.length
+                                    text: {
+                                        var left = unifiedSettings.dictationHistoryCount
+                                                   - unifiedSettings.dictationHistory.length
+                                        return "Show " + Math.min(unifiedSettings.dictationHistoryPageSize, left)
+                                               + " more (" + left + " left)"
+                                    }
+                                    onClicked: unifiedSettings.settingChanged("dictationHistoryMore", true)
+                                }
+
                                 // Clear all is two-step, like Snippets delete:
                                 // the first tap asks, the second does it.
                                 Flow {
@@ -3762,7 +3778,7 @@ Item {
                                         onClicked: unifiedSettings.settingChanged("dictationHistoryOpenFolder", true)
                                     }
                                     SettingsButton {
-                                        visible: unifiedSettings.dictationHistory.length > 0
+                                        visible: unifiedSettings.dictationHistoryCount > 0
                                         objectName: "dictationHistoryClearAll"
                                         text: unifiedSettings.dictationHistoryConfirm === "*"
                                               ? "Yes, delete everything" : "Clear all"

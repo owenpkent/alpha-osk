@@ -521,10 +521,12 @@ class DictationController(QObject):
         # a held-back run is delivered whole, raw, now.
         self._set_interim("")
         self._set_state(DictationState.IDLE)
-        self._record("dictate", text, text, cleaned=False)
+        # Typing and the bar come first: the record is a disk write that
+        # grows with the history, and the words must not wait on it.
         if self._accumulate:
             self._deliver(text)
         self._emit_run_finished(text)
+        self._record("dictate", text, text, cleaned=False)
         self._clear_run()
 
     # --- Claude passes ----------------------------------------------------
@@ -610,13 +612,16 @@ class DictationController(QObject):
         purpose = self._purpose
         self._set_interim("")
         self._set_state(DictationState.IDLE)
-        self._record(purpose, raw, result, cleaned=True)
-        self._clear_run()
         if purpose == "write":
+            self._record(purpose, raw, result, cleaned=True)
+            self._clear_run()
             self.draftReady.emit(result)
         else:
+            # Insert first, record after (see `_finish_run`).
             self._deliver(result)
             self._emit_run_finished(result)
+            self._record(purpose, raw, result, cleaned=True)
+            self._clear_run()
 
     def _on_polish_failed(self, request: ClaudeRequest, raw: str, reason: str) -> None:
         if not self._take_request(request):
@@ -626,6 +631,14 @@ class DictationController(QObject):
         self._set_state(DictationState.IDLE)
         # Recorded even on failure: for a write the spoken request is the
         # only copy, and for a dictation it is the raw words.
+        if purpose != "write":
+            self._deliver(raw)
+            self._emit_run_finished(raw)
+            self._record(purpose, raw, raw, cleaned=False)
+            self._clear_run()
+            done = "Inserted as spoken." if self._type_into_app else "Kept as spoken."
+            self.errorRaised.emit(f"AI cleanup failed ({_reason(reason)}). {done}")
+            return
         kept = self._record(purpose, raw, raw, cleaned=False)
         self._clear_run()
         if purpose == "write":
@@ -645,11 +658,6 @@ class DictationController(QObject):
                     f"Write with AI failed ({_reason(reason)}). "
                     "Your spoken request is shown so you can copy it."
                 )
-        else:
-            self._deliver(raw)
-            self._emit_run_finished(raw)
-            done = "Inserted as spoken." if self._type_into_app else "Kept as spoken."
-            self.errorRaised.emit(f"AI cleanup failed ({_reason(reason)}). {done}")
 
     def reprocess(self, entry_id: str) -> bool:
         """Re-run cleanup over a history entry's raw text.

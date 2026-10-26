@@ -257,6 +257,23 @@ a WAV with no entry is deleted on load, but only if its name is exactly
 content and reports False). A cancelled run is not recorded; a run whose
 cleanup failed is, with `cleaned` false.
 
+**Cost scales with the store, so the hot paths avoid it.** Each entry records its
+WAV size (`audio_bytes`, validated like the other fields; a legacy entry is
+stat-ed once on load), so pruning and `usage_bytes()` never stat thousands of
+files, and each entry's encoded length is cached, so the index size is a sum.
+The index is written compact. A 5000-run store with half the runs holding audio
+went from roughly 0.3 to 1 s per `add()` under a 200 MB budget (and 0.09 s under
+No limit) to roughly 0.03 to 0.08 s. `_record` also runs *after* the run is delivered and
+announced (`runFinished`), so typing and the bar never wait on the disk; the
+Write with AI branches still record first, because the failure message depends
+on whether the entry was kept. On the QML side the list is **lazy and paged**:
+`refreshDictationHistory()` fetches only while Settings is open on the Dictation
+page (`dictationHistoryLive`), drops the model when it is not, and asks
+`getDictationHistoryPage(count)` for the newest 20, with *Show 20 more* growing
+it (`getDictationHistoryCount()` feeds the label). A finished run with Settings
+closed therefore builds no delegates. Tests:
+`tests/test_qml_dictation_ai.py::TestTheHistoryIsLazyAndPaged`.
+
 `reprocess(entry_id)` re-runs cleanup over an entry's raw text, updates the
 entry in place and emits `historyChanged`. It is refused while a live run
 is active and for write entries, and **it carries the same two gates a live

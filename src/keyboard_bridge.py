@@ -5070,6 +5070,15 @@ class KeyboardBridge(QObject):
         """Newest first.  Entries carry ``hasAudio`` and never a path."""
         return self._history_store().entries()
 
+    @Slot(int, result="QVariantList")
+    def getDictationHistoryPage(self, count: int) -> List[Dict[str, Any]]:
+        """The newest *count* entries, so the settings page builds only what it shows."""
+        return self._history_store().entries(max(0, int(count)))
+
+    @Slot(result=int)
+    def getDictationHistoryCount(self) -> int:
+        return self._history_store().count()
+
     @Slot(str, result=bool)
     def copyDictationHistory(self, entry_id: str) -> bool:
         entry = self._history_store().get(entry_id)

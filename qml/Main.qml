@@ -1344,13 +1344,28 @@ Window {
     }
 
     // The history list is read on its own, and again whenever the bridge says
-    // it changed, rather than with the rest of the record: it can grow while
-    // the settings window is closed (a dictation finishes), and re-reading
-    // 20 small entries is cheap.
+    // it changed, but only while someone can see it (Settings open on the
+    // Dictation page).  The store holds up to 5000 runs and a run finishing
+    // emits a change; building a delegate per entry on every finish stalled
+    // the UI thread for seconds.  Hidden, the model is dropped, and opening
+    // the page reads it afresh.  Only the newest `dictationHistoryShown` are
+    // fetched; "Show more" grows that.
+    readonly property bool dictationHistoryLive:
+        root.showSettings && typeof settingsPanel !== "undefined" && settingsPanel !== null
+        && settingsPanel.currentView === "dictation"
+    onDictationHistoryLiveChanged: root.refreshDictationHistory()
+
     function refreshDictationHistory() {
         if (!keyboard || typeof settingsPanel === "undefined" || !settingsPanel)
             return
-        settingsPanel.dictationHistory = keyboard.getDictationHistory()
+        if (!root.dictationHistoryLive) {
+            if (settingsPanel.dictationHistory.length > 0)
+                settingsPanel.dictationHistory = []
+            settingsPanel.dictationHistoryShown = settingsPanel.dictationHistoryPageSize
+            return
+        }
+        settingsPanel.dictationHistory = keyboard.getDictationHistoryPage(settingsPanel.dictationHistoryShown)
+        settingsPanel.dictationHistoryCount = keyboard.getDictationHistoryCount()
         settingsPanel.dictationHistoryUsageBytes = keyboard.getDictationHistoryUsageBytes()
         settingsPanel.dictationHistoryConfirm = ""
     }
@@ -6318,6 +6333,9 @@ Window {
                 } else if (setting === "dictationHistoryReprocess") {
                     if (keyboard && !keyboard.reprocessDictationHistory(value))
                         dictationErrorToast.flash(qsTr("Could not reprocess that entry"))
+                } else if (setting === "dictationHistoryMore") {
+                    settingsPanel.dictationHistoryShown += settingsPanel.dictationHistoryPageSize
+                    root.refreshDictationHistory()
                 } else if (setting === "dictationHistoryDelete") {
                     if (keyboard) keyboard.deleteDictationHistory(value)
                 } else if (setting === "dictationHistoryClear") {

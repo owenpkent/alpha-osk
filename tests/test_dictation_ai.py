@@ -1635,3 +1635,17 @@ class TestMoreLanguages:
         from src.dictation import prompts
 
         assert "Korean" in prompts.cleanup_system_prompt("ko", "smart")
+
+
+class TestHistoryPageSlots:
+    def test_the_page_and_count_slots_read_the_store(self, bridge: KeyboardBridge, tmp_path):
+        from src.dictation.history import DictationHistory
+
+        store = DictationHistory(tmp_path / "h")
+        for i in range(5):
+            store.add("dictate", f"raw {i}", f"res {i}", False, 1.0, None)
+        bridge._dictation_history = store
+        assert bridge.getDictationHistoryCount() == 5
+        assert [e["raw"] for e in bridge.getDictationHistoryPage(2)] == ["raw 4", "raw 3"]
+        assert bridge.getDictationHistoryPage(-3) == []
+        assert len(bridge.getDictationHistory()) == 5
