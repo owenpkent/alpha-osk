@@ -4,6 +4,24 @@ All notable changes to Alpha-OSK are documented in this file.
 
 ## [Unreleased]
 
+## [1.10.0] (2026-10-25)
+
+### Added
+- **Level bars beside the microphone show that dictation hears you.** Four small bars next to the mic move with your voice while it is listening. The old ring around the mic was meant to do this but barely moved, because ordinary speech into a desktop microphone is quiet compared with the loudest sound it can record; the bars are scaled to how loud speech really is.
+
+### Changed
+- **A held-back dictation run no longer previews its words in the bar.** With "type as you speak" off, or AI cleanup on, the bar used to fill with everything heard so far, which looked as if it was being typed when it was not. The bar now says "Listening...", then "Polishing..." or "Writing..." while Claude works, and the text appears once, when it is actually typed or the draft opens.
+
+### Fixed
+- **The keyboard no longer grows past the bottom of the screen.** Keys scale with the window's width, so a wide enough window pushed the bottom rows, the space bar and the resize handle off the display (Compact View on an ultrawide monitor was about 700 px over). The width is now limited to what the screen's height allows, wherever it is set: resizing, turning panels or Compact View on, moving to another screen, and starting up.
+- **The keyboard comes back fully on screen at startup.** A large keyboard saved low on the screen could reopen with its bottom part below the display, and on a fresh install with the navigation panel it could start a few pixels too low. Both now use the window's real size.
+- **Memory use no longer grows the longer you type.** The suggestion pills were rebuilt every time the suggestions changed and the memory was never given back: about 1.6 GB after a day of typing. They are now built once and reused, and memory stays flat.
+- **Speech is kept when the connection to the transcription service fails.** If the connection drops after anything was heard, the run ends as if you had stopped it, so what you said is typed and kept in History. If it fails before anything was transcribed, the recording is still saved in History (marked "Not transcribed") so you can play it back. A slow connection now gives up after 10 seconds with a message instead of leaving the mic open, and a final phrase that never arrives is reported rather than silently dropped.
+- **A Deepgram key pasted twice is fixed automatically, and Paste and Save replaces the key instead of adding to it.** The doubled key was refused by Deepgram with a confusing technical message; that message now says to check your key.
+
+### Chores
+- Updated build tools for the telemetry worker and the CI workflows. Nothing in the keyboard itself changed.
+
 ## [1.9.1] (2026-10-23)
 
 ### Fixed
