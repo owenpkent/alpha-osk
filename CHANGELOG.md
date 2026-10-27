@@ -4,6 +4,11 @@ All notable changes to Alpha-OSK are documented in this file.
 
 ## [Unreleased]
 
+## [1.9.4] (2026-10-27)
+
+### Fixed
+- **Spaces after punctuation, and suggestions, no longer drop out at random.** Since 1.9.1 the keyboard often mistook ordinary Windows text boxes (the taskbar, Start and search) for password fields, and switched to privacy mode for a moment each time. While privacy mode is on, no space follows a full stop or comma and nothing is predicted or learned. Password fields are still detected as before.
+
 ## [1.9.3] (2026-10-26)
 
 ### Added
