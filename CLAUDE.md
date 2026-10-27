@@ -445,6 +445,7 @@ Full write-up: `docs/architecture/ANALYTICS.md` (section of the same name). Read
 Full write-up: `docs/architecture/PRIVACY_MODE.md` (section of the same name). Read it before changing this area.
 
 - **Detection**: a 200 ms `QTimer` (`_check_password_field`) plus a ~50 ms rate-limited `_check_password_field_sync()` on **every** keystroke. Windows: UIA, then Win32 `EM_GETPASSWORDCHAR`; Linux: AT-SPI 2; code in `src/platform/password_detect.py`. The title-bar **Learning** switch overrides it.
+- **`IsPassword` is a 16-bit `VARIANT_BOOL`: read `val & 0xFFFF`, never all 64 bits** (UIA leaves junk above it; Explorer's XAML surfaces read as password fields, and every false flip drops the punctuation auto-space). Test: `TestUIAReadsOnlyTheBool`.
 - **Fails open**: with no working backend (`detection_available()` / `KeyboardBridge.passwordDetectionAvailable`) a WARNING is logged and the UI says so; the manual toggle is then the only protection.
 - **When active**: keys still reach the OS, but `_current_word`, predictions, learning and `activeContextChanged` are suppressed.
 
