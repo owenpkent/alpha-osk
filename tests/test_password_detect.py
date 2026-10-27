@@ -517,3 +517,43 @@ class TestUIASkipsWhatCannotAnswer:
         calls = self._uia_calls(monkeypatch)
         self._armed_detector().check()
         assert calls != []
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows UI Automation")
+class TestUIAReadsOnlyTheBool:
+    """IsPassword is a 16-bit VARIANT_BOOL; the rest of the union is junk."""
+
+    @staticmethod
+    def _answer(monkeypatch, raw: int) -> bool:
+        TestUIASkipsWhatCannotAnswer._foreground(monkeypatch, hung=False, pid=os.getpid() + 1)
+
+        def vtable_func(_obj, index, *_sig):
+            if index == 8:  # GetFocusedElement
+
+                def get_focused(_self, element_ref):
+                    element_ref._obj.value = 1
+                    return 0
+
+                return get_focused
+            if index == 10:  # GetCurrentPropertyValue
+
+                def get_prop(_self, _prop_id, variant_ref):
+                    variant_ref._obj.vt = pd._VT_BOOL
+                    variant_ref._obj.val = raw
+                    return 0
+
+                return get_prop
+            return lambda *_args: 0  # Release
+
+        monkeypatch.setattr(pd, "_vtable_func", vtable_func)
+        return TestUIASkipsWhatCannotAnswer._armed_detector().check()
+
+    def test_false_with_junk_above_the_bool_is_not_a_password_field(self, monkeypatch):
+        # The value Explorer's XAML input sites returned on a real desktop.
+        assert self._answer(monkeypatch, 0x00007FFA37780000) is False
+
+    def test_variant_true_is_a_password_field(self, monkeypatch):
+        assert self._answer(monkeypatch, 0xFFFF) is True
+
+    def test_variant_true_with_junk_above_it_is_still_a_password_field(self, monkeypatch):
+        assert self._answer(monkeypatch, 0x00007FFA3778FFFF) is True
