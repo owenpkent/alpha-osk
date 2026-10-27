@@ -808,7 +808,11 @@ if sys.platform == "win32":
                 if hr != 0:
                     return False
 
-                return bool(variant.vt == _VT_BOOL and variant.val != 0)
+                # A VARIANT_BOOL is the low 16 bits only. UIA leaves the
+                # rest of the union as it found it (Explorer's XAML input
+                # sites hand back 0x00007ffa37780000 for "false"), so
+                # reading all 64 bits turned privacy mode on there.
+                return bool(variant.vt == _VT_BOOL and variant.val & 0xFFFF)
 
             except Exception:
                 return False
