@@ -532,6 +532,51 @@ class TestTheHangUpAfterAStopIsNotAnError:
         assert "RemoteHostClosedError" in caplog.text
 
 
+class TestAPlainCloseAfterAStopWaitsForTheMetadata:
+    """The same rule when Qt reports the hang-up as a plain disconnect
+    rather than an error: quiet only once the flush has finished."""
+
+    def test_a_close_after_the_metadata_is_quiet(self, stream):
+        failures: List[str] = []
+        closes: List[int] = []
+        stream.failed.connect(failures.append)
+        stream.closed.connect(lambda: closes.append(1))
+        stream.start()
+        _FakeSocket.last.connected.emit()
+        stream.finish()
+        _FakeSocket.last.textMessageReceived.emit(_metadata())
+        _FakeSocket.last.disconnected.emit()
+        assert failures == []
+        assert closes == [1]
+
+    def test_a_close_before_the_metadata_is_a_failure(self, stream):
+        failures: List[str] = []
+        closes: List[int] = []
+        stream.failed.connect(failures.append)
+        stream.closed.connect(lambda: closes.append(1))
+        stream.start()
+        _FakeSocket.last.connected.emit()
+        stream.finish()
+        _FakeSocket.last.disconnected.emit()
+        assert failures == ["Dictation stopped: the connection was lost."]
+        assert closes == []
+        assert _FakeSocket.last.aborted is True
+        assert stream._flush_timer is None
+
+    def test_a_close_mid_run_is_left_to_the_controller(self, stream):
+        """A refused key closes during the handshake; the controller turns
+        a `closed` it did not ask for into its own message."""
+        failures: List[str] = []
+        closes: List[int] = []
+        stream.failed.connect(failures.append)
+        stream.closed.connect(lambda: closes.append(1))
+        stream.start()
+        _FakeSocket.last.connected.emit()
+        _FakeSocket.last.disconnected.emit()
+        assert failures == []
+        assert closes == [1]
+
+
 class TestTheRunLifecycle:
     def test_a_run_reaches_listening_once_the_socket_opens(self, controller):
         states: List[str] = []

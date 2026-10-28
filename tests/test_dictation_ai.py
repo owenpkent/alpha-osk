@@ -229,7 +229,21 @@ class TestAHangUpBeforeTheFlushFinishesKeepsTheRun:
     """The real provider wired to the real controller.  A remote close after
     Stop is quiet only once Deepgram's Metadata says the flush finished;
     before that it must reach the controller as `failed`, which is the only
-    path that keeps an untranscribed run's audio in History."""
+    path that keeps an untranscribed run's audio in History.  Qt reports the
+    hang-up either through errorOccurred or as a plain disconnect, and both
+    must end the same way."""
+
+    @pytest.fixture(params=["error", "disconnect"])
+    def hang_up(self, request):
+        from tests.test_dictation import _remote_close
+
+        def _hang_up() -> None:
+            if request.param == "error":
+                self._socket().errorOccurred.emit(_remote_close())
+            else:
+                self._socket().disconnected.emit()
+
+        return _hang_up
 
     @pytest.fixture
     def ctl(self, qapp, monkeypatch, claude, history) -> DictationController:
@@ -263,36 +277,31 @@ class TestAHangUpBeforeTheFlushFinishesKeepsTheRun:
             )
         ctl.stop()
 
-    def _hang_up(self) -> None:
-        from tests.test_dictation import _remote_close
-
-        self._socket().errorOccurred.emit(_remote_close())
-
-    def test_no_final_before_the_hang_up_keeps_the_audio(self, ctl, history):
+    def test_no_final_before_the_hang_up_keeps_the_audio(self, ctl, history, hang_up):
         spy = _Spy(ctl)
         self._stop_after(ctl)
-        self._hang_up()
+        hang_up()
         assert len(spy.errors) == 1 and "saved in History" in spy.errors[0]
         entries = history.entries()
         assert len(entries) == 1
         assert entries[0]["raw"] == "" and entries[0]["hasAudio"] is True
         assert ctl.state is DictationState.IDLE
 
-    def test_a_partial_transcript_is_delivered_and_the_drop_is_said(self, ctl, history):
+    def test_a_partial_transcript_is_delivered_and_the_drop_is_said(self, ctl, history, hang_up):
         spy = _Spy(ctl)
         self._stop_after(ctl, "the first half")
-        self._hang_up()
+        hang_up()
         assert spy.finals == ["the first half"]
         assert spy.errors == ["Dictation stopped: the connection was lost."]
         assert history.entries()[0]["result"] == "the first half"
 
-    def test_a_finished_flush_then_a_hang_up_is_quiet(self, ctl, history):
+    def test_a_finished_flush_then_a_hang_up_is_quiet(self, ctl, history, hang_up):
         from tests.test_dictation import _metadata
 
         spy = _Spy(ctl)
         self._stop_after(ctl, "all of it")
         self._socket().textMessageReceived.emit(_metadata())
-        self._hang_up()
+        hang_up()
         assert spy.errors == []
         assert spy.finals == ["all of it"]
         assert history.entries()[0]["result"] == "all of it"
