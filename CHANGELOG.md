@@ -4,6 +4,13 @@ All notable changes to Alpha-OSK are documented in this file.
 
 ## [Unreleased]
 
+## [1.9.5] (2026-10-28)
+
+### Fixed
+- **No more false "Could not make a secure connection" after dictating.** A run that finished normally sometimes ended with that error, though every word had been typed. The connection was fine: the dictation service hangs up once it is done, and that was reported as a failure.
+- **A dictation run cut off after you press stop keeps what you said.** If the connection drops before the last words come back, any words that did arrive are typed and you are told the end may be missing; if none arrived, the recording is saved in History so you can play it back.
+- **Symbols no longer change when Shift is held.** With Shift on or locked, a symbol from the compact symbol page or a right-click could come out as its shifted twin (an underscore for a hyphen), and the next suggestion you tapped could then replace the wrong letters.
+
 ## [1.9.4] (2026-10-27)
 
 ### Fixed
