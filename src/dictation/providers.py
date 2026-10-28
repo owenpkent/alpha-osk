@@ -263,10 +263,16 @@ class DeepgramStream(TranscriptionStream):
         self.opened.emit()
 
     def _on_disconnected(self) -> None:
-        # Expected once `finish()` has been acknowledged; unexpected
-        # otherwise, but by this point any audio in the gap is already
-        # lost, so it is reported as the end of the run either way and
-        # the controller decides whether to call it an error.
+        if self._finishing and not self._flush_acknowledged:
+            # A close after CloseStream but before its Metadata: the flush
+            # never finished, so the tail (or the whole transcript) may be
+            # missing.  Only `failed` keeps the audio; a quiet `closed`
+            # here would end the run as if nothing were lost.
+            self._fail("Dictation stopped: the connection was lost.")
+            return
+        # Expected once the flush has been acknowledged.  Mid-run it is
+        # reported as the end of the run and the controller decides
+        # whether to call it an error (a refused key closes this way).
         self.abort()
 
     def _on_text(self, message: str) -> None:

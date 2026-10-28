@@ -637,14 +637,20 @@ hold here.
   and its answer may have lost the tail or the whole transcript, and only
   `failed` reaches `_keep_failed_audio`, so treating it as `closed`
   silently threw an untranscribed run's audio away (caught in review of
-  PR #229). Any other code, or the same code mid-run, still fails.
+  PR #229). Any other code, or the same code mid-run, still fails. A plain
+  `disconnected` follows the same gate: before the Metadata,
+  `_on_disconnected` fails with "the connection was lost" rather than
+  emitting `closed` (it used to drop the audio the same way); mid-run it
+  still emits `closed`, because a refused key closes during the handshake
+  and the controller words that case itself.
   `_on_error` logs the enum name (content-free) so the next failure can be
   told apart after the fact. Seen in the field 2026-10-26 and 2026-10-28:
   both runs kept their full text, and the user was told to check a
   connection that was fine.
 
 Tests: `tests/test_dictation.py::TestTheProviderGivesUpOnTime` and
-`::TestTheHangUpAfterAStopIsNotAnError` (a real
+`::TestTheHangUpAfterAStopIsNotAnError`,
+`::TestAPlainCloseAfterAStopWaitsForTheMetadata` (a real
 `DeepgramStream` over a fake socket), `tests/test_dictation_ai.py::
 TestAHangUpBeforeTheFlushFinishesKeepsTheRun` (the real provider wired to
 the real controller), `TestAFailedRunKeepsWhatWasHeard`, and the audio-only row in
