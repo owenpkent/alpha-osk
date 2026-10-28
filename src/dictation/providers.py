@@ -294,7 +294,21 @@ class DeepgramStream(TranscriptionStream):
         else:
             self.interim.emit(text)
 
-    def _on_error(self, _error: Any) -> None:
+    def _on_error(self, error: Any) -> None:
+        # The enum name carries no content, unlike errorString(), and is
+        # the one detail that tells a refusal from a drop after the fact.
+        _logger.warning(
+            "Dictation socket error: %s (finishing=%s)",
+            getattr(error, "name", error),
+            self._finishing,
+        )
+        if self._finishing and _is_remote_close(error):
+            # Deepgram answers CloseStream with the last finals and then
+            # hangs up.  Qt sometimes reports that hang-up as an error
+            # ("The TLS/SSL connection has been closed") rather than a
+            # plain disconnect; it is the same expected end either way.
+            self.abort()
+            return
         message = ""
         if self._socket is not None:
             try:
@@ -315,6 +329,14 @@ class DeepgramStream(TranscriptionStream):
         self.abort()
 
 
+def _is_remote_close(error: Any) -> bool:
+    try:
+        from PySide6.QtNetwork import QAbstractSocket
+    except ImportError:  # pragma: no cover - the socket could not exist either
+        return False
+    return bool(error == QAbstractSocket.SocketError.RemoteHostClosedError)
+
+
 def _friendly_error(raw: str) -> str:
     """Turn a Qt socket error string into a sentence with a next step.
 
@@ -328,6 +350,12 @@ def _friendly_error(raw: str) -> str:
     refused = ("401", "403", "unauthor", "forbidden", "www-authenticate")
     if any(marker in lowered for marker in refused):
         return "Dictation was refused: check your API key in Settings."
+    # A hang-up after the connection was made: "The TLS/SSL connection has
+    # been closed" or "The remote host closed the connection".  Checked
+    # before the TLS and host markers, which both strings also contain, so
+    # a drop is not blamed on a handshake or an unreachable host.
+    if "closed" in lowered:
+        return "Dictation stopped: the connection was lost."
     # Qt's SslHandshakeFailedError reads "SSL handshake failed"; a proxy or
     # an inspecting firewall is the usual cause.  ("handshake" alone is not
     # a marker: Qt also says "processHandshake" for plain HTTP refusals.)

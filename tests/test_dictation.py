@@ -442,6 +442,61 @@ class TestTheProviderGivesUpOnTime:
         assert 5000 <= CONNECT_TIMEOUT_MS <= 20000
 
 
+class TestTheHangUpAfterAStopIsNotAnError:
+    """Deepgram answers CloseStream with the last finals and then hangs up.
+    Qt sometimes reports that hang-up through errorOccurred, which used to
+    show "Could not make a secure connection" after a run that worked."""
+
+    @staticmethod
+    def _remote_close():
+        from PySide6.QtNetwork import QAbstractSocket
+
+        return QAbstractSocket.SocketError.RemoteHostClosedError
+
+    def test_a_hang_up_after_close_stream_ends_the_run_quietly(self, stream):
+        failures: List[str] = []
+        closes: List[int] = []
+        stream.failed.connect(failures.append)
+        stream.closed.connect(lambda: closes.append(1))
+        stream.start()
+        _FakeSocket.last.connected.emit()
+        stream.finish()
+        _FakeSocket.last.errorOccurred.emit(self._remote_close())
+        assert failures == []
+        assert closes == [1]
+        assert _FakeSocket.last.aborted is True
+        assert stream._flush_timer is None
+
+    def test_a_hang_up_mid_run_is_still_a_failure(self, stream):
+        """No CloseStream was sent, so audio may have been lost: say so."""
+        failures: List[str] = []
+        stream.failed.connect(failures.append)
+        stream.start()
+        _FakeSocket.last.connected.emit()
+        _FakeSocket.last.errorOccurred.emit(self._remote_close())
+        assert len(failures) == 1
+
+    def test_another_error_while_finishing_is_still_a_failure(self, stream):
+        from PySide6.QtNetwork import QAbstractSocket
+
+        failures: List[str] = []
+        stream.failed.connect(failures.append)
+        stream.start()
+        _FakeSocket.last.connected.emit()
+        stream.finish()
+        _FakeSocket.last.errorOccurred.emit(QAbstractSocket.SocketError.SslInternalError)
+        assert len(failures) == 1
+
+    def test_the_log_names_the_error_code(self, stream, caplog):
+        import logging
+
+        stream.start()
+        _FakeSocket.last.connected.emit()
+        with caplog.at_level(logging.WARNING, logger="src.dictation.providers"):
+            _FakeSocket.last.errorOccurred.emit(self._remote_close())
+        assert "RemoteHostClosedError" in caplog.text
+
+
 class TestTheRunLifecycle:
     def test_a_run_reaches_listening_once_the_socket_opens(self, controller):
         states: List[str] = []
@@ -627,7 +682,9 @@ class TestTheProviderUrl:
             ),
             ("Host api.deepgram.com not found", "connection"),
             ("SSL handshake failed", "secure connection"),
-            ("The TLS/SSL connection has been closed", "secure connection"),
+            # A hang-up, not a handshake problem or an unreachable host.
+            ("The TLS/SSL connection has been closed", "connection was lost"),
+            ("The remote host closed the connection", "connection was lost"),
             # "processHandshake" is Qt's plain-HTTP refusal, not TLS.
             ("QWebSocketPrivate::processHandshake: Handshake failed", "dictation stopped"),
             ("The operation timed out", "respond"),

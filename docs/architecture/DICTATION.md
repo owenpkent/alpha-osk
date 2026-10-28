@@ -621,9 +621,22 @@ hold here.
 - `_friendly_error` maps `ssl` / `tls` / `certificate` to "Could not make
   a secure connection", the wording a proxy or inspecting firewall
   produces. `handshake` alone is not a marker: Qt says `processHandshake`
-  for a plain HTTP refusal too.
+  for a plain HTTP refusal too. A `closed` marker is checked first and
+  reads "the connection was lost": "The TLS/SSL connection has been
+  closed" is a hang-up after the handshake, not a TLS problem, and used to
+  be blamed on the connection.
+- **A hang-up after `CloseStream` is the expected end, not an error.**
+  Deepgram sends its last finals and closes; Qt sometimes reports that
+  close through `errorOccurred` (`RemoteHostClosedError`) instead of
+  `disconnected`. While `_finishing`, `_on_error` treats that one code as
+  `disconnected` (`abort()`, then `closed`); any other code, or the same
+  code mid-run, still fails. `_on_error` logs the enum name (content-free)
+  so the next failure can be told apart after the fact. Seen in the field
+  2026-10-26 and 2026-10-28: both runs kept their full text, and the user
+  was told to check a connection that was fine.
 
-Tests: `tests/test_dictation.py::TestTheProviderGivesUpOnTime` (a real
+Tests: `tests/test_dictation.py::TestTheProviderGivesUpOnTime` and
+`::TestTheHangUpAfterAStopIsNotAnError` (a real
 `DeepgramStream` over a fake socket), `tests/test_dictation_ai.py::
 TestAFailedRunKeepsWhatWasHeard`, and the audio-only row in
 `tests/test_qml_dictation_ai.py::TestTheHistoryList`.
