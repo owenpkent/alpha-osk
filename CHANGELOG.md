@@ -4,6 +4,9 @@ All notable changes to Alpha-OSK are documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+- **A symbol typed with Shift locked now arrives as the symbol on the key.** Keys that type exactly the glyph on their cap (the compact symbol page, a right-click's shifted character) were still being shifted by a locked Shift at the system level, so `-` could arrive as `_` while the keyboard believed it had typed `-`, and the next suggestion was inserted against text that was not there.
+
 ## [1.9.4] (2026-10-27)
 
 ### Fixed
