@@ -442,18 +442,27 @@ class TestTheProviderGivesUpOnTime:
         assert 5000 <= CONNECT_TIMEOUT_MS <= 20000
 
 
+def _remote_close():
+    from PySide6.QtNetwork import QAbstractSocket
+
+    return QAbstractSocket.SocketError.RemoteHostClosedError
+
+
+def _metadata() -> str:
+    """Deepgram's summary after CloseStream: the flush is done."""
+    import json
+
+    return json.dumps({"type": "Metadata", "request_id": "r", "duration": 1.0})
+
+
 class TestTheHangUpAfterAStopIsNotAnError:
-    """Deepgram answers CloseStream with the last finals and then hangs up.
-    Qt sometimes reports that hang-up through errorOccurred, which used to
-    show "Could not make a secure connection" after a run that worked."""
+    """Deepgram answers CloseStream with the last finals and a Metadata
+    summary, then hangs up.  Qt sometimes reports that hang-up through
+    errorOccurred, which used to show "Could not make a secure connection"
+    after a run that worked.  A hang-up before the Metadata is still a
+    failure: the flush did not finish."""
 
-    @staticmethod
-    def _remote_close():
-        from PySide6.QtNetwork import QAbstractSocket
-
-        return QAbstractSocket.SocketError.RemoteHostClosedError
-
-    def test_a_hang_up_after_close_stream_ends_the_run_quietly(self, stream):
+    def test_a_hang_up_after_the_metadata_ends_the_run_quietly(self, stream):
         failures: List[str] = []
         closes: List[int] = []
         stream.failed.connect(failures.append)
@@ -461,11 +470,36 @@ class TestTheHangUpAfterAStopIsNotAnError:
         stream.start()
         _FakeSocket.last.connected.emit()
         stream.finish()
-        _FakeSocket.last.errorOccurred.emit(self._remote_close())
+        _FakeSocket.last.textMessageReceived.emit(_metadata())
+        _FakeSocket.last.errorOccurred.emit(_remote_close())
         assert failures == []
         assert closes == [1]
         assert _FakeSocket.last.aborted is True
         assert stream._flush_timer is None
+
+    def test_a_hang_up_before_the_metadata_is_still_a_failure(self, stream):
+        """CloseStream was sent but never answered: the tail, or the whole
+        transcript, may be missing."""
+        failures: List[str] = []
+        closes: List[int] = []
+        stream.failed.connect(failures.append)
+        stream.closed.connect(lambda: closes.append(1))
+        stream.start()
+        _FakeSocket.last.connected.emit()
+        stream.finish()
+        _FakeSocket.last.errorOccurred.emit(_remote_close())
+        assert len(failures) == 1
+        assert closes == []
+
+    def test_a_metadata_before_the_stop_does_not_count(self, stream):
+        failures: List[str] = []
+        stream.failed.connect(failures.append)
+        stream.start()
+        _FakeSocket.last.connected.emit()
+        _FakeSocket.last.textMessageReceived.emit(_metadata())
+        stream.finish()
+        _FakeSocket.last.errorOccurred.emit(_remote_close())
+        assert len(failures) == 1
 
     def test_a_hang_up_mid_run_is_still_a_failure(self, stream):
         """No CloseStream was sent, so audio may have been lost: say so."""
@@ -473,7 +507,7 @@ class TestTheHangUpAfterAStopIsNotAnError:
         stream.failed.connect(failures.append)
         stream.start()
         _FakeSocket.last.connected.emit()
-        _FakeSocket.last.errorOccurred.emit(self._remote_close())
+        _FakeSocket.last.errorOccurred.emit(_remote_close())
         assert len(failures) == 1
 
     def test_another_error_while_finishing_is_still_a_failure(self, stream):
@@ -484,6 +518,7 @@ class TestTheHangUpAfterAStopIsNotAnError:
         stream.start()
         _FakeSocket.last.connected.emit()
         stream.finish()
+        _FakeSocket.last.textMessageReceived.emit(_metadata())
         _FakeSocket.last.errorOccurred.emit(QAbstractSocket.SocketError.SslInternalError)
         assert len(failures) == 1
 
@@ -493,7 +528,7 @@ class TestTheHangUpAfterAStopIsNotAnError:
         stream.start()
         _FakeSocket.last.connected.emit()
         with caplog.at_level(logging.WARNING, logger="src.dictation.providers"):
-            _FakeSocket.last.errorOccurred.emit(self._remote_close())
+            _FakeSocket.last.errorOccurred.emit(_remote_close())
         assert "RemoteHostClosedError" in caplog.text
 
 

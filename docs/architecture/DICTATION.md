@@ -625,20 +625,29 @@ hold here.
   reads "the connection was lost": "The TLS/SSL connection has been
   closed" is a hang-up after the handshake, not a TLS problem, and used to
   be blamed on the connection.
-- **A hang-up after `CloseStream` is the expected end, not an error.**
-  Deepgram sends its last finals and closes; Qt sometimes reports that
-  close through `errorOccurred` (`RemoteHostClosedError`) instead of
-  `disconnected`. While `_finishing`, `_on_error` treats that one code as
-  `disconnected` (`abort()`, then `closed`); any other code, or the same
-  code mid-run, still fails. `_on_error` logs the enum name (content-free)
-  so the next failure can be told apart after the fact. Seen in the field
-  2026-10-26 and 2026-10-28: both runs kept their full text, and the user
-  was told to check a connection that was fine.
+- **A hang-up after a finished flush is the expected end, not an error.**
+  Deepgram answers `CloseStream` with the last results, then a `Metadata`
+  summary, then a close
+  ([docs](https://developers.deepgram.com/docs/close-stream)); Qt
+  sometimes reports that close through `errorOccurred`
+  (`RemoteHostClosedError`) instead of `disconnected`. Once a `Metadata`
+  has arrived after `finish()` (`_flush_acknowledged`), `_on_error`
+  treats that one code as `disconnected` (`abort()`, then `closed`). **The
+  gate is the Metadata, not `_finishing`**: a close between `CloseStream`
+  and its answer may have lost the tail or the whole transcript, and only
+  `failed` reaches `_keep_failed_audio`, so treating it as `closed`
+  silently threw an untranscribed run's audio away (caught in review of
+  PR #229). Any other code, or the same code mid-run, still fails.
+  `_on_error` logs the enum name (content-free) so the next failure can be
+  told apart after the fact. Seen in the field 2026-10-26 and 2026-10-28:
+  both runs kept their full text, and the user was told to check a
+  connection that was fine.
 
 Tests: `tests/test_dictation.py::TestTheProviderGivesUpOnTime` and
 `::TestTheHangUpAfterAStopIsNotAnError` (a real
 `DeepgramStream` over a fake socket), `tests/test_dictation_ai.py::
-TestAFailedRunKeepsWhatWasHeard`, and the audio-only row in
+TestAHangUpBeforeTheFlushFinishesKeepsTheRun` (the real provider wired to
+the real controller), `TestAFailedRunKeepsWhatWasHeard`, and the audio-only row in
 `tests/test_qml_dictation_ai.py::TestTheHistoryList`.
 
 ## Nothing here logs what was said

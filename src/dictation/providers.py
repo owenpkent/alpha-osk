@@ -120,6 +120,7 @@ class DeepgramStream(TranscriptionStream):
         self._flush_timer: Any = None
         self._connect_timer: Any = None
         self._finishing = False
+        self._flush_acknowledged = False
         self._reported = False
 
     # --- URL -----------------------------------------------------------
@@ -276,6 +277,10 @@ class DeepgramStream(TranscriptionStream):
         if not isinstance(payload, dict):
             return
         if payload.get("type") == "Metadata":
+            # Deepgram's answer to CloseStream is the last results, then this
+            # summary, then a close: only now has the flush finished.
+            if self._finishing:
+                self._flush_acknowledged = True
             return
         channel = payload.get("channel")
         if not isinstance(channel, dict):
@@ -302,11 +307,14 @@ class DeepgramStream(TranscriptionStream):
             getattr(error, "name", error),
             self._finishing,
         )
-        if self._finishing and _is_remote_close(error):
-            # Deepgram answers CloseStream with the last finals and then
-            # hangs up.  Qt sometimes reports that hang-up as an error
-            # ("The TLS/SSL connection has been closed") rather than a
-            # plain disconnect; it is the same expected end either way.
+        if self._flush_acknowledged and _is_remote_close(error):
+            # Deepgram answers CloseStream with the last finals and a
+            # Metadata summary, and then hangs up.  Qt sometimes reports
+            # that hang-up as an error ("The TLS/SSL connection has been
+            # closed") rather than a plain disconnect; it is the same
+            # expected end either way.  A close before the Metadata is not:
+            # the tail, or the whole transcript, may be missing, and the
+            # controller keeps the audio only on `failed`.
             self.abort()
             return
         message = ""

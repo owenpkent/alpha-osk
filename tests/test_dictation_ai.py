@@ -225,6 +225,80 @@ def _speak(ctl: DictationController, *phrases: str, purpose: str = "dictate") ->
     _FakeStream.last.closed.emit()
 
 
+class TestAHangUpBeforeTheFlushFinishesKeepsTheRun:
+    """The real provider wired to the real controller.  A remote close after
+    Stop is quiet only once Deepgram's Metadata says the flush finished;
+    before that it must reach the controller as `failed`, which is the only
+    path that keeps an untranscribed run's audio in History."""
+
+    @pytest.fixture
+    def ctl(self, qapp, monkeypatch, claude, history) -> DictationController:
+        import PySide6.QtWebSockets
+
+        from tests.test_dictation import _FakeSocket
+
+        monkeypatch.setattr(PySide6.QtWebSockets, "QWebSocket", _FakeSocket)
+        ctl = DictationController(
+            DictationConfig(enabled=True, api_key="k" * 40), claude_client=claude, history=history
+        )
+        monkeypatch.setattr(ctl._capture, "start", lambda device="": True)
+        monkeypatch.setattr(ctl._capture, "stop", lambda: None)
+        return ctl
+
+    @staticmethod
+    def _socket():
+        from tests.test_dictation import _FakeSocket
+
+        return _FakeSocket.last
+
+    def _stop_after(self, ctl: DictationController, *finals: str) -> None:
+        from src.dictation.controller import _PCM_BYTES_PER_SECOND
+
+        ctl.start()
+        self._socket().connected.emit()
+        ctl._on_chunk(b"\x01\x00" * (int(_PCM_BYTES_PER_SECOND * 3.0) // 2))
+        for text in finals:
+            self._socket().textMessageReceived.emit(
+                json.dumps({"is_final": True, "channel": {"alternatives": [{"transcript": text}]}})
+            )
+        ctl.stop()
+
+    def _hang_up(self) -> None:
+        from tests.test_dictation import _remote_close
+
+        self._socket().errorOccurred.emit(_remote_close())
+
+    def test_no_final_before_the_hang_up_keeps_the_audio(self, ctl, history):
+        spy = _Spy(ctl)
+        self._stop_after(ctl)
+        self._hang_up()
+        assert len(spy.errors) == 1 and "saved in History" in spy.errors[0]
+        entries = history.entries()
+        assert len(entries) == 1
+        assert entries[0]["raw"] == "" and entries[0]["hasAudio"] is True
+        assert ctl.state is DictationState.IDLE
+
+    def test_a_partial_transcript_is_delivered_and_the_drop_is_said(self, ctl, history):
+        spy = _Spy(ctl)
+        self._stop_after(ctl, "the first half")
+        self._hang_up()
+        assert spy.finals == ["the first half"]
+        assert spy.errors == ["Dictation stopped: the connection was lost."]
+        assert history.entries()[0]["result"] == "the first half"
+
+    def test_a_finished_flush_then_a_hang_up_is_quiet(self, ctl, history):
+        from tests.test_dictation import _metadata
+
+        spy = _Spy(ctl)
+        self._stop_after(ctl, "all of it")
+        self._socket().textMessageReceived.emit(_metadata())
+        self._hang_up()
+        assert spy.errors == []
+        assert spy.finals == ["all of it"]
+        assert history.entries()[0]["result"] == "all of it"
+        assert ctl.state is DictationState.IDLE
+
+
 class TestAFailedRunKeepsWhatWasHeard:
     """Three lessons from MacroVox, applied here.
 
