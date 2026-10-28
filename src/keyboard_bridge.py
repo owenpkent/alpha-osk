@@ -17,7 +17,7 @@ from __future__ import annotations
 import json
 import logging
 import time
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
 from typing import (
     Any,
@@ -1427,9 +1427,11 @@ class KeyboardBridge(QObject):
         The single-character path in ``_press_char`` deliberately does not
         use this: there a held Shift is doing its job (it is what makes
         the keystroke uppercase), and a release plus re-hold on every
-        keystroke would be churn on the hottest path in the app.  Callers
-        that also want the sticky auto-release should do it *before*
-        entering, which leaves nothing for this to restore.
+        keystroke would be churn on the hottest path in the app.  Its one
+        exception is a *literal* key, which must type the glyph on its cap
+        whatever Shift is doing.  Callers that also want the sticky
+        auto-release should do it *before* entering, which leaves nothing
+        for this to restore.
         """
         held = [name for name in self._MODIFIERS if getattr(self, f"_{name}_active", False)]
         for name in held:
@@ -1826,14 +1828,26 @@ class KeyboardBridge(QObject):
             # locked lets Ctrl+C, Ctrl+V, ... fire without re-tapping.
             self._release_sticky_modifiers()
             return
-        elif self._in_game_mode():
-            # Polling game: send the single char as a held key so it survives
-            # a per-frame keyboard-state poll. send_key resolves the char's VK
-            # and applies shift for case the same way send_text's scancode
-            # path does, so the held tap matches what would otherwise be typed.
-            self._send_key(char, hold_seconds=self._key_hold_seconds())
         else:
-            self._send_text(char)
+            # A literal key types exactly the glyph on its cap, so a Shift
+            # standing held (sticky or right-click-locked) must not rewrite
+            # it: "-" would arrive as "_" and "a" as "A" while
+            # `_current_word` records the unshifted glyph, and the next pill
+            # tap is then measured against text that is not on screen.  Only
+            # Shift can be held here (Ctrl/Alt/Win took the chord branch),
+            # and literal keys are rare, so the release and re-hold cost
+            # nothing on the hot path, which keeps its held Shift.
+            guard = self._without_held_modifiers() if literal else nullcontext()
+            with guard:
+                if self._in_game_mode():
+                    # Polling game: send the single char as a held key so it
+                    # survives a per-frame keyboard-state poll. send_key
+                    # resolves the char's VK and applies shift for case the
+                    # same way send_text's scancode path does, so the held
+                    # tap matches what would otherwise be typed.
+                    self._send_key(char, hold_seconds=self._key_hold_seconds())
+                else:
+                    self._send_text(char)
 
         # Privacy mode — send keystrokes but don't learn or predict
         if self._privacy_mode:
