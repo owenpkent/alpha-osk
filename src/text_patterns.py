@@ -487,11 +487,15 @@ def suppression_is_provisional(token: str, punct: str) -> bool:
     Still outright, never provisional: anything with an "@", a slash or
     a known scheme in it.  A letter after "example.co." may be the "u"
     of ".co.uk", so the next character cannot settle a domain, which is
-    the known gap documented on ``suppresses_auto_space``.
+    the known gap documented on ``suppresses_auto_space``.  The slash
+    needs saying twice, because ``is_numeric_run`` admits it as a
+    separator: "2026/10/31" is a number by that test and a path by the
+    one that matters, and the "t" of "2026/10/31.txt" must not deliver
+    a space (review finding on PR #233).
     """
     if not suppresses_auto_space(token, punct):
         return False
-    return is_numeric_run(token)
+    return is_numeric_run(token) and "/" not in token
 
 
 # ---------------------------------------------------------------------

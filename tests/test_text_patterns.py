@@ -288,6 +288,8 @@ class TestProvisionalSuppression:
     @pytest.mark.parametrize(
         "token,punct",
         [
+            ("2026/10/31", "."),  # a number by the regex, a path by the rule that matters
+            ("1/2", "."),  # "1/2.csv"
             ("owen@gmail", "."),  # the "@" is the evidence
             ("C:/Users/owen", "."),
             ("www", "."),

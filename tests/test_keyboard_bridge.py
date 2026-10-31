@@ -3412,6 +3412,23 @@ class TestTheDeferredSpaceAfterABareNumber:
         _press(bridge, f"{punct}then")
         assert "".join(_typed(bridge)) == f"{punct} then"
 
+    @pytest.mark.parametrize(
+        "path,ext", [("2026/10/31", ".txt"), ("1/2", ".csv"), ("2026/10/31", ".log")]
+    )
+    def test_a_numeric_relative_path_keeps_its_extension(
+        self, bridge: KeyboardBridge, path: str, ext: str
+    ):
+        """A slash makes it a path, and a path never gets a late space.
+
+        ``is_numeric_run`` admits the slash, so the deferral once took
+        these and typed "2026/10/31. txt", a different file name
+        (review finding on PR #233).
+        """
+        _press(bridge, f"open {path}")
+        bridge._synth.send_text.reset_mock()
+        _press(bridge, ext)
+        assert "".join(_typed(bridge)) == ext
+
     @pytest.mark.parametrize("number,tail", [("192.168.1", ".1"), ("1.2", ".3"), ("1,000", ",000")])
     def test_a_separated_number_that_goes_on_keeps_its_dots(
         self, bridge: KeyboardBridge, number: str, tail: str
