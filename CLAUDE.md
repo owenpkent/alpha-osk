@@ -300,7 +300,7 @@ Mic in the suggestion bar; off by default, inert without a Deepgram key. Code in
 - **`_accumulate` and `_polish` are both decided once at `start()` and `_finish_run` reads those fields, never the live config**: cleanup switched on mid-run used to retype the already-streamed phrases as one polished block.
 - **Reprocess sends stored text to Anthropic, so it is gated like a live cleanup**: the controller refuses it unless `cleanup_ready` (the toggle, not merely a key), the bridge refuses it in privacy mode, and the Settings button shows only while cleanup is on. `docs/PRIVACY.md` discloses it as the one outbound path from history.
 - **A Write with AI draft is never auto-typed**: `draftReady` opens a preview (Insert / Copy / Discard) and Insert goes through `insertDictationDraft`. The three actions are the `draft` section of the UIA contract (`aosk.v1.draft.0.<index>`, built on `BarButton`, present exactly while the preview is open, which feeds `scanRevision`): a scanner that can start the run from the bar must be able to finish it. Every colour in the preview is the theme's (`accentKeyColor` for Insert, `themeKeyColor` otherwise).
-- **History (`<config>/dictation_history/`, last 20 runs with WAV audio) is excluded from Data Backup**, and a WAV path is derived from the validated 16-hex id, never read from the index.
+- **History (`<config>/dictation_history/`, a size budget, 200 MB by default, oldest pruned first, with WAV audio) is excluded from Data Backup**, and a WAV path is derived from the validated 16-hex id, never read from the index.
 
 ## Data Backup (Export / Import)
 

@@ -4,7 +4,7 @@
 > have been **absorbed natively into Alpha-OSK's dictation**: AI transcript
 > cleanup (Claude Haiku), Write with AI (MacroVox's agentive writing, Claude
 > Sonnet, with a preview before anything is typed) and a local dictation
-> history (last 20 runs with audio). They run on the user's own Anthropic
+> history (recent runs with audio, kept to a size budget, oldest pruned first). They run on the user's own Anthropic
 > key through raw HTTPS on Qt, with no new dependency. See
 > `docs/architecture/DICTATION.md`.
 >
