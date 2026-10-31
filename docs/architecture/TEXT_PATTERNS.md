@@ -81,7 +81,7 @@ A flat count-weighted store of whole tokens, matched by prefix. **No context mod
 ### The two bars
 `KeyboardBridge._in_token_context()` decides, off `_raw_token` (not `_current_word`, which resets at `@` and at every dot: see the `_raw_token` note under *Intelligent Spacing*). Two signals, and the asymmetry is deliberate:
 - **a digit anywhere**: already outside what the word engine can complete;
-- **an `@` that is not the first character**: `owen@` is an address whose only useful continuation is a domain, while `@owen` is a *mention*, which the word model can genuinely complete from a learned name. `tok.find("@") > 0`, not `"@" in tok`.
+- **an `@` after an address's local part**: `owen@` is an address whose only useful continuation is a domain, while `@owen` is a *mention*, which the word model can genuinely complete from a learned name. `is_address_in_progress(tok)` (`text_patterns.py`) strips any opening quote or bracket, then requires an email-shaped local part before the `@`: `'@` and `!@` are not addresses and get no domain pill (a tap would insert `'@gmail.com `, which `is_email` rejects). Not `"@" in tok`, and no longer `tok.find("@") > 0`. A domain tapped after `<owen@` is still an address, so it gets no trailing space.
 
 Two characters minimum (`TokenPredictor.MIN_PREFIX_LEN`): on one character the prefix matches most of the store, so the bar would fill with unrelated numbers on the first digit of anything.
 
