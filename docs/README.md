@@ -24,7 +24,7 @@ Active design docs for the engine, the platform abstraction, and the user-facing
 - [`architecture/COMPACT_VIEW.md`](architecture/COMPACT_VIEW.md): the denser 13x4 keyboard for small screens, its measurements, and the layer model behind `?123`.
 - [`architecture/MODULAR_LAYOUTS.md`](architecture/MODULAR_LAYOUTS.md): custom keyboard layouts inspired by Octavium / Nimbus.
 - [`architecture/UIA_TARGETS.md`](architecture/UIA_TARGETS.md): the switch-scanning contract. How an external scanner finds the keyboard through Windows UI Automation, the target ids, stale-prediction safety, minimizing and restoring without taking focus, and what was verified and how.
-- [`architecture/DICTATION.md`](architecture/DICTATION.md): voice input. The Qt-only audio and websocket stack, the four-state run model, where the Deepgram API key lives, and why privacy mode cancels a run outright.
+- [`architecture/DICTATION.md`](architecture/DICTATION.md): voice input. The Qt-only audio and websocket stack, the five-state run model, optional AI cleanup and Write with AI through Claude, dictation history, where the API keys live, and why privacy mode cancels a run outright.
 - [`architecture/MODIFIERS_AND_CASING.md`](architecture/MODIFIERS_AND_CASING.md): sticky modifiers, Caps Lock versus Shift, pill casing and pill widths.
 - [`architecture/TEXT_PATTERNS.md`](architecture/TEXT_PATTERNS.md): intelligent spacing, snippet auto-detection and structured tokens (numbers, phones, email domains).
 - [`architecture/SNIPPETS.md`](architecture/SNIPPETS.md): the Snippets window and its store.
@@ -65,7 +65,7 @@ Forward-looking design docs and active launch planning. Convert entries into `ar
 - [`roadmap/launch_tasks.csv`](roadmap/launch_tasks.csv): structured task tracking.
 - [`roadmap/FEDERATED_LEARNING.md`](roadmap/FEDERATED_LEARNING.md): federated-learning roadmap (separate from §5.6 telemetry; not yet implemented).
 - [`roadmap/ECOSYSTEM.md`](roadmap/ECOSYSTEM.md): four-tool adaptive-input platform (Alpha-OSK + MacroVox + Octavium + Nimbus).
-- [`roadmap/MACROVOX_INTEGRATION.md`](roadmap/MACROVOX_INTEGRATION.md): voice-dictation integration plan.
+- [`roadmap/MACROVOX_INTEGRATION.md`](roadmap/MACROVOX_INTEGRATION.md): voice-dictation integration plan (history; MacroVox's AI features are now native in Alpha-OSK).
 - [`roadmap/DOCUMENT_IMPORT.md`](roadmap/DOCUMENT_IMPORT.md): import-from-document feature spec.
 - [`roadmap/dictation-speaking-indicator.html`](roadmap/dictation-speaking-indicator.html): the five candidate "the mic hears you" animations, side by side with simulated speech (open locally). B, level bars, shipped 2026-10-24; kept as the record of what was rejected. Uses the vendored [`roadmap/alex-style/`](roadmap/alex-style/README.md) tokens.
 

@@ -262,7 +262,7 @@ Full write-up: `docs/architecture/TEXT_PATTERNS.md` (section of the same name). 
 Both live in `src/text_patterns.py` (linear-time, length-capped, never logs: every argument is typed content).
 
 - **`_raw_token`**, not `_current_word`, is the run before the cursor (capped at 128, maintained only outside privacy mode).
-- A suppressed auto-space skips the sent space, the `_context_buffer` space, and the auto-capitalize together. **A bare digit run suppresses provisionally** (`_deferred_auto_space`, settled by the next character; it only ever *adds* a space late).
+- A suppressed auto-space skips the sent space, the `_context_buffer` space, and the auto-capitalize together. **A numeric run suppresses provisionally**, separators included (`_deferred_auto_space`, settled by the next character; it only ever *adds* a space late, and delivering it retires `_raw_token`).
 - `_closes_a_quotation` decides on `"` parity; `"` must never join `_NO_SPACE_BEFORE`.
 - **Auto-capitalize is not a held Shift**: it arms `_pending_auto_cap`, never `_shift_active`. Verbatim inserts spend it (`_consume_auto_cap`); the edit-mode branch ignores it; the end-of-keystroke spend is guarded on `consumed_auto_cap and not rearmed_auto_cap`; `_CARRIES_AUTO_CAP` characters pass it along. Test with even-length punctuation runs.
 - **Do not reintroduce the "first-token rescue" or guess-from-the-next-character rules.** A bare `example.com` getting a space after its first dot is a pinned limitation.
@@ -458,6 +458,7 @@ Six signals reset context: foreground window, focused element, caret position (4
 - A `None` token means unknown; state is untouched.
 - **`_reset_typing_context` drops `_last_focus_token`**, so the poll re-seeds after Tab / nav / click instead of resetting a second time and wiping a character typed in the new field (`hellis`). Guard: `TestTabClearsContext::test_a_character_typed_before_the_next_focus_poll_survives_it`.
 - **The outside click resets mid-word; `_check_caret_moved` keeps its only-between-words guard. Do not re-unify them.**
+- **A focused-element change within `_FOCUS_CHURN_GRACE_S` (1 s) of our own keystroke moves the baseline and resets nothing**: web composers re-identify their editor node on the first character, and resetting there dropped the first letter of every word typed after a pause from `_current_word`. Only text at the caret arms it; a chord or a special key outside `_TEXT_EDITING_KEYS` through `_send_key` disarms it (Ctrl+F, F3, F6 move focus on purpose). Guard: `TestAFocusChurnUnderOurOwnKeystrokeKeepsTheWord`.
 - Clicks settle over `_CLICK_SETTLE_MS` against `_caret_before_click`; `_note_own_keystroke` is set in the synth wrappers. Within-window resets pass `keep_snippet_offer=True`.
 - **The tail of an interrupted word is never learned** (`_word_prefix_lost`); tests must type the word three times.
 - Only the **high bit** of `GetAsyncKeyState` is read. Tab does not learn; Delete and Escape skip the nav reset.

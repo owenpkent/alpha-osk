@@ -4,8 +4,18 @@ All notable changes to Alpha-OSK are documented in this file.
 
 ## [Unreleased]
 
+## [1.9.6] (2026-10-31)
+
 ### Fixed
-- **A symbol typed with Shift locked now arrives as the symbol on the key.** Keys that type exactly the glyph on their cap (the compact symbol page, a right-click's shifted character) were still being shifted by a locked Shift at the system level, so `-` could arrive as `_` while the keyboard believed it had typed `-`, and the next suggestion was inserted against text that was not there.
+- **A space now follows a number that ends a sentence, even one with a separator in it.** After a price, a time or a decimal (`1,000.`, `10:30.`, `1.5.`) the space was skipped for good, where a plain `42.` got it back on the next letter. The same number no longer swallows the space after the short sentence that follows it.
+- **The first letter of a word no longer goes missing from the suggestions.** After a pause, or after switching to another app, the first letter you typed often did not count toward the suggestions, and tapping one then typed the whole word next to it. Web text boxes re-identify themselves on the first character and the keyboard mistook that for you moving to another field.
+
+## [1.9.5] (2026-10-28)
+
+### Fixed
+- **No more false "Could not make a secure connection" after dictating.** A run that finished normally sometimes ended with that error, though every word had been typed. The connection was fine: the dictation service hangs up once it is done, and that was reported as a failure.
+- **A dictation run cut off after you press stop keeps what you said.** If the connection drops before the last words come back, any words that did arrive are typed and you are told the end may be missing; if none arrived, the recording is saved in History so you can play it back.
+- **Symbols no longer change when Shift is held.** With Shift on or locked, a symbol from the compact symbol page or a right-click could come out as its shifted twin (an underscore for a hyphen), and the next suggestion you tapped could then replace the wrong letters.
 
 ## [1.9.4] (2026-10-27)
 

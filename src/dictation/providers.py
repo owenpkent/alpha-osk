@@ -120,6 +120,7 @@ class DeepgramStream(TranscriptionStream):
         self._flush_timer: Any = None
         self._connect_timer: Any = None
         self._finishing = False
+        self._flush_acknowledged = False
         self._reported = False
 
     # --- URL -----------------------------------------------------------
@@ -262,10 +263,16 @@ class DeepgramStream(TranscriptionStream):
         self.opened.emit()
 
     def _on_disconnected(self) -> None:
-        # Expected once `finish()` has been acknowledged; unexpected
-        # otherwise, but by this point any audio in the gap is already
-        # lost, so it is reported as the end of the run either way and
-        # the controller decides whether to call it an error.
+        if self._finishing and not self._flush_acknowledged:
+            # A close after CloseStream but before its Metadata: the flush
+            # never finished, so the tail (or the whole transcript) may be
+            # missing.  Only `failed` keeps the audio; a quiet `closed`
+            # here would end the run as if nothing were lost.
+            self._fail("Dictation stopped: the connection was lost.")
+            return
+        # Expected once the flush has been acknowledged.  Mid-run it is
+        # reported as the end of the run and the controller decides
+        # whether to call it an error (a refused key closes this way).
         self.abort()
 
     def _on_text(self, message: str) -> None:
@@ -276,6 +283,10 @@ class DeepgramStream(TranscriptionStream):
         if not isinstance(payload, dict):
             return
         if payload.get("type") == "Metadata":
+            # Deepgram's answer to CloseStream is the last results, then this
+            # summary, then a close: only now has the flush finished.
+            if self._finishing:
+                self._flush_acknowledged = True
             return
         channel = payload.get("channel")
         if not isinstance(channel, dict):
@@ -294,7 +305,24 @@ class DeepgramStream(TranscriptionStream):
         else:
             self.interim.emit(text)
 
-    def _on_error(self, _error: Any) -> None:
+    def _on_error(self, error: Any) -> None:
+        # The enum name carries no content, unlike errorString(), and is
+        # the one detail that tells a refusal from a drop after the fact.
+        _logger.warning(
+            "Dictation socket error: %s (finishing=%s)",
+            getattr(error, "name", error),
+            self._finishing,
+        )
+        if self._flush_acknowledged and _is_remote_close(error):
+            # Deepgram answers CloseStream with the last finals and a
+            # Metadata summary, and then hangs up.  Qt sometimes reports
+            # that hang-up as an error ("The TLS/SSL connection has been
+            # closed") rather than a plain disconnect; it is the same
+            # expected end either way.  A close before the Metadata is not:
+            # the tail, or the whole transcript, may be missing, and the
+            # controller keeps the audio only on `failed`.
+            self.abort()
+            return
         message = ""
         if self._socket is not None:
             try:
@@ -315,6 +343,14 @@ class DeepgramStream(TranscriptionStream):
         self.abort()
 
 
+def _is_remote_close(error: Any) -> bool:
+    try:
+        from PySide6.QtNetwork import QAbstractSocket
+    except ImportError:  # pragma: no cover - the socket could not exist either
+        return False
+    return bool(error == QAbstractSocket.SocketError.RemoteHostClosedError)
+
+
 def _friendly_error(raw: str) -> str:
     """Turn a Qt socket error string into a sentence with a next step.
 
@@ -328,6 +364,12 @@ def _friendly_error(raw: str) -> str:
     refused = ("401", "403", "unauthor", "forbidden", "www-authenticate")
     if any(marker in lowered for marker in refused):
         return "Dictation was refused: check your API key in Settings."
+    # A hang-up after the connection was made: "The TLS/SSL connection has
+    # been closed" or "The remote host closed the connection".  Checked
+    # before the TLS and host markers, which both strings also contain, so
+    # a drop is not blamed on a handshake or an unreachable host.
+    if "closed" in lowered:
+        return "Dictation stopped: the connection was lost."
     # Qt's SslHandshakeFailedError reads "SSL handshake failed"; a proxy or
     # an inspecting firewall is the usual cause.  ("handshake" alone is not
     # a marker: Qt also says "processHandshake" for plain HTTP refusals.)

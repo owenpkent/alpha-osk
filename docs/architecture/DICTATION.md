@@ -104,7 +104,7 @@ looking like recording**, or the user clicks again and starts a second run.
 Deepgram a `CloseStream`, because the final fragment for the last thing
 said arrives *after* that message. Closing on stop would throw away the
 tail of the user's sentence, which is the part they are most likely to be
-watching for. `FLUSH_GRACE_MS` (2.5 s) is the ceiling, so a wedged server
+watching for. `FLUSH_GRACE_MS` (5 s) is the ceiling, so a wedged server
 cannot pin the UI in `finishing`.
 
 ## AI cleanup
@@ -621,11 +621,39 @@ hold here.
 - `_friendly_error` maps `ssl` / `tls` / `certificate` to "Could not make
   a secure connection", the wording a proxy or inspecting firewall
   produces. `handshake` alone is not a marker: Qt says `processHandshake`
-  for a plain HTTP refusal too.
+  for a plain HTTP refusal too. A `closed` marker is checked first and
+  reads "the connection was lost": "The TLS/SSL connection has been
+  closed" is a hang-up after the handshake, not a TLS problem, and used to
+  be blamed on the connection.
+- **A hang-up after a finished flush is the expected end, not an error.**
+  Deepgram answers `CloseStream` with the last results, then a `Metadata`
+  summary, then a close
+  ([docs](https://developers.deepgram.com/docs/close-stream)); Qt
+  sometimes reports that close through `errorOccurred`
+  (`RemoteHostClosedError`) instead of `disconnected`. Once a `Metadata`
+  has arrived after `finish()` (`_flush_acknowledged`), `_on_error`
+  treats that one code as `disconnected` (`abort()`, then `closed`). **The
+  gate is the Metadata, not `_finishing`**: a close between `CloseStream`
+  and its answer may have lost the tail or the whole transcript, and only
+  `failed` reaches `_keep_failed_audio`, so treating it as `closed`
+  silently threw an untranscribed run's audio away (caught in review of
+  PR #229). Any other code, or the same code mid-run, still fails. A plain
+  `disconnected` follows the same gate: before the Metadata,
+  `_on_disconnected` fails with "the connection was lost" rather than
+  emitting `closed` (it used to drop the audio the same way); mid-run it
+  still emits `closed`, because a refused key closes during the handshake
+  and the controller words that case itself.
+  `_on_error` logs the enum name (content-free) so the next failure can be
+  told apart after the fact. Seen in the field 2026-10-26 and 2026-10-28:
+  both runs kept their full text, and the user was told to check a
+  connection that was fine.
 
-Tests: `tests/test_dictation.py::TestTheProviderGivesUpOnTime` (a real
+Tests: `tests/test_dictation.py::TestTheProviderGivesUpOnTime` and
+`::TestTheHangUpAfterAStopIsNotAnError`,
+`::TestAPlainCloseAfterAStopWaitsForTheMetadata` (a real
 `DeepgramStream` over a fake socket), `tests/test_dictation_ai.py::
-TestAFailedRunKeepsWhatWasHeard`, and the audio-only row in
+TestAHangUpBeforeTheFlushFinishesKeepsTheRun` (the real provider wired to
+the real controller), `TestAFailedRunKeepsWhatWasHeard`, and the audio-only row in
 `tests/test_qml_dictation_ai.py::TestTheHistoryList`.
 
 ## Nothing here logs what was said
@@ -684,7 +712,12 @@ Every setter persists immediately, the same way `SnippetStore` does, so there is
   OSK would need the edit-session plumbing the snippets editor uses. That
   is still not wired, but it is mitigated: the key fields have large Paste
   and Save buttons, so the whole path is two clicks and no typing. (Nobody
-  types 40 hex characters by hand, least of all here.)
+  types 40 hex characters by hand, least of all here.) Paste and Save
+  clears the field first (`TextField.paste()` inserts at the caret, so a
+  second tap used to save the key twice), and both key setters collapse an
+  exact doubled paste as a backstop. Qt's wording for a Deepgram 401
+  ("Unsupported WWW-Authenticate challenges") maps to the check-your-key
+  message in `_friendly_error`.
 - **Dictation is a no-op while an edit popup is open.** Routing a phrase
   into the snippets editor or the prediction-edit field would need an
   "insert this string" edit signal; both surfaces currently take one
