@@ -3394,6 +3394,62 @@ class TestTheDeferredSpaceAfterABareNumber:
         _press(bridge, ",000")
         assert "".join(_typed(bridge)) == ",000"
 
+    @pytest.mark.parametrize(
+        "number,punct",
+        [("1.5", "."), ("1,000", "."), ("10:30", "."), ("2.0", "."), ("1,000", ",")],
+        ids=["decimal", "thousands", "time", "version", "thousands-comma"],
+    )
+    def test_a_number_with_a_separator_gets_its_space_back_too(
+        self, bridge: KeyboardBridge, number: str, punct: str
+    ):
+        """A separator makes it a number, not a number that goes on.
+
+        These used to be suppressed outright, so the space after a price,
+        a time or a decimal that ended a sentence was lost for good.
+        """
+        _press(bridge, f"it was {number}")
+        bridge._synth.send_text.reset_mock()
+        _press(bridge, f"{punct}then")
+        assert "".join(_typed(bridge)) == f"{punct} then"
+
+    @pytest.mark.parametrize(
+        "path,ext", [("2026/10/31", ".txt"), ("1/2", ".csv"), ("2026/10/31", ".log")]
+    )
+    def test_a_numeric_relative_path_keeps_its_extension(
+        self, bridge: KeyboardBridge, path: str, ext: str
+    ):
+        """A slash makes it a path, and a path never gets a late space.
+
+        ``is_numeric_run`` admits the slash, so the deferral once took
+        these and typed "2026/10/31. txt", a different file name
+        (review finding on PR #233).
+        """
+        _press(bridge, f"open {path}")
+        bridge._synth.send_text.reset_mock()
+        _press(bridge, ext)
+        assert "".join(_typed(bridge)) == ext
+
+    @pytest.mark.parametrize("number,tail", [("192.168.1", ".1"), ("1.2", ".3"), ("1,000", ",000")])
+    def test_a_separated_number_that_goes_on_keeps_its_dots(
+        self, bridge: KeyboardBridge, number: str, tail: str
+    ):
+        _press(bridge, f"it was {number}")
+        bridge._synth.send_text.reset_mock()
+        _press(bridge, tail)
+        assert "".join(_typed(bridge)) == tail
+
+    def test_a_late_space_retires_the_run(self, bridge: KeyboardBridge):
+        """The delivered space ends the number, so the next word starts fresh.
+
+        Without that, ``_raw_token`` carried "42." into "yes", and the dot
+        in it tripped the "already inside a dotted structure" rule: the
+        one-word sentence after the number lost its own space.
+        """
+        _press(bridge, "the total is 42")
+        bridge._synth.send_text.reset_mock()
+        _press(bridge, ".yes.then")
+        assert "".join(_typed(bridge)) == ". yes. then"
+
     def test_a_prose_comma_after_a_number_gets_its_space_back(self, bridge: KeyboardBridge):
         _press(bridge, "i bought 5")
         bridge._synth.send_text.reset_mock()

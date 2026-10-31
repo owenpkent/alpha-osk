@@ -1348,6 +1348,16 @@ class KeyboardBridge(QObject):
             # auto-space is mirrored: a pill click inserts against what
             # the buffer says is on screen.
             self._context_buffer += " "
+        # The space ends the run, exactly as the ordinary auto-space does
+        # in the punctuation branches: the number is finished, so it is
+        # offered to the token store, and the run is retired.  Left in
+        # place, `_raw_token` carried "42." into the next word, and the
+        # dot in it made the rule "a dot already in the token means a
+        # dotted structure" swallow the space after the next one-word
+        # sentence ("the total is 42. Yes.Then").
+        if self._raw_token.endswith(punct):
+            self._learn_raw_token(self._raw_token[: -len(punct)])
+        self._raw_token = ""
         return " ", self._auto_capitalize_after_punctuation and punct in (".", "!", "?")
 
     def _begin_verbatim_insert(self, *, prose: bool = True) -> Tuple[str, bool]:
