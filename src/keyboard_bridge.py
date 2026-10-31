@@ -1217,6 +1217,18 @@ class KeyboardBridge(QObject):
 
         mods = modifiers if modifiers else None
         self._note_own_keystroke()
+        # A chord is a command, not text, and the commands people reach
+        # for move focus on purpose: Ctrl+F opens Find, Ctrl+L the address
+        # bar, Alt+D likewise.  The focused element then changes inside
+        # the same window, which is the one case the churn grace must
+        # not forgive, so the chord disarms it outright rather than
+        # merely declining to arm it: a word typed just before the chord
+        # would otherwise still be inside its own grace, and its pill
+        # would type the tail of that word into the field the chord
+        # opened.  Shift alone is casing, not a command, and never comes
+        # through here on its own (a shifted letter is `_send_text`).
+        if any(m in ("ctrl", "alt", "win") for m in modifiers):
+            self._last_own_keystroke_at = float("-inf")
         # Only thread hold_seconds through when actually holding (game mode) so
         # the common zero-hold call keeps its original two-arg signature.
         if hold_seconds > 0:

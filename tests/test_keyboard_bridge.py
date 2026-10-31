@@ -4439,6 +4439,35 @@ class TestAFocusChurnUnderOurOwnKeystrokeKeepsTheWord:
         assert bridge._current_word == ""
         assert bridge._predictions == []
 
+    @pytest.mark.parametrize("chord_key", ["f", "l"], ids=["ctrl-f-find", "ctrl-l-address-bar"])
+    def test_a_focus_moving_chord_disarms_the_grace(
+        self, bridge: KeyboardBridge, monkeypatch, chord_key: str
+    ):
+        """Ctrl+F right after typing moves focus on purpose; the old word must go.
+
+        Review finding on PR #234: the chord went through `_send_key`,
+        which armed the grace, so the Find field's element change was
+        forgiven and the `hello` pill then typed `lo ` into Find.  The
+        chord has to *disarm* the grace, not merely decline to arm it,
+        because the letters typed just before it are still inside theirs.
+        """
+        self._poll(bridge, monkeypatch, "editor")
+        _type(bridge, "hel")
+        bridge._ctrl_active = True
+        bridge.pressKey(chord_key)  # the chord branch: a command, not a letter
+        self._poll(bridge, monkeypatch, "find-field")
+        assert bridge._current_word == ""
+        assert bridge._predictions == []
+        assert bridge._last_focus_token == "find-field"
+
+    def test_a_hotkey_action_disarms_it_too(self, bridge: KeyboardBridge, monkeypatch):
+        """A programmed Ctrl+F on a function key is the same command."""
+        self._poll(bridge, monkeypatch, "editor")
+        _type(bridge, "hel")
+        bridge._send_key("f", extra_modifiers=["ctrl"])
+        self._poll(bridge, monkeypatch, "find-field")
+        assert bridge._current_word == ""
+
     def test_a_window_switch_still_clears_inside_the_grace(
         self, bridge: KeyboardBridge, monkeypatch
     ):
