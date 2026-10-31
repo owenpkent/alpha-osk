@@ -69,11 +69,6 @@ _OPENING_PUNCTUATION = "\"'([{<"
 # there is no backtracking blow-up.
 _NUMERIC_RUN_RE = re.compile(r"^[0-9]+(?:[.,:\-/][0-9]+)*$")
 
-# A run of digits with no separator in it yet -- the one token shape for
-# which a following "." or "," is genuinely ambiguous.  See
-# ``suppression_is_provisional``.
-_BARE_DIGITS_RE = re.compile(r"^[0-9]+$")
-
 # URL schemes worth recognising before the "://" is typed, so the colon
 # in "https:" doesn't get an auto-space.
 _URL_SCHEMES = frozenset(
@@ -463,7 +458,7 @@ def suppresses_auto_space(token: str, punct: str) -> bool:
 
 
 def suppression_is_provisional(token: str, punct: str) -> bool:
-    """Is a suppression resting only on a bare run of digits?
+    """Is a suppression resting only on the token being a number?
 
     "3" + "." is the start of a decimal; "42" + "." is the end of a
     sentence.  At the instant the dot lands the two are the same string,
@@ -476,14 +471,31 @@ def suppression_is_provisional(token: str, punct: str) -> bool:
     deleted, so the wrong guess costs a late space rather than mangled
     text.
 
-    True only when a bare digit run was the *sole* evidence.  Anything
-    with a separator already in it ("192.168.1", "1,000") or with an
-    "@", a slash or a known scheme is structural on its own terms and
-    stays suppressed outright.
+    True for **every numeric run**, separators included.  An earlier
+    version limited this to a bare digit run, on the reasoning that
+    "192.168.1" and "1,000" already carry a separator and so are
+    structural on their own terms.  That mistook the shape for the
+    evidence: a separator says the token *is* a number, not that the
+    number continues past this punctuation, and a number is exactly as
+    likely to end a sentence as a word is.  "it cost 1.5.", "paid
+    1,000." and "meet at 10:30." all lost their space for good, every
+    time, where "42." got it back one keystroke late.  The next
+    character settles the separated case the same way it settles the
+    bare one: a digit continues the IP, the version or the thousands,
+    and anything else proves prose.
+
+    Still outright, never provisional: anything with an "@", a slash or
+    a known scheme in it.  A letter after "example.co." may be the "u"
+    of ".co.uk", so the next character cannot settle a domain, which is
+    the known gap documented on ``suppresses_auto_space``.  The slash
+    needs saying twice, because ``is_numeric_run`` admits it as a
+    separator: "2026/10/31" is a number by that test and a path by the
+    one that matters, and the "t" of "2026/10/31.txt" must not deliver
+    a space (review finding on PR #233).
     """
     if not suppresses_auto_space(token, punct):
         return False
-    return bool(_BARE_DIGITS_RE.match(token))
+    return is_numeric_run(token) and "/" not in token
 
 
 # ---------------------------------------------------------------------

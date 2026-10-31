@@ -268,8 +268,28 @@ class TestProvisionalSuppression:
     @pytest.mark.parametrize(
         "token,punct",
         [
-            ("192.168.1", "."),  # a separator is already in it
-            ("1,000", ","),
+            ("1.5", "."),  # "it cost 1.5. Then"
+            ("1,000", "."),  # "paid 1,000. Then"
+            ("10:30", "."),  # "meet at 10:30. Then"
+            ("1,000", ","),  # "paid 1,000, then"
+            ("192.168.1", "."),  # the next digit continues the IP
+            ("1.2", "."),  # the next digit continues the version
+        ],
+    )
+    def test_a_number_with_a_separator_is_provisional_too(self, token, punct) -> None:
+        """The separator says it is a number, not that the number goes on.
+
+        Limiting the deferral to bare digits lost the space after every
+        price, time, decimal and version that ended a sentence, for good,
+        where a bare "42." got it back one keystroke late.
+        """
+        assert suppression_is_provisional(token, punct)
+
+    @pytest.mark.parametrize(
+        "token,punct",
+        [
+            ("2026/10/31", "."),  # a number by the regex, a path by the rule that matters
+            ("1/2", "."),  # "1/2.csv"
             ("owen@gmail", "."),  # the "@" is the evidence
             ("C:/Users/owen", "."),
             ("www", "."),

@@ -4,6 +4,12 @@ All notable changes to Alpha-OSK are documented in this file.
 
 ## [Unreleased]
 
+## [1.9.6] (2026-10-31)
+
+### Fixed
+- **A space now follows a number that ends a sentence, even one with a separator in it.** After a price, a time or a decimal (`1,000.`, `10:30.`, `1.5.`) the space was skipped for good, where a plain `42.` got it back on the next letter. The same number no longer swallows the space after the short sentence that follows it.
+- **The first letter of a word no longer goes missing from the suggestions.** After a pause, or after switching to another app, the first letter you typed often did not count toward the suggestions, and tapping one then typed the whole word next to it. Web text boxes re-identify themselves on the first character and the keyboard mistook that for you moving to another field.
+
 ## [1.9.5] (2026-10-28)
 
 ### Fixed
