@@ -489,6 +489,29 @@ _CLICK_POLL_MS = 50
 # does that in 200 ms.
 _CLICK_SETTLE_MS = 200
 
+# How long after one of our own keystrokes a change of focused element
+# (same window) is read as the app re-identifying the control under the
+# caret rather than the user moving to another one.  Web and Electron
+# composers swap their editor node when it goes from empty to non-empty
+# (the placeholder goes, the text node arrives, a framework re-renders),
+# and Chrome rebuilds its accessibility tree lazily and asynchronously,
+# so the UIA RuntimeId the 4 Hz poll compares changes exactly once, on
+# the first character, and sometimes a tick or two after it.  Four
+# ticks covers the asynchronous case with room to spare; a user moving
+# to another control with the mouse is caught by the outside-click
+# signal regardless, and with Tab or an arrow by the key itself, so the
+# only move this window can hide is a physical-keyboard Tab inside one
+# second of a click on the OSK.
+_FOCUS_CHURN_GRACE_S = 1.0
+
+# The special keys that edit text at the caret, and so may arm the grace
+# above.  Everything else sent through `_send_key` is a command, and the
+# commands people reach for move focus on purpose: Ctrl+F or F3 open
+# Find, Ctrl+L or F6 the address bar, Escape closes a dialog.  Tab and
+# the arrows are commands too, but they reset the context themselves
+# before the send, so they never reach the question.
+_TEXT_EDITING_KEYS = frozenset({"BackSpace", "Return", "space", "Delete"})
+
 
 # Cursor-movement keys. When a sticky modifier is held, pressing one of
 # these should KEEP Shift/Ctrl held (extend selection / word-jump across
@@ -994,6 +1017,11 @@ class KeyboardBridge(QObject):
         # made (typing), which the element token cannot distinguish.
         self._last_caret_token: Optional[str] = None
         self._keystroke_since_poll = False
+        # When we last moved the caret ourselves, for the focused-element
+        # check: a flag consumed per tick is not enough there, because the
+        # churn it guards against can surface a tick or two after the
+        # keystroke that caused it (see _FOCUS_CHURN_GRACE_S).
+        self._last_own_keystroke_at = float("-inf")
         self._foreground_timer = QTimer(self)
         self._foreground_timer.setInterval(250)
         self._foreground_timer.timeout.connect(self._check_foreground_window)
@@ -1134,8 +1162,18 @@ class KeyboardBridge(QObject):
 
     # --- Key synthesis (delegated to platform layer) ---
 
-    def _note_own_keystroke(self) -> None:
+    def _note_own_keystroke(self, *, text: bool = True) -> None:
         """Record that *we* just moved the caret, for both caret polls.
+
+        *text* is whether the keystroke put text at the caret (a
+        character, a Backspace, a Return) or was a command (a chord, a
+        function key, Escape).  Only text arms the focus-churn grace,
+        and a command **disarms** it: Ctrl+F, F3, Ctrl+L and F6 move
+        focus to another control on purpose, which is exactly the
+        same-window element change the grace must not forgive, and the
+        letters typed just before the command are still inside their
+        own grace, so declining to arm would not be enough (review
+        findings on PR #234, twice).
 
         Two polls compare a caret token across their own ticks, and both
         have to tell our own insert from the user clicking somewhere
@@ -1150,6 +1188,11 @@ class KeyboardBridge(QObject):
         """
         self._keystroke_since_poll = True
         self._keystroke_since_click_poll = True
+        self._last_own_keystroke_at = time.monotonic() if text else float("-inf")
+
+    def _typed_within_focus_grace(self) -> bool:
+        """Did one of our own keystrokes land inside ``_FOCUS_CHURN_GRACE_S``?"""
+        return time.monotonic() - self._last_own_keystroke_at < _FOCUS_CHURN_GRACE_S
 
     def _send_key(
         self,
@@ -1191,7 +1234,16 @@ class KeyboardBridge(QObject):
                 modifiers.append(extra)
 
         mods = modifiers if modifiers else None
-        self._note_own_keystroke()
+        # Text at the caret, or a command?  A single character (the
+        # game-mode held-key path) or a text-editing special key with no
+        # Ctrl/Alt/Win attached is text; a chord or any other special key
+        # (F3, F6, Escape, Insert) is a command.  Shift alone is casing,
+        # not a command.  See _note_own_keystroke for what the verdict
+        # does to the focus-churn grace.
+        is_command = any(m in ("ctrl", "alt", "win") for m in modifiers) or not (
+            len(key_name) == 1 or key_name in _TEXT_EDITING_KEYS
+        )
+        self._note_own_keystroke(text=not is_command)
         # Only thread hold_seconds through when actually holding (game mode) so
         # the common zero-hold call keeps its original two-arg signature.
         if hold_seconds > 0:
@@ -5642,12 +5694,27 @@ class KeyboardBridge(QObject):
                 and self._last_focus_token is not None
                 and token != self._last_focus_token
             ):
-                # Same window, so the user is still in the form they were
-                # filling in: a live snippet offer survives, exactly as it
-                # does for the outside click.  Only `window_switched`
-                # above takes the default and withdraws it.
-                self._reset_typing_context(keep_snippet_offer=True)
-                _logger.debug("Focused element changed — predictions cleared")
+                if self._typed_within_focus_grace():
+                    # The control re-identified itself under our own
+                    # keystroke, which is what a web composer does on its
+                    # first character: the one letter typed is still on
+                    # screen and still the word in progress, so the
+                    # baseline moves and nothing else does.  Resetting
+                    # here wiped that letter from `_current_word` every
+                    # time, so the bar never saw the first letter of a
+                    # word typed after a pause or an app switch, and a
+                    # pill tapped afterwards typed the whole word beside
+                    # it.  The caret check below has carried the same
+                    # guard since it was written; this branch did not.
+                    _logger.debug("Focused element changed under our keystroke: context kept")
+                else:
+                    # Same window, so the user is still in the form they
+                    # were filling in: a live snippet offer survives,
+                    # exactly as it does for the outside click.  Only
+                    # `window_switched` above takes the default and
+                    # withdraws it.
+                    self._reset_typing_context(keep_snippet_offer=True)
+                    _logger.debug("Focused element changed — predictions cleared")
             self._last_focus_token = token
         elif window_switched:
             # Window changed but the element is unreadable; drop the stale

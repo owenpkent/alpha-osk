@@ -3762,6 +3762,7 @@ class TestOutsideClickClearsContext:
         assert bridge._pending_snippet_offer is not None
         bridge._last_foreground_hwnd = 100
         bridge._last_focus_token = "A"
+        _age_last_keystroke(bridge)  # the user moved on, not the composer re-rendering
         monkeypatch.setattr(bridge, "_get_foreground_window_id", lambda: 100)
         monkeypatch.setattr("src.keyboard_bridge.focused_element_token", lambda: "B")
         bridge._check_foreground_window()
@@ -4359,7 +4360,160 @@ class TestTabClearsContext:
         _type(bridge, "h")
         self._poll(bridge, monkeypatch, "B")  # re-seeds on B
         _type(bridge, "el")
+        _age_last_keystroke(bridge)  # long enough ago that the move is the app's
         self._poll(bridge, monkeypatch, "C")  # the app moved focus again
+        assert bridge._current_word == ""
+
+
+def _age_last_keystroke(bridge: KeyboardBridge) -> None:
+    """Pretend our last keystroke was well outside the focus-churn grace."""
+    bridge._last_own_keystroke_at = time.monotonic() - 10.0
+
+
+class TestAFocusChurnUnderOurOwnKeystrokeKeepsTheWord:
+    """The first letter of a word must not vanish from the bar.
+
+    Web and Electron composers swap their editor node on the first
+    character (placeholder out, text node in, a re-render), and Chrome
+    builds its accessibility tree lazily, so the UIA RuntimeId behind
+    ``focused_element_token`` changes once, right after the first
+    keystroke into an empty field, sometimes a tick or two later.  The
+    4 Hz poll read that as "different control" and reset, which wiped
+    the one letter typed from ``_current_word`` while it stayed on
+    screen: the pills never saw the first letter of a word typed after
+    a pause or an app switch, and a tapped pill then typed the whole
+    word beside it.  The caret check has refused to reset under our own
+    keystroke since it was written; the element check now does too,
+    inside ``_FOCUS_CHURN_GRACE_S``.
+    """
+
+    def _poll(self, bridge: KeyboardBridge, monkeypatch, token: str) -> None:
+        monkeypatch.setattr(bridge, "_get_foreground_window_id", lambda: 100)
+        monkeypatch.setattr("src.keyboard_bridge.focused_element_token", lambda: token)
+        bridge._check_foreground_window()
+
+    def test_the_first_letter_survives_the_element_changing_under_it(
+        self, bridge: KeyboardBridge, monkeypatch
+    ):
+        self._poll(bridge, monkeypatch, "empty-composer")
+        _type(bridge, "h")
+        self._poll(bridge, monkeypatch, "composer-with-text")
+        assert bridge._current_word == "h"
+        assert bridge._last_focus_token == "composer-with-text"
+
+    def test_a_churn_that_surfaces_a_tick_or_two_late_is_still_ours(
+        self, bridge: KeyboardBridge, monkeypatch
+    ):
+        """Chrome reports the new element asynchronously, after the tick that typed."""
+        self._poll(bridge, monkeypatch, "A")
+        _type(bridge, "h")
+        self._poll(bridge, monkeypatch, "A")  # tree not rebuilt yet
+        self._poll(bridge, monkeypatch, "A")
+        self._poll(bridge, monkeypatch, "B")  # now it is
+        assert bridge._current_word == "h"
+
+    def test_the_context_behind_the_word_survives_too(self, bridge: KeyboardBridge, monkeypatch):
+        self._poll(bridge, monkeypatch, "A")
+        _type(bridge, "dear bob h")
+        self._poll(bridge, monkeypatch, "B")
+        assert bridge._current_word == "h"
+        assert bridge._context_buffer.endswith("bob ")
+
+    def test_a_tapped_pill_counts_as_our_keystroke(self, bridge: KeyboardBridge, monkeypatch):
+        """A pill insert moves the caret through the same marker a key does."""
+        self._poll(bridge, monkeypatch, "A")
+        _type(bridge, "hel")
+        bridge._predictions = ["hello"]
+        bridge.pressPrediction("hello")
+        self._poll(bridge, monkeypatch, "B")
+        assert bridge._context_buffer.endswith("hello ")
+
+    def test_an_element_change_with_no_keystroke_behind_it_still_clears(
+        self, bridge: KeyboardBridge, monkeypatch
+    ):
+        """The inverse: the guard is a grace after typing, not a blindfold."""
+        self._poll(bridge, monkeypatch, "A")
+        _type(bridge, "hel")
+        _age_last_keystroke(bridge)
+        self._poll(bridge, monkeypatch, "B")  # the user moved to another control
+        assert bridge._current_word == ""
+        assert bridge._predictions == []
+
+    @pytest.mark.parametrize("chord_key", ["f", "l"], ids=["ctrl-f-find", "ctrl-l-address-bar"])
+    def test_a_focus_moving_chord_disarms_the_grace(
+        self, bridge: KeyboardBridge, monkeypatch, chord_key: str
+    ):
+        """Ctrl+F right after typing moves focus on purpose; the old word must go.
+
+        Review finding on PR #234: the chord went through `_send_key`,
+        which armed the grace, so the Find field's element change was
+        forgiven and the `hello` pill then typed `lo ` into Find.  The
+        chord has to *disarm* the grace, not merely decline to arm it,
+        because the letters typed just before it are still inside theirs.
+        """
+        self._poll(bridge, monkeypatch, "editor")
+        _type(bridge, "hel")
+        bridge._ctrl_active = True
+        bridge.pressKey(chord_key)  # the chord branch: a command, not a letter
+        self._poll(bridge, monkeypatch, "find-field")
+        assert bridge._current_word == ""
+        assert bridge._predictions == []
+        assert bridge._last_focus_token == "find-field"
+
+    @pytest.mark.parametrize("fkey", ["f3", "f6"], ids=["f3-find", "f6-address-bar"])
+    def test_an_unmodified_function_key_disarms_it_too(
+        self, bridge: KeyboardBridge, monkeypatch, fkey: str
+    ):
+        """F3 opens Find and F6 the address bar with no modifier at all.
+
+        Second review finding on PR #234: the chord rule let these
+        through, and the `hello` pill typed `lo ` into Find.  The rule is
+        now "text at the caret arms, anything else disarms", and a plain
+        function key is not text.
+        """
+        self._poll(bridge, monkeypatch, "editor")
+        _type(bridge, "hel")
+        bridge._predictions = ["hello"]
+        bridge.pressSpecialKey(fkey)
+        self._poll(bridge, monkeypatch, "find-field")
+        assert bridge._current_word == ""
+        assert bridge._predictions == []
+        bridge._synth.send_text.reset_mock()
+        bridge.pressPrediction("hello")
+        assert "".join(_typed(bridge)) == "hello "
+
+    @pytest.mark.parametrize("key", ["backspace", "return", "space", "delete"])
+    def test_a_text_editing_special_key_keeps_the_grace(
+        self, bridge: KeyboardBridge, monkeypatch, key: str
+    ):
+        """The inverse: Backspace and friends edit text, so churn under them is ours."""
+        self._poll(bridge, monkeypatch, "A")
+        _type(bridge, "hel")
+        _age_last_keystroke(bridge)
+        bridge.pressSpecialKey(key)
+        before = bridge._context_buffer
+        self._poll(bridge, monkeypatch, "B")
+        # Whatever the key did to the word, the poll did not wipe the context.
+        assert bridge._context_buffer == before
+
+    def test_a_hotkey_action_disarms_it_too(self, bridge: KeyboardBridge, monkeypatch):
+        """A programmed Ctrl+F on a function key is the same command."""
+        self._poll(bridge, monkeypatch, "editor")
+        _type(bridge, "hel")
+        bridge._send_key("f", extra_modifiers=["ctrl"])
+        self._poll(bridge, monkeypatch, "find-field")
+        assert bridge._current_word == ""
+
+    def test_a_window_switch_still_clears_inside_the_grace(
+        self, bridge: KeyboardBridge, monkeypatch
+    ):
+        """Only the same-window element churn is forgiven; an app switch never is."""
+        monkeypatch.setattr(bridge, "_get_foreground_window_id", lambda: 100)
+        monkeypatch.setattr("src.keyboard_bridge.focused_element_token", lambda: "A")
+        bridge._check_foreground_window()
+        _type(bridge, "hel")
+        monkeypatch.setattr(bridge, "_get_foreground_window_id", lambda: 200)
+        bridge._check_foreground_window()
         assert bridge._current_word == ""
 
 
