@@ -262,7 +262,7 @@ Full write-up: `docs/architecture/TEXT_PATTERNS.md` (section of the same name). 
 Both live in `src/text_patterns.py` (linear-time, length-capped, never logs: every argument is typed content).
 
 - **`_raw_token`**, not `_current_word`, is the run before the cursor (capped at 128, maintained only outside privacy mode).
-- A suppressed auto-space skips the sent space, the `_context_buffer` space, and the auto-capitalize together. **A bare digit run suppresses provisionally** (`_deferred_auto_space`, settled by the next character; it only ever *adds* a space late).
+- A suppressed auto-space skips the sent space, the `_context_buffer` space, and the auto-capitalize together. **A numeric run suppresses provisionally**, separators included (`_deferred_auto_space`, settled by the next character; it only ever *adds* a space late, and delivering it retires `_raw_token`).
 - `_closes_a_quotation` decides on `"` parity; `"` must never join `_NO_SPACE_BEFORE`.
 - **Auto-capitalize is not a held Shift**: it arms `_pending_auto_cap`, never `_shift_active`. Verbatim inserts spend it (`_consume_auto_cap`); the edit-mode branch ignores it; the end-of-keystroke spend is guarded on `consumed_auto_cap and not rearmed_auto_cap`; `_CARRIES_AUTO_CAP` characters pass it along. Test with even-length punctuation runs.
 - **Do not reintroduce the "first-token rescue" or guess-from-the-next-character rules.** A bare `example.com` getting a space after its first dot is a pinned limitation.
