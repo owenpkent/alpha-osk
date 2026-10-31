@@ -504,6 +504,14 @@ _CLICK_SETTLE_MS = 200
 # second of a click on the OSK.
 _FOCUS_CHURN_GRACE_S = 1.0
 
+# The special keys that edit text at the caret, and so may arm the grace
+# above.  Everything else sent through `_send_key` is a command, and the
+# commands people reach for move focus on purpose: Ctrl+F or F3 open
+# Find, Ctrl+L or F6 the address bar, Escape closes a dialog.  Tab and
+# the arrows are commands too, but they reset the context themselves
+# before the send, so they never reach the question.
+_TEXT_EDITING_KEYS = frozenset({"BackSpace", "Return", "space", "Delete"})
+
 
 # Cursor-movement keys. When a sticky modifier is held, pressing one of
 # these should KEEP Shift/Ctrl held (extend selection / word-jump across
@@ -1154,8 +1162,18 @@ class KeyboardBridge(QObject):
 
     # --- Key synthesis (delegated to platform layer) ---
 
-    def _note_own_keystroke(self) -> None:
+    def _note_own_keystroke(self, *, text: bool = True) -> None:
         """Record that *we* just moved the caret, for both caret polls.
+
+        *text* is whether the keystroke put text at the caret (a
+        character, a Backspace, a Return) or was a command (a chord, a
+        function key, Escape).  Only text arms the focus-churn grace,
+        and a command **disarms** it: Ctrl+F, F3, Ctrl+L and F6 move
+        focus to another control on purpose, which is exactly the
+        same-window element change the grace must not forgive, and the
+        letters typed just before the command are still inside their
+        own grace, so declining to arm would not be enough (review
+        findings on PR #234, twice).
 
         Two polls compare a caret token across their own ticks, and both
         have to tell our own insert from the user clicking somewhere
@@ -1170,7 +1188,7 @@ class KeyboardBridge(QObject):
         """
         self._keystroke_since_poll = True
         self._keystroke_since_click_poll = True
-        self._last_own_keystroke_at = time.monotonic()
+        self._last_own_keystroke_at = time.monotonic() if text else float("-inf")
 
     def _typed_within_focus_grace(self) -> bool:
         """Did one of our own keystrokes land inside ``_FOCUS_CHURN_GRACE_S``?"""
@@ -1216,19 +1234,16 @@ class KeyboardBridge(QObject):
                 modifiers.append(extra)
 
         mods = modifiers if modifiers else None
-        self._note_own_keystroke()
-        # A chord is a command, not text, and the commands people reach
-        # for move focus on purpose: Ctrl+F opens Find, Ctrl+L the address
-        # bar, Alt+D likewise.  The focused element then changes inside
-        # the same window, which is the one case the churn grace must
-        # not forgive, so the chord disarms it outright rather than
-        # merely declining to arm it: a word typed just before the chord
-        # would otherwise still be inside its own grace, and its pill
-        # would type the tail of that word into the field the chord
-        # opened.  Shift alone is casing, not a command, and never comes
-        # through here on its own (a shifted letter is `_send_text`).
-        if any(m in ("ctrl", "alt", "win") for m in modifiers):
-            self._last_own_keystroke_at = float("-inf")
+        # Text at the caret, or a command?  A single character (the
+        # game-mode held-key path) or a text-editing special key with no
+        # Ctrl/Alt/Win attached is text; a chord or any other special key
+        # (F3, F6, Escape, Insert) is a command.  Shift alone is casing,
+        # not a command.  See _note_own_keystroke for what the verdict
+        # does to the focus-churn grace.
+        is_command = any(m in ("ctrl", "alt", "win") for m in modifiers) or not (
+            len(key_name) == 1 or key_name in _TEXT_EDITING_KEYS
+        )
+        self._note_own_keystroke(text=not is_command)
         # Only thread hold_seconds through when actually holding (game mode) so
         # the common zero-hold call keeps its original two-arg signature.
         if hold_seconds > 0:

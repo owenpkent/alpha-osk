@@ -4460,6 +4460,42 @@ class TestAFocusChurnUnderOurOwnKeystrokeKeepsTheWord:
         assert bridge._predictions == []
         assert bridge._last_focus_token == "find-field"
 
+    @pytest.mark.parametrize("fkey", ["f3", "f6"], ids=["f3-find", "f6-address-bar"])
+    def test_an_unmodified_function_key_disarms_it_too(
+        self, bridge: KeyboardBridge, monkeypatch, fkey: str
+    ):
+        """F3 opens Find and F6 the address bar with no modifier at all.
+
+        Second review finding on PR #234: the chord rule let these
+        through, and the `hello` pill typed `lo ` into Find.  The rule is
+        now "text at the caret arms, anything else disarms", and a plain
+        function key is not text.
+        """
+        self._poll(bridge, monkeypatch, "editor")
+        _type(bridge, "hel")
+        bridge._predictions = ["hello"]
+        bridge.pressSpecialKey(fkey)
+        self._poll(bridge, monkeypatch, "find-field")
+        assert bridge._current_word == ""
+        assert bridge._predictions == []
+        bridge._synth.send_text.reset_mock()
+        bridge.pressPrediction("hello")
+        assert "".join(_typed(bridge)) == "hello "
+
+    @pytest.mark.parametrize("key", ["backspace", "return", "space", "delete"])
+    def test_a_text_editing_special_key_keeps_the_grace(
+        self, bridge: KeyboardBridge, monkeypatch, key: str
+    ):
+        """The inverse: Backspace and friends edit text, so churn under them is ours."""
+        self._poll(bridge, monkeypatch, "A")
+        _type(bridge, "hel")
+        _age_last_keystroke(bridge)
+        bridge.pressSpecialKey(key)
+        before = bridge._context_buffer
+        self._poll(bridge, monkeypatch, "B")
+        # Whatever the key did to the word, the poll did not wipe the context.
+        assert bridge._context_buffer == before
+
     def test_a_hotkey_action_disarms_it_too(self, bridge: KeyboardBridge, monkeypatch):
         """A programmed Ctrl+F on a function key is the same command."""
         self._poll(bridge, monkeypatch, "editor")
