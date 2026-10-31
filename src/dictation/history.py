@@ -41,16 +41,26 @@ from pathlib import Path
 from typing import Any
 
 from ..atomic_write import atomic_write_json
+from .config import DEFAULT_HISTORY_LIMIT_MB
 
 _logger = logging.getLogger(__name__)
 
 SCHEMA_VERSION = 1
 
-MAX_ENTRIES = 20
-MAX_AUDIO_BYTES_TOTAL = 200 * 1024 * 1024
-MAX_INDEX_BYTES = 2 * 1024 * 1024
+#: A ceiling, not the working limit: the user's megabyte budget decides
+#: how many runs are kept, and under "No limit" (0) this alone bounds the
+#: store.  The oldest run goes when it is reached.
+MAX_ENTRIES = 5000
+#: Sized for `MAX_ENTRIES` ordinary runs (a few KB each once escaped and
+#: indented).  Pruning still keeps the saved index under it, so a store of
+#: huge non-ASCII runs sheds the oldest rather than saving an index the
+#: loader would refuse.
+MAX_INDEX_BYTES = 16 * 1024 * 1024
 MAX_TEXT_CHARS = 20_000
 MAX_SECONDS = 3600.0
+#: A recording's recorded size is only bookkeeping for the budget; a value
+#: past this is a damaged index, not audio.
+_MAX_AUDIO_BYTES = 1 << 40
 
 _ID_RE = re.compile(r"^[0-9a-f]{16}$")
 _WAV_RE = re.compile(r"^([0-9a-f]{16})\.wav$")
@@ -92,7 +102,7 @@ def _clean_entry(raw: Any) -> dict[str, Any] | None:
             seconds = 0.0
         if not math.isfinite(seconds):
             seconds = 0.0
-    return {
+    entry = {
         "id": raw["id"],
         "created": created[:40] if isinstance(created, str) else "",
         "purpose": purpose,
@@ -101,19 +111,39 @@ def _clean_entry(raw: Any) -> dict[str, Any] | None:
         "cleaned": raw.get("cleaned") is True,
         "seconds": max(0.0, min(MAX_SECONDS, seconds)),
     }
+    # Optional: an entry from an older build has none, and `_load` measures
+    # it once.  Recorded so pruning never stats thousands of files.
+    audio_bytes = raw.get("audio_bytes")
+    if isinstance(audio_bytes, int) and not isinstance(audio_bytes, bool):
+        entry["audio_bytes"] = max(0, min(_MAX_AUDIO_BYTES, audio_bytes))
+    return entry
 
 
 class DictationHistory:
     """The on-disk history.  Newest entry first in memory and on disk."""
 
-    def __init__(self, directory: Path | None = None) -> None:
+    def __init__(
+        self, directory: Path | None = None, limit_bytes: int = DEFAULT_HISTORY_LIMIT_MB << 20
+    ) -> None:
         self._explicit_dir = directory
+        #: Total bytes the WAVs plus the index may use; oldest runs go first.
+        #: 0 means no byte limit.
+        self.limit_bytes = limit_bytes
         self._entries: list[dict[str, Any]] | None = None
+        #: Encoded length of each entry's JSON by id, so the index size is a
+        #: sum rather than a re-encode of every run on each save.
+        self._sizes: dict[str, int] = {}
 
     # --- paths ----------------------------------------------------------
 
     def _dir(self) -> Path:
         return self._explicit_dir if self._explicit_dir is not None else _root()
+
+    def directory(self) -> Path:
+        """The history folder, created if absent so it can be opened."""
+        directory = self._dir()
+        directory.mkdir(parents=True, exist_ok=True)
+        return directory
 
     def _index_path(self) -> Path:
         return self._dir() / "index.json"
@@ -150,6 +180,9 @@ class DictationHistory:
             entries = []
             rejected = True
         self._entries = entries[:MAX_ENTRIES]
+        for entry in self._entries:
+            if "audio_bytes" not in entry:
+                entry["audio_bytes"] = self._measure_audio(entry["id"])
         if not rejected:
             # An index that could not be read says nothing about which
             # recordings are owned, so sweeping "orphans" against an empty
@@ -173,10 +206,25 @@ class DictationHistory:
         except OSError:
             _logger.warning("dictation history could not be scanned", exc_info=True)
 
+    def _measure_audio(self, entry_id: str) -> int:
+        try:
+            return self._wav_path(entry_id).stat().st_size
+        except OSError:
+            return 0
+
+    def _entry_size(self, entry: dict[str, Any]) -> int:
+        size = self._sizes.get(entry["id"])
+        if size is None:
+            size = len(json.dumps(entry, ensure_ascii=True))
+            self._sizes[entry["id"]] = size
+        return size
+
     @staticmethod
     def _unlink(path: Path) -> None:
         try:
             path.unlink()
+        except FileNotFoundError:
+            pass
         except OSError:
             _logger.warning("dictation history file could not be removed", exc_info=True)
 
@@ -191,13 +239,18 @@ class DictationHistory:
 
         ``atomic_write_json`` escapes non-ASCII, so a character of
         Japanese costs six bytes rather than three; the only honest
-        measure is to encode the payload exactly as the writer will.
+        measure is to encode the payload exactly as the writer will.  The
+        writer is compact (no indent), so the total is the wrapper plus each
+        entry's cached length plus the ", " between entries.
         """
-        return len(json.dumps(self._payload(), indent=2, ensure_ascii=True).encode("utf-8"))
+        entries = self._load()
+        wrapper = len(json.dumps({**self._payload(), "entries": []}, ensure_ascii=True))
+        body = sum(self._entry_size(e) for e in entries) + 2 * max(0, len(entries) - 1)
+        return wrapper + body
 
     def _save(self) -> bool:
         try:
-            atomic_write_json(self._index_path(), self._payload(), indent=2)
+            atomic_write_json(self._index_path(), self._payload())
         except OSError:
             _logger.warning("dictation history index could not be saved", exc_info=True)
             return False
@@ -223,30 +276,46 @@ class DictationHistory:
             return False
 
     def _audio_bytes(self) -> int:
-        total = 0
-        for entry in self._load():
-            try:
-                total += self._wav_path(entry["id"]).stat().st_size
-            except OSError:
-                pass
-        return total
+        return sum(e.get("audio_bytes", 0) for e in self._load())
+
+    def usage_bytes(self) -> int:
+        """Bytes the history occupies: every recording plus the index."""
+        self._load()
+        return self._audio_bytes() + self._encoded_bytes()
+
+    def set_limit_bytes(self, limit_bytes: int) -> None:
+        """Change the budget and prune to it now, so a lower limit frees space."""
+        self.limit_bytes = limit_bytes
+        self._prune()
+        self._save()
 
     def _prune(self) -> None:
         entries = self._load()
         while len(entries) > MAX_ENTRIES:
             self._drop(entries.pop())
-        # Oldest entries go first when the disk budget is exceeded.  The
-        # newest is never evicted by its own size alone.
-        while len(entries) > 1 and self._audio_bytes() > MAX_AUDIO_BYTES_TOTAL:
-            self._drop(entries.pop())
+        # Oldest entries go first when the budget is exceeded.  The newest
+        # is never evicted by its own size alone: a single long run over
+        # the limit is still the one the user most needs back.  Sizes are
+        # measured once and subtracted as entries go, because re-measuring
+        # per drop is quadratic and this runs on the UI thread.
+        if self.limit_bytes > 0 and len(entries) > 1:
+            sizes = [e.get("audio_bytes", 0) for e in entries]
+            each = [self._entry_size(e) + 2 for e in entries]
+            total = sum(sizes) + self._encoded_bytes()
+            while len(entries) > 1 and total > self.limit_bytes:
+                self._drop(entries.pop())
+                total -= sizes.pop() + each.pop()
         # The index has a byte cap of its own, and `_load` refuses a file
-        # over it unread.  Each entry's text is capped, but twenty entries
-        # of non-ASCII text at the cap encode past the index cap, and a
-        # saved index the loader rejects reads back as nothing.
+        # over it unread.  Each entry's text is capped, but thousands of
+        # entries of non-ASCII text at the cap encode past the index cap,
+        # and a saved index the loader rejects reads back as nothing.
         while len(entries) > 1 and self._encoded_bytes() > MAX_INDEX_BYTES:
-            self._drop(entries.pop())
+            for _ in range(max(1, len(entries) // 20)):
+                if len(entries) > 1:
+                    self._drop(entries.pop())
 
     def _drop(self, entry: dict[str, Any]) -> None:
+        self._sizes.pop(entry["id"], None)
         self._unlink(self._wav_path(entry["id"]))
 
     # --- public API -----------------------------------------------------
@@ -278,18 +347,25 @@ class DictationHistory:
         )
         if entry is None:  # pragma: no cover - the literal above is always valid
             return ""
-        if pcm:
-            self._write_wav(entry_id, pcm)
+        entry["audio_bytes"] = (
+            self._measure_audio(entry_id) if pcm and self._write_wav(entry_id, pcm) else 0
+        )
         entries.insert(0, entry)
         self._prune()
         if not self._save():
             return ""
         return entry_id
 
-    def entries(self) -> list[dict[str, Any]]:
-        """Newest first.  No filesystem paths, only ``hasAudio``."""
+    def count(self) -> int:
+        return len(self._load())
+
+    def entries(self, limit: int | None = None) -> list[dict[str, Any]]:
+        """Newest first, at most *limit*.  No filesystem paths, only ``hasAudio``.
+
+        The page matters: ``hasAudio`` is a filesystem check per entry.
+        """
         out: list[dict[str, Any]] = []
-        for entry in self._load():
+        for entry in self._load()[: None if limit is None else max(0, limit)]:
             item = dict(entry)
             item["hasAudio"] = self._wav_path(entry["id"]).is_file()
             out.append(item)
@@ -316,6 +392,7 @@ class DictationHistory:
             if entry["id"] == entry_id:
                 entry["result"] = result[:MAX_TEXT_CHARS]
                 entry["cleaned"] = bool(cleaned)
+                self._sizes.pop(entry_id, None)
                 return self._save()
         return False
 

@@ -4,6 +4,41 @@ All notable changes to Alpha-OSK are documented in this file.
 
 ## [Unreleased]
 
+## [1.9.6] (2026-10-31)
+
+### Fixed
+- **A space now follows a number that ends a sentence, even one with a separator in it.** After a price, a time or a decimal (`1,000.`, `10:30.`, `1.5.`) the space was skipped for good, where a plain `42.` got it back on the next letter. The same number no longer swallows the space after the short sentence that follows it.
+- **The first letter of a word no longer goes missing from the suggestions.** After a pause, or after switching to another app, the first letter you typed often did not count toward the suggestions, and tapping one then typed the whole word next to it. Web text boxes re-identify themselves on the first character and the keyboard mistook that for you moving to another field.
+
+## [1.9.5] (2026-10-28)
+
+### Fixed
+- **No more false "Could not make a secure connection" after dictating.** A run that finished normally sometimes ended with that error, though every word had been typed. The connection was fine: the dictation service hangs up once it is done, and that was reported as a failure.
+- **A dictation run cut off after you press stop keeps what you said.** If the connection drops before the last words come back, any words that did arrive are typed and you are told the end may be missing; if none arrived, the recording is saved in History so you can play it back.
+- **Symbols no longer change when Shift is held.** With Shift on or locked, a symbol from the compact symbol page or a right-click could come out as its shifted twin (an underscore for a hyphen), and the next suggestion you tapped could then replace the wrong letters.
+
+## [1.9.4] (2026-10-27)
+
+### Fixed
+- **Spaces after punctuation, and suggestions, no longer drop out at random.** Since 1.9.1 the keyboard often mistook ordinary Windows text boxes (the taskbar, Start and search) for password fields, and switched to privacy mode for a moment each time. While privacy mode is on, no space follows a full stop or comma and nothing is predicted or learned. Password fields are still detected as before.
+
+## [1.9.3] (2026-10-26)
+
+### Added
+- **How I Speak** (*Settings > Dictation > AI cleanup*): describe your own speech (names, slurred sounds, phrases you repeat) and Claude uses it to read the transcript, in AI cleanup, Reprocess and Write with AI. It is sent to Anthropic with each of those requests.
+- **Choose how much dictation history to keep.** *Settings > Dictation > History* offers 50, 100, 200 or 500 MB, or No limit, and shows how much is in use. The oldest runs go first; the 20-run cap is gone (the ceiling is now 5000 runs).
+- **Ten more dictation languages:** Korean, Chinese (Mandarin), Russian, Ukrainian, Polish, Turkish, Swedish, Danish, Norwegian and Finnish.
+- **A History button beside the microphone** opens Settings on the Dictation page, scrolled to your saved runs. It has a title-bar copy for when suggestions are off.
+- **Dictation can stop typing into the app.** *Settings > Dictation > Type Into the App*, on by default. Off, a run's words only show in the bar, go to the clipboard and are kept in History.
+- **Open Folder in Dictation History** opens the folder that holds the saved runs and their recordings.
+- **A finished dictation shows in the bar and is copied to the clipboard.** When a dictation run ends, its whole text shows where the suggestions are, with a "Copied" badge, until your next key or 8 seconds. Copying is on by default (*Settings > Dictation > Copy Finished Dictation*) and is skipped in privacy mode. Windows clipboard history may keep what is copied.
+
+### Changed
+- **No dictation run previews its words while you speak.** The bar shows "Listening..." and the level bars for every run; the words appear once, when the run is done.
+
+### Removed
+- **The clear-context button is gone** from the suggestion bar. Suggestions still reset on their own when you change window, field, caret position, or press Tab or a navigation key. Switch-scanner id `aosk.v1.bar.0.4` is retired.
+
 ## [1.9.2] (2026-10-25)
 
 ### Added

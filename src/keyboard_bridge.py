@@ -17,7 +17,7 @@ from __future__ import annotations
 import json
 import logging
 import time
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
 from typing import (
     Any,
@@ -489,6 +489,29 @@ _CLICK_POLL_MS = 50
 # does that in 200 ms.
 _CLICK_SETTLE_MS = 200
 
+# How long after one of our own keystrokes a change of focused element
+# (same window) is read as the app re-identifying the control under the
+# caret rather than the user moving to another one.  Web and Electron
+# composers swap their editor node when it goes from empty to non-empty
+# (the placeholder goes, the text node arrives, a framework re-renders),
+# and Chrome rebuilds its accessibility tree lazily and asynchronously,
+# so the UIA RuntimeId the 4 Hz poll compares changes exactly once, on
+# the first character, and sometimes a tick or two after it.  Four
+# ticks covers the asynchronous case with room to spare; a user moving
+# to another control with the mouse is caught by the outside-click
+# signal regardless, and with Tab or an arrow by the key itself, so the
+# only move this window can hide is a physical-keyboard Tab inside one
+# second of a click on the OSK.
+_FOCUS_CHURN_GRACE_S = 1.0
+
+# The special keys that edit text at the caret, and so may arm the grace
+# above.  Everything else sent through `_send_key` is a command, and the
+# commands people reach for move focus on purpose: Ctrl+F or F3 open
+# Find, Ctrl+L or F6 the address bar, Escape closes a dialog.  Tab and
+# the arrows are commands too, but they reset the context themselves
+# before the send, so they never reach the question.
+_TEXT_EDITING_KEYS = frozenset({"BackSpace", "Return", "space", "Delete"})
+
 
 # Cursor-movement keys. When a sticky modifier is held, pressing one of
 # these should KEEP Shift/Ctrl held (extend selection / word-jump across
@@ -685,11 +708,10 @@ class KeyboardBridge(QObject):
     # "connecting", "finishing" and "polishing" all need to look busy
     # without looking like they are recording.
     dictationStateChanged = Signal(str)
-    # The revisable text for the phrase being spoken right now, shown
-    # live in the suggestion bar.  Empty whenever nothing is in flight.
-    # Finalised phrases leave this and are typed into the focused app,
-    # so it stays short by construction rather than by truncation.
-    dictationTranscriptChanged = Signal(str)
+    # The finished text of the last dictate run, or "" when none is on
+    # show (or the copy flag moved).  QML renders it in the bar where the
+    # pills are; no run previews words while it is being spoken.
+    dictationResultChanged = Signal()
     # Mic peak level, 0.0-1.0, for the button's live ring.  This is the
     # only feedback that the microphone is actually open.
     dictationLevelChanged = Signal(float)
@@ -995,6 +1017,11 @@ class KeyboardBridge(QObject):
         # made (typing), which the element token cannot distinguish.
         self._last_caret_token: Optional[str] = None
         self._keystroke_since_poll = False
+        # When we last moved the caret ourselves, for the focused-element
+        # check: a flag consumed per tick is not enough there, because the
+        # churn it guards against can surface a tick or two after the
+        # keystroke that caused it (see _FOCUS_CHURN_GRACE_S).
+        self._last_own_keystroke_at = float("-inf")
         self._foreground_timer = QTimer(self)
         self._foreground_timer.setInterval(250)
         self._foreground_timer.timeout.connect(self._check_foreground_window)
@@ -1135,8 +1162,18 @@ class KeyboardBridge(QObject):
 
     # --- Key synthesis (delegated to platform layer) ---
 
-    def _note_own_keystroke(self) -> None:
+    def _note_own_keystroke(self, *, text: bool = True) -> None:
         """Record that *we* just moved the caret, for both caret polls.
+
+        *text* is whether the keystroke put text at the caret (a
+        character, a Backspace, a Return) or was a command (a chord, a
+        function key, Escape).  Only text arms the focus-churn grace,
+        and a command **disarms** it: Ctrl+F, F3, Ctrl+L and F6 move
+        focus to another control on purpose, which is exactly the
+        same-window element change the grace must not forgive, and the
+        letters typed just before the command are still inside their
+        own grace, so declining to arm would not be enough (review
+        findings on PR #234, twice).
 
         Two polls compare a caret token across their own ticks, and both
         have to tell our own insert from the user clicking somewhere
@@ -1151,6 +1188,11 @@ class KeyboardBridge(QObject):
         """
         self._keystroke_since_poll = True
         self._keystroke_since_click_poll = True
+        self._last_own_keystroke_at = time.monotonic() if text else float("-inf")
+
+    def _typed_within_focus_grace(self) -> bool:
+        """Did one of our own keystrokes land inside ``_FOCUS_CHURN_GRACE_S``?"""
+        return time.monotonic() - self._last_own_keystroke_at < _FOCUS_CHURN_GRACE_S
 
     def _send_key(
         self,
@@ -1192,7 +1234,16 @@ class KeyboardBridge(QObject):
                 modifiers.append(extra)
 
         mods = modifiers if modifiers else None
-        self._note_own_keystroke()
+        # Text at the caret, or a command?  A single character (the
+        # game-mode held-key path) or a text-editing special key with no
+        # Ctrl/Alt/Win attached is text; a chord or any other special key
+        # (F3, F6, Escape, Insert) is a command.  Shift alone is casing,
+        # not a command.  See _note_own_keystroke for what the verdict
+        # does to the focus-churn grace.
+        is_command = any(m in ("ctrl", "alt", "win") for m in modifiers) or not (
+            len(key_name) == 1 or key_name in _TEXT_EDITING_KEYS
+        )
+        self._note_own_keystroke(text=not is_command)
         # Only thread hold_seconds through when actually holding (game mode) so
         # the common zero-hold call keeps its original two-arg signature.
         if hold_seconds > 0:
@@ -1349,6 +1400,16 @@ class KeyboardBridge(QObject):
             # auto-space is mirrored: a pill click inserts against what
             # the buffer says is on screen.
             self._context_buffer += " "
+        # The space ends the run, exactly as the ordinary auto-space does
+        # in the punctuation branches: the number is finished, so it is
+        # offered to the token store, and the run is retired.  Left in
+        # place, `_raw_token` carried "42." into the next word, and the
+        # dot in it made the rule "a dot already in the token means a
+        # dotted structure" swallow the space after the next one-word
+        # sentence ("the total is 42. Yes.Then").
+        if self._raw_token.endswith(punct):
+            self._learn_raw_token(self._raw_token[: -len(punct)])
+        self._raw_token = ""
         return " ", self._auto_capitalize_after_punctuation and punct in (".", "!", "?")
 
     def _begin_verbatim_insert(self, *, prose: bool = True) -> Tuple[str, bool]:
@@ -1428,9 +1489,11 @@ class KeyboardBridge(QObject):
         The single-character path in ``_press_char`` deliberately does not
         use this: there a held Shift is doing its job (it is what makes
         the keystroke uppercase), and a release plus re-hold on every
-        keystroke would be churn on the hottest path in the app.  Callers
-        that also want the sticky auto-release should do it *before*
-        entering, which leaves nothing for this to restore.
+        keystroke would be churn on the hottest path in the app.  Its one
+        exception is a *literal* key, which must type the glyph on its cap
+        whatever Shift is doing.  Callers that also want the sticky
+        auto-release should do it *before* entering, which leaves nothing
+        for this to restore.
         """
         held = [name for name in self._MODIFIERS if getattr(self, f"_{name}_active", False)]
         for name in held:
@@ -1827,14 +1890,26 @@ class KeyboardBridge(QObject):
             # locked lets Ctrl+C, Ctrl+V, ... fire without re-tapping.
             self._release_sticky_modifiers()
             return
-        elif self._in_game_mode():
-            # Polling game: send the single char as a held key so it survives
-            # a per-frame keyboard-state poll. send_key resolves the char's VK
-            # and applies shift for case the same way send_text's scancode
-            # path does, so the held tap matches what would otherwise be typed.
-            self._send_key(char, hold_seconds=self._key_hold_seconds())
         else:
-            self._send_text(char)
+            # A literal key types exactly the glyph on its cap, so a Shift
+            # standing held (sticky or right-click-locked) must not rewrite
+            # it: "-" would arrive as "_" and "a" as "A" while
+            # `_current_word` records the unshifted glyph, and the next pill
+            # tap is then measured against text that is not on screen.  Only
+            # Shift can be held here (Ctrl/Alt/Win took the chord branch),
+            # and literal keys are rare, so the release and re-hold cost
+            # nothing on the hot path, which keeps its held Shift.
+            guard = self._without_held_modifiers() if literal else nullcontext()
+            with guard:
+                if self._in_game_mode():
+                    # Polling game: send the single char as a held key so it
+                    # survives a per-frame keyboard-state poll. send_key
+                    # resolves the char's VK and applies shift for case the
+                    # same way send_text's scancode path does, so the held
+                    # tap matches what would otherwise be typed.
+                    self._send_key(char, hold_seconds=self._key_hold_seconds())
+                else:
+                    self._send_text(char)
 
         # Privacy mode — send keystrokes but don't learn or predict
         if self._privacy_mode:
@@ -2579,6 +2654,11 @@ class KeyboardBridge(QObject):
         copy: that hand-copying is exactly the drift this method exists
         to end.
         """
+        # Also the "a key was pressed" signal for the bar: a finished
+        # dictation's text yields to the pills on the next keystroke, and
+        # this is the one place every keystroke path (UIA Invoke included)
+        # already passes through.
+        self._clear_dictation_result()
         for name in names:
             if name in keep:
                 continue
@@ -2891,7 +2971,8 @@ class KeyboardBridge(QObject):
     def resetContext(self) -> None:
         """Full reset of typing state, for explicit user action only.
 
-        The clear-context ring.  It **delegates** rather than clearing
+        Formerly the clear-context button's slot (the button was removed
+        2026-10-26; tests still drive it).  It **delegates** rather than clearing
         the same fields itself, because the hand-written copy is exactly
         the parallel-blocks drift this file warns about for sticky
         modifiers, and it had already drifted in both directions: this
@@ -2990,7 +3071,7 @@ class KeyboardBridge(QObject):
         """
         return glyph_categories()
 
-    @Slot(result=int)
+    @Slot(result=float)
     def getRecentGlyphLimit(self) -> int:
         """How many recently-tapped glyphs the picker keeps.
 
@@ -4617,7 +4698,8 @@ class KeyboardBridge(QObject):
                 history=self._history_store(),
             )
             controller.stateChanged.connect(self.dictationStateChanged)
-            controller.interimChanged.connect(self.dictationTranscriptChanged)
+            controller.stateChanged.connect(self._on_dictation_state)
+            controller.runFinished.connect(self._on_dictation_run_finished)
             controller.levelChanged.connect(self._on_dictation_level)
             controller.errorRaised.connect(self.dictationError)
             controller.finalReady.connect(self._insert_dictated_text)
@@ -4626,9 +4708,75 @@ class KeyboardBridge(QObject):
             self._dictation = controller
         return self._dictation
 
+    # How long a finished run's text stays in the bar if no key comes first.
+    _DICTATION_RESULT_MS = 8000
+    # Class-level defaults, so a bridge built without __init__ (tests) and
+    # `_release_sticky_modifiers`, which runs on every keystroke, never meet
+    # a missing attribute.
+    _dictation_result_text = ""
+    _dictation_result_copied = False
+    _dictation_result_timer: Optional[QTimer] = None
+
+    def _get_dictation_result_text(self) -> str:
+        return self._dictation_result_text
+
+    def _get_dictation_result_copied(self) -> bool:
+        return self._dictation_result_copied
+
+    dictationResultText = Property(str, _get_dictation_result_text, notify=dictationResultChanged)
+    dictationResultCopied = Property(
+        bool, _get_dictation_result_copied, notify=dictationResultChanged
+    )
+
+    def _on_dictation_state(self, state: str) -> None:
+        # A new run supersedes the last one's text.
+        if state != "idle":
+            self._clear_dictation_result()
+
+    def _on_dictation_run_finished(self, text: str) -> None:
+        """Copy a finished dictate run and put its text in the bar.
+
+        Skipped in privacy mode: the words were typed (the user asked for
+        them) but they must not land on the clipboard or in the bar.  The
+        badge is true or absent: `copied` is the clipboard call's own result.
+        Nothing here logs the text.
+        """
+        if self._privacy_mode or not text.strip():
+            return
+        copied = self._dictation_config.auto_copy and self._copy_to_clipboard(text)
+        self._dictation_result_text = text
+        self._dictation_result_copied = copied
+        self.dictationResultChanged.emit()
+        timer = self._dictation_result_timer
+        if timer is None:
+            timer = QTimer(self)
+            timer.setSingleShot(True)
+            timer.setInterval(self._DICTATION_RESULT_MS)
+            timer.timeout.connect(self._clear_dictation_result)
+            self._dictation_result_timer = timer
+        timer.start()
+
+    def _clear_dictation_result(self) -> None:
+        """Take the finished text off the bar.  The one place it is cleared:
+        a key, the timeout, a new run and privacy mode all land here."""
+        if not self._dictation_result_text:
+            return
+        self._dictation_result_text = ""
+        self._dictation_result_copied = False
+        if self._dictation_result_timer is not None:
+            self._dictation_result_timer.stop()
+        self.dictationResultChanged.emit()
+
+    @Slot(bool)
+    def setDictationAutoCopy(self, enabled: bool) -> None:
+        self._dictation_config.auto_copy = bool(enabled)
+        self._dictation_config.save()
+
     def _history_store(self) -> DictationHistory:
         if self._dictation_history is None:
-            self._dictation_history = DictationHistory()
+            self._dictation_history = DictationHistory(
+                limit_bytes=self._dictation_config.history_limit_mb << 20
+            )
         return self._dictation_history
 
     def _insert_dictated_text(self, text: str) -> None:
@@ -4799,6 +4947,7 @@ class KeyboardBridge(QObject):
             "silenceSeconds": cfg.silence_seconds,
             "keyterms": "\n".join(cfg.keyterms),
             "streamInserts": cfg.stream_inserts,
+            "typeIntoApp": cfg.type_into_app,
             "hasAnthropicKey": cfg.has_anthropic_key,
             "maskedAnthropicKey": cfg.masked_anthropic_key(),
             "cleanupEnabled": cfg.cleanup_enabled,
@@ -4808,7 +4957,11 @@ class KeyboardBridge(QObject):
             ],
             "writingEnabled": cfg.writing_enabled,
             "writingStyle": cfg.writing_style,
+            "speechNotes": cfg.speech_notes,
             "historyEnabled": cfg.history_enabled,
+            "historyLimitMb": cfg.history_limit_mb,
+            "historyLimits": list(dictation_config.HISTORY_LIMITS_MB),
+            "autoCopy": cfg.auto_copy,
             "models": [{"id": m, "label": label} for m, label in dictation_config.MODELS],
             "languages": [{"id": c, "label": label} for c, label in dictation_config.LANGUAGES],
         }
@@ -4955,6 +5108,32 @@ class KeyboardBridge(QObject):
         self._dictation_config.writing_style = _clean_style(style)
         return self._dictation_config.save()
 
+    @Slot(str, result=bool)
+    def setDictationSpeechNotes(self, notes: str) -> bool:
+        from .dictation.config import _clean_speech_notes
+
+        self._dictation_config.speech_notes = _clean_speech_notes(notes)
+        return self._dictation_config.save()
+
+    @Slot(int, result=bool)
+    def setDictationHistoryLimit(self, megabytes: int) -> bool:
+        """Set the history budget (0 = no limit); a lower one prunes at once."""
+        from .dictation.config import clean_history_limit
+
+        limit = clean_history_limit(megabytes)
+        self._dictation_config.history_limit_mb = limit
+        store = self._history_store()
+        before = len(store.entries())
+        store.set_limit_bytes(limit << 20)
+        if len(store.entries()) != before:
+            self.dictationHistoryChanged.emit()
+        return self._dictation_config.save()
+
+    @Slot(result=float)
+    def getDictationHistoryUsageBytes(self) -> float:
+        """Bytes the history uses on disk (recordings plus index), never a path."""
+        return float(self._history_store().usage_bytes())
+
     @Slot(bool)
     def setDictationHistoryEnabled(self, enabled: bool) -> None:
         self._dictation_config.history_enabled = bool(enabled)
@@ -4966,6 +5145,15 @@ class KeyboardBridge(QObject):
     def getDictationHistory(self) -> List[Dict[str, Any]]:
         """Newest first.  Entries carry ``hasAudio`` and never a path."""
         return self._history_store().entries()
+
+    @Slot(int, result="QVariantList")
+    def getDictationHistoryPage(self, count: int) -> List[Dict[str, Any]]:
+        """The newest *count* entries, so the settings page builds only what it shows."""
+        return self._history_store().entries(max(0, int(count)))
+
+    @Slot(result=int)
+    def getDictationHistoryCount(self) -> int:
+        return self._history_store().count()
 
     @Slot(str, result=bool)
     def copyDictationHistory(self, entry_id: str) -> bool:
@@ -5000,6 +5188,23 @@ class KeyboardBridge(QObject):
         self.stopDictationPlayback()
         self._history_store().clear()
         self.dictationHistoryChanged.emit()
+
+    @Slot(result=bool)
+    def openDictationHistoryFolder(self) -> bool:
+        """Open the history folder (index plus WAV files) in the file manager.
+
+        Lazy imports for the same reason `openLogFolder` has them.
+        """
+        try:
+            from PySide6.QtCore import QUrl
+            from PySide6.QtGui import QDesktopServices
+        except ImportError:  # no GUI stack on this host
+            return False
+        try:
+            folder = str(self._history_store().directory())
+        except OSError:
+            return False
+        return bool(QDesktopServices.openUrl(QUrl.fromLocalFile(folder)))
 
     def _ensure_player(self) -> Any:
         """The playback pair, built on first Play.
@@ -5061,6 +5266,11 @@ class KeyboardBridge(QObject):
     @Slot(bool)
     def setDictationStreamInserts(self, stream: bool) -> None:
         self._dictation_config.stream_inserts = bool(stream)
+        self._dictation_config.save()
+
+    @Slot(bool)
+    def setDictationTypeIntoApp(self, enabled: bool) -> None:
+        self._dictation_config.type_into_app = bool(enabled)
         self._dictation_config.save()
 
     @Slot(str)
@@ -5484,12 +5694,27 @@ class KeyboardBridge(QObject):
                 and self._last_focus_token is not None
                 and token != self._last_focus_token
             ):
-                # Same window, so the user is still in the form they were
-                # filling in: a live snippet offer survives, exactly as it
-                # does for the outside click.  Only `window_switched`
-                # above takes the default and withdraws it.
-                self._reset_typing_context(keep_snippet_offer=True)
-                _logger.debug("Focused element changed — predictions cleared")
+                if self._typed_within_focus_grace():
+                    # The control re-identified itself under our own
+                    # keystroke, which is what a web composer does on its
+                    # first character: the one letter typed is still on
+                    # screen and still the word in progress, so the
+                    # baseline moves and nothing else does.  Resetting
+                    # here wiped that letter from `_current_word` every
+                    # time, so the bar never saw the first letter of a
+                    # word typed after a pause or an app switch, and a
+                    # pill tapped afterwards typed the whole word beside
+                    # it.  The caret check below has carried the same
+                    # guard since it was written; this branch did not.
+                    _logger.debug("Focused element changed under our keystroke: context kept")
+                else:
+                    # Same window, so the user is still in the form they
+                    # were filling in: a live snippet offer survives,
+                    # exactly as it does for the outside click.  Only
+                    # `window_switched` above takes the default and
+                    # withdraws it.
+                    self._reset_typing_context(keep_snippet_offer=True)
+                    _logger.debug("Focused element changed — predictions cleared")
             self._last_focus_token = token
         elif window_switched:
             # Window changed but the element is unreadable; drop the stale
@@ -5907,6 +6132,7 @@ class KeyboardBridge(QObject):
     def _enter_privacy_mode(self) -> None:
         """Scrub all buffers to prevent sensitive data from leaking to the model."""
         self._reset_typing_context()
+        self._clear_dictation_result()
         # A live dictation run is cancelled, not stopped: `cancel` drops
         # whatever the provider still owes us, so a run that was under way
         # when the caret landed on a password field cannot deliver one

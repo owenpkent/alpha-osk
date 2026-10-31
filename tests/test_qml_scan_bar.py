@@ -2,7 +2,7 @@
 """Headless QML tests for the `bar` section of the switch-scanning contract.
 
 The suggestion bar's buttons (dictation mic, Write with AI, Symbols,
-Snippets, clear-context) and their title-bar twins are published as
+Snippets, dictation history) and their title-bar twins are published as
 `aosk.v1.bar.0.<index>` UI Automation buttons, one fixed index per function.
 Normative text: docs/architecture/UIA_TARGETS.md, section "The bar".  The
 key and pill halves of the contract are in tests/test_qml_scan_targets.py,
@@ -52,8 +52,12 @@ CONTROLS = {
     "write": ("writeWithAiBarButton", "writeWithAiTitleBarButton", 1),
     "symbols": ("symbolsBarButton", "symbolsTitleBarButton", 2),
     "snippets": ("snippetsBarButton", "snippetsTitleBarButton", 3),
-    "clear": ("clearContextButton", None, 4),
+    # Index 4 was the clear-context button (removed 2026-10-26).  Retired,
+    # never reused: nothing below may ever publish `aosk.v1.bar.0.4`.
+    "history": ("dictationHistoryBarButton", "dictationHistoryTitleBarButton", 5),
 }
+
+RETIRED_INDEX = 4
 
 
 def _item(root, name: str):
@@ -98,7 +102,7 @@ def _live_bar_ids(root) -> dict[str, str]:
 
 
 class TestEveryBarControlPublishesItsId:
-    def test_all_five_are_present_and_well_formed_with_the_bar_showing(self, qml_root):
+    def test_all_six_are_present_and_well_formed_with_the_bar_showing(self, qml_root):
         root, _, bridge = qml_root
         _enable_everything(root, bridge)
         ids = _live_bar_ids(root)
@@ -123,12 +127,20 @@ class TestEveryBarControlPublishesItsId:
         assert "write" not in ids
         assert set(ids) == set(CONTROLS) - {"write"}
 
-    def test_dictation_off_removes_mic_and_write_only(self, qml_root):
+    def test_dictation_off_removes_mic_history_and_write_only(self, qml_root):
         root, _, bridge = qml_root
         _enable_everything(root, bridge)
         root.setProperty("dictationEnabled", False)
         _settle(root)
-        assert set(_live_bar_ids(root)) == {"symbols", "snippets", "clear"}
+        assert set(_live_bar_ids(root)) == {"symbols", "snippets"}
+
+    def test_nothing_ever_publishes_the_retired_index(self, qml_root):
+        root, _, bridge = qml_root
+        for suggestions in (True, False):
+            _enable_everything(root, bridge, suggestions)
+            ids = _live_bar_ids(root).values()
+            assert f"aosk.v1.bar.0.{RETIRED_INDEX}" not in ids
+        assert root.findChild(QObject, "clearContextButton") is None
 
 
 class TestIndicesAreStableWhenASiblingIsHidden:
@@ -157,8 +169,8 @@ class TestTheTwinCarriesTheBarCounterpartsId:
         root.setProperty("suggestionsEnabled", False)
         _settle(root)
         after = _live_bar_ids(root)
-        # Every function with a twin keeps its id; the ring has none.
-        assert set(after) == set(CONTROLS) - {"clear"}
+        # Every function has a twin and keeps its id.
+        assert set(after) == set(CONTROLS)
         for func in after:
             assert after[func] == before[func], func
 
@@ -211,7 +223,7 @@ class TestInvoke:
     def test_invoke_flashes_the_button(self, qml_root):
         root, _, bridge = qml_root
         _enable_everything(root, bridge)
-        item = _item(root, "clearContextButton")
+        item = _item(root, "snippetsBarButton")
         QMetaObject.invokeMethod(item, "activateFromAssistiveClient")
         assert item.property("_flash") is True
 
@@ -248,7 +260,7 @@ class TestInvoke:
     def test_a_minimized_keyboard_refuses(self, qml_root):
         root, _, bridge = qml_root
         _enable_everything(root, bridge)
-        item = _item(root, "clearContextButton")
+        item = _item(root, "snippetsBarButton")
         spy = self._spy(item)
         QMetaObject.invokeMethod(root, "showMinimized")
         QCoreApplication.processEvents()
@@ -260,14 +272,22 @@ class TestInvoke:
             QMetaObject.invokeMethod(root, "showNormal")
             QCoreApplication.processEvents()
 
-    def test_clear_invoke_clears_the_context(self, qml_root):
+    @pytest.mark.parametrize(
+        "name", ["dictationHistoryBarButton", "dictationHistoryTitleBarButton"]
+    )
+    def test_history_invoke_opens_settings_on_the_dictation_page(self, qml_root, name):
         root, _, bridge = qml_root
-        _enable_everything(root, bridge)
-        bridge._current_word = "abc"
-        item = _item(root, "clearContextButton")
+        _enable_everything(root, bridge, suggestions="Title" not in name)
+        assert root.property("showSettings") is False
+        item = _item(root, name)
         QMetaObject.invokeMethod(item, "activateFromAssistiveClient")
-        QCoreApplication.processEvents()
-        assert bridge._current_word == ""
+        _settle(root)
+        assert root.property("showSettings") is True
+        panel = _item(root, "settingsPanel")
+        assert panel.property("currentView") == "dictation"
+        # Consumed, so a later ordinary open lands on home.
+        assert root.property("settingsReturnView") == ""
+        assert root.property("settingsScrollToHistory") is False
 
 
 class TestDictationInvokeReachesTheBridgeSlot:

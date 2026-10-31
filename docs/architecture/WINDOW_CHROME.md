@@ -157,7 +157,7 @@ pointer wherever it already is on the strip the user grabs the window by.
   blocks**, and are **word-only, no icons**: any glyph small enough to sit in a
   menu row is at the mercy of the host emoji font, which on Windows renders in
   colour and ignores the ink it is given (same reason as the lock badge and the
-  clear-context ring). The Tuck row is built unconditionally and **collapses to
+  clear-context ring, which has since been removed). The Tuck row is built unconditionally and **collapses to
   zero height** off X11, because a row for something that cannot happen is
   worse than no row. **Close carries a rule and a 9 px gap above it**: it is
   the one row that ends the session, there is no undo, and it must not sit

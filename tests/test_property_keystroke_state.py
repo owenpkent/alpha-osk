@@ -402,3 +402,28 @@ class TestDefectsTheMachinesFound:
         bridge.toggleShift()
         assert not bridge.shiftActive
         assert fake.held == set()
+
+    def test_a_literal_key_types_its_own_glyph_under_a_locked_shift(self, rig) -> None:
+        """A locked Shift used to shift a literal key at the OS ("-" as "_").
+
+        The bridge recorded the glyph on the cap while the screen got its
+        shifted form, so the buffers stopped mirroring the screen and a later
+        pill tap landed against text that was not there (nightly fuzz, "aS"
+        arriving as "AS").
+        """
+        bridge, fake = rig
+        bridge.lockModifier("shift")
+        bridge.pressKeyLiteral("-")
+        bridge.pressKeyLiteral("a")
+        assert fake.text.endswith("-a"), fake.text
+        assert bridge._current_word.endswith("a")
+        assert bridge.shiftActive
+        assert fake.held == {"shift"}
+
+    def test_a_plain_key_is_still_shifted_by_a_locked_shift(self, rig) -> None:
+        """The inverse: on the ordinary path the held Shift is doing its job."""
+        bridge, fake = rig
+        bridge.lockModifier("shift")
+        bridge.pressKey("a")
+        assert fake.text.endswith("A"), fake.text
+        assert bridge._current_word == "A"

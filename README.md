@@ -222,7 +222,7 @@ Yes on Windows (Unicode keystroke injection covers anything in BMP and supplemen
 ### Voice
 
 - Dictation: click the microphone at the left of the suggestion bar, speak, click again. There is nothing to hold down, which matters if a sustained press is exactly the gesture you cannot make
-- What you have said so far shows in the suggestion bar; each finished phrase is typed into whatever app you were already using
+- While you speak the bar shows that it is listening (level bars beside the microphone), not your words; each finished phrase is typed into whatever app you were already using, and when the run ends its text shows in the bar with a "Copied" badge until your next key (it is copied to the clipboard by default, switchable off). A clock button beside the microphone opens your dictation history
 - Stops itself after a few seconds of silence, so a click that misses cannot leave the microphone open. Both that delay and a maximum run length are adjustable
 - Off by default and inert until you add your own Deepgram API key. Audio is sent only while the microphone is open, and a focused password field cancels a run outright (see [Privacy](docs/PRIVACY.md))
 - AI cleanup (optional, your own Anthropic key): the run is held back until you stop, tidied by Claude, and typed once. If it fails, your words are typed as you said them

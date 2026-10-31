@@ -20,11 +20,13 @@ than bundled as an asset, because it is
 fed to a `Canvas` via `ctx.path` (see `qml/components/StrokeIcon.qml`).
 
 - Project: https://github.com/feathericons/feather
-- Icons: `rotate-ccw` (clear-context button), `bookmark` (Snippets),
-  `mic` (Dictation), `x` (close buttons)
+- Icons: `clock` (dictation history), `check` (the "Copied" badge),
+  `bookmark` (Snippets), `mic` (Dictation), `x` (close buttons)
 - Licence: MIT
 - Icons in use:
-  - `rotate-ccw`, the clear-context button in the suggestion bar
+  - `clock`, the dictation history buttons in the suggestion bar and the
+    title bar ([`qml/Main.qml`](qml/Main.qml))
+  - `check`, the "Copied" badge on a finished dictation
     ([`qml/Main.qml`](qml/Main.qml))
   - `bookmark`, the Snippets buttons in the suggestion bar and the title bar
     ([`qml/Main.qml`](qml/Main.qml))
