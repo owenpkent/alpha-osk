@@ -1337,3 +1337,53 @@ class TestPowerShellIsNeverInvokedByBareName:
             f"{source} invokes powershell by bare name; use "
             "platform.powershell_path() so CWD cannot win"
         )
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows backend")
+class TestWindowsInjectPacing:
+    """_inject sends one SendInput call per event with a gap between."""
+
+    def _make(self, monkeypatch: pytest.MonkeyPatch):
+        from src.platform import windows as win_mod
+
+        log: list = []
+        synth = win_mod.WindowsKeySynthesizer.__new__(win_mod.WindowsKeySynthesizer)
+
+        def fake_send(n, arr, size):
+            log.append(("send", n, arr[0]._input.ki.wVk))
+            return n
+
+        synth._send_input = fake_send
+        monkeypatch.setattr(win_mod.time, "sleep", lambda s: log.append(("sleep", s)))
+        return win_mod, synth, log
+
+    def test_burst_is_ordered_with_gaps_and_no_trailing_sleep(self, monkeypatch):
+        win_mod, synth, log = self._make(monkeypatch)
+        events = [synth_event(win_mod, vk) for vk in (1, 2, 3)]
+        synth._inject(events)
+        gap = win_mod.INTER_EVENT_DELAY_S
+        assert gap == 0.003
+        assert log == [
+            ("send", 1, 1),
+            ("sleep", gap),
+            ("send", 1, 2),
+            ("sleep", gap),
+            ("send", 1, 3),
+        ]
+
+    def test_single_event_does_not_sleep(self, monkeypatch):
+        win_mod, synth, log = self._make(monkeypatch)
+        synth._inject([synth_event(win_mod, 7)])
+        assert log == [("send", 1, 7)]
+
+    def test_empty_does_nothing(self, monkeypatch):
+        win_mod, synth, log = self._make(monkeypatch)
+        synth._inject([])
+        assert log == []
+
+
+def synth_event(win_mod, vk: int):
+    inp = win_mod.INPUT()
+    inp.type = win_mod.INPUT_KEYBOARD
+    inp._input.ki.wVk = vk
+    return inp

@@ -95,6 +95,13 @@ _logger = logging.getLogger("WindowsKeySynthesizer")
 
 INPUT_KEYBOARD = 1
 
+# Pause between consecutive key events in one injected burst (seconds).
+# Remote-desktop/streaming clients such as Moonlight (Sunshine host) drop or
+# delay key-ups when events arrive as a zero-gap burst, leaving a letter held
+# on the remote side until the next key (verified 2026-11-01; Windows itself
+# saw every key-up on time).  Applies to every app, not just Moonlight.
+INTER_EVENT_DELAY_S = 0.003
+
 # KEYBDINPUT.dwFlags
 KEYEVENTF_EXTENDEDKEY = 0x0001
 KEYEVENTF_KEYUP = 0x0002
@@ -1213,7 +1220,15 @@ class WindowsKeySynthesizer(KeySynthesizerBase):
 
     def _inject(self, events: List[INPUT]) -> None:
         """
-        Call ``SendInput`` to inject an array of INPUT events atomically.
+        Call ``SendInput`` once per event, in order, with a short gap between.
+
+        A burst delivered in one zero-gap ``SendInput`` call makes
+        remote-desktop/streaming clients drop key-ups (see
+        ``INTER_EVENT_DELAY_S``), so each event is its own call and
+        ``INTER_EVENT_DELAY_S`` is slept between consecutive events (never
+        before the first or after the last; a single event never sleeps).
+        Runs on the caller's thread (the Qt/UI thread for suggestion picks
+        and key clicks), so an N-event burst blocks it ~(N-1) * the gap.
 
         Args:
             events: List of INPUT structures to inject.
@@ -1226,16 +1241,24 @@ class WindowsKeySynthesizer(KeySynthesizerBase):
             return
 
         n = len(events)
-        arr = (INPUT * n)(*events)
-        sent = self._send_input(n, arr, ctypes.sizeof(INPUT))
+        total_sent = 0
+        error = 0
+        for i, event in enumerate(events):
+            if i:
+                time.sleep(INTER_EVENT_DELAY_S)
+            # One-element array, alive until SendInput returns.
+            arr = (INPUT * 1)(event)
+            sent = self._send_input(1, arr, ctypes.sizeof(INPUT))
+            total_sent += sent
+            if sent != 1:
+                error = ctypes.get_last_error()
 
-        if sent != n:
-            error = ctypes.get_last_error()
+        if total_sent != n:
             _logger.warning(
                 "SendInput injected %d/%d events (error=%d). "
                 "This may indicate insufficient privileges — consider "
                 "UIAccess or running as admin.",
-                sent,
+                total_sent,
                 n,
                 error,
             )
