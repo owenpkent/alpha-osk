@@ -56,7 +56,7 @@ from hypothesis.stateful import (
 from src.keyboard_bridge import KeyboardBridge
 from src.prediction.token_predictor import TokenPredictor
 from src.snippets import SnippetStore
-from tests.fake_os_keyboard import MODIFIER_NAMES, FakeOSError, FakeOSKeyboard
+from tests.fake_os_keyboard import HELD_MODIFIERS, MODIFIER_NAMES, FakeOSError, FakeOSKeyboard
 
 _TYPED_KEYS = list("abcdefghijklmnopqrstuvwxyz0123456789.,;:!?'-/@")
 _LITERAL_KEYS = list("ABCXYZabc!@#.,'1")
@@ -134,7 +134,9 @@ class _BridgeMachine(RuleBasedStateMachine):
     # --- helpers ---
 
     def _bridge_modifiers(self) -> set:
-        return {name for name in MODIFIER_NAMES if getattr(self.bridge, f"{name}Active")}
+        # The modifiers an active keycap means the OS is holding.  An active
+        # Win holds nothing; the fake leaves it out of ``held`` for good.
+        return {name for name in HELD_MODIFIERS if getattr(self.bridge, f"{name}Active")}
 
     def _locked(self, name: str) -> bool:
         return bool(getattr(self.bridge, f"_{name}_locked"))

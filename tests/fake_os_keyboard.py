@@ -21,8 +21,9 @@ inverse.
 Truthfulness rules, all taken from how ``WindowsKeySynthesizer`` behaves:
 
 - ``hold_modifier`` / ``release_modifier`` edit a ``held`` set.  ``win`` is
-  holdable (the Linux synthesiser refuses it; the bridge's invariants are the
-  Windows ones).
+  never held, by either synthesiser (Windows: a held Win turns the next click
+  into Click to Do; Linux: the window manager grabs the pointer), so both
+  calls ignore it and a Win chord is wrapped by ``send_key`` like any other.
 - ``send_key`` is atomic: modifiers passed in that are not already held go
   down and up around the key, and a modifier that *was* held is left held
   (the "do not wrap an already-held modifier" synth invariant).
@@ -43,6 +44,10 @@ from typing import Callable, Dict, FrozenSet, List, NamedTuple, Optional, Sequen
 from src.platform.base import KeySynthesizerBase
 
 MODIFIER_NAMES: Tuple[str, ...] = ("shift", "ctrl", "alt", "win")
+
+#: The modifiers a synthesiser holds at the OS.  Win is a bridge modifier but
+#: never an OS hold; see the truthfulness rules above.
+HELD_MODIFIERS: Tuple[str, ...] = ("shift", "ctrl", "alt")
 
 #: Modifiers that turn a keystroke into a chord.  Shift is absent on purpose:
 #: it changes *which* character arrives, it does not stop one arriving.
@@ -147,12 +152,16 @@ class FakeOSKeyboard(KeySynthesizerBase):
         return "fake-os"
 
     def hold_modifier(self, key_name: str) -> None:
+        if key_name not in HELD_MODIFIERS:
+            return  # The real synthesisers make no OS call, so nothing can fail.
         self._tick("hold_modifier")
         if key_name in MODIFIER_NAMES:
             self.held.add(key_name)
             self.events.append(Event("down", key_name))
 
     def release_modifier(self, key_name: str) -> None:
+        if key_name not in HELD_MODIFIERS:
+            return
         self._tick("release_modifier")
         if key_name in MODIFIER_NAMES:
             self.held.discard(key_name)
