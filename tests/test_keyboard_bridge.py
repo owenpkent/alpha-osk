@@ -339,6 +339,37 @@ class TestModifierState:
         bridge.pressSpecialKey("left")
         assert not bridge._win_active
 
+    @staticmethod
+    def _win_taps(bridge: KeyboardBridge) -> int:
+        return sum(1 for c in bridge._synth.send_key.call_args_list if c.args[:1] == ("win",))
+
+    def test_win_tapped_twice_alone_opens_start(self, bridge: KeyboardBridge, monkeypatch):
+        # Win is never held at the OS, so the tap a physical Win makes on
+        # its own has to be sent on purpose.
+        monkeypatch.setattr("src.keyboard_bridge.CURRENT_PLATFORM", "windows")
+        bridge.toggleWin()
+        assert self._win_taps(bridge) == 0
+        bridge.toggleWin()
+        assert self._win_taps(bridge) == 1
+        assert not bridge._win_active
+
+    def test_win_used_in_a_chord_does_not_open_start(self, bridge: KeyboardBridge, monkeypatch):
+        monkeypatch.setattr("src.keyboard_bridge.CURRENT_PLATFORM", "windows")
+        bridge.lockModifier("win")
+        bridge.pressKey("d")
+        bridge.toggleWin()
+        assert self._win_taps(bridge) == 0
+        # A fresh activation starts clean again.
+        bridge.toggleWin()
+        bridge.toggleWin()
+        assert self._win_taps(bridge) == 1
+
+    def test_win_tapped_twice_sends_nothing_off_windows(self, bridge: KeyboardBridge, monkeypatch):
+        monkeypatch.setattr("src.keyboard_bridge.CURRENT_PLATFORM", "linux")
+        bridge.toggleWin()
+        bridge.toggleWin()
+        assert self._win_taps(bridge) == 0
+
     def test_reset_modifiers_clears_all_held(self, bridge: KeyboardBridge):
         # Clean-slate on open: any sticky modifier left active (from a
         # prior run, a crash mid-chord, or an external grab) is dropped so

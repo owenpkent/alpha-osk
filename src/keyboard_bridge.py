@@ -763,6 +763,11 @@ class KeyboardBridge(QObject):
         self._ctrl_active = False
         self._alt_active = False
         self._win_active = False
+        # Whether a chord has used Win since it went active.  Win is never
+        # held at the OS (see ``hold_modifier``), so a Win tap on its own
+        # would otherwise do nothing; ``toggleWin`` sends one when the user
+        # taps Win twice with nothing in between, which opens Start.
+        self._win_chorded = False
         # Right-click "lock" flags: a locked modifier is held at the OS
         # level and exempt from the per-keystroke auto-release below.
         # A locked modifier is always also active (held); clearing the
@@ -1255,6 +1260,7 @@ class KeyboardBridge(QObject):
             modifiers.append("alt")
         if self._win_active:
             modifiers.append("win")
+            self._win_chorded = True
 
         for extra in extra_modifiers or ():
             if extra not in modifiers:
@@ -2601,10 +2607,16 @@ class KeyboardBridge(QObject):
     def toggleWin(self) -> None:
         """Toggle Windows/Super modifier (sticky). Holds/releases at the OS level."""
         if self._win_active:
+            lone_tap = not self._win_chorded
             self._release_held("win")
             self._clear_lock("win")
+            if lone_tap and CURRENT_PLATFORM == "windows":
+                # A physical Win tapped alone opens Start.  Windows only:
+                # Linux has no one keysym every WM reads that way.
+                self._send_key("win")
         else:
             self._win_active = True
+            self._win_chorded = False
             self._synth.hold_modifier("win")
         self.winActiveChanged.emit(self._win_active)
 
@@ -2754,6 +2766,8 @@ class KeyboardBridge(QObject):
         # re-send a redundant key-down (and unlocking a modifier that was
         # only sticky-active still releases it).
         if new_active and not was_active:
+            if name == "win":
+                self._win_chorded = False
             self._synth.hold_modifier(name)
         elif not new_active and was_active:
             self._synth.release_modifier(name)
