@@ -354,6 +354,10 @@ that property feeds `scanRevision`, so a scanner's target map follows).
 Guards: `tests/test_dictation_ai.py::TestRunFinished`,
 `::TestTheBridgeAutoCopies`, `tests/test_qml_dictation.py::TestNoRunPreviewsWords`,
 `::TestTheFinishedTextReplacesThePills`, `::TestTheFinishedTextElidesFromTheLeft`.
+The 8 s timeout guard (`test_it_times_out`) asserts the banner is visible
+with the real interval still armed and only then shortens the timer: the
+earlier form shortened it first and flaked on a loaded CI shard (PR #237;
+`docs/build/TESTING.md`, "a floor, never a race").
 
 ## The mic button, and the left edge
 

@@ -422,6 +422,7 @@ Full write-up: `docs/build/TESTING.md` (section of the same name). Read it befor
 - **QSettings, registry or fixed temp paths must be keyed per xdist worker** via `tests/qt_settings_scope.py`.
 - **The shard hash is `crc32(nodeid)`, never `hash()`.**
 - **A Qt test fixture builds a `QGuiApplication` (never `QCoreApplication`) and asserts the organisation name** in `qapp`.
+- **A wall-clock wait (`_wait_ms`) is a floor, never a race**: assert the "before" state against the real interval, then shorten the timer and wait. Shortening it first flaked `test_it_times_out` on a loaded shard (PR #237).
 - Branch protection requires the `Tests` job, not the shards. **Merge with `python scripts/merge_pr.py <n>`, never a bare `gh pr merge --admin`.**
 
 ## Word Suppression and Boosting
