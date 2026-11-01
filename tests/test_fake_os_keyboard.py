@@ -23,10 +23,21 @@ def os_() -> FakeOSKeyboard:
 class TestHeldModifiers:
     def test_hold_and_release_edit_the_state_table(self, os_: FakeOSKeyboard) -> None:
         os_.hold_modifier("shift")
-        os_.hold_modifier("win")
-        assert os_.held == {"shift", "win"}
+        os_.hold_modifier("ctrl")
+        assert os_.held == {"shift", "ctrl"}
         os_.release_modifier("shift")
-        assert os_.held == {"win"}
+        assert os_.held == {"ctrl"}
+
+    def test_win_is_never_held(self, os_: FakeOSKeyboard) -> None:
+        os_.hold_modifier("win")
+        assert os_.held == set()
+        assert os_.events == []
+
+    def test_a_win_chord_is_still_wrapped(self, os_: FakeOSKeyboard) -> None:
+        # The inverse: Win never held does not mean Win never sent.
+        os_.send_key("d", modifiers=["win"])
+        assert os_.events[-1].kind == "chord"
+        assert "win" in os_.events[-1].modifiers
 
     def test_unknown_names_are_not_holdable(self, os_: FakeOSKeyboard) -> None:
         os_.hold_modifier("caps")
@@ -60,7 +71,8 @@ class TestSendText:
         os_.send_text("é")
         assert os_.text == "é"
 
-    @pytest.mark.parametrize("name", ["ctrl", "alt", "win"])
+    # Win is absent: it is never held (``test_win_is_never_held``).
+    @pytest.mark.parametrize("name", ["ctrl", "alt"])
     def test_a_chord_modifier_turns_text_into_chords(self, os_: FakeOSKeyboard, name: str) -> None:
         os_.hold_modifier(name)
         os_.send_text("ab")
