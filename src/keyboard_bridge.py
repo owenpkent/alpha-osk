@@ -348,6 +348,60 @@ def _owning_exe_name(hwnd: int) -> Optional[str]:
     return None
 
 
+# The ctypes types behind ``_window_is_borderless_fullscreen``, built once
+# per process. They were declared inside the function, which runs at 4 Hz
+# from ``_check_foreground_window``, and ctypes never frees a Structure
+# subclass (``POINTER(RECT)`` pins it in a module-level cache) nor unloads a
+# ``WinDLL``, so every tick leaked about 13 KB: 3 MB a minute, 1.5 GB over
+# a day at the keyboard, the idle half of #204 (the pills were the typing
+# half). Lazily built rather than declared at module scope because the
+# suite runs on Linux too; same shape as ``password_detect._gui_thread_info_struct``.
+_fullscreen_probe: Any = None
+
+
+def _fullscreen_probe_types() -> Any:
+    """``(RECT, MONITORINFO, user32)`` for the fullscreen probe, one set per process."""
+    import sys
+
+    global _fullscreen_probe
+    if sys.platform != "win32":
+        return None
+    if _fullscreen_probe is None:
+        import ctypes
+        from ctypes import wintypes
+
+        class RECT(ctypes.Structure):
+            _fields_ = [
+                ("left", wintypes.LONG),
+                ("top", wintypes.LONG),
+                ("right", wintypes.LONG),
+                ("bottom", wintypes.LONG),
+            ]
+
+        class MONITORINFO(ctypes.Structure):
+            _fields_ = [
+                ("cbSize", wintypes.DWORD),
+                ("rcMonitor", RECT),
+                ("rcWork", RECT),
+                ("dwFlags", wintypes.DWORD),
+            ]
+
+        # Own WinDLL instance so setting argtypes/restype (needed to keep the
+        # 64-bit HMONITOR handle from being truncated to int) doesn't mutate
+        # the shared ``ctypes.windll.user32`` prototypes other call sites use.
+        user32 = ctypes.WinDLL("user32")
+        user32.GetWindowRect.argtypes = [wintypes.HWND, ctypes.POINTER(RECT)]
+        user32.GetWindowRect.restype = wintypes.BOOL
+        user32.MonitorFromWindow.argtypes = [wintypes.HWND, wintypes.DWORD]
+        user32.MonitorFromWindow.restype = ctypes.c_void_p
+        user32.GetMonitorInfoW.argtypes = [ctypes.c_void_p, ctypes.POINTER(MONITORINFO)]
+        user32.GetMonitorInfoW.restype = wintypes.BOOL
+        user32.GetWindowLongW.argtypes = [wintypes.HWND, ctypes.c_int]
+        user32.GetWindowLongW.restype = wintypes.LONG
+        _fullscreen_probe = (RECT, MONITORINFO, user32)
+    return _fullscreen_probe
+
+
 def _window_is_borderless_fullscreen(hwnd: int) -> bool:
     """Whether ``hwnd`` is a borderless window covering its whole monitor.
 
@@ -372,34 +426,7 @@ def _window_is_borderless_fullscreen(hwnd: int) -> bool:
         import ctypes
         from ctypes import wintypes
 
-        class RECT(ctypes.Structure):
-            _fields_ = [
-                ("left", wintypes.LONG),
-                ("top", wintypes.LONG),
-                ("right", wintypes.LONG),
-                ("bottom", wintypes.LONG),
-            ]
-
-        class MONITORINFO(ctypes.Structure):
-            _fields_ = [
-                ("cbSize", wintypes.DWORD),
-                ("rcMonitor", RECT),
-                ("rcWork", RECT),
-                ("dwFlags", wintypes.DWORD),
-            ]
-
-        # Local WinDLL instance so setting argtypes/restype (needed to keep the
-        # 64-bit HMONITOR handle from being truncated to int) doesn't mutate the
-        # shared ``ctypes.windll.user32`` prototypes other call sites rely on.
-        user32 = ctypes.WinDLL("user32")
-        user32.GetWindowRect.argtypes = [wintypes.HWND, ctypes.POINTER(RECT)]
-        user32.GetWindowRect.restype = wintypes.BOOL
-        user32.MonitorFromWindow.argtypes = [wintypes.HWND, wintypes.DWORD]
-        user32.MonitorFromWindow.restype = ctypes.c_void_p
-        user32.GetMonitorInfoW.argtypes = [ctypes.c_void_p, ctypes.POINTER(MONITORINFO)]
-        user32.GetMonitorInfoW.restype = wintypes.BOOL
-        user32.GetWindowLongW.argtypes = [wintypes.HWND, ctypes.c_int]
-        user32.GetWindowLongW.restype = wintypes.LONG
+        RECT, MONITORINFO, user32 = _fullscreen_probe_types()
 
         hwnd_h = wintypes.HWND(hwnd)
         rect = RECT()

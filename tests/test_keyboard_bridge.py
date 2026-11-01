@@ -8,6 +8,7 @@ don't want tests injecting real keystrokes.
 from __future__ import annotations
 
 import logging
+import sys
 import time
 from pathlib import Path
 from unittest.mock import MagicMock, Mock, call, patch
@@ -689,6 +690,30 @@ class TestGameKeyHold:
 
         monkeypatch.setattr(sys, "platform", "linux")
         assert keyboard_bridge._window_is_borderless_fullscreen(12345) is False
+
+    @pytest.mark.skipif(sys.platform != "win32", reason="the fullscreen probe is Win32")
+    def test_the_fullscreen_probe_builds_its_ctypes_types_once(self):
+        """The probe runs at 4 Hz for the life of the process.
+
+        It used to declare its two Structures and a fresh ``WinDLL`` on
+        every call, and ctypes never frees either, so the keyboard grew
+        by about 13 KB a tick, 1.5 GB over a day (#204, the idle half).
+        The types must be the same objects on every call, and after many
+        calls there must be one MONITORINFO class alive, not hundreds.
+        """
+        import ctypes
+        import gc
+
+        from src import keyboard_bridge
+
+        hwnd = int(ctypes.windll.user32.GetDesktopWindow())
+        first = keyboard_bridge._fullscreen_probe_types()
+        for _ in range(100):
+            keyboard_bridge._window_is_borderless_fullscreen(hwnd)
+        assert keyboard_bridge._fullscreen_probe_types() is first
+        gc.collect()
+        alive = [o for o in gc.get_objects() if isinstance(o, type) and o.__name__ == "MONITORINFO"]
+        assert len(alive) == 1
 
     def test_game_match_takes_priority_over_compat(self, monkeypatch):
         # Exe in the game list wins; compat exclusion / fullscreen heuristic
