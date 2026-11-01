@@ -334,6 +334,10 @@ _EXTENDED_KEYS = {
 }
 
 
+# Sticky modifiers that ``hold_modifier`` leaves up (see its docstring).
+_NEVER_HELD = frozenset({"win", "super"})
+
+
 # ====================================================================== #
 #  WindowsKeySynthesizer
 # ====================================================================== #
@@ -1181,7 +1185,16 @@ class WindowsKeySynthesizer(KeySynthesizerBase):
         Scancode mode so a held modifier (sticky Shift/Ctrl/Alt/Win) is
         relayed over remote-desktop tools — otherwise Ctrl+click / Shift+drag
         on the remote machine would see a bare click with no modifier.
+
+        The Windows key is never held, as on Linux.  With ``VK_LWIN`` down,
+        the next click anywhere (on our own keys too) is Win+click, which
+        Windows 11 hands to Click to Do: a screen capture that freezes the
+        display for a moment and draws a glow around its edge.  Win+<key>
+        chords still work, because ``send_key`` wraps the key in an atomic
+        Win down/up.
         """
+        if key_name in _NEVER_HELD:
+            return
         vk = _KEY_MAP.get(key_name)
         if vk is not None:
             self._inject([self._make_vk_scancode_event(vk, key_down=True)])
@@ -1189,6 +1202,10 @@ class WindowsKeySynthesizer(KeySynthesizerBase):
 
     def release_modifier(self, key_name: str) -> None:
         """Send a modifier key-up to release a held modifier."""
+        # Never held, so there is nothing of ours to release, and a stray
+        # key-up must not touch a Win key the user holds on a real keyboard.
+        if key_name in _NEVER_HELD:
+            return
         vk = _KEY_MAP.get(key_name)
         if vk is not None:
             self._inject([self._make_vk_scancode_event(vk, key_down=False)])

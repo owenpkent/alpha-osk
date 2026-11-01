@@ -326,6 +326,70 @@ class TestLinuxSuperNeverHeld:
         assert calls == [["xdotool", "keyup", "super"]]
 
 
+class TestWindowsWinNeverHeld:
+    """The Windows key must never be *held* on Windows either.
+
+    Regression: tapping Win held ``VK_LWIN`` down, so the next click
+    anywhere was Win+click, which Windows 11 sends to Click to Do: the
+    screen froze for a moment while it captured it and a glow ringed the
+    display.  Win+<key> chords still fire, wrapped by ``send_key``.
+    """
+
+    def _make_synth(self):
+        from src.platform import windows as win_mod
+
+        synth = win_mod.WindowsKeySynthesizer.__new__(win_mod.WindowsKeySynthesizer)
+        captured: list = []
+        synth._inject = lambda events: captured.append(list(events))
+        synth._make_vk_scancode_event = lambda vk, key_down: ("vk", vk, key_down)
+        synth._make_unicode_events = lambda c: [("uni", c)]
+        synth._log_send = lambda msg: None
+
+        class _StubUser32:
+            def VkKeyScanW(self_inner, ch):
+                return ord(ch.upper())
+
+            def GetAsyncKeyState(self_inner, vk):
+                return 0
+
+        synth._user32 = _StubUser32()
+        return synth, captured
+
+    def test_hold_win_sends_nothing(self):
+        synth, captured = self._make_synth()
+        synth.hold_modifier("win")
+        synth.hold_modifier("super")
+        assert captured == []
+
+    def test_release_win_sends_nothing(self):
+        # A stray key-up could cut short a Win the user holds on a real
+        # keyboard, and there is no hold of ours to undo.
+        synth, captured = self._make_synth()
+        synth.release_modifier("win")
+        assert captured == []
+
+    def test_hold_ctrl_still_holds(self):
+        from src.platform.windows import VK_CONTROL
+
+        synth, captured = self._make_synth()
+        synth.hold_modifier("ctrl")
+        assert captured == [[("vk", VK_CONTROL, True)]]
+
+    def test_win_combo_still_chords(self):
+        from src.platform.windows import VK_LWIN
+
+        synth, captured = self._make_synth()
+        synth.send_key("d", modifiers=["win"])
+        assert captured == [
+            [
+                ("vk", VK_LWIN, True),
+                ("vk", ord("D"), True),
+                ("vk", ord("D"), False),
+                ("vk", VK_LWIN, False),
+            ]
+        ]
+
+
 class TestLinuxSendText:
     """``send_text()`` must end-of-options guard the typed text.
 
