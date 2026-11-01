@@ -4,6 +4,11 @@ All notable changes to Alpha-OSK are documented in this file.
 
 ## [Unreleased]
 
+## [1.9.8] (2026-11-01)
+
+### Fixed
+- **The Win key no longer freezes the screen.** After you tapped Win, your next click went to Windows as Win+click, which on Windows 11 opens Click to Do: the screen froze for a moment and a glowing ring appeared around its edge. Win now acts only on the next key you tap (Win+D, Win+E and so on), and tapping Win twice with nothing in between opens Start.
+
 ## [1.9.7] (2026-10-31)
 
 ### Fixed

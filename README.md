@@ -210,7 +210,7 @@ Yes on Windows (Unicode keystroke injection covers anything in BMP and supplemen
 
 - QWERTY, Dvorak, and Colemak layouts
 - Compact View: a denser 13x4 grid for small screens, with digits on their own panel and a symbol page behind `?123`
-- Sticky modifiers (Shift, Ctrl, Alt, Win) with auto-release after the next key, or right-click one to lock it held
+- Sticky modifiers (Shift, Ctrl, Alt, Win) with auto-release after the next key, or right-click one to lock it held; Win applies to the next key only (never to a click), and tapping it twice opens Start on Windows
 - Multi-modifier chords (Win+Shift+S, Ctrl+Alt+Del, etc.)
 - Right-click a character key for its shifted variant without flipping sticky shift
 - Numpad panel with NumLock toggle between digits and navigation keys
