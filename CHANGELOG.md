@@ -4,6 +4,11 @@ All notable changes to Alpha-OSK are documented in this file.
 
 ## [Unreleased]
 
+## [1.9.7] (2026-10-31)
+
+### Fixed
+- **Memory no longer grows while the keyboard sits idle.** Four times a second the keyboard asks whether the app in front is a full-screen game, and each check built a fresh set of system call descriptions that Python never frees: about 3 MB a minute, 1.5 GB over a day, whether or not you typed. The descriptions are now built once.
+
 ## [1.9.6] (2026-10-31)
 
 ### Fixed
