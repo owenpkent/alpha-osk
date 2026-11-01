@@ -202,3 +202,21 @@ the QML modules assert their organisation in the `qapp` fixture rather
 than merely setting it; the assertion is what caught this, and any new
 `qapp` fixture should carry it too.
 
+**A wall-clock wait in a headless QML test is a floor, never a race.**
+Some QML state only moves on the wall clock (a `Behavior`, a `QTimer`), so
+these tests run the event loop for a fixed time (`_wait_ms`) rather than
+calling `processEvents()`. That is fine when the wait only has to be long
+enough. It is a flake when the test also needs something *not* to have
+happened yet. `tests/test_qml_dictation.py::TestTheFinishedTextReplacesThePills::test_it_times_out`
+shortened the bridge's 8 s result timer to 30 ms *before* delivering the
+run, then asserted the banner was still visible; on a loaded Windows CI
+shard the `processEvents()` that delivered the run took longer than 30 ms,
+the timer fired inside it, and the "still visible" half failed (run
+41234459723, a docs-only PR, green on re-run; the same test failed locally
+with three pre-push gates running at once). The fix is the order: assert
+the "before" state against the real interval, confirm the timer is armed,
+*then* shorten it and wait. Shorten a timer only after everything that must
+precede it has been asserted, and give the wait that follows a wide margin
+(the fixed test waits 200 ms on a 10 ms timer). Do not answer a flake like
+this by lengthening both numbers: a race with a bigger gap is still a race.
+
