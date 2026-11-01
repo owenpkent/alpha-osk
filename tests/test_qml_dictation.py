@@ -734,13 +734,28 @@ class TestTheFinishedTextReplacesThePills:
         assert _child(root, "dictationBanner").property("visible") is False
 
     def test_it_times_out(self, qml_root):
+        """The run arms the 8 s timer, and the timer firing takes the text away.
+
+        Two halves, in this order, on purpose. The first form shortened the
+        interval to 30 ms *before* delivering the run, and on a loaded CI
+        shard the `processEvents` that delivers it ran long enough for the
+        timer to fire inside it, so the banner was already gone when the
+        "still visible" assertion looked (Windows shard, 2026-10-31). Here
+        the visible half is asserted against the real interval, and only
+        then is the deadline brought forward, so the timer cannot fire
+        early; the wait that follows is a floor, not a race.
+        """
         root, _, bridge = qml_root
         _turn_dictation_on(root)
-        assert bridge._DICTATION_RESULT_MS == 8000
-        bridge._DICTATION_RESULT_MS = 30
         _finish_a_run(root, bridge, "hello there")
         assert _child(root, "dictationBanner").property("visible") is True
-        _wait_ms(120)
+        timer = bridge._dictation_result_timer
+        assert timer is not None and timer.isActive()
+        assert timer.interval() == bridge._DICTATION_RESULT_MS == 8000
+
+        timer.setInterval(10)
+        timer.start()
+        _wait_ms(200)
         assert _child(root, "dictationBanner").property("visible") is False
 
     def test_a_new_run_clears_it(self, qml_root):
