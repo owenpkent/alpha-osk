@@ -52,6 +52,8 @@ class Harness:
         # Called in turn, one per gap, before the gate (if any) is waited on.
         self.on_sleep: List[Callable[[], None]] = []
         self.gate: Optional[threading.Event] = None
+        # Set by the scripted sleep once the worker waits at the gate.
+        self.parked = threading.Event()
         self._send_result = send_result
 
         def send(events: Sequence[str]) -> Tuple[int, int]:
@@ -68,6 +70,7 @@ class Harness:
             if index < len(self.on_sleep):
                 self.on_sleep[index]()
             if self.gate is not None:
+                self.parked.set()
                 self.gate.wait(5)
 
         self.injector: SerialInjector[str] = SerialInjector(
@@ -90,6 +93,15 @@ class Harness:
         """Gate every sleep so the worker parks until the test opens it."""
         self.gate = threading.Event()
         return self
+
+    def wait_parked(self) -> None:
+        """Block until the worker has started and is waiting at the gate.
+
+        A cancel or shutdown issued before the worker popped its first
+        job would drop that job whole, so every gated test waits here
+        before acting on the worker.
+        """
+        assert self.parked.wait(5), "the worker never reached its first gap"
 
     def finish(self) -> None:
         assert self.gate is not None
@@ -154,6 +166,7 @@ class TestInlineOrQueued:
         h = Harness(gap_s=0.01, inline_budget_s=0.05).background()
         units = tap("a") + tap("b") + tap("c") + tap("d")  # 7 gaps: over the budget
         h.injector.inject(units)
+        h.wait_parked()
         assert h.injector.busy
         assert len(h.sent) < 8
         h.finish()
@@ -167,6 +180,7 @@ class TestInlineOrQueued:
         h = Harness(gap_s=0.01, inline_budget_s=0.05).background()
         first = tap("a") + tap("b") + tap("c") + tap("d")
         h.injector.inject(first)
+        h.wait_parked()
         h.injector.inject(tap("z"))  # returns immediately, worker parked
         assert h.injector.busy
         assert "z+" not in h.sent
@@ -180,12 +194,14 @@ class TestInlineOrQueued:
         h = Harness(gap_s=0.01, inline_budget_s=0.0).background()
         for key in "abc":
             h.injector.inject(tap(key))
+            h.wait_parked()
         h.finish()
         assert h.sent == ["a+", "a-", "b+", "b-", "c+", "c-"]
 
     def test_the_worker_exits_when_the_queue_is_empty_and_inline_resumes(self):
         h = Harness(gap_s=0.01, inline_budget_s=0.05).background()
         h.injector.inject(tap("a") + tap("b") + tap("c") + tap("d"))
+        h.wait_parked()
         h.finish()
         h.gate = None
         h.injector.inject(tap("z"))
@@ -236,6 +252,7 @@ class TestCancel:
     def test_cancel_drops_queued_cancellable_bursts_too(self):
         h = self._background().background()
         h.injector.inject(tap("a") + tap("b"), cancellable=True)
+        h.wait_parked()
         h.injector.inject(tap("c"), cancellable=True)
         h.injector.cancel()
         h.finish()
@@ -247,6 +264,7 @@ class TestCancel:
         only typed text is dropped."""
         h = self._background().background()
         h.injector.inject(tap("a") + tap("b"), cancellable=True)
+        h.wait_parked()
         h.injector.inject(atomic("shift+"))
         h.injector.inject(tap("z"))
         h.injector.cancel()
@@ -280,6 +298,7 @@ class TestShutdown:
     def test_shutdown_drops_the_queue_finishes_the_unit_and_joins(self):
         h = Harness(gap_s=0.001, inline_budget_s=0.0).background()
         h.injector.inject(paced("s+", "a+", "a-", "s-") + tap("b"))
+        h.wait_parked()
         h.injector.inject(atomic("shift+"))  # queued, not cancellable, dropped anyway
         threading.Timer(0.05, h.gate.set).start()  # type: ignore[union-attr]
         assert h.injector.shutdown(5)
@@ -289,6 +308,7 @@ class TestShutdown:
     def test_after_shutdown_the_next_burst_goes_out_inline(self):
         h = Harness(gap_s=0.001, inline_budget_s=0.0).background()
         h.injector.inject(tap("a") + tap("b"))
+        h.wait_parked()
         threading.Timer(0.05, h.gate.set).start()  # type: ignore[union-attr]
         assert h.injector.shutdown(5)
         h.gate = None

@@ -6,6 +6,7 @@ import logging
 import ntpath
 import subprocess
 import sys
+import threading
 from pathlib import Path
 
 import pytest
@@ -1375,8 +1376,6 @@ class TestWindowsInjectPacing:
         ``("sleep", s)`` per pacing gap, in order.  A key is its VK for a
         VK event, else its scancode or Unicode code unit.
         """
-        import threading
-
         from src.platform import windows as win_mod
 
         log: list = []
@@ -1526,15 +1525,14 @@ class TestWindowsInjectPacing:
         """The P1 case from the review of PR #244: a dictated passage used to
         block the Qt thread for (N-1) x 3 ms; now the call returns while a
         worker types it."""
-        import threading
-
-        gate = threading.Event()
-        win_mod, synth, log = self._make(sleep=lambda s: gate.wait(5))
+        gate = _Gate()
+        win_mod, synth, log = self._make(sleep=gate.sleep)
 
         synth.send_text("x" * 100)  # 200 groups, 0.6 s of gaps: over the inline budget
+        gate.wait_parked()
         assert synth.busy
         assert len(self._sends(log)) < 200
-        gate.set()
+        gate.release()
         assert synth._injector.settle(5)
         assert not synth.busy
         assert len(self._sends(log)) == 200
@@ -1543,16 +1541,15 @@ class TestWindowsInjectPacing:
         """The second P1 case: a key tapped while a passage is typing used to
         join the worker on the Qt thread for the rest of the passage.  It
         now queues and the call returns; the order still holds."""
-        import threading
-
-        gate = threading.Event()
-        win_mod, synth, log = self._make(sleep=lambda s: gate.wait(5))
+        gate = _Gate()
+        win_mod, synth, log = self._make(sleep=gate.sleep)
         synth.send_text("x" * 100)
+        gate.wait_parked()
         assert synth.busy
 
         synth.send_key("Return")  # must not block
         assert synth.busy
-        gate.set()
+        gate.release()
         assert synth._injector.settle(5)
         keys = self._sent_keys(log)
         assert keys[:200] == [0x28] * 200
@@ -1565,15 +1562,14 @@ class TestWindowsInjectPacing:
         be built against the Shift that *will* be held once the queue
         drains (``_os_key_down``), or its own Shift wrap would release the
         lock."""
-        import threading
-
-        gate = threading.Event()
-        win_mod, synth, log = self._make(sleep=lambda s: gate.wait(5))
+        gate = _Gate()
+        win_mod, synth, log = self._make(sleep=gate.sleep)
         synth.send_text("x" * 100)
+        gate.wait_parked()
         synth.hold_modifier("shift")  # returns at once
         assert synth.busy
         synth.send_text("A")  # built while the hold is still queued
-        gate.set()
+        gate.release()
         assert synth._injector.settle(5)
 
         keys = self._sent_keys(log)
@@ -1592,13 +1588,12 @@ class TestWindowsInjectPacing:
     # -- cancel and shutdown -----------------------------------------------
 
     def test_cancel_pending_stops_a_long_text_with_no_key_left_down(self):
-        import threading
-
-        gate = threading.Event()
-        win_mod, synth, log = self._make(sleep=lambda s: gate.wait(5))
+        gate = _Gate()
+        win_mod, synth, log = self._make(sleep=gate.sleep)
         synth.send_text("x" * 100)
+        gate.wait_parked()
         synth.cancel_pending()
-        gate.set()
+        gate.release()
         assert synth._injector.settle(5)
 
         sends = self._sends(log)
@@ -1608,27 +1603,25 @@ class TestWindowsInjectPacing:
     def test_cancel_does_not_split_a_surrogate_pair(self):
         """An emoji is two UTF-16 code units, four events; a cancel in the
         first gap must still deliver all four (review of cc0f8d1)."""
-        import threading
-
-        gate = threading.Event()
-        win_mod, synth, log = self._make(sleep=lambda s: gate.wait(5))
+        gate = _Gate()
+        win_mod, synth, log = self._make(sleep=gate.sleep)
         synth.send_text(chr(0x1F600) + "x" * 100)
+        gate.wait_parked()
         synth.cancel_pending()
-        gate.set()
+        gate.release()
         assert synth._injector.settle(5)
         assert self._sent_keys(log) == [0xD83D, 0xD83D, 0xDE00, 0xDE00]
 
     def test_cancel_keeps_a_queued_re_hold(self):
         """The re-hold of a locked modifier queued behind the text is not
         typed text: a cancel drops the text, the hold still lands."""
-        import threading
-
-        gate = threading.Event()
-        win_mod, synth, log = self._make(sleep=lambda s: gate.wait(5))
+        gate = _Gate()
+        win_mod, synth, log = self._make(sleep=gate.sleep)
         synth.send_text("x" * 100)
+        gate.wait_parked()
         synth.hold_modifier("shift")
         synth.cancel_pending()
-        gate.set()
+        gate.release()
         assert synth._injector.settle(5)
         keys = self._sent_keys(log)
         assert len(keys) < 201
@@ -1644,13 +1637,12 @@ class TestWindowsInjectPacing:
         """Quitting mid-insert: the worker is joined, the shift-wrapped
         character in flight is complete, the rest is dropped, and a
         modifier release sent next goes out at once (review of cc0f8d1)."""
-        import threading
-
-        gate = threading.Event()
-        win_mod, synth, log = self._make(sleep=lambda s: gate.wait(5))
+        gate = _Gate()
+        win_mod, synth, log = self._make(sleep=gate.sleep)
         synth.send_text("aB" * 60)
+        gate.wait_parked()
         assert synth.busy
-        threading.Timer(0.05, gate.set).start()
+        threading.Timer(0.05, gate.release).start()
 
         synth.shutdown()
         assert not synth.busy
@@ -1661,6 +1653,29 @@ class TestWindowsInjectPacing:
 
         synth.release_modifier("shift")
         assert self._sent_keys(log)[-1] == win_mod.VK_SHIFT
+
+
+class _Gate:
+    """A scripted sleep that parks the injector's worker until released.
+
+    ``parked`` is set when the worker reaches its first gap, so a test
+    cancels or shuts down only once the worker owns its job (a cancel
+    before that would drop the job whole and deliver nothing).
+    """
+
+    def __init__(self) -> None:
+        self.parked = threading.Event()
+        self._open = threading.Event()
+
+    def sleep(self, seconds: float) -> None:
+        self.parked.set()
+        self._open.wait(5)
+
+    def wait_parked(self) -> None:
+        assert self.parked.wait(5), "the worker never reached its first gap"
+
+    def release(self) -> None:
+        self._open.set()
 
 
 def synth_event(win_mod, vk: int, key_down: bool = True):
