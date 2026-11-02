@@ -1,32 +1,42 @@
 """
-One key-event burst at a time, paced, and off the caller's thread when long.
+One key-event burst at a time, paced, queued, and off the caller's thread.
 
-``WindowsKeySynthesizer`` hands every burst of events it builds to a
-:class:`SerialInjector`, which decides how the burst reaches the OS:
+``WindowsKeySynthesizer`` hands every burst it builds to a
+:class:`SerialInjector` as a list of **units**, each a list of **groups**,
+each a list of events:
 
-- **Atomic**: the whole burst in one ``send`` call.  For a chord
-  (Ctrl down, C, Ctrl up) and for the Shift+Left selection that opens a
-  ``replace_text``, where a gap between the events would let a click of
-  the user's land *inside* the gesture (Shift+click extends a selection
-  the next keystroke then overwrites; review of PR #244).
-- **Paced**: one ``send`` call per event with ``gap_s`` between them.
-  Streaming clients (Moonlight over Sunshine) drop key-ups out of a
-  zero-gap burst and leave a letter held on the far side, so typed text
-  goes out paced.  A burst short enough to fit ``inline_budget_s`` runs on
-  the caller's thread, which keeps a suggestion pick synchronous; a longer
-  one (a dictated passage, a programmed text action) runs on a worker
-  thread so the UI thread is not blocked for seconds (same review).
+- A *group* is one ``send`` call (one ``SendInput``).  A chord (Ctrl down,
+  C, Ctrl up), the Shift+Left selection that opens ``replace_text`` and a
+  shift-wrapped character (Shift down, R, R up, Shift up) are each one
+  group, so no gap exists while a modifier is down: a click of the user's
+  landing in such a gap would be Shift+click, and the keystrokes that
+  follow would act on the wrong text (review of PR #244).  A plain typed
+  character is two groups, key-down and key-up, because streaming clients
+  (Moonlight over Sunshine) drop key-ups out of a zero-gap burst and leave
+  the letter held on the far side.
+- ``gap_s`` is slept between consecutive groups, never before the first
+  group of a quiet injector or after the last.
+- A *unit* is the smallest thing a cancel may split: one character (a
+  UTF-16 surrogate pair included), one gesture.  A cancelled burst stops
+  at the next unit boundary, so it never leaves a key down or half a
+  character typed.
 
-Only one burst is ever in flight.  The synthesizer calls :meth:`settle`
-before building the next burst, so what it reads about the OS key state
-is current and the order of its calls is the order of the events.  A
-background burst can be :meth:`cancel`-led, and stops only at a point
-where no key it pressed is still down, so an abandoned insert never
-leaves a key held.
+Only one group is ever in flight, and bursts are delivered in the order
+they were handed in.  A burst that fits ``inline_budget_s`` while the
+injector is idle is delivered before :meth:`inject` returns (a suggestion
+pick stays synchronous); anything else joins a FIFO drained by one worker
+thread, and :meth:`inject` returns at once.  **Nothing on the caller's
+thread ever waits for the worker** except :meth:`shutdown` and the test
+helper :meth:`settle`: joining it from a Qt callback froze the UI for the
+length of a dictated passage (same review, twice).
+
+A burst marked *cancellable* (typed text) is dropped by :meth:`cancel`,
+queued or running; everything else (a modifier hold or release, a chord, a
+key the user tapped meanwhile) is still delivered, so a locked modifier
+the bridge re-holds after an insert is never lost to a cancel.
 
 This module is platform-neutral so its behaviour is tested on every CI
-runner; the Windows synthesizer supplies the ``send`` and ``key_state``
-callables.
+runner; the Windows synthesizer supplies ``send``.
 """
 
 from __future__ import annotations
@@ -34,17 +44,30 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from typing import Callable, Generic, Hashable, List, Optional, Sequence, Set, Tuple, TypeVar
+from collections import deque
+from typing import Callable, Deque, Generic, List, Optional, Sequence, Tuple, TypeVar
 
 T = TypeVar("T")
 
-# (key identity, is_down) for a key event; None for an event that is not
-# a key (nothing in this app sends one, but the injector does not care).
-KeyState = Optional[Tuple[Hashable, bool]]
+Group = Sequence[T]  # one send call
+Unit = Sequence[Group[T]]  # one character or gesture: the cancel boundary
+
+
+class _Job(Generic[T]):
+    __slots__ = ("units", "cancellable", "cancelled")
+
+    def __init__(self, units: Sequence[Unit[T]], cancellable: bool) -> None:
+        self.units: List[List[List[T]]] = [[list(group) for group in unit] for unit in units]
+        self.cancellable = cancellable
+        self.cancelled = False
+
+    @property
+    def group_count(self) -> int:
+        return sum(len(unit) for unit in self.units)
 
 
 class SerialInjector(Generic[T]):
-    """Serialise, pace and background the delivery of key-event bursts."""
+    """Serialise, pace, queue and background the delivery of key-event bursts."""
 
     def __init__(
         self,
@@ -52,36 +75,33 @@ class SerialInjector(Generic[T]):
         *,
         gap_s: float,
         inline_budget_s: float,
-        key_state: Callable[[T], KeyState],
         sleep: Callable[[float], None] = time.sleep,
         logger: Optional[logging.Logger] = None,
     ) -> None:
         """
         Args:
-            send: Delivers a batch to the OS in one call and returns
-                ``(events injected, last error code)``.  ``error`` is 0
-                when every event went in.
-            gap_s: Pause between consecutive events of a paced burst.
-            inline_budget_s: A paced burst whose gaps add up to at most
-                this runs on the caller's thread; a longer one runs on a
-                worker thread.
-            key_state: Maps an event to ``(key identity, is_down)`` so a
-                cancel can wait for every pressed key to be released.
-            sleep: Injected for tests; the worker and the inline path both
-                pace through it.
+            send: Delivers one group to the OS in one call and returns
+                ``(events injected, last error code)``; the error is 0 when
+                every event went in.
+            gap_s: Pause between consecutive groups.
+            inline_budget_s: A burst whose gaps add up to at most this, met
+                while the injector is idle, is delivered on the caller's
+                thread; anything else is queued for the worker.
+            sleep: Injected for tests; every gap goes through it.
         """
         self._send = send
         self._gap_s = gap_s
         self._inline_budget_s = inline_budget_s
-        self._key_state = key_state
         self._sleep = sleep
         self._log = logger or logging.getLogger(__name__)
-        # Held by whichever thread is delivering a burst.  Inline bursts and
-        # the worker both take it, so two bursts can never interleave.
+        # Held by whichever thread is delivering, so an inline burst and
+        # the worker can never interleave.
         self._delivering = threading.Lock()
+        # Guards the queue, the worker handle and the running job.
         self._state = threading.Lock()
+        self._queue: Deque[_Job[T]] = deque()
         self._worker: Optional[threading.Thread] = None
-        self._cancel = threading.Event()
+        self._current: Optional[_Job[T]] = None
 
     # ------------------------------------------------------------------ #
     #  Queries
@@ -89,124 +109,133 @@ class SerialInjector(Generic[T]):
 
     @property
     def busy(self) -> bool:
-        """True while a background burst is still being delivered."""
-        worker = self._worker
-        return worker is not None and worker.is_alive()
+        """True while anything is queued or still being delivered by the worker."""
+        with self._state:
+            return self._worker is not None
 
-    def paced_duration_s(self, count: int) -> float:
-        """How long the gaps of a paced burst of ``count`` events take."""
-        return max(count - 1, 0) * self._gap_s
+    def paced_duration_s(self, group_count: int) -> float:
+        """How long the gaps of a burst of ``group_count`` groups take."""
+        return max(group_count - 1, 0) * self._gap_s
 
     # ------------------------------------------------------------------ #
     #  Control
     # ------------------------------------------------------------------ #
 
-    def settle(self, timeout: float) -> bool:
-        """Wait for a background burst to finish.
+    def inject(self, units: Sequence[Unit[T]], *, cancellable: bool = False) -> None:
+        """Deliver ``units`` in order, after everything handed in before.
 
-        Returns False if it was still running when ``timeout`` elapsed;
-        the caller then goes ahead anyway (the delivery lock still keeps
-        the two bursts from interleaving) and should say so in the log.
+        Returns before delivery unless the injector is idle and the burst
+        fits the inline budget.  ``cancellable`` marks a burst
+        :meth:`cancel` may drop.
         """
-        worker = self._worker
-        if worker is None or not worker.is_alive():
+        job: _Job[T] = _Job(units, cancellable)
+        if not job.group_count:
+            return
+        with self._state:
+            idle = self._worker is None
+            inline = idle and self.paced_duration_s(job.group_count) <= self._inline_budget_s
+            if not inline:
+                self._queue.append(job)
+                if self._worker is None:
+                    self._worker = threading.Thread(
+                        target=self._drain,
+                        name="alpha-osk-key-injector",
+                        daemon=True,
+                    )
+                    self._worker.start()
+        if inline:
+            with self._delivering:
+                self._deliver(job, lead_gap=False)
+
+    def cancel(self) -> None:
+        """Drop every cancellable burst, queued or running.
+
+        The running one stops at its next unit boundary, so a shift wrap
+        or a surrogate pair is finished first.  Bursts that are not
+        cancellable stay queued and are delivered.
+        """
+        with self._state:
+            self._queue = deque(job for job in self._queue if not job.cancellable)
+            if self._current is not None and self._current.cancellable:
+                self._current.cancelled = True
+
+    def shutdown(self, timeout: float) -> bool:
+        """Stop delivering: drop the queue, finish the running unit, join the worker.
+
+        Returns False if the worker was still alive when ``timeout``
+        elapsed.  Afterwards the injector is idle, so a modifier release
+        the caller sends next goes out inline.
+        """
+        with self._state:
+            self._queue.clear()
+            if self._current is not None:
+                self._current.cancelled = True
+            worker = self._worker
+        if worker is None:
             return True
         worker.join(timeout)
         return not worker.is_alive()
 
-    def cancel(self) -> None:
-        """Abandon the rest of a background burst.
-
-        Takes effect at the next point where no key the burst pressed is
-        still down, so a Shift wrap or a surrogate pair is finished before
-        the burst stops.  A no-op when nothing is running in the
-        background: an inline burst has already finished by the time its
-        caller could ask, and the flag must not leak into the next burst.
-        """
+    def settle(self, timeout: float) -> bool:
+        """Wait for the worker to drain (tests and shutdown only)."""
         with self._state:
-            if self._worker is not None and self._worker.is_alive():
-                self._cancel.set()
-
-    def inject(self, events: Sequence[T], *, atomic: bool = False) -> None:
-        """Deliver ``events`` in order, atomically or paced.
-
-        A paced burst that fits ``inline_budget_s`` is delivered before
-        this returns; a longer one is handed to a worker thread and this
-        returns at once.  Either way a burst still running in the
-        background is waited for first, so bursts never overlap or
-        reorder.
-        """
-        if not events:
-            return
-        events = list(events)
-        if not self.settle(timeout=60.0):
-            self._log.warning("A background key burst did not finish; sending the next one anyway")
-
-        if atomic or self.paced_duration_s(len(events)) <= self._inline_budget_s:
-            with self._delivering:
-                if atomic:
-                    sent, error = self._send(events)
-                    self._report(sent, error, len(events))
-                else:
-                    self._deliver_paced(events, cancel=None)
-            return
-
-        with self._state:
-            self._cancel.clear()
-            worker = threading.Thread(
-                target=self._deliver_in_background,
-                args=(events,),
-                name="alpha-osk-key-injector",
-                daemon=True,
-            )
-            self._worker = worker
-            worker.start()
+            worker = self._worker
+        if worker is None:
+            return True
+        worker.join(timeout)
+        return not worker.is_alive()
 
     # ------------------------------------------------------------------ #
     #  Delivery
     # ------------------------------------------------------------------ #
 
-    def _deliver_in_background(self, events: List[T]) -> None:
+    def _drain(self) -> None:
         with self._delivering:
-            try:
-                self._deliver_paced(events, cancel=self._cancel)
-            except Exception:
-                # A worker's exception would otherwise vanish into the
-                # thread's default hook; the UI thread carries on either way.
-                self._log.warning("Background key burst failed", exc_info=True)
+            first = True
+            while True:
+                with self._state:
+                    if not self._queue:
+                        self._worker = None
+                        return
+                    job = self._queue.popleft()
+                    self._current = job
+                try:
+                    self._deliver(job, lead_gap=not first)
+                except Exception:
+                    # Would otherwise vanish into the thread's default
+                    # hook; the UI thread carries on either way.
+                    self._log.warning("Background key burst failed", exc_info=True)
+                finally:
+                    with self._state:
+                        self._current = None
+                first = False
 
-    def _deliver_paced(self, events: List[T], *, cancel: Optional[threading.Event]) -> None:
+    def _deliver(self, job: _Job[T], *, lead_gap: bool) -> None:
         total_sent = 0
+        expected = 0
         last_error = 0
-        down: Set[Hashable] = set()
-        delivered = 0
-        for i, event in enumerate(events):
-            if i:
-                if cancel is not None and cancel.is_set() and not down:
-                    self._log.debug("Key burst cancelled after %d/%d events", i, len(events))
-                    break
-                self._sleep(self._gap_s)
-            sent, error = self._send([event])
-            total_sent += sent
-            if error:
-                last_error = error
-            delivered += 1
-            state = self._key_state(event)
-            if state is not None:
-                key, is_down = state
-                if is_down:
-                    down.add(key)
-                else:
-                    down.discard(key)
-        self._report(total_sent, last_error, delivered)
-
-    def _report(self, sent: int, error: int, expected: int) -> None:
-        if sent != expected:
+        groups_sent = 0
+        for unit in job.units:
+            if job.cancelled:
+                self._log.debug(
+                    "Key burst cancelled after %d/%d groups", groups_sent, job.group_count
+                )
+                break
+            for group in unit:
+                if groups_sent or lead_gap:
+                    self._sleep(self._gap_s)
+                sent, error = self._send(group)
+                total_sent += sent
+                expected += len(group)
+                if error:
+                    last_error = error
+                groups_sent += 1
+        if total_sent != expected:
             self._log.warning(
                 "SendInput injected %d/%d events (error=%d). "
                 "This may indicate insufficient privileges: consider "
                 "UIAccess or running as admin.",
-                sent,
+                total_sent,
                 expected,
-                error,
+                last_error,
             )

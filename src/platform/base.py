@@ -216,6 +216,16 @@ class KeySynthesizerBase(ABC):
         nothing to cancel, so the default is a no-op.
         """
 
+    def shutdown(self) -> None:
+        """Stop delivering before the process exits.
+
+        The bridge calls this first thing in its own shutdown, before it
+        releases the sticky modifiers: a backend with a worker thread
+        drops what is queued, lets the unit in flight release its keys,
+        and joins the worker, so quitting mid-insert leaves no key (and
+        no shift wrap) held at the OS.  The default is a no-op.
+        """
+
     def replace_text(self, backspace_count: int, text: str) -> None:
         """
         Atomically erase *backspace_count* characters then type *text*.

@@ -85,7 +85,7 @@ from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 from . import powershell_path
 from .base import KeySynthesizerBase
-from .serial_injector import KeyState, SerialInjector
+from .serial_injector import SerialInjector
 
 _logger = logging.getLogger("WindowsKeySynthesizer")
 
@@ -113,10 +113,9 @@ INTER_EVENT_DELAY_S = 0.003
 # seconds.  33 events, a 16-letter word and its space, fit the budget.
 INLINE_INJECT_BUDGET_S = 0.1
 
-# How long a public send waits for a background burst before going ahead.
-# Generous because the burst is the user's own text; ``SerialInjector``
-# still keeps the two from interleaving if the wait is exceeded.
-SETTLE_TIMEOUT_S = 30.0
+# How long ``shutdown`` waits for the injector's worker to finish the unit
+# in flight (a character, a gesture: a few groups) and exit.
+SHUTDOWN_TIMEOUT_S = 2.0
 
 # KEYBDINPUT.dwFlags
 KEYEVENTF_EXTENDEDKEY = 0x0001
@@ -361,18 +360,19 @@ _EXTENDED_KEYS = {
 _NEVER_HELD = frozenset({"win", "super"})
 
 
-def _key_state(event: INPUT) -> KeyState:
-    """``(key identity, is_down)`` of a keyboard INPUT, for the injector.
+# One burst for the injector: units (a character, a gesture) of groups (one
+# ``SendInput`` call each).  See serial_injector.py.
+_Unit = List[List[INPUT]]
 
-    A cancelled background burst stops only when nothing it pressed is
-    still down, so the identity has to match a key-up to its key-down:
-    the VK for a VK event, the scancode for a scancode-mode or UNICODE one
-    (both carry ``wVk == 0``), and the pair distinguishes the two.
-    """
-    if event.type != INPUT_KEYBOARD:
-        return None
-    ki = event._input.ki
-    return (ki.wVk, ki.wScan), not (ki.dwFlags & KEYEVENTF_KEYUP)
+
+def _atomic(events: Sequence[INPUT]) -> _Unit:
+    """One unit of one group: the whole gesture in a single ``SendInput`` call."""
+    return [list(events)]
+
+
+def _paced(events: Sequence[INPUT]) -> _Unit:
+    """One unit, one group per event: paced key-down, gap, key-up."""
+    return [[event] for event in events]
 
 
 # ====================================================================== #
@@ -514,7 +514,6 @@ class WindowsKeySynthesizer(KeySynthesizerBase):
                        The default 0.0 keeps the original single batch
                        (fastest, correct for normal apps).
         """
-        self._settle()
         modifiers = list(modifiers or [])
 
         # Resolve the action key.  For single-char keys not in the
@@ -562,7 +561,11 @@ class WindowsKeySynthesizer(KeySynthesizerBase):
                 if mod_vk is not None:
                     down.append(self._make_vk_scancode_event(mod_vk, key_down=True))
             down.append(self._make_vk_scancode_event(vk, key_down=True))
-            self._inject(down, atomic=True)
+            # Two atomic bursts around a real sleep.  Exact only while the
+            # injector is idle (the normal case: a game is in front, not a
+            # dictation insert); queued behind a long insert the two land
+            # one pacing gap apart instead, which is latency, not loss.
+            self._inject([_atomic(down)])
 
             time.sleep(hold_seconds)
 
@@ -571,7 +574,7 @@ class WindowsKeySynthesizer(KeySynthesizerBase):
                 mod_vk = _KEY_MAP.get(mod)
                 if mod_vk is not None:
                     up.append(self._make_vk_scancode_event(mod_vk, key_down=False))
-            self._inject(up, atomic=True)
+            self._inject([_atomic(up)])
             self._log_send(
                 f"key={key_name} (held {hold_seconds * 1000:.0f}ms)"
                 + (f" mods={modifiers}" if modifiers else "")
@@ -604,7 +607,7 @@ class WindowsKeySynthesizer(KeySynthesizerBase):
 
         # A chord is one gesture: no gap a click could land in.  A bare key
         # is paced like text, so its key-up survives a streaming client.
-        self._inject(events, atomic=bool(wrap_mods))
+        self._inject([_atomic(events) if wrap_mods else _paced(events)])
         self._log_send(f"key={key_name}" + (f" mods={modifiers}" if modifiers else ""))
 
     def send_text(self, text: str) -> None:
@@ -641,18 +644,31 @@ class WindowsKeySynthesizer(KeySynthesizerBase):
         """
         if not text:
             return
-        self._settle()
+        self._inject(self._char_units(text), cancellable=True)
+        self._log_send(f"text='{text}'")
 
-        events: List[INPUT] = []
+    def _char_units(self, text: str) -> List[_Unit]:
+        """One injector unit per character of ``text``.
+
+        A plain scancode character is paced (key-down, gap, key-up).  A
+        shift-wrapped one (Shift down, key, key up, Shift up) is one
+        atomic group, so Shift is never down across a gap a click could
+        land in.  A UNICODE character is paced per event; its surrogate
+        pair, when it has one, is still one unit, so a cancel cannot
+        split it.
+        """
+        units: List[_Unit] = []
         for char in text:
             scancode_events = self._make_char_scancode_events(char)
-            if scancode_events is not None:
-                events.extend(scancode_events)
+            if scancode_events is None:
+                units.append(_paced(self._make_unicode_events(char)))
+            elif len(scancode_events) > 2:
+                # _make_char_scancode_events returns two events for a bare
+                # key and four when it wrapped the key in Shift.
+                units.append(_atomic(scancode_events))
             else:
-                events.extend(self._make_unicode_events(char))
-
-        self._inject(events)
-        self._log_send(f"text='{text}'")
+                units.append(_paced(scancode_events))
+        return units
 
     def replace_text(self, backspace_count: int, text: str) -> None:
         """
@@ -682,30 +698,25 @@ class WindowsKeySynthesizer(KeySynthesizerBase):
         """
 
         # The typed-replacement portion uses the same scancode-first
-        # dispatch as send_text so prediction-pill insertion in
-        # Blender / VirtualBox / DirectInput apps produces real
-        # WM_KEYDOWN events. See send_text and _resolve_char_scancode
-        # for the rationale.
-        def _typed_events_for(s: str) -> List[INPUT]:
-            out: List[INPUT] = []
-            for char in s:
-                scancode_events = self._make_char_scancode_events(char)
-                if scancode_events is not None:
-                    out.extend(scancode_events)
-                else:
-                    out.extend(self._make_unicode_events(char))
-            return out
-
-        self._settle()
+        # dispatch as send_text (``_char_units``) so prediction-pill
+        # insertion in Blender / VirtualBox / DirectInput apps produces
+        # real WM_KEYDOWN events. See send_text and _resolve_char_scancode
+        # for the rationale.  Selection and replacement are one burst, so
+        # nothing else can be delivered between them.
+        units: List[_Unit] = []
 
         if self._foreground_is_terminal():
-            events: List[INPUT] = []
             for _ in range(backspace_count):
-                events.append(self._make_key_event(VK_BACK, key_down=True))
-                events.append(self._make_key_event(VK_BACK, key_down=False))
-            events.extend(_typed_events_for(text))
-            if events:
-                self._inject(events)
+                units.append(
+                    _paced(
+                        [
+                            self._make_key_event(VK_BACK, key_down=True),
+                            self._make_key_event(VK_BACK, key_down=False),
+                        ]
+                    )
+                )
+            units.extend(self._char_units(text))
+            self._inject(units, cancellable=True)
             self._log_send(f"replace (terminal) backspace={backspace_count} text='{text}'")
             return
 
@@ -726,10 +737,11 @@ class WindowsKeySynthesizer(KeySynthesizerBase):
             if not shift_already_held:
                 selection.append(self._make_key_event(VK_SHIFT, key_down=False))
             # One call, so Shift is never held across a gap (see docstring).
-            self._inject(selection, atomic=True)
+            units.append(_atomic(selection))
 
         # Typing the replacement overwrites the selection
-        self._inject(_typed_events_for(text))
+        units.extend(self._char_units(text))
+        self._inject(units, cancellable=True)
         self._log_send(f"replace select={backspace_count} text='{text}'")
 
     # Window classes where Shift+Left moves the cursor without
@@ -772,7 +784,6 @@ class WindowsKeySynthesizer(KeySynthesizerBase):
         """
         if not keys:
             return
-        self._settle()
 
         events: List[INPUT] = []
 
@@ -788,7 +799,7 @@ class WindowsKeySynthesizer(KeySynthesizerBase):
             if vk is not None:
                 events.append(self._make_key_event(vk, key_down=False))
 
-        self._inject(events, atomic=True)
+        self._inject([_atomic(events)])
         self._log_send(f"combo={keys}")
 
     # ------------------------------------------------------------------ #
@@ -1074,12 +1085,7 @@ class WindowsKeySynthesizer(KeySynthesizerBase):
         # shift for this char, we'd produce the wrong character.
         # We can't release the user's physical shift, so bail to
         # UNICODE which bypasses shift state entirely.
-        try:
-            shift_held = bool(
-                self._user32.GetAsyncKeyState(VK_SHIFT) & 0x8000,
-            )
-        except (OSError, ValueError):
-            shift_held = False
+        shift_held = self._os_key_down(VK_SHIFT)
         if shift_held and not needs_shift:
             return None
 
@@ -1104,12 +1110,7 @@ class WindowsKeySynthesizer(KeySynthesizerBase):
             return None
         vk, scancode, needs_shift = resolved
 
-        try:
-            shift_already_held = bool(
-                self._user32.GetAsyncKeyState(VK_SHIFT) & 0x8000,
-            )
-        except (OSError, ValueError):
-            shift_already_held = False
+        shift_already_held = self._os_key_down(VK_SHIFT)
 
         events: List[INPUT] = []
         wrap_with_shift = needs_shift and not shift_already_held
@@ -1230,10 +1231,44 @@ class WindowsKeySynthesizer(KeySynthesizerBase):
         vk = _KEY_MAP.get(mod)
         if vk is None:
             return False
+        return self._os_key_down(vk)
+
+    def _os_key_down(self, vk: int) -> bool:
+        """Is ``vk`` down at the OS, once everything already queued has landed?
+
+        ``GetAsyncKeyState`` answers for *now*.  While the injector is
+        busy, a hold or release we queued behind a long insert has not
+        reached the OS yet, and an event built against the current state
+        would be wrong by the time it is delivered: a letter typed under a
+        re-held Shift would carry its own Shift wrap, whose key-up drops
+        the lock.  ``_note_pending_modifier`` records the state each
+        queued hold or release will leave behind, and that prediction wins
+        while the queue is live.  Once the injector is idle the OS is
+        authoritative again and the predictions are forgotten.
+        """
+        pending = self._pending_modifiers
+        if self._injector.busy:
+            predicted = pending.get(vk)
+            if predicted is not None:
+                return predicted
+        elif pending:
+            pending.clear()
         try:
             return bool(self._user32.GetAsyncKeyState(vk) & 0x8000)
         except (OSError, ValueError):
             return False
+
+    def _note_pending_modifier(self, vk: int, *, down: bool) -> None:
+        """Record what a queued hold or release will leave ``vk`` as (see ``_os_key_down``)."""
+        self._pending_modifiers[vk] = down
+
+    @property
+    def _pending_modifiers(self) -> Dict[int, bool]:
+        if self._pending_modifier_state is None:
+            self._pending_modifier_state = {}
+        return self._pending_modifier_state
+
+    _pending_modifier_state: Optional[Dict[int, bool]] = None
 
     def hold_modifier(self, key_name: str) -> None:
         """Send a modifier key-down so it stays held at the OS level.
@@ -1253,8 +1288,8 @@ class WindowsKeySynthesizer(KeySynthesizerBase):
             return
         vk = _KEY_MAP.get(key_name)
         if vk is not None:
-            self._settle()
-            self._inject([self._make_vk_scancode_event(vk, key_down=True)])
+            self._note_pending_modifier(vk, down=True)
+            self._inject([_atomic([self._make_vk_scancode_event(vk, key_down=True)])])
             self._log_send(f"hold modifier {key_name} (vk=0x{vk:02X})")
 
     def release_modifier(self, key_name: str) -> None:
@@ -1265,48 +1300,50 @@ class WindowsKeySynthesizer(KeySynthesizerBase):
             return
         vk = _KEY_MAP.get(key_name)
         if vk is not None:
-            self._settle()
-            self._inject([self._make_vk_scancode_event(vk, key_down=False)])
+            self._note_pending_modifier(vk, down=False)
+            self._inject([_atomic([self._make_vk_scancode_event(vk, key_down=False)])])
             self._log_send(f"release modifier {key_name} (vk=0x{vk:02X})")
 
-    def _inject(self, events: List[INPUT], *, atomic: bool = False) -> None:
+    def _inject(self, units: Sequence[_Unit], *, cancellable: bool = False) -> None:
         """
-        Hand a burst of events to the serial injector.
+        Hand a burst to the serial injector (``serial_injector.py``).
 
-        ``atomic`` delivers the whole burst in one ``SendInput`` call, as
-        every burst was before 1.9.9.  It is for a chord and for the
-        Shift+Left selection of ``replace_text``: a gesture with a modifier
+        ``units`` is a list of units (a character, a gesture) of groups,
+        each group one ``SendInput`` call.  ``_atomic(events)`` is a
+        gesture in one call, as every burst was before 1.9.9: a chord, the
+        Shift+Left selection of ``replace_text``, a shift-wrapped
+        character, a modifier hold or release.  A gesture with a modifier
         down must have no gap a click of the user's could land in.
+        ``_paced(events)`` is one call per event with ``INTER_EVENT_DELAY_S``
+        between consecutive groups: a zero-gap burst of typed text makes
+        streaming clients drop key-ups (see the constant).
 
-        Otherwise the burst is *paced*: one ``SendInput`` call per event
-        with ``INTER_EVENT_DELAY_S`` between consecutive events (never
-        before the first or after the last; a single event never sleeps).
-        A zero-gap burst of typed text makes streaming clients drop
-        key-ups (see the constant).  A burst within
-        ``INLINE_INJECT_BUDGET_S`` is delivered on the caller's thread, a
-        longer one on the injector's worker thread, and every public send
-        calls ``_settle`` first so its ``GetAsyncKeyState`` reads and its
-        place in the order are both current.
+        A burst within ``INLINE_INJECT_BUDGET_S`` handed to an idle
+        injector is delivered before this returns; anything else queues
+        behind what is already in flight and is delivered in order by the
+        injector's worker, so no public send ever waits on the Qt thread.
+        Event builders read the OS modifier state through ``_os_key_down``,
+        which accounts for a queued hold or release.
 
-        Args:
-            events: List of INPUT structures to inject.
+        ``cancellable`` marks typed text, which ``cancel_pending`` drops
+        when the user clicks elsewhere or switches windows mid-insert; a
+        hold, release, chord or key stays queued and is delivered.
 
-        Raises:
-            Logs a warning if SendInput returns fewer events than expected
-            (indicates a permissions issue or input blocked).
+        Logs a warning if SendInput injected fewer events than expected
+        (a permissions issue or blocked input).
         """
-        if not events:
+        if not units:
             return
-        self._injector.inject(events, atomic=atomic)
-
-    def _settle(self) -> None:
-        """Wait for a background burst so the next send builds on current state."""
-        if not self._injector.settle(SETTLE_TIMEOUT_S):
-            _logger.warning("A background key burst did not finish in %.0fs", SETTLE_TIMEOUT_S)
+        self._injector.inject(units, cancellable=cancellable)
 
     def cancel_pending(self) -> None:
         """Abandon the rest of a long insert still typing in the background."""
         self._injector.cancel()
+
+    def shutdown(self) -> None:
+        """Drop what is queued, let the unit in flight release its keys, join the worker."""
+        if not self._injector.shutdown(SHUTDOWN_TIMEOUT_S):
+            _logger.warning("The key injector did not stop within %.0fs", SHUTDOWN_TIMEOUT_S)
 
     @property
     def busy(self) -> bool:
@@ -1338,7 +1375,6 @@ class WindowsKeySynthesizer(KeySynthesizerBase):
             self._send_array,
             gap_s=INTER_EVENT_DELAY_S,
             inline_budget_s=INLINE_INJECT_BUDGET_S,
-            key_state=_key_state,
             sleep=sleep,
             logger=_logger,
         )

@@ -5363,6 +5363,12 @@ class KeyboardBridge(QObject):
                 except RuntimeError:
                     pass  # already deleted by Qt; harmless
 
+        # Stop a long insert still typing in the background first: its
+        # worker would otherwise be killed between a key-down and its
+        # key-up (a daemon thread gets no cleanup at exit), and the
+        # releases below must not queue behind it.
+        self._synth.shutdown()
+
         # Release any held modifier — sticky or right-click-locked — so
         # quitting with one "active" doesn't pin it at the OS level.
         if self._shift_active:
@@ -5726,7 +5732,11 @@ class KeyboardBridge(QObject):
             return  # detection unavailable on this platform
         window_switched = hwnd != self._last_foreground_hwnd and self._last_foreground_hwnd != 0
         if window_switched:
-            # Foreground window changed — user switched apps
+            # Foreground window changed — user switched apps.  Whatever of
+            # a long insert is still to be typed would land in the new
+            # window (Alt+Tab, a switch-access command, an app raising
+            # itself), so it stops here with the context that mirrored it.
+            self._synth.cancel_pending()
             self._reset_typing_context()
             _logger.debug("Foreground window changed — predictions cleared")
         # Element-level focus: catches the caret moving between two controls

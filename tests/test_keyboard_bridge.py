@@ -116,6 +116,27 @@ class TestForegroundWindow:
         assert bridge._predictions == []
         assert bridge._last_foreground_hwnd == 200
 
+    def test_a_window_switch_stops_an_insert_still_typing(
+        self, bridge: KeyboardBridge, monkeypatch
+    ):
+        """Alt+Tab, a switch-access command or an app raising itself produce
+        no outside click, but the rest of a long insert would land in the
+        new window all the same (review of cc0f8d1)."""
+        bridge._last_foreground_hwnd = 100
+        bridge._synth.busy = True
+        monkeypatch.setattr(bridge, "_get_foreground_window_id", lambda: 200)
+        monkeypatch.setattr("src.keyboard_bridge.focused_element_token", lambda: None)
+        bridge._check_foreground_window()
+        bridge._synth.cancel_pending.assert_called_once_with()
+
+    def test_the_same_window_polled_again_stops_nothing(self, bridge: KeyboardBridge, monkeypatch):
+        bridge._last_foreground_hwnd = 100
+        bridge._synth.busy = True
+        monkeypatch.setattr(bridge, "_get_foreground_window_id", lambda: 100)
+        monkeypatch.setattr("src.keyboard_bridge.focused_element_token", lambda: None)
+        bridge._check_foreground_window()
+        bridge._synth.cancel_pending.assert_not_called()
+
     def test_check_foreground_skips_first_poll(self, bridge: KeyboardBridge, monkeypatch):
         """First poll after startup only seeds _last_foreground_hwnd — no wipe."""
         bridge._last_foreground_hwnd = 0
@@ -526,6 +547,22 @@ class TestModifierLock:
         bridge.shutdown()
         bridge._synth.release_modifier.assert_any_call("ctrl")
         assert not bridge._ctrl_locked
+
+    def test_shutdown_stops_the_synthesizer_before_releasing_anything(self, bridge: KeyboardBridge):
+        """A long insert still typing on a worker thread would be killed
+        mid-character at exit, and the releases must not queue behind it
+        (review of cc0f8d1).  The synthesizer is stopped first, whether or
+        not a modifier is held."""
+        bridge.lockModifier("shift")
+        bridge._synth.reset_mock()
+        bridge.shutdown()
+        names = [name for name, _, _ in bridge._synth.mock_calls]
+        assert names.index("shutdown") < names.index("release_modifier")
+
+    def test_shutdown_stops_the_synthesizer_even_with_nothing_held(self, bridge: KeyboardBridge):
+        bridge._synth.reset_mock()
+        bridge.shutdown()
+        bridge._synth.shutdown.assert_called_once_with()
 
 
 class TestModifierReleaseIsOneMethod:
