@@ -191,6 +191,31 @@ class KeySynthesizerBase(ABC):
         stray OS-level modifier state is possible on their platform.
         """
 
+    # ------------------------------------------------------------------ #
+    #  Long inserts still typing in the background
+    # ------------------------------------------------------------------ #
+
+    @property
+    def busy(self) -> bool:
+        """True while a long insert is still being typed after its call returned.
+
+        Only a backend that paces long text on a worker thread (Windows)
+        is ever busy; the bridge reads this so its caret polls know a
+        caret still on the move is our own typing.  The default is False:
+        every other backend finishes before returning.
+        """
+        return False
+
+    def cancel_pending(self) -> None:
+        """Abandon whatever of a long insert has not been typed yet.
+
+        The bridge calls this when the user clicks somewhere else while a
+        dictated passage or a programmed text action is still going in:
+        the rest would land at the new caret, in text it was never meant
+        for.  A backend that types everything before returning has
+        nothing to cancel, so the default is a no-op.
+        """
+
     def replace_text(self, backspace_count: int, text: str) -> None:
         """
         Atomically erase *backspace_count* characters then type *text*.

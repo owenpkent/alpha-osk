@@ -101,6 +101,17 @@ class FakeOSKeyboard(KeySynthesizerBase):
         # True return raises *before* the call has any effect, like a
         # SendInput that injected nothing.
         self.fail_on: Optional[Callable[[str, int], bool]] = None
+        # How often the bridge asked a background insert to stop (see ``busy``).
+        self.cancelled = 0
+
+    # The background-insert surface (``KeySynthesizerBase.busy`` is a
+    # read-only property there).  The fake types everything at once, so a
+    # test sets ``busy`` by hand to stand for a long insert still going in,
+    # and reads ``cancelled`` to see the bridge ask for it to stop.
+    busy: bool = False  # type: ignore[assignment]
+
+    def cancel_pending(self) -> None:
+        self.cancelled += 1
 
     # --- failure injection ---
 

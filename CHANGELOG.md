@@ -4,6 +4,9 @@ All notable changes to Alpha-OSK are documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+- **A letter no longer stays held on a streamed desktop after a suggestion.** Over Moonlight (and other remote-desktop clients) the word a suggestion typed arrived as one burst, and the far side sometimes missed a key-up, holding that letter until the next key. Typed text now goes out one key event at a time with a short gap between. A long insert (a dictated passage, a programmed text action) is typed in the background so the keyboard stays responsive, and clicking somewhere else while it types stops it there. Keyboard shortcuts and the selection a suggestion makes before overwriting a word are unchanged.
+
 ## [1.9.8] (2026-11-01)
 
 ### Fixed

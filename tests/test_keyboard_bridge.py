@@ -36,6 +36,7 @@ def bridge(tmp_path: Path) -> KeyboardBridge:
     """
     with patch("src.keyboard_bridge.create_key_synthesizer") as mock_factory:
         mock_synth = MagicMock()
+        mock_synth.busy = False  # a bare mock's busy is truthy
         mock_synth.is_available.return_value = True
         mock_synth.backend_name.return_value = "MockSynth"
         mock_factory.return_value = mock_synth
@@ -2561,6 +2562,7 @@ class TestPasswordDetectionAvailableProperty:
         monkeypatch.setattr("src.keyboard_bridge.detection_available", lambda: available)
         with patch("src.keyboard_bridge.create_key_synthesizer") as mock_factory:
             mock_synth = MagicMock()
+            mock_synth.busy = False  # a bare mock's busy is truthy
             mock_synth.is_available.return_value = True
             mock_synth.backend_name.return_value = "MockSynth"
             mock_factory.return_value = mock_synth
@@ -3699,6 +3701,45 @@ class TestOutsideClickClearsContext:
         self._click(bridge, outside=False)
         assert bridge._context_buffer == "dear bob "
 
+    def test_a_click_outside_while_an_insert_is_still_typing_cancels_the_rest(
+        self, bridge: KeyboardBridge
+    ):
+        """A dictated passage types in the background on Windows.  A click
+        elsewhere while it is going in would send the rest to the new
+        caret, so the click stops it at once, caret moved or not, and the
+        context that mirrored the passage goes with it (review of PR #244)."""
+        bridge._synth.busy = True
+        bridge._context_buffer = "dear bob "
+        with patch("src.keyboard_bridge.caret_position_token", return_value="A,10,20"):
+            self._click(bridge, outside=True)
+        bridge._synth.cancel_pending.assert_called_once_with()
+        assert bridge._context_buffer == ""
+        assert bridge._click_settle is None
+
+    def test_a_click_outside_while_nothing_is_typing_cancels_nothing(self, bridge: KeyboardBridge):
+        """The inverse: with no insert in flight the click takes the usual
+        settle path (the caret has not moved yet, so nothing is decided),
+        and there is nothing to cancel."""
+        bridge._synth.busy = False
+        bridge._context_buffer = "dear bob "
+        with patch("src.keyboard_bridge.caret_position_token", return_value="A,10,20"):
+            self._click(bridge, outside=False)  # seeds the caret baseline
+            self._click(bridge, outside=True)
+        bridge._synth.cancel_pending.assert_not_called()
+        assert bridge._context_buffer == "dear bob "
+        assert bridge._click_settle is not None
+
+    def test_a_click_on_the_keyboard_while_an_insert_is_typing_changes_nothing(
+        self, bridge: KeyboardBridge
+    ):
+        """Keys tapped during a long insert queue behind it; they must not
+        stop it."""
+        bridge._synth.busy = True
+        bridge._context_buffer = "dear bob "
+        self._click(bridge, outside=False)
+        bridge._synth.cancel_pending.assert_not_called()
+        assert bridge._context_buffer == "dear bob "
+
     def test_a_mid_word_click_clears_immediately(self, bridge: KeyboardBridge):
         """The reversal, and the case the old guard withheld.
 
@@ -4599,6 +4640,22 @@ class TestCaretMoveClearsContext:
         self._poll(bridge, "A,10,20")
         self._poll(bridge, "A,10,20")
         assert bridge._context_buffer == "hello world "
+
+    def test_a_long_insert_still_typing_moves_the_caret_without_a_reset(
+        self, bridge: KeyboardBridge
+    ):
+        """On Windows a dictated passage types in the background over several
+        polls, long after the one keystroke flag it set was consumed; while
+        the synthesizer is busy, every caret move is ours."""
+        bridge._context_buffer = "hello world "
+        self._poll(bridge, "A,10,20")
+        bridge._synth.busy = True
+        self._poll(bridge, "A,400,90")
+        self._poll(bridge, "A,800,90")
+        assert bridge._context_buffer == "hello world "
+        bridge._synth.busy = False
+        self._poll(bridge, "A,900,90")  # the user, once the insert is done
+        assert bridge._context_buffer == ""
 
     def test_typing_does_not_trigger_it(self, bridge: KeyboardBridge):
         """Our own keystrokes move the caret every time."""

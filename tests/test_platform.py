@@ -340,7 +340,7 @@ class TestWindowsWinNeverHeld:
 
         synth = win_mod.WindowsKeySynthesizer.__new__(win_mod.WindowsKeySynthesizer)
         captured: list = []
-        synth._inject = lambda events: captured.append(list(events))
+        synth._inject = lambda events, **kw: captured.append(list(events))
         synth._make_vk_scancode_event = lambda vk, key_down: ("vk", vk, key_down)
         synth._make_unicode_events = lambda c: [("uni", c)]
         synth._log_send = lambda msg: None
@@ -655,7 +655,7 @@ class TestWindowsReplaceText:
 
         synth = win_mod.WindowsKeySynthesizer.__new__(win_mod.WindowsKeySynthesizer)
         captured: list = []
-        synth._inject = lambda events: captured.append(list(events))
+        synth._inject = lambda events, **kw: captured.append(list(events))
         synth._make_key_event = lambda vk, key_down: ("vk", vk, key_down)
         synth._make_unicode_events = lambda c: [("uni", c)]
         # Force the per-char dispatch in replace_text to take the
@@ -723,6 +723,8 @@ class TestWindowsReplaceText:
 
         synth, captured = self._make_synth("Chrome_WidgetWin_1")
         synth.replace_text(2, "hi")
+        # Two bursts: the selection (sent atomically, see
+        # TestWindowsInjectPacing) and then the paced replacement.
         assert captured == [
             [
                 ("vk", VK_SHIFT, True),
@@ -731,9 +733,11 @@ class TestWindowsReplaceText:
                 ("vk", VK_LEFT, True),
                 ("vk", VK_LEFT, False),
                 ("vk", VK_SHIFT, False),
+            ],
+            [
                 ("uni", "h"),
                 ("uni", "i"),
-            ]
+            ],
         ]
 
     def test_held_shift_not_wrapped_in_selection(self):
@@ -754,9 +758,11 @@ class TestWindowsReplaceText:
                 ("vk", VK_LEFT, False),
                 ("vk", VK_LEFT, True),
                 ("vk", VK_LEFT, False),
+            ],
+            [
                 ("uni", "h"),
                 ("uni", "i"),
-            ]
+            ],
         ]
         assert ("vk", VK_SHIFT, True) not in captured[0]
         assert ("vk", VK_SHIFT, False) not in captured[0]
@@ -798,7 +804,7 @@ class TestWindowsSendKeyPunctuationChord:
 
         synth = win_mod.WindowsKeySynthesizer.__new__(win_mod.WindowsKeySynthesizer)
         captured: list = []
-        synth._inject = lambda events: captured.append(list(events))
+        synth._inject = lambda events, **kw: captured.append(list(events))
         # send_key builds chord events via _make_vk_scancode_event (scancode
         # mode, for remote-desktop relay). Stub it to a tuple so these tests
         # stay focused on VK resolution / shift-prepend / unicode fallback;
@@ -983,7 +989,7 @@ class TestWindowsScancodeDispatch:
 
         synth = win_mod.WindowsKeySynthesizer.__new__(win_mod.WindowsKeySynthesizer)
         captured: list = []
-        synth._inject = lambda events: captured.append(list(events))
+        synth._inject = lambda events, **kw: captured.append(list(events))
 
         # Real _make_unicode_events would build INPUT structures; for
         # tests we substitute a marker so the assertion shape is
@@ -1260,7 +1266,7 @@ class TestWindowsChordScancodeMode:
 
         synth = self._make_synth({win_mod.VK_CONTROL: 0x1D})
         captured: list = []
-        synth._inject = lambda events: captured.append(list(events))
+        synth._inject = lambda events, **kw: captured.append(list(events))
         synth._log_send = lambda msg: None
         synth.hold_modifier("ctrl")
         assert len(captured) == 1 and len(captured[0]) == 1
@@ -1341,49 +1347,184 @@ class TestPowerShellIsNeverInvokedByBareName:
 
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows backend")
 class TestWindowsInjectPacing:
-    """_inject sends one SendInput call per event with a gap between."""
+    """Typed text is paced, one SendInput call per event; a chord and the
+    Shift+Left selection stay one call; a long text types in the background.
 
-    def _make(self, monkeypatch: pytest.MonkeyPatch):
+    The generic delivery rules (inline budget, cancel points, the one-at-a-
+    time guarantee) are covered on every runner by test_serial_injector.py;
+    this class pins how the Windows synthesizer uses them.
+    """
+
+    def _make(self, sleep=None):
+        """A synthesizer with a fake SendInput and a fake (or gated) sleep.
+
+        The log holds ``("send", n, [vk...])`` per SendInput call and
+        ``("sleep", s)`` per pacing gap, in order.
+        """
+        import threading
+
         from src.platform import windows as win_mod
 
         log: list = []
+        log_lock = threading.Lock()
         synth = win_mod.WindowsKeySynthesizer.__new__(win_mod.WindowsKeySynthesizer)
 
         def fake_send(n, arr, size):
-            log.append(("send", n, arr[0]._input.ki.wVk))
+            keys = [arr[i]._input.ki.wVk or arr[i]._input.ki.wScan for i in range(n)]
+            with log_lock:
+                log.append(("send", n, keys))
             return n
 
+        def fake_sleep(s):
+            with log_lock:
+                log.append(("sleep", s))
+            if sleep is not None:
+                sleep(s)
+
         synth._send_input = fake_send
-        monkeypatch.setattr(win_mod.time, "sleep", lambda s: log.append(("sleep", s)))
+        synth._injector = synth._build_injector(sleep=fake_sleep)
+        synth._log_send = lambda msg: None
+        # Real INPUT structures, but without user32: a VK event carries its
+        # VK, a typed character goes down the UNICODE path (wScan = code).
+        synth._make_vk_scancode_event = lambda vk, key_down: synth_event(win_mod, vk, key_down)
+        synth._make_key_event = lambda vk, key_down: synth_event(win_mod, vk, key_down)
+        synth._make_char_scancode_events = lambda c: None
+        synth._modifier_already_held = lambda mod: False
+        synth._foreground_is_terminal = lambda: False
         return win_mod, synth, log
 
-    def test_burst_is_ordered_with_gaps_and_no_trailing_sleep(self, monkeypatch):
-        win_mod, synth, log = self._make(monkeypatch)
+    def test_burst_is_ordered_with_gaps_and_no_trailing_sleep(self):
+        win_mod, synth, log = self._make()
         events = [synth_event(win_mod, vk) for vk in (1, 2, 3)]
         synth._inject(events)
         gap = win_mod.INTER_EVENT_DELAY_S
         assert gap == 0.003
         assert log == [
-            ("send", 1, 1),
+            ("send", 1, [1]),
             ("sleep", gap),
-            ("send", 1, 2),
+            ("send", 1, [2]),
             ("sleep", gap),
-            ("send", 1, 3),
+            ("send", 1, [3]),
         ]
 
-    def test_single_event_does_not_sleep(self, monkeypatch):
-        win_mod, synth, log = self._make(monkeypatch)
+    def test_single_event_does_not_sleep(self):
+        win_mod, synth, log = self._make()
         synth._inject([synth_event(win_mod, 7)])
-        assert log == [("send", 1, 7)]
+        assert log == [("send", 1, [7])]
 
-    def test_empty_does_nothing(self, monkeypatch):
-        win_mod, synth, log = self._make(monkeypatch)
+    def test_empty_does_nothing(self):
+        win_mod, synth, log = self._make()
         synth._inject([])
         assert log == []
 
+    def test_a_chord_is_one_send_input_call(self):
+        """Ctrl down, C, Ctrl up: no gap a click could land in as Ctrl+click."""
+        win_mod, synth, log = self._make()
+        synth.send_key("c", modifiers=["ctrl"])
+        assert log == [("send", 4, [win_mod.VK_CONTROL, ord("C"), ord("C"), win_mod.VK_CONTROL])]
 
-def synth_event(win_mod, vk: int):
+    def test_a_bare_key_is_paced(self):
+        win_mod, synth, log = self._make()
+        synth.send_key("Return")
+        assert [entry[0] for entry in log] == ["send", "sleep", "send"]
+
+    def test_replace_text_selects_in_one_call_and_shift_never_spans_a_gap(self):
+        """The P2 case from the review of PR #244: an outside click can only
+        land between SendInput calls, so Shift must not be down at any gap,
+        or the click becomes Shift+click and the replacement overwrites text
+        beyond the prefix."""
+        win_mod, synth, log = self._make()
+        synth.replace_text(5, "right ")
+
+        first = log[0]
+        assert first[0] == "send" and first[1] == 12  # Shift, 5 x (Left, Left), Shift
+        assert first[2][0] == win_mod.VK_SHIFT and first[2][-1] == win_mod.VK_SHIFT
+        assert first[2][1:-1] == [win_mod.VK_LEFT] * 10
+
+        typed = log[1:]
+        assert [n for kind, n, *_ in typed if kind == "send"] == [1] * 12  # 6 chars x down/up
+        assert sum(1 for entry in typed if entry[0] == "sleep") == 11
+
+        shift_down = False
+        for entry in log:
+            if entry[0] == "sleep":
+                assert not shift_down, "Shift was held across a pacing gap"
+            else:
+                for vk in entry[2]:
+                    if vk == win_mod.VK_SHIFT:
+                        shift_down = not shift_down
+
+    def test_replace_text_with_nothing_to_select_only_types(self):
+        win_mod, synth, log = self._make()
+        synth.replace_text(0, "ab")
+        assert [entry[1] for entry in log if entry[0] == "send"] == [1, 1, 1, 1]
+
+    def test_a_word_is_typed_before_send_text_returns(self):
+        """A suggestion pick stays synchronous: no background thread for a word."""
+        win_mod, synth, log = self._make()
+        synth.send_text("sixteen letters!")
+        assert not synth.busy
+        assert sum(1 for entry in log if entry[0] == "send") == 32
+
+    def test_a_long_text_returns_before_it_is_typed(self):
+        """The P1 case from the review of PR #244: a dictated passage used to
+        block the Qt thread for (N-1) x 3 ms; now the call returns while a
+        worker types it."""
+        import threading
+
+        gate = threading.Event()
+        win_mod, synth, log = self._make(sleep=lambda s: gate.wait(5))
+        text = "x" * 100  # 200 events, 0.6 s of gaps: over the inline budget
+
+        synth.send_text(text)
+        assert synth.busy
+        assert sum(1 for entry in log if entry[0] == "send") < 200
+        gate.set()
+        assert synth._injector.settle(5)
+        assert not synth.busy
+        assert sum(1 for entry in log if entry[0] == "send") == 200
+
+    def test_a_send_after_a_long_text_waits_its_turn(self):
+        """Ordering holds across the thread boundary: the next key is built
+        and sent only after the background text has finished."""
+        import threading
+
+        gate = threading.Event()
+        win_mod, synth, log = self._make(sleep=lambda s: gate.wait(5))
+        synth.send_text("x" * 100)
+        assert synth.busy
+        threading.Timer(0.05, gate.set).start()
+
+        synth.send_text("y")
+        assert not synth.busy
+        sent = [entry[2][0] for entry in log if entry[0] == "send"]
+        assert sent[:200] == [ord("x")] * 200
+        assert sent[200:] == [ord("y"), ord("y")]
+
+    def test_cancel_pending_stops_a_long_text_with_no_key_left_down(self):
+        import threading
+
+        gate = threading.Event()
+        win_mod, synth, log = self._make(sleep=lambda s: gate.wait(5))
+        synth.send_text("x" * 100)
+        synth.cancel_pending()
+        gate.set()
+        assert synth._injector.settle(5)
+
+        sent = [entry for entry in log if entry[0] == "send"]
+        assert 0 < len(sent) < 200
+        assert len(sent) % 2 == 0, "a key was left down"
+
+    def test_cancel_pending_when_idle_is_harmless(self):
+        win_mod, synth, log = self._make()
+        synth.cancel_pending()
+        synth.send_text("ab")
+        assert sum(1 for entry in log if entry[0] == "send") == 4
+
+
+def synth_event(win_mod, vk: int, key_down: bool = True):
     inp = win_mod.INPUT()
     inp.type = win_mod.INPUT_KEYBOARD
     inp._input.ki.wVk = vk
+    inp._input.ki.dwFlags = 0 if key_down else win_mod.KEYEVENTF_KEYUP
     return inp

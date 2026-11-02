@@ -1223,7 +1223,14 @@ class KeyboardBridge(QObject):
         self._last_own_keystroke_at = time.monotonic() if text else float("-inf")
 
     def _typed_within_focus_grace(self) -> bool:
-        """Did one of our own keystrokes land inside ``_FOCUS_CHURN_GRACE_S``?"""
+        """Did one of our own keystrokes land inside ``_FOCUS_CHURN_GRACE_S``?
+
+        A long insert the synthesizer is still typing in the background
+        (``busy``) counts as a keystroke in progress: its characters land
+        over several seconds, long after the call that recorded them.
+        """
+        if self._synth.busy:
+            return True
         return time.monotonic() - self._last_own_keystroke_at < _FOCUS_CHURN_GRACE_S
 
     def _send_key(
@@ -5826,7 +5833,9 @@ class KeyboardBridge(QObject):
             self._keystroke_since_poll = False
             return
 
-        typed_since_last_poll = self._keystroke_since_poll
+        # A long insert still typing in the background moves the caret
+        # across several polls after the one keystroke that recorded it.
+        typed_since_last_poll = self._keystroke_since_poll or self._synth.busy
         self._keystroke_since_poll = False
         previous = self._last_caret_token
         self._last_caret_token = token
@@ -5944,6 +5953,15 @@ class KeyboardBridge(QObject):
 
     def _begin_click_settle(self, caret_before: Optional[str], caret_now: Optional[str]) -> None:
         """Decide, or start waiting to decide, about a fresh outside click."""
+        if self._synth.busy:
+            # A long insert is still typing.  Whatever the click did to the
+            # caret, the rest of that text would now land wherever the
+            # click put it, and our own keystrokes would mask the move
+            # the settle below waits for.  Fail closed: stop the insert
+            # and drop the context that described it.
+            self._clear_click_settle()
+            self._reset_after_outside_click("while an insert was typing")
+            return
         if caret_before is None or caret_now is None:
             # No caret to reason about: fail closed, the pre-existing
             # behaviour and the one the browser case depends on.
@@ -5997,6 +6015,10 @@ class KeyboardBridge(QObject):
         self._click_settle = None
 
     def _reset_after_outside_click(self, why: str) -> None:
+        # Whatever of a long insert is still to be typed would land where
+        # the click put the caret, so it stops here; the context that
+        # mirrored it goes with it.
+        self._synth.cancel_pending()
         self._reset_typing_context(keep_snippet_offer=True)
         _logger.debug("Click outside the keyboard (%s): predictions cleared", why)
 
