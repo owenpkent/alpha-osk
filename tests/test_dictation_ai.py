@@ -975,6 +975,7 @@ class TestReprocess:
 def bridge(tmp_path: Path, qapp, claude) -> KeyboardBridge:
     with patch("src.keyboard_bridge.create_key_synthesizer") as mock_factory:
         mock_synth = MagicMock()
+        mock_synth.busy = False  # a bare mock's busy is truthy
         mock_synth.is_available.return_value = True
         mock_synth.backend_name.return_value = "MockSynth"
         mock_factory.return_value = mock_synth
