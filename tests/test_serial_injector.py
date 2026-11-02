@@ -148,6 +148,31 @@ class TestPacedAndAtomicGroups:
         assert h.calls == [["a+"], ["a-"], ["shift+", "r+", "r-", "shift-"], ["b+"], ["b-"]]
         assert sum(1 for entry in h.log if entry[0] == "sleep") == 4
 
+    def test_a_pause_inside_a_unit_replaces_the_gap_before_the_next_group(self):
+        """The game-compat hold: down batch, 50 ms, up batch, as one unit."""
+        h = Harness()
+        h.injector.inject([[["k+"], 0.05, ["k-"]]])
+        assert h.log == [("send", ["k+"]), ("sleep", 0.05), ("send", ["k-"])]
+
+    def test_a_pause_is_honoured_when_the_unit_is_delivered_by_the_worker(self):
+        """Queued behind a passage the hold used to shrink to one pacing gap
+        (review of dbd1c9c); the worker now sleeps the hold itself."""
+        h = Harness(gap_s=0.001, inline_budget_s=0.0).background()
+        h.injector.inject(tap("a"), cancellable=True)
+        h.wait_parked()
+        h.injector.inject([[["k+"], 0.05, ["k-"]]])
+        h.finish()
+        held = h.log.index(("send", ["k+"]))
+        assert h.log[held + 1] == ("sleep", 0.05)
+        assert h.log[held + 2] == ("send", ["k-"])
+
+    def test_a_pause_counts_toward_the_inline_budget(self):
+        h = Harness(gap_s=0.001, inline_budget_s=0.01)
+        h.injector.inject([[["k+"], 0.05, ["k-"]]])  # 50 ms hold: over a 10 ms budget
+        assert h.injector.busy or len(h.sent) == 2
+        assert h.injector.settle(5)
+        assert h.sent == ["k+", "k-"]
+
     def test_paced_duration_counts_the_gaps_between_groups(self):
         h = Harness(gap_s=0.01)
         assert h.injector.paced_duration_s(0) == 0
@@ -295,15 +320,28 @@ class TestCancel:
 
 
 class TestShutdown:
-    def test_shutdown_drops_the_queue_finishes_the_unit_and_joins(self):
+    def test_shutdown_drops_the_text_finishes_the_unit_and_joins(self):
         h = Harness(gap_s=0.001, inline_budget_s=0.0).background()
-        h.injector.inject(paced("s+", "a+", "a-", "s-") + tap("b"))
+        h.injector.inject(paced("s+", "a+", "a-", "s-") + tap("b"), cancellable=True)
         h.wait_parked()
-        h.injector.inject(atomic("shift+"))  # queued, not cancellable, dropped anyway
         threading.Timer(0.05, h.gate.set).start()  # type: ignore[union-attr]
         assert h.injector.shutdown(5)
         assert not h.injector.busy
         assert h.sent == ["s+", "a+", "a-", "s-"]
+
+    def test_shutdown_still_delivers_a_queued_modifier_release(self):
+        """A release queued behind the text may balance a hold that already
+        reached the OS, and the caller's flag already says "released", so
+        dropping it would leave Shift held at exit (review of dbd1c9c)."""
+        h = Harness(gap_s=0.001, inline_budget_s=0.0).background()
+        h.injector.inject(tap("a") + tap("b"), cancellable=True)
+        h.wait_parked()
+        h.injector.inject(atomic("shift+"))
+        h.injector.inject(atomic("shift-"))
+        threading.Timer(0.05, h.gate.set).start()  # type: ignore[union-attr]
+        assert h.injector.shutdown(5)
+        assert "b+" not in h.sent
+        assert h.sent[-2:] == ["shift+", "shift-"]
 
     def test_after_shutdown_the_next_burst_goes_out_inline(self):
         h = Harness(gap_s=0.001, inline_budget_s=0.0).background()

@@ -81,7 +81,7 @@ import ctypes
 import ctypes.wintypes as wintypes
 import logging
 import time
-from typing import Callable, Dict, List, Optional, Sequence, Tuple
+from typing import Callable, Dict, List, Optional, Sequence, Tuple, Union
 
 from . import powershell_path
 from .base import KeySynthesizerBase
@@ -361,8 +361,9 @@ _NEVER_HELD = frozenset({"win", "super"})
 
 
 # One burst for the injector: units (a character, a gesture) of groups (one
-# ``SendInput`` call each).  See serial_injector.py.
-_Unit = List[List[INPUT]]
+# ``SendInput`` call each); a float between two groups is a hold in seconds
+# that replaces the pacing gap there.  See serial_injector.py.
+_Unit = List[Union[List[INPUT], float]]
 
 
 def _atomic(events: Sequence[INPUT]) -> _Unit:
@@ -561,20 +562,17 @@ class WindowsKeySynthesizer(KeySynthesizerBase):
                 if mod_vk is not None:
                     down.append(self._make_vk_scancode_event(mod_vk, key_down=True))
             down.append(self._make_vk_scancode_event(vk, key_down=True))
-            # Two atomic bursts around a real sleep.  Exact only while the
-            # injector is idle (the normal case: a game is in front, not a
-            # dictation insert); queued behind a long insert the two land
-            # one pacing gap apart instead, which is latency, not loss.
-            self._inject([_atomic(down)])
-
-            time.sleep(hold_seconds)
-
             up: List[INPUT] = [self._make_vk_scancode_event(vk, key_down=False)]
             for mod in reversed(wrap_mods):
                 mod_vk = _KEY_MAP.get(mod)
                 if mod_vk is not None:
                     up.append(self._make_vk_scancode_event(mod_vk, key_down=False))
-            self._inject([_atomic(up)])
+            # One unit: the down batch, the hold, the up batch.  The hold is
+            # part of the unit, so it is honoured by whichever thread
+            # delivers it; queued behind a long insert, the worker sleeps
+            # it between the two batches (review of dbd1c9c: delivering
+            # the two as separate bursts shrank the hold to one pacing gap).
+            self._inject([[down, float(hold_seconds), up]])
             self._log_send(
                 f"key={key_name} (held {hold_seconds * 1000:.0f}ms)"
                 + (f" mods={modifiers}" if modifiers else "")
@@ -1341,7 +1339,7 @@ class WindowsKeySynthesizer(KeySynthesizerBase):
         self._injector.cancel()
 
     def shutdown(self) -> None:
-        """Drop what is queued, let the unit in flight release its keys, join the worker."""
+        """Stop typing, deliver the holds and releases still queued, join the worker."""
         if not self._injector.shutdown(SHUTDOWN_TIMEOUT_S):
             _logger.warning("The key injector did not stop within %.0fs", SHUTDOWN_TIMEOUT_S)
 

@@ -221,9 +221,12 @@ class KeySynthesizerBase(ABC):
 
         The bridge calls this first thing in its own shutdown, before it
         releases the sticky modifiers: a backend with a worker thread
-        drops what is queued, lets the unit in flight release its keys,
-        and joins the worker, so quitting mid-insert leaves no key (and
-        no shift wrap) held at the OS.  The default is a no-op.
+        drops the typed text still queued, lets the unit in flight
+        release its keys, delivers the modifier holds and releases that
+        were queued behind the text (a queued release may balance a hold
+        already at the OS, and the bridge's flag already says it is
+        released), and joins the worker, so quitting mid-insert leaves no
+        key (and no shift wrap) held at the OS.  The default is a no-op.
         """
 
     def replace_text(self, backspace_count: int, text: str) -> None:

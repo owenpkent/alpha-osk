@@ -16,8 +16,11 @@ from src.platform.base import KeySynthesizerBase
 
 
 def _flat(units):
-    """Every event of an injector burst (units of groups), in order."""
-    return [event for unit in units for group in unit for event in group]
+    """Every event of an injector burst (units of groups), in order.
+
+    A float inside a unit is a hold between two groups, not a group.
+    """
+    return [event for unit in units for group in unit if isinstance(group, list) for event in group]
 
 
 class TestPlatformDetection:
@@ -1653,6 +1656,51 @@ class TestWindowsInjectPacing:
 
         synth.release_modifier("shift")
         assert self._sent_keys(log)[-1] == win_mod.VK_SHIFT
+
+    def test_shutdown_still_delivers_a_queued_modifier_release(self):
+        """Shift tapped on and off while a passage types queues a hold and a
+        release; the bridge's flag is already down, so it will not send
+        another.  Shutdown must deliver both, or Shift stays held at exit
+        (review of dbd1c9c)."""
+        gate = _Gate()
+        win_mod, synth, log = self._make(sleep=gate.sleep)
+        synth.send_text("x" * 100)
+        gate.wait_parked()
+        synth.hold_modifier("shift")
+        synth.release_modifier("shift")
+        threading.Timer(0.05, gate.release).start()
+
+        synth.shutdown()
+        assert not synth.busy
+        keys = self._sent_keys(log)
+        assert keys.count(0x28) < 200
+        assert keys[-2:] == [win_mod.VK_SHIFT, win_mod.VK_SHIFT]
+
+    def test_a_held_game_key_queued_behind_text_keeps_its_hold(self):
+        """``send_key(hold_seconds=0.05)`` queued behind a passage used to land
+        its down and up one pacing gap apart (review of dbd1c9c).  The hold
+        is part of the unit now, so the worker sleeps it."""
+        gate = _Gate()
+        win_mod, synth, log = self._make(sleep=gate.sleep)
+        synth.send_text("x" * 100)
+        gate.wait_parked()
+        synth.send_key("Right", hold_seconds=0.05)  # returns at once
+        gate.release()
+        assert synth._injector.settle(5)
+
+        down = log.index(("send", 1, [win_mod.VK_RIGHT]))
+        assert log[down + 1] == ("sleep", 0.05)
+        assert log[down + 2] == ("send", 1, [win_mod.VK_RIGHT])
+
+    def test_a_held_game_key_on_an_idle_injector_sleeps_inline(self):
+        win_mod, synth, log = self._make()
+        synth.send_key("Right", hold_seconds=0.05)
+        assert not synth.busy
+        assert log == [
+            ("send", 1, [win_mod.VK_RIGHT]),
+            ("sleep", 0.05),
+            ("send", 1, [win_mod.VK_RIGHT]),
+        ]
 
 
 class _Gate:

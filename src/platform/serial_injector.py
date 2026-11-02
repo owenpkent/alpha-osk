@@ -45,25 +45,48 @@ import logging
 import threading
 import time
 from collections import deque
-from typing import Callable, Deque, Generic, List, Optional, Sequence, Tuple, TypeVar
+from typing import Callable, Deque, Generic, List, Optional, Sequence, Tuple, TypeVar, Union
 
 T = TypeVar("T")
 
 Group = Sequence[T]  # one send call
-Unit = Sequence[Group[T]]  # one character or gesture: the cancel boundary
+# One character or gesture: the cancel boundary.  A float between two
+# groups is a pause in seconds that replaces the standard gap there (the
+# game-compat hold between a key-down and its key-up), delivered by
+# whichever thread delivers the unit.
+Unit = Sequence[Union[Group[T], float]]
 
 
 class _Job(Generic[T]):
     __slots__ = ("units", "cancellable", "cancelled")
 
     def __init__(self, units: Sequence[Unit[T]], cancellable: bool) -> None:
-        self.units: List[List[List[T]]] = [[list(group) for group in unit] for unit in units]
+        self.units: List[List[Union[List[T], float]]] = [
+            [float(item) if isinstance(item, (int, float)) else list(item) for item in unit]
+            for unit in units
+        ]
         self.cancellable = cancellable
         self.cancelled = False
 
     @property
     def group_count(self) -> int:
-        return sum(len(unit) for unit in self.units)
+        return sum(1 for unit in self.units for item in unit if isinstance(item, list))
+
+    def gaps_s(self, gap_s: float) -> float:
+        """How long the sleeps between this job's groups take, pauses included."""
+        total = 0.0
+        groups_seen = 0
+        pause = 0.0
+        for unit in self.units:
+            for item in unit:
+                if not isinstance(item, list):
+                    pause = max(pause, item)
+                    continue
+                if groups_seen:
+                    total += max(gap_s, pause)
+                pause = 0.0
+                groups_seen += 1
+        return total
 
 
 class SerialInjector(Generic[T]):
@@ -133,7 +156,7 @@ class SerialInjector(Generic[T]):
             return
         with self._state:
             idle = self._worker is None
-            inline = idle and self.paced_duration_s(job.group_count) <= self._inline_budget_s
+            inline = idle and job.gaps_s(self._gap_s) <= self._inline_budget_s
             if not inline:
                 self._queue.append(job)
                 if self._worker is None:
@@ -160,21 +183,23 @@ class SerialInjector(Generic[T]):
                 self._current.cancelled = True
 
     def shutdown(self, timeout: float) -> bool:
-        """Stop delivering: drop the queue, finish the running unit, join the worker.
+        """Stop typing: drop the text, deliver the rest, join the worker.
+
+        The same drop as :meth:`cancel` (typed text, queued or running at
+        its next unit boundary), then a wait for the worker to deliver
+        what is left.  What is left is never dropped: a queued modifier
+        *release* may balance a hold that has already reached the OS, and
+        the bridge, whose flag went down when it queued the release, will
+        not send another; dropping it would leave Shift held at exit
+        (review of dbd1c9c).  Holds, chords and tapped keys are a few
+        groups each, so the wait is short.
 
         Returns False if the worker was still alive when ``timeout``
         elapsed.  Afterwards the injector is idle, so a modifier release
         the caller sends next goes out inline.
         """
-        with self._state:
-            self._queue.clear()
-            if self._current is not None:
-                self._current.cancelled = True
-            worker = self._worker
-        if worker is None:
-            return True
-        worker.join(timeout)
-        return not worker.is_alive()
+        self.cancel()
+        return self.settle(timeout)
 
     def settle(self, timeout: float) -> bool:
         """Wait for the worker to drain (tests and shutdown only)."""
@@ -215,18 +240,25 @@ class SerialInjector(Generic[T]):
         expected = 0
         last_error = 0
         groups_sent = 0
+        pause = 0.0
         for unit in job.units:
             if job.cancelled:
                 self._log.debug(
                     "Key burst cancelled after %d/%d groups", groups_sent, job.group_count
                 )
                 break
-            for group in unit:
+            for item in unit:
+                if not isinstance(item, list):
+                    # A hold between two groups: replaces the gap before
+                    # the next group, however the unit reached us.
+                    pause = max(pause, item)
+                    continue
                 if groups_sent or lead_gap:
-                    self._sleep(self._gap_s)
-                sent, error = self._send(group)
+                    self._sleep(max(self._gap_s, pause))
+                pause = 0.0
+                sent, error = self._send(item)
                 total_sent += sent
-                expected += len(group)
+                expected += len(item)
                 if error:
                     last_error = error
                 groups_sent += 1
