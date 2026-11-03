@@ -188,12 +188,21 @@ def _unplug_the_live_desktop(monkeypatch: pytest.MonkeyPatch) -> None:
     whether the reset fired, and the assertions about it would pass or
     fail per machine.
 
-    All three stubs are plain module attributes, so any test that wants
+    The fourth is the focus probe (``start_focus_probe``), the thread
+    that owns UI Automation on Windows and reads the live desktop five
+    times a second.  Stubbed to ``None``, so every bridge takes the
+    direct path through the three names above; a test of the probe path
+    patches the same name with a factory over a fake detector (see
+    ``tests/test_focus_probe.py``), which also keeps a real thread from
+    outliving the test that forgot to stop it.
+
+    All four stubs are plain module attributes, so any test that wants
     another answer patches the same name and wins.
     """
     monkeypatch.setattr("src.keyboard_bridge.is_password_field", lambda: False)
     monkeypatch.setattr("src.keyboard_bridge.external_click_detected", lambda: False)
     monkeypatch.setattr("src.keyboard_bridge.caret_position_token", lambda: None)
+    monkeypatch.setattr("src.keyboard_bridge.start_focus_probe", lambda on_reading=None: None)
 
 
 @pytest.fixture(autouse=True)

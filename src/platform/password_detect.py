@@ -58,7 +58,9 @@ import ctypes
 import logging
 import os
 import sys
-from typing import Any, Optional, Protocol
+from typing import Any, Callable, Optional, Protocol
+
+from .focus_probe import FocusProbe, FocusReading
 
 _logger = logging.getLogger("PasswordDetect")
 
@@ -252,6 +254,36 @@ def shutdown() -> None:
             close()
         except Exception as exc:
             _logger.debug("Password detector close failed: %s", exc)
+
+
+def start_focus_probe(
+    on_reading: Optional[Callable[[FocusReading], None]] = None,
+) -> Optional[FocusProbe]:
+    """Windows only: start the thread that owns UI Automation from now on.
+
+    The probe builds its own detector on its own thread (its own COM
+    apartment and UIA connection), reads the focused element about five
+    times a second and on request, and hands every reading to
+    ``on_reading`` on that thread.  With a probe running the keyboard
+    thread must not call ``is_password_field`` or
+    ``focused_element_token``: those go through the lazily created
+    module detector, which would be a second connection on the UI
+    thread, the thing the probe exists to avoid.  Returns ``None`` where
+    there is no probe to run (every other platform, or a thread that
+    failed to start), and the caller keeps the direct path.
+    """
+    if sys.platform != "win32":
+        return None
+    user32 = ctypes.windll.user32
+
+    def foreground() -> int:
+        return int(user32.GetForegroundWindow() or 0)
+
+    probe = FocusProbe(_create_detector, foreground=foreground, on_reading=on_reading)
+    if not probe.start():
+        probe.stop()
+        return None
+    return probe
 
 
 def _create_detector() -> _Detector:
@@ -777,10 +809,34 @@ if sys.platform == "win32":
             return pid.value == os.getpid()
 
         def check(self) -> bool:
+            return self.read_focus()[1]
+
+        def focus_token(self) -> Optional[str]:
+            """Stable identity string for the focused element, or None.
+
+            Uses the element's UIA RuntimeId — an int array UIA keeps
+            stable for the element's lifetime and unique on the desktop.
+            It's the right signal for "did focus move to a different
+            control": unlike the element's screen rectangle it survives
+            scrolling and window moves, and unlike the window handle it
+            differs between two text boxes in the same browser window.
+            """
+            return self.read_focus()[0]
+
+        def read_focus(self) -> tuple[Optional[str], bool]:
+            """The focused element's token and password state, from one query.
+
+            One ``GetFocusedElement`` answers both questions; asking twice
+            doubled the cross-process traffic for every target, and the
+            focus probe takes both on every tick.  The token is ``None``
+            and the state ``False`` on any failure, each its own fail-open
+            answer (``focused_element_token`` and ``is_password_field``
+            document them).
+            """
             if not self.available or not self._automation:
-                return False
+                return None, False
             if self._foreground_unreachable():
-                return False
+                return None, False
 
             element = ctypes.c_void_p()
             try:
@@ -793,8 +849,16 @@ if sys.platform == "win32":
                 )
                 hr = get_focused(self._automation, ctypes.byref(element))
                 if hr != 0 or not element:
-                    return False
+                    return None, False
+                return self._runtime_id_of(element), self._is_password(element)
+            except Exception:
+                return None, False
+            finally:
+                _com_release(element)
 
+        @staticmethod
+        def _is_password(element: ctypes.c_void_p) -> bool:
+            try:
                 # IUIAutomationElement::GetCurrentPropertyValue — vtable index 10
                 variant = _VARIANT()
                 get_prop = _vtable_func(
@@ -813,40 +877,12 @@ if sys.platform == "win32":
                 # sites hand back 0x00007ffa37780000 for "false"), so
                 # reading all 64 bits turned privacy mode on there.
                 return bool(variant.vt == _VT_BOOL and variant.val & 0xFFFF)
-
             except Exception:
                 return False
-            finally:
-                _com_release(element)
 
-        def focus_token(self) -> Optional[str]:
-            """Stable identity string for the focused element, or None.
-
-            Uses the element's UIA RuntimeId — an int array UIA keeps
-            stable for the element's lifetime and unique on the desktop.
-            It's the right signal for "did focus move to a different
-            control": unlike the element's screen rectangle it survives
-            scrolling and window moves, and unlike the window handle it
-            differs between two text boxes in the same browser window.
-            """
-            if not self.available or not self._automation:
-                return None
-            if self._foreground_unreachable():
-                return None
-
-            element = ctypes.c_void_p()
+        @staticmethod
+        def _runtime_id_of(element: ctypes.c_void_p) -> Optional[str]:
             try:
-                # IUIAutomation::GetFocusedElement — vtable index 8
-                get_focused = _vtable_func(
-                    self._automation,
-                    8,
-                    ctypes.c_long,
-                    ctypes.POINTER(ctypes.c_void_p),
-                )
-                hr = get_focused(self._automation, ctypes.byref(element))
-                if hr != 0 or not element:
-                    return None
-
                 # IUIAutomationElement::GetRuntimeId — vtable index 4.
                 # Hands back a freshly-allocated SAFEARRAY we must destroy.
                 psa = ctypes.c_void_p()
@@ -863,11 +899,8 @@ if sys.platform == "win32":
                     return _safearray_i4_to_str(psa)
                 finally:
                     _oleaut32.SafeArrayDestroy(psa)
-
             except Exception:
                 return None
-            finally:
-                _com_release(element)
 
     # ------------------------------------------------------------------
     #  Win32 fallback (EM_GETPASSWORDCHAR)
