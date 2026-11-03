@@ -33,7 +33,7 @@ from typing import (
     Union,
 )
 
-from PySide6.QtCore import Property, QObject, QTimer, QUrl, Signal, Slot
+from PySide6.QtCore import Property, QObject, Qt, QTimer, QUrl, Signal, Slot
 
 # Audio feedback — optional, gracefully degrades if QtMultimedia unavailable
 try:
@@ -60,11 +60,13 @@ from .key_actions import (
 )
 from .platform import CURRENT_PLATFORM, create_key_synthesizer
 from .platform.base import KeySynthesizerBase
+from .platform.focus_probe import FocusProbe, FocusReading
 from .platform.password_detect import (
     caret_position_token,
     detection_available,
     focused_element_token,
     is_password_field,
+    start_focus_probe,
 )
 from .platform.pointer import external_click_detected
 from .prediction import HybridPredictor
@@ -531,6 +533,16 @@ _CLICK_SETTLE_MS = 200
 # second of a click on the OSK.
 _FOCUS_CHURN_GRACE_S = 1.0
 
+# The focus probe (Windows): a stored reading younger than this answers a
+# keystroke's password check outright, the same 50 ms the synchronous
+# check cached its answer for; an older one is refreshed, and the
+# keystroke waits at most ``_FOCUS_REQUEST_TIMEOUT_S`` for the refresh.
+# A responsive target answers in about 2 ms; a stalled one (Thunderbird
+# at 317 ms) used to hold the keystroke for the whole stall, and now
+# costs it 25 ms, with the late answer applied when it lands.
+_FOCUS_READING_FRESH_S = 0.05
+_FOCUS_REQUEST_TIMEOUT_S = 0.025
+
 # The special keys that edit text at the caret, and so may arm the grace
 # above.  Everything else sent through `_send_key` is a command, and the
 # commands people reach for move focus on purpose: Ctrl+F or F3 open
@@ -596,6 +608,19 @@ _SNIPPET_SCAN_TAIL = 120
 # so the ledger is bounded rather than session-long; overflowing costs
 # at most a re-offer of something dismissed long ago.
 _MAX_REMEMBERED_OFFERS = 64
+
+
+class _FocusNotifier(QObject):
+    """Carries a focus-probe reading from the probe thread to the bridge.
+
+    The probe calls ``reading.emit`` on its own thread; the bridge
+    connects the signal with a queued connection, so the slot runs on
+    the UI thread with the bridge intact.  Parentless and held by the
+    bridge, like the prediction loader's notifier: it must outlive any
+    emit the probe thread may still be inside when the bridge stops it.
+    """
+
+    reading = Signal(object)
 
 
 class KeyboardBridge(QObject):
@@ -1022,11 +1047,39 @@ class KeyboardBridge(QObject):
         # tell the user the manual Learning toggle is their only protection.
         # This call is also what lazily creates the cached detector and logs
         # the one-time startup warning when it falls back to null.
-        self._password_detection_available = detection_available()
+        #
+        # On Windows the detector lives on the focus probe's thread
+        # instead (``start_focus_probe``), with its own UIA connection:
+        # nothing on this thread asks UI Automation anything, so a target
+        # that is slow to answer (Thunderbird, 317 ms) cannot hold a
+        # keystroke.  The probe's readings arrive through ``_focus_notifier``
+        # as a queued signal; the polls read ``latest()``; the keystroke
+        # check asks for a fresh one and waits a bounded time.  Elsewhere,
+        # and in tests (``tests/conftest.py`` stubs the starter), there is
+        # no probe and the direct calls stay.
+        self._focus_notifier = _FocusNotifier()
+        self._focus_notifier.reading.connect(
+            self._on_focus_reading, Qt.ConnectionType.QueuedConnection
+        )
+        self._focus_probe: Optional[FocusProbe] = start_focus_probe(
+            self._focus_notifier.reading.emit
+        )
+        if self._focus_probe is not None:
+            self._password_detection_available = self._focus_probe.available
+        else:
+            self._password_detection_available = detection_available()
         # Last synchronous is_password_field() call, to rate-limit the
         # sync check fired on every keystroke (COM calls are cheap but
         # not free; ~50 ms between calls stops thrashing).
         self._last_sync_password_check: float = 0.0
+        # Readings taken before this instant say nothing about the field
+        # the caret is in now: every context reset moves it, so the next
+        # focus-token comparison seeds from a reading taken after the
+        # reset rather than from the stored one, which still names the
+        # field the user just left (and would otherwise be compared
+        # against the new field's token one tick later, wiping whatever
+        # was typed there in between: the ``hellis`` bug, by another road).
+        self._focus_reading_floor: float = 0.0
 
         # Poll for password fields every 200ms (fast detection reduces keystroke leakage)
         self._password_timer = QTimer(self)
@@ -1222,8 +1275,14 @@ class KeyboardBridge(QObject):
         self._keystroke_since_click_poll = True
         self._last_own_keystroke_at = time.monotonic() if text else float("-inf")
 
-    def _typed_within_focus_grace(self) -> bool:
+    def _typed_within_focus_grace(self, at: Optional[float] = None) -> bool:
         """Did one of our own keystrokes land inside ``_FOCUS_CHURN_GRACE_S``?
+
+        ``at`` is when the focus was read; it defaults to now, which is
+        right for a token read on the spot.  A reading from the focus
+        probe was taken earlier, so it is judged by its own ``read_at``:
+        what it saw is what focus looked like then, not when the poll got
+        round to it.
 
         A long insert the synthesizer is still typing in the background
         (``busy``) counts as a keystroke in progress: its characters land
@@ -1231,7 +1290,8 @@ class KeyboardBridge(QObject):
         """
         if self._synth.busy:
             return True
-        return time.monotonic() - self._last_own_keystroke_at < _FOCUS_CHURN_GRACE_S
+        when = time.monotonic() if at is None else at
+        return when - self._last_own_keystroke_at < _FOCUS_CHURN_GRACE_S
 
     def _send_key(
         self,
@@ -5401,6 +5461,19 @@ class KeyboardBridge(QObject):
             except Exception:
                 _logger.debug("Dictation playback shutdown failed", exc_info=True)
 
+        # Stop the focus probe: it closes its detector on its own thread
+        # (the COM apartment it created), and after ``stop`` no reading
+        # is delivered, so nothing lands on a bridge that is going away.
+        # Bounded, as the thread may be inside a call a slow target is
+        # still answering; a daemon thread dies with the process.
+        probe = getattr(self, "_focus_probe", None)
+        if probe is not None:
+            try:
+                probe.stop()
+            except Exception:
+                _logger.debug("Focus probe shutdown failed", exc_info=True)
+            self._focus_probe = None
+
         # Release the password detector's COM interface + CoInitializeEx
         # token.  Negligible at process exit (the OS reaps it anyway) but
         # makes the lifecycle explicit and lets a hot-reload path tear
@@ -5745,14 +5818,14 @@ class KeyboardBridge(QObject):
         # focused_element_token() returns None elsewhere, making this a no-op.
         # None means "couldn't read it" — we leave the baseline alone so a
         # transient UIA hiccup never wipes context.
-        token = focused_element_token()
+        token, read_at = self._focus_token_for(hwnd)
         if token is not None:
             if (
                 not window_switched
                 and self._last_focus_token is not None
                 and token != self._last_focus_token
             ):
-                if self._typed_within_focus_grace():
+                if self._typed_within_focus_grace(read_at):
                     # The control re-identified itself under our own
                     # keystroke, which is what a web composer does on its
                     # first character: the one letter typed is still on
@@ -6109,7 +6182,27 @@ class KeyboardBridge(QObject):
         result for ~50 ms so the UI Automation COM call doesn't thrash
         under rapid repeats.
         """
-        import time
+        probe = self._focus_probe
+        if probe is not None:
+            # The probe's reading, if it is young enough, else a fresh one
+            # with a bounded wait.  ``None`` back means the probe is
+            # stalled behind a slow target: the key goes out on whatever
+            # was known, and the late reading is applied by
+            # ``_on_focus_reading`` when it lands, exactly as the timer
+            # would have.  Learning only happens when a word finishes,
+            # seconds later, by which time the answer is in.
+            if not self._password_detect_enabled or self._privacy_mode_manual:
+                return
+            reading = probe.latest()
+            if (
+                reading is None
+                or time.monotonic() - reading.read_at > _FOCUS_READING_FRESH_S
+                or reading.hwnd != self._get_foreground_window_id()
+            ):
+                reading = probe.request(_FOCUS_REQUEST_TIMEOUT_S)
+            if reading is not None:
+                self._apply_focus_reading(reading)
+            return
 
         now = time.monotonic()
         if now - self._last_sync_password_check < 0.05:
@@ -6122,7 +6215,62 @@ class KeyboardBridge(QObject):
         if not self._password_detect_enabled or self._privacy_mode_manual:
             return
 
-        detected = is_password_field()
+        probe = self._focus_probe
+        if probe is not None:
+            reading = probe.latest()
+            if reading is not None:
+                self._apply_focus_reading(reading)
+            return
+        self._apply_password_state(is_password_field())
+
+    def _on_focus_reading(self, reading: object) -> None:
+        """A probe reading, delivered on the UI thread (queued signal).
+
+        Every reading comes this way, including the late answer to a
+        keystroke whose bounded wait ran out: if it says "password",
+        privacy mode switches on and the word in progress is wiped here,
+        the same as the timer does.
+        """
+        if self._shutting_down or not isinstance(reading, FocusReading):
+            return
+        if not self._password_detect_enabled or self._privacy_mode_manual:
+            return
+        self._apply_focus_reading(reading)
+
+    def _apply_focus_reading(self, reading: FocusReading) -> None:
+        """Apply a probe reading's password state, if it is about this window.
+
+        A reading taken under another foreground window says nothing
+        about the one in front now; it is dropped, and the next reading
+        (at most one probe interval away) settles it.  Idempotent, so the
+        same reading may arrive by the keystroke path and the queued
+        signal both.
+        """
+        if reading.hwnd != self._get_foreground_window_id():
+            return
+        self._apply_password_state(reading.is_password)
+
+    def _focus_token_for(self, hwnd: int) -> tuple[Optional[str], Optional[float]]:
+        """The focused element's token for the 4 Hz poll, and when it was read.
+
+        With a probe, the stored reading, provided it was taken under
+        ``hwnd`` and after the last context reset (``_focus_reading_floor``):
+        an older one still names the field the user just left.  "After"
+        is strict: ``time.monotonic`` ticks every 15.6 ms on Windows under
+        Python 3.12, so a reading in the reset's own tick is treated as
+        older, which costs at most one probe interval before the baseline
+        seeds and never seeds it from the old field.  Without a probe, a
+        direct read, timed now.
+        """
+        probe = self._focus_probe
+        if probe is None:
+            return focused_element_token(), None
+        reading = probe.latest()
+        if reading is None or reading.hwnd != hwnd or reading.read_at <= self._focus_reading_floor:
+            return None, None
+        return reading.token, reading.read_at
+
+    def _apply_password_state(self, detected: bool) -> None:
         if detected != self._privacy_mode:
             self._privacy_mode = detected
             self.privacyModeChanged.emit(detected)
@@ -6159,8 +6307,11 @@ class KeyboardBridge(QObject):
         # poll read old-to-new as a second move and wiped whatever had
         # been typed into the new field in the meantime (the screen said
         # "h", the bridge said nothing, and the next pill typed "hellis").
-        # None means "seed on the next reading, don't compare".
+        # None means "seed on the next reading, don't compare".  The probe's
+        # stored reading predates this reset and so still names the old
+        # field; the floor keeps it from seeding (see ``_focus_token_for``).
         self._last_focus_token = None
+        self._focus_reading_floor = time.monotonic()
         # A reset that lands mid-word leaves the word's opening on screen
         # with nothing tracking it, so what the user types next is a
         # tail.  See _take_lost_prefix for what learning it would cost.
