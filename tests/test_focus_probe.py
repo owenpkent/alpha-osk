@@ -463,22 +463,53 @@ class TestAnOlderQueuedReadingNeverUndoesANewerOne:
         h.bridge._check_password_field()
         assert h.bridge.privacyMode is True
 
-    def test_a_dropped_reading_for_another_window_still_moves_the_watermark(
+    def test_a_fresh_password_reading_dropped_mid_transition_still_protects_the_key(
         self, harness_factory, monkeypatch
     ):
+        """Second review of PR #246: dropping a reading must not consume it.
+
+        ``GetForegroundWindow`` reads 0 during an activation change.  A
+        fresh "password" reading delivered on that tick is dropped; the
+        window is in front again before the reading is 50 ms old and a
+        key is pressed.  The keystroke takes the stored reading (fresh,
+        window matches, no refresh), so if the drop had moved the
+        watermark the key went out with privacy off.
+        """
         det = FakeDetector(is_password=True)
         h = harness_factory(det)
         assert h.probe is not None
-        old = h.probe.request(0.5)
-        assert old is not None
-        # The newer reading is for a window that is not in front (our side reads 0).
-        det.is_password = False
+        monkeypatch.setattr(kb, "_FOCUS_READING_FRESH_S", 10.0)  # pinned fresh
+        reading = h.probe.request(0.5)
+        assert reading is not None
         monkeypatch.setattr(h.bridge, "_get_foreground_window_id", lambda: 0)
-        new = h.probe.request(0.5)
+        QTest.qWait(30)  # the queued delivery lands while the foreground reads 0
+        assert h.bridge.privacyMode is False
+        monkeypatch.setattr(h.bridge, "_get_foreground_window_id", lambda: WINDOW)
+        reads = det.reads
+        h.bridge.pressKey("h")
+        assert det.reads == reads  # no refresh: the stored reading answered
+        assert h.bridge.privacyMode is True
+        assert h.bridge._current_word == ""
+
+    def test_a_strictly_older_reading_is_still_rejected_after_a_drop(
+        self, harness_factory, monkeypatch
+    ):
+        det = FakeDetector(is_password=False)
+        h = harness_factory(det)
+        assert h.probe is not None
+        assert h.probe.request(0.5) is not None
+        QTest.qWait(30)
+        det.is_password = True
+        old = h.probe.request(0.5)  # "password", seq k
+        assert old is not None
+        det.is_password = False
+        new = h.probe.request(0.5)  # "not", seq k + 1
         assert new is not None
         h.bridge._apply_focus_reading(new)
+        monkeypatch.setattr(h.bridge, "_get_foreground_window_id", lambda: 0)
+        QTest.qWait(30)  # both drain while the foreground reads 0: neither applies
         monkeypatch.setattr(h.bridge, "_get_foreground_window_id", lambda: WINDOW)
-        h.bridge._apply_focus_reading(old)  # older than one already seen
+        h.bridge._apply_focus_reading(old)  # older than what was applied
         assert h.bridge.privacyMode is False
 
 

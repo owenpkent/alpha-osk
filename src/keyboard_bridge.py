@@ -6248,21 +6248,23 @@ class KeyboardBridge(QObject):
     def _apply_focus_reading(self, reading: FocusReading) -> None:
         """Apply a probe reading's password state, if it is about this window.
 
-        A reading no newer than the last one judged is dropped
+        A reading no newer than the last one *applied* is dropped
         (``_focus_applied_seq``): the same reading arrives by the
         keystroke path and the queued signal both, and the queued road
         can deliver one older than what a keystroke already applied.
         A reading taken under another foreground window says nothing
-        about the one in front now; it is dropped too, but still moves
-        the watermark, since anything older than it is older information
-        whatever window it was about.  The next reading (at most one
-        probe interval away) settles either case.
+        about the one in front now and is dropped without moving the
+        watermark: ``GetForegroundWindow`` reads 0 during an activation
+        change, and a fresh "password" reading dropped on that tick must
+        still protect the keystroke that follows once its window is in
+        front (the second review of PR #246).  The next reading (at
+        most one probe interval away) settles either case.
         """
         if reading.seq <= self._focus_applied_seq:
             return
-        self._focus_applied_seq = reading.seq
         if reading.hwnd != self._get_foreground_window_id():
             return
+        self._focus_applied_seq = reading.seq
         self._apply_password_state(reading.is_password)
 
     def _focus_token_for(self, hwnd: int) -> tuple[Optional[str], Optional[float]]:
