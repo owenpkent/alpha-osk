@@ -1080,6 +1080,14 @@ class KeyboardBridge(QObject):
         # against the new field's token one tick later, wiping whatever
         # was typed there in between: the ``hellis`` bug, by another road).
         self._focus_reading_floor: float = 0.0
+        # The newest probe reading whose password state has been judged,
+        # by ``seq``.  A reading reaches ``_apply_focus_reading`` by three
+        # roads (the keystroke's request, the timer's ``latest()``, and
+        # the queued signal), and the queued one can be older than what a
+        # keystroke already applied: an old "password" draining after a
+        # newer "not" turned privacy on and wiped the character just
+        # typed into a normal field (review of PR #246, P2).
+        self._focus_applied_seq: int = 0
 
         # Poll for password fields every 200ms (fast detection reduces keystroke leakage)
         self._password_timer = QTimer(self)
@@ -6240,12 +6248,19 @@ class KeyboardBridge(QObject):
     def _apply_focus_reading(self, reading: FocusReading) -> None:
         """Apply a probe reading's password state, if it is about this window.
 
+        A reading no newer than the last one judged is dropped
+        (``_focus_applied_seq``): the same reading arrives by the
+        keystroke path and the queued signal both, and the queued road
+        can deliver one older than what a keystroke already applied.
         A reading taken under another foreground window says nothing
-        about the one in front now; it is dropped, and the next reading
-        (at most one probe interval away) settles it.  Idempotent, so the
-        same reading may arrive by the keystroke path and the queued
-        signal both.
+        about the one in front now; it is dropped too, but still moves
+        the watermark, since anything older than it is older information
+        whatever window it was about.  The next reading (at most one
+        probe interval away) settles either case.
         """
+        if reading.seq <= self._focus_applied_seq:
+            return
+        self._focus_applied_seq = reading.seq
         if reading.hwnd != self._get_foreground_window_id():
             return
         self._apply_password_state(reading.is_password)

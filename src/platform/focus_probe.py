@@ -137,6 +137,12 @@ class FocusProbe:
         self._stop = threading.Event()
         self._started = threading.Event()
         self._latest: Optional[FocusReading] = None
+        # Reads begun and reads completed, both under ``_cond``.  A request
+        # waits for a read that *begins* after it: one already in flight
+        # captured the focused element before the request was made, and
+        # if focus moved to a password field in the meantime its answer
+        # is the old field's, inside the budget and wrong.
+        self._begun = 0
         self._seq = 0
         self._available = False
         self._thread: Optional[threading.Thread] = None
@@ -195,14 +201,17 @@ class FocusProbe:
     def request(self, timeout_s: float) -> Optional[FocusReading]:
         """Take a reading now and wait up to ``timeout_s`` for it.
 
-        Returns the reading taken after this call, or ``None`` when it did
-        not arrive in time (the thread is stalled in a call, or stopped).
-        A late reading still reaches ``on_reading`` and ``latest``.
+        Returns a reading from a read that *began* after this call, or
+        ``None`` when none arrived in time (the thread is stalled in a
+        call, or stopped).  A late reading still reaches ``on_reading``
+        and ``latest``.
         """
         if not self._available or self._stop.is_set():
             return None
         with self._cond:
-            want = self._seq + 1
+            # The next read to begin, not the next to complete: a read in
+            # flight predates this request (review of PR #246, P1).
+            want = self._begun + 1
             self._wake.set()
             deadline = time.monotonic() + timeout_s
             while self._seq < want:
@@ -247,6 +256,8 @@ class FocusProbe:
                     _logger.debug("Focus probe detector close failed", exc_info=True)
 
     def _take(self, detector: Any) -> None:
+        with self._cond:
+            self._begun += 1
         read_at = time.monotonic()
         try:
             hwnd = int(self._foreground() or 0)

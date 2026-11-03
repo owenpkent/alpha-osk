@@ -150,6 +150,46 @@ class TestTheProbeAlone:
         finally:
             probe.stop()
 
+    def test_a_request_waits_for_a_read_that_begins_after_it(self):
+        """A read in flight captured focus before the request (PR #246 review, P1).
+
+        The first read captures a plain field and stalls in its property
+        reads; focus moves to a password field in the same window; a
+        keystroke requests a fresh reading.  Waiting for the next read to
+        *complete* handed back the plain field's answer, inside the
+        budget and wrong.
+        """
+        releases = [threading.Event(), threading.Event(), threading.Event()]
+        captured: list[tuple[str | None, bool]] = []
+
+        class GatedDetector(FakeDetector):
+            def read_focus(self) -> tuple[str | None, bool]:
+                self.reads += 1
+                answer = (self.token, self.is_password)
+                captured.append(answer)
+                releases[min(self.reads - 1, 2)].wait(2.0)
+                return answer
+
+        det = GatedDetector(token="plain-field", is_password=False)
+        probe = _probe(det)
+        try:
+            deadline = time.monotonic() + 2.0
+            while det.reads < 1 and time.monotonic() < deadline:
+                time.sleep(0.005)
+            assert det.reads == 1  # the first read is in flight, holding the plain field
+            det.token, det.is_password = "password-field", True
+            # Let the first read finish while the request waits, then the second.
+            threading.Timer(0.05, releases[0].set).start()
+            threading.Timer(0.15, releases[1].set).start()
+            reading = probe.request(1.0)
+            assert reading is not None
+            assert reading.seq == 2
+            assert (reading.token, reading.is_password) == ("password-field", True)
+        finally:
+            for release in releases:
+                release.set()
+            probe.stop()
+
     def test_the_timer_reads_on_its_own(self):
         det = FakeDetector()
         probe = _probe(det, interval_s=0.02)
@@ -318,10 +358,14 @@ def harness_factory(qapp, tmp_path, monkeypatch):
 class TestAKeystrokeIsNeverHeldByTheTarget:
     def test_it_returns_inside_the_budget_while_the_target_stalls(self, harness_factory):
         h = harness_factory(FakeDetector(delay_s=STALL_S))
+        # The check is timed on its own: the rest of a keystroke (the
+        # prediction query) is what a loaded CI shard makes slow, and it
+        # is not what this bounds.
         started = time.monotonic()
-        h.bridge.pressKey("h")
+        h.bridge._check_password_field_sync()
         elapsed = time.monotonic() - started
         assert elapsed < KEYSTROKE_BUDGET_S
+        h.bridge.pressKey("h")
         assert h.bridge._current_word == "h"
 
     def test_a_late_password_answer_still_switches_privacy_mode_on(self, harness_factory):
@@ -340,15 +384,19 @@ class TestAKeystrokeIsNeverHeldByTheTarget:
         assert h.bridge.privacyMode is True
         assert h.bridge._current_word == ""
 
-    def test_a_fresh_stored_reading_answers_without_asking_again(self, harness_factory):
+    def test_a_fresh_stored_reading_answers_without_asking_again(
+        self, harness_factory, monkeypatch
+    ):
+        """Pinned, not timed: a keystroke on a loaded shard can outlast 50 ms."""
         det = FakeDetector()
         h = harness_factory(det)
+        monkeypatch.setattr(kb, "_FOCUS_READING_FRESH_S", 10.0)
         h.bridge.pressKey("h")
         reads = det.reads
         assert reads >= 1
         h.bridge.pressKey("e")  # inside the freshness window
         assert det.reads == reads
-        _settle(kb._FOCUS_READING_FRESH_S + 0.02)
+        monkeypatch.setattr(kb, "_FOCUS_READING_FRESH_S", -1.0)  # every reading is stale
         h.bridge.pressKey("l")
         assert det.reads == reads + 1
 
@@ -376,6 +424,61 @@ class TestAReadingForAnotherWindowIsIgnored:
         assert h.probe is not None
         assert h.probe.request(0.5) is not None
         h.bridge._check_password_field()
+        assert h.bridge.privacyMode is False
+
+
+class TestAnOlderQueuedReadingNeverUndoesANewerOne:
+    def test_a_stale_password_reading_draining_late_keeps_the_word(self, harness_factory):
+        """PR #246 review, P2: the queued road can be older than what a keystroke applied.
+
+        A "password" reading is queued; a newer "not" reading is taken;
+        a keystroke applies the newer one and tracks the character; the
+        queue drains.  Applying the old "password" there turned privacy
+        on and wiped the character, which is on screen and now untracked.
+        """
+        det = FakeDetector(is_password=True)
+        h = harness_factory(det)
+        assert h.probe is not None
+        old = h.probe.request(0.5)  # queued, not yet processed
+        assert old is not None and old.is_password
+        det.is_password = False
+        new = h.probe.request(0.5)
+        assert new is not None and new.seq > old.seq
+        h.bridge.pressKey("h")
+        assert h.bridge.privacyMode is False
+        assert h.bridge._current_word == "h"
+        QTest.qWait(50)  # the queue drains: old "password", then new "not"
+        assert h.bridge.privacyMode is False
+        assert h.bridge._current_word == "h"
+
+    def test_a_newer_reading_still_applies_after_an_older_one(self, harness_factory):
+        det = FakeDetector(is_password=False)
+        h = harness_factory(det)
+        assert h.probe is not None
+        assert h.probe.request(0.5) is not None
+        h.bridge._check_password_field()
+        assert h.bridge.privacyMode is False
+        det.is_password = True
+        assert h.probe.request(0.5) is not None
+        h.bridge._check_password_field()
+        assert h.bridge.privacyMode is True
+
+    def test_a_dropped_reading_for_another_window_still_moves_the_watermark(
+        self, harness_factory, monkeypatch
+    ):
+        det = FakeDetector(is_password=True)
+        h = harness_factory(det)
+        assert h.probe is not None
+        old = h.probe.request(0.5)
+        assert old is not None
+        # The newer reading is for a window that is not in front (our side reads 0).
+        det.is_password = False
+        monkeypatch.setattr(h.bridge, "_get_foreground_window_id", lambda: 0)
+        new = h.probe.request(0.5)
+        assert new is not None
+        h.bridge._apply_focus_reading(new)
+        monkeypatch.setattr(h.bridge, "_get_foreground_window_id", lambda: WINDOW)
+        h.bridge._apply_focus_reading(old)  # older than one already seen
         assert h.bridge.privacyMode is False
 
 
