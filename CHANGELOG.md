@@ -4,6 +4,12 @@ All notable changes to Alpha-OSK are documented in this file.
 
 ## [Unreleased]
 
+## [1.10.0] (2026-11-03)
+
+### Changed
+- **A slow app no longer holds up your keystrokes.** Before each key the keyboard asks Windows whether the text box in front is a password field, so it can stop learning. Some apps answer that question slowly (Thunderbird took about a third of a second each time), and the key waited for the answer. The asking now happens on its own in the background, about five times a second; a key uses the latest answer, or waits at most 25 ms for a fresh one. A late "password" answer still switches privacy mode on and clears the word in progress, exactly as before, so nothing typed into a password field is learned.
+- The same background check now also notices when you move between two text boxes in the same window, so Windows is asked once instead of twice.
+
 ## [1.9.9] (2026-11-01)
 
 ### Fixed
