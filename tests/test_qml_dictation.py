@@ -368,9 +368,8 @@ class TestTheMicCostsNothingWhileDictationIsOff:
     """A user who never turns dictation on must get the bar they had before.
 
     `docs/architecture/DICTATION.md` calls this load-bearing rather than an
-    optimisation: `predRow.x` centres in `width - micReserve -
-    rightButtonsReserve`, so a zero reserve has to collapse that expression back
-    to the single-reserve one it grew from, exactly.
+    optimisation: `predRow.x` is floored at `micReserve + 8`, so a zero reserve
+    has to collapse that expression to the one with no mic term, exactly.
     """
 
     def test_the_reserve_is_exactly_zero(self, qml_root):
@@ -383,8 +382,9 @@ class TestTheMicCostsNothingWhileDictationIsOff:
     def test_the_row_sits_where_the_single_reserve_expression_puts_it(self, qml_root):
         """The mic code cannot be deleted to compare, so assert the equivalent.
 
-        With `micReserve` at 0 the live `predRow.x` must equal the expression
-        the bar used before a second reserve existed.
+        With `micReserve` at 0 the live `predRow.x` must equal the placement
+        with the mic term gone: centred over the letter grid, clamped between
+        an 8 px left margin and the right-hand buttons.
         """
         root, _, _ = qml_root
         row = _show(root, ["hello", "help", "held"])
@@ -392,7 +392,9 @@ class TestTheMicCostsNothingWhileDictationIsOff:
 
         before_the_mic = _bar(
             root,
-            "Math.max(8, (predBar.width - predBar.rightButtonsReserve - predRow.width) / 2)",
+            "Math.max(8, Math.min(mainLayout.x - predBar.x + mainKeyboard.x"
+            " + (mainKeyboard.width - predRow.width) / 2,"
+            " predBar.width - predBar.rightButtonsReserve - 8 - predRow.width))",
         )
         assert row.property("x") == pytest.approx(before_the_mic)
 
@@ -407,7 +409,9 @@ class TestTheMicCostsNothingWhileDictationIsOff:
         assert _bar(root, "predBar.micReserve") == 0
         before_the_mic = _bar(
             root,
-            "Math.max(8, (predBar.width - predBar.rightButtonsReserve - predRow.width) / 2)",
+            "Math.max(8, Math.min(mainLayout.x - predBar.x + mainKeyboard.x"
+            " + (mainKeyboard.width - predRow.width) / 2,"
+            " predBar.width - predBar.rightButtonsReserve - 8 - predRow.width))",
         )
         assert row.property("x") == pytest.approx(before_the_mic)
 
