@@ -3225,15 +3225,22 @@ Window {
                     // row never overlaps the right-hand buttons.
                     objectName: "predictionRow"
                     anchors.verticalCenter: parent.verticalCenter
-                    // Centred in the bar minus the button zones at each end,
-                    // floored at the 8 px margin.  Not anchors.centerIn: that
-                    // centres on the full bar and pushes the right-hand pill
-                    // under a button.  `micReserve` is 0 whenever the mic
-                    // is not on screen, which collapses this back to exactly
-                    // the single-reserve expression it grew from.
-                    x: predBar.micReserve + Math.max(
-                        8, (predBar.width - predBar.micReserve
-                            - predBar.rightButtonsReserve - width) / 2)
+                    // Centred over the letter grid (`mainKeyboard`), not the
+                    // bar, so the pills stay over the letters when the nav
+                    // cluster and numpad widen the window (owner's call,
+                    // 2026-11-19, from docs/roadmap/pill-centring.html).
+                    // Then clamped into the free span between the button
+                    // zones (8 px clear of each) so a long row slides aside
+                    // rather than rendering under a button.  Not
+                    // anchors.centerIn, which has no clamp.  The fit already
+                    // keeps the row no wider than that span, so the clamp
+                    // never inverts.  Written as sibling offsets, not
+                    // mapToItem, so the binding follows the layout.
+                    x: Math.max(predBar.micReserve + 8,
+                                Math.min(mainLayout.x - predBar.x + mainKeyboard.x
+                                             + (mainKeyboard.width - width) / 2,
+                                         predBar.width - predBar.rightButtonsReserve
+                                             - 8 - width))
                     spacing: 8
                     // The dictation banner takes the whole bar, during a run and
                     // while its finished text shows: the pills would be about a
