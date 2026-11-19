@@ -198,11 +198,32 @@ def _unplug_the_live_desktop(monkeypatch: pytest.MonkeyPatch) -> None:
 
     All four stubs are plain module attributes, so any test that wants
     another answer patches the same name and wins.
+
+    This fixture is function-scoped, so it is not yet in place while a
+    module-scoped fixture builds its bridge; the probe stub is repeated
+    for the whole session in ``_no_real_focus_probe_anywhere`` below.
     """
     monkeypatch.setattr("src.keyboard_bridge.is_password_field", lambda: False)
     monkeypatch.setattr("src.keyboard_bridge.external_click_detected", lambda: False)
     monkeypatch.setattr("src.keyboard_bridge.caret_position_token", lambda: None)
     monkeypatch.setattr("src.keyboard_bridge.start_focus_probe", lambda on_reading=None: None)
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _no_real_focus_probe_anywhere():
+    """Keep the real focus probe out of bridges built by module fixtures.
+
+    Pytest sets up higher-scoped fixtures before function-scoped ones, so
+    a ``scope="module"`` fixture that builds a ``KeyboardBridge`` ran
+    before ``_unplug_the_live_desktop`` and started a real UI Automation
+    probe on Windows that nothing stopped.  It outlived its module and
+    crashed a later test's worker with an access violation (CI run
+    44616698984, during tests/test_qml_dictation.py).  Function-scoped
+    patches of the same name still win inside their test.
+    """
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr("src.keyboard_bridge.start_focus_probe", lambda on_reading=None: None)
+        yield
 
 
 @pytest.fixture(autouse=True)

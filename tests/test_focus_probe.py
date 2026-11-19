@@ -670,3 +670,26 @@ class TestDetectionAvailabilityComesFromTheProbe:
             assert bridge.passwordDetectionAvailable is False
         finally:
             bridge.shutdown()
+
+
+# ---------------------------------------------------------------------- #
+#  A module-scoped bridge never gets the real probe
+# ---------------------------------------------------------------------- #
+
+
+@pytest.fixture(scope="module")
+def module_scoped_bridge():
+    """Built before any function-scoped stub, like the fixtures that leaked."""
+    with patch("src.keyboard_bridge.create_key_synthesizer") as factory:
+        synth = MagicMock()
+        synth.is_available.return_value = True
+        synth.backend_name.return_value = "MockSynth"
+        factory.return_value = synth
+        bridge = KeyboardBridge()
+    yield bridge
+    bridge.shutdown()
+
+
+class TestAModuleScopedBridgeHasNoRealProbe:
+    def test_the_session_stub_covers_module_fixtures(self, module_scoped_bridge):
+        assert module_scoped_bridge._focus_probe is None
