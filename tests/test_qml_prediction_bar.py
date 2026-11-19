@@ -398,6 +398,34 @@ class TestRightButtonsNeverCoverPills:
         assert widths[-1] > widths[0] * 1.5
 
 
+class TestPillsAreCentredOverTheLetterKeys:
+    """The row centres over the letter grid, not the gap between the button
+    zones nor the whole window (owner's call, 2026-11-19); it slides aside
+    only when the centred position would run under a button."""
+
+    def _offset(self, root) -> float:
+        row = _child(root, "predictionRow")
+        grid_centre = _evaluate(
+            row, "mainKeyboard.mapToItem(null, 0, 0).x + mainKeyboard.width / 2"
+        )
+        return _scene_left(row) + row.property("width") / 2 - grid_centre
+
+    def test_a_short_row_sits_over_the_letters(self, qml_root):
+        root, _, _ = qml_root
+        _show(root, ["a", "the", "I"])
+        assert abs(self._offset(root)) <= 1
+
+    def test_side_panels_do_not_pull_it_off_the_letters(self, qml_root):
+        """With the numpad on, the window centre is right of the letters."""
+        root, _, _ = qml_root
+        root.setProperty("showNavigation", True)
+        root.setProperty("showNumpad", True)
+        root.grabWindow()  # force a frame so the layout settles
+        QCoreApplication.processEvents()
+        _show(root, ["a", "the", "I"])
+        assert abs(self._offset(root)) <= 1
+
+
 class TestTheClearContextButtonIsGone:
     """Removed 2026-10-26 (owner's call): the automatic context resets
     (focus, caret, click, Tab, nav keys) cover what it was for.  Its scan
