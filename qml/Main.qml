@@ -3133,9 +3133,11 @@ Window {
                 // you: no run previews words (owner's call, 2026-10-26).  When a
                 // dictate run has been delivered it shows that run's whole text
                 // plus a "Copied" badge, until the next key or 8 s (the bridge
-                // clears it).  It elides on the LEFT so the newest words are the
-                // ones that survive, the opposite of every other elide in this
-                // file, because the tail is what you are checking.
+                // clears it).  A finished run that does not fit is cut in the
+                // MIDDLE, on word boundaries, so it shows how the run began and
+                // how it ended (owner's call, 2026-11-19; it was cut from the
+                // left, which lost the beginning).  The live state labels keep
+                // the left elide.
                 Item {
                     id: dictationBanner
                     objectName: "dictationBanner"
@@ -3147,7 +3149,44 @@ Window {
                              && (root.dictationActive || root.dictationResultShown)
 
                     Text {
+                        id: dictationBannerText
                         objectName: "dictationBannerText"
+                        // Measures in the Text's own font, the way predRow
+                        // measures pills: the larger of advance and ink, so a
+                        // string this says fits never elides again in Qt.
+                        FontMetrics {
+                            id: bannerMetrics
+                            font: dictationBannerText.font
+                        }
+                        function measure(s) {
+                            return Math.ceil(Math.max(bannerMetrics.advanceWidth(s),
+                                                      bannerMetrics.boundingRect(s).width))
+                        }
+                        // Whole words from both ends around " … ", taking one
+                        // from the start, then one from the end, until the
+                        // next would not fit.  Returns the text unchanged when
+                        // it fits, or when not even one word from each end
+                        // does (then Qt's own ElideMiddle cuts it).
+                        function middleElided(s, avail) {
+                            if (avail <= 0 || measure(s) <= avail)
+                                return s
+                            var words = s.split(/\s+/).filter(function (w) { return w !== "" })
+                            var head = [], tail = [], i = 0, j = words.length - 1
+                            var fromStart = true
+                            while (i <= j) {
+                                var h = fromStart ? head.concat([words[i]]) : head
+                                var t = fromStart ? tail : [words[j]].concat(tail)
+                                if (measure(h.join(" ") + " … " + t.join(" ")) > avail)
+                                    break
+                                head = h
+                                tail = t
+                                if (fromStart) i++; else j--
+                                fromStart = !fromStart
+                            }
+                            if (head.length === 0 || tail.length === 0)
+                                return s
+                            return head.join(" ") + " … " + tail.join(" ")
+                        }
                         anchors.left: parent.left
                         anchors.right: dictationCopiedBadge.visible ? dictationCopiedBadge.left
                                                                     : parent.right
@@ -3158,7 +3197,7 @@ Window {
                         verticalAlignment: Text.AlignVCenter
                         horizontalAlignment: root.dictationResultShown ? Text.AlignLeft
                                                                        : Text.AlignHCenter
-                        elide: Text.ElideLeft
+                        elide: root.dictationResultShown ? Text.ElideMiddle : Text.ElideLeft
                         // Whatever the user said is exactly as untrusted as
                         // anything else displayed here: AutoText would sniff
                         // it for markup.
@@ -3168,7 +3207,7 @@ Window {
                         color: root.dictationResultShown ? root.themeTextColor
                                                          : Qt.rgba(1, 1, 1, 0.55)
                         text: root.dictationResultShown
-                              ? root.dictationResultText
+                              ? middleElided(root.dictationResultText, width)
                               : (root.dictationState === "connecting" ? qsTr("Connecting...")
                                  : (root.dictationState === "finishing" ? qsTr("Finishing...")
                                     : (root.dictationState === "polishing"

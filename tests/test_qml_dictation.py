@@ -859,37 +859,55 @@ class TestTheBannerStaysInsideTheBar:
         assert _scene_left(bars) >= _scene_right(history)
 
 
-class TestTheFinishedTextElidesFromTheLeft:
-    """The tail is what the user is checking, so the newest words are the ones
-    that must survive. This is the opposite of every other elide in Main.qml,
-    which makes it the one most likely to be "corrected" back to the default
-    by someone tidying up."""
+class TestTheFinishedTextKeepsBothEnds:
+    """A finished run that does not fit is cut in the middle, on word
+    boundaries, so the bar shows how it began and how it ended (owner's
+    call, 2026-11-19). It used to be cut from the left, which lost the
+    beginning."""
 
-    def test_the_elide_mode_is_left(self, qml_root):
-        root, _, bridge = qml_root
-        _turn_dictation_on(root)
-        _finish_a_run(root, bridge, TestTheBannerStaysInsideTheBar.LONG)
+    LONGER = " ".join([TestTheBannerStaysInsideTheBar.LONG] * 3)
 
-        text = _child(root, "dictationBannerText")
-        assert _evaluate(text, "elide === Text.ElideLeft") is True, (
-            "the result elides from somewhere other than the left, so the "
-            "words the user just said are the ones being thrown away"
-        )
-
-    def test_a_long_run_actually_elides(self, qml_root):
-        """Asserted on `truncated` rather than on `contentWidth <= width`: once
-        a Text elides, contentWidth measures the shortened string, so that
-        comparison fits by construction and can never fail."""
-        root, _, bridge = qml_root
+    def _long_run(self, root, bridge):
         _turn_dictation_on(root)
         root.setProperty("width", root.property("minimumWidth"))
-        _finish_a_run(root, bridge, TestTheBannerStaysInsideTheBar.LONG * 3)
+        _finish_a_run(root, bridge, self.LONGER)
+        return _child(root, "dictationBannerText")
 
+    def test_it_shows_the_first_and_the_last_words(self, qml_root):
+        root, _, bridge = qml_root
+        shown = self._long_run(root, bridge).property("text")
+        words = self.LONGER.split()
+        assert "…" in shown, "the run was not long enough to be cut here"
+        assert shown.startswith(" ".join(words[:2]) + " "), shown
+        assert shown.endswith(" " + " ".join(words[-2:])), shown
+
+    def test_it_cuts_between_words(self, qml_root):
+        root, _, bridge = qml_root
+        shown = self._long_run(root, bridge).property("text")
+        head, _, tail = shown.partition(" … ")
+        words = self.LONGER.split()
+        assert self.LONGER.startswith(head + " "), head
+        assert self.LONGER.endswith(" " + tail), tail
+        assert len(head.split()) + len(tail.split()) < len(words)
+
+    def test_what_it_shows_fits_without_a_second_cut(self, qml_root):
+        """`truncated` is Qt's own word: true would mean Qt cut the already
+        shortened string again, mid-word."""
+        root, _, bridge = qml_root
+        assert self._long_run(root, bridge).property("truncated") is False
+
+    def test_a_run_that_fits_is_shown_whole(self, qml_root):
+        root, _, bridge = qml_root
+        _turn_dictation_on(root)
+        _finish_a_run(root, bridge, "send the report on friday")
+        assert _child(root, "dictationBannerText").property("text") == "send the report on friday"
+
+    def test_the_live_label_still_elides_from_the_left(self, qml_root):
+        root, _, _ = qml_root
+        _turn_dictation_on(root)
+        root.setProperty("dictationState", "listening")
+        QCoreApplication.processEvents()
         text = _child(root, "dictationBannerText")
-        assert text.property("truncated") is True, (
-            "the text was not long enough to elide here, so this test is "
-            "not exercising the elide at all"
-        )
         assert _evaluate(text, "elide === Text.ElideLeft") is True
 
 
