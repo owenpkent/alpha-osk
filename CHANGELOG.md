@@ -6,6 +6,8 @@ All notable changes to Alpha-OSK are documented in this file.
 
 ## [2.0.0] (2026-11-20)
 
+**2.0 is the dictation release.** Over the 1.x line, Alpha-OSK learned to take your voice as well as your clicks: click the microphone, speak, and your words are typed into whatever app you are using. AI cleanup can tidy the punctuation and recognition slips, Write with AI can turn what you say into a draft you check before it goes in, and History keeps your recent runs, with their recordings, on your own computer. Dictation is off by default and uses your own Deepgram key (and your own Anthropic key for the Claude features); word prediction still runs entirely on your machine. This release also carries three fixes:
+
 ### Fixed
 - **The suggestions sit over the letter keys.** The row of suggestions was centred in the space left between the bar's buttons, so it sat left of the letters when dictation was off, and well right of them with the arrow keys or the number pad showing. It is now centred over the letters, and moves aside only when a full row needs the room.
 - **A long dictation shows how it starts and how it ends.** After a dictation, the bar shows what you said until your next key. A passage longer than the bar used to lose its beginning; it now keeps whole words from both ends with "…" in the middle.
