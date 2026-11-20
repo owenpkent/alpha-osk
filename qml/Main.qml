@@ -3151,6 +3151,13 @@ Window {
                     Text {
                         id: dictationBannerText
                         objectName: "dictationBannerText"
+                        // `text` holds the shortened string, so a screen reader
+                        // would read the cut version; the accessible name is
+                        // the whole run.  A named property because PySide
+                        // cannot read attached Accessible.* values.
+                        readonly property string accessibleText: root.dictationResultShown
+                                                                 ? root.dictationResultText : text
+                        Accessible.name: accessibleText
                         // Measures in the Text's own font, the way predRow
                         // measures pills: the larger of advance and ink, so a
                         // string this says fits never elides again in Qt.

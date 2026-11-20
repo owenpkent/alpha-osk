@@ -896,6 +896,14 @@ class TestTheFinishedTextKeepsBothEnds:
         root, _, bridge = qml_root
         assert self._long_run(root, bridge).property("truncated") is False
 
+    def test_a_screen_reader_still_gets_the_whole_run(self, qml_root):
+        """`text` is the cut string; Qt's own elide never changed `text`, so
+        before this a screen reader read the full run, and it still must."""
+        root, _, bridge = qml_root
+        banner = self._long_run(root, bridge)
+        assert "…" in banner.property("text")
+        assert banner.property("accessibleText") == self.LONGER
+
     def test_a_run_that_fits_is_shown_whole(self, qml_root):
         root, _, bridge = qml_root
         _turn_dictation_on(root)
