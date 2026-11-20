@@ -1633,7 +1633,7 @@ class TestWindowsInjectPacing:
         synth.send_text("A")
         assert self._sends(log)[-1] == ("send", 4, [self.SHIFT_SC, 0x11, 0x11, self.SHIFT_SC])
 
-    def test_a_queued_release_counts_from_when_the_queue_drained(self):
+    def test_a_queued_release_counts_from_when_it_was_delivered(self):
         """A release queued behind a long insert reaches the OS only when the
         worker gets to it, so its settle window starts there."""
         from src.platform import windows as win_mod
@@ -1652,6 +1652,58 @@ class TestWindowsInjectPacing:
         assert synth._injector.settle(5)
         synth.send_text("A")
         assert self._sends(log)[-1] == ("send", 4, [self.SHIFT_SC, 0x11, 0x11, self.SHIFT_SC])
+
+    def test_a_release_followed_by_a_long_insert_is_dated_by_the_release(self):
+        """Review of PR #257: a release queued *before* a long insert must not
+        be re-dated when the queue drains, or a Shift pressed on a real
+        keyboard after the window really passed is ignored and "a" lands
+        as "A" while the bridge records "a"."""
+        from src.platform import windows as win_mod
+
+        now = [100.0]
+        physical = [False]
+        gate = _Gate()
+
+        def sleep(seconds):
+            now[0] += seconds
+            gate.sleep(seconds)
+
+        def os_state(vk, sent):
+            return 0x8000 if vk == win_mod.VK_SHIFT and physical[0] else 0
+
+        _, synth, log = self._make(sleep=sleep, async_key_state=os_state, clock=lambda: now[0])
+        synth.hold_modifier("shift")
+        synth.send_text("x" * 100)
+        gate.wait_parked()
+        synth.release_modifier("shift")  # queued
+        synth.send_text("y" * 100)  # queued after it
+        gate.release()
+        assert synth._injector.settle(5)
+        # The 200 paced groups after the release outlast the settle window.
+        assert 199 * win_mod.INTER_EVENT_DELAY_S > win_mod.OWN_RELEASE_SETTLE_S
+        physical[0] = True  # Shift pressed on a real keyboard
+        now[0] += 0.01
+        synth.send_text("a")
+        assert self._sent_keys(log)[-2:] == [ord("a"), ord("a")], "a held Shift was ignored"
+
+    def test_a_right_shift_held_through_our_release_still_counts(self):
+        """Review of PR #257: our release lifts the left-hand Shift only, so
+        a Right Shift held on a real keyboard throughout is still down, and
+        "a" must go out as Unicode rather than as a bare scancode that the
+        held Right Shift would turn into "A"."""
+        from src.platform import windows as win_mod
+
+        now = [100.0]
+        right_shift = 0xA1  # VK_RSHIFT
+
+        def os_state(vk, sent):
+            return 0x8000 if vk in (win_mod.VK_SHIFT, right_shift) else 0
+
+        _, synth, log = self._make(async_key_state=os_state, clock=lambda: now[0])
+        synth.hold_modifier("shift")
+        synth.release_modifier("shift")
+        synth.send_text("a")
+        assert self._sent_keys(log)[-2:] == [ord("a"), ord("a")], "Right Shift was ignored"
 
     def test_a_shift_held_on_a_real_keyboard_counts_again_after_the_window(self):
         """The record corrects a lagging read; it does not replace the OS.
