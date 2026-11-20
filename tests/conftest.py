@@ -239,6 +239,28 @@ def _no_real_focus_probe_anywhere():
 
 
 @pytest.fixture(scope="session", autouse=True)
+def _no_mode_picked_from_the_real_foreground_app():
+    """Keep the foreground poll from choosing game or compat mode off the desktop.
+
+    The bridge's 4 Hz poll classifies the real window in front of the
+    tests: ``_window_is_game`` (a fullscreen browser or video reads as a
+    game, by the borderless-fullscreen heuristic) and
+    ``_window_needs_compat_mode`` (an IDE or remote-desktop client, by exe
+    name).  In game mode a character goes out through ``send_key`` with a
+    hold, so a test counting ``send_text`` calls saw nothing typed, but
+    only once a test ran long enough for the poll to tick, which load
+    decides: four QML click tests failed at 16 workers and passed alone.
+    Session-scoped so module-scoped bridges are covered too; a test that
+    wants either mode sets ``_game_auto_active`` / ``_compat_auto_active``
+    or patches the same name back (``TestGameKeyHold`` does).
+    """
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr("src.keyboard_bridge._window_is_game", lambda hwnd: False)
+        mp.setattr("src.keyboard_bridge._window_needs_compat_mode", lambda hwnd: False)
+        yield
+
+
+@pytest.fixture(scope="session", autouse=True)
 def _no_llm_loader_thread():
     """Never start the optional LLM loader thread.
 
