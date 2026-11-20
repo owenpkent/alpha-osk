@@ -389,7 +389,8 @@ def buffer_bridge():
     predictor.learn_capitalization.return_value = False
     bridge._predictor = predictor
     bridge._update_predictions = lambda *a, **kw: None
-    return bridge
+    yield bridge
+    bridge.shutdown()
 
 
 def _reset(bridge) -> None:

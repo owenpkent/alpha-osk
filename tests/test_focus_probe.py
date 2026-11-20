@@ -670,3 +670,38 @@ class TestDetectionAvailabilityComesFromTheProbe:
             assert bridge.passwordDetectionAvailable is False
         finally:
             bridge.shutdown()
+
+
+# ---------------------------------------------------------------------- #
+#  A module-scoped bridge never gets the real probe or the real config dir
+# ---------------------------------------------------------------------- #
+
+
+@pytest.fixture(scope="module")
+def module_scoped_bridge():
+    """Built before any function-scoped stub, like the fixtures that leaked.
+
+    Yields the bridge and the config directory it was built against.
+    """
+    import src.platform
+
+    config_dir = src.platform.get_config_dir()
+    with patch("src.keyboard_bridge.create_key_synthesizer") as factory:
+        synth = MagicMock()
+        synth.is_available.return_value = True
+        synth.backend_name.return_value = "MockSynth"
+        factory.return_value = synth
+        bridge = KeyboardBridge()
+    yield bridge, config_dir
+    bridge.shutdown()
+
+
+class TestAModuleScopedBridgeIsIsolated:
+    def test_the_session_stub_covers_module_fixtures(self, module_scoped_bridge):
+        bridge, _ = module_scoped_bridge
+        assert bridge._focus_probe is None
+
+    def test_it_stays_off_the_real_config_dir(self, module_scoped_bridge, tmp_path_factory):
+        """Module fixtures run before the per-test config redirect too."""
+        _, config_dir = module_scoped_bridge
+        assert Path(config_dir).is_relative_to(tmp_path_factory.getbasetemp())

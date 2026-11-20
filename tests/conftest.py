@@ -198,11 +198,32 @@ def _unplug_the_live_desktop(monkeypatch: pytest.MonkeyPatch) -> None:
 
     All four stubs are plain module attributes, so any test that wants
     another answer patches the same name and wins.
+
+    This fixture is function-scoped, so it is not yet in place while a
+    module-scoped fixture builds its bridge; the probe stub is repeated
+    for the whole session in ``_no_real_focus_probe_anywhere`` below.
     """
     monkeypatch.setattr("src.keyboard_bridge.is_password_field", lambda: False)
     monkeypatch.setattr("src.keyboard_bridge.external_click_detected", lambda: False)
     monkeypatch.setattr("src.keyboard_bridge.caret_position_token", lambda: None)
     monkeypatch.setattr("src.keyboard_bridge.start_focus_probe", lambda on_reading=None: None)
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _no_real_focus_probe_anywhere():
+    """Keep the real focus probe out of bridges built by module fixtures.
+
+    Pytest sets up higher-scoped fixtures before function-scoped ones, so
+    a ``scope="module"`` fixture that builds a ``KeyboardBridge`` ran
+    before ``_unplug_the_live_desktop`` and started a real UI Automation
+    probe on Windows that nothing stopped.  It outlived its module and
+    crashed a later test's worker with an access violation (CI run
+    44616698984, during tests/test_qml_dictation.py).  Function-scoped
+    patches of the same name still win inside their test.
+    """
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr("src.keyboard_bridge.start_focus_probe", lambda on_reading=None: None)
+        yield
 
 
 @pytest.fixture(autouse=True)
@@ -275,21 +296,43 @@ def _stay_off_the_real_config_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
     ``monkeypatch.setattr`` calls (module *attribute* assignments) never
     touch. A test that wants a different fake path patches the same
     dotted name and wins, same as the other autouse guards here.
+
+    Being function-scoped, it is not yet in place while a module-scoped
+    fixture builds its bridge; ``_stay_off_the_real_config_dir_for_the_session``
+    below covers those with a session-wide fake directory.
     """
-    fake_config_dir = tmp_path / "fake-appdata" / "alpha-osk"
+    _redirect_config_dir(monkeypatch, tmp_path / "fake-appdata" / "alpha-osk")
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _stay_off_the_real_config_dir_for_the_session(tmp_path_factory: pytest.TempPathFactory):
+    """The same redirect for the whole session, under its own temp directory.
+
+    Pytest sets up higher-scoped fixtures first, so a ``scope="module"``
+    fixture that builds a ``KeyboardBridge`` would otherwise load, and could
+    write, the developer's real ``%APPDATA%/alpha-osk``.  Each test still
+    gets its own directory from the function-scoped fixture above.
+    """
+    with pytest.MonkeyPatch.context() as mp:
+        _redirect_config_dir(mp, tmp_path_factory.mktemp("session-appdata") / "alpha-osk")
+        yield
+
+
+def _redirect_config_dir(mp: pytest.MonkeyPatch, fake_config_dir: Path) -> None:
+    """Point every ``get_config_dir`` binding the app holds at *fake_config_dir*."""
 
     def _fake_get_config_dir() -> Path:
         fake_config_dir.mkdir(parents=True, exist_ok=True)
         return fake_config_dir
 
-    monkeypatch.setattr("src.platform.get_config_dir", _fake_get_config_dir)
-    monkeypatch.setattr("src.snippets.get_config_dir", _fake_get_config_dir)
-    monkeypatch.setattr("src.key_actions.get_config_dir", _fake_get_config_dir)
+    mp.setattr("src.platform.get_config_dir", _fake_get_config_dir)
+    mp.setattr("src.snippets.get_config_dir", _fake_get_config_dir)
+    mp.setattr("src.key_actions.get_config_dir", _fake_get_config_dir)
     try:
         import src.keyboard_app  # noqa: F401  -- needs PySide6 to import at all
     except ImportError:  # pragma: no cover - PySide6 missing in this environment
         return
-    monkeypatch.setattr("src.keyboard_app.get_config_dir", _fake_get_config_dir)
+    mp.setattr("src.keyboard_app.get_config_dir", _fake_get_config_dir)
 
 
 @pytest.fixture
