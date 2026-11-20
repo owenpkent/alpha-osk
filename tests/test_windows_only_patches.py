@@ -153,6 +153,18 @@ def _skips_off_windows(decorators: list[ast.expr]) -> bool:
     return False
 
 
+def _is_win32_check(test: ast.expr) -> bool:
+    """`sys.platform == "win32"`, and nothing looser."""
+    return (
+        isinstance(test, ast.Compare)
+        and ast.unparse(test.left) == "sys.platform"
+        and len(test.ops) == 1
+        and isinstance(test.ops[0], ast.Eq)
+        and isinstance(test.comparators[0], ast.Constant)
+        and test.comparators[0].value == "win32"
+    )
+
+
 def _module_skips_off_windows(tree: ast.Module) -> bool:
     for node in tree.body:
         if isinstance(node, ast.Assign) and any(
@@ -176,6 +188,18 @@ class _Scanner(ast.NodeVisitor):
     visit_FunctionDef = _scoped
     visit_AsyncFunctionDef = _scoped
     visit_ClassDef = _scoped
+
+    def visit_If(self, node: ast.If) -> None:
+        """The body of exactly ``if sys.platform == "win32":`` never runs off
+        Windows (conftest's error-mode call is the case).  Its ``else`` is
+        not guarded, and no other condition is understood."""
+        self.visit(node.test)
+        self.skipped.append(self.skipped[-1] or _is_win32_check(node.test))
+        for child in node.body:
+            self.visit(child)
+        self.skipped.pop()
+        for child in node.orelse:
+            self.visit(child)
 
     def visit_Call(self, node: ast.Call) -> None:
         for message in _patch_problems(node):
@@ -229,6 +253,10 @@ class TestTheScannerItself:
             # Skipped on Linux only, which is the wrong way round.
             "@pytest.mark.skipif(sys.platform == 'linux', reason='')\n"
             "def test_x():\n    ctypes.GetLastError()\n",
+            # The else of a win32 check runs off Windows; other checks guard nothing.
+            "if sys.platform == 'win32':\n    pass\nelse:\n    ctypes.windll.kernel32\n",
+            "if sys.platform == 'linux':\n    ctypes.windll.kernel32\n",
+            "if sys.platform != 'win32':\n    ctypes.windll.kernel32\n",
         ],
     )
     def test_flags(self, source: str) -> None:
@@ -250,6 +278,8 @@ class TestTheScannerItself:
             "class TestX:\n    def test_x(self):\n        ctypes.windll.kernel32\n",
             "pytestmark = pytest.mark.skipif(sys.platform != 'win32', reason='')\n"
             "def test_x():\n    ctypes.WinDLL('user32')\n",
+            # The body of exactly `if sys.platform == "win32":` (conftest's error mode).
+            'if sys.platform == "win32":\n    ctypes.windll.kernel32.SetErrorMode(3)\n',
         ],
     )
     def test_accepts(self, source: str) -> None:

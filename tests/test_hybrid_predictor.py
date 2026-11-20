@@ -228,6 +228,17 @@ class TestHybridLLM:
         predictor.enable_llm = True
         assert predictor.enable_llm
 
+    def test_turning_it_on_starts_no_loader_thread(self, predictor: HybridPredictor):
+        """The real loader imports torch on a thread that outlives the test
+        and crashed later Qt tests (see conftest `_no_llm_loader_thread`)."""
+        import threading
+
+        before = {t.ident for t in threading.enumerate()}
+        predictor.enable_llm = True
+        started = [t.name for t in threading.enumerate() if t.ident not in before]
+        assert started == []
+        assert predictor._transformer is None
+
 
 class TestHybridStats:
     """Statistics reporting."""

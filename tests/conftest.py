@@ -9,6 +9,18 @@ from pathlib import Path
 
 import pytest
 
+# A test process that crashes must not put a Windows "Application Error"
+# dialog on the developer's desktop: it waits for a click, and on a machine
+# driven by an on-screen keyboard that is a modal box in the way.  Set at
+# import, so every xdist worker sets it for itself (children inherit it
+# too).  faulthandler still prints the Python stacks.
+if sys.platform == "win32":
+    import ctypes
+
+    _SEM_FAILCRITICALERRORS = 0x0001
+    _SEM_NOGPFAULTERRORBOX = 0x0002
+    ctypes.windll.kernel32.SetErrorMode(_SEM_FAILCRITICALERRORS | _SEM_NOGPFAULTERRORBOX)
+
 # ----------------------------------------------------------------------
 #  Sharding across machines (--shard-id / --shard-count)
 # ----------------------------------------------------------------------
@@ -223,6 +235,27 @@ def _no_real_focus_probe_anywhere():
     """
     with pytest.MonkeyPatch.context() as mp:
         mp.setattr("src.keyboard_bridge.start_focus_probe", lambda on_reading=None: None)
+        yield
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _no_llm_loader_thread():
+    """Never start the optional LLM loader thread.
+
+    ``HybridPredictor.enable_llm = True`` (and the bridge paths that set it)
+    starts a daemon thread that imports ``transformers`` and fetches
+    DistilGPT-2 from Hugging Face.  Where those packages are installed (a
+    developer's Python, not CI's venv) the thread outlived its test and was
+    still importing torch while later tests drove Qt on the main thread,
+    which crashed workers with an access violation, and the suite
+    downloaded a 340 MB model.  No test needs the real load; one that
+    does can patch the same name back.
+    """
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(
+            "src.prediction.hybrid_predictor.HybridPredictor._load_llm_async",
+            lambda self: None,
+        )
         yield
 
 
