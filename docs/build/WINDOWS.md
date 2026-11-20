@@ -332,8 +332,10 @@ the login screen.  Users who need an OSK at login should rely on that.
 ### Prerequisites
 
 ```powershell
-pip install pyinstaller
+pip install -r requirements-dev.txt
 ```
+
+That file pins the build tools exactly (PyInstaller, and `cyclonedx-bom` for the SBOM) alongside the test tools, so a release builds with the versions CI checked. A bare `pip install pyinstaller` takes whatever is newest and skips the SBOM tool. Run it again before a release if the Python you build with has been upgraded or cleaned up: `build.py` stops at *Checking Prerequisites* with "PyInstaller not found" otherwise (2.0.0's first build did).
 
 Optionally, install **NSIS** for an installer (otherwise you get a portable build):
 
@@ -621,6 +623,8 @@ __version__ = "x.y.z"
 
 This flows into the installer filename (`Alpha-OSK-Setup-x.y.z.exe`), NSIS `APP_VERSION` (Add/Remove Programs), and the registry `DisplayVersion`.
 
+**Always three parts, even for a major release: `2.0.0`, never `2.0`.** The updater's `_parse_version` accepts only a clean MAJOR.MINOR.PATCH tag and ignores anything else, so a `v2.0` release would never be offered to anyone.
+
 ### 2. Update `CHANGELOG.md`
 
 Add a new `## [x.y.z] (YYYY-MM-DD)` section at the top under `[Unreleased]`. Categorize under `### Added` / `### Fixed` / `### Changed` / `### Chores`.
@@ -646,6 +650,8 @@ gh pr create --base main --title "chore(release): x.y.z"
 python scripts/merge_pr.py <n>   # once CI is green
 git switch main && git pull --ff-only
 ```
+
+To change the version after the PR is open (2.0.0 started as 1.10.1), push a new commit to the same branch and edit the PR title. **Do not rename the branch**: GitHub closes a PR whose head branch is renamed, and it cannot be reopened, so you end up opening a fresh one.
 
 ### 4. Build + sign
 
