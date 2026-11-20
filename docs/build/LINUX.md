@@ -108,8 +108,8 @@ a single-directory bundle under `dist/alpha-osk/` that can be run
 directly or wrapped into an AppImage for distribution.
 
 ```bash
-# One-time: install PyInstaller into the project venv
-venv/bin/pip install pyinstaller
+# One-time: install the pinned build tools (PyInstaller, cyclonedx-bom) into the project venv
+venv/bin/pip install -r requirements-dev.txt
 
 # Bundle only (≈300 MB folder with bundled Qt)
 python build/linux/build.py
@@ -252,7 +252,7 @@ trust a hash pasted from anywhere other than a file you fetched yourself.
 
 ## Linux build (moved from CLAUDE.md)
 
-- The Linux pipeline in `build/linux/` mirrors the Windows one but skips the NSIS and signing legs (AppImage is unsigned by design; EV signing is Windows-specific). Commands: `venv/bin/pip install pyinstaller` (one-time); `python build/linux/build.py` (bundle -> `dist/alpha-osk/`); `python build/linux/build.py --appimage --fetch-appimagetool` (+ AppImage -> `release/Alpha-OSK-<ver>-x86_64.AppImage`).
+- The Linux pipeline in `build/linux/` mirrors the Windows one but skips the NSIS and signing legs (AppImage is unsigned by design; EV signing is Windows-specific). Commands: `venv/bin/pip install -r requirements-dev.txt` (one-time, pinned build tools); `python build/linux/build.py` (bundle -> `dist/alpha-osk/`); `python build/linux/build.py --appimage --fetch-appimagetool` (+ AppImage -> `release/Alpha-OSK-<ver>-x86_64.AppImage`).
 - `build/linux/alpha-osk.spec`: same exclusions as the Windows spec (torch, transformers, QtWebEngine, etc.).
 - `build/linux/build.py` optionally downloads `appimagetool` to `~/.cache/alpha-osk-build/` on first `--appimage` run. It is pinned to a tagged release (`1.9.1`, not the mutable `continuous` tag) and verified against `APPIMAGETOOL_SHA256` before it is ever executed; bump the tag and the hash together, never one without the other. This is trust-on-first-use, not independent verification (appimagetool ships no signed checksum manifest), but it catches the actual risk: the release asset being swapped, the tag re-pointed, or a corrupted or intercepted download, all of which the old `continuous`-tag fetch would have silently executed.
 - `build/linux/AppRun` points `QT_PLUGIN_PATH` / `QML2_IMPORT_PATH` at the bundled Qt and defaults `QT_QPA_PLATFORM=xcb`. `build/linux/alpha-osk.desktop` has `Categories=Utility;Accessibility;` so the app surfaces in accessibility menus once the AppImage is integrated.
