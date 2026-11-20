@@ -58,15 +58,21 @@ Unit = Sequence[Union[Group[T], float]]
 
 
 class _Job(Generic[T]):
-    __slots__ = ("units", "cancellable", "cancelled")
+    __slots__ = ("units", "cancellable", "cancelled", "on_delivered")
 
-    def __init__(self, units: Sequence[Unit[T]], cancellable: bool) -> None:
+    def __init__(
+        self,
+        units: Sequence[Unit[T]],
+        cancellable: bool,
+        on_delivered: Optional[Callable[[float], None]] = None,
+    ) -> None:
         self.units: List[List[Union[List[T], float]]] = [
             [float(item) if isinstance(item, (int, float)) else list(item) for item in unit]
             for unit in units
         ]
         self.cancellable = cancellable
         self.cancelled = False
+        self.on_delivered = on_delivered
 
     @property
     def group_count(self) -> int:
@@ -99,6 +105,7 @@ class SerialInjector(Generic[T]):
         gap_s: float,
         inline_budget_s: float,
         sleep: Callable[[float], None] = time.sleep,
+        clock: Callable[[], float] = time.monotonic,
         logger: Optional[logging.Logger] = None,
     ) -> None:
         """
@@ -111,11 +118,13 @@ class SerialInjector(Generic[T]):
                 while the injector is idle, is delivered on the caller's
                 thread; anything else is queued for the worker.
             sleep: Injected for tests; every gap goes through it.
+            clock: Injected for tests; the time handed to ``on_delivered``.
         """
         self._send = send
         self._gap_s = gap_s
         self._inline_budget_s = inline_budget_s
         self._sleep = sleep
+        self._clock = clock
         self._log = logger or logging.getLogger(__name__)
         # Held by whichever thread is delivering, so an inline burst and
         # the worker can never interleave.
@@ -136,6 +145,10 @@ class SerialInjector(Generic[T]):
         with self._state:
             return self._worker is not None
 
+    def now(self) -> float:
+        """The injector's clock."""
+        return self._clock()
+
     def paced_duration_s(self, group_count: int) -> float:
         """How long the gaps of a burst of ``group_count`` groups take."""
         return max(group_count - 1, 0) * self._gap_s
@@ -144,14 +157,25 @@ class SerialInjector(Generic[T]):
     #  Control
     # ------------------------------------------------------------------ #
 
-    def inject(self, units: Sequence[Unit[T]], *, cancellable: bool = False) -> None:
+    def inject(
+        self,
+        units: Sequence[Unit[T]],
+        *,
+        cancellable: bool = False,
+        on_delivered: Optional[Callable[[float], None]] = None,
+    ) -> None:
         """Deliver ``units`` in order, after everything handed in before.
 
         Returns before delivery unless the injector is idle and the burst
         fits the inline budget.  ``cancellable`` marks a burst
-        :meth:`cancel` may drop.
+        :meth:`cancel` may drop.  ``on_delivered(t)`` runs on the
+        delivering thread once every event of this burst went in, with
+        ``t`` the clock reading taken just after its last group: the
+        moment *this* burst reached the OS, not when the queue around it
+        drained.  It is not called for a burst cut short by a cancel or a
+        short ``SendInput``.
         """
-        job: _Job[T] = _Job(units, cancellable)
+        job: _Job[T] = _Job(units, cancellable, on_delivered)
         if not job.group_count:
             return
         with self._state:
@@ -241,11 +265,13 @@ class SerialInjector(Generic[T]):
         last_error = 0
         groups_sent = 0
         pause = 0.0
+        cut_short = False
         for unit in job.units:
             if job.cancelled:
                 self._log.debug(
                     "Key burst cancelled after %d/%d groups", groups_sent, job.group_count
                 )
+                cut_short = True
                 break
             for item in unit:
                 if not isinstance(item, list):
@@ -271,3 +297,5 @@ class SerialInjector(Generic[T]):
                 expected,
                 last_error,
             )
+        elif not cut_short and job.on_delivered is not None:
+            job.on_delivered(self._clock())

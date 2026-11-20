@@ -46,6 +46,7 @@ class Harness:
         gap_s: float = GAP,
         inline_budget_s: float = 0.1,
         send_result: Optional[Callable[[Sequence[str]], Tuple[int, int]]] = None,
+        clock: Optional[Callable[[], float]] = None,
     ) -> None:
         self.log: List[tuple] = []
         self._lock = threading.Lock()
@@ -78,6 +79,7 @@ class Harness:
             gap_s=gap_s,
             inline_budget_s=inline_budget_s,
             sleep=sleep,
+            **({} if clock is None else {"clock": clock}),
             logger=logging.getLogger("test.serial_injector"),
         )
 
@@ -388,3 +390,60 @@ class TestShortCounts:
         with caplog.at_level(logging.WARNING, logger="test.serial_injector"):
             h.injector.inject(tap("a"))
         assert caplog.text == ""
+
+
+class TestOnDelivered:
+    """``on_delivered`` dates one burst by its own last event (review of PR #257)."""
+
+    @staticmethod
+    def _clocked(**kwargs) -> Tuple[Harness, List[float]]:
+        """A harness whose clock reads how many groups have been sent."""
+        h: Optional[Harness] = None
+
+        def clock() -> float:
+            return float(len(h.calls)) if h is not None else 0.0
+
+        h = Harness(clock=clock, **kwargs)
+        stamps: List[float] = []
+        return h, stamps
+
+    def _note(self, h: Harness, stamps: List[float], name: str) -> Callable[[float], None]:
+        def delivered(t: float) -> None:
+            stamps.append(t)
+            h.log.append(("delivered", name))
+
+        return delivered
+
+    def test_an_inline_burst_is_dated_after_its_last_group(self):
+        h, stamps = self._clocked()
+        h.injector.inject(tap("a"), on_delivered=self._note(h, stamps, "a"))
+        assert stamps == [2.0]
+        assert h.log[-1] == ("delivered", "a")
+
+    def test_a_queued_burst_is_dated_by_itself_not_by_the_queue_draining(self):
+        """A release queued between two long inserts is dated when its own
+        event went in, before the second insert is typed."""
+        h, stamps = self._clocked(gap_s=0.001, inline_budget_s=0.0)
+        h.gate = threading.Event()
+        h.injector.inject(tap("a") + tap("b"), cancellable=True)
+        h.wait_parked()
+        h.injector.inject(atomic("shift-"), on_delivered=self._note(h, stamps, "shift-"))
+        h.injector.inject(tap("c") + tap("d") + tap("e"), cancellable=True)
+        h.finish()
+        assert stamps == [5.0], "dated after a+ a- b+ b- shift-, not after e-"
+        events = [entry[1] if entry[0] == "delivered" else None for entry in h.log]
+        assert events.index("shift-") < h.log.index(("send", ["c+"]))
+
+    def test_a_cancelled_burst_is_not_reported_delivered(self):
+        h, stamps = self._clocked(gap_s=0.001, inline_budget_s=0.0)
+        h.on_sleep = [h.injector.cancel]
+        h.injector.inject(
+            tap("a") + tap("b"), cancellable=True, on_delivered=self._note(h, stamps, "ab")
+        )
+        assert h.injector.settle(5)
+        assert stamps == []
+
+    def test_a_short_send_is_not_reported_delivered(self):
+        h, stamps = self._clocked(send_result=lambda events: (0, 5))
+        h.injector.inject(atomic("shift-"), on_delivered=self._note(h, stamps, "shift-"))
+        assert stamps == []
