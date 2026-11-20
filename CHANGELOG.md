@@ -4,6 +4,13 @@ All notable changes to Alpha-OSK are documented in this file.
 
 ## [Unreleased]
 
+## [2.0.0] (2026-11-20)
+
+### Fixed
+- **The suggestions sit over the letter keys.** The row of suggestions was centred in the space left between the bar's buttons, so it sat left of the letters when dictation was off, and well right of them with the arrow keys or the number pad showing. It is now centred over the letters, and moves aside only when a full row needs the room.
+- **A long dictation shows how it starts and how it ends.** After a dictation, the bar shows what you said until your next key. A passage longer than the bar used to lose its beginning; it now keeps whole words from both ends with "…" in the middle.
+- **A capital typed straight after Shift lets go stays a capital.** When the keyboard released Shift and typed a capital at once (sticky Shift, then a suggestion), Windows could still report Shift as down for a moment, and the capital could come out lowercase. The keyboard now trusts its own release for a tenth of a second. A Shift you hold on a real keyboard still counts, including a right-hand Shift held all along.
+
 ## [1.10.0] (2026-11-03)
 
 ### Changed
