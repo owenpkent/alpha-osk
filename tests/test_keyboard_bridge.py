@@ -24,6 +24,9 @@ from src.prediction.fuzzy_recognizer import QWERTY_POSITIONS
 from src.prediction.token_predictor import TokenPredictor
 from src.snippets import SnippetStore
 
+# Taken at import, before conftest's session fixture swaps in its stub.
+_REAL_WINDOW_IS_GAME = kb._window_is_game
+
 
 @pytest.fixture
 def bridge(tmp_path: Path) -> KeyboardBridge:
@@ -713,6 +716,12 @@ class TestGameKeyHold:
     missed; holding the key down ~one frame fixes it.
     """
 
+    @pytest.fixture(autouse=True)
+    def _the_real_detector(self, monkeypatch):
+        """``conftest.py`` stubs the detector for the whole suite; these
+        tests are the ones that test it, so they put it back."""
+        monkeypatch.setattr(kb, "_window_is_game", _REAL_WINDOW_IS_GAME)
+
     def test_char_uses_send_text_when_not_a_game(self, bridge: KeyboardBridge):
         bridge._game_auto_active = False
         bridge.pressKey("q")
@@ -850,6 +859,36 @@ class TestGameKeyHold:
         )
         monkeypatch.setattr(keyboard_bridge, "_window_is_borderless_fullscreen", lambda h: False)
         assert keyboard_bridge._window_is_game(999) is True
+
+
+class TestTheSuiteNeverReadsTheForegroundApp:
+    """The foreground poll must not pick game or compat mode from the
+    developer's desktop.
+
+    Both detectors read the real window behind the tests on Windows.  A
+    fullscreen browser or video there reads as a game, and in game mode a
+    character goes out through ``send_key`` with a hold, so a test counting
+    ``send_text`` calls saw nothing typed.  It showed only under load, when
+    a test lasted long enough for the 4 Hz poll to tick: four QML click
+    tests failed at 16 workers and passed when run alone.
+    """
+
+    def test_a_poll_of_a_full_screen_window_turns_on_neither_mode(
+        self, bridge: KeyboardBridge, monkeypatch
+    ):
+        # The desktop window covers the monitor and has no caption, which
+        # is what the borderless-fullscreen heuristic calls a game.
+        hwnd = 1
+        if sys.platform == "win32":
+            import ctypes
+
+            hwnd = int(ctypes.windll.user32.GetDesktopWindow())
+        monkeypatch.setattr(bridge, "_get_foreground_window_id", lambda: hwnd)
+        bridge._compat_auto_enabled = True
+        bridge._check_foreground_window()
+        bridge._check_foreground_window()
+        assert not bridge._game_auto_active
+        assert not bridge._compat_auto_active
 
 
 class TestContextTracking:

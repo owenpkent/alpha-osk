@@ -64,7 +64,7 @@ salted per process); a new sort over scores needs the same tie-break. `scripts/b
 
 ### Autouse guards in `tests/conftest.py`
 
-Two fixtures apply to every test, both stating a property that has to hold
+These fixtures apply to every test, each stating a property that has to hold
 for tests nobody has written yet rather than being patched in case by case:
 
 - **`_unplug_the_live_desktop`** stubs `is_password_field()` and
@@ -78,8 +78,17 @@ for tests nobody has written yet rather than being patched in case by case:
   them, each holding a console window. (Today the real spawn is also a
   bundle-sized copy into the developer's temp dir, one more reason no test
   may reach it.)
+- **`_no_mode_picked_from_the_real_foreground_app`** (session-scoped) stubs
+  `_window_is_game` and `_window_needs_compat_mode`. The bridge's 4 Hz
+  foreground poll classified the real window in front of the tests, and a
+  fullscreen browser or video reads as a game: in game mode a character goes
+  out through `send_key` with a hold, so a test counting `send_text` calls saw
+  nothing typed. It needed the poll to tick inside a test, which load decides,
+  so four QML click tests failed at 16 workers and passed alone.
+  `TestGameKeyHold` puts the real detector back; the guard is
+  `TestTheSuiteNeverReadsTheForegroundApp`.
 
-Both fail the same way when absent: something outside the test survives it.
+Absent, each lets the machine the suite runs on decide a result, or leaves something outside the test that survives it.
 A test wanting the real behaviour patches the same name and wins, since its
 own monkeypatch applies after the fixture's.
 
