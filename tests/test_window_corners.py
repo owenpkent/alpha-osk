@@ -112,6 +112,7 @@ def qml_root(qapp):
         yield root, warnings
     finally:
         del engine
+        bridge.shutdown()
 
 
 class TestWhoRoundsTheCorners:
