@@ -313,8 +313,12 @@ the user is no longer typing.
 ### The finished text, and auto-copy
 
 When a *dictate* run has been delivered, the banner shows that run's **whole
-text** where the pills are, elided on the **left** (the opposite of every other
-elide in `Main.qml`, on purpose: the tail is what you check), followed by a
+text** where the pills are. A run that does not fit is cut in the **middle, on
+word boundaries** (`dictationBannerText.middleElided`, measured with a
+`FontMetrics` in the Text's own font), so it shows how the run began and how it
+ended; owner's call 2026-11-19, replacing a left elide that lost the beginning.
+Qt's `ElideMiddle` is only the fallback for a single word wider than the bar.
+The live state labels still elide on the left. It is followed by a
 small "Copied" badge. The text is `textFormat: Text.PlainText` (it is whatever
 two recognisers returned). The badge is drawn in the theme's key colour under
 the theme's text colour, the pairing the pills use, so it clears 4.5:1 on all
@@ -353,7 +357,7 @@ that property feeds `scanRevision`, so a scanner's target map follows).
 
 Guards: `tests/test_dictation_ai.py::TestRunFinished`,
 `::TestTheBridgeAutoCopies`, `tests/test_qml_dictation.py::TestNoRunPreviewsWords`,
-`::TestTheFinishedTextReplacesThePills`, `::TestTheFinishedTextElidesFromTheLeft`.
+`::TestTheFinishedTextReplacesThePills`, `::TestTheFinishedTextKeepsBothEnds`.
 The 8 s timeout guard (`test_it_times_out`) asserts the banner is visible
 with the real interval still armed and only then shortens the timer: the
 earlier form shortened it first and flaked on a loaded CI shard (PR #237;
