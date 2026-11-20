@@ -99,6 +99,7 @@ class SerialInjector(Generic[T]):
         gap_s: float,
         inline_budget_s: float,
         sleep: Callable[[float], None] = time.sleep,
+        clock: Callable[[], float] = time.monotonic,
         logger: Optional[logging.Logger] = None,
     ) -> None:
         """
@@ -111,11 +112,14 @@ class SerialInjector(Generic[T]):
                 while the injector is idle, is delivered on the caller's
                 thread; anything else is queued for the worker.
             sleep: Injected for tests; every gap goes through it.
+            clock: Injected for tests; stamps :attr:`idle_since`.
         """
         self._send = send
         self._gap_s = gap_s
         self._inline_budget_s = inline_budget_s
         self._sleep = sleep
+        self._clock = clock
+        self._idle_since = clock()
         self._log = logger or logging.getLogger(__name__)
         # Held by whichever thread is delivering, so an inline burst and
         # the worker can never interleave.
@@ -135,6 +139,16 @@ class SerialInjector(Generic[T]):
         """True while anything is queued or still being delivered by the worker."""
         with self._state:
             return self._worker is not None
+
+    @property
+    def idle_since(self) -> float:
+        """When the worker last emptied the queue (construction, if never), by :meth:`now`."""
+        with self._state:
+            return self._idle_since
+
+    def now(self) -> float:
+        """The injector's clock."""
+        return self._clock()
 
     def paced_duration_s(self, group_count: int) -> float:
         """How long the gaps of a burst of ``group_count`` groups take."""
@@ -220,6 +234,7 @@ class SerialInjector(Generic[T]):
             while True:
                 with self._state:
                     if not self._queue:
+                        self._idle_since = self._clock()
                         self._worker = None
                         return
                     job = self._queue.popleft()

@@ -113,6 +113,18 @@ INTER_EVENT_DELAY_S = 0.003
 # seconds.  33 events, a 16-letter word and its space, fit the budget.
 INLINE_INJECT_BUDGET_S = 0.1
 
+# How long after this synthesizer releases a modifier its own record beats
+# ``GetAsyncKeyState`` (issue #227).  The async key state can lag an
+# injected event until the raw input thread has processed it
+# (https://devblogs.microsoft.com/oldnewthing/20140213-00/?p=1773), so a
+# capital built straight after ``release_modifier("shift")`` could read
+# Shift as still down, skip its own wrap and land lowercase.  Short on
+# purpose: a Shift the user holds on a real keyboard is respected again
+# once it has passed.  Within it nothing is lost, since our key-up cleared
+# the key's state at the OS whatever the hand on the keyboard is doing,
+# until that key sends another key-down (autorepeat starts at 250 ms).
+OWN_RELEASE_SETTLE_S = 0.1
+
 # How long ``shutdown`` waits for the injector's worker to finish the unit
 # in flight (a character, a gesture: a few groups) and exit.
 SHUTDOWN_TIMEOUT_S = 2.0
@@ -1243,18 +1255,38 @@ class WindowsKeySynthesizer(KeySynthesizerBase):
         queued hold or release will leave behind, and that prediction wins
         while the queue is live.  Once the injector is idle the OS is
         authoritative again and the predictions are forgotten.
+
+        Then a modifier this synthesizer released itself reads as up for
+        ``OWN_RELEASE_SETTLE_S`` after the release reached the OS, whatever
+        ``GetAsyncKeyState`` says, because that read can lag an injected
+        key-up (issue #227).  The record only ever turns a "down" into an
+        "up"; a key the OS reports up is up.
         """
         pending = self._pending_modifiers
+        released = self._released_at
         if self._injector.busy:
             predicted = pending.get(vk)
             if predicted is not None:
                 return predicted
         elif pending:
+            # Everything queued has landed: a queued release reached the OS
+            # no later than the moment the worker went idle.
+            landed = self._injector.idle_since
+            for key, down in pending.items():
+                if down:
+                    released.pop(key, None)
+                else:
+                    released[key] = max(released.get(key, landed), landed)
             pending.clear()
         try:
-            return bool(self._user32.GetAsyncKeyState(vk) & 0x8000)
+            down = bool(self._user32.GetAsyncKeyState(vk) & 0x8000)
         except (OSError, ValueError):
             return False
+        if down and vk in released:
+            if self._injector.now() - released[vk] < OWN_RELEASE_SETTLE_S:
+                return False
+            del released[vk]
+        return down
 
     def _note_pending_modifier(self, vk: int, *, down: bool) -> None:
         """Record what a queued hold or release will leave ``vk`` as (see ``_os_key_down``)."""
@@ -1267,6 +1299,15 @@ class WindowsKeySynthesizer(KeySynthesizerBase):
         return self._pending_modifier_state
 
     _pending_modifier_state: Optional[Dict[int, bool]] = None
+
+    @property
+    def _released_at(self) -> Dict[int, float]:
+        """When each modifier we released reached the OS (see ``_os_key_down``)."""
+        if self._released_at_state is None:
+            self._released_at_state = {}
+        return self._released_at_state
+
+    _released_at_state: Optional[Dict[int, float]] = None
 
     def hold_modifier(self, key_name: str) -> None:
         """Send a modifier key-down so it stays held at the OS level.
@@ -1287,6 +1328,7 @@ class WindowsKeySynthesizer(KeySynthesizerBase):
         vk = _KEY_MAP.get(key_name)
         if vk is not None:
             self._note_pending_modifier(vk, down=True)
+            self._released_at.pop(vk, None)
             self._inject([_atomic([self._make_vk_scancode_event(vk, key_down=True)])])
             self._log_send(f"hold modifier {key_name} (vk=0x{vk:02X})")
 
@@ -1300,6 +1342,10 @@ class WindowsKeySynthesizer(KeySynthesizerBase):
         if vk is not None:
             self._note_pending_modifier(vk, down=False)
             self._inject([_atomic([self._make_vk_scancode_event(vk, key_down=False)])])
+            if not self._injector.busy:
+                # Delivered inline: it has reached the OS by now.  A queued
+                # one is stamped when the queue drains (``_os_key_down``).
+                self._released_at[vk] = self._injector.now()
             self._log_send(f"release modifier {key_name} (vk=0x{vk:02X})")
 
     def _inject(self, units: Sequence[_Unit], *, cancellable: bool = False) -> None:
@@ -1367,13 +1413,18 @@ class WindowsKeySynthesizer(KeySynthesizerBase):
 
     _injector_instance: Optional[SerialInjector[INPUT]] = None
 
-    def _build_injector(self, sleep: Callable[[float], None] = time.sleep) -> SerialInjector[INPUT]:
-        """Build an injector over ``_send_array``; tests pass a scripted ``sleep``."""
+    def _build_injector(
+        self,
+        sleep: Callable[[float], None] = time.sleep,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> SerialInjector[INPUT]:
+        """Build an injector over ``_send_array``; tests script ``sleep`` and ``clock``."""
         return SerialInjector(
             self._send_array,
             gap_s=INTER_EVENT_DELAY_S,
             inline_budget_s=INLINE_INJECT_BUDGET_S,
             sleep=sleep,
+            clock=clock,
             logger=_logger,
         )
 

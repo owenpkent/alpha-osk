@@ -1371,13 +1371,17 @@ class TestWindowsInjectPacing:
     _VSC[0x10] = 0x2A  # VK_SHIFT -> left shift scancode
     SHIFT_SC = 0x2A
 
-    def _make(self, sleep=None, *, shift_held: bool = False):
+    def _make(self, sleep=None, *, shift_held: bool = False, async_key_state=None, clock=None):
         """A synthesizer with a fake SendInput, a fake (or gated) sleep and a
         stub user32, so the real scancode builder runs.
 
         The log holds ``("send", n, [key...])`` per SendInput call and
         ``("sleep", s)`` per pacing gap, in order.  A key is its VK for a
         VK event, else its scancode or Unicode code unit.
+
+        ``async_key_state(vk, sent)`` replaces the ``GetAsyncKeyState``
+        stub (``sent`` is every event so far, as ``(key, down)``);
+        ``clock`` replaces the injector's monotonic clock.
         """
         from src.platform import windows as win_mod
 
@@ -1386,10 +1390,15 @@ class TestWindowsInjectPacing:
         synth = win_mod.WindowsKeySynthesizer.__new__(win_mod.WindowsKeySynthesizer)
         vk_scan, vsc = self._VK_SCAN, self._VSC
 
+        sent: list = []
+
         def fake_send(n, arr, size):
             keys = [arr[i]._input.ki.wVk or arr[i]._input.ki.wScan for i in range(n)]
             with log_lock:
                 log.append(("send", n, keys))
+                for i in range(n):
+                    up = bool(arr[i]._input.ki.dwFlags & win_mod.KEYEVENTF_KEYUP)
+                    sent.append((keys[i], not up))
             return n
 
         def fake_sleep(s):
@@ -1413,11 +1422,18 @@ class TestWindowsInjectPacing:
                 return 0
 
             def GetAsyncKeyState(self_inner, vk):
+                if async_key_state is not None:
+                    with log_lock:
+                        return async_key_state(vk, list(sent))
                 return 0x8000 if (vk == win_mod.VK_SHIFT and shift_held) else 0
 
         synth._user32 = _StubUser32()
         synth._send_input = fake_send
-        synth._injector = synth._build_injector(sleep=fake_sleep)
+        synth._injector = (
+            synth._build_injector(sleep=fake_sleep)
+            if clock is None
+            else synth._build_injector(sleep=fake_sleep, clock=clock)
+        )
         synth._log_send = lambda msg: None
         synth._make_vk_scancode_event = lambda vk, key_down: synth_event(win_mod, vk, key_down)
         synth._make_key_event = lambda vk, key_down: synth_event(win_mod, vk, key_down)
@@ -1587,6 +1603,84 @@ class TestWindowsInjectPacing:
         # prediction must not linger: "A" gets its wrap.
         synth.send_text("A")
         assert self._sends(log)[-1] == ("send", 4, [self.SHIFT_SC, 0x11, 0x11, self.SHIFT_SC])
+
+    # -- an OS that lags our own release (issue #227) -----------------------
+
+    @staticmethod
+    def _lagging_os(win_mod):
+        """``GetAsyncKeyState`` one event behind: it reports VK_SHIFT as the
+        state *before* the last Shift event sent, the lag Raymond Chen
+        describes for injected input."""
+
+        def state(vk, sent):
+            if vk != win_mod.VK_SHIFT:
+                return 0
+            shifts = [down for key, down in sent if key == win_mod.VK_SHIFT]
+            return 0x8000 if len(shifts) >= 2 and shifts[-2] else 0
+
+        return state
+
+    def test_a_capital_after_releasing_shift_gets_its_own_wrap(self):
+        """Sticky Shift released, then a pill's capital: the OS still says
+        Shift is down, but we released it, so "A" must carry its own wrap
+        or it lands lowercase while the bridge records the capital."""
+        from src.platform import windows as win_mod
+
+        win_mod_, synth, log = self._make(async_key_state=self._lagging_os(win_mod))
+        synth.hold_modifier("shift")
+        synth.release_modifier("shift")
+        assert synth._user32.GetAsyncKeyState(win_mod.VK_SHIFT) & 0x8000, "the fake must lag"
+        synth.send_text("A")
+        assert self._sends(log)[-1] == ("send", 4, [self.SHIFT_SC, 0x11, 0x11, self.SHIFT_SC])
+
+    def test_a_queued_release_counts_from_when_the_queue_drained(self):
+        """A release queued behind a long insert reaches the OS only when the
+        worker gets to it, so its settle window starts there."""
+        from src.platform import windows as win_mod
+
+        now = [100.0]
+        gate = _Gate()
+        _, synth, log = self._make(
+            sleep=gate.sleep, async_key_state=self._lagging_os(win_mod), clock=lambda: now[0]
+        )
+        synth.hold_modifier("shift")
+        synth.send_text("x" * 100)
+        gate.wait_parked()
+        synth.release_modifier("shift")  # queued
+        now[0] = 200.0  # long after the call, at the moment the queue drains
+        gate.release()
+        assert synth._injector.settle(5)
+        synth.send_text("A")
+        assert self._sends(log)[-1] == ("send", 4, [self.SHIFT_SC, 0x11, 0x11, self.SHIFT_SC])
+
+    def test_a_shift_held_on_a_real_keyboard_counts_again_after_the_window(self):
+        """The record corrects a lagging read; it does not replace the OS.
+        Once the window has passed, a Shift the OS reports down is down,
+        so "a" goes out as Unicode rather than as a shifted scancode."""
+        now = [100.0]
+        win_mod, synth, log = self._make(shift_held=True, clock=lambda: now[0])
+        synth.release_modifier("shift")
+        now[0] += win_mod.OWN_RELEASE_SETTLE_S + 0.001
+        synth.send_text("a")
+        assert self._sent_keys(log)[-2:] == [ord("a"), ord("a")]
+
+    def test_re_holding_shift_ends_the_correction(self):
+        """Released then held again (``_without_held_modifiers``' finally):
+        the lock is down, so "A" must not add a wrap whose key-up drops it."""
+        now = [100.0]
+        win_mod, synth, log = self._make(shift_held=True, clock=lambda: now[0])
+        synth.release_modifier("shift")
+        synth.hold_modifier("shift")
+        synth.send_text("A")
+        assert self._sent_keys(log)[-3:] == [win_mod.VK_SHIFT, 0x11, 0x11], "A carried a wrap"
+
+    def test_a_modifier_we_never_released_is_read_from_the_os(self):
+        """A Ctrl released moments ago says nothing about Shift."""
+        now = [100.0]
+        win_mod, synth, log = self._make(shift_held=True, clock=lambda: now[0])
+        synth.release_modifier("ctrl")
+        synth.send_text("a")
+        assert self._sent_keys(log)[-2:] == [ord("a"), ord("a")]
 
     # -- cancel and shutdown -----------------------------------------------
 
