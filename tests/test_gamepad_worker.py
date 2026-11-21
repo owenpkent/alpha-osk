@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import threading
+import time
 from typing import List, Optional, Tuple
 
 from src.gamepad.state import NEUTRAL, PadReport
@@ -219,3 +220,182 @@ class TestFailing:
         h.worker.stop()
         h.worker.stop()
         assert device.closes == 1
+
+
+class _BlockingDevice:
+    """The first apply blocks on ``release`` (a stuck driver call)."""
+
+    def __init__(self) -> None:
+        self.applied: List[PadReport] = []
+        self.events: List[str] = []
+        self.entered = threading.Event()
+        self.release = threading.Event()
+        self.cancelled = False
+        self.closes = 0
+
+    def apply(self, report: PadReport) -> None:
+        self.applied.append(report)
+        if len(self.applied) == 1:
+            self.entered.set()
+            assert self.release.wait(CEILING_S)
+
+    def cancel(self) -> None:
+        self.cancelled = True
+        self.events.append("cancel")
+
+    def close(self) -> None:
+        self.closes += 1
+        self.events.append("close")
+
+
+class TestAStuckApply:
+    def test_stop_times_out_cancels_first_and_reports_off_only_after_the_close(self) -> None:
+        device = _BlockingDevice()
+        events: List[str] = []
+        off = threading.Event()
+
+        def status(s: str, d: str) -> None:
+            events.append(s)
+            device.events.append(f"status:{s}")
+            if s == "off":
+                off.set()
+
+        worker = PadWorker(lambda: device, status)
+        worker.start()
+        worker.submit(_report(7))
+        assert device.entered.wait(CEILING_S)
+        worker.stop(timeout_s=0.05)
+        assert worker.running
+        assert device.cancelled
+        assert "off" not in events
+        device.release.set()
+        assert off.wait(CEILING_S)
+        worker.stop()
+        assert not worker.running
+        assert device.applied == [_report(7), NEUTRAL]
+        assert device.closes == 1
+        assert device.events.index("cancel") < device.events.index("close")
+        assert device.events.index("close") < device.events.index("status:off")
+
+    def test_a_device_without_cancel_still_stops(self) -> None:
+        h = _Harness()
+        h.worker.start()
+        assert h.got["on"].wait(CEILING_S)
+        h.worker.stop()
+        assert not h.worker.running
+
+
+class _TimedDevice:
+    def __init__(self, first_apply_s: float = 0.0) -> None:
+        self.first_apply_s = first_apply_s
+        self.log: List[Tuple[float, PadReport]] = []
+        self.closes = 0
+
+    def apply(self, report: PadReport) -> None:
+        if not self.log and self.first_apply_s:
+            time.sleep(self.first_apply_s)
+        self.log.append((time.perf_counter(), report))
+
+    def close(self) -> None:
+        self.closes += 1
+
+    def wait_for(self, count: int) -> bool:
+        deadline = time.perf_counter() + CEILING_S
+        while len(self.log) < count and time.perf_counter() < deadline:
+            time.sleep(0.002)
+        return len(self.log) >= count
+
+
+HOLD_S = 0.1
+TOLERANCE_S = 0.01
+
+
+def _timed(device: _TimedDevice, min_hold_s: float = HOLD_S) -> PadWorker:
+    worker = PadWorker(lambda: device, lambda s, d: None)
+    worker.min_hold_s = min_hold_s
+    return worker
+
+
+class TestMinimumHold:
+    def test_a_slow_first_write_cannot_squash_a_tap(self) -> None:
+        device = _TimedDevice(first_apply_s=0.15)
+        worker = _timed(device)
+        worker.start()
+        worker.submit(_report(1))
+        worker.submit(NEUTRAL)
+        assert device.wait_for(2)
+        gap = device.log[1][0] - device.log[0][0]
+        assert gap >= HOLD_S - TOLERANCE_S
+        assert gap < CEILING_S
+        assert device.log[1][1] == NEUTRAL
+        worker.stop()
+
+    def test_a_control_down_longer_than_the_floor_is_released_at_once(self) -> None:
+        device = _TimedDevice()
+        worker = _timed(device, min_hold_s=0.2)
+        worker.start()
+        worker.submit(_report(1))
+        assert device.wait_for(1)
+        time.sleep(0.25)
+        submitted = time.perf_counter()
+        worker.submit(NEUTRAL)
+        assert device.wait_for(2)
+        assert device.log[1][0] - submitted < 0.15
+        worker.stop()
+
+    def test_a_second_button_going_down_is_not_delayed(self) -> None:
+        device = _TimedDevice()
+        worker = _timed(device, min_hold_s=0.5)
+        worker.start()
+        start = time.perf_counter()
+        worker.submit(_report(1))
+        worker.submit(_report(3))
+        assert device.wait_for(2)
+        assert device.log[1][0] - start < 0.4
+        worker.stop()
+
+    def test_a_stick_moving_between_non_zero_positions_is_not_delayed(self) -> None:
+        device = _TimedDevice()
+        worker = _timed(device, min_hold_s=0.5)
+        worker.start()
+        start = time.perf_counter()
+        worker.submit(PadReport(left_y=1.0))
+        worker.submit(PadReport(left_x=1.0))
+        assert device.wait_for(2)
+        assert device.log[1][0] - start < 0.4
+        worker.stop()
+
+    def test_a_trigger_is_held_for_the_floor_too(self) -> None:
+        device = _TimedDevice()
+        worker = _timed(device)
+        worker.start()
+        worker.submit(PadReport(right_trigger=1.0))
+        worker.submit(NEUTRAL)
+        assert device.wait_for(2)
+        assert device.log[1][0] - device.log[0][0] >= HOLD_S - TOLERANCE_S
+        worker.stop()
+
+    def test_stop_during_a_hold_returns_promptly_and_ends_on_neutral(self) -> None:
+        device = _TimedDevice()
+        worker = _timed(device, min_hold_s=30.0)
+        worker.start()
+        worker.submit(_report(1))
+        assert device.wait_for(1)
+        worker.submit(NEUTRAL)
+        begin = time.perf_counter()
+        worker.stop()
+        assert time.perf_counter() - begin < 2.0
+        assert not worker.running
+        assert device.log[-1][1] == NEUTRAL
+        assert device.closes == 1
+
+    def test_a_zero_floor_keeps_the_old_behaviour(self) -> None:
+        device = _TimedDevice()
+        worker = _timed(device, min_hold_s=0.0)
+        worker.start()
+        start = time.perf_counter()
+        worker.submit(_report(1))
+        worker.submit(NEUTRAL)
+        assert device.wait_for(2)
+        assert device.log[1][0] - start < 0.5
+        worker.stop()

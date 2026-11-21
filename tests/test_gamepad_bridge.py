@@ -39,6 +39,33 @@ class _FakeWorker:
         self.stops += 1
 
 
+class _StickyWorker(_FakeWorker):
+    """A worker that is still running after ``stop`` until ``finish`` is called."""
+
+    def __init__(self, open_device: Callable[[], Any], on_status: Callable[[str, str], None]):
+        super().__init__(open_device, on_status)
+        self.running = False
+
+    def start(self) -> None:
+        super().start()
+        self.running = True
+
+    def finish(self) -> None:
+        self.running = False
+
+
+class _CleanWorker(_StickyWorker):
+    def stop(self) -> None:
+        super().stop()
+        self.running = False
+
+
+class _HoldWorker(_FakeWorker):
+    def __init__(self, open_device: Callable[[], Any], on_status: Callable[[str, str], None]):
+        super().__init__(open_device, on_status)
+        self.min_hold_s = 0.0
+
+
 class _Clock:
     def __init__(self) -> None:
         self.now = 1000.0
@@ -319,6 +346,71 @@ class TestTurningOff:
         pad.shutdown()
         assert pad.status == "off"
         assert _worker().stops == 1
+
+
+class TestAWorkerThatOutlivesItsStop:
+    def test_turning_on_again_is_refused_until_it_has_really_stopped(
+        self, qapp: Any, clock: _Clock
+    ) -> None:
+        bridge = _make(qapp, clock, factory=_StickyWorker)
+        failures: List[str] = []
+        bridge.failed.connect(failures.append)
+        assert bridge.setActive(True)
+        _pump()
+        first = _worker()
+        assert bridge.setActive(False) is False
+        assert first.running
+        assert bridge.setActive(True) is False
+        assert failures == ["The controller is still disconnecting. Try again in a moment."]
+        assert len(_FakeWorker.instances) == 1
+        assert bridge.status == "off"
+        # A late status from the retiring worker is ignored.
+        first.on_status("on", "")
+        _pump()
+        assert bridge.status == "off"
+        first.finish()
+        assert bridge.setActive(True) is True
+        _pump()
+        assert len(_FakeWorker.instances) == 2
+        assert bridge.status == "on"
+
+    def test_a_worker_that_stopped_cleanly_does_not_block_the_next_on(
+        self, qapp: Any, clock: _Clock
+    ) -> None:
+        bridge = _make(qapp, clock, factory=_CleanWorker)
+        assert bridge.setActive(True)
+        _pump()
+        bridge.setActive(False)
+        assert bridge.setActive(True) is True
+        assert len(_FakeWorker.instances) == 2
+
+    def test_workers_without_a_running_attribute_never_block(
+        self, qapp: Any, clock: _Clock
+    ) -> None:
+        bridge = _make(qapp, clock)
+        assert bridge.setActive(True)
+        bridge.setActive(False)
+        assert bridge.setActive(True) is True
+
+    def test_shutdown_with_a_stuck_worker_does_not_raise(self, qapp: Any, clock: _Clock) -> None:
+        bridge = _make(qapp, clock, factory=_StickyWorker)
+        assert bridge.setActive(True)
+        bridge.shutdown()
+        bridge.shutdown()
+
+
+class TestTheWorkersMinimumHold:
+    def test_it_is_set_from_min_press_ms_when_the_worker_has_one(
+        self, qapp: Any, clock: _Clock
+    ) -> None:
+        bridge = _make(qapp, clock, factory=_HoldWorker)
+        assert bridge.setActive(True)
+        assert _worker().min_hold_s == GamepadBridge.MIN_PRESS_MS / 1000.0  # type: ignore[attr-defined]
+
+    def test_a_worker_without_one_is_left_alone(self, qapp: Any, clock: _Clock) -> None:
+        bridge = _make(qapp, clock)
+        assert bridge.setActive(True)
+        assert not hasattr(_worker(), "min_hold_s")
 
 
 class TestWorkerErrors:

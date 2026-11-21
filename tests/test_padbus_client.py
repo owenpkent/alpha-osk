@@ -342,8 +342,12 @@ class _FakeBus:
         return struct.unpack_from("<II", raw)[1]
 
 
-def _no_more_items():
-    return pb.PadBusError("no device object", pb.ERROR_NO_MORE_ITEMS)
+def _no_more_items(code=pb.ERROR_NO_MORE_ITEMS):
+    return pb.PadBusError("no device object", code)
+
+
+#: ViGEmBus 1.21 reports the first, 1.22 the second (STATUS_DEVICE_DOES_NOT_EXIST).
+MISSING_CODES = [pb.ERROR_NO_MORE_ITEMS, pb.ERROR_DEV_NOT_EXIST]
 
 
 @pytest.fixture
@@ -408,10 +412,13 @@ class TestPlugging:
             pb.X360Pad()
         assert bus.closed == 1
 
-    def test_a_serial_that_never_takes_a_report_is_skipped_after_the_ready_timeout(self, bus):
+    @pytest.mark.parametrize("winerror", MISSING_CODES)
+    def test_a_serial_that_never_takes_a_report_is_skipped_after_the_ready_timeout(
+        self, bus, winerror
+    ):
         def fail(code, raw):
             if code == pb.IOCTL_XUSB_SUBMIT_REPORT and bus.serial_of(raw) == 1:
-                return _no_more_items()
+                return _no_more_items(winerror)
 
         bus.fail = fail
         pad = pb.X360Pad(ready_timeout_ms=20)
@@ -451,9 +458,25 @@ class TestUpdate:
         with pytest.raises(pb.PadBusError):
             pad.update()
 
-    def test_a_report_that_fails_once_is_retried_and_counted(self, bus):
+    def test_the_missing_device_codes_are_259_and_55(self):
+        assert pb.ERROR_DEV_NOT_EXIST == 55
+        assert pb._is_missing_child(259) and pb._is_missing_child(55)
+        assert not pb._is_missing_child(5)
+
+    def test_another_error_while_proving_readiness_raises_without_retrying(self, bus):
+        bus.fail = lambda code, raw: (
+            pb.PadBusError("denied", 5) if code == pb.IOCTL_XUSB_SUBMIT_REPORT else None
+        )
+        with pytest.raises(pb.PadBusError):
+            pb.X360Pad()
+        submits = [c for c in bus.codes() if c == pb.IOCTL_XUSB_SUBMIT_REPORT]
+        assert len(submits) == 1
+        assert pb.IOCTL_VIGEM_UNPLUG_TARGET in bus.codes()
+
+    @pytest.mark.parametrize("winerror", MISSING_CODES)
+    def test_a_report_that_fails_once_is_retried_and_counted(self, bus, winerror):
         pad = pb.X360Pad()
-        failures = [_no_more_items(), _no_more_items()]
+        failures = [_no_more_items(winerror), _no_more_items(winerror)]
         bus.fail = lambda code, raw: failures.pop(0) if failures else None
         pad.update()
         assert pad.recovered_reports == 1
@@ -467,7 +490,8 @@ class TestUpdate:
             pad.update()
         assert len(bus.calls) == before + 1
 
-    def test_a_pad_that_stays_gone_is_replugged_on_another_serial(self, bus, monkeypatch):
+    @pytest.mark.parametrize("winerror", MISSING_CODES)
+    def test_a_pad_that_stays_gone_is_replugged_on_another_serial(self, bus, monkeypatch, winerror):
         monkeypatch.setattr(pb, "REPORT_RETRY_S", 0.02)
         pad = pb.X360Pad()
         pad.press_button(pb.XUSB_BUTTON.XUSB_GAMEPAD_B)
@@ -475,7 +499,7 @@ class TestUpdate:
 
         def fail(code, raw):
             if code == pb.IOCTL_XUSB_SUBMIT_REPORT and bus.serial_of(raw) == 1:
-                return _no_more_items()
+                return _no_more_items(winerror)
 
         bus.fail = fail
         pad.update()
@@ -489,6 +513,72 @@ class TestUpdate:
         assert code == pb.IOCTL_XUSB_SUBMIT_REPORT
         assert bus.serial_of(raw) == 2
         assert struct.unpack_from("<H", raw, 8)[0] == 0x2000
+
+
+def _last_submit_buttons(bus):
+    submits = [raw for code, raw in bus.calls if code == pb.IOCTL_XUSB_SUBMIT_REPORT]
+    return struct.unpack_from("<H", submits[-1], 8)[0]
+
+
+class TestCancel:
+    def test_after_cancel_update_sends_an_all_zero_report(self, bus):
+        pad = pb.X360Pad()
+        pad.press_button(pb.XUSB_BUTTON.XUSB_GAMEPAD_A)
+        pad.right_trigger_float(1.0)
+        pad.left_joystick_float(1.0, 1.0)
+        pad.cancel()
+        pad.update()
+        code, raw = bus.calls[-1]
+        assert code == pb.IOCTL_XUSB_SUBMIT_REPORT
+        assert raw == struct.pack("<IIHBBhhhh", 20, pad.serial, 0, 0, 0, 0, 0, 0, 0)
+
+    def test_before_cancel_the_held_report_is_still_sent(self, bus):
+        pad = pb.X360Pad()
+        pad.press_button(pb.XUSB_BUTTON.XUSB_GAMEPAD_A)
+        pad.update()
+        assert _last_submit_buttons(bus) == 0x1000
+
+    def test_a_replug_under_way_when_cancel_lands_does_not_resubmit_the_stale_report(
+        self, bus, monkeypatch
+    ):
+        monkeypatch.setattr(pb, "REPORT_RETRY_S", 0.02)
+        pad = pb.X360Pad()
+        pad.press_button(pb.XUSB_BUTTON.XUSB_GAMEPAD_B)
+
+        def fail(code, raw):
+            if code == pb.IOCTL_XUSB_SUBMIT_REPORT and bus.serial_of(raw) == 1:
+                return _no_more_items()
+            # Cancel arrives while the new serial is being plugged.
+            if code == pb.IOCTL_VIGEM_WAIT_DEVICE_READY:
+                pad.cancel()
+
+        bus.fail = fail
+        pad.update()
+        assert pad.serial == 2
+        submits = [raw for code, raw in bus.calls if code == pb.IOCTL_XUSB_SUBMIT_REPORT]
+        on_new_serial = [r for r in submits if bus.serial_of(r) == 2]
+        assert on_new_serial
+        assert all(struct.unpack_from("<H", r, 8)[0] == 0 for r in on_new_serial)
+
+    def test_cancelled_pad_starts_no_new_replug(self, bus, monkeypatch):
+        monkeypatch.setattr(pb, "REPORT_RETRY_S", 0.02)
+        pad = pb.X360Pad()
+        pad.cancel()
+        bus.fail = lambda code, raw: (
+            _no_more_items() if code == pb.IOCTL_XUSB_SUBMIT_REPORT else None
+        )
+        with pytest.raises(pb.PadBusError):
+            pad.update()
+        assert pad.replugs == []
+        assert bus.codes().count(pb.IOCTL_VIGEM_PLUGIN_TARGET) == 1
+
+    def test_cancel_twice_and_after_close_are_harmless(self, bus):
+        pad = pb.X360Pad()
+        pad.cancel()
+        pad.cancel()
+        pad.close()
+        pad.cancel()
+        assert bus.closed == 1
 
 
 class TestClose:

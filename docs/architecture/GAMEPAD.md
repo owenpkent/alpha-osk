@@ -154,6 +154,19 @@ pending cancels that release, so two taps closer together than the minimum
 reach the game as one longer press. That is the honest outcome of a floor;
 splitting them would mean inventing a gap the user did not make.
 
+**The floor is kept where the device receives the press, not where it is
+asked for.** The bridge's clock starts when a press is submitted. If an
+earlier write to the device was slow, the press and its release would both
+be waiting in the worker's queue and go out microseconds apart, in order
+but with no duration, and a game would miss the tap. So `PadWorker` keeps
+its own record of when each control went down *at the device* (each button
+bit, each trigger, each stick leaving centre) and will not apply a report
+that brings one up sooner than `min_hold_s` after that. The bridge sets
+`min_hold_s` from `MIN_PRESS_MS`. In the ordinary case the bridge's deferred
+release has already spaced the two reports and the worker waits for nothing;
+a report that only moves a control between two non-zero values is never
+delayed; and turning the pad off interrupts a hold at once.
+
 ## One thread owns the device
 
 Measured on the owner's machine against ViGEmBus 1.22.0 (2026-11-21):
@@ -178,6 +191,22 @@ blocks for seconds. So:
   ignores a status from a worker it has already replaced.
 - An error from the device ends the worker. There is no automatic retry:
   the bridge goes to `"error"`, lets go of everything and says so.
+- **A worker is not forgotten until its pad is closed.** `stop()` waits a
+  bounded two seconds, but the client's own recovery can sit in a re-plug
+  for five. A worker still running after its stop is kept as *retiring*, and
+  the bridge refuses to start another while one is (it says the controller
+  is still disconnecting). Otherwise Off would leave the old pad connected,
+  the next On would plug a second one, and a game would see two.
+- **A cancelled pad can only send neutral.** `stop()` cancels the device
+  before it joins. From then on `X360Pad` submits an all-zero report whatever
+  it was holding and starts no new re-plug, so a recovery that finishes
+  after Off cannot replay a button the user has already let go of. The
+  worker reports `off` only after the pad has been closed.
+- **"The pad's device is gone" is two error codes.** The client heals a
+  missing child device by retrying and then re-plugging. It recognises
+  `ERROR_NO_MORE_ITEMS` (259), seen on 1.21, and `ERROR_DEV_NOT_EXIST` (55),
+  which is what ViGEmBus 1.22.0's `STATUS_DEVICE_DOES_NOT_EXIST` becomes.
+  Any other error ends the worker at once.
 
 ## Nothing is left held down
 
