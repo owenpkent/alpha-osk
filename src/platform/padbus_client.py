@@ -47,7 +47,8 @@ One thing the reference client does not do, and this one must: keep the pad
 alive through the bus's replug gap. A serial plugged again soon after it was
 released can land on a child that is still being removed; the ready wait
 completes on it, and once it is gone every report fails with
-``ERROR_NO_MORE_ITEMS`` until a replacement starts. ViGEmClient reports
+``ERROR_NO_MORE_ITEMS`` (or, from ViGEmBus 1.22, ``ERROR_DEV_NOT_EXIST``: the
+driver's ``STATUS_DEVICE_DOES_NOT_EXIST``) until a replacement starts. ViGEmClient reports
 success for those failed submits, so under vgamepad the pad simply went
 dead. Here ``_plug`` skips serials whose child device is still present and
 proves readiness with real reports, and ``update`` retries a failed report
@@ -68,6 +69,7 @@ from __future__ import annotations
 import ctypes
 import enum
 import sys
+import threading
 import time
 import uuid
 from typing import List, Optional, Tuple
@@ -321,6 +323,7 @@ FILE_ATTRIBUTE_NORMAL = 0x00000080
 FILE_FLAG_OVERLAPPED = 0x40000000
 ERROR_INVALID_FUNCTION = 1
 ERROR_NO_MORE_ITEMS = 259
+ERROR_DEV_NOT_EXIST = 55
 ERROR_IO_PENDING = 997
 WAIT_OBJECT_0 = 0
 CR_SUCCESS = 0
@@ -415,6 +418,15 @@ if IS_WINDOWS:
     _kernel32.CancelIoEx.restype = wintypes.BOOL
     _kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
     _kernel32.CloseHandle.restype = wintypes.BOOL
+
+
+def _is_missing_child(winerror: int) -> bool:
+    """Whether the bus says the pad's device object is gone (retry or re-plug).
+
+    ViGEmBus 1.21 reports ERROR_NO_MORE_ITEMS; 1.22 reports
+    STATUS_DEVICE_DOES_NOT_EXIST, which Windows maps to ERROR_DEV_NOT_EXIST.
+    """
+    return winerror in (ERROR_NO_MORE_ITEMS, ERROR_DEV_NOT_EXIST)
 
 
 def _last_error() -> int:
@@ -659,6 +671,7 @@ class X360Pad(X360ReportState):
         self.recovered_reports = 0
         self.replugs: List[Tuple[int, int]] = []
         self._ready_timeout_ms = ready_timeout_ms
+        self._cancelled = threading.Event()
         try:
             self._plug(serial, ready_timeout_ms)
         except Exception:
@@ -675,8 +688,8 @@ class X360Pad(X360ReportState):
         # serial with WdfChildListRetrievePdo, which returns nothing while a
         # serial's device object is between an old child dying and its
         # replacement starting. Every report in that gap fails with
-        # ERROR_NO_MORE_ITEMS. The gap opens when a serial released a moment
-        # ago is plugged again (by anyone: PnP removes the old child
+        # ERROR_NO_MORE_ITEMS (ERROR_DEV_NOT_EXIST on 1.22). The gap opens
+        # when a serial released a moment ago is plugged again (by anyone: PnP removes the old child
         # asynchronously, and an XInput reader that has not re-polled keeps it
         # alive longer), and the ready wait can complete on the old child, so
         # it proves nothing then. Measured on ViGEmBus 1.21.442.0, 2026-09-09:
@@ -732,7 +745,7 @@ class X360Pad(X360ReportState):
                     self._submit()
                     return
                 except PadBusError as exc:
-                    if exc.winerror != ERROR_NO_MORE_ITEMS:
+                    if not _is_missing_child(exc.winerror):
                         self._unplug_quietly()
                         raise
                     last = exc
@@ -756,8 +769,18 @@ class X360Pad(X360ReportState):
     def _submit(self) -> None:
         assert self._bus is not None
         req = XUSB_SUBMIT_REPORT(Size=ctypes.sizeof(XUSB_SUBMIT_REPORT), SerialNo=self.serial)
-        req.Report = self.report
+        # Once cancelled the pad may only ever say "nothing pressed", however
+        # late a stuck re-plug finishes: no path sends the held report.
+        req.Report = XUSB_REPORT() if self._cancelled.is_set() else self.report
         self._bus.ioctl(IOCTL_XUSB_SUBMIT_REPORT, req, timeout_ms=1000)
+
+    def cancel(self) -> None:
+        """Make every later report neutral and start no new re-plug.
+
+        Thread-safe and idempotent. Called from another thread while
+        ``update`` may be waiting out a re-plug; ``close`` is unchanged.
+        """
+        self._cancelled.set()
 
     @property
     def plugged(self) -> bool:
@@ -772,6 +795,8 @@ class X360Pad(X360ReportState):
         gone it is re-plugged on another serial and the report resubmitted, so
         the game sees a brief reconnect instead of a stick that never moves
         again. ``recovered_reports`` and ``replugs`` count the two outcomes.
+        Both the 259 and 55 codes mean "gone" (see ``_is_missing_child``).
+        After ``cancel`` no new re-plug starts and only neutral is sent.
         """
         if self._bus is None or not self.serial:
             raise PadBusError("pad is not plugged in")
@@ -779,18 +804,23 @@ class X360Pad(X360ReportState):
             self._submit()
             return
         except PadBusError as exc:
-            if exc.winerror != ERROR_NO_MORE_ITEMS:
+            if not _is_missing_child(exc.winerror):
                 raise
+            first = exc
         deadline = time.monotonic() + REPORT_RETRY_S
         while time.monotonic() < deadline:
+            if self._cancelled.is_set():
+                raise first
             time.sleep(0.005)
             try:
                 self._submit()
                 self.recovered_reports += 1
                 return
             except PadBusError as exc:
-                if exc.winerror != ERROR_NO_MORE_ITEMS:
+                if not _is_missing_child(exc.winerror):
                     raise
+        if self._cancelled.is_set():
+            raise first
         old = self.serial
         self._unplug_quietly()
         self._plug(None, self._ready_timeout_ms, avoid=(old,))

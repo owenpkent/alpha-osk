@@ -18,6 +18,10 @@ class PadDevice(Protocol):
 
     def close(self) -> None: ...
 
+    def cancel(self) -> None:
+        """Make anything still in flight send neutral. Callable from any thread."""
+        ...
+
 
 def pad_bus_available() -> bool:
     """Whether a pad bus exists. Enumeration only; never raises."""
@@ -45,6 +49,11 @@ class _X360Device:
         pad.left_joystick_float(report.left_x, report.left_y)
         pad.right_joystick_float(report.right_x, report.right_y)
         pad.update()
+
+    def cancel(self) -> None:
+        pad = self._pad
+        if pad is not None:
+            pad.cancel()
 
     def close(self) -> None:
         pad, self._pad = self._pad, None
