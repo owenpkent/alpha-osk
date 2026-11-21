@@ -156,9 +156,21 @@ letter keys and the sticks in the same second. The proposal is a
 key to swap back, the way compact's `?123` layer swaps a page. Layers are
 already a QML-side concept the backend never sees.
 
-The alternatives are a fourth panel beside the numpad (only room for
-buttons) and a floating window like Symbols (a second thing to place over a
-game). Both are in scope for the mockup.
+The alternatives are drawn beside it in
+[`controller-layout.html`](controller-layout.html), four clickable replicas
+at one key size (open the file locally):
+
+| | Placement | Window on a 1920 x 1080 screen | Stick | Letters and pad together |
+|---|-----------|-------------------------------|-------|--------------------------|
+| A | Controller view (recommended) | 962 px wide, 18.4 % covered, as today | 212 px | No, one key swaps |
+| B | Two halves beside the letters | 1476 px, 28.2 % | 157 px | Yes |
+| C | One panel, like the numpad | 1280 px, 24.5 % | 157 px, one stick at a time | Yes |
+| D | A floating window | two windows, 27.3 % | 159 px | Yes |
+
+The figures are the page's own, at today's key size. Its sticks already use
+the pick-up and put-down behaviour from *The stick*, with a control for what
+happens when the pointer leaves the window, so both open designs can be
+tried on the one page.
 
 ## How it sits in the existing architecture
 
@@ -263,10 +275,9 @@ Two things, independent of each other:
 
 - **The probe (phase 0).** Install ViGEmBus 1.22.0, vendor the client, and
   run the five measurements.
-- **The mockups.** A local page in `docs/roadmap/` with the Controller
-  view's layout options and the stick's pick-up and put-down behaviour, to
-  click through. It needs no driver, and it settles the two open designs
-  everything after phase 0 hangs on.
+- **The mockups.** Drawn 2026-11-21 as
+  [`controller-layout.html`](controller-layout.html); the choice between its
+  four placements is the owner's and is still open.
 
 ## Corrections owed to ECOSYSTEM.md
 
