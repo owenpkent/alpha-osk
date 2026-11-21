@@ -33,6 +33,7 @@
   .round.on { background: #4a9eff; border-color: #4a9eff; }
   .round.on svg { stroke: #0b1a2e; }
   .round.new { outline: 2px dashed #ffb84a; outline-offset: 3px; }
+  .round.live { border-color: #4a9eff; box-shadow: inset 0 0 0 2px #4a9eff; }
   .body { display: flex; padding: 0 6px 6px; }
   .sect { position: relative; flex: none; }
   .sep { width: 1px; background: #333; margin: 4px 6px; flex: none; }
@@ -65,7 +66,7 @@
   .readout { margin-top: 8px; font: 12px/1.6 var(--ax-font-mono, monospace); color: var(--ax-muted); min-height: 20px; font-variant-numeric: tabular-nums; }
   .readout b { color: var(--ax-accent); font-weight: 500; }
   .readout .hint { color: var(--ax-ink); }
-  .option { display: grid; grid-template-columns: 44px 1fr; gap: 0 14px; align-items: start; }
+  .option { display: grid; grid-template-columns: 50px 1fr; gap: 0 14px; align-items: start; }
   .option .letter { font: 700 30px/1 var(--ax-font-title); color: var(--ax-accent); padding-top: 2px; }
   .option h2 { margin-top: 0; }
   .controls { display: flex; gap: 18px; align-items: center; flex-wrap: wrap; margin-top: 10px; }
@@ -81,7 +82,7 @@
   <div class="ax-mast">
     <div>
       <h1>Where the controller lives</h1>
-      <div class="ax-meta">Four placements of a game controller in the keyboard window, for NIMBUS_INTEGRATION.md. Dark theme, every option at the same key size. Open this file locally. <span class="ax-status good">Decided</span> A, the Controller view, and the pointer stays in the stick's area while a stick is held (2026-11-21).</div>
+      <div class="ax-meta">Four placements of a game controller in the keyboard window, for NIMBUS_INTEGRATION.md. Dark theme, every option at the same key size. Open this file locally. <span class="ax-status good">Decided</span> A, the Controller view, and the pointer stays in the stick's area while a stick is held (2026-11-21). <span class="ax-status warning">To confirm</span> A1, the digital first version.</div>
     </div>
   </div>
 
@@ -99,6 +100,14 @@
         <button class="ax-btn" id="leaveDrop">Centre and drop</button></span>
     </div>
     <p class="ax-muted" style="margin-top: 10px"><b>Stay in the area:</b> while a stick is held the pointer cannot go further than full deflection in any direction, so it never leaves the keyboard and never lands on the game. The browser stands in for this by locking the pointer and drawing its own arrow; it shows a notice about Esc, and when you drop the stick the real pointer reappears where you picked it up. In the app it would stay where you dropped it.</p>
+  </section>
+
+  <section class="ax-panel" style="margin-top: 8px">
+    <div class="option"><div class="letter">A1</div><div>
+      <h2>Controller view, first version (digital) <span class="ax-status warning" style="margin-left: 8px">To confirm</span></h2>
+      <div class="ax-muted">What phase 1 builds, before analog sticks exist. Same placement as A, but each stick is eight direction keys around its stick click (L3, R3). A left click pushes the stick that way for as long as you hold the click; a right click holds it there, one direction per stick, and a left click lets go. <b>ABC</b> goes back to the letters and leaves the controller plugged in with its latches, so a game does not see it disconnect while you type (the dashed button gets a blue ring). <b>Off</b> lets go of everything, unplugs the controller and returns to the letters.</div>
+      <div class="stage" id="stageA1"></div><div class="readout" id="outA1"></div>
+    </div></div>
   </section>
 
   <section class="ax-panel" style="margin-top: 8px">
@@ -167,6 +176,25 @@ const dpad = (x, y) => [b('Up', x + 1, y, 1, '↑'), b('Left', x, y + 1, 1, '←
 const face = (x, y) => [b('Y', x + 1, y), b('X', x, y + 1), b('B', x + 2, y + 1), b('A', x + 1, y + 2)];
 const dpadRow = (x, y) => [b('Left', x, y, 1, '←'), b('Up', x + 1, y, 1, '↑'), b('Down', x + 2, y, 1, '↓'), b('Right', x + 3, y, 1, '→')];
 
+// A1: the digital first version. A stick is a 3 x 3 block of keys in its 4u x 4-row cell:
+// eight directions around the stick click.
+const DIRS = [['nw', '\u2196', -1, 1], ['n', '\u2191', 0, 1], ['ne', '\u2197', 1, 1], ['w', '\u2190', -1, 0], null,
+  ['e', '\u2192', 1, 0], ['sw', '\u2199', -1, -1], ['s', '\u2193', 0, -1], ['se', '\u2198', 1, -1]];
+const stickKeys = (stick, x, y, size, click) => DIRS.map((d, i) => {
+  const c = size / 3, at = { x: x + (i % 3) * c, y: y + Math.floor(i / 3) * c, w: c, h: c };
+  return d ? Object.assign({ kind: 'dir', id: stick + ' ' + d[0], label: d[1], stick, vx: d[2], vy: d[3] }, at)
+           : Object.assign({ kind: 'btn', id: click, label: click }, at);
+});
+const PAD_DIGITAL = { w: 15.5, items: [
+  b('LT', 0, 0, 2), b('LB', 2, 0, 2), b('Back', 5.25, 0, 1.5), { kind: 'swap', id: 'ABC', label: 'ABC', x: 7, y: 0, w: 1.5, h: 1 },
+  b('Start', 8.75, 0, 1.5), b('RB', 11.5, 0, 2), b('RT', 13.5, 0, 2),
+  ...stickKeys('LS', 0, 1, 4, 'L3'), { kind: 'off', id: 'Off', label: 'Off', x: 4.25, y: 1, w: 1.5, h: 1 }, b('Guide', 7, 1, 1.5),
+  ...stickKeys('RS', 11.5, 1, 4, 'R3'),
+  { kind: 'plain', id: 'Esc', label: 'Esc', x: 7.25, y: 3, w: 1, h: 1 }, { kind: 'plain', id: 'Enter', label: 'Ent', x: 7.25, y: 4, w: 1, h: 1 },
+  ...dpad(4.25, 2), ...face(8.25, 2),
+] };
+const DIRV = {};
+
 // A: the whole 15.5u grid.  4 + 0.25 + 3 + 1 + 3 + 0.25 + 4 = 15.5.
 const PAD_FULL = (withSwap) => ({ w: 15.5, items: [
   b('LT', 0, 0, 2), b('LB', 2, 0, 2), b('Back', 5.25, 0, 1.5),
@@ -224,6 +252,16 @@ function padSection(v, spec, unit, rowH) {
     const e = el('div', 'key pad' + (it.kind === 'swap' ? ' swap' : '')); e.textContent = it.label; place(e, it, unit, rowH);
     if (it.kind === 'swap') e.addEventListener('mousedown', ev => { if (ev.button === 0) v.toggle(); });
     else if (it.kind === 'sel') { v.sels.push({ e, id: it.id }); e.addEventListener('mousedown', ev => { if (ev.button === 0) { v.sel = it.id; show(v); } }); }
+    else if (it.kind === 'off') e.addEventListener('mousedown', ev => { if (ev.button === 0) v.off(); });
+    else if (it.kind === 'dir') {
+      v.btns.push({ e, id: it.id }); DIRV[it.id] = [it.vx, it.vy];
+      e.addEventListener('mousedown', ev => { if (ev.button !== 0) return;
+        if (v.latched.has(it.id)) v.latched.delete(it.id); else { v.mom[it.stick] = it.id; e.classList.add('down'); v.last = it.id; } show(v); });
+      e.addEventListener('contextmenu', ev => { ev.preventDefault(); if (Date.now() < swallowUntil) return;
+        if (v.latched.has(it.id)) v.latched.delete(it.id);
+        else { [...v.latched].forEach(n => { if (n.startsWith(it.stick + ' ')) v.latched.delete(n); }); v.latched.add(it.id); }
+        show(v); });
+    }
     else if (it.kind === 'plain') e.addEventListener('mousedown', ev => { if (ev.button === 0) { flash(e); v.last = it.id + ' key'; show(v); } });
     else {
       v.btns.push({ e, id: it.id });
@@ -306,6 +344,9 @@ document.addEventListener('mousedown', ev => {
   putDown(ev.button === 2);
 }, true);
 document.addEventListener('contextmenu', ev => { if (Date.now() < swallowUntil) ev.preventDefault(); }, true);
+document.addEventListener('mouseup', () => { Object.values(variants).forEach(v => {
+  if (!v.mom || !Object.keys(v.mom).length) return;
+  v.mom = {}; v.btns.forEach(k => k.e.classList.remove('down')); show(v); }); });
 document.addEventListener('mousemove', ev => {
   if (!held) return;
   if (held.stay && document.pointerLockElement) {
@@ -323,6 +364,11 @@ document.addEventListener('mousemove', ev => {
 // ---- drawing state ----------------------------------------------------------
 const f = n => (n >= 0 ? '+' : '−') + Math.abs(n).toFixed(2);
 function show(v) {
+  // The digital version: a held click wins while it lasts, then the latched direction shows through.
+  if (v.digital) ['LS', 'RS'].forEach(s => {
+    const id = v.mom[s] || [...v.latched].find(n => n.startsWith(s + ' ')), d = id ? DIRV[id] : [0, 0], m = Math.hypot(d[0], d[1]) || 1;
+    v.pad[s] = { x: d[0] / m, y: d[1] / m };
+  });
   v.sticks.forEach(rec => {
     const id = stickId(v, rec), p = v.pad[id], r = rec.d * 0.3;
     rec.e.querySelector('.knob').style.transform = 'translate(' + (p.x * r) + 'px,' + (-p.y * r) + 'px)';
@@ -337,11 +383,25 @@ function show(v) {
     + ' &nbsp; latched <b>' + (heldNames.join(' ') || 'none') + '</b> &nbsp; last tap <b>' + (v.last || 'none') + '</b>';
   if (v.typed) line += ' &nbsp; typed <b>' + v.typed.replace(/</g, '&lt;') + '</b>';
   if (held && held.v === v) line += ' &nbsp; <span class="hint">Stick held: click to drop, right click to hold it there.</span>';
-  if (!v.on) line = 'Controller off. Click the dashed button to bring it back.';
+  if (!v.on) line = !v.digital ? 'Controller off. Click the dashed button to bring it back.'
+    : v.plugged ? 'Letters. The controller is still plugged in, holding <b>' + ([...v.latched].join(', ') || 'nothing') + '</b>'
+        + (v.typed ? ' &nbsp; typed <b>' + v.typed.replace(/</g, '&lt;') + '</b>' : '') + '. Click the dashed button to go back.'
+    : 'Controller off and unplugged. Click the dashed button to plug it in.';
+  if (v.digital && v.padBtn) v.padBtn.classList.toggle('live', v.plugged && !v.on);
   v.out.innerHTML = line;
 }
 
 // ---- the four options --------------------------------------------------------
+function buildA1() {
+  const v = newVariant('A1'); v.digital = true; v.mom = {}; v.plugged = false; v.out = document.getElementById('outA1');
+  const w = windowShell(v, {}); const letters = lettersSection(v, U, RH), pad = padSection(v, PAD_DIGITAL, U, RH);
+  w.bodyEl.append(letters, pad);
+  const view = on => { v.on = on; if (on) v.plugged = true; letters.classList.toggle('hidden', on); pad.classList.toggle('hidden', !on);
+    v.padBtn.classList.toggle('on', on); setPills(v, !on); show(v); };
+  v.toggle = () => view(!v.on);
+  v.off = () => { v.latched.clear(); v.mom = {}; v.plugged = false; view(false); };
+  document.getElementById('stageA1').appendChild(w); view(true);
+}
 function buildA() {
   const v = newVariant('A'); v.out = document.getElementById('outA');
   const w = windowShell(v, {}); const letters = lettersSection(v, U, RH), pad = padSection(v, PAD_FULL(true), U, RH);
@@ -409,7 +469,7 @@ const modes = { stay: document.getElementById('leaveStay'), keep: document.getEl
 Object.keys(modes).forEach(m => modes[m].addEventListener('click', () => {
   leaveMode = m; Object.keys(modes).forEach(k => modes[k].classList.toggle('sel', k === m)); }));
 
-buildA(); buildSide('B', 'stageB', PAD_LEFT, PAD_RIGHT); buildSide('C', 'stageC', null, PAD_ONE); buildD(); footprint();
+buildA1(); buildA(); buildSide('B', 'stageB', PAD_LEFT, PAD_RIGHT); buildSide('C', 'stageC', null, PAD_ONE); buildD(); footprint();
 </script>
 </body>
 </html>
