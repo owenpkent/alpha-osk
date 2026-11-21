@@ -75,7 +75,7 @@ every key click.
 
 ## The three hard problems
 
-### 1. The stick (open, needs a mockup and a prototype)
+### 1. The stick (shape decided, needs a prototype)
 
 A stick held by a mouse button is a sustained precise drag, the one gesture
 this keyboard's users cannot be asked to make. Nimbus's answer is a
@@ -90,10 +90,29 @@ held, tap again to put it down.
 | Deflection | Absolute: the pointer's offset from where the stick was picked up, full deflection at `travel_px` (Nimbus's field, kept). |
 | Putting down | Left tap: release and centre. Right tap: hold the current deflection (a latch, with the `lockBar` cue). |
 | While it is held | An overlay over our window, as `windowMoveOverlay` does, so the ending click can hit no key. |
-| The pointer leaving our window | Open. Either the pointer is confined to our window while a stick is held, or leaving centres and drops the stick. Confinement is what Nimbus does and games fight it; dropping is safer and may be annoying. Measure both. |
+| The pointer leaving our window | **Decided 2026-11-21: it does not leave.** While a stick is held the pointer is confined to the stick's travel area (the square of `travel_px` around where it was picked up), so it cannot wander onto the game and full deflection is a wall, not a guess. See *Confining the pointer* below. |
 | Where motion is read | A timer reading the pointer position, not a hook and not a capture. |
 | Two sticks, one pointer | One stick is held at a time; the other keeps its latch. |
 | Rate | Nimbus submits on every mouse event, on the GUI thread. Here reports go out on a fixed tick off the Qt thread, as key events go through `SerialInjector`. |
+
+#### Confining the pointer
+
+The owner's words were "ideally mouse would stay in the area while held", so this is the target, and the
+prototype has to show it holds. On Windows that is `ClipCursor` with a small rectangle, which is a confinement
+and not a hook: no pointer event is intercepted or swallowed. What the prototype must settle:
+
+- **Games set a clip of their own**, and Windows drops ours on a foreground change. The tick that reads the
+  pointer re-applies the rectangle while a stick is held.
+- **Release cannot depend on the Qt thread.** A stalled keyboard with the pointer boxed into a few hundred
+  pixels is the failure this plan must not have. The clip is released on put-down, on shutdown, and by a
+  watchdog off the Qt thread when the window stops answering. What Windows does with a clip whose process
+  has died is to be measured, not assumed.
+- **If confinement cannot be made reliable** in some game, the fallback is that the stick keeps following a
+  free pointer. Dropping the stick when the pointer leaves the window was the third option and was not chosen.
+- **Linux and macOS** need their own answer, which has not been looked at.
+
+The rule under *Game Mode* below stands: this confines the pointer to our own controls for as long as one is
+held, and nothing here withholds it from the user.
 
 Triggers and sliders are the one-dimensional case of the same thing. Every
 analog control also has a digital fallback (eight directions, full or
@@ -148,11 +167,11 @@ In the end state it is this repo's:
 (checked 2026-11-21: `bus_present()` was false). The owner approved
 installing it the same day, for the phase 0 measurements.
 
-## Where the controller lives (open, needs a mockup)
+## Where the controller lives (decided: the Controller view)
 
 A controller does not fit beside a 15.5u grid, and a game rarely wants the
-letter keys and the sticks in the same second. The proposal is a
-**Controller view**: the window swaps the letter grid for the pad, with one
+letter keys and the sticks in the same second. The owner chose the
+**Controller view** on 2026-11-21: the window swaps the letter grid for the pad, with one
 key to swap back, the way compact's `?123` layer swaps a page. Layers are
 already a QML-side concept the backend never sees.
 
@@ -162,7 +181,7 @@ at one key size (open the file locally):
 
 | | Placement | Window on a 1920 x 1080 screen | Stick | Letters and pad together |
 |---|-----------|-------------------------------|-------|--------------------------|
-| A | Controller view (recommended) | 962 px wide, 18.4 % covered, as today | 212 px | No, one key swaps |
+| A | Controller view (**chosen**) | 962 px wide, 18.4 % covered, as today | 212 px | No, one key swaps |
 | B | Two halves beside the letters | 1476 px, 28.2 % | 157 px | Yes |
 | C | One panel, like the numpad | 1280 px, 24.5 % | 157 px, one stick at a time | Yes |
 | D | A floating window | two windows, 27.3 % | 159 px | Yes |
@@ -259,11 +278,12 @@ Settled 2026-11-21:
 
 - The end state is one app.
 - ViGEmBus may be installed on the working machine for the measurements.
+- The controller lives in a Controller view that swaps with the letter grid.
+- While a stick is held, the pointer stays in the stick's area.
 
 Later, each at its phase:
 
-- Controller view, panel or floating window (phase 1 mockup).
-- How a stick is put down, and what happens at our window's edge (phase 2).
+- Whether confinement holds up in real games, from the prototype (phase 2).
 - Whether vJoy is wanted at all (phase 6).
 - Whether this installer ever carries a kernel driver (phase 5).
 - What the combined product is called, and what becomes of Nimbus's site
@@ -276,8 +296,8 @@ Two things, independent of each other:
 - **The probe (phase 0).** Install ViGEmBus 1.22.0, vendor the client, and
   run the five measurements.
 - **The mockups.** Drawn 2026-11-21 as
-  [`controller-layout.html`](controller-layout.html); the choice between its
-  four placements is the owner's and is still open.
+  [`controller-layout.html`](controller-layout.html); the owner chose placement A
+  and pointer confinement from it.
 
 ## Corrections owed to ECOSYSTEM.md
 

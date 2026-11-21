@@ -58,6 +58,10 @@
   .float { display: block; margin: 0 0 10px 260px; width: max-content; }
   .float .tbar { height: 24px; }
   .hidden { display: none !important; }
+  #ghost { position: fixed; left: 0; top: 0; width: 16px; height: 22px; pointer-events: none; z-index: 50; display: none; }
+  #ghost.show { display: block; }
+  .area { position: fixed; pointer-events: none; z-index: 49; border: 1px dashed #4a9eff; display: none; }
+  .area.show { display: block; }
   .readout { margin-top: 8px; font: 12px/1.6 var(--ax-font-mono, monospace); color: var(--ax-muted); min-height: 20px; font-variant-numeric: tabular-nums; }
   .readout b { color: var(--ax-accent); font-weight: 500; }
   .readout .hint { color: var(--ax-ink); }
@@ -77,7 +81,7 @@
   <div class="ax-mast">
     <div>
       <h1>Where the controller lives</h1>
-      <div class="ax-meta">Four placements of a game controller in the keyboard window, for NIMBUS_INTEGRATION.md. Dark theme, every option at the same key size. Open this file locally. <span class="ax-status">Undecided</span></div>
+      <div class="ax-meta">Four placements of a game controller in the keyboard window, for NIMBUS_INTEGRATION.md. Dark theme, every option at the same key size. Open this file locally. <span class="ax-status good">Decided</span> A, the Controller view, and the pointer stays in the stick's area while a stick is held (2026-11-21).</div>
     </div>
   </div>
 
@@ -90,14 +94,16 @@
         <input class="ax-range" type="range" id="travel" min="30" max="220" value="90" style="vertical-align: middle; margin: 0 8px">
         <span class="ax-mono" id="travelOut">90</span> <span class="ax-muted">px</span></label>
       <span class="ax-label">When the pointer leaves the window while a stick is held:
-        <button class="ax-btn sel" id="leaveKeep">Keep steering</button>
+        <button class="ax-btn sel" id="leaveStay">Stay in the area (chosen)</button>
+        <button class="ax-btn" id="leaveKeep">Keep steering</button>
         <button class="ax-btn" id="leaveDrop">Centre and drop</button></span>
     </div>
+    <p class="ax-muted" style="margin-top: 10px"><b>Stay in the area:</b> while a stick is held the pointer cannot go further than full deflection in any direction, so it never leaves the keyboard and never lands on the game. The browser stands in for this by locking the pointer and drawing its own arrow; it shows a notice about Esc, and when you drop the stick the real pointer reappears where you picked it up. In the app it would stay where you dropped it.</p>
   </section>
 
   <section class="ax-panel" style="margin-top: 8px">
     <div class="option"><div class="letter">A</div><div>
-      <h2>Controller view <span class="ax-muted" style="text-transform: none; letter-spacing: 0">recommended</span></h2>
+      <h2>Controller view <span class="ax-status good" style="margin-left: 8px">Chosen</span></h2>
       <div class="ax-muted">The letter grid swaps for the pad, and the ABC key swaps back. The window stays the size it is today, and the sticks are the largest of the four. You cannot type and steer at the same moment.</div>
       <div class="stage" id="stageA"></div><div class="readout" id="outA"></div>
     </div></div>
@@ -138,6 +144,8 @@
   </section>
 </div>
 
+<svg id="ghost" viewBox="0 0 16 22"><path d="M1 1v17l4.5-4 3 7 2.6-1.1-3-6.9H14z" fill="#fff" stroke="#000" stroke-width="1.2" stroke-linejoin="round"/></svg>
+<div class="area" id="area"></div>
 <script>
 'use strict';
 // ---- geometry -------------------------------------------------------------
@@ -178,7 +186,10 @@ const PAD_ONE = { w: 5, items: [b('LT', 0, 0, 1.25), b('LB', 1.25, 0, 1.25), b('
   ...dpadRow(0, 4), b('Start', 4, 4)] };
 
 // ---- shared stick settings -------------------------------------------------
-let travel = 90, leaveDrops = false, held = null, swallowUntil = 0;
+// 'stay': the pointer is confined to the travel square (ClipCursor in the app, pointer lock here).
+// 'keep': it roams and the stick keeps following.  'drop': leaving the window lets go.
+let travel = 90, leaveMode = 'stay', held = null, swallowUntil = 0;
+const ghost = document.getElementById('ghost'), area = document.getElementById('area');
 const variants = {};
 
 function el(tag, cls, html) { const e = document.createElement(tag); if (cls) e.className = cls; if (html != null) e.innerHTML = html; return e; }
@@ -235,7 +246,7 @@ const ICON_SNIP = '<svg viewBox="0 0 24 24"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1
 function windowShell(v, opts) {
   const w = el('div', 'kbwin' + (opts.float ? ' float' : ''));
   w.addEventListener('contextmenu', ev => ev.preventDefault());
-  w.addEventListener('mouseleave', () => { if (held && held.v === v && leaveDrops && held.win === w) putDown(false); });
+  w.addEventListener('mouseleave', () => { if (held && held.v === v && leaveMode === 'drop' && held.win === w) putDown(false); });
   const t = el('div', 'tbar');
   t.innerHTML = opts.float ? '<span>Controller</span><span>✕</span>'
     : '<span class="grip"></span><span class="caps"><span><span class="sw"></span>Learning</span><span>⚙</span><span>–</span><span>✕</span></span>';
@@ -270,16 +281,25 @@ function pickUp(v, rec, ev) {
   const id = stickId(v, rec);
   if (v.latched.has(id)) { v.latched.delete(id); v.pad[id] = { x: 0, y: 0 }; show(v); return; }
   const cur = v.pad[id];
-  held = { v, rec, id, ax: ev.clientX - cur.x * travel, ay: ev.clientY + cur.y * travel, win: rec.e.closest('.kbwin') };
+  held = { v, rec, id, ax: ev.clientX - cur.x * travel, ay: ev.clientY + cur.y * travel, vx: cur.x * travel, vy: -cur.y * travel,
+    win: rec.e.closest('.kbwin'), stay: leaveMode === 'stay' };
+  if (held.stay && rec.e.requestPointerLock) {
+    // Not granted (no user gesture, or a browser without it): the stick falls back to keep-steering.
+    try { const p = rec.e.requestPointerLock(); if (p && p.catch) p.catch(() => {}); } catch (e) { /* same fallback */ }
+  }
   held.win.classList.add('holding'); show(v);
   ev.stopPropagation();
 }
 function putDown(latch) {
   if (!held) return;
   const { v, id, win } = held;
+  ghost.classList.remove('show'); area.classList.remove('show');
   if (latch) v.latched.add(id); else v.pad[id] = { x: 0, y: 0 };
   win.classList.remove('holding'); held = null; swallowUntil = Date.now() + 350; show(v);
+  if (document.pointerLockElement) document.exitPointerLock();
 }
+// Esc ends the browser's lock on its own: treat that as dropping the stick.
+document.addEventListener('pointerlockchange', () => { if (held && held.stay && held.locked && !document.pointerLockElement) putDown(false); });
 document.addEventListener('mousedown', ev => {
   if (!held) return;
   ev.preventDefault(); ev.stopPropagation();   // the ending click hits no key, as Move mode's does
@@ -288,7 +308,14 @@ document.addEventListener('mousedown', ev => {
 document.addEventListener('contextmenu', ev => { if (Date.now() < swallowUntil) ev.preventDefault(); }, true);
 document.addEventListener('mousemove', ev => {
   if (!held) return;
-  let x = (ev.clientX - held.ax) / travel, y = -(ev.clientY - held.ay) / travel;
+  if (held.stay && document.pointerLockElement) {
+    const lim = n => Math.max(-travel, Math.min(travel, n));
+    held.locked = true; held.vx = lim(held.vx + ev.movementX); held.vy = lim(held.vy + ev.movementY);
+    ghost.style.transform = 'translate(' + (held.ax + held.vx) + 'px,' + (held.ay + held.vy) + 'px)'; ghost.classList.add('show');
+    area.style.left = (held.ax - travel) + 'px'; area.style.top = (held.ay - travel) + 'px';
+    area.style.width = area.style.height = (2 * travel) + 'px'; area.classList.add('show');
+  } else { held.vx = ev.clientX - held.ax; held.vy = ev.clientY - held.ay; }
+  let x = held.vx / travel, y = -held.vy / travel;
   const m = Math.hypot(x, y); if (m > 1) { x /= m; y /= m; }
   held.v.pad[held.id] = { x, y }; show(held.v);
 });
@@ -378,9 +405,9 @@ function footprint() {
 // ---- controls -------------------------------------------------------------------
 const tr = document.getElementById('travel'), trOut = document.getElementById('travelOut');
 tr.addEventListener('input', () => { travel = +tr.value; trOut.textContent = tr.value; });
-const keep = document.getElementById('leaveKeep'), drop = document.getElementById('leaveDrop');
-keep.addEventListener('click', () => { leaveDrops = false; keep.classList.add('sel'); drop.classList.remove('sel'); });
-drop.addEventListener('click', () => { leaveDrops = true; drop.classList.add('sel'); keep.classList.remove('sel'); });
+const modes = { stay: document.getElementById('leaveStay'), keep: document.getElementById('leaveKeep'), drop: document.getElementById('leaveDrop') };
+Object.keys(modes).forEach(m => modes[m].addEventListener('click', () => {
+  leaveMode = m; Object.keys(modes).forEach(k => modes[k].classList.toggle('sel', k === m)); }));
 
 buildA(); buildSide('B', 'stageB', PAD_LEFT, PAD_RIGHT); buildSide('C', 'stageC', null, PAD_ONE); buildD(); footprint();
 </script>
