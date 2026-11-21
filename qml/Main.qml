@@ -102,6 +102,10 @@ Window {
         // see the Compact view block near `currentLayout` for how the two
         // resolve into one layout id.
         property bool savedCompactView: false
+        // Whether the Controller view's button is offered at all.  Whether
+        // the view is showing is deliberately not saved: the keyboard always
+        // starts on the letters and never plugs a pad at launch.
+        property bool savedControllerEnabled: false
         property bool savedAudioEnabled: false
         property bool savedAutoSpaceAfterPunctuation: true
         property bool savedIntelligentSpacing: true
@@ -287,6 +291,10 @@ Window {
     // is excluded alongside Hidden for the same reason: it's a way *out*, so
     // untucking there would fire on the way down instead of the way back up.
     onVisibilityChanged: {
+        // A minimized or closed keyboard offers nothing, and a pad nobody can
+        // see must not stay plugged in front of a game.
+        if (root.visibility === Window.Minimized || root.visibility === Window.Hidden)
+            root.turnControllerOff()
         if (root.tucked
                 && root.visibility !== Window.Hidden
                 && root.visibility !== Window.Minimized) {
@@ -766,6 +774,7 @@ Window {
     readonly property int barIndexSymbols: 2
     readonly property int barIndexSnippets: 3
     readonly property int barIndexHistory: 5
+    readonly property int barIndexController: 6
     function scanBarId(idx) {
         return root.scanTargetId("bar", 0, idx)
     }
@@ -782,6 +791,61 @@ Window {
     function toggleDictationRun() {
         if (keyboard) keyboard.toggleDictation()
     }
+
+    // ===== Controller view =====
+    // The virtual game controller replaces the letter grid (same size, so the
+    // window never moves).  `controllerEnabled` only offers the bar button;
+    // `controllerViewActive` is what is on screen and is never persisted.  The
+    // pad itself belongs to `gamepad`: leaving the view with ABC keeps it
+    // plugged in, with its latches, so a game does not see a disconnect while
+    // the user types a chat message.  Pad controls never touch `keyboard`.
+    property bool controllerEnabled: appSettings.savedControllerEnabled
+    property bool controllerViewActive: false
+    function toggleController() {
+        if (root.controllerViewActive) {
+            root.controllerViewActive = false
+            return
+        }
+        if (gamepad.setActive(true)) {
+            root.controllerViewActive = true
+        } else if (gamepad.status === "unavailable") {
+            // Any other refusal has already raised `failed`, whose handler
+            // below says why.
+            snippetProblemToast.flash(
+                qsTr("The controller needs the ViGEmBus driver, which was not found."))
+        }
+    }
+    function turnControllerOff() {
+        root.controllerViewActive = false
+        if (gamepad.status !== "off")
+            gamepad.setActive(false)
+    }
+    onControllerEnabledChanged: if (!root.controllerEnabled) root.turnControllerOff()
+    Connections {
+        target: gamepad
+        function onFailed(message) {
+            root.controllerViewActive = false
+            snippetProblemToast.flash(message)
+        }
+        function onStatusChanged() {
+            if (gamepad.status === "off" || gamepad.status === "error"
+                    || gamepad.status === "unavailable")
+                root.controllerViewActive = false
+        }
+    }
+    // The rows the controller view stands in for: their summed height, so the
+    // view can take exactly that much and `sectionHeight` stays put.  Each
+    // data-driven row is a `Row` of keys, whose reported height is ceiled to a
+    // pixel (see the note on `keyHitMarginV`), separated by `rowSpacing`.
+    readonly property real gridRowsHeight: {
+        var rows = root.visibleRows
+        var h = 0
+        for (var i = 0; i < rows.length; i++)
+            h += Math.ceil(rows[i].id === "number" ? root.keyH - 4 : root.keyH)
+        return rows.length > 0 ? h + root.rowSpacing * (rows.length - 1) : 0
+    }
+    readonly property real gridRowsWidth: root._widestRow.units * root.keyW
+                                          + root._widestRow.gaps * root.keySpacing
     function toggleWriting() {
         if (root.dictationState === "idle") root.writeRunPending = true
         keyboard.toggleAiWriting()
@@ -831,6 +895,9 @@ Window {
         && !root.dictationActive && !root.dictationResultShown
         && !study.suppressPredictions
         && root.predictionStatus === "ready"
+        // The bar keeps its height while the controller shows, so the window
+        // does not move; only the pills (and their scan targets) go.
+        && !root.controllerViewActive
     readonly property string scanRevision: [
         root.predictionGeneration,
         // Everything that decides whether the pills are there at all, not
@@ -844,6 +911,10 @@ Window {
         (root.dictationActive && root.writeRunPending) ? 1 : 0,
         // The `draft` section exists exactly while the preview is open.
         aiDraftPopup.opened ? 1 : 0,
+        // The `game` section exists exactly while the controller view shows
+        // on a connected pad; its latches are toggle states.
+        root.controllerEnabled ? 1 : 0, root.controllerViewActive ? 1 : 0,
+        gamepad.status, gamepad.latched.join("+"),
         root.visibility,
         Math.round(root.x), Math.round(root.y),
         Math.round(root.width), Math.round(root.height),
@@ -2358,6 +2429,48 @@ Window {
                 // in it with it, and Snippets is a feature rather than a
                 // suggestion-adjacent control, so losing the only way in
                 // because of an unrelated setting is not acceptable.
+                // Controller mirror: same id as its bar copy, never visible
+                // with it.
+                Comp.BarButton {
+                    id: controllerTwin
+                    objectName: "controllerTitleBarButton"
+                    targetId: root.scanBarId(root.barIndexController)
+                    scanName: qsTr("Controller")
+                    isToggleTarget: true
+                    scanOn: root.controllerViewActive
+                    onActivated: root.toggleController()
+                    visible: !root.suggestionsEnabled && root.controllerEnabled
+                    width: visible ? 28 : 0
+                    height: 24
+                    radius: 4
+                    color: root.controllerViewActive ? root.themeAccent
+                           : (controllerTitleBtn.containsMouse ? "#444" : "transparent")
+
+                    ToolTip.visible: controllerTitleBtn.containsMouse
+                    ToolTip.text: root.controllerViewActive
+                                  ? qsTr("Back to the letters (the controller stays connected)")
+                                  : qsTr("Controller: a game pad for games")
+                    ToolTip.delay: 400
+
+                    Comp.StrokeIcon {
+                        anchors.centerIn: parent
+                        width: 18
+                        height: 18
+                        paths: ["M7 7h10a5 5 0 0 1 5 5v1a5 5 0 0 1-5 5H7a5 5 0 0 1-5-5v-1a5 5 0 0 1 5-5z",
+                                "M7 10.5v4", "M5 12.5h4", "M15.5 11.5h.01", "M18 13.5h.01"]
+                        ink: root.controllerViewActive ? root.inkOn(root.themeAccent)
+                             : (gamepad.status === "on" ? root.themeAccent : "#999")
+                    }
+
+                    MouseArea {
+                        id: controllerTitleBtn
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: controllerTwin.activated()
+                    }
+                }
+
                 Comp.BarButton {
                     id: symbolsTwin
                     objectName: "symbolsTitleBarButton"
@@ -2757,6 +2870,7 @@ Window {
                 // reserve went from one button to two to three and each time
                 // it was the formula that had to be re-derived by hand.
                 property int predButtonCount: 2 + (root.writeAvailable ? 1 : 0)
+                                              + (root.controllerEnabled ? 1 : 0)
                 // Width the pills must keep clear so the row can never render
                 // underneath the buttons.  Derived from the same numbers the
                 // Row is laid out from, because a reserve that is merely
@@ -2795,6 +2909,7 @@ Window {
                              && !root.dictationActive && !root.dictationResultShown
                              && !study.suppressPredictions
                              && root.predictionStatus !== "ready"
+                             && !root.controllerViewActive
 
                     RowLayout {
                         anchors.centerIn: parent
@@ -3734,6 +3849,74 @@ Window {
                     spacing: predBar.predButtonGap
                     visible: root.suggestionsEnabled
 
+                // Controller: swaps the letters for a game controller.  Present
+                // only when the Controller setting is on, first in this Row
+                // like every newcomer; predBar.predButtonCount counts it.
+                // Three looks: viewing (accent fill), plugged in but the
+                // letters showing (accent ink and a dot), and idle.
+                Comp.BarButton {
+                    id: controllerPill
+                    objectName: "controllerBarButton"
+                    targetId: root.scanBarId(root.barIndexController)
+                    scanName: qsTr("Controller")
+                    isToggleTarget: true
+                    scanOn: root.controllerViewActive
+                    onActivated: root.toggleController()
+                    visible: root.controllerEnabled
+                    width: predBar.predPillHeight
+                    height: predBar.predPillHeight
+                    radius: width / 2
+                    readonly property bool viewing: root.controllerViewActive
+                    readonly property bool connected: !viewing && gamepad.status === "on"
+                    color: controllerPill.viewing ? root.themeAccent
+                           : (controllerBarBtn.containsMouse ? Qt.lighter(root.themeKeyColor, 1.3)
+                                                             : Qt.rgba(0, 0, 0, 0.18))
+                    border.color: controllerPill.viewing || controllerPill.connected
+                                  || controllerBarBtn.containsMouse
+                                  ? root.themeAccent : Qt.rgba(1, 1, 1, 0.18)
+                    border.width: 1
+
+                    ToolTip.visible: controllerBarBtn.containsMouse
+                    ToolTip.text: controllerPill.viewing ? qsTr("Back to the letters (the controller stays connected)")
+                                  : (controllerPill.connected ? qsTr("Controller connected: show it")
+                                                              : qsTr("Controller: a game pad for games"))
+                    ToolTip.delay: 400
+
+                    // Original artwork: a pad outline, a plus and two buttons.
+                    Comp.StrokeIcon {
+                        anchors.fill: parent
+                        paths: ["M7 7h10a5 5 0 0 1 5 5v1a5 5 0 0 1-5 5H7a5 5 0 0 1-5-5v-1a5 5 0 0 1 5-5z",
+                                "M7 10.5v4", "M5 12.5h4", "M15.5 11.5h.01", "M18 13.5h.01"]
+                        boxFraction: 0.62
+                        ink: controllerPill.viewing ? root.inkOn(root.themeAccent)
+                             : (controllerPill.connected ? root.themeAccent
+                                : (controllerBarBtn.containsMouse ? root.themeTextColor : "#bbb"))
+                    }
+
+                    Rectangle {
+                        objectName: "controllerConnectedDot"
+                        visible: controllerPill.connected
+                        width: 7
+                        height: 7
+                        radius: 3.5
+                        color: root.themeAccent
+                        anchors.right: parent.right
+                        anchors.top: parent.top
+                        anchors.rightMargin: 3
+                        anchors.topMargin: 3
+                    }
+
+                    MouseArea {
+                        id: controllerBarBtn
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: controllerPill.activated()
+                    }
+
+                    Behavior on color { ColorAnimation { duration: 100 } }
+                }
+
                 // Write with AI.  Present only when dictation, writing and
                 // both API keys are all in place (root.writeAvailable), and
                 // first in this right-anchored Row so every button that was
@@ -4035,6 +4218,12 @@ Window {
 
                     Row {
                         Layout.alignment: Qt.AlignHCenter
+                        // Hidden (not removed) while the controller view
+                        // stands in: the Controller view takes the summed
+                        // height of these rows, so `sectionHeight` and the
+                        // window are what they were.  Out of the layout, so no
+                        // letter is a scan target meanwhile.
+                        visible: !root.controllerViewActive
                         spacing: root.keySpacing
                         property var rowData: modelData
                         // Visual row order, for the scan-target id below.  The
@@ -4306,6 +4495,47 @@ Window {
                             }
                         }
                     }
+                }
+
+                // ===== Controller view (replaces the data-driven rows) =====
+                // Exactly the rows' width and summed height, so the window and
+                // `sectionHeight` do not change.  Every pad control talks to
+                // `gamepad` from here and never to `keyboard`; Esc and Enter
+                // are ordinary keys and take the grid's own path.
+                Comp.ControllerView {
+                    id: controllerView
+                    objectName: "controllerView"
+                    visible: root.controllerViewActive
+                    // Out of reach (and out of the scan tree) until the pad is
+                    // really plugged: a press the bridge refuses would only
+                    // look like a dead key.
+                    enabled: gamepad.status === "on"
+                    opacity: enabled ? 1.0 : 0.5
+                    Layout.alignment: Qt.AlignHCenter
+                    Layout.preferredWidth: root.gridRowsWidth
+                    Layout.preferredHeight: root.gridRowsHeight
+                    scanSection: "game"
+                    scanIdFor: root.scanTargetId
+                    keySpacing: root.keySpacing
+                    rowSpacing: root.rowSpacing
+                    hitMarginH: root.keyHitMarginH
+                    hitMarginV: root.keyHitMarginV
+                    roleColors: root.keyRoles
+                    keyColor: root.themeKeyColor
+                    enterKeyColor: root.accentKeyColor
+                    keyPressedColor: root.themeKeyPressed
+                    keyTextColor: root.themeTextColor
+                    accentColor: root.themeAccent
+                    borderColor: root.themeBorder
+                    latched: gamepad.latched
+                    onPadPressed: function(controlId) { gamepad.press(controlId) }
+                    onPadReleased: function(controlId) { gamepad.release(controlId) }
+                    onPadTapped: function(controlId) { gamepad.tap(controlId) }
+                    onPadLatchToggled: function(controlId) { gamepad.toggleLatch(controlId) }
+                    // Back to the letters; the pad stays plugged in.
+                    onLettersRequested: root.controllerViewActive = false
+                    onOffRequested: root.turnControllerOff()
+                    onKeyRequested: function(action) { keyboard.pressSpecialKey(action) }
                 }
             }
 
@@ -6211,6 +6441,7 @@ Window {
             alwaysOnTop: root.alwaysOnTop
             currentLayout: root.currentLayout
             compactView: root.compactView
+            controllerEnabled: root.controllerEnabled
             characterRepeat: root.characterRepeat
             audioEnabled: root.audioEnabled
             suggestionsEnabled: root.suggestionsEnabled
@@ -6270,6 +6501,9 @@ Window {
                     root.applyLayout()
                 } else if (setting === "compactView") {
                     root.compactView = value
+                } else if (setting === "controller") {
+                    root.controllerEnabled = value
+                    appSettings.savedControllerEnabled = value
                 } else if (setting === "snapToEdges") {
                     root.snapToEdges = value
                     appSettings.savedSnapToEdges = value
