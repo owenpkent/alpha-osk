@@ -337,7 +337,13 @@ function putDown(latch) {
   if (document.pointerLockElement) document.exitPointerLock();
 }
 // Esc ends the browser's lock on its own: treat that as dropping the stick.
-document.addEventListener('pointerlockchange', () => { if (held && held.stay && held.locked && !document.pointerLockElement) putDown(false); });
+// The lock is tracked from its own event, not inferred from the first movement:
+// Esc straight after pick-up, before the pointer has moved, must still end the gesture.
+document.addEventListener('pointerlockchange', () => {
+  if (!held || !held.stay) return;
+  if (document.pointerLockElement) { held.locked = true; return; }
+  if (held.locked) putDown(false);
+});
 document.addEventListener('mousedown', ev => {
   if (!held) return;
   ev.preventDefault(); ev.stopPropagation();   // the ending click hits no key, as Move mode's does
