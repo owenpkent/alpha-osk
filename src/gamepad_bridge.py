@@ -15,13 +15,21 @@ exception type names are ever logged.
 from __future__ import annotations
 
 import logging
+import math
 import time
 from typing import Any, Callable, Dict, List, Optional
 
 from PySide6.QtCore import Property, QObject, Qt, QTimer, Signal, Slot
 
 from .gamepad.device import PadDevice, open_pad, pad_bus_available
-from .gamepad.state import CONTROL_IDS, PadReport, PadState, is_control
+from .gamepad.state import (
+    CONTROL_IDS,
+    STICKS,
+    TRIGGERS,
+    PadReport,
+    PadState,
+    is_control,
+)
 from .gamepad.worker import PadWorker
 
 _logger = logging.getLogger("GamepadBridge")
@@ -239,6 +247,60 @@ class GamepadBridge(QObject):
     @Slot(str, result=bool)
     def isLatched(self, control_id: str) -> bool:
         return control_id in self._state.latched
+
+    # ---- analog ----
+    # A position stays until it is cleared: that is what lets a stick be put
+    # down "held". No minimum hold applies; a position is a level, not a tap.
+
+    @Slot(str, float, float, result=bool)
+    def setStick(self, stick: str, x: float, y: float) -> bool:
+        """Hold ``"ls"`` or ``"rs"`` at ``(x, y)``, X right and Y up, each -1 to 1.
+
+        True means the position was taken (not that it changed). Refused
+        while the pad is not on, for an unknown stick, and for a value that
+        is not a finite number.
+        """
+        try:
+            if self._status != "on" or stick not in STICKS:
+                return False
+            if not (math.isfinite(x) and math.isfinite(y)):
+                return False
+            self._state.set_stick(stick, x, y)
+            self._publish()
+            return True
+        except Exception as exc:
+            _logger.warning("gamepad setStick failed: %s", type(exc).__name__)
+            return False
+
+    @Slot(str)
+    def centerStick(self, stick: str) -> None:
+        """Let go of a stick's analog position. Safe in any status."""
+        try:
+            self._state.clear_stick(stick)
+            self._publish()
+        except Exception as exc:
+            _logger.warning("gamepad centerStick failed: %s", type(exc).__name__)
+
+    @Slot(str, float, result=bool)
+    def setTrigger(self, trigger: str, value: float) -> bool:
+        """Hold ``"lt"`` or ``"rt"`` at ``value``, 0 (up) to 1 (down)."""
+        try:
+            if self._status != "on" or trigger not in TRIGGERS or not math.isfinite(value):
+                return False
+            self._state.set_trigger(trigger, value)
+            self._publish()
+            return True
+        except Exception as exc:
+            _logger.warning("gamepad setTrigger failed: %s", type(exc).__name__)
+            return False
+
+    @Slot(str)
+    def clearTrigger(self, trigger: str) -> None:
+        try:
+            self._state.clear_trigger(trigger)
+            self._publish()
+        except Exception as exc:
+            _logger.warning("gamepad clearTrigger failed: %s", type(exc).__name__)
 
     @Slot()
     def releaseAll(self) -> None:

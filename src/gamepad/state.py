@@ -22,9 +22,14 @@ idiom carried over:
   recent press wins while it lasts, then the latched member (there is at
   most one) shows through again.
 
-Sticks and triggers are digital here: a direction is full deflection and a
-trigger is all the way down. Analog control is a later phase and will add
-to this module, not replace its rules.
+The ids are digital: a direction is full deflection and a trigger is all
+the way down. Analog control sits beside them rather than replacing them:
+``set_stick`` holds a stick at any point inside the unit circle and
+``set_trigger`` holds a trigger part-way. While a stick has an analog
+position, that position is the stick, and its direction ids do not show; a
+trigger reports whichever of its analog value and its id is further down.
+Analog values stay until they are cleared, which is how a stick that has
+been "put down held" keeps its place.
 """
 
 from __future__ import annotations
@@ -97,6 +102,11 @@ def is_control(control_id: object) -> bool:
     return isinstance(control_id, str) and control_id in CONTROL_IDS
 
 
+def _finite(value: object) -> bool:
+    """A real, finite number. ``True``/``False`` are not stick positions."""
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+
+
 @dataclass(frozen=True)
 class PadReport:
     """One Xbox 360 report, in the units the pad client's float setters take.
@@ -129,6 +139,8 @@ class PadState:
         # Ordered, oldest first: within a group the most recent press wins.
         self._pressed: List[str] = []
         self._latched: Set[str] = set()
+        self._analog_sticks: Dict[str, Tuple[float, float]] = {}
+        self._analog_triggers: Dict[str, float] = {}
 
     # ---- reading ----
 
@@ -185,11 +197,59 @@ class PadState:
         self._latched.add(control_id)
         return True
 
+    def set_stick(self, stick: str, x: float, y: float) -> bool:
+        """Hold a stick at ``(x, y)``, X right and Y up. True when the report changed.
+
+        A point outside the unit circle is pulled back onto it, keeping its
+        direction, because that is the furthest a real stick travels. An
+        unknown stick, or a value that is not a finite number, is refused.
+        """
+        if stick not in STICKS or not _finite(x) or not _finite(y):
+            return False
+        x, y = float(x), float(y)
+        magnitude = math.hypot(x, y)
+        if magnitude > 1.0:
+            x, y = x / magnitude, y / magnitude
+        before = self.report()
+        self._analog_sticks[stick] = (x, y)
+        return self.report() != before
+
+    def clear_stick(self, stick: str) -> bool:
+        """Let go of a stick's analog position; its direction ids show again."""
+        if stick not in self._analog_sticks:
+            return False
+        before = self.report()
+        del self._analog_sticks[stick]
+        return self.report() != before
+
+    def set_trigger(self, trigger: str, value: float) -> bool:
+        """Hold a trigger at ``value``, 0.0 (up) to 1.0 (down), clamped."""
+        if trigger not in TRIGGERS or not _finite(value):
+            return False
+        before = self.report()
+        self._analog_triggers[trigger] = min(1.0, max(0.0, float(value)))
+        return self.report() != before
+
+    def clear_trigger(self, trigger: str) -> bool:
+        if trigger not in self._analog_triggers:
+            return False
+        before = self.report()
+        del self._analog_triggers[trigger]
+        return self.report() != before
+
+    def analog_stick(self, stick: str) -> Optional[Tuple[float, float]]:
+        """The stick's analog position, or ``None`` when it has none."""
+        return self._analog_sticks.get(stick)
+
     def release_all(self) -> bool:
-        """Drop every press and every latch. True when anything was down."""
-        was_down = bool(self._pressed or self._latched)
+        """Drop every press, latch and analog position. True when anything was held."""
+        was_down = bool(
+            self._pressed or self._latched or self._analog_sticks or self._analog_triggers
+        )
         self._pressed.clear()
         self._latched.clear()
+        self._analog_sticks.clear()
+        self._analog_triggers.clear()
         return was_down
 
     # ---- the report ----
@@ -226,10 +286,12 @@ class PadState:
             vector = STICK_VECTORS.get(control_id)
             if vector is not None:
                 sticks[_GROUP_OF[control_id]] = vector
+        # An analog position is the stick: the direction ids do not add to it.
+        sticks.update(self._analog_sticks)
         return PadReport(
             buttons=buttons,
-            left_trigger=1.0 if "lt" in down else 0.0,
-            right_trigger=1.0 if "rt" in down else 0.0,
+            left_trigger=max(1.0 if "lt" in down else 0.0, self._analog_triggers.get("lt", 0.0)),
+            right_trigger=max(1.0 if "rt" in down else 0.0, self._analog_triggers.get("rt", 0.0)),
             left_x=sticks["ls"][0],
             left_y=sticks["ls"][1],
             right_x=sticks["rs"][0],
