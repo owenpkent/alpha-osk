@@ -1,5 +1,9 @@
 # Accessibility Ecosystem: Alpha-OSK + MacroVox + Octavium + Nimbus
 
+> **Nimbus (2026-11-21):** what incorporating it would actually take, and
+> which lines below the code has since overtaken, is in
+> [`NIMBUS_INTEGRATION.md`](NIMBUS_INTEGRATION.md).
+
 ## Overview
 
 Four tools that together form a complete adaptive input platform:

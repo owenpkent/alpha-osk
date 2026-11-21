@@ -65,6 +65,7 @@ Forward-looking design docs and active launch planning. Convert entries into `ar
 - [`roadmap/launch_tasks.csv`](roadmap/launch_tasks.csv): structured task tracking.
 - [`roadmap/FEDERATED_LEARNING.md`](roadmap/FEDERATED_LEARNING.md): federated-learning roadmap (separate from §5.6 telemetry; not yet implemented).
 - [`roadmap/ECOSYSTEM.md`](roadmap/ECOSYSTEM.md): four-tool adaptive-input platform (Alpha-OSK + MacroVox + Octavium + Nimbus).
+- [`roadmap/NIMBUS_INTEGRATION.md`](roadmap/NIMBUS_INTEGRATION.md): exploration of incorporating Nimbus (recommendation: a gamepad panel on Nimbus's pad-bus client, not an embed; undecided).
 - [`roadmap/MACROVOX_INTEGRATION.md`](roadmap/MACROVOX_INTEGRATION.md): voice-dictation integration plan (history; MacroVox's AI features are now native in Alpha-OSK).
 - [`roadmap/DOCUMENT_IMPORT.md`](roadmap/DOCUMENT_IMPORT.md): import-from-document feature spec.
 - [`roadmap/dictation-speaking-indicator.html`](roadmap/dictation-speaking-indicator.html): the five candidate "the mic hears you" animations, side by side with simulated speech (open locally). B, level bars, shipped 2026-10-24; kept as the record of what was rejected. Uses the vendored [`roadmap/alex-style/`](roadmap/alex-style/README.md) tokens.
