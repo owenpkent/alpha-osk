@@ -210,6 +210,29 @@ where the engineering risk is.
    `uiAccess`, but nothing shows it running from a trusted location.
 5. Does the vendored client keep a pad alive across sleep and resume?
 
+### Measured so far (2026-11-21, no game)
+
+ViGEmBus 1.22.0 was installed on the owner's machine (installer checked
+against the SHA-256 and signer thumbprint Nimbus pins in
+`build_tools/fetch_redist.ps1`), and Nimbus's client was run unmodified
+against it from an ordinary, non-elevated Python process, reading the pad
+back through `XInputGetState`:
+
+| What | Result | What it means here |
+|------|--------|--------------------|
+| Plugging a pad (`X360Pad()` returns) | 109 ms | Too long for the Qt thread. Plug on a worker, as planned. |
+| Pad visible to XInput after that | 7 ms | No settling wait is needed before the first report. |
+| Press or release reaching XInput, 50 each | median 0.01 ms, max 0.15 ms, none missed | A report is synchronous in practice. |
+| Cost of one `update()` call, 200 calls | median 0.01 ms, max 0.07 ms | Cheap enough for any tick rate. It still stays off the Qt thread, because its failure path retries and can re-plug, which blocks for seconds. |
+| Analog round trip | sent 0.05, read 1638 of 32767, exact | The float conversion matches. |
+| Unplugging (`close()`) | 1 ms until the XInput slot is empty | Shutdown costs nothing. |
+| Bus-reported player index | none | 1.22.0 does not answer the query (Nimbus recorded the same of 1.21.442), so the pad's slot is found through XInput. |
+| Retried reports, re-plugs | 0, 0 | A clean bus. |
+
+That closes none of the five questions above, which all need a real game, a
+`uiAccess` build or a sleep cycle. It does show the client works on this
+machine as it stands.
+
 ## What this plan does not promise
 
 - **Raw Input mouse-look.** Unsolved in Nimbus, unsolved here.
