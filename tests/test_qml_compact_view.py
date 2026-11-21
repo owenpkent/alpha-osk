@@ -701,7 +701,18 @@ class TestTheSymbolPage:
         )
         # The panel's own keys are inside the same tree, and they are the
         # ones that are allowed to be digits, so take them back out.
-        panel_keys = {id(i) for i in self._key_items(self._panel(root, "numberRowPanel"))}
+        #
+        # The list is held, not consumed: PySide's wrapper for an item is a
+        # temporary, freed as soon as nothing refers to it, and the walk
+        # below would then meet the same keys behind brand-new wrappers with
+        # different ids. While the wrappers are held, the same item returns
+        # the same wrapper, so the ids are an identity. (Without it this
+        # passed only where the freed addresses happened to be handed back
+        # in the same order, and failed on a Linux shard the day the tree
+        # gained more items.)
+        panel_items = self._key_items(self._panel(root, "numberRowPanel"))
+        assert panel_items, "the number row panel has no keys to exclude"
+        panel_keys = {id(i) for i in panel_items}
         drawn = sorted(
             {
                 key
