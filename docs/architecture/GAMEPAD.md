@@ -1,9 +1,10 @@
 # Gamepad (controller output)
 
 Alpha-OSK can drive a virtual Xbox 360 controller, so the keys of a game
-controller can be clicked the way the keys of a keyboard are. This page
-covers the backend. **Nothing in the UI uses it yet**: the Controller view
-is the next piece of work, and until it lands the pad is never plugged.
+controller can be clicked the way the keys of a keyboard are. The
+**Controller view** swaps the letter grid for a game pad. It is off by
+default (*Appearance -> Panels -> Controller*), it needs a driver Alpha-OSK
+does not install, and this first version is digital: no analog sticks yet.
 
 The plan this is the first step of, and the decisions behind it, are in
 [`../roadmap/NIMBUS_INTEGRATION.md`](../roadmap/NIMBUS_INTEGRATION.md).
@@ -17,6 +18,7 @@ The plan this is the first step of, and the decisions behind it, are in
 | `src/gamepad/device.py` | `PadDevice`, the two-method surface the rest sees (`apply`, `close`), its adapter over the client, and `pad_bus_available()`. |
 | `src/gamepad/worker.py` | `PadWorker`: the one thread that owns the device. |
 | `src/gamepad_bridge.py` | `GamepadBridge`: the QML-facing object, registered as the `gamepad` context property. |
+| `qml/components/ControllerView.qml` | The view. Draws the controls and raises signals; `Main.qml` talks to `gamepad`. |
 
 `KeyboardBridge` does not know any of this exists, and a test holds it to
 that (`tests/test_gamepad_bridge.py`). The split is the one
@@ -71,6 +73,71 @@ Pad latches are **not** modifiers. They never go through
 drop a held direction. Their one release site is `GamepadBridge`
 (`releaseAll`, and every path that turns the pad off).
 
+## The Controller view
+
+The view takes the place of the letter grid's rows, at exactly their width
+and summed height, so opening it never changes the window. The navigation
+panel, the numpad, the function rows and compact's number row stay where
+they are. The layout was chosen from a clickable mockup
+(`docs/roadmap/controller-layout.html`, option A1).
+
+**What is on it.** Triggers and bumpers along the top with Back, ABC and
+Start between them; a stick at each end; Off, Guide, a D-pad and the four
+face buttons in the middle; and two ordinary keys, Esc and Enter, because
+games ask for them. Each stick is **eight direction keys around its stick
+click** (`l3`, `r3`) until the analog stick replaces them.
+
+**What a click does.**
+
+- Left press: the control goes down, and comes up when the press ends.
+- Right click: latch, with the lock bar a locked modifier shows. A left
+  click lets go.
+- **ABC** goes back to the letters and **leaves the pad plugged in with its
+  latches** (the owner's decision, 2026-11-21: a game must not see a
+  controller disconnect because the user stopped to type). The bar button
+  then carries a dot and the accent colour.
+- **Off** lets go of everything, unplugs the pad and goes back to the
+  letters.
+
+**Geometry.** The controls sit on a 15.5 by 5 unit design grid whatever the
+real grid is; in compact view it scales into 13 units by four rows. With
+`W`, `H` the view's size and `s`, `r` the grid's key and row gaps, a control
+at design `(x, y, w, h)` is at `x * (W + s) / 15.5`, `y * (H + r) / 5` and is
+`w * (W + s) / 15.5 - s` by `h * (H + r) / 5 - r`. The outermost key edges
+land on the view's edges and every gap equals the grid's. It is a plain
+`Item` with computed positions, never `QtQuick.Layouts`.
+
+**The height is the rows' own.** `Main.qml::gridRowsHeight` restates how
+tall the data-driven rows are (each ceiled to a pixel, the number row four
+pixels shorter, `rowSpacing` between), because the rows are hidden while
+the view shows and cannot be asked. If the rows' heights change and this
+does not, `sectionHeight` moves when the view opens;
+`tests/test_qml_controller_view.py` compares the two in the full, compact,
+panels-on and function-row configurations.
+
+**Rules that are easy to break.**
+
+- The component only raises signals. `Main.qml` owns `gamepad`, as it owns
+  every other context property. A pad control never calls `keyboard`: no
+  sticky-modifier release, no prediction, no key preview. Esc and Enter are
+  the exception and take the grid's own `pressSpecialKey` path.
+- **A press must always end.** `KeyButton.keyReleased` fires on release,
+  cancel and drag-off; the view also remembers what it pressed and lets go
+  of it if it is hidden or destroyed mid-press. A right click presses
+  nothing, so its release is ignored.
+- **An assistive Invoke is `tap()`, never `press()`**: it has no release to
+  pair with (`KeyButton.pressFromPointer` is false).
+- The view is disabled, and dimmed, until the status is `"on"`. A press the
+  bridge would refuse must not look like a dead key.
+- `controllerViewActive` is never saved. The keyboard starts on the letters.
+- The bar button is scan index 6 and is counted in `predButtonCount`; it has
+  a title-bar twin for when suggestions are off.
+
+**Not yet seen outside a test.** The view has been rendered offscreen and
+driven headlessly over a fake pad, and the backend has been run against the
+real driver. As of this writing the two have not been used together in the
+running app or in a game.
+
 ## A tap has a minimum length
 
 A game reads the pad once a frame, so a press that lasts a millisecond can
@@ -121,10 +188,13 @@ bus owns a pad by file handle, so a crashed process cannot leave one behind.
 
 ## The pad exists only while it is wanted
 
-Constructing `GamepadBridge` probes nothing and starts nothing. The pad is
-plugged by `setActive(True)` and unplugged by `setActive(False)`, and
-nothing calls either yet. A controller appearing changes how some games
-behave (prompts, input mode), so it is never plugged at launch.
+Constructing `GamepadBridge` probes nothing and starts nothing. A controller
+appearing changes how some games behave (prompts, input mode), so it is
+never plugged at launch: the pad is plugged the first time the Controller
+view is opened, and stays plugged while the letters show. It is unplugged
+by the Off key, by turning the Controller setting off, when the keyboard is
+minimized or hidden (a pad nobody can reach must not sit in front of a game
+with a direction held), on a device error, and on quit.
 
 ## Tests never touch a real bus
 
@@ -142,11 +212,12 @@ to make a test pass.
 | `tests/test_gamepad_device.py` | The adapter, and the availability probe never raising |
 | `tests/test_gamepad_worker.py` | Ordering, the neutral report on the way out, both failure paths |
 | `tests/test_gamepad_bridge.py` | The slots, the minimum hold, status handling, the bridge split |
+| `tests/test_qml_controller_view.py` | The view in the real `Main.qml`: size unchanged, geometry, press and latch, ABC and Off, scan targets |
 
 ## Not here yet
 
-- Any UI. No key, button or setting reaches this code.
 - Analog sticks and triggers.
-- Scan targets for pad controls (`UIA_TARGETS.md` will gain a `pad` section
-  with the view).
+- Latching through UI Automation. A scanner's Invoke taps; it cannot hold a
+  control down (`UIA_TARGETS.md`, *The controller*).
+- A measured tap length, and any measurement in a real game.
 - Linux and macOS. The client imports cleanly there and reports no bus.
