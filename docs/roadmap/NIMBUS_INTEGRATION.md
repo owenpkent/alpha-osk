@@ -4,7 +4,7 @@
 was chosen by the owner on that day; the phases, and every design marked
 *open*, are proposals.
 
-It was written from a read of Nimbus (`W:\dev\Nimbus-Adaptive-Controller`) at
+It was written from a read of Nimbus (`owenpkent/Nimbus-Adaptive-Controller`) at
 commit `bcbf5dc` (2026-09-15) and of this repo at `730c165`. Driver facts
 were checked against the upstream pages on the same day (*Sources*).
 
@@ -97,7 +97,7 @@ held, tap again to put it down.
 
 #### Confining the pointer
 
-The owner's words were "ideally mouse would stay in the area while held", so this is the target, and the
+The owner asked for this as the ideal, so it is the target, and the
 prototype has to show it holds. On Windows that is `ClipCursor` with a small rectangle, which is a confinement
 and not a hook: no pointer event is intercepted or swallowed. What the prototype must settle:
 
@@ -205,7 +205,7 @@ tried on the one page.
 | Sticky state | One release site for modifiers | Pad latches are not modifiers and get their own single release site. Typing a letter must not drop a held direction. |
 | Actions | `key_actions.py` is a registry | One new `pad` type and one `ActionExecutor` method. |
 | Shutdown | `shutdown()` releases anything held | A neutral report, then the handle closes, which unplugs the pad. |
-| Pad lifetime | none yet | Plugged while the Controller view is in use, not at launch: a controller appearing changes what some games do. |
+| Pad lifetime | none yet | Plugged when the Controller view is first opened, never at launch: a controller appearing changes what some games do. Swapping back to the letters leaves it plugged in with its latches, so a game does not see a disconnect while the user types; an Off key on the view unplugs it (decided 2026-11-21). |
 | Settings | The 8-step wiring; no secret in `Settings {}` | A seventh category, *Controller*. That is seven cards on a six-card home, so it is a layout question too. |
 | Imports | Sanitise, cap, allow-list | The Nimbus profile importer is an import path and is written to those rules from the first line. |
 | Data Backup | Schema changes need a `SCHEMA_VERSION` bump | Controller layouts join the archive when they exist; that is a schema change. |
@@ -220,7 +220,7 @@ requests.
 | | Phase | Ends with | Depends on |
 |---|-------|-----------|------------|
 | 0 | **Probe.** Vendor the client; a script that plugs a pad and answers the measurements below. | Numbers. No UI. | The driver installed on a test machine. |
-| 1 | **Controller view, digital.** Pad output, buttons, D-pad, eight-way sticks, tap and latch. | Menus and turn-based games playable. | 0, and the view's mockup. |
+| 1 | **Controller view, digital.** Pad output, buttons, D-pad, eight-way sticks, tap and latch. The backend is built (`docs/architecture/GAMEPAD.md`, pull request 261); the view follows option A1 of the mockup. | Menus and turn-based games playable. | 0, and the view's mockup. |
 | 2 | **Analog.** The drag-free stick, triggers, shaping, precision modifier, tremor filter. | Movement and camera in games that give up the cursor. | The stick's mockup and prototype. |
 | 3 | **Layouts.** Pad keys in layout JSON, `pad` actions, zone sticks, shipped Xbox and adaptive layouts. | Function keys and custom layouts can fire pad input. | `MODULAR_LAYOUTS.md` phase 1. |
 | 4 | **Game Mode.** Controller-mode pulse in process; pointer handling and borderless in a helper. | Nimbus's game compatibility, with a watchdog. | 2. |
@@ -280,6 +280,10 @@ Settled 2026-11-21:
 - ViGEmBus may be installed on the working machine for the measurements.
 - The controller lives in a Controller view that swaps with the letter grid.
 - While a stick is held, the pointer stays in the stick's area.
+- The first version is digital (option A1 of the mockup): each stick is eight
+  direction keys around its stick click, until the analog stick of phase 2
+  replaces them.
+- ABC returns to the letters and leaves the controller plugged in; Off unplugs it.
 
 Later, each at its phase:
 
