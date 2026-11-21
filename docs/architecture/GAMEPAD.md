@@ -196,6 +196,112 @@ by the Off key, by turning the Controller setting off, when the keyboard is
 minimized or hidden (a pad nobody can reach must not sit in front of a game
 with a direction held), on a device error, and on quit.
 
+## The analog stick (prototype, not in the app yet)
+
+The direction keys are a stopgap. The stick they stand in for is **picked up,
+not dragged**: a click picks it up, it follows the pointer with no button
+held, and another click puts it down, either dropped back to centre (left
+click) or left held where it is (right click). This is Move mode's idiom. A
+sustained drag with a button held is the one gesture this keyboard's users
+cannot be asked to make.
+
+While a stick is held the pointer is **confined to the stick's travel
+square**, so full deflection is a wall the pointer stops at and the click
+that puts the stick down cannot land on the game (the owner's decision,
+2026-11-21).
+
+| File | Role |
+|------|------|
+| `src/gamepad/stick.py` | The arithmetic: anchor, travel square, deflection, the idle / held / latched gesture. Pure. |
+| `src/gamepad/stick_session.py` | `StickSession`: one gesture per stick, tied to the confiner and to whatever receives positions. |
+| `src/platform/pointer_clip.py` | `PointerConfiner`, the `Heartbeat` it shares with the guard, and the guard loop. |
+| `src/platform/pointer_clip_guard.py` | The guard process's entry point. |
+| `scripts/prototypes/analog_stick.py`, `AnalogStick.qml` | A throwaway no-focus window to try it against a real game. Run by hand; no test launches it. |
+
+Nothing in `qml/` or `keyboard_app.py` uses any of this yet. The Controller
+view still draws direction keys.
+
+### Analog positions in the state
+
+`PadState.set_stick(stick, x, y)` holds a stick anywhere inside the unit
+circle (a point outside is pulled back onto it) and `set_trigger` holds a
+trigger part-way. **A position stays until it is cleared**, which is what
+lets a stick be put down held. While a stick has an analog position, that
+position is the stick and its direction ids do not show; a trigger reports
+whichever of its analog value and its id is further down. `release_all`
+clears positions too. No minimum hold applies: a position is a level, not a
+tap. The bridge's slots are `setStick`, `centerStick`, `setTrigger` and
+`clearTrigger`.
+
+### A clip outlives the process that set it
+
+Measured on the owner's machine (Windows 11, 2026-11-21): a child process
+set a `ClipCursor` rectangle and was killed, and the clip was still in force
+three seconds later. A normal exit leaves it behind as well. A clip set by a
+process that is not the foreground window does hold, and held for four
+seconds with nothing re-applying it.
+
+The pointer is this keyboard's user's only input device. A keyboard that
+died or hung while a stick was held would leave him boxed into a few hundred
+pixels with nothing to type his way out with. So there is one rule:
+
+**No clip without a live guard.** A second process, the guard, shares a
+small named block of memory with the keyboard and calls `ClipCursor(NULL)`
+itself when either of two things happens:
+
+- the keyboard process is gone (a process handle, polled every 50 ms);
+- a clip is active and the keyboard's heartbeat has not moved for 0.4 s (a
+  hung UI thread: alive, but no longer ticking).
+
+Measured with the real guard and a real clip: the guard was up and proven in
+139 ms; a keyboard that stopped ticking lost its clip 396 ms after its last
+tick; a keyboard that was killed lost it 44 ms after the kill.
+
+What has to stay true, in `pointer_clip.py`:
+
+- `confine()` **refuses** unless the guard process is running and its own
+  counter has advanced in the last half second. `start()` does not return
+  true until the guard has proven it is mapping the same memory.
+- The heartbeat is marked active **before** `ClipCursor` is called, and
+  cleared **before** the clip is released. A crash between the two then
+  errs towards an extra release, never a missing one.
+- On the keyboard's death the guard releases **unconditionally**, whatever
+  the active flag says, for the same reason.
+- `tick()` is what beats the heart. A caller that confines and then stops
+  ticking loses its clip in 0.4 s, which is the safe default.
+- `tick()` also re-applies the rectangle if something else cleared it (a
+  game setting its own clip, a foreground change) and counts it.
+- When the guard has released, or has gone, `StickSession` **drops the
+  stick** rather than let it follow a free pointer.
+- `release()` clears only a clip this object set. A game may hold its own.
+- If confinement is refused (no guard, or the clip fails), the stick is
+  still usable, unconfined and anchored where it was clicked, and the
+  pointer is never moved.
+
+**Live checks never use a small rectangle.** Every real-API check so far has
+used the whole desktop minus a two-pixel strip, which exercises the same
+calls and cannot trap anyone. `tests/conftest.py` makes
+`pointer_clip.win32_clip_api` return nothing, per test and for the session
+(`_no_real_pointer_clip`, `_no_real_pointer_clip_anywhere`), so the suite
+never confines or moves the developer's pointer; the one test that runs the
+real guard process runs it in a dry-run mode that touches nothing.
+
+### Not settled
+
+- **A frozen build.** The guard is spawned as
+  `python -m src.platform.pointer_clip_guard`. In the installed app
+  `sys.executable` is the app itself, so the spawn fails and confinement is
+  refused (the safe direction). It needs its own small executable, built
+  like the update helper.
+- **`uiAccess`.** The installed keyboard runs at a higher integrity level
+  than a plain guard process would. Whether the guard can release a clip
+  the keyboard set has not been tested.
+- **Real games.** Whether a game fights the clip, and how often it has to be
+  re-applied, is what the prototype exists to find out.
+- **Shaping.** No dead zone, curve or anti-deadzone is applied yet; Nimbus's
+  are about 120 lines and port as they are.
+- **Linux and macOS.** Not looked at.
+
 ## Tests never touch a real bus
 
 The driver may be installed on a developer's machine, and a plugged pad is
@@ -213,10 +319,14 @@ to make a test pass.
 | `tests/test_gamepad_worker.py` | Ordering, the neutral report on the way out, both failure paths |
 | `tests/test_gamepad_bridge.py` | The slots, the minimum hold, status handling, the bridge split |
 | `tests/test_qml_controller_view.py` | The view in the real `Main.qml`: size unchanged, geometry, press and latch, ABC and Off, scan targets |
+| `tests/test_gamepad_state_analog.py`, `test_gamepad_bridge_analog.py` | Analog positions: clamping, persistence, refusals |
+| `tests/test_gamepad_stick.py`, `test_gamepad_stick_session.py` | The pick-up gesture and the session that ties it to the clip |
+| `tests/test_pointer_clip.py` | The confiner, the heartbeat, the guard loop, and the real guard process in dry-run |
 
 ## Not here yet
 
-- Analog sticks and triggers.
+- Analog sticks and triggers in the app. The backend and a prototype exist
+  (*The analog stick*, above); the Controller view does not use them.
 - Latching through UI Automation. A scanner's Invoke taps; it cannot hold a
   control down (`UIA_TARGETS.md`, *The controller*).
 - A measured tap length, and any measurement in a real game.
