@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import atexit
 import logging
+import math
 import sys
 import time
 from pathlib import Path
@@ -217,18 +218,42 @@ class StickPrototype(QObject):
         self._refresh()
 
     @Slot(str, float, float, float, result=str)
-    def pickUp(self, stick: str, centreDx: float, centreDy: float, travel: float) -> str:
+    @Slot(str, float, float, float, float, float, float, float, result=str)
+    def pickUp(
+        self,
+        stick: str,
+        centreDx: float,
+        centreDy: float,
+        travel: float,
+        boundsDx: float = 0.0,
+        boundsDy: float = 0.0,
+        boundsW: float = 0.0,
+        boundsH: float = 0.0,
+    ) -> str:
         """``centreDx/Dy``: physical pixels from the pointer to the stick's centre.
 
         The pointer is read through the confiner and the offsets added, so no
         global coordinate mapping is needed (the trick Move mode uses).
+        ``boundsDx/Dy`` are the offsets from the pointer to this window's
+        top-left corner and ``boundsW/H`` its size, all physical pixels: the
+        confinement is cut down to the window, because the click that puts a
+        stick down can only be caught there.
         """
         try:
             pointer = self._confiner.cursor_pos()
             if pointer is None:
                 return "refused"
             centre = (pointer[0] + int(round(centreDx)), pointer[1] + int(round(centreDy)))
-            result = str(self._session.pick_up(stick, centre, int(round(travel))))
+            bounds = None
+            if boundsW > 0 and boundsH > 0:
+                # Rounded inward: a pixel that is only partly ours is not ours.
+                bounds = (
+                    pointer[0] + math.ceil(boundsDx),
+                    pointer[1] + math.ceil(boundsDy),
+                    pointer[0] + math.floor(boundsDx + boundsW),
+                    pointer[1] + math.floor(boundsDy + boundsH),
+                )
+            result = str(self._session.pick_up(stick, centre, int(round(travel)), bounds))
         except Exception as exc:
             _logger.warning("pickUp failed: %s", type(exc).__name__)
             result = "refused"

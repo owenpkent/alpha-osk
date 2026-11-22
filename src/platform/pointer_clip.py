@@ -380,6 +380,12 @@ class PointerConfiner:
         self._proc: Any = None
         self._started = False
         self._holds_clip = False
+        #: A release the OS refused. The clip may still be set; the heartbeat
+        #: is left active and unbeaten so the guard retries it, and every later
+        #: call here retries it first.
+        self.release_pending = False
+        # Guards left running because a release was still outstanding at close().
+        self._orphans: list[Any] = []
         self._releases_seen = 0
         self._seen_guard_beat = 0
         self._seen_guard_at = 0.0
@@ -394,11 +400,9 @@ class PointerConfiner:
         if self._started:
             return True
         try:
-            api = (self._api_factory or win32_clip_api)()
-            if api is None:
+            if self._ensure_api() is None:
                 return False
-            self._api = api
-            name = f"alpha-osk-clip-{os.getpid()}-{secrets.token_hex(6)}"
+            name =f"alpha-osk-clip-{os.getpid()}-{secrets.token_hex(6)}"
             self._heartbeat = Heartbeat.create(name)
             self._proc = self._spawn_guard(name)
             if not self._await_guard(timeout_s):
@@ -452,7 +456,16 @@ class PointerConfiner:
                 hb.close()
             except Exception:
                 pass
-        self._api = None
+        # The api is kept: reading the pointer needs no guard, and a stick that
+        # cannot be confined must still be usable unconfined.
+
+    def _ensure_api(self) -> Optional[ClipApi]:
+        if self._api is None:
+            try:
+                self._api = (self._api_factory or win32_clip_api)()
+            except Exception:
+                self._api = None
+        return self._api
 
     @property
     def guard_alive(self) -> bool:
@@ -477,23 +490,49 @@ class PointerConfiner:
         self.confined = False
         self.rect = None
 
+    def _set_inactive(self) -> None:
+        try:
+            if self._heartbeat is not None:
+                self._heartbeat.set_active(False)
+        except Exception:
+            pass
+
+    def _os_release(self) -> bool:
+        """``ClipCursor(NULL)``, as a plain bool. A raise is a failure."""
+        try:
+            return bool(self._api is not None and self._api.release())
+        except Exception:
+            return False
+
+    def _settle_pending(self) -> bool:
+        """Retry a release the OS refused. True once nothing of ours is clipped."""
+        if not self.release_pending:
+            return True
+        if self._os_release():
+            self._set_inactive()
+            self._forget_clip()
+            self.release_pending = False
+            return True
+        return False
+
     def confine(self, rect: Rect) -> bool:
         try:
             if not self._started or self._api is None or self._heartbeat is None:
                 return False
+            if not self._settle_pending():
+                return False
             if not self.guard_alive:
                 return False
             hb = self._heartbeat
-            if self.confined and hb.read().guard_releases != self._releases_seen:
-                self._forget_clip()  # the guard already released it
             hb.beat()
             hb.set_active(True)
             if not self._api.set_clip(rect):
                 if not self._holds_clip:
                     hb.set_active(False)
                 return False
-            if not self.confined:
-                self._releases_seen = hb.read().guard_releases
+            # Counted from here: a guard release before this clip is old news,
+            # one after it is about this clip.
+            self._releases_seen = hb.read().guard_releases
             self._holds_clip = True
             self.confined = True
             self.rect = rect
@@ -503,57 +542,123 @@ class PointerConfiner:
 
     def tick(self) -> str:
         try:
+            if self.release_pending:
+                return "idle" if self._settle_pending() else "release-pending"
             if not self.confined or self._heartbeat is None or self._api is None:
                 return "idle"
             hb = self._heartbeat
             hb.beat()
-            if hb.read().guard_releases != self._releases_seen:
-                self._forget_clip()
-                hb.set_active(False)
+            releases = hb.read().guard_releases
+            if releases != self._releases_seen:
+                # The guard clears the OS clip and counts it as two steps, in
+                # another process. A tick that ran between them saw the cleared
+                # rectangle and put ours back, so the count going up does not
+                # prove nothing is clipped. Release for ourselves before giving
+                # up ownership; forgetting here without it is how the pointer
+                # stays boxed in with both sides believing it is free.
+                self._releases_seen = releases
+                self.release()
                 return "guard-released"
             if not self.guard_alive:
                 self.release()
                 return "guard-lost"
             if self._api.get_clip() != self.rect:
                 assert self.rect is not None
-                self._api.set_clip(self.rect)
-                self.reapplied += 1
-                return "reapplied"
+                if self._api.set_clip(self.rect):
+                    self.reapplied += 1
+                    return "reapplied"
+                # Something cleared the clip and it will not go back: the
+                # pointer is loose, so this is not confinement any more.
+                self.release()
+                return "clip-lost"
             return "ok"
         except Exception:
-            return "idle"
+            # Unknown state: fail towards freeing the pointer.
+            self.release()
+            return "clip-lost"
 
-    def release(self) -> None:
+    def release(self) -> bool:
+        """Let the pointer go. True once nothing of ours is clipped.
+
+        The heartbeat goes inactive only AFTER the OS confirms the release.
+        Until then the guard is still watching, and because nothing beats
+        while no stick is held, its stale-heartbeat path takes the retry over
+        within ``STALE_S``. (Marking it inactive first would leave a refused
+        release, or a stall between the two steps, with a clip set and nobody
+        responsible for it.) Only a clip this object set is cleared: a game
+        may hold its own.
+        """
         try:
-            if self._heartbeat is not None:
-                self._heartbeat.set_active(False)
+            if not self._holds_clip:
+                self._set_inactive()
+                self._forget_clip()
+                self.release_pending = False
+                return True
+            if self._os_release():
+                self._set_inactive()
+                self._forget_clip()
+                self.release_pending = False
+                return True
+            # Still ours, still clipped. Not "confined" as far as a caller is
+            # concerned (no stick may follow it), but not forgotten either.
+            self.confined = False
+            self.rect = None
+            self.release_pending = True
+            return False
         except Exception:
-            pass
-        try:
-            # Only clear a clip this object set: a game may hold its own.
-            if self._holds_clip and self._api is not None:
-                self._api.release()
-        except Exception:
-            pass
-        self._forget_clip()
+            self.release_pending = self._holds_clip
+            return not self._holds_clip
 
     def close(self) -> None:
+        released = False
         try:
-            self.release()
+            released = self.release()
+            for _ in range(_RELEASE_ATTEMPTS):
+                if released:
+                    break
+                self._sleep(POLL_S)
+                released = self._settle_pending()
         except Exception:
-            pass
+            released = False
         if self._atexit_registered:
             try:
                 atexit.unregister(self.close)
             except Exception:
                 pass
             self._atexit_registered = False
-        self._teardown()
+        if released:
+            self._teardown()
+        else:
+            self._abandon_to_guard()
+
+    def _abandon_to_guard(self) -> None:
+        """Stop, but leave the guard alive: it is the only thing still retrying.
+
+        The heartbeat stays active and unbeaten, so the guard keeps trying the
+        release on every poll until it succeeds, and releases once more when
+        this process exits. Terminating it here would strand the clip.
+        """
+        self._started = False
+        proc, self._proc = self._proc, None
+        if proc is not None:
+            self._orphans.append(proc)
+        self._heartbeat = None
 
     # -- pointer pass-throughs ----------------------------------------------
 
     def cursor_pos(self) -> Optional[Tuple[int, int]]:
-        return self._api.cursor_pos() if self._api is not None else None
+        """Where the pointer is. Needs no guard: it changes nothing."""
+        api = self._ensure_api()
+        try:
+            return api.cursor_pos() if api is not None else None
+        except Exception:
+            return None
 
     def set_cursor_pos(self, x: int, y: int) -> bool:
-        return self._api.set_cursor_pos(x, y) if self._api is not None else False
+        """Move the pointer, only while it is confined: never one that is not walled in."""
+        if not self.confined or self._api is None:
+            return False
+        try:
+            return bool(self._api.set_cursor_pos(x, y))
+        except Exception:
+            return False

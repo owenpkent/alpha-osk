@@ -18,6 +18,28 @@ _logger = logging.getLogger("StickSession")
 
 STICKS = ("ls", "rs")
 
+Rect = Tuple[int, int, int, int]
+
+#: Results of the confiner's tick that mean the pointer is no longer walled
+#: in. The stick is dropped on any of them: a stick following a loose pointer
+#: has no click that is sure to reach this window to put it down.
+_CONFINEMENT_LOST = ("guard-released", "guard-lost", "clip-lost", "release-pending")
+
+
+def _within(clip: Rect, bounds: Optional[Rect]) -> Optional[Rect]:
+    """``clip`` cut down to ``bounds``; ``None`` when nothing is left."""
+    if bounds is None:
+        return clip
+    left, top = max(clip[0], bounds[0]), max(clip[1], bounds[1])
+    right, bottom = min(clip[2], bounds[2]), min(clip[3], bounds[3])
+    if right <= left or bottom <= top:
+        return None
+    return (left, top, right, bottom)
+
+
+def _contains(rect: Rect, point: Tuple[int, int]) -> bool:
+    return rect[0] <= point[0] < rect[2] and rect[1] <= point[1] < rect[3]
+
 
 class StickSink(Protocol):
     def set_stick(self, stick: str, x: float, y: float) -> object: ...
@@ -68,8 +90,23 @@ class StickSession:
 
     # ---- gestures ----
 
-    def pick_up(self, stick: str, centre: Tuple[int, int], travel: int) -> str:
-        """``"held"``, ``"held-unconfined"``, ``"released"`` or ``"refused"``."""
+    def pick_up(
+        self,
+        stick: str,
+        centre: Tuple[int, int],
+        travel: int,
+        bounds: Optional[Rect] = None,
+    ) -> str:
+        """``"held"``, ``"held-unconfined"``, ``"released"`` or ``"refused"``.
+
+        ``bounds`` is the rectangle (physical pixels, right and bottom
+        exclusive) in which a click still reaches the caller's own window,
+        which is the only place the click that puts the stick down can land.
+        The confinement is cut down to it. Without recentring the travel
+        square is centred on the click, so a pick-up near the window's edge
+        would otherwise confine the pointer partly over the game, where a
+        click goes to the game and the stick is never put down.
+        """
         if stick not in self._gestures:
             return "refused"
         try:
@@ -87,7 +124,11 @@ class StickSession:
             confined = False
             if self.confine:
                 pick = gesture.pick_up(pointer, centre, travel, recentre=self.recentre)
-                if self._confiner.confine(pick.clip):
+                clip = _within(pick.clip, bounds)
+                # Where the pointer will be once held must itself be inside:
+                # a clip that excludes it would yank the pointer on pick-up.
+                rests_at = pick.warp_to if pick.warp_to is not None else pointer
+                if clip is not None and _contains(clip, rests_at) and self._confiner.confine(clip):
                     confined = True
                     # After the clip, so the pointer lands inside it.
                     if pick.warp_to is not None:
@@ -115,7 +156,7 @@ class StickSession:
             status = "ok"
             if self.confined:
                 status = str(self._confiner.tick())
-                if status in ("guard-released", "guard-lost"):
+                if status in _CONFINEMENT_LOST:
                     self.drop()
                     self.last_tick = status
                     return status

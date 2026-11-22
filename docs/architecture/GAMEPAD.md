@@ -262,17 +262,45 @@ What has to stay true, in `pointer_clip.py`:
 - `confine()` **refuses** unless the guard process is running and its own
   counter has advanced in the last half second. `start()` does not return
   true until the guard has proven it is mapping the same memory.
-- The heartbeat is marked active **before** `ClipCursor` is called, and
-  cleared **before** the clip is released. A crash between the two then
-  errs towards an extra release, never a missing one.
+- The heartbeat is marked active **before** `ClipCursor` is called, and goes
+  inactive only **after the system confirms the release**. Either way a
+  crash or a stall between the two steps errs towards an extra release,
+  never a missing one. (The first cut cleared it before releasing. A stall
+  there, or a release the system refused, left a clip set with the guard
+  told there was nothing to watch.)
+- **A refused release is not forgotten.** `ClipCursor` can fail. When it
+  does, `release()` answers false, keeps ownership (`release_pending`),
+  and leaves the heartbeat active. Nothing beats while no stick is held,
+  so within 0.4 s the guard's stale-heartbeat path takes the retry over and
+  keeps trying on every poll until it succeeds; every later call here
+  retries first as well. `close()` does **not** terminate the guard while
+  a release is outstanding: it is the only thing still trying.
+- **"The guard released" does not prove nothing is clipped.** The guard
+  clears the clip and then counts it, as two steps in another process. A
+  tick that runs between them sees the cleared rectangle and puts ours
+  back. So when `tick()` sees the count go up it releases for itself
+  before giving up ownership. Forgetting without releasing is how the
+  pointer ends up boxed in with both sides believing it is free.
 - On the keyboard's death the guard releases **unconditionally**, whatever
   the active flag says, for the same reason.
 - `tick()` is what beats the heart. A caller that confines and then stops
   ticking loses its clip in 0.4 s, which is the safe default.
 - `tick()` also re-applies the rectangle if something else cleared it (a
-  game setting its own clip, a foreground change) and counts it.
-- When the guard has released, or has gone, `StickSession` **drops the
-  stick** rather than let it follow a free pointer.
+  game setting its own clip, a foreground change) and counts it. If it
+  will not go back, that is `clip-lost`, not confinement.
+- When the guard has released, or has gone, or the clip is lost, or a
+  release is still pending, `StickSession` **drops the stick** rather than
+  let it follow a free pointer.
+- **The confinement never reaches past the window that can end it.** The
+  click that puts a stick down has to land on our own window, so
+  `StickSession.pick_up` takes that window's rectangle and cuts the clip
+  down to it. Without recentring the travel square is centred on the
+  click, and a pick-up near the window's edge would otherwise confine the
+  pointer partly over the game. If the cut-down rectangle would not even
+  hold the pointer, the stick is picked up unconfined instead.
+- **Reading the pointer needs no guard.** `cursor_pos()` works whether or
+  not the guard started, which is what makes the unconfined fallback
+  real. `set_cursor_pos()` is refused unless the pointer is confined.
 - `release()` clears only a clip this object set. A game may hold its own.
 - If confinement is refused (no guard, or the clip fails), the stick is
   still usable, unconfined and anchored where it was clicked, and the
@@ -322,6 +350,8 @@ to make a test pass.
 | `tests/test_gamepad_state_analog.py`, `test_gamepad_bridge_analog.py` | Analog positions: clamping, persistence, refusals |
 | `tests/test_gamepad_stick.py`, `test_gamepad_stick_session.py` | The pick-up gesture and the session that ties it to the clip |
 | `tests/test_pointer_clip.py` | The confiner, the heartbeat, the guard loop, and the real guard process in dry-run |
+| `tests/test_pointer_clip_release.py` | Every way a clip could outlive what both sides believe: the guard and keyboard interleaving, a refused release, a clip that will not go back, no guard at all |
+| `tests/test_gamepad_stick_bounds.py` | The confinement cut down to the window, and the stick dropped when it is lost |
 
 ## Not here yet
 

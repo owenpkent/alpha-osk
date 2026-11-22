@@ -112,7 +112,13 @@ Window {
                 // Pointer to the stick's drawn centre, in physical pixels.
                 var dx = (sv.width / 2 - mouse.x) * dpr
                 var dy = (sv.height / 2 - mouse.y) * dpr
-                stick.pickUp(sv.name, dx, dy, sv.radius2 * dpr)
+                // Pointer to this window's corner, and the window's size: the
+                // confinement is cut down to the window, the only place the
+                // click that puts the stick down can be caught.
+                var inWindow = mapToItem(null, mouse.x, mouse.y)
+                stick.pickUp(sv.name, dx, dy, sv.radius2 * dpr,
+                             -inWindow.x * dpr, -inWindow.y * dpr,
+                             win.width * dpr, win.height * dpr)
             }
         }
     }
