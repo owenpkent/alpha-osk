@@ -11,18 +11,23 @@ import collections
 import logging
 import threading
 import time
-from typing import Callable, Deque, Dict, Optional, Set
+from typing import Callable, Deque, Dict, Optional, Tuple
 
 from .device import PadDevice
 from .state import NEUTRAL, PadReport
 
 MAX_QUEUED_REPORTS = 256
+#: How many applied sequence numbers are remembered for ``after`` lookups.
+MAX_REMEMBERED_APPLIES = 1024
 STOP_TIMEOUT_S = 2.0
 
 _logger = logging.getLogger("PadWorker")
 
 
 class PadWorker:
+    #: The bridge reads this to tell a worker that numbers reports from a fake.
+    numbers_reports = True
+
     def __init__(
         self,
         open_device: Callable[[], PadDevice],
@@ -33,17 +38,21 @@ class PadWorker:
         self._open_device = open_device
         self._on_status = on_status
         self._cond = threading.Condition()
-        self._queue: Deque[PadReport] = collections.deque()
+        self._queue: Deque[Tuple[int, PadReport, Optional[int]]] = collections.deque()
         self._stopping = False
         self._thread: Optional[threading.Thread] = None
         self.dropped_reports = 0
-        #: Shortest time a control stays down at the device, measured from
-        #: when its press was applied (not submitted), so a slow earlier write
-        #: cannot squash a tap. Set before ``start()``.
+        #: Shortest time a press stays down at the device, measured from when
+        #: its report was applied (not submitted), so a slow earlier write
+        #: cannot squash a tap. Only a report submitted with ``after`` waits;
+        #: whatever else a report contains, it is never delayed. Set before
+        #: ``start()``.
         self.min_hold_s = 0.0
         self._clock = clock
         self._device: Optional[PadDevice] = None
-        self._down_at: Dict[str, float] = {}
+        self._seq = 0
+        #: Sequence number -> when that report was applied, oldest evicted first.
+        self._applied_at: Dict[int, float] = {}
 
     @property
     def running(self) -> bool:
@@ -60,15 +69,26 @@ class PadWorker:
             self._thread = threading.Thread(target=self._run, name="pad-worker", daemon=True)
             self._thread.start()
 
-    def submit(self, report: PadReport) -> None:
+    def submit(self, report: PadReport, *, after: Optional[int] = None) -> int:
+        """Queue ``report`` and return its sequence number.
+
+        ``after`` is the sequence number of the report whose press this one
+        ends; the worker holds this report back until that press has been at
+        the device for ``min_hold_s``. The caller says so because the worker
+        cannot tell a release from a stick moving on: guessing from report
+        contents would delay analog input.
+        """
         with self._cond:
+            self._seq += 1
+            seq = self._seq
             if self._stopping:
-                return
+                return seq
             if len(self._queue) >= MAX_QUEUED_REPORTS:
                 self._queue.popleft()
                 self.dropped_reports += 1
-            self._queue.append(report)
+            self._queue.append((seq, report, after))
             self._cond.notify()
+            return seq
 
     def stop(self, timeout_s: float = STOP_TIMEOUT_S) -> None:
         try:
@@ -97,34 +117,14 @@ class PadWorker:
         except Exception:
             _logger.debug("pad status callback failed", exc_info=True)
 
-    @staticmethod
-    def _controls_down(report: PadReport) -> Set[str]:
-        down = {f"b{bit}" for bit in range(32) if report.buttons >> bit & 1}
-        if report.left_trigger > 0:
-            down.add("lt")
-        if report.right_trigger > 0:
-            down.add("rt")
-        if (report.left_x, report.left_y) != (0.0, 0.0):
-            down.add("ls")
-        if (report.right_x, report.right_y) != (0.0, 0.0):
-            down.add("rs")
-        return down
-
-    def _hold_wait_s(self, report: PadReport) -> float:
-        """How long until every control this report lets go of has been down long enough."""
-        if self.min_hold_s <= 0 or not self._down_at:
+    def _hold_wait_s(self, after: Optional[int]) -> float:
+        """How long until the press ``after`` names has been applied for ``min_hold_s``."""
+        if after is None or self.min_hold_s <= 0:
             return 0.0
-        now = self._clock()
-        releasing = set(self._down_at) - self._controls_down(report)
-        return max((self._down_at[c] + self.min_hold_s - now for c in releasing), default=0.0)
-
-    def _note_applied(self, report: PadReport) -> None:
-        down = self._controls_down(report)
-        now = self._clock()
-        for control in down:
-            self._down_at.setdefault(control, now)
-        for control in set(self._down_at) - down:
-            del self._down_at[control]
+        applied_at = self._applied_at.get(after)
+        if applied_at is None:
+            return 0.0
+        return applied_at + self.min_hold_s - self._clock()
 
     def _run(self) -> None:
         try:
@@ -142,20 +142,22 @@ class PadWorker:
                     while not self._queue and not self._stopping:
                         self._cond.wait()
                     while not self._stopping:
-                        wait_s = self._hold_wait_s(self._queue[0])
+                        wait_s = self._hold_wait_s(self._queue[0][2])
                         if wait_s <= 0:
                             break
                         # Queued reports stay queued, in order; stop() wakes this.
                         self._cond.wait(wait_s)
                     if self._stopping:
                         break
-                    report = self._queue.popleft()
+                    seq, report, _after = self._queue.popleft()
                 try:
                     device.apply(report)
                 except Exception as exc:
                     self._status("error", type(exc).__name__)
                     return
-                self._note_applied(report)
+                self._applied_at[seq] = self._clock()
+                if len(self._applied_at) > MAX_REMEMBERED_APPLIES:
+                    del self._applied_at[next(iter(self._applied_at))]
             try:
                 device.apply(NEUTRAL)
             except Exception:
