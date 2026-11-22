@@ -350,6 +350,32 @@ def _no_real_pad_bus_anywhere():
         yield
 
 
+def _refuse_the_real_pointer_clip(mp: pytest.MonkeyPatch) -> None:
+    """Make the real pointer api unavailable (``win32_clip_api`` returns None)."""
+    mp.setattr("src.platform.pointer_clip.win32_clip_api", lambda: None)
+
+
+@pytest.fixture(autouse=True)
+def _no_real_pointer_clip(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The suite never confines or moves the developer's real pointer.
+
+    The pointer is this app's user's only input device, and a clip outlives
+    the process that set it, so a stray ``ClipCursor`` from a test could box
+    it in. ``win32_clip_api`` returns None, so ``PointerConfiner.start()`` is
+    False and no guard process is spawned. A test that wants an api passes
+    its own fake to ``PointerConfiner(api_factory=...)``.
+    """
+    _refuse_the_real_pointer_clip(monkeypatch)
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _no_real_pointer_clip_anywhere():
+    """Session-scoped twin of ``_no_real_pointer_clip`` for module-scoped fixtures."""
+    with pytest.MonkeyPatch.context() as mp:
+        _refuse_the_real_pointer_clip(mp)
+        yield
+
+
 @pytest.fixture(autouse=True)
 def _stay_off_the_real_config_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Stop the suite reading or writing the developer's real config directory.
