@@ -436,14 +436,19 @@ class TestTick:
         assert rig.confiner.tick() == "ok"
         assert rig.confiner.reapplied == 1
 
-    def test_guard_released_forgets_the_clip_without_releasing_again(self, rig) -> None:
+    def test_guard_released_releases_for_itself_before_forgetting(self, rig) -> None:
+        # This used to assert the opposite ("forgets without releasing again").
+        # That was the hole: the guard clears and then counts, and a tick
+        # between the two re-applies the clip, so the count going up does not
+        # mean nothing is clipped. See test_pointer_clip_release.py.
         assert rig.confiner.start() and rig.confiner.confine(RECT)
         rig.guard_hb.note_guard_release()
         rig.api.calls.clear()
         assert rig.confiner.tick() == "guard-released"
         assert not rig.confiner.confined and rig.confiner.rect is None
         assert rig.guard_hb.read().active == 0
-        assert "release" not in rig.api.names() and "set_clip" not in rig.api.names()
+        assert rig.api.names().count("release") == 1 and "set_clip" not in rig.api.names()
+        assert rig.api.clip is None
         assert rig.confiner.tick() == "idle"
 
     def test_guard_lost_releases_the_clip(self, rig) -> None:
@@ -517,10 +522,14 @@ class TestReleaseAndClose:
         assert rig.spawned == 2
 
     def test_pointer_pass_throughs(self, rig) -> None:
-        assert rig.confiner.cursor_pos() is None
+        # Reading the pointer needs no guard (the unconfined stick depends on
+        # it); moving it is allowed only while it is confined.
+        assert rig.confiner.cursor_pos() == (5, 6)
         assert rig.confiner.set_cursor_pos(1, 2) is False
         assert rig.confiner.start()
         assert rig.confiner.cursor_pos() == (5, 6)
+        assert rig.confiner.set_cursor_pos(1, 2) is False
+        assert rig.confiner.confine(RECT)
         assert rig.confiner.set_cursor_pos(1, 2) is True
 
 

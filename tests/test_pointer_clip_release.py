@@ -135,7 +135,9 @@ class TestAReleaseTheSystemRefuses:
         assert tries > 3, "the guard gave up on a clip that is still set"
         assert rig.guard_hb is not None and rig.guard_hb.read().guard_releases == 0
         rig.api.release_ok = True
-        _run_guard(rig, 0.2)
+        # A fresh run of the loop starts its stale clock again (the real guard
+        # is one loop and would release on its next poll).
+        _run_guard(rig, STALE_S + 0.3)
         assert rig.api.clip is None
         confiner.close()
 

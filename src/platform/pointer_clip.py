@@ -402,7 +402,7 @@ class PointerConfiner:
         try:
             if self._ensure_api() is None:
                 return False
-            name =f"alpha-osk-clip-{os.getpid()}-{secrets.token_hex(6)}"
+            name = f"alpha-osk-clip-{os.getpid()}-{secrets.token_hex(6)}"
             self._heartbeat = Heartbeat.create(name)
             self._proc = self._spawn_guard(name)
             if not self._await_guard(timeout_s):

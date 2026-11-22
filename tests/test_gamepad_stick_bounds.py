@@ -50,7 +50,10 @@ def _confined_to(confiner: FakeConfiner) -> List[Any]:
 
 def _inside(inner: Tuple[int, int, int, int], outer: Tuple[int, int, int, int]) -> bool:
     return (
-        inner[0] >= outer[0] and inner[1] >= outer[1] and inner[2] <= outer[2] and inner[3] <= outer[3]
+        inner[0] >= outer[0]
+        and inner[1] >= outer[1]
+        and inner[2] <= outer[2]
+        and inner[3] <= outer[3]
     )
 
 
