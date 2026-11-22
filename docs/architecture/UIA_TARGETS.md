@@ -72,6 +72,7 @@ AutomationId begins with `aosk.v1.`.
 | `pred`  | The prediction pills |
 | `bar`   | The suggestion bar's buttons and their title-bar twins (see *The bar*) |
 | `draft` | The Write with AI preview's Insert, Copy and Discard, while it is open (see *The draft*) |
+| `game`  | The Controller view's game-pad controls, while it shows on a connected pad (see *The controller*) |
 
 **Presence means activatable.** A key on a hidden panel, or on a symbol layer
 that is not showing, is absent from the tree rather than present and
@@ -99,6 +100,7 @@ help, snippets, symbols and dashboard windows (their bar buttons are targets); s
     aosk.v1.pred.<index>.g<generation>       prediction pills
     aosk.v1.bar.0.<index>                    bar buttons and their twins
     aosk.v1.draft.0.<index>                  the draft preview's actions
+    aosk.v1.game.0.<index>                   the Controller view's controls
     aosk.v1.revision                         the revision beacon
 
 `row` and `index` are zero-based visual order, top to bottom and left to
@@ -113,8 +115,9 @@ target that moved, not as a fault).
 
 ## The bar
 
-The suggestion bar's five buttons are targets, so a switch user can reach
-dictation, Write with AI, Symbols, Snippets and the dictation history. They
+The suggestion bar's six buttons are targets, so a switch user can reach
+dictation, Write with AI, Symbols, Snippets, the dictation history and the
+Controller view. They
 are `Button`s with the id `aosk.v1.bar.0.<index>`. `row` is always `0` (the
 bar is one row); **`index` is fixed per function, not per position**:
 
@@ -126,6 +129,7 @@ bar is one row); **`index` is fixed per function, not per position**:
 | 3 | Snippets | `Snippets` | Always |
 | 4 | *Retired* | | Was the clear-context button, removed 2026-10-26. Never reused: nothing publishes `bar.0.4` |
 | 5 | Dictation history | `Dictation history` | Dictation is enabled (the setting), same rule as the mic |
+| 6 | Controller view | `Controller` | The Controller setting is on. A toggle: on while the view shows |
 
 **Stable indices.** A hidden control is simply absent; its index is not
 reused and no other id moves. `bar.0.3` is Snippets whether or not the mic and
@@ -201,6 +205,45 @@ the preview; Copy puts it on the clipboard and leaves the preview open;
 Discard closes it with nothing typed. A failed writing run with history
 off also opens this preview, holding the spoken request rather than a
 draft, and the same three targets apply.
+
+## The controller
+
+The Controller view (`docs/architecture/GAMEPAD.md`) stands in for the letter
+grid and draws a game pad. Its controls are `Button`s with the id
+`aosk.v1.game.0.<index>`. The section is `game` because `pad` already means
+the numpad. `row` is always `0` and **`index` is fixed per control**, the
+same rule as the bar: a control takes the next number, none is renumbered.
+
+| Index | Control | Name |
+|-------|---------|------|
+| 0, 1, 2, 3 | `lt`, `lb`, `rb`, `rt` | `Left trigger`, `Left bumper`, `Right bumper`, `Right trigger` |
+| 4, 5, 6 | `back`, `guide`, `start` | `Back button`, `Guide button`, `Start button` |
+| 7 | Off (unplugs the controller, back to the letters) | `Controller off` |
+| 8 | ABC (back to the letters, controller stays plugged in) | `Letters` |
+| 9 to 17 | Left stick: `ls_nw`, `ls_n`, `ls_ne`, `ls_w`, `l3`, `ls_e`, `ls_sw`, `ls_s`, `ls_se` | `Left stick up left`, ..., `Left stick click`, ... |
+| 18 to 26 | Right stick, the same order, `r3` at 22 | `Right stick up left`, ..., `Right stick click`, ... |
+| 27, 28, 29, 30 | `dpad_up`, `dpad_left`, `dpad_right`, `dpad_down` | `D-pad up`, `D-pad left`, `D-pad right`, `D-pad down` |
+| 31, 32, 33, 34 | `y`, `x`, `b`, `a` | `Y button`, `X button`, `B button`, `A button` |
+| 35, 36 | Esc, Enter (the real keys) | `Escape`, `Enter` |
+
+**Presence follows the view and the pad.** The targets exist exactly while
+the view shows *and* the virtual pad is connected (the view is disabled until
+then, and a disabled key is not a target). While the view shows, the `grid`
+section is absent: the letters are hidden, not removed, and a hidden key is
+not a target. Both feed the revision beacon, as do the latches.
+
+**Invoke is a tap.** An Invoke carries no release, so it never presses a
+control and leaves it down: it is one press and one release, with the
+minimum hold the bridge gives every tap.
+
+**A pad control is not a toggle target.** v1 offers no way to latch through
+UI Automation (latching is a secondary click, and secondary-click actions
+are out of scope above), so a pad control must not be checkable: Qt turns
+"checkable" into the Toggle pattern, whose Toggle would then do nothing at
+all, silently. A control that is latched says so in its **description**
+(`latched`), the way a locked modifier says `locked`, and a latch changing
+moves the revision. A scanner can press buttons and tap directions; it
+cannot hold one.
 
 ## Names, and why they are not the keycaps
 
@@ -599,8 +642,8 @@ no framing, no PID or token checks and no publisher policy. Do not "upgrade"
 this to a socket without re-reading that argument.
 
 - **Ids are `aosk.v1.<section>.<row>.<index>`** (`grid` / `fn1` / `fn2` /
-  `num` / `nav` / `pad`), predictions `aosk.v1.pred.<index>.g<generation>`.
-  **The format lives once**, in `Main.qml::scanTargetId`; six surfaces draw
+  `num` / `nav` / `pad` / `game`), predictions `aosk.v1.pred.<index>.g<generation>`.
+  **The format lives once**, in `Main.qml::scanTargetId`; seven surfaces draw
   targets and call it. Two surfaces computing it independently would
   eventually collide, and a collision is invisible to the client (it reads
   as one target that moved, not as a fault). Same parallel-blocks failure

@@ -309,7 +309,7 @@ Mic in the suggestion bar; off by default, inert without a Deepgram key. Code in
 
 Full write-up: `docs/architecture/GAMEPAD.md`. Read it before changing this area. The plan it is the first step of: `docs/roadmap/NIMBUS_INTEGRATION.md`.
 
-A virtual Xbox 360 pad, backend only: **no UI reaches it yet**, so the pad is never plugged. Code in `src/gamepad/`, `src/gamepad_bridge.py`, `src/platform/padbus_client.py` (adopted from Nimbus; standard-library `ctypes`, zero new dependencies).
+A virtual Xbox 360 pad, shown as the **Controller view** (*Appearance -> Panels -> Controller*, default OFF), which swaps the letter grid for a game pad. Digital only so far. Code in `src/gamepad/`, `src/gamepad_bridge.py`, `src/platform/padbus_client.py` (adopted from Nimbus; standard-library `ctypes`, zero new dependencies), `qml/components/ControllerView.qml`.
 
 - **The driver (ViGEmBus) is detected, never installed, bundled or updated.** Without it `setActive(True)` answers False and the status is `"unavailable"`.
 - **Own QML context property**: `GamepadBridge` registered as `gamepad`; `KeyboardBridge` does not reference it (a test reads its source to hold that).
@@ -319,8 +319,12 @@ A virtual Xbox 360 pad, backend only: **no UI reaches it yet**, so the pad is ne
 - **Pad latches are not modifiers.** They never go through `_release_sticky_modifiers` (typing must not drop a held direction); their one release site is `GamepadBridge`.
 - `GamepadBridge.release()` enforces `MIN_PRESS_MS` (100, provisional, unmeasured against real games): an early release is deferred, never dropped. `tap()` is press then release. **The floor is also kept at the device** (`PadWorker.min_hold_s`, timed from when the press was *applied*): a slow earlier write would otherwise put the press and its release on the pad microseconds apart.
 - **`PadWorker` owns the device on its own thread** (the plug has taken up to 110 ms; a failing report can block for seconds). **Reports are FIFO, never latest-wins**: a tap is two reports and merging them loses the press. Nothing on the Qt thread waits on the worker except the bounded `stop()`. No automatic retry after a device error.
-- **Every way out sends a neutral report first** (off, error, `shutdown()`), and `keyboard_app.py` calls `gamepad.shutdown()` before `bridge.shutdown()`. The pad is plugged by `setActive(True)` only, never at launch.
-- Tests: `tests/test_padbus_client.py`, `test_gamepad_state.py`, `test_gamepad_device.py`, `test_gamepad_worker.py`, `test_gamepad_bridge.py`.
+- **Every way out sends a neutral report first** (off, error, `shutdown()`), and `keyboard_app.py` calls `gamepad.shutdown()` before `bridge.shutdown()`.
+- **The pad is plugged the first time the view opens, never at launch** (`controllerViewActive` is not persisted), and **ABC leaves it plugged in with its latches** (owner's call 2026-11-21: a game must not see a disconnect while the user types). Off, the setting going off, minimize / hide, a device error and quit unplug it.
+- **The view takes exactly the letter rows' width and summed height** (`Main.qml::gridRowsWidth` / `gridRowsHeight`, which restates the rows' height rule because hidden rows cannot be asked), so the window never moves. Its controls sit on a 15.5 by 5 design grid scaled into that rectangle; no `QtQuick.Layouts`.
+- `ControllerView` only raises signals; `Main.qml` talks to `gamepad`. **A pad control never calls `keyboard`** (Esc and Enter on the view are real keys and do). **A press must always end**: the view releases whatever it pressed if it is hidden mid-press. **An assistive Invoke is `tap()`, never `press()`**, and **a pad control is not a toggle target** (checkable would advertise a Toggle that does nothing; the latch is in the description as `latched`). **Held is not drawn-pressed**: `KeyButton._pressHeld` tracks the accepted pointer press apart from the visual the 5 s safety timer clears, so a drag-off still releases. The view is disabled until the status is `"on"`. `Main.qml::titleStripFloor` keeps every title-bar control inside a minimum-width window (derived from `titleButtons.width`, never a constant).
+- Scan section `game` (`pad` is the numpad), `aosk.v1.game.0.<index>`, fixed index per control; bar index 6.
+- Tests: `tests/test_padbus_client.py`, `test_gamepad_state.py`, `test_gamepad_device.py`, `test_gamepad_worker.py`, `test_gamepad_bridge.py`, `test_qml_controller_view.py`.
 
 ## Data Backup (Export / Import)
 
@@ -638,9 +642,9 @@ Alpha button in the suggestion bar (title-bar twin when suggestions are off). Ca
 
 Every visible key and pill is a UI Automation `Button` for external scanners (Switchify PC, issue #106). Contract: `docs/architecture/UIA_TARGETS.md`. Guard: `tests/test_qml_scan_targets.py`.
 
-- **The suggestion bar's buttons are the `bar` section**: `aosk.v1.bar.0.<index>` with one FIXED index per function (0 mic, 1 Write with AI, 2 Symbols, 3 Snippets, 5 dictation history; **4 was the clear-context button, removed 2026-10-26, retired and never reused**), so a hidden control is absent and no other id moves; a title-bar twin carries its bar copy's id (never visible together). Built on `BarButton.qml`; click and Invoke both raise its `activated()` into one handler in `Main.qml`. Append indices, never renumber. Guard: `tests/test_qml_scan_bar.py`.
+- **The suggestion bar's buttons are the `bar` section**: `aosk.v1.bar.0.<index>` with one FIXED index per function (0 mic, 1 Write with AI, 2 Symbols, 3 Snippets, 5 dictation history, 6 Controller view; **4 was the clear-context button, removed 2026-10-26, retired and never reused**), so a hidden control is absent and no other id moves; a title-bar twin carries its bar copy's id (never visible together). Built on `BarButton.qml`; click and Invoke both raise its `activated()` into one handler in `Main.qml`. Append indices, never renumber. Guard: `tests/test_qml_scan_bar.py`.
 - **UIA, not an IPC server** (`uiAccess="true"` makes a pipe a confused deputy). Don't "upgrade" to a socket.
-- Ids `aosk.v1.<section>.<row>.<index>` from `Main.qml::scanTargetId`; pills `aosk.v1.pred.<index>.g<generation>`; the Write with AI preview's actions `aosk.v1.draft.0.<index>` (0 Insert, 1 Copy, 2 Discard), present only while it is open.
+- Ids `aosk.v1.<section>.<row>.<index>` from `Main.qml::scanTargetId`; pills `aosk.v1.pred.<index>.g<generation>`; the Write with AI preview's actions `aosk.v1.draft.0.<index>` (0 Insert, 1 Copy, 2 Discard), present only while it is open; the Controller view's controls `aosk.v1.game.0.<index>`, present only while it shows on a connected pad (see *Gamepad*).
 - **Presence means activatable, rechecked at activation** (`KeyButton._scanActivatable`); a `KeyButton` without `targetId` is unreachable.
 - `Accessible.name` is a speakable label (`_scanName`); only real toggles report toggle state; the lock rides in `Accessible.description`.
 - Anything that can change the target set feeds `Main.qml::scanRevision` (the `aosk.v1.revision` beacon). Compare, never parse.

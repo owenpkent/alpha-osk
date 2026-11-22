@@ -53,6 +53,7 @@ Item {
     property bool alwaysOnTop: true
     property string currentLayout: "qwerty"
     property bool compactView: false
+    property bool controllerEnabled: false
 
     // Compact variants are selected by the "Compact view" toggle, not picked
     // directly — surfacing them here would let the user choose a letter
@@ -683,6 +684,16 @@ Item {
                                                : ""
                                     checked: unifiedSettings.showNumpad
                                     onToggled: function(c) { unifiedSettings.settingChanged("numpad", c) }
+                                }
+
+                                SettingsToggle {
+                                    Layout.fillWidth: true
+                                    text: "Controller"
+                                    description: "Adds a button that swaps the letters for a game "
+                                               + "controller. Needs the ViGEmBus driver, which "
+                                               + "Alpha-OSK does not install."
+                                    checked: unifiedSettings.controllerEnabled
+                                    onToggled: function(c) { unifiedSettings.settingChanged("controller", c) }
                                 }
                             }
                         }

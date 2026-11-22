@@ -4,6 +4,9 @@ All notable changes to Alpha-OSK are documented in this file.
 
 ## [Unreleased]
 
+### Added
+- **A game controller you can click (first version, off by default).** Turn on *Settings -> Appearance -> Panels -> Controller* and a game-pad button joins the suggestion bar. Click it and the letters swap for a controller: triggers and bumpers, a D-pad, A B X Y, Back, Start and Guide, and two sticks, each drawn as eight direction keys around its stick click. A left click presses for as long as you hold it; a right click holds a control down until you click it again, so a direction or a trigger can stay held with no button under your finger. **ABC** returns to the letters and leaves the controller connected, so a game does not see it unplug while you type; **Off** disconnects it. It appears to games as an Xbox 360 controller. It needs the ViGEmBus driver, which Alpha-OSK does not install, and it is Windows only. The sticks are all-or-nothing for now; smooth analog control is planned.
+
 ## [2.0.0] (2026-11-20)
 
 **2.0 is the dictation release.** Over the 1.x line, Alpha-OSK learned to take your voice as well as your clicks: click the microphone, speak, and your words are typed into whatever app you are using. AI cleanup can tidy the punctuation and recognition slips, Write with AI can turn what you say into a draft you check before it goes in, and History keeps your recent runs, with their recordings, on your own computer. Dictation is off by default and uses your own Deepgram key (and your own Anthropic key for the Claude features); word prediction still runs entirely on your machine. This release also carries three fixes:
