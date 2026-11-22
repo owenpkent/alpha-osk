@@ -1011,6 +1011,64 @@ class TestTheTitleStripFloor:
         assert L.root.property("width") == wide
         assert L.root.property("minimumWidth") < wide
 
+    @staticmethod
+    def _parked(load, *, offset_from_right_edge: float):
+        """A minimum-width window whose right edge is `offset` past the screen's."""
+        L = load(enabled=False, savedCompactView=True)
+        _squeeze(L, controller=False, update=True)
+        root = L.root
+        root.setProperty("width", root.property("minimumWidth"))
+        _relayout(root)
+        narrow = root.property("width")
+        right = _eval(root, "screenBoundsAt(x + width / 2, y + height / 2).right")
+        root.setProperty("x", int(right - narrow + offset_from_right_edge))
+        _relayout(root)
+        assert root.property("x") + narrow == right + offset_from_right_edge
+        return L, narrow, right
+
+    def test_growing_at_the_screens_right_edge_keeps_close_on_screen(self, load):
+        """Reported: the floor widened the window to the right with `x` unchanged,
+        so a keyboard parked against the right edge put Close past the display."""
+        L, narrow, right = self._parked(load, offset_from_right_edge=0)
+        root = L.root
+        root.setProperty("controllerEnabled", True)
+        _relayout(root)
+        wide = root.property("width")
+        assert wide > narrow, "the floor did not rise; the test proves nothing"
+        assert root.property("x") + wide == right, "the right edge moved"
+        for left, r in _title_controls(root):
+            assert root.property("x") + r <= right, "a title control is past the screen's edge"
+            assert root.property("x") + left >= 0
+        assert not L.warnings
+
+    def test_growing_with_room_to_spare_does_not_move_the_window(self, load):
+        L, narrow, right = self._parked(load, offset_from_right_edge=-200)
+        root = L.root
+        x_before = root.property("x")
+        root.setProperty("controllerEnabled", True)
+        _relayout(root)
+        assert root.property("width") > narrow
+        assert root.property("x") == x_before
+
+    def test_a_window_the_user_left_past_the_edge_keeps_its_right_edge_there(self, load):
+        L, narrow, right = self._parked(load, offset_from_right_edge=40)
+        root = L.root
+        right_edge_before = root.property("x") + narrow
+        root.setProperty("controllerEnabled", True)
+        _relayout(root)
+        assert root.property("width") > narrow
+        assert root.property("x") + root.property("width") == right_edge_before
+
+    def test_a_width_set_by_hand_at_the_edge_is_left_where_it_is(self, load):
+        # Only growth the floor forced is corrected; a resize is the user's.
+        L, narrow, right = self._parked(load, offset_from_right_edge=0)
+        root = L.root
+        x_before = root.property("x")
+        root.setProperty("width", narrow + 60)
+        _relayout(root)
+        assert root.property("width") == narrow + 60
+        assert root.property("x") == x_before
+
     def test_with_no_optional_twins_the_minimum_is_what_it_always_was(self, load):
         L = load(enabled=False, savedCompactView=True)
         old = _eval(L.root, "Math.round(30 * totalKeyUnits + layoutFixedPixels)")

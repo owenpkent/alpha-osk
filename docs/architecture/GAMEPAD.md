@@ -150,6 +150,10 @@ panels-on and function-row configurations.
   the next control needs no edit; a control appearing at the minimum widens
   the window through `fitWidth`, and nothing shrinks it back. With no
   optional title control showing, the minimum is what it always was.
+  **Growth the floor forces stays on screen**: a window grows to the right,
+  so `keepFloorGrowthOnScreen` pulls it back by what the growth pushed past
+  the edge of the screen it was on, or keeps its right edge where the user
+  left it if it was already past. A width the user sets is not moved.
 
 **Not yet seen outside a test.** The view has been rendered offscreen and
 driven headlessly over a fake pad, and the backend has been run against the
