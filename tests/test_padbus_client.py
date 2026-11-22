@@ -515,6 +515,14 @@ class TestUpdate:
         assert struct.unpack_from("<H", raw, 8)[0] == 0x2000
 
 
+def _plugged_serials(bus):
+    return [bus.serial_of(raw) for code, raw in bus.calls if code == pb.IOCTL_VIGEM_PLUGIN_TARGET]
+
+
+def _unplugged_serials(bus):
+    return [bus.serial_of(raw) for code, raw in bus.calls if code == pb.IOCTL_VIGEM_UNPLUG_TARGET]
+
+
 def _last_submit_buttons(bus):
     submits = [raw for code, raw in bus.calls if code == pb.IOCTL_XUSB_SUBMIT_REPORT]
     return struct.unpack_from("<H", submits[-1], 8)[0]
@@ -541,6 +549,9 @@ class TestCancel:
     def test_a_replug_under_way_when_cancel_lands_does_not_resubmit_the_stale_report(
         self, bus, monkeypatch
     ):
+        # Replaces the older form of this test, which let the re-plug finish and
+        # only checked the report was neutral: a cancelled pad now abandons the
+        # re-plug instead of connecting a replacement.
         monkeypatch.setattr(pb, "REPORT_RETRY_S", 0.02)
         pad = pb.X360Pad()
         pad.press_button(pb.XUSB_BUTTON.XUSB_GAMEPAD_B)
@@ -553,12 +564,79 @@ class TestCancel:
                 pad.cancel()
 
         bus.fail = fail
-        pad.update()
-        assert pad.serial == 2
+        with pytest.raises(pb.PadBusError):
+            pad.update()
         submits = [raw for code, raw in bus.calls if code == pb.IOCTL_XUSB_SUBMIT_REPORT]
         on_new_serial = [r for r in submits if bus.serial_of(r) == 2]
-        assert on_new_serial
         assert all(struct.unpack_from("<H", r, 8)[0] == 0 for r in on_new_serial)
+
+    def test_cancel_during_the_old_serials_unplug_plugs_nothing(self, bus, monkeypatch):
+        monkeypatch.setattr(pb, "REPORT_RETRY_S", 0.02)
+        pad = pb.X360Pad()
+
+        def fail(code, raw):
+            if code == pb.IOCTL_XUSB_SUBMIT_REPORT and bus.serial_of(raw) == 1:
+                return _no_more_items()
+            if code == pb.IOCTL_VIGEM_UNPLUG_TARGET:
+                pad.cancel()
+
+        bus.fail = fail
+        with pytest.raises(pb.PadBusError):
+            pad.update()
+        assert _plugged_serials(bus) == [1]
+        assert pad.replugs == []
+        assert not pad.plugged
+
+    def test_cancel_during_a_candidates_ready_wait_unplugs_it_and_tries_no_more(
+        self, bus, monkeypatch
+    ):
+        monkeypatch.setattr(pb, "REPORT_RETRY_S", 0.02)
+        pad = pb.X360Pad()
+
+        def fail(code, raw):
+            if code == pb.IOCTL_XUSB_SUBMIT_REPORT and bus.serial_of(raw) in (1, 2):
+                return _no_more_items(55)
+            if code == pb.IOCTL_VIGEM_WAIT_DEVICE_READY and bus.serial_of(raw) == 2:
+                pad.cancel()
+
+        bus.fail = fail
+        with pytest.raises(pb.PadBusError):
+            pad.update()
+        assert _plugged_serials(bus) == [1, 2]
+        assert _unplugged_serials(bus) == [1, 2]
+        assert not pad.plugged
+
+    def test_cancel_during_a_candidates_verification_unplugs_it_and_tries_no_more(
+        self, bus, monkeypatch
+    ):
+        monkeypatch.setattr(pb, "REPORT_RETRY_S", 0.02)
+        pad = pb.X360Pad()
+
+        def fail(code, raw):
+            if code == pb.IOCTL_XUSB_SUBMIT_REPORT and bus.serial_of(raw) in (1, 2):
+                if bus.serial_of(raw) == 2:
+                    pad.cancel()
+                return _no_more_items(55)
+
+        bus.fail = fail
+        with pytest.raises(pb.PadBusError):
+            pad.update()
+        assert _plugged_serials(bus) == [1, 2]
+        assert _unplugged_serials(bus) == [1, 2]
+        assert not pad.plugged
+
+    def test_without_cancel_a_failing_candidate_still_moves_on_to_the_next(self, bus, monkeypatch):
+        monkeypatch.setattr(pb, "REPORT_RETRY_S", 0.02)
+        pad = pb.X360Pad()
+        bus.fail = lambda code, raw: (
+            _no_more_items(55)
+            if code == pb.IOCTL_XUSB_SUBMIT_REPORT and bus.serial_of(raw) in (1, 2)
+            else None
+        )
+        pad.update()
+        assert _plugged_serials(bus) == [1, 2, 3]
+        assert pad.serial == 3
+        assert pad.replugs == [(1, 3)]
 
     def test_cancelled_pad_starts_no_new_replug(self, bus, monkeypatch):
         monkeypatch.setattr(pb, "REPORT_RETRY_S", 0.02)

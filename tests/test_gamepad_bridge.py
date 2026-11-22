@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import threading
+import time
 from pathlib import Path
 from typing import Any, Callable, List, Optional
 
@@ -454,6 +456,127 @@ class TestControlIds:
         ids = list(pad.getControlIds())
         assert ids == sorted(ids)
         assert "a" in ids and "ls_n" in ids
+
+
+class _TimedPad:
+    """A device that stamps every apply and can stall the next one."""
+
+    def __init__(self) -> None:
+        self.log: List[tuple[float, PadReport]] = []
+        self.closes = 0
+        self.hold: Optional[threading.Event] = None
+        self.entered = threading.Event()
+
+    def stall_next(self) -> threading.Event:
+        self.entered.clear()
+        self.hold = threading.Event()
+        return self.hold
+
+    def apply(self, report: PadReport) -> None:
+        hold = self.hold
+        if hold is not None:
+            self.hold = None
+            self.entered.set()
+            assert hold.wait(CEILING_S)
+        self.log.append((time.perf_counter(), report))
+
+    def close(self) -> None:
+        self.closes += 1
+
+
+CEILING_S = 5.0
+TOLERANCE_S = 0.015
+
+
+def _pump_until(condition: Callable[[], bool], timeout_s: float = CEILING_S) -> bool:
+    deadline = time.perf_counter() + timeout_s
+    while not condition() and time.perf_counter() < deadline:
+        _pump()
+        time.sleep(0.002)
+    return condition()
+
+
+class TestTheRealWorkerHoldsARelease:
+    """The real thread and worker under the real bridge, over a fake device."""
+
+    @pytest.fixture
+    def rig(self, qapp: Any) -> Any:
+        device = _TimedPad()
+        bridge = GamepadBridge(bus_available=lambda: True, open_device=lambda: device)
+        assert bridge.setActive(True)
+        assert _pump_until(lambda: bridge.status == "on")
+        assert _pump_until(lambda: len(device.log) >= 1)
+        yield bridge, device
+        bridge.shutdown()
+
+    @staticmethod
+    def _hold_s() -> float:
+        return GamepadBridge.MIN_PRESS_MS / 1000.0
+
+    def test_a_direction_tapped_over_a_latched_one_is_held_at_the_device(self, rig: Any) -> None:
+        bridge, device = rig
+        assert bridge.toggleLatch("ls_e")
+        assert _pump_until(lambda: len(device.log) >= 2)
+        stall = device.stall_next()
+        assert bridge.tap("ls_n")
+        assert device.entered.wait(CEILING_S)
+        _wait_ms(int(self._hold_s() * 1000) + 100)  # the bridge's release timer has fired
+        stall.set()
+        assert _pump_until(lambda: len(device.log) >= 4)
+        (_, _), (_, east), (t_north, north), (t_back, back) = device.log[:4]
+        assert east.left_x > 0 and east.left_y == 0
+        assert north.left_y != 0
+        assert back == east
+        assert t_back - t_north >= self._hold_s() - TOLERANCE_S
+
+    def test_a_delayed_button_tap_is_held_the_floor(self, rig: Any) -> None:
+        bridge, device = rig
+        stall = device.stall_next()
+        assert bridge.tap("a")
+        assert device.entered.wait(CEILING_S)
+        _wait_ms(int(self._hold_s() * 1000) + 100)
+        stall.set()
+        assert _pump_until(lambda: len(device.log) >= 3)
+        (_, _), (t_down, down), (t_up, up) = device.log[:3]
+        assert down.buttons == BUTTON_MASKS["a"] and up == NEUTRAL
+        assert t_up - t_down >= self._hold_s() - TOLERANCE_S
+
+    def test_a_press_behind_a_waiting_release_goes_in_order_and_is_not_held(self, rig: Any) -> None:
+        bridge, device = rig
+        stall = device.stall_next()
+        assert bridge.tap("a")
+        assert device.entered.wait(CEILING_S)
+        _wait_ms(int(self._hold_s() * 1000) + 100)
+        stall.set()
+        assert _pump_until(lambda: len(device.log) >= 2)
+        assert bridge.press("b")  # queued behind the release that is still waiting
+        assert _pump_until(lambda: len(device.log) >= 4)
+        reports = [r for _, r in device.log]
+        assert reports[1].buttons == BUTTON_MASKS["a"]
+        assert reports[2] == NEUTRAL
+        assert reports[3].buttons == BUTTON_MASKS["b"]
+        assert device.log[3][0] - device.log[2][0] < self._hold_s() - 0.02
+        bridge.release("b")
+
+    def test_turning_off_during_a_waiting_hold_is_prompt_and_ends_on_neutral(
+        self, rig: Any
+    ) -> None:
+        bridge, device = rig
+        assert bridge.toggleLatch("ls_e")
+        assert _pump_until(lambda: len(device.log) >= 2)
+        bridge._worker.min_hold_s = 30.0  # long enough that no load can end the wait early
+        stall = device.stall_next()
+        assert bridge.tap("ls_n")
+        assert device.entered.wait(CEILING_S)
+        _wait_ms(int(self._hold_s() * 1000) + 100)
+        stall.set()
+        assert _pump_until(lambda: len(device.log) >= 3)  # north applied, release waiting
+        begin = time.perf_counter()
+        assert bridge.setActive(False) is False
+        assert time.perf_counter() - begin < 2.0
+        assert device.log[-1][1] == NEUTRAL
+        assert len(device.log) == 4  # the held-back east report was never applied
+        assert device.closes == 1
 
 
 def test_keyboard_bridge_never_mentions_the_gamepad() -> None:

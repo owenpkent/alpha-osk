@@ -317,12 +317,14 @@ def _timed(device: _TimedDevice, min_hold_s: float = HOLD_S) -> PadWorker:
 
 
 class TestMinimumHold:
-    def test_a_slow_first_write_cannot_squash_a_tap(self) -> None:
+    """A release is held back only when the caller says which press it ends (``after``)."""
+
+    def test_a_release_behind_a_slow_first_write_waits_out_the_floor(self) -> None:
         device = _TimedDevice(first_apply_s=0.15)
         worker = _timed(device)
         worker.start()
-        worker.submit(_report(1))
-        worker.submit(NEUTRAL)
+        press = worker.submit(_report(1))
+        worker.submit(NEUTRAL, after=press)
         assert device.wait_for(2)
         gap = device.log[1][0] - device.log[0][0]
         assert gap >= HOLD_S - TOLERANCE_S
@@ -330,72 +332,101 @@ class TestMinimumHold:
         assert device.log[1][1] == NEUTRAL
         worker.stop()
 
-    def test_a_control_down_longer_than_the_floor_is_released_at_once(self) -> None:
+    def test_a_report_without_after_is_never_delayed(self) -> None:
+        device = _TimedDevice()
+        worker = _timed(device, min_hold_s=0.5)
+        worker.start()
+        start = time.perf_counter()
+        worker.submit(_report(1))
+        worker.submit(NEUTRAL)
+        worker.submit(PadReport(left_y=1.0))
+        worker.submit(PadReport(left_x=1.0))
+        assert device.wait_for(4)
+        assert device.log[3][0] - start < 0.4
+        worker.stop()
+
+    def test_a_press_applied_long_ago_adds_no_wait(self) -> None:
         device = _TimedDevice()
         worker = _timed(device, min_hold_s=0.2)
         worker.start()
-        worker.submit(_report(1))
+        press = worker.submit(_report(1))
         assert device.wait_for(1)
         time.sleep(0.25)
         submitted = time.perf_counter()
-        worker.submit(NEUTRAL)
+        worker.submit(NEUTRAL, after=press)
         assert device.wait_for(2)
         assert device.log[1][0] - submitted < 0.15
         worker.stop()
 
-    def test_a_second_button_going_down_is_not_delayed(self) -> None:
+    def test_an_unknown_sequence_number_adds_no_wait(self) -> None:
         device = _TimedDevice()
         worker = _timed(device, min_hold_s=0.5)
         worker.start()
         start = time.perf_counter()
+        worker.submit(NEUTRAL, after=9999)
+        assert device.wait_for(1)
+        assert device.log[0][0] - start < 0.4
+        worker.stop()
+
+    def test_a_press_the_queue_dropped_adds_no_wait(self) -> None:
+        device = _TimedDevice(first_apply_s=0.3)
+        worker = _timed(device, min_hold_s=0.5)
+        worker.start()
         worker.submit(_report(1))
-        worker.submit(_report(3))
-        assert device.wait_for(2)
-        assert device.log[1][0] - start < 0.4
-        worker.stop()
-
-    def test_a_stick_moving_between_non_zero_positions_is_not_delayed(self) -> None:
-        device = _TimedDevice()
-        worker = _timed(device, min_hold_s=0.5)
-        worker.start()
+        time.sleep(0.05)
+        press = worker.submit(_report(2))
+        for n in range(MAX_QUEUED_REPORTS):
+            worker.submit(_report(3 + n))
+        assert worker.dropped_reports > 0
         start = time.perf_counter()
-        worker.submit(PadReport(left_y=1.0))
-        worker.submit(PadReport(left_x=1.0))
-        assert device.wait_for(2)
-        assert device.log[1][0] - start < 0.4
+        worker.submit(NEUTRAL, after=press)
+        assert device.wait_for(MAX_QUEUED_REPORTS + 1)
+        assert device.log[-1][0] - start < 0.4
         worker.stop()
 
-    def test_a_trigger_is_held_for_the_floor_too(self) -> None:
+    def test_reports_behind_a_waiting_release_stay_in_order(self) -> None:
         device = _TimedDevice()
         worker = _timed(device)
         worker.start()
-        worker.submit(PadReport(right_trigger=1.0))
-        worker.submit(NEUTRAL)
-        assert device.wait_for(2)
-        assert device.log[1][0] - device.log[0][0] >= HOLD_S - TOLERANCE_S
+        press = worker.submit(_report(1))
+        worker.submit(NEUTRAL, after=press)
+        worker.submit(_report(2))
+        assert device.wait_for(3)
+        assert [r for _, r in device.log] == [_report(1), NEUTRAL, _report(2)]
         worker.stop()
 
     def test_stop_during_a_hold_returns_promptly_and_ends_on_neutral(self) -> None:
         device = _TimedDevice()
         worker = _timed(device, min_hold_s=30.0)
         worker.start()
-        worker.submit(_report(1))
+        press = worker.submit(_report(1))
         assert device.wait_for(1)
-        worker.submit(NEUTRAL)
+        worker.submit(_report(2), after=press)
+        time.sleep(0.05)
         begin = time.perf_counter()
         worker.stop()
         assert time.perf_counter() - begin < 2.0
         assert not worker.running
         assert device.log[-1][1] == NEUTRAL
+        assert _report(2) not in [r for _, r in device.log]
         assert device.closes == 1
 
-    def test_a_zero_floor_keeps_the_old_behaviour(self) -> None:
+    def test_a_zero_floor_adds_no_wait(self) -> None:
         device = _TimedDevice()
         worker = _timed(device, min_hold_s=0.0)
         worker.start()
         start = time.perf_counter()
-        worker.submit(_report(1))
-        worker.submit(NEUTRAL)
+        press = worker.submit(_report(1))
+        worker.submit(NEUTRAL, after=press)
         assert device.wait_for(2)
         assert device.log[1][0] - start < 0.5
         worker.stop()
+
+    def test_sequence_numbers_rise_by_one_per_submit(self) -> None:
+        worker = _timed(_TimedDevice())
+        assert [worker.submit(_report(n)) for n in range(1, 5)] == [1, 2, 3, 4]
+        worker.stop()
+        assert worker.submit(_report(9)) == 5
+
+    def test_it_says_it_numbers_reports(self) -> None:
+        assert PadWorker.numbers_reports is True
