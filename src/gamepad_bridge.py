@@ -35,6 +35,7 @@ from .gamepad.worker import PadWorker
 _logger = logging.getLogger("GamepadBridge")
 
 _FAILED_MESSAGE = "The virtual controller stopped working."
+_DISCONNECTING_MESSAGE = "The controller is still disconnecting. Try again in a moment."
 
 
 class _StatusNotifier(QObject):
@@ -77,6 +78,9 @@ class GamepadBridge(QObject):
         self._status = "off"
         self._worker: Any = None
         self._generation = 0
+        #: Stopped workers whose thread outlived the stop timeout (stuck in a
+        #: driver call). A new pad must not start beside one.
+        self._retiring: List[Any] = []
         self._last_report: PadReport = self._state.report()
         self._latched_view: List[str] = []
         self._pressed_at: Dict[str, float] = {}
@@ -127,6 +131,10 @@ class GamepadBridge(QObject):
     def _turn_on(self) -> bool:
         if self._status in ("on", "connecting"):
             return True
+        self._retiring = [w for w in self._retiring if getattr(w, "running", False)]
+        if self._retiring:
+            self.failed.emit(_DISCONNECTING_MESSAGE)
+            return False
         if not self.refreshAvailability():
             self._set_status("unavailable")
             return False
@@ -142,6 +150,8 @@ class GamepadBridge(QObject):
         try:
             worker = self._worker_factory(self._open_device, on_status)
             self._worker = worker
+            if hasattr(worker, "min_hold_s"):
+                worker.min_hold_s = self.MIN_PRESS_MS / 1000.0
             worker.start()
         except Exception as exc:
             _logger.warning("pad worker failed to start: %s", type(exc).__name__)
@@ -170,6 +180,8 @@ class GamepadBridge(QObject):
                 worker.stop()
             except Exception as exc:
                 _logger.warning("pad worker stop failed: %s", type(exc).__name__)
+            if getattr(worker, "running", False):
+                self._retiring.append(worker)
 
     def shutdown(self) -> None:
         """Turn the pad off. Idempotent; called from the app's quit sequence."""

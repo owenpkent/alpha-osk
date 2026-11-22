@@ -125,6 +125,16 @@ panels-on and function-row configurations.
   cancel and drag-off; the view also remembers what it pressed and lets go
   of it if it is hidden or destroyed mid-press. A right click presses
   nothing, so its release is ignored.
+- **Held is not the same as drawn pressed.** `KeyButton`'s safety timer
+  clears the *visual* press after five seconds, and a controller control is
+  routinely held longer than that. `KeyButton._pressHeld` tracks the
+  accepted pointer press by itself, so moving off a control still releases
+  it after the visual has gone. Windows can drop the mouse release when the
+  pointer leaves this non-activating window; drag-off is what ends the
+  press then.
+- **A pad control is not a toggle target** (`isToggleTarget: false`). Its
+  latch is in the accessible description; see `UIA_TARGETS.md`, *The
+  controller*.
 - **An assistive Invoke is `tap()`, never `press()`**: it has no release to
   pair with (`KeyButton.pressFromPointer` is false).
 - The view is disabled, and dimmed, until the status is `"on"`. A press the
@@ -132,6 +142,14 @@ panels-on and function-row configurations.
 - `controllerViewActive` is never saved. The keyboard starts on the letters.
 - The bar button is scan index 6 and is counted in `predButtonCount`; it has
   a title-bar twin for when suggestions are off.
+- **The title strip has a width floor.** `Main.qml::titleStripFloor` is the
+  grip, a drag target's worth of strip, and the title controls' measured
+  width, and `minimumWidth` is the larger of that and the keys' own
+  minimum. Without it the twin pushed the Update button out of a
+  minimum-width compact window. It is derived from `titleButtons.width`, so
+  the next control needs no edit; a control appearing at the minimum widens
+  the window through `fitWidth`, and nothing shrinks it back. With no
+  optional title control showing, the minimum is what it always was.
 
 **Not yet seen outside a test.** The view has been rendered offscreen and
 driven headlessly over a fake pad, and the backend has been run against the
@@ -153,6 +171,19 @@ One consequence: a second press of a control whose deferred release is still
 pending cancels that release, so two taps closer together than the minimum
 reach the game as one longer press. That is the honest outcome of a floor;
 splitting them would mean inventing a gap the user did not make.
+
+**The floor is kept where the device receives the press, not where it is
+asked for.** The bridge's clock starts when a press is submitted. If an
+earlier write to the device was slow, the press and its release would both
+be waiting in the worker's queue and go out microseconds apart, in order
+but with no duration, and a game would miss the tap. So `PadWorker` keeps
+its own record of when each control went down *at the device* (each button
+bit, each trigger, each stick leaving centre) and will not apply a report
+that brings one up sooner than `min_hold_s` after that. The bridge sets
+`min_hold_s` from `MIN_PRESS_MS`. In the ordinary case the bridge's deferred
+release has already spaced the two reports and the worker waits for nothing;
+a report that only moves a control between two non-zero values is never
+delayed; and turning the pad off interrupts a hold at once.
 
 ## One thread owns the device
 
@@ -178,6 +209,22 @@ blocks for seconds. So:
   ignores a status from a worker it has already replaced.
 - An error from the device ends the worker. There is no automatic retry:
   the bridge goes to `"error"`, lets go of everything and says so.
+- **A worker is not forgotten until its pad is closed.** `stop()` waits a
+  bounded two seconds, but the client's own recovery can sit in a re-plug
+  for five. A worker still running after its stop is kept as *retiring*, and
+  the bridge refuses to start another while one is (it says the controller
+  is still disconnecting). Otherwise Off would leave the old pad connected,
+  the next On would plug a second one, and a game would see two.
+- **A cancelled pad can only send neutral.** `stop()` cancels the device
+  before it joins. From then on `X360Pad` submits an all-zero report whatever
+  it was holding and starts no new re-plug, so a recovery that finishes
+  after Off cannot replay a button the user has already let go of. The
+  worker reports `off` only after the pad has been closed.
+- **"The pad's device is gone" is two error codes.** The client heals a
+  missing child device by retrying and then re-plugging. It recognises
+  `ERROR_NO_MORE_ITEMS` (259), seen on 1.21, and `ERROR_DEV_NOT_EXIST` (55),
+  which is what ViGEmBus 1.22.0's `STATUS_DEVICE_DOES_NOT_EXIST` becomes.
+  Any other error ends the worker at once.
 
 ## Nothing is left held down
 

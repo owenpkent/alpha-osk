@@ -21,6 +21,7 @@ class _FakePad(X360ReportState):
         self.submitted: List[Tuple[int, int, int, int, int, int, int]] = []
         self.updates = 0
         self.closes = 0
+        self.cancels = 0
         _FakePad.instances.append(self)
 
     def update(self) -> None:
@@ -40,6 +41,9 @@ class _FakePad(X360ReportState):
 
     def close(self) -> None:
         self.closes += 1
+
+    def cancel(self) -> None:
+        self.cancels += 1
 
 
 @pytest.fixture
@@ -90,6 +94,18 @@ class TestClosing:
         pad.device.close()
         pad.device.apply(PadReport(buttons=1))
         assert pad.updates == 0
+
+
+class TestCancelling:
+    def test_cancel_reaches_the_pad(self, pad: Any) -> None:
+        pad.device.cancel()
+        assert pad.cancels == 1
+
+    def test_cancel_after_close_is_harmless(self, pad: Any) -> None:
+        pad.device.close()
+        pad.device.cancel()
+        assert pad.cancels == 0
+        assert pad.closes == 1
 
 
 class TestBusAvailability:

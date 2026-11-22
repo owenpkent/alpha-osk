@@ -234,11 +234,16 @@ not a target. Both feed the revision beacon, as do the latches.
 
 **Invoke is a tap.** An Invoke carries no release, so it never presses a
 control and leaves it down: it is one press and one release, with the
-minimum hold the bridge gives every tap. A pad control reports toggle state,
-and it is on while the control is latched, but **v1 offers no way to latch
-through UI Automation** (latching is a secondary click, and secondary-click
-actions are out of scope above). A scanner can press buttons and tap
-directions; it cannot hold one.
+minimum hold the bridge gives every tap.
+
+**A pad control is not a toggle target.** v1 offers no way to latch through
+UI Automation (latching is a secondary click, and secondary-click actions
+are out of scope above), so a pad control must not be checkable: Qt turns
+"checkable" into the Toggle pattern, whose Toggle would then do nothing at
+all, silently. A control that is latched says so in its **description**
+(`latched`), the way a locked modifier says `locked`, and a latch changing
+moves the revision. A scanner can press buttons and tap directions; it
+cannot hold one.
 
 ## Names, and why they are not the keycaps
 

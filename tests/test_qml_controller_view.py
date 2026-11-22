@@ -700,14 +700,16 @@ class TestScanTargets:
         assert all(n.strip() and n.isascii() for n in names)
         assert len(set(names)) == len(names)
 
-    def test_a_latch_is_reported_as_a_toggle_state(self, load):
+    def test_a_pad_control_is_not_a_toggle_target_but_a_latch_is_still_visible(self, load):
         L = load()
         _open(L)
         key = _pad_keys(L.root)["a"]
-        assert key.property("isToggleTarget") is True
+        assert key.property("isToggleTarget") is False
         assert key.property("_scanChecked") is False
         _click(L.root, key, Qt.RightButton)
-        assert key.property("_scanChecked") is True
+        assert key.property("_scanChecked") is False
+        assert key.property("isActive") is True
+        assert key.property("isLocked") is True
 
     def test_no_pad_target_exists_while_the_letters_show(self, load):
         L = load()
@@ -737,3 +739,280 @@ class TestScanTargets:
         _click(L.root, _pad_keys(L.root)["abc"])
         _relayout(L.root)
         assert L.root.property("scanRevision") != latched
+
+
+# ---- a pad control is Invoke-only; its latch is in the description ----
+
+
+def _accessible(item):
+    from PySide6.QtGui import QAccessible
+
+    iface = QAccessible.queryAccessibleInterface(item)
+    assert iface is not None, "a live pad control has no accessible interface"
+    return iface
+
+
+def _description_of(item) -> str:
+    from PySide6.QtGui import QAccessible
+
+    return _accessible(item).text(QAccessible.Text.Description)
+
+
+class TestPadControlsOfferInvokeOnly:
+    def test_a_pad_control_is_not_checkable_and_its_toggle_does_nothing(self, load):
+        from PySide6.QtGui import QAccessibleActionInterface
+
+        L = load()
+        _open(L)
+        key = _pad_keys(L.root)["a"]
+        iface = _accessible(key)
+        # `checkable` is what makes Windows publish the Toggle pattern.
+        assert not iface.state().checkable
+        actions = iface.actionInterface()
+        assert actions is not None
+        before = len(L.worker.submitted)
+        toggle = QAccessibleActionInterface.toggleAction()
+        if toggle in actions.actionNames():
+            actions.doAction(toggle)
+            _settle()
+        assert len(L.worker.submitted) == before
+        assert L.pad.latched == []
+
+    def test_the_press_action_is_a_tap(self, load):
+        from PySide6.QtGui import QAccessibleActionInterface
+
+        L = load()
+        _open(L)
+        iface = _accessible(_pad_keys(L.root)["a"])
+        iface.actionInterface().doAction(QAccessibleActionInterface.pressAction())
+        _settle()
+        assert L.last_report() == PadReport(buttons=BUTTON_MASKS["a"])
+        QTest.qWait(int(L.pad.MIN_PRESS_MS) + 150)
+        assert L.last_report() == NEUTRAL
+
+    def test_a_latch_is_in_the_description_in_words_and_only_then(self, load):
+        L = load()
+        _open(L)
+        key = _pad_keys(L.root)["a"]
+        assert str(key.property("_scanDescription")) == ""
+        assert "latched" not in _description_of(key)
+        _click(L.root, key, Qt.RightButton)
+        assert str(key.property("_scanDescription")) == "latched"
+        assert "latched" in _description_of(key)
+        assert not _accessible(key).state().checkable
+        assert str(_pad_keys(L.root)["b"].property("_scanDescription")) == ""
+        QTest.qWait(200)  # clear the key's own double-click debounce
+        _click(L.root, key)  # a left click unlatches
+        assert str(key.property("_scanDescription")) == ""
+
+    def test_a_letter_still_reports_nothing(self, load):
+        L = load()
+        key = _a_letter_key(L.root)
+        assert str(key.property("_scanDescription")) == ""
+        assert key.property("scanLockWord") == "locked"
+
+
+# ---- a press ends exactly once, even after the visual safety timer ----
+
+
+def _safety_timer(key):
+    timer = key.findChild(QObject, "keyPressSafetyTimer")
+    assert timer is not None
+    return timer
+
+
+def _count_releases(key) -> List[int]:
+    count = [0]
+
+    def bump() -> None:
+        count[0] += 1
+
+    key.keyReleased.connect(bump)
+    return count
+
+
+def _move_to(root, point) -> None:
+    QTest.mouseMove(root, point)
+    _settle()
+
+
+def _outside(root, item):
+    """A window point well clear of `item` and its hit margins."""
+    from PySide6.QtCore import QPoint
+
+    x, y, w, h = _rect(item)
+    below = y + h + 25
+    return QPoint(int(x + w / 2), int(below if below < root.property("height") - 2 else y - 25))
+
+
+def _a_letter_key(root):
+    for item in _grid_keys(root):
+        if str(item.property("keyText")) == "a" and _visible(item):
+            return item
+    raise AssertionError("no visible letter a")
+
+
+class TestAHeldPressAlwaysEnds:
+    def test_drag_off_after_the_safety_timer_still_releases_the_control(self, load):
+        L = load()
+        _open(L)
+        a = _pad_keys(L.root)["a"]
+        _click(L.root, a, hold=True)
+        assert L.last_report() == PadReport(buttons=BUTTON_MASKS["a"])
+        timer = _safety_timer(a)
+        # Floor, not a race: against the real interval the press is still down.
+        assert timer.property("interval") == 5000
+        assert a.property("_visualPressed") is True
+        timer.setProperty("interval", 60)
+        QTest.qWait(250)
+        assert a.property("_visualPressed") is False, "the safety timer must have fired"
+        assert a.property("_pressHeld") is True
+        assert L.last_report() == PadReport(buttons=BUTTON_MASKS["a"])
+        _move_to(L.root, _outside(L.root, a))
+        QTest.qWait(int(L.pad.MIN_PRESS_MS) + 150)
+        assert L.last_report() == NEUTRAL
+        _release(L.root, a)
+
+    def test_an_early_drag_off_releases_once(self, load):
+        L = load()
+        _open(L)
+        a = _pad_keys(L.root)["a"]
+        count = _count_releases(a)
+        _click(L.root, a, hold=True)
+        _move_to(L.root, _outside(L.root, a))
+        assert count[0] == 1
+        QTest.qWait(int(L.pad.MIN_PRESS_MS) + 150)
+        assert L.last_report() == NEUTRAL
+        reports = len(L.worker.submitted)
+        _release(L.root, a)
+        QTest.qWait(int(L.pad.MIN_PRESS_MS) + 150)
+        assert len(L.worker.submitted) == reports, "a late real release adds no report"
+
+    def test_a_normal_press_and_release_is_one_press_report_and_one_release_report(self, load):
+        L = load()
+        _open(L)
+        before = len(L.worker.submitted)
+        _click(L.root, _pad_keys(L.root)["a"])
+        QTest.qWait(int(L.pad.MIN_PRESS_MS) + 150)
+        assert L.worker.submitted[before:] == [PadReport(buttons=BUTTON_MASKS["a"]), NEUTRAL]
+
+    def test_a_letter_key_emits_one_release_for_a_plain_press(self, load):
+        L = load()
+        key = _a_letter_key(L.root)
+        count = _count_releases(key)
+        _click(L.root, key)
+        assert count[0] == 1
+
+    def test_a_letter_key_drag_off_emits_at_the_drag_off(self, load):
+        L = load()
+        key = _a_letter_key(L.root)
+        count = _count_releases(key)
+        _click(L.root, key, hold=True)
+        _move_to(L.root, _outside(L.root, key))
+        assert count[0] == 1
+        # The grab's own end still emits, as it always did.
+        _release(L.root, key)
+        assert count[0] == 2
+
+    def test_a_letter_key_press_then_safety_timeout_then_release(self, load):
+        L = load()
+        key = _a_letter_key(L.root)
+        count = _count_releases(key)
+        _click(L.root, key, hold=True)
+        timer = _safety_timer(key)
+        assert timer.property("interval") == 5000
+        assert key.property("_visualPressed") is True
+        timer.setProperty("interval", 60)
+        QTest.qWait(250)
+        assert key.property("_visualPressed") is False
+        assert count[0] == 0, "the safety timer clears the visual and emits nothing"
+        _release(L.root, key)
+        assert count[0] == 1
+
+    def test_a_letter_key_press_timeout_then_drag_off_releases_once(self, load):
+        L = load()
+        key = _a_letter_key(L.root)
+        count = _count_releases(key)
+        _click(L.root, key, hold=True)
+        _safety_timer(key).setProperty("interval", 60)
+        QTest.qWait(250)
+        _move_to(L.root, _outside(L.root, key))
+        assert count[0] == 1
+
+
+# ---- the title strip keeps every control inside the window ----
+
+#: What `Math.round(30 * totalKeyUnits + layoutFixedPixels)` gave for the
+#: default compact view before the title strip had a floor of its own.
+OLD_COMPACT_MINIMUM_WIDTH = 418
+
+
+def _eval(root, expression: str):
+    from PySide6.QtQml import QQmlEngine, QQmlExpression
+
+    expr = QQmlExpression(QQmlEngine.contextForObject(root), root, expression)
+    value, _undefined = expr.evaluate()
+    assert not expr.hasError(), f"{expression}: {expr.error().toString()}"
+    return value
+
+
+def _title_controls(root) -> list:
+    import json
+
+    raw = _eval(
+        root,
+        "JSON.stringify(Array.prototype.map.call("
+        "  Array.prototype.filter.call(titleButtons.children,"
+        "    function (c) { return c.visible && c.width > 0 }),"
+        "  function (c) { return [titleButtons.x + c.x, titleButtons.x + c.x + c.width] }))",
+    )
+    return json.loads(raw)
+
+
+def _squeeze(L: _Loaded, *, controller: bool, update: bool) -> None:
+    root = L.root
+    root.setProperty("suggestionsEnabled", False)
+    root.setProperty("dictationEnabled", True)
+    root.setProperty("writingConfigured", True)
+    root.setProperty("controllerEnabled", controller)
+    root.setProperty("updateAvailable", update)
+    _relayout(root)
+
+
+class TestTheTitleStripFloor:
+    def test_every_control_fits_and_a_drag_target_remains_at_the_minimum(self, load):
+        L = load(enabled=False, savedCompactView=True)
+        _squeeze(L, controller=True, update=True)
+        L.root.setProperty("width", L.root.property("minimumWidth"))
+        _relayout(L.root)
+        width = L.root.property("width")
+        assert width == L.root.property("minimumWidth")
+        spans = _title_controls(L.root)
+        assert len(spans) >= 8
+        assert all(left >= 0 and right <= width for left, right in spans), (spans, width)
+        grip = _eval(L.root, "titleGrip.width")
+        assert _eval(L.root, "dragArea.width") >= grip + 2 * 10
+        assert not L.warnings
+
+    def test_turning_the_controller_on_at_the_minimum_widens_the_window(self, load):
+        L = load(enabled=False, savedCompactView=True)
+        _squeeze(L, controller=False, update=True)
+        L.root.setProperty("width", L.root.property("minimumWidth"))
+        _relayout(L.root)
+        narrow = L.root.property("width")
+        L.root.setProperty("controllerEnabled", True)
+        _relayout(L.root)
+        wide = L.root.property("width")
+        assert wide >= narrow + 28
+        assert all(r <= wide and left >= 0 for left, r in _title_controls(L.root))
+        # The floor falls back; the window does not shrink by itself.
+        L.root.setProperty("controllerEnabled", False)
+        _relayout(L.root)
+        assert L.root.property("width") == wide
+        assert L.root.property("minimumWidth") < wide
+
+    def test_with_no_optional_twins_the_minimum_is_what_it_always_was(self, load):
+        L = load(enabled=False, savedCompactView=True)
+        old = _eval(L.root, "Math.round(30 * totalKeyUnits + layoutFixedPixels)")
+        assert L.root.property("minimumWidth") == old
+        assert old == OLD_COMPACT_MINIMUM_WIDTH
