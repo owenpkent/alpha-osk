@@ -136,6 +136,14 @@ Item {
     // a safety timeout so a missed event can't strand the key visually.
     property bool _visualPressed: false
 
+    // An accepted pointer press that has not ended yet.  Separate from the
+    // visual because the safety timer clears the visual after 5 s while the
+    // button can still be held, and a caller that pairs every press with its
+    // `keyReleased` (the controller view) must still hear one when the
+    // pointer then leaves the key.  Exactly one `keyReleased` per accepted
+    // press, however it ends.
+    property bool _pressHeld: false
+
     // Ink colour for anything drawn ON TOP of the active / pressed fill:
     // the key label and the lock bar.  Nine themes ship and several have a
     // pale accent (Blackboard, Spaceship) while Typewriter is a light theme
@@ -295,6 +303,7 @@ Item {
     // tick so it only fires when nothing is happening.
     Timer {
         id: pressSafetyTimer
+        objectName: "keyPressSafetyTimer"
         interval: 5000
         repeat: false
         onTriggered: {
@@ -339,8 +348,14 @@ Item {
     // modifier state rides in the description as a documented token.  It
     // doubles as a sensible screen-reader announcement ("Shift, locked"),
     // which is why it is a real word rather than a code.
+    //
+    // A control that is not a toggle target but still latches (a controller
+    // button: Invoke is a tap, so offering the Toggle pattern would be a
+    // silent no-op) sets `scanReportsLock` and says it in its own word.
+    property bool scanReportsLock: keyRoot.isToggleTarget
+    property string scanLockWord: "locked"
     readonly property string _scanDescription:
-        (keyRoot.isToggleTarget && keyRoot.isLocked) ? "locked" : ""
+        (keyRoot.scanReportsLock && keyRoot.isLocked) ? keyRoot.scanLockWord : ""
     readonly property bool _scanChecked: keyRoot.isToggleTarget && keyRoot.isActive
     // A keyboard the user has put away offers nothing to activate.  While
     // its window is minimized every key leaves the tree, and an Invoke on an
@@ -465,6 +480,7 @@ Item {
 
     function _endPress() {
         keyRoot._visualPressed = false
+        keyRoot._pressHeld = false
         keyRoot.keyReleased()
         pressSafetyTimer.stop()
         repeatTimer.stop()
@@ -664,6 +680,7 @@ Item {
             var capX = mouse.x - keyRoot.hitMarginH
             var capY = mouse.y - keyRoot.hitMarginV
             keyRoot._pressVisual(capX, capY)
+            keyRoot._pressHeld = true
             keyRoot.pressFromPointer = true
             keyRoot.pressDx = keyRoot.width > 0 ? capX / keyRoot.width - 0.5 : 0
             keyRoot.pressDy = keyRoot.height > 0 ? capY / keyRoot.height - 0.5 : 0
@@ -690,7 +707,10 @@ Item {
         // being interacted with, so it shouldn't look held down.
         onContainsMouseChanged: {
             if (!containsMouse) {
-                if (keyRoot._visualPressed) keyRoot.keyReleased()
+                // A press whose visual the safety timer already cleared is
+                // still held, and still owes its release.
+                if (keyRoot._pressHeld || keyRoot._visualPressed) keyRoot.keyReleased()
+                keyRoot._pressHeld = false
                 keyRoot._visualPressed = false
                 repeatTimer.stop()
                 repeatTimer.interval = keyRoot.repeatDelay

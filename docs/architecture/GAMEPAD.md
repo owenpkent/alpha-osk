@@ -125,6 +125,16 @@ panels-on and function-row configurations.
   cancel and drag-off; the view also remembers what it pressed and lets go
   of it if it is hidden or destroyed mid-press. A right click presses
   nothing, so its release is ignored.
+- **Held is not the same as drawn pressed.** `KeyButton`'s safety timer
+  clears the *visual* press after five seconds, and a controller control is
+  routinely held longer than that. `KeyButton._pressHeld` tracks the
+  accepted pointer press by itself, so moving off a control still releases
+  it after the visual has gone. Windows can drop the mouse release when the
+  pointer leaves this non-activating window; drag-off is what ends the
+  press then.
+- **A pad control is not a toggle target** (`isToggleTarget: false`). Its
+  latch is in the accessible description; see `UIA_TARGETS.md`, *The
+  controller*.
 - **An assistive Invoke is `tap()`, never `press()`**: it has no release to
   pair with (`KeyButton.pressFromPointer` is false).
 - The view is disabled, and dimmed, until the status is `"on"`. A press the
@@ -132,6 +142,14 @@ panels-on and function-row configurations.
 - `controllerViewActive` is never saved. The keyboard starts on the letters.
 - The bar button is scan index 6 and is counted in `predButtonCount`; it has
   a title-bar twin for when suggestions are off.
+- **The title strip has a width floor.** `Main.qml::titleStripFloor` is the
+  grip, a drag target's worth of strip, and the title controls' measured
+  width, and `minimumWidth` is the larger of that and the keys' own
+  minimum. Without it the twin pushed the Update button out of a
+  minimum-width compact window. It is derived from `titleButtons.width`, so
+  the next control needs no edit; a control appearing at the minimum widens
+  the window through `fitWidth`, and nothing shrinks it back. With no
+  optional title control showing, the minimum is what it always was.
 
 **Not yet seen outside a test.** The view has been rendered offscreen and
 driven headlessly over a fake pad, and the backend has been run against the

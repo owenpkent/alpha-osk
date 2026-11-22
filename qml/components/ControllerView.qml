@@ -150,10 +150,13 @@ Item {
             isSpecial: true
             enableRepeat: false
             targetId: view._scanId(cd.scan)
-            // A pad control is "on" while latched; that is a real toggle state
-            // for a scanner, unlike the F-key's reassigned accent.
+            // Invoke is a tap, so a pad control is not a toggle target: that
+            // would advertise a Toggle action nothing handles.  Its latch
+            // reaches a scanner through the description instead.
             readonly property bool latchedNow: cd.kind === "pad" && view.latched.indexOf(cd.id) >= 0
-            isToggleTarget: cd.kind === "pad"
+            isToggleTarget: false
+            scanReportsLock: cd.kind === "pad"
+            scanLockWord: "latched"
             isActive: latchedNow
             isLocked: latchedNow
             role: cd.role

@@ -12,7 +12,9 @@ Window {
     // Default size gives keyW ≈ 56px; user can freely resize and keys scale
     width: 940
     height: outerLayout.implicitHeight + 80  // Extra height for the (taller) title bar + bottom padding
-    minimumWidth: Math.round(30 * totalKeyUnits + layoutFixedPixels)  // keyW ≈ 30px — smallest usable touch target
+    // keyW ≈ 30px is the smallest usable touch target; the title strip's own
+    // floor (below) takes over when its controls need more than the keys do.
+    minimumWidth: Math.max(Math.round(30 * totalKeyUnits + layoutFixedPixels), titleStripFloor)
     minimumHeight: 200
     color: "transparent"
     title: "Alpha-OSK"
@@ -1208,6 +1210,22 @@ Window {
     // they fit.
     readonly property real sectionHeight: mainKeyboard.implicitHeight
 
+    // The narrowest window whose title strip still fits: the grip with a drag
+    // target's worth of strip after it, then every visible title control and the
+    // row's right margin.  Derived from the row's measured width, so a new
+    // control needs no edit here.  Its inputs are fixed-size controls, never the
+    // window width, so this cannot loop back into itself.
+    readonly property real titleStripFloor: Math.ceil(
+        titleGrip.anchors.leftMargin + titleGrip.width + titleGrip.anchors.leftMargin
+        + titleButtons.width + titleButtons.anchors.rightMargin)
+
+    // A control that appears at the minimum width widens the window through the
+    // same clamp every hand-set width uses.  It never shrinks it when the floor
+    // falls back.
+    onMinimumWidthChanged: {
+        if (_loaded && width < minimumWidth) root.width = root.fitWidth(root.width)
+    }
+
     // Safety net: if the window width ever drops below minimumWidth (e.g. via
     // OS window-snap, DPI change, or panel toggle), clamp it back up.
     onWidthChanged: {
@@ -2146,6 +2164,7 @@ Window {
             // the visual affordance and a bigger aim point. It accepts no
             // mouse events itself, so presses fall through to dragArea.
             Rectangle {
+                id: titleGrip
                 anchors.left: parent.left
                 anchors.leftMargin: 10
                 anchors.verticalCenter: parent.verticalCenter
