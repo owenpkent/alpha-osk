@@ -74,6 +74,8 @@ User clicks key (QML)
 |------|------|
 | `src/keyboard_bridge.py` | Central bridge: keys, modifiers, context tracking, predictions |
 | `src/telemetry_bridge.py` | `TelemetryBridge`: QML-facing opt-in telemetry wrapper, its own context property (see *Opt-in Telemetry*) |
+| `src/gamepad_bridge.py` | `GamepadBridge`: QML-facing virtual game controller, its own context property (see *Gamepad*) |
+| `src/gamepad/` | Controller backend: `state.py` (press / latch rules), `device.py`, `worker.py` (the thread that owns the pad) |
 | `src/keyboard_app.py` | Launcher: QML engine, window flags, auto-save on exit |
 | `src/platform/` | `linux.py` (xdotool/ydotool), `windows.py` (SendInput), `password_detect.py`, `windows_window.py`, `macos_window.py`, `x11_window.py` (DOCK tuck); `__init__.py` has platform detection, `get_config_dir()`, `get_model_dir()` |
 | `src/prediction/` | Prediction engines (see below) |
@@ -107,6 +109,7 @@ Each section below that is marked *Full write-up* keeps only its load-bearing ru
 | Window chrome (corners, taskbar button, title-bar menu, Move mode, snapping, stepping aside for notifications) | `docs/architecture/WINDOW_CHROME.md` |
 | Switch scanning over UI Automation | `docs/architecture/UIA_TARGETS.md` |
 | Dictation | `docs/architecture/DICTATION.md` |
+| Gamepad (virtual controller output) | `docs/architecture/GAMEPAD.md` |
 | Telemetry, and the installer invitation | `docs/architecture/TELEMETRY.md` |
 | Vocabulary, explicit filter, packs | `docs/architecture/VOCABULARY.md` |
 | Language profile, layout-derived key positions | `docs/architecture/LANGUAGE_PROFILE.md` |
@@ -302,6 +305,23 @@ Mic in the suggestion bar; off by default, inert without a Deepgram key. Code in
 - **A Write with AI draft is never auto-typed**: `draftReady` opens a preview (Insert / Copy / Discard) and Insert goes through `insertDictationDraft`. The three actions are the `draft` section of the UIA contract (`aosk.v1.draft.0.<index>`, built on `BarButton`, present exactly while the preview is open, which feeds `scanRevision`): a scanner that can start the run from the bar must be able to finish it. Every colour in the preview is the theme's (`accentKeyColor` for Insert, `themeKeyColor` otherwise).
 - **History (`<config>/dictation_history/`, a size budget, 200 MB by default, oldest pruned first, with WAV audio) is excluded from Data Backup**, and a WAV path is derived from the validated 16-hex id, never read from the index.
 
+## Gamepad (controller output)
+
+Full write-up: `docs/architecture/GAMEPAD.md`. Read it before changing this area. The plan it is the first step of: `docs/roadmap/NIMBUS_INTEGRATION.md`.
+
+A virtual Xbox 360 pad, backend only: **no UI reaches it yet**, so the pad is never plugged. Code in `src/gamepad/`, `src/gamepad_bridge.py`, `src/platform/padbus_client.py` (adopted from Nimbus; standard-library `ctypes`, zero new dependencies).
+
+- **The driver (ViGEmBus) is detected, never installed, bundled or updated.** Without it `setActive(True)` answers False and the status is `"unavailable"`.
+- **Own QML context property**: `GamepadBridge` registered as `gamepad`; `KeyboardBridge` does not reference it (a test reads its source to hold that).
+- **No test may open the real bus**: `tests/conftest.py` makes `padbus_client.open_bus` raise and `find_bus` return nothing (`_no_real_pad_bus`, and its session twin). A plugged pad is visible to every program on the machine. Do not weaken the guard; put a fake over it.
+- Control ids are a closed allow-list (`state.CONTROL_IDS`); an unknown id changes nothing. Sticks and triggers are digital for now (a direction is a unit vector).
+- **The press / latch rules live in `PadState`, nowhere else**: pressing a latched control releases the latch and presses nothing; one stick points one way; a D-pad axis has one end down.
+- **Pad latches are not modifiers.** They never go through `_release_sticky_modifiers` (typing must not drop a held direction); their one release site is `GamepadBridge`.
+- `GamepadBridge.release()` enforces `MIN_PRESS_MS` (100, provisional, unmeasured against real games): an early release is deferred, never dropped. `tap()` is press then release. **The floor is also kept at the device** (`PadWorker.min_hold_s`, timed from when the press was *applied*): a slow earlier write would otherwise put the press and its release on the pad microseconds apart.
+- **`PadWorker` owns the device on its own thread** (the plug has taken up to 110 ms; a failing report can block for seconds). **Reports are FIFO, never latest-wins**: a tap is two reports and merging them loses the press. Nothing on the Qt thread waits on the worker except the bounded `stop()`. No automatic retry after a device error.
+- **Every way out sends a neutral report first** (off, error, `shutdown()`), and `keyboard_app.py` calls `gamepad.shutdown()` before `bridge.shutdown()`. The pad is plugged by `setActive(True)` only, never at launch.
+- Tests: `tests/test_padbus_client.py`, `test_gamepad_state.py`, `test_gamepad_device.py`, `test_gamepad_worker.py`, `test_gamepad_bridge.py`.
+
 ## Data Backup (Export / Import)
 
 Full write-up: `docs/architecture/USER_DATA.md` (section of the same name). Read it before changing this area.
@@ -318,7 +338,7 @@ Full write-up: `docs/architecture/USER_DATA.md` (section of the same name). Read
 
 QML calls Python via `@Slot` methods on `KeyboardBridge`; Python emits `Signal`s back (the round trip is under *Architecture Overview*; predictions reach QML as a binding on `keyboard.predictions`, not a callback).
 
-Two QML context properties are registered in `keyboard_app.py`: `keyboard` (`KeyboardBridge`) and `telemetry` (`TelemetryBridge`, see *Opt-in Telemetry*), the first surface split off per `docs/architecture/STRUCTURAL_REVIEW.md` 3.1. A further split follows the same shape: its own `QObject` wrapper and context property, registered in `keyboard_app.py` and `tests/qml_context.py::install_context_properties`.
+Four QML context properties are registered in `keyboard_app.py`: `keyboard` (`KeyboardBridge`), `telemetry` (`TelemetryBridge`, see *Opt-in Telemetry*, the first surface split off per `docs/architecture/STRUCTURAL_REVIEW.md` 3.1), `study` (`StudyBridge`) and `gamepad` (`GamepadBridge`, see *Gamepad*). A further split follows the same shape: its own `QObject` wrapper and context property, registered in `keyboard_app.py` and `tests/qml_context.py::install_context_properties`.
 
 ## Caps Lock vs. Shift
 

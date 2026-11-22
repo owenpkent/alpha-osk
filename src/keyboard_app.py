@@ -62,6 +62,7 @@ from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
 from . import update_signals
 from .__version__ import __version__
+from .gamepad_bridge import GamepadBridge
 from .keyboard_bridge import KeyboardBridge
 from .platform import (
     CURRENT_PLATFORM,
@@ -1038,6 +1039,10 @@ def main() -> int:
         parent=bridge,
     )
 
+    # The game controller is split off the same way; the keyboard bridge
+    # never references it.
+    gamepad = GamepadBridge(parent=bridge)
+
     # The research study is a third feature surface off the bridge, same
     # shape as telemetry (STRUCTURAL_REVIEW.md section 3.1). It needs the
     # bridge (to redirect keystrokes during a trial) and the predictor (to
@@ -1086,6 +1091,7 @@ def main() -> int:
     # Expose bridge to QML
     engine.rootContext().setContextProperty("keyboard", bridge)
     engine.rootContext().setContextProperty("telemetry", telemetry)
+    engine.rootContext().setContextProperty("gamepad", gamepad)
     engine.rootContext().setContextProperty("study", study)
 
     # Load QML
@@ -1194,6 +1200,9 @@ def main() -> int:
         # relative order it had when it was the first thing bridge.shutdown()
         # did, before bridge.shutdown() tears down its own timers/modifiers.
         telemetry.shutdown()
+        # Unplug the virtual pad, letting go of any held button, before the
+        # keyboard bridge is torn down.
+        gamepad.shutdown()
         # A quit mid-session must release the capture and the learning
         # freeze before the bridge itself is torn down, or the freeze
         # outlives its only caller.

@@ -3,7 +3,8 @@
 ``Main.qml`` reads two Python objects out of the QML root context:
 ``keyboard`` (the ``KeyboardBridge``) and, since telemetry moved off the
 bridge (``docs/architecture/STRUCTURAL_REVIEW.md`` section 3.1),
-``telemetry`` (a ``TelemetryBridge``). Seven fixtures across the headless
+``telemetry`` (a ``TelemetryBridge``), ``study`` and ``gamepad`` (a
+``GamepadBridge``, built inert here). Seven fixtures across the headless
 QML test modules each called ``setContextProperty("keyboard", bridge)``
 by hand; without this helper, adding ``telemetry`` would have meant
 editing all seven, and the next context property after that would mean
@@ -31,6 +32,7 @@ from typing import Optional
 
 from PySide6.QtQml import QQmlApplicationEngine
 
+from src.gamepad_bridge import GamepadBridge
 from src.keyboard_bridge import KeyboardBridge
 from src.study_bridge import StudyBridge
 from src.telemetry_bridge import TelemetryBridge
@@ -42,8 +44,9 @@ def install_context_properties(
     *,
     telemetry: Optional[TelemetryBridge] = None,
     study: Optional[StudyBridge] = None,
+    gamepad: Optional[GamepadBridge] = None,
 ) -> TelemetryBridge:
-    """Register ``keyboard``, ``telemetry`` and ``study`` on the root context.
+    """Register ``keyboard``, ``telemetry``, ``study`` and ``gamepad`` on the root context.
 
     Returns the ``TelemetryBridge`` that was registered (the one passed
     in, or a freshly built one parented to ``bridge``), so a test that
@@ -61,7 +64,11 @@ def install_context_properties(
         # A deferred bridge has no engine yet; hand it over when it lands,
         # the same wiring keyboard_app.main makes.
         bridge.predictionEngineReady.connect(study.set_predictor)
+    if gamepad is None:
+        # Inert: a headless QML test must never reach a pad bus.
+        gamepad = GamepadBridge(bus_available=lambda: False, parent=bridge)
     engine.rootContext().setContextProperty("keyboard", bridge)
     engine.rootContext().setContextProperty("telemetry", telemetry)
     engine.rootContext().setContextProperty("study", study)
+    engine.rootContext().setContextProperty("gamepad", gamepad)
     return telemetry

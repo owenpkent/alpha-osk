@@ -314,6 +314,42 @@ def _no_real_update_relauncher(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(updater, "_spawn_relauncher", lambda *a, **kw: None)
 
 
+def _refuse_the_real_pad_bus(mp: pytest.MonkeyPatch) -> None:
+    """Patch the two entry points that touch the real virtual gamepad bus."""
+    from src.platform import padbus_client
+
+    def _no_bus(*args: object, **kwargs: object) -> None:
+        raise padbus_client.PadBusNotFound("the test suite never opens the real pad bus")
+
+    mp.setattr("src.platform.padbus_client.open_bus", _no_bus)
+    mp.setattr("src.platform.padbus_client.find_bus", lambda *a, **kw: None)
+
+
+@pytest.fixture(autouse=True)
+def _no_real_pad_bus(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep every test away from the real virtual gamepad bus.
+
+    The ViGEmBus driver may be installed on a developer's machine, and a
+    pad plugged into it is a real controller, visible to every program
+    (a game open in the background would see it move). So no test may
+    reach ``open_bus``: it raises ``PadBusNotFound``, and ``find_bus``
+    reports no bus, so ``bus_present()`` is False.
+
+    A test that wants a bus patches its own fake over this one, which wins
+    because its monkeypatch applies later. The session-scoped twin below
+    covers module-scoped fixtures built before this one runs.
+    """
+    _refuse_the_real_pad_bus(monkeypatch)
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _no_real_pad_bus_anywhere():
+    """Session-scoped twin of ``_no_real_pad_bus`` for module-scoped fixtures."""
+    with pytest.MonkeyPatch.context() as mp:
+        _refuse_the_real_pad_bus(mp)
+        yield
+
+
 @pytest.fixture(autouse=True)
 def _stay_off_the_real_config_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Stop the suite reading or writing the developer's real config directory.

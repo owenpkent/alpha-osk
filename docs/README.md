@@ -25,6 +25,7 @@ Active design docs for the engine, the platform abstraction, and the user-facing
 - [`architecture/MODULAR_LAYOUTS.md`](architecture/MODULAR_LAYOUTS.md): custom keyboard layouts inspired by Octavium / Nimbus.
 - [`architecture/UIA_TARGETS.md`](architecture/UIA_TARGETS.md): the switch-scanning contract. How an external scanner finds the keyboard through Windows UI Automation, the target ids, stale-prediction safety, minimizing and restoring without taking focus, and what was verified and how.
 - [`architecture/DICTATION.md`](architecture/DICTATION.md): voice input. The Qt-only audio and websocket stack, the five-state run model, optional AI cleanup and Write with AI through Claude, dictation history, where the API keys live, and why privacy mode cancels a run outright.
+- [`architecture/GAMEPAD.md`](architecture/GAMEPAD.md): the virtual game controller's backend. The ViGEmBus client, the press and latch rules, the worker thread that owns the pad, and why no test may reach a real bus. No UI uses it yet.
 - [`architecture/MODIFIERS_AND_CASING.md`](architecture/MODIFIERS_AND_CASING.md): sticky modifiers, Caps Lock versus Shift, pill casing and pill widths.
 - [`architecture/TEXT_PATTERNS.md`](architecture/TEXT_PATTERNS.md): intelligent spacing, snippet auto-detection and structured tokens (numbers, phones, email domains).
 - [`architecture/SNIPPETS.md`](architecture/SNIPPETS.md): the Snippets window and its store.
