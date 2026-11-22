@@ -1,0 +1,481 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Controller layout mockup</title>
+<link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&family=Roboto+Condensed:wght@500;700&family=Roboto+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="okstudio-style/tokens.css">
+<style>
+  /* Replica of the keyboard window, Dark theme values from Main.qml::themeData:
+     background #1a1a1a, key #3a3a3a, pressed #5a5a5a, text #e0e0e0,
+     accent #4a9eff, border #505050.  Every row is 15.5u, as the real grid is.
+     The page chrome is okstudio-style; only the replica keeps the app's look. */
+  .ax-page { max-width: 1280px; }
+  .stage { overflow-x: auto; padding: 4px 0 2px; }
+  .kbwin {
+    display: inline-block; background: #1a1a1a; border: 1px solid #505050; border-radius: 10px;
+    user-select: none; -webkit-user-select: none; color: #e0e0e0; vertical-align: top;
+    font-family: 'Roboto Condensed', var(--ax-font-title), sans-serif;
+  }
+  .kbwin.holding { outline: 2px solid #4a9eff; outline-offset: 2px; cursor: crosshair; }
+  .kbwin.holding * { cursor: crosshair !important; }
+  .tbar { height: 30px; display: flex; align-items: center; justify-content: space-between; padding: 0 10px; color: #9a9a9a; font-size: 11px; }
+  .tbar .grip { width: 54px; height: 16px; border-radius: 5px; background: #2a2a2a; }
+  .tbar .caps { display: flex; gap: 14px; align-items: center; }
+  .tbar .sw { width: 22px; height: 11px; border-radius: 6px; background: #4a9eff; display: inline-block; vertical-align: -1px; margin-right: 5px; }
+  .pbar { height: 46px; display: flex; align-items: center; padding: 0 8px; gap: 6px; }
+  .pbar .pills { flex: 1; display: flex; justify-content: center; gap: 6px; min-width: 0; overflow: hidden; }
+  .pbar .pill { height: 32px; padding: 0 13px; display: flex; align-items: center; background: #3a3a3a; border: 1px solid #4a9eff; border-radius: 7px; font-size: 14px; white-space: nowrap; }
+  .pbar .note { color: #8a8a8a; font-size: 12px; letter-spacing: 0.04em; }
+  .round { width: 34px; height: 34px; border-radius: 50%; flex: none; display: grid; place-items: center; background: #2a2a2a; border: 1px solid #505050; cursor: pointer; }
+  .round svg { width: 18px; height: 18px; stroke: #e0e0e0; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+  .round.on { background: #4a9eff; border-color: #4a9eff; }
+  .round.on svg { stroke: #0b1a2e; }
+  .round.new { outline: 2px dashed #ffb84a; outline-offset: 3px; }
+  .round.live { border-color: #4a9eff; box-shadow: inset 0 0 0 2px #4a9eff; }
+  .body { display: flex; padding: 0 6px 6px; }
+  .sect { position: relative; flex: none; }
+  .sep { width: 1px; background: #333; margin: 4px 6px; flex: none; }
+  .key {
+    position: absolute; box-sizing: border-box; display: grid; place-items: center;
+    background: linear-gradient(#414141, #333); border: 1px solid #292929; border-radius: 6px;
+    font-size: 12px; font-weight: 500; cursor: pointer; overflow: hidden;
+  }
+  .key.down { background: #5a5a5a; }
+  .key.pad { font-size: 13px; font-weight: 700; letter-spacing: 0.03em; }
+  .key.swap { background: linear-gradient(#35506e, #2a4058); }
+  .key.on { background: #4a9eff; color: #0b1a2e; }
+  .key.latched::after, .stick.latched::after {
+    content: ""; position: absolute; left: 18%; right: 18%; bottom: 3px; height: 3px; border-radius: 2px; background: #4a9eff;
+  }
+  .stick { position: absolute; box-sizing: border-box; border-radius: 50%; background: #242424; border: 1px solid #505050; cursor: pointer; }
+  .stick .tag { position: absolute; left: 50%; top: 7%; transform: translateX(-50%); font-size: 10px; color: #8a8a8a; letter-spacing: 0.08em; }
+  .stick .knob { position: absolute; width: 40%; height: 40%; left: 30%; top: 30%; border-radius: 50%; background: linear-gradient(#4c4c4c, #383838); border: 1px solid #606060; box-sizing: border-box; }
+  .stick.held { border-color: #4a9eff; }
+  .stick.held .knob { border-color: #4a9eff; background: linear-gradient(#56708e, #3d5876); }
+  .stick.latched { border-color: #4a9eff; }
+  .stick.latched::after { left: 38%; right: 38%; bottom: 6%; }
+  .float { display: block; margin: 0 0 10px 260px; width: max-content; }
+  .float .tbar { height: 24px; }
+  .hidden { display: none !important; }
+  #ghost { position: fixed; left: 0; top: 0; width: 16px; height: 22px; pointer-events: none; z-index: 50; display: none; }
+  #ghost.show { display: block; }
+  .area { position: fixed; pointer-events: none; z-index: 49; border: 1px dashed #4a9eff; display: none; }
+  .area.show { display: block; }
+  .readout { margin-top: 8px; font: 12px/1.6 var(--ax-font-mono, monospace); color: var(--ax-muted); min-height: 20px; font-variant-numeric: tabular-nums; }
+  .readout b { color: var(--ax-accent); font-weight: 500; }
+  .readout .hint { color: var(--ax-ink); }
+  .option { display: grid; grid-template-columns: 50px 1fr; gap: 0 14px; align-items: start; }
+  .option .letter { font: 700 30px/1 var(--ax-font-title); color: var(--ax-accent); padding-top: 2px; }
+  .option h2 { margin-top: 0; }
+  .controls { display: flex; gap: 18px; align-items: center; flex-wrap: wrap; margin-top: 10px; }
+  .controls .ax-btn.sel { border-color: var(--ax-accent); color: var(--ax-accent); }
+  .feet { display: flex; gap: 14px; flex-wrap: wrap; margin-top: 10px; }
+  .foot { font: 11px var(--ax-font-mono, monospace); color: var(--ax-muted); }
+  .foot svg { display: block; margin-bottom: 4px; }
+  .foot b { color: var(--ax-ink); font-weight: 500; }
+</style>
+</head>
+<body class="ax">
+<div class="ax-page">
+  <div class="ax-mast">
+    <div>
+      <h1>Where the controller lives</h1>
+      <div class="ax-meta">Four placements of a game controller in the keyboard window, for NIMBUS_INTEGRATION.md. Dark theme, every option at the same key size. Open this file locally. <span class="ax-status good">Decided</span> A, the Controller view, and the pointer stays in the stick's area while a stick is held (2026-11-21). A1 is the first version to be built, with the controller staying plugged in while the letters show.</div>
+    </div>
+  </div>
+
+  <section class="ax-panel">
+    <h2>How to try them</h2>
+    <p class="ax-muted"><b>Buttons:</b> left click taps. Right click latches (the blue bar), and a left click lets go. <b>Sticks:</b> click a stick to pick it up, then move the pointer with no button held. Click anywhere to drop it back to centre, or right click to leave it held where it is. Click a held stick to release it. The line under each option shows what the pad is sending.</p>
+    <p class="ax-muted">The button with the dashed outline is the one new control: it switches the controller on and off in every option.</p>
+    <div class="controls">
+      <label class="ax-label">Pointer travel for full deflection
+        <input class="ax-range" type="range" id="travel" min="30" max="220" value="90" style="vertical-align: middle; margin: 0 8px">
+        <span class="ax-mono" id="travelOut">90</span> <span class="ax-muted">px</span></label>
+      <span class="ax-label">When the pointer leaves the window while a stick is held:
+        <button class="ax-btn sel" id="leaveStay">Stay in the area (chosen)</button>
+        <button class="ax-btn" id="leaveKeep">Keep steering</button>
+        <button class="ax-btn" id="leaveDrop">Centre and drop</button></span>
+    </div>
+    <p class="ax-muted" style="margin-top: 10px"><b>Stay in the area:</b> while a stick is held the pointer cannot go further than full deflection in any direction, so it never leaves the keyboard and never lands on the game. The browser stands in for this by locking the pointer and drawing its own arrow; it shows a notice about Esc, and when you drop the stick the real pointer reappears where you picked it up. In the app it would stay where you dropped it.</p>
+  </section>
+
+  <section class="ax-panel" style="margin-top: 8px">
+    <div class="option"><div class="letter">A1</div><div>
+      <h2>Controller view, first version (digital) <span class="ax-status good" style="margin-left: 8px">Chosen</span></h2>
+      <div class="ax-muted">What phase 1 builds, before analog sticks exist. Same placement as A, but each stick is eight direction keys around its stick click (L3, R3). A left click pushes the stick that way for as long as you hold the click; a right click holds it there, one direction per stick, and a left click lets go. <b>ABC</b> goes back to the letters and leaves the controller plugged in with its latches, so a game does not see it disconnect while you type (the dashed button gets a blue ring). <b>Off</b> lets go of everything, unplugs the controller and returns to the letters.</div>
+      <div class="stage" id="stageA1"></div><div class="readout" id="outA1"></div>
+    </div></div>
+  </section>
+
+  <section class="ax-panel" style="margin-top: 8px">
+    <div class="option"><div class="letter">A</div><div>
+      <h2>Controller view <span class="ax-status good" style="margin-left: 8px">Chosen</span></h2>
+      <div class="ax-muted">The letter grid swaps for the pad, and the ABC key swaps back. The window stays the size it is today, and the sticks are the largest of the four. You cannot type and steer at the same moment.</div>
+      <div class="stage" id="stageA"></div><div class="readout" id="outA"></div>
+    </div></div>
+  </section>
+
+  <section class="ax-panel" style="margin-top: 8px">
+    <div class="option"><div class="letter">B</div><div>
+      <h2>Two halves beside the letters</h2>
+      <div class="ax-muted">A handheld: left stick and D-pad on one side, right stick and face buttons on the other, letters between. Type and play together, but the window is half as wide again, the sticks are smaller, and Guide, L3 and R3 have no room.</div>
+      <div class="stage" id="stageB"></div><div class="readout" id="outB"></div>
+    </div></div>
+  </section>
+
+  <section class="ax-panel" style="margin-top: 8px">
+    <div class="option"><div class="letter">C</div><div>
+      <h2>One panel, like the numpad</h2>
+      <div class="ax-muted">A fourth panel on the right. One stick on screen, switched between left and right by the L and R keys (a latched stick keeps its position while the other is shown). Back, Guide, L3 and R3 would need a second page.</div>
+      <div class="stage" id="stageC"></div><div class="readout" id="outC"></div>
+    </div></div>
+  </section>
+
+  <section class="ax-panel" style="margin-top: 8px">
+    <div class="option"><div class="letter">D</div><div>
+      <h2>A floating window</h2>
+      <div class="ax-muted">Its own window, like Symbols and Snippets, placed wherever it suits the game. The keyboard is untouched and can be minimized. Two windows to arrange over a game, and the pad is drawn smaller here to keep the pair from covering it.</div>
+      <div class="stage" id="stageD"></div><div class="readout" id="outD"></div>
+    </div></div>
+  </section>
+
+  <section class="ax-panel" style="margin-top: 8px">
+    <h2>How much of the game each one covers</h2>
+    <div class="ax-muted">Each window on a 1920 x 1080 screen at today's key size (61 px per key unit, five key rows, no function or number row). Blue is the keyboard, cyan the controller.</div>
+    <div class="feet" id="feet"></div>
+    <table style="margin-top: 14px">
+      <thead><tr><th>Option</th><th>Window width, px</th><th>Screen covered, %</th><th>Stick diameter, px</th><th>Pad controls on screen</th><th>Letters and pad together</th></tr></thead>
+      <tbody id="facts"></tbody>
+    </table>
+  </section>
+</div>
+
+<svg id="ghost" viewBox="0 0 16 22"><path d="M1 1v17l4.5-4 3 7 2.6-1.1-3-6.9H14z" fill="#fff" stroke="#000" stroke-width="1.2" stroke-linejoin="round"/></svg>
+<div class="area" id="area"></div>
+<script>
+'use strict';
+// ---- geometry -------------------------------------------------------------
+const U = 44, RH = 39, GAP = 4, ROWS_HIGH = 5;
+// The real window, for the footprint figures: measured off the Dark theme screenshot.
+const REAL = { u: 61, row: 55, title: 44, bar: 62, pad: 16, sep: 13 };
+
+const LETTERS = [
+  [['Esc', 1], '`', '1', '2', '3', '4', '5', '6', '7', '8', '9', '0', '-', '=', ['⌫', 1.5]],
+  [['Tab', 1.75], 'q', 'w', 'e', 'r', 't', 'y', 'u', 'i', 'o', 'p', '[', ']', ['\\', 1.75]],
+  [['Caps', 1.75], 'a', 's', 'd', 'f', 'g', 'h', 'j', 'k', 'l', ';', "'", ['Enter', 2.75]],
+  [['Shift', 2.75], 'z', 'x', 'c', 'v', 'b', 'n', 'm', ',', '.', '/', ['Shift', 2.75]],
+  [['Ctrl', 1.25], ['Win', 1], ['Alt', 1.25], [' ', 9.5], ['Alt', 1.25], ['Ctrl', 1.25]],
+];
+
+const b = (id, x, y, w = 1, label) => ({ kind: 'btn', id, label: label || id, x, y, w, h: 1 });
+const stick = (id, x, y, w, h) => ({ kind: 'stick', id, x, y, w, h });
+const dpad = (x, y) => [b('Up', x + 1, y, 1, '↑'), b('Left', x, y + 1, 1, '←'), b('Right', x + 2, y + 1, 1, '→'), b('Down', x + 1, y + 2, 1, '↓')];
+const face = (x, y) => [b('Y', x + 1, y), b('X', x, y + 1), b('B', x + 2, y + 1), b('A', x + 1, y + 2)];
+const dpadRow = (x, y) => [b('Left', x, y, 1, '←'), b('Up', x + 1, y, 1, '↑'), b('Down', x + 2, y, 1, '↓'), b('Right', x + 3, y, 1, '→')];
+
+// A1: the digital first version. A stick is a 3 x 3 block of keys in its 4u x 4-row cell:
+// eight directions around the stick click.
+const DIRS = [['nw', '\u2196', -1, 1], ['n', '\u2191', 0, 1], ['ne', '\u2197', 1, 1], ['w', '\u2190', -1, 0], null,
+  ['e', '\u2192', 1, 0], ['sw', '\u2199', -1, -1], ['s', '\u2193', 0, -1], ['se', '\u2198', 1, -1]];
+const stickKeys = (stick, x, y, size, click) => DIRS.map((d, i) => {
+  const c = size / 3, at = { x: x + (i % 3) * c, y: y + Math.floor(i / 3) * c, w: c, h: c };
+  return d ? Object.assign({ kind: 'dir', id: stick + ' ' + d[0], label: d[1], stick, vx: d[2], vy: d[3] }, at)
+           : Object.assign({ kind: 'btn', id: click, label: click }, at);
+});
+const PAD_DIGITAL = { w: 15.5, items: [
+  b('LT', 0, 0, 2), b('LB', 2, 0, 2), b('Back', 5.25, 0, 1.5), { kind: 'swap', id: 'ABC', label: 'ABC', x: 7, y: 0, w: 1.5, h: 1 },
+  b('Start', 8.75, 0, 1.5), b('RB', 11.5, 0, 2), b('RT', 13.5, 0, 2),
+  ...stickKeys('LS', 0, 1, 4, 'L3'), { kind: 'off', id: 'Off', label: 'Off', x: 4.25, y: 1, w: 1.5, h: 1 }, b('Guide', 7, 1, 1.5),
+  ...stickKeys('RS', 11.5, 1, 4, 'R3'),
+  { kind: 'plain', id: 'Esc', label: 'Esc', x: 7.25, y: 3, w: 1, h: 1 }, { kind: 'plain', id: 'Enter', label: 'Ent', x: 7.25, y: 4, w: 1, h: 1 },
+  ...dpad(4.25, 2), ...face(8.25, 2),
+] };
+const DIRV = {};
+
+// A: the whole 15.5u grid.  4 + 0.25 + 3 + 1 + 3 + 0.25 + 4 = 15.5.
+const PAD_FULL = (withSwap) => ({ w: 15.5, items: [
+  b('LT', 0, 0, 2), b('LB', 2, 0, 2), b('Back', 5.25, 0, 1.5),
+  withSwap ? { kind: 'swap', id: 'ABC', label: 'ABC', x: 7, y: 0, w: 1.5, h: 1 } : b('Guide', 7, 0, 1.5),
+  b('Start', 8.75, 0, 1.5), b('RB', 11.5, 0, 2), b('RT', 13.5, 0, 2),
+  stick('LS', 0, 1, 4, 4), b('L3', 4.25, 1, 1.5), b('R3', 9.75, 1, 1.5), stick('RS', 11.5, 1, 4, 4),
+  ...(withSwap ? [b('Guide', 7, 1, 1.5), { kind: 'plain', id: 'Esc', label: 'Esc', x: 7.25, y: 3, w: 1, h: 1 }, { kind: 'plain', id: 'Enter', label: 'Ent', x: 7.25, y: 4, w: 1, h: 1 }] : []),
+  ...dpad(4.25, 2), ...face(8.25, 2),
+] });
+const THIRD = 4 / 3;
+const PAD_LEFT = { w: 4, items: [b('LT', 0, 0, THIRD), b('LB', THIRD, 0, THIRD), b('Back', 2 * THIRD, 0, THIRD), stick('LS', 0.5, 1, 3, 3), ...dpadRow(0, 4)] };
+const PAD_RIGHT = { w: 4, items: [b('Start', 0, 0, THIRD), b('RB', THIRD, 0, THIRD), b('RT', 2 * THIRD, 0, THIRD), stick('RS', 0.5, 1, 3, 3),
+  b('X', 0, 4), b('Y', 1, 4), b('B', 2, 4), b('A', 3, 4)] };
+const PAD_ONE = { w: 5, items: [b('LT', 0, 0, 1.25), b('LB', 1.25, 0, 1.25), b('RB', 2.5, 0, 1.25), b('RT', 3.75, 0, 1.25),
+  { kind: 'stick', id: null, x: 0, y: 1, w: 3, h: 3 }, b('X', 3, 1), b('Y', 4, 1), b('A', 3, 2), b('B', 4, 2),
+  { kind: 'sel', id: 'LS', label: 'L', x: 3, y: 3, w: 1, h: 1 }, { kind: 'sel', id: 'RS', label: 'R', x: 4, y: 3, w: 1, h: 1 },
+  ...dpadRow(0, 4), b('Start', 4, 4)] };
+
+// ---- shared stick settings -------------------------------------------------
+// 'stay': the pointer is confined to the travel square (ClipCursor in the app, pointer lock here).
+// 'keep': it roams and the stick keeps following.  'drop': leaving the window lets go.
+let travel = 90, leaveMode = 'stay', held = null, swallowUntil = 0;
+const ghost = document.getElementById('ghost'), area = document.getElementById('area');
+const variants = {};
+
+function el(tag, cls, html) { const e = document.createElement(tag); if (cls) e.className = cls; if (html != null) e.innerHTML = html; return e; }
+function place(e, it, unit, rowH) {
+  e.style.left = (it.x * unit + GAP / 2) + 'px'; e.style.top = (it.y * rowH + GAP / 2) + 'px';
+  e.style.width = (it.w * unit - GAP) + 'px'; e.style.height = (it.h * rowH - GAP) + 'px';
+}
+
+function lettersSection(v, unit, rowH) {
+  const s = el('div', 'sect'); s.style.width = (15.5 * unit) + 'px'; s.style.height = (ROWS_HIGH * rowH) + 'px';
+  LETTERS.forEach((row, y) => { let x = 0; row.forEach(k => {
+    const label = Array.isArray(k) ? k[0] : k, w = Array.isArray(k) ? k[1] : 1;
+    const e = el('div', 'key'); e.textContent = label; place(e, { x, y, w, h: 1 }, unit, rowH); x += w;
+    e.addEventListener('mousedown', ev => { if (ev.button !== 0) return; flash(e); v.typed = (v.typed + (label.length === 1 ? label : '')).slice(-14); show(v); });
+    s.appendChild(e);
+  }); });
+  return s;
+}
+
+function padSection(v, spec, unit, rowH) {
+  const s = el('div', 'sect'); s.style.width = (spec.w * unit) + 'px'; s.style.height = (ROWS_HIGH * rowH) + 'px';
+  spec.items.forEach(it => {
+    if (it.kind === 'stick') {
+      const d = Math.min(it.w * unit, it.h * rowH) - GAP * 2;
+      const e = el('div', 'stick', '<span class="tag"></span><div class="knob"></div>');
+      e.style.width = e.style.height = d + 'px';
+      e.style.left = (it.x * unit + (it.w * unit - d) / 2) + 'px'; e.style.top = (it.y * rowH + (it.h * rowH - d) / 2) + 'px';
+      const rec = { e, fixed: it.id, d }; v.sticks.push(rec);
+      e.addEventListener('mousedown', ev => { if (ev.button === 0) pickUp(v, rec, ev); });
+      s.appendChild(e); return;
+    }
+    const e = el('div', 'key pad' + (it.kind === 'swap' ? ' swap' : '')); e.textContent = it.label; place(e, it, unit, rowH);
+    if (it.kind === 'swap') e.addEventListener('mousedown', ev => { if (ev.button === 0) v.toggle(); });
+    else if (it.kind === 'sel') { v.sels.push({ e, id: it.id }); e.addEventListener('mousedown', ev => { if (ev.button === 0) { v.sel = it.id; show(v); } }); }
+    else if (it.kind === 'off') e.addEventListener('mousedown', ev => { if (ev.button === 0) v.off(); });
+    else if (it.kind === 'dir') {
+      v.btns.push({ e, id: it.id }); DIRV[it.id] = [it.vx, it.vy];
+      e.addEventListener('mousedown', ev => { if (ev.button !== 0) return;
+        if (v.latched.has(it.id)) v.latched.delete(it.id); else { v.mom[it.stick] = it.id; e.classList.add('down'); v.last = it.id; } show(v); });
+      e.addEventListener('contextmenu', ev => { ev.preventDefault(); if (Date.now() < swallowUntil) return;
+        if (v.latched.has(it.id)) v.latched.delete(it.id);
+        else { [...v.latched].forEach(n => { if (n.startsWith(it.stick + ' ')) v.latched.delete(n); }); v.latched.add(it.id); }
+        show(v); });
+    }
+    else if (it.kind === 'plain') e.addEventListener('mousedown', ev => { if (ev.button === 0) { flash(e); v.last = it.id + ' key'; show(v); } });
+    else {
+      v.btns.push({ e, id: it.id });
+      e.addEventListener('mousedown', ev => { if (ev.button !== 0) return;
+        if (v.latched.has(it.id)) v.latched.delete(it.id); else { flash(e); v.last = it.id; } show(v); });
+      e.addEventListener('contextmenu', ev => { ev.preventDefault(); if (Date.now() < swallowUntil) return;
+        if (v.latched.has(it.id)) v.latched.delete(it.id); else v.latched.add(it.id); show(v); });
+    }
+    s.appendChild(e);
+  });
+  return s;
+}
+
+function flash(e) { e.classList.add('down'); setTimeout(() => e.classList.remove('down'), 140); }
+
+const ICON_PAD = '<svg viewBox="0 0 24 24"><rect x="2" y="7" width="20" height="11" rx="5"/><path d="M7 10.5v4M5 12.5h4"/><circle cx="15.5" cy="11.5" r="0.6"/><circle cx="18" cy="13.5" r="0.6"/></svg>';
+const ICON_SYM = '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M8.5 14.5c1 1.2 2.2 1.8 3.5 1.8s2.5-.6 3.5-1.8M9 9.5h.01M15 9.5h.01"/></svg>';
+const ICON_SNIP = '<svg viewBox="0 0 24 24"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>';
+
+function windowShell(v, opts) {
+  const w = el('div', 'kbwin' + (opts.float ? ' float' : ''));
+  w.addEventListener('contextmenu', ev => ev.preventDefault());
+  w.addEventListener('mouseleave', () => { if (held && held.v === v && leaveMode === 'drop' && held.win === w) putDown(false); });
+  const t = el('div', 'tbar');
+  t.innerHTML = opts.float ? '<span>Controller</span><span>✕</span>'
+    : '<span class="grip"></span><span class="caps"><span><span class="sw"></span>Learning</span><span>⚙</span><span>–</span><span>✕</span></span>';
+  w.appendChild(t);
+  if (!opts.float) {
+    const p = el('div', 'pbar');
+    const pills = el('div', 'pills'); v.pills = pills; p.appendChild(pills);
+    const pad = el('div', 'round new', ICON_PAD); pad.title = 'Controller (new)'; v.padBtn = pad;
+    pad.addEventListener('mousedown', ev => { if (ev.button === 0) v.toggle(); });
+    p.appendChild(pad); p.appendChild(el('div', 'round', ICON_SYM)); p.appendChild(el('div', 'round', ICON_SNIP));
+    w.appendChild(p);
+  }
+  const body = el('div', 'body'); w.appendChild(body); w.bodyEl = body;
+  return w;
+}
+function setPills(v, on) {
+  v.pills.innerHTML = on ? ['help', 'here', 'hearing', 'hear', 'hey', 'he'].map(t => '<span class="pill">' + t + '</span>').join('')
+    : '<span class="note">Controller. Suggestions return with the letters.</span>';
+}
+function sep() { return el('div', 'sep'); }
+
+function newVariant(key) {
+  const v = { key, pad: { LS: { x: 0, y: 0 }, RS: { x: 0, y: 0 } }, latched: new Set(), sticks: [], btns: [], sels: [], sel: 'LS', last: '', typed: '', on: true };
+  variants[key] = v; return v;
+}
+
+// ---- the stick: pick up, steer with no button held, put down ---------------
+function stickId(v, rec) { return rec.fixed || v.sel; }
+function pickUp(v, rec, ev) {
+  if (held) return;                       // the capture listener below has already handled this click
+  if (Date.now() < swallowUntil) return;
+  const id = stickId(v, rec);
+  if (v.latched.has(id)) { v.latched.delete(id); v.pad[id] = { x: 0, y: 0 }; show(v); return; }
+  const cur = v.pad[id];
+  held = { v, rec, id, ax: ev.clientX - cur.x * travel, ay: ev.clientY + cur.y * travel, vx: cur.x * travel, vy: -cur.y * travel,
+    win: rec.e.closest('.kbwin'), stay: leaveMode === 'stay' };
+  if (held.stay && rec.e.requestPointerLock) {
+    // Not granted (no user gesture, or a browser without it): the stick falls back to keep-steering.
+    try { const p = rec.e.requestPointerLock(); if (p && p.catch) p.catch(() => {}); } catch (e) { /* same fallback */ }
+  }
+  held.win.classList.add('holding'); show(v);
+  ev.stopPropagation();
+}
+function putDown(latch) {
+  if (!held) return;
+  const { v, id, win } = held;
+  ghost.classList.remove('show'); area.classList.remove('show');
+  if (latch) v.latched.add(id); else v.pad[id] = { x: 0, y: 0 };
+  win.classList.remove('holding'); held = null; swallowUntil = Date.now() + 350; show(v);
+  if (document.pointerLockElement) document.exitPointerLock();
+}
+// Esc ends the browser's lock on its own: treat that as dropping the stick.
+// The lock is tracked from its own event, not inferred from the first movement:
+// Esc straight after pick-up, before the pointer has moved, must still end the gesture.
+document.addEventListener('pointerlockchange', () => {
+  if (!held || !held.stay) return;
+  if (document.pointerLockElement) { held.locked = true; return; }
+  if (held.locked) putDown(false);
+});
+document.addEventListener('mousedown', ev => {
+  if (!held) return;
+  ev.preventDefault(); ev.stopPropagation();   // the ending click hits no key, as Move mode's does
+  putDown(ev.button === 2);
+}, true);
+document.addEventListener('contextmenu', ev => { if (Date.now() < swallowUntil) ev.preventDefault(); }, true);
+document.addEventListener('mouseup', () => { Object.values(variants).forEach(v => {
+  if (!v.mom || !Object.keys(v.mom).length) return;
+  v.mom = {}; v.btns.forEach(k => k.e.classList.remove('down')); show(v); }); });
+document.addEventListener('mousemove', ev => {
+  if (!held) return;
+  if (held.stay && document.pointerLockElement) {
+    const lim = n => Math.max(-travel, Math.min(travel, n));
+    held.locked = true; held.vx = lim(held.vx + ev.movementX); held.vy = lim(held.vy + ev.movementY);
+    ghost.style.transform = 'translate(' + (held.ax + held.vx) + 'px,' + (held.ay + held.vy) + 'px)'; ghost.classList.add('show');
+    area.style.left = (held.ax - travel) + 'px'; area.style.top = (held.ay - travel) + 'px';
+    area.style.width = area.style.height = (2 * travel) + 'px'; area.classList.add('show');
+  } else { held.vx = ev.clientX - held.ax; held.vy = ev.clientY - held.ay; }
+  let x = held.vx / travel, y = -held.vy / travel;
+  const m = Math.hypot(x, y); if (m > 1) { x /= m; y /= m; }
+  held.v.pad[held.id] = { x, y }; show(held.v);
+});
+
+// ---- drawing state ----------------------------------------------------------
+const f = n => (n >= 0 ? '+' : '−') + Math.abs(n).toFixed(2);
+function show(v) {
+  // The digital version: a held click wins while it lasts, then the latched direction shows through.
+  if (v.digital) ['LS', 'RS'].forEach(s => {
+    const id = v.mom[s] || [...v.latched].find(n => n.startsWith(s + ' ')), d = id ? DIRV[id] : [0, 0], m = Math.hypot(d[0], d[1]) || 1;
+    v.pad[s] = { x: d[0] / m, y: d[1] / m };
+  });
+  v.sticks.forEach(rec => {
+    const id = stickId(v, rec), p = v.pad[id], r = rec.d * 0.3;
+    rec.e.querySelector('.knob').style.transform = 'translate(' + (p.x * r) + 'px,' + (-p.y * r) + 'px)';
+    rec.e.querySelector('.tag').textContent = id === 'LS' ? 'LEFT' : 'RIGHT';
+    rec.e.classList.toggle('held', !!held && held.v === v && held.id === id);
+    rec.e.classList.toggle('latched', v.latched.has(id));
+  });
+  v.btns.forEach(k => k.e.classList.toggle('latched', v.latched.has(k.id)));
+  v.sels.forEach(k => { k.e.classList.toggle('on', v.sel === k.id); k.e.classList.toggle('latched', v.latched.has(k.id) && v.sel !== k.id); });
+  const heldNames = [...v.latched].filter(n => n !== 'LS' && n !== 'RS');
+  let line = 'LS <b>' + f(v.pad.LS.x) + ' ' + f(v.pad.LS.y) + '</b> &nbsp; RS <b>' + f(v.pad.RS.x) + ' ' + f(v.pad.RS.y) + '</b>'
+    + ' &nbsp; latched <b>' + (heldNames.join(' ') || 'none') + '</b> &nbsp; last tap <b>' + (v.last || 'none') + '</b>';
+  if (v.typed) line += ' &nbsp; typed <b>' + v.typed.replace(/</g, '&lt;') + '</b>';
+  if (held && held.v === v) line += ' &nbsp; <span class="hint">Stick held: click to drop, right click to hold it there.</span>';
+  if (!v.on) line = !v.digital ? 'Controller off. Click the dashed button to bring it back.'
+    : v.plugged ? 'Letters. The controller is still plugged in, holding <b>' + ([...v.latched].join(', ') || 'nothing') + '</b>'
+        + (v.typed ? ' &nbsp; typed <b>' + v.typed.replace(/</g, '&lt;') + '</b>' : '') + '. Click the dashed button to go back.'
+    : 'Controller off and unplugged. Click the dashed button to plug it in.';
+  if (v.digital && v.padBtn) v.padBtn.classList.toggle('live', v.plugged && !v.on);
+  v.out.innerHTML = line;
+}
+
+// ---- the four options --------------------------------------------------------
+function buildA1() {
+  const v = newVariant('A1'); v.digital = true; v.mom = {}; v.plugged = false; v.out = document.getElementById('outA1');
+  const w = windowShell(v, {}); const letters = lettersSection(v, U, RH), pad = padSection(v, PAD_DIGITAL, U, RH);
+  w.bodyEl.append(letters, pad);
+  const view = on => { v.on = on; if (on) v.plugged = true; letters.classList.toggle('hidden', on); pad.classList.toggle('hidden', !on);
+    v.padBtn.classList.toggle('on', on); setPills(v, !on); show(v); };
+  v.toggle = () => view(!v.on);
+  v.off = () => { v.latched.clear(); v.mom = {}; v.plugged = false; view(false); };
+  document.getElementById('stageA1').appendChild(w); view(true);
+}
+function buildA() {
+  const v = newVariant('A'); v.out = document.getElementById('outA');
+  const w = windowShell(v, {}); const letters = lettersSection(v, U, RH), pad = padSection(v, PAD_FULL(true), U, RH);
+  w.bodyEl.append(letters, pad);
+  v.toggle = () => { if (held) putDown(false); v.on = !v.on; letters.classList.toggle('hidden', v.on); pad.classList.toggle('hidden', !v.on);
+    v.padBtn.classList.toggle('on', v.on); setPills(v, !v.on); show(v); if (!v.on) v.out.innerHTML = 'Letters. Click the dashed button for the controller.'; };
+  document.getElementById('stageA').appendChild(w); v.on = false; v.toggle();
+}
+function buildSide(key, stageId, left, right) {
+  const v = newVariant(key); v.out = document.getElementById('out' + key);
+  const w = windowShell(v, {}); const parts = [];
+  if (left) { const s = padSection(v, left, U, RH), p = sep(); parts.push(s, p); w.bodyEl.append(s, p); }
+  w.bodyEl.append(lettersSection(v, U, RH));
+  if (right) { const p = sep(), s = padSection(v, right, U, RH); parts.push(p, s); w.bodyEl.append(p, s); }
+  v.toggle = () => { if (held) putDown(false); v.on = !v.on; parts.forEach(p => p.classList.toggle('hidden', !v.on)); v.padBtn.classList.toggle('on', v.on); show(v); };
+  setPills(v, true); document.getElementById(stageId).appendChild(w); v.on = false; v.toggle();
+}
+const FLOAT_SCALE = 0.75;
+function buildD() {
+  const v = newVariant('D'); v.out = document.getElementById('outD');
+  const fw = windowShell(v, { float: true }); fw.bodyEl.append(padSection(v, PAD_FULL(false), U * FLOAT_SCALE, RH * FLOAT_SCALE));
+  const w = windowShell(v, {}); w.bodyEl.append(lettersSection(v, U, RH));
+  v.toggle = () => { if (held) putDown(false); v.on = !v.on; fw.classList.toggle('hidden', !v.on); v.padBtn.classList.toggle('on', v.on); show(v); };
+  setPills(v, true); document.getElementById('stageD').append(fw, w); v.on = false; v.toggle();
+}
+
+// ---- footprint and the table --------------------------------------------------
+function footprint() {
+  const R = REAL, H = R.title + R.bar + ROWS_HIGH * R.row + R.pad, grid = 15.5 * R.u + R.pad;
+  const padH = 32 + ROWS_HIGH * R.row * FLOAT_SCALE + R.pad, padW = 15.5 * R.u * FLOAT_SCALE + R.pad;
+  const stickPx = (w, h, s = 1) => Math.round((Math.min(w * R.u, h * R.row) - 8) * s);
+  const opts = [
+    { name: 'Today', note: 'letters only', wins: [{ w: grid, h: H, c: 'kb' }], stick: null, controls: 'none', both: 'n/a' },
+    { name: 'A', note: 'controller view', wins: [{ w: grid, h: H, c: 'pad' }], stick: stickPx(4, 4), controls: 'all 17, two sticks', both: 'No, one key swaps' },
+    { name: 'B', note: 'two halves', wins: [{ w: 23.5 * R.u + 2 * R.sep + R.pad, h: H, c: 'mix', split: [4, 15.5, 4] }], stick: stickPx(3, 3), controls: '14, two sticks', both: 'Yes' },
+    { name: 'C', note: 'one panel', wins: [{ w: 20.5 * R.u + R.sep + R.pad, h: H, c: 'mix', split: [0, 15.5, 5] }], stick: stickPx(3, 3), controls: '13, one stick at a time', both: 'Yes' },
+    { name: 'D', note: 'floating window', wins: [{ w: grid, h: H, c: 'kb' }, { w: padW, h: padH, c: 'pad', up: true }], stick: stickPx(4, 4, FLOAT_SCALE), controls: 'all 17, two sticks', both: 'Yes, in two windows' },
+  ];
+  const S = 0.11, W = 1920 * S, Hs = 1080 * S, css = n => getComputedStyle(document.documentElement).getPropertyValue('--ax-' + n).trim();
+  const kbCol = css('s1') || '#5b9cff', padCol = css('accent') || '#35c4d7';
+  const feet = document.getElementById('feet'), facts = document.getElementById('facts');
+  opts.forEach(o => {
+    let svg = '<svg width="' + W + '" height="' + Hs + '" viewBox="0 0 1920 1080"><rect x="0" y="0" width="1920" height="1080" fill="none" stroke="' + css('border') + '" stroke-width="9"/>';
+    let area = 0;
+    o.wins.forEach(win => {
+      area += win.w * win.h;
+      const x = win.up ? 1920 - win.w - 60 : (1920 - win.w) / 2, y = win.up ? 1080 - 20 - o.wins[0].h - 20 - win.h : 1080 - 20 - win.h;
+      if (win.c === 'mix') {
+        const tot = win.split[0] + win.split[1] + win.split[2]; let cx = x;
+        win.split.forEach((part, i) => { const pw = win.w * part / tot; if (part) svg += '<rect x="' + cx + '" y="' + y + '" width="' + pw + '" height="' + win.h + '" fill="' + (i === 1 ? kbCol : padCol) + '" opacity="0.85"/>'; cx += pw; });
+      } else svg += '<rect x="' + x + '" y="' + y + '" width="' + win.w + '" height="' + win.h + '" fill="' + (win.c === 'kb' ? kbCol : padCol) + '" opacity="0.85"/>';
+    });
+    svg += '</svg>';
+    const pct = (100 * area / (1920 * 1080)).toFixed(1), width = o.wins.map(w => Math.round(w.w)).join(' + ');
+    feet.appendChild(el('div', 'foot', svg + '<b>' + o.name + '</b> ' + o.note + ', ' + pct + ' %'));
+    const tr = el('tr'); tr.innerHTML = '<td>' + o.name + ', ' + o.note + '</td><td class="num">' + width + '</td><td class="num">' + pct + '</td><td class="num">' + (o.stick == null ? '' : o.stick) + '</td><td>' + o.controls + '</td><td>' + o.both + '</td>';
+    facts.appendChild(tr);
+  });
+}
+
+// ---- controls -------------------------------------------------------------------
+const tr = document.getElementById('travel'), trOut = document.getElementById('travelOut');
+tr.addEventListener('input', () => { travel = +tr.value; trOut.textContent = tr.value; });
+const modes = { stay: document.getElementById('leaveStay'), keep: document.getElementById('leaveKeep'), drop: document.getElementById('leaveDrop') };
+Object.keys(modes).forEach(m => modes[m].addEventListener('click', () => {
+  leaveMode = m; Object.keys(modes).forEach(k => modes[k].classList.toggle('sel', k === m)); }));
+
+buildA1(); buildA(); buildSide('B', 'stageB', PAD_LEFT, PAD_RIGHT); buildSide('C', 'stageC', null, PAD_ONE); buildD(); footprint();
+</script>
+</body>
+</html>
