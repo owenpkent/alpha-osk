@@ -14,7 +14,8 @@ Window {
     height: outerLayout.implicitHeight + 80  // Extra height for the (taller) title bar + bottom padding
     // keyW ≈ 30px is the smallest usable touch target; the title strip's own
     // floor (below) takes over when its controls need more than the keys do.
-    minimumWidth: Math.max(Math.round(30 * totalKeyUnits + layoutFixedPixels), titleStripFloor)
+    minimumWidth: Math.max(keysMinimumWidth, titleStripFloor)
+    readonly property real keysMinimumWidth: Math.round(30 * totalKeyUnits + layoutFixedPixels)
     minimumHeight: 200
     color: "transparent"
     title: "Alpha-OSK"
@@ -1226,10 +1227,40 @@ Window {
         if (_loaded && width < minimumWidth) root.width = root.fitWidth(root.width)
     }
 
+    // Growth forced by the title strip's floor must not carry the window's
+    // right edge, where Close is, off the screen it is on.  A window grows to
+    // the right, so a keyboard parked against the right edge would otherwise
+    // put Close past the display the moment a title control appears.  Only
+    // this growth is corrected: a width the user or a panel toggle sets is
+    // theirs.  The width before the change is tracked here because whichever
+    // path widens the window (the handler above, or the platform enforcing
+    // `minimumWidth`), it arrives as an ordinary width change.
+    property real _widthBeforeChange: 0
+    function keepFloorGrowthOnScreen(oldWidth) {
+        var grew = root.width - oldWidth
+        if (grew <= 0) return
+        // The screen it was on before it grew.
+        var b = root.screenBoundsAt(root.x + oldWidth / 2, root.y + root.height / 2)
+        var newX = root.x
+        if (root.x + oldWidth > b.right) {
+            // Already past the edge by the user's own placement: keep the
+            // right edge exactly where they left it.
+            newX = root.x - grew
+        } else if (root.x + root.width > b.right) {
+            newX = b.right - root.width
+        }
+        newX = Math.max(b.left, newX)
+        if (newX !== root.x) root.x = newX
+    }
+
     // Safety net: if the window width ever drops below minimumWidth (e.g. via
     // OS window-snap, DPI change, or panel toggle), clamp it back up.
     onWidthChanged: {
         if (width < minimumWidth) width = minimumWidth
+        if (_loaded && _widthBeforeChange > 0 && _widthBeforeChange < minimumWidth
+                && titleStripFloor > keysMinimumWidth)
+            root.keepFloorGrowthOnScreen(_widthBeforeChange)
+        _widthBeforeChange = width
         if (_geometryRestored) saveGeometryTimer.restart()
     }
 

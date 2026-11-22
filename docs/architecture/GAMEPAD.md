@@ -150,6 +150,10 @@ panels-on and function-row configurations.
   the next control needs no edit; a control appearing at the minimum widens
   the window through `fitWidth`, and nothing shrinks it back. With no
   optional title control showing, the minimum is what it always was.
+  **Growth the floor forces stays on screen**: a window grows to the right,
+  so `keepFloorGrowthOnScreen` pulls it back by what the growth pushed past
+  the edge of the screen it was on, or keeps its right edge where the user
+  left it if it was already past. A width the user sets is not moved.
 
 **Not yet seen outside a test.** The view has been rendered offscreen and
 driven headlessly over a fake pad, and the backend has been run against the
@@ -176,14 +180,23 @@ splitting them would mean inventing a gap the user did not make.
 asked for.** The bridge's clock starts when a press is submitted. If an
 earlier write to the device was slow, the press and its release would both
 be waiting in the worker's queue and go out microseconds apart, in order
-but with no duration, and a game would miss the tap. So `PadWorker` keeps
-its own record of when each control went down *at the device* (each button
-bit, each trigger, each stick leaving centre) and will not apply a report
-that brings one up sooner than `min_hold_s` after that. The bridge sets
-`min_hold_s` from `MIN_PRESS_MS`. In the ordinary case the bridge's deferred
-release has already spaced the two reports and the worker waits for nothing;
-a report that only moves a control between two non-zero values is never
-delayed; and turning the pad off interrupts a hold at once.
+but with no duration, and a game would miss the tap. So the bridge tells the
+worker which report ends which press. `PadWorker.submit()` numbers every
+report; the bridge remembers the number of the report that put a control
+down and submits the report that lets it up with `after=<that number>`. The
+worker records when each report reached the device and will not apply one
+sooner than `min_hold_s` after the report it is `after`. The bridge sets
+`min_hold_s` from `MIN_PRESS_MS`.
+
+It is an explicit link on purpose. An earlier version had the worker guess
+presses and releases from what a report contained, and it could not see a
+direction tapped over a latched one (east held, north tapped: the stick is
+non-zero throughout, so nothing looked like a release, and north reached the
+device for nine microseconds). A report with no `after` is never delayed,
+whatever it contains, which is what keeps a continuous analog stick and a
+new press immediate. In the ordinary case the bridge's deferred release has
+already spaced the two reports and the worker waits for nothing; turning
+the pad off interrupts a hold at once.
 
 ## One thread owns the device
 
@@ -217,8 +230,11 @@ blocks for seconds. So:
   the next On would plug a second one, and a game would see two.
 - **A cancelled pad can only send neutral.** `stop()` cancels the device
   before it joins. From then on `X360Pad` submits an all-zero report whatever
-  it was holding and starts no new re-plug, so a recovery that finishes
-  after Off cannot replay a button the user has already let go of. The
+  it was holding, so a recovery that finishes after Off cannot replay a
+  button the user has already let go of. **Off never connects another
+  controller either**: cancellation is checked after the old pad's unplug
+  and at every step of trying a replacement, and a candidate already
+  plugged when the cancel lands is unplugged again. The
   worker reports `off` only after the pad has been closed.
 - **"The pad's device is gone" is two error codes.** The client heals a
   missing child device by retrying and then re-plugging. It recognises

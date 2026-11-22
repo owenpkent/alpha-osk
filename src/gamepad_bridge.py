@@ -85,6 +85,9 @@ class GamepadBridge(QObject):
         self._latched_view: List[str] = []
         self._pressed_at: Dict[str, float] = {}
         self._release_timers: Dict[str, QTimer] = {}
+        #: Control -> sequence number of the report that pressed it, while it
+        #: is down. A release names it so the worker can hold the release back.
+        self._press_seq: Dict[str, int] = {}
         self._notifier = _StatusNotifier()
         self._notifier.status.connect(self._on_worker_status, Qt.ConnectionType.QueuedConnection)
 
@@ -216,7 +219,10 @@ class GamepadBridge(QObject):
             self._cancel_release(control_id)
             self._pressed_at[control_id] = self._clock()
             self._state.press(control_id)
-            self._publish()
+            seq = self._publish()
+            # Pressing a latched control only lifts the latch: nothing went down.
+            if seq is not None and control_id in self._state.pressed:
+                self._press_seq.setdefault(control_id, seq)
             return True
         except Exception as exc:
             _logger.warning("gamepad press failed: %s", type(exc).__name__)
@@ -347,7 +353,7 @@ class GamepadBridge(QObject):
             self._cancel_release(control_id)
             self._pressed_at.pop(control_id, None)
             self._state.release(control_id)
-            self._publish()
+            self._publish(after=self._press_seq.pop(control_id, None))
         except Exception as exc:
             _logger.warning("gamepad release failed: %s", type(exc).__name__)
 
@@ -355,6 +361,7 @@ class GamepadBridge(QObject):
         for timer in self._release_timers.values():
             timer.stop()
         self._pressed_at.clear()
+        self._press_seq.clear()
         self._state.release_all()
         self._refresh_latched()
 
@@ -364,16 +371,23 @@ class GamepadBridge(QObject):
             self._latched_view = view
             self.latchedChanged.emit()
 
-    def _publish(self) -> None:
+    def _publish(self, *, after: Optional[int] = None) -> Optional[int]:
         self._refresh_latched()
-        self._submit()
+        return self._submit(after=after)
 
-    def _submit(self, *, force: bool = False) -> None:
+    def _submit(self, *, force: bool = False, after: Optional[int] = None) -> Optional[int]:
+        """Hand a changed report to the worker; its sequence number if it numbers them."""
         report = self._state.report()
         changed = report != self._last_report
         self._last_report = report
-        if self._status == "on" and self._worker is not None and (changed or force):
-            self._worker.submit(report)
+        worker = self._worker
+        if self._status != "on" or worker is None or not (changed or force):
+            return None
+        if getattr(worker, "numbers_reports", False):
+            seq = worker.submit(report, after=after)
+            return int(seq) if seq is not None else None
+        worker.submit(report)
+        return None
 
     def _set_status(self, status: str) -> None:
         if status == self._status:

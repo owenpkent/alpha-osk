@@ -711,6 +711,7 @@ class X360Pad(X360ReportState):
             self.skipped_serials.extend(s for s in range(1, MAX_SERIALS + 1) if s in taken)
         last: Optional[PadBusError] = None
         for s in candidates:
+            self._abort_if_cancelled()
             req = VIGEM_PLUGIN_TARGET(
                 Size=ctypes.sizeof(VIGEM_PLUGIN_TARGET),
                 SerialNo=s,
@@ -724,6 +725,7 @@ class X360Pad(X360ReportState):
                 last = exc
                 continue
             self.serial = s
+            self._abort_if_cancelled()
             wait = VIGEM_WAIT_DEVICE_READY(Size=ctypes.sizeof(VIGEM_WAIT_DEVICE_READY), SerialNo=s)
             try:
                 self._bus.ioctl(IOCTL_VIGEM_WAIT_DEVICE_READY, wait, timeout_ms=ready_timeout_ms)
@@ -736,22 +738,27 @@ class X360Pad(X360ReportState):
                     )
                 # A bus older than 1.17 has no WAIT_DEVICE_READY; there the
                 # plug-in request itself pended until the child was up.
+            self._abort_if_cancelled()
             # Prove it with reports: the current one (neutral on a new pad, the
             # live state on a re-plug) until it goes through, for at most the
             # ready timeout.
             deadline = time.monotonic() + ready_timeout_ms / 1000.0
             while True:
+                self._abort_if_cancelled()
                 try:
                     self._submit()
-                    return
                 except PadBusError as exc:
                     if not _is_missing_child(exc.winerror):
                         self._unplug_quietly()
                         raise
                     last = exc
+                    self._abort_if_cancelled()
                     if time.monotonic() >= deadline:
                         break
                     time.sleep(0.005)
+                else:
+                    self._abort_if_cancelled()
+                    return
             self.skipped_serials.append(s)
             self._unplug_quietly()
         raise PadBusError(
@@ -759,6 +766,12 @@ class X360Pad(X360ReportState):
             + (f": {last}" if last else ""),
             last.winerror if last else 0,
         )
+
+    def _abort_if_cancelled(self) -> None:
+        """Off must never connect another pad: undo what this call plugged and stop."""
+        if self._cancelled.is_set():
+            self._unplug_quietly()
+            raise PadBusError("pad cancelled")
 
     def _unplug_quietly(self) -> None:
         try:
@@ -823,6 +836,7 @@ class X360Pad(X360ReportState):
             raise first
         old = self.serial
         self._unplug_quietly()
+        self._abort_if_cancelled()
         self._plug(None, self._ready_timeout_ms, avoid=(old,))
         self.replugs.append((old, self.serial))
 
