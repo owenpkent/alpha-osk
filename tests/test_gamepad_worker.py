@@ -286,12 +286,21 @@ class TestAStuckApply:
 
 
 class _TimedDevice:
-    def __init__(self, first_apply_s: float = 0.0) -> None:
+    def __init__(self, first_apply_s: float = 0.0, hold_first: bool = False) -> None:
         self.first_apply_s = first_apply_s
         self.log: List[Tuple[float, PadReport]] = []
         self.closes = 0
+        # With ``hold_first`` the first write blocks until the test lets it go,
+        # and says when it has started: "the worker has taken the first report
+        # out of the queue" is then a fact, not a hope about scheduling.
+        self.hold_first = hold_first
+        self.entered = threading.Event()
+        self.release = threading.Event()
 
     def apply(self, report: PadReport) -> None:
+        if not self.log and self.hold_first:
+            self.entered.set()
+            assert self.release.wait(CEILING_S)
         if not self.log and self.first_apply_s:
             time.sleep(self.first_apply_s)
         self.log.append((time.perf_counter(), report))
@@ -369,19 +378,30 @@ class TestMinimumHold:
         worker.stop()
 
     def test_a_press_the_queue_dropped_adds_no_wait(self) -> None:
-        device = _TimedDevice(first_apply_s=0.3)
+        device = _TimedDevice(hold_first=True)
         worker = _timed(device, min_hold_s=0.5)
         worker.start()
         worker.submit(_report(1))
-        time.sleep(0.05)
+        # The first report is in flight, so it is out of the queue and cannot
+        # be evicted. Without this, a worker thread that starts late leaves it
+        # queued, it is dropped with the press, and only MAX_QUEUED_REPORTS
+        # reports can ever arrive where this test waits for one more.
+        assert device.entered.wait(CEILING_S)
         press = worker.submit(_report(2))
         for n in range(MAX_QUEUED_REPORTS):
             worker.submit(_report(3 + n))
-        assert worker.dropped_reports > 0
-        start = time.perf_counter()
+        assert worker.dropped_reports == 1, "the press was not the report that got dropped"
         worker.submit(NEUTRAL, after=press)
+        assert worker.dropped_reports == 2
+        start = time.perf_counter()
+        device.release.set()
+        # One in flight plus a full queue.
         assert device.wait_for(MAX_QUEUED_REPORTS + 1)
-        assert device.log[-1][0] - start < 0.4
+        assert device.log[0][1] == _report(1) and device.log[-1][1] == NEUTRAL
+        assert _report(2) not in [r for _, r in device.log]
+        assert device.log[-1][0] - start < 0.4, (
+            "a release waited on a press that never reached the pad"
+        )
         worker.stop()
 
     def test_reports_behind_a_waiting_release_stay_in_order(self) -> None:
